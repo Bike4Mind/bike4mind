@@ -14,8 +14,11 @@ import {
   recordActivity,
   recordUsageSource,
   selectExternal,
+  selectExternalSignups,
   toUtcDay,
+  windowStartDay,
   type UserDayMap,
+  type UserRecord,
   type UserSourceCounts,
 } from './externalActiveUsers';
 
@@ -105,6 +108,37 @@ describe('exclusions', () => {
     expect([...external.keys()]).toEqual(['ext']);
     expect(excluded).toEqual({ noUser: 1, admin: 1, staffDomain: 1, testPattern: 1 });
   });
+
+  it('selectExternalSignups maps external users with a createdAt to their UTC signup day, active or not', () => {
+    const created = at('2026-09-02');
+    const users = new Map([
+      ['ext', { email: 'a@customer.example', createdAt: created }],
+      ['late', { email: 'l@customer.example', createdAt: new Date('2026-09-02T23:59:59.999Z') }],
+      ['undated', { email: 'u@customer.example' }],
+      ['adm', { email: 'b@customer.example', isAdmin: true, createdAt: created }],
+      ['stf', { email: 'c@staff.example.com', createdAt: created }],
+      ['tst', { email: 'd+test@customer.example', createdAt: created }],
+    ]);
+
+    expect(selectExternalSignups(users, rules)).toEqual(
+      new Map([
+        ['ext', day('2026-09-02')],
+        ['late', day('2026-09-02')],
+      ])
+    );
+  });
+});
+
+describe('windowStartDay', () => {
+  it('is UTC midnight of the first day of a window ending on the UTC day of now', () => {
+    expect(windowStartDay(NOW, DEFAULT_DAYS)).toEqual(new Date('2026-07-16T00:00:00Z'));
+    expect(toUtcDay(windowStartDay(NOW, DEFAULT_DAYS))).toBe(WINDOW_START);
+  });
+
+  it('is the start of today for a one-day window, whatever the time of day', () => {
+    expect(windowStartDay(new Date('2026-10-13T23:59:59.999Z'), 1)).toEqual(new Date('2026-10-13T00:00:00Z'));
+    expect(windowStartDay(new Date('2026-10-13T00:00:00Z'), 1)).toEqual(new Date('2026-10-13T00:00:00Z'));
+  });
 });
 
 describe('dauSeries', () => {
@@ -127,25 +161,31 @@ describe('dauSeries', () => {
 });
 
 describe('buildCohorts', () => {
-  const cohorts = (map: UserDayMap) => buildCohorts(map, { todayDay: TODAY, windowStartDay: WINDOW_START });
+  /** userId -> signup UTC day from ISO dates. */
+  const signupsOf = (entries: Record<string, string>) =>
+    new Map(Object.entries(entries).map(([id, iso]) => [id, day(iso)]));
+  const cohorts = (userDays: UserDayMap, signups: Map<string, number>) =>
+    buildCohorts(userDays, signups, { todayDay: TODAY, windowFirstDay: WINDOW_START });
 
-  it('computes D1/D7/D30 as the share active exactly N days after the first day', () => {
+  it('computes D1/D7/D30 as the share active exactly N days after the signup day', () => {
     const table = cohorts(
       new Map([
         // Week of Sunday 2026-08-30. D1, D7 and D30 all hit.
-        ['u1', daysOf('2026-08-31', '2026-09-01', '2026-09-07', '2026-09-30')],
+        ['u1', daysOf('2026-09-01', '2026-09-07', '2026-09-30')],
         // D1 only: active a day before and a day after D7 (09-09), but not on it.
-        ['u2', daysOf('2026-09-02', '2026-09-03', '2026-09-08', '2026-09-10')],
+        ['u2', daysOf('2026-09-03', '2026-09-08', '2026-09-10')],
         // D1 and D7 hit, D30 misses.
-        ['u3', daysOf('2026-09-05', '2026-09-06', '2026-09-12')],
-      ])
+        ['u3', daysOf('2026-09-06', '2026-09-12')],
+      ]),
+      signupsOf({ u1: '2026-08-31', u2: '2026-09-02', u3: '2026-09-05' })
     );
 
-    expect(table.skippedAtWindowStart).toBe(0);
     expect(table.rows).toHaveLength(1);
     const [row] = table.rows;
     expect(row.weekStart).toBe('2026-08-30');
-    expect(row.users).toBe(3);
+    expect(row.signups).toBe(3);
+    expect(row.activated).toBe(3);
+    expect(row.activatedPercent).toBeCloseTo(100);
     expect(row.retention[1]).toBeCloseTo(100);
     expect(row.retention[7]).toBeCloseTo(66.67, 1);
     expect(row.retention[30]).toBeCloseTo(33.33, 1);
@@ -155,30 +195,32 @@ describe('buildCohorts', () => {
     const table = cohorts(
       new Map([
         // Week of 2026-10-04: D1 measurable (10-11 <= yesterday), D7 not (10-17), even though u4 is
-        // active on 10-12, exactly 7 days after their first day.
-        ['u4', daysOf('2026-10-05', '2026-10-06', '2026-10-12')],
-        // Week of 2026-10-11: first day yesterday and today, nothing measurable yet.
+        // active on 10-12, exactly 7 days after signing up on 10-05.
+        ['u4', daysOf('2026-10-06', '2026-10-12')],
+        // Week of 2026-10-11: signed up yesterday and today, nothing measurable yet.
         ['u5', daysOf('2026-10-12', '2026-10-13')],
         ['u6', daysOf('2026-10-13')],
-      ])
+      ]),
+      signupsOf({ u4: '2026-10-05', u5: '2026-10-12', u6: '2026-10-13' })
     );
 
     expect(table.rows.map(r => r.weekStart)).toEqual(['2026-10-04', '2026-10-11']);
     expect(table.rows[0].retention[1]).toBeCloseTo(100);
     expect(table.rows[0].retention[7]).toBeNull();
     expect(table.rows[0].retention[30]).toBeNull();
-    expect(table.rows[1].users).toBe(2);
+    expect(table.rows[1].signups).toBe(2);
     expect(table.rows[1].retention).toEqual({ 1: null, 7: null, 30: null });
   });
 
-  it('measures a cohort once its newest possible member has N full days behind them', () => {
+  it('measures a cohort once its newest possible signup has N full days behind them', () => {
     const table = cohorts(
       new Map([
         // Week of 2026-09-06: 09-06 + 6 + 30 is exactly yesterday (10-12), so D30 is measured.
         ['u7', daysOf('2026-09-08', '2026-10-08')],
         // Week of 2026-09-13: D30 would need 10-19, so it is not.
         ['u8', daysOf('2026-09-14', '2026-10-14')],
-      ])
+      ]),
+      signupsOf({ u7: '2026-09-08', u8: '2026-09-14' })
     );
 
     expect(table.rows[0].weekStart).toBe('2026-09-06');
@@ -187,16 +229,72 @@ describe('buildCohorts', () => {
     expect(table.rows[1].retention[30]).toBeNull();
   });
 
-  it('skips users whose first active day is the window start and keeps those one day later', () => {
+  it('keeps a signup on the window start day and leaves out one the day before', () => {
     const table = cohorts(
       new Map([
-        ['old', new Set([WINDOW_START, WINDOW_START + 1])],
-        ['new', new Set([WINDOW_START + 1])],
+        ['before', new Set([WINDOW_START, WINDOW_START + 1])],
+        ['first', new Set([WINDOW_START + 1])],
+      ]),
+      new Map([
+        ['before', WINDOW_START - 1],
+        ['first', WINDOW_START],
       ])
     );
 
-    expect(table.skippedAtWindowStart).toBe(1);
-    expect(table.rows.reduce((sum, r) => sum + r.users, 0)).toBe(1);
+    expect(table.rows.reduce((sum, r) => sum + r.signups, 0)).toBe(1);
+    expect(table.rows[0].retention[1]).toBeCloseTo(100);
+  });
+
+  it('counts a signup with no activity as a signup that did not activate or return', () => {
+    const table = cohorts(
+      new Map([['active', daysOf('2026-09-02', '2026-09-03')]]),
+      signupsOf({ active: '2026-09-02', idle: '2026-09-03' })
+    );
+
+    const [row] = table.rows;
+    expect(row.signups).toBe(2);
+    expect(row.activated).toBe(1);
+    expect(row.activatedPercent).toBeCloseTo(50);
+    expect(row.retention[1]).toBeCloseTo(50);
+    expect(row.retention[7]).toBeCloseTo(0);
+  });
+});
+
+describe('buildReport cohorts', () => {
+  const rules = buildExclusionRules('staff.example.com', /\+test/i);
+  const report = (userDays: UserDayMap, users: Map<string, UserRecord>) =>
+    buildReport({ userDays, sourceCounts: new Map(), users, rules, days: DEFAULT_DAYS, now: NOW });
+
+  it('counts a pre-window signup first active mid-window toward DAU but in no cohort', () => {
+    const result = report(
+      new Map([['old', daysOf('2026-10-10')]]),
+      new Map([['old', { email: 'o@customer.example', createdAt: at('2026-01-05') }]])
+    );
+
+    expect(result.externalUsers).toBe(1);
+    expect(result.dau.find(r => r.day === '2026-10-10')?.users).toBe(1);
+    expect(result.cohorts.rows).toEqual([]);
+  });
+
+  it('counts an in-window signup with no activity in signups only, with 0% activation and retention', () => {
+    const result = report(
+      new Map(),
+      new Map([
+        ['idle', { email: 'i@customer.example', createdAt: at('2026-09-02') }],
+        ['staff', { email: 's@staff.example.com', createdAt: at('2026-09-02') }],
+      ])
+    );
+
+    expect(result.externalUsers).toBe(0);
+    expect(result.cohorts.rows).toEqual([
+      {
+        weekStart: '2026-08-30',
+        signups: 1,
+        activated: 0,
+        activatedPercent: 0,
+        retention: { 1: 0, 7: 0, 30: 0 },
+      },
+    ]);
   });
 });
 
@@ -265,8 +363,8 @@ describe('formatReport', () => {
         ]),
         sourceCounts: new Map([['u1', new Map([['chat', 2]])]]),
         users: new Map([
-          ['u1', { email: 'a@customer.example' }],
-          ['u2', { email: 'b@customer.example' }],
+          ['u1', { email: 'a@customer.example', createdAt: at('2026-09-01') }],
+          ['u2', { email: 'b@customer.example', createdAt: at('2026-10-12') }],
         ]),
         rules: buildExclusionRules(staffDomains, /\+test/i),
         days,
@@ -280,8 +378,11 @@ describe('formatReport', () => {
     expect(text).toContain('DAU (UTC, last 30 days)');
     expect(text).toMatch(/2026-10-13 {2}1 {2}\(partial day\)/);
     expect(text).toMatch(/chat\s+2/);
-    expect(text).toMatch(/2026-08-30\s+1\s+100\.0%\s+0\.0%\s+0\.0%/);
-    expect(text).toMatch(/2026-10-11\s+1\s+-\s+-\s+-/);
+    expect(text).toContain('Weekly signup cohorts');
+    expect(text).toMatch(/Cohort\s+Signups\s+Activated\s+Act %\s+D1\s+D7\s+D30/);
+    expect(text).toMatch(/2026-08-30\s+1\s+1\s+100\.0%\s+100\.0%\s+0\.0%\s+0\.0%/);
+    expect(text).toMatch(/2026-10-11\s+1\s+1\s+100\.0%\s+-\s+-\s+-/);
+    expect(text).not.toContain('Skipped');
     expect(text).not.toContain('WARNING');
   });
 

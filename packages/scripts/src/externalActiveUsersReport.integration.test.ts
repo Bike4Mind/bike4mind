@@ -34,9 +34,10 @@ const STAFF_DOMAINS = 'staff.example.com';
 const silent = () => undefined;
 const at = (iso: string) => new Date(`${iso}T10:00:00Z`);
 
+// Raw inserts skip the schema timestamps, so createdAt is seeded. Defaults to inside the window.
 const insertUser = async (email: string, extra: Record<string, unknown> = {}) => {
   const _id = new mongoose.Types.ObjectId();
-  await User.collection.insertOne({ _id, username: `u-${_id}`, email, ...extra });
+  await User.collection.insertOne({ _id, username: `u-${_id}`, email, createdAt: at('2026-10-10'), ...extra });
   return String(_id);
 };
 
@@ -140,30 +141,51 @@ describe('runExternalActivityReport', () => {
     ]);
   });
 
-  it('buckets the three users into their first-day week with D1 measured and D7 too young', async () => {
+  it('buckets the three users into their signup week with D1 measured and D7 too young', async () => {
     await seed();
 
     const { cohorts } = await run();
 
-    expect(cohorts.skippedAtWindowStart).toBe(0);
     expect(cohorts.rows).toHaveLength(1);
     const [row] = cohorts.rows;
     expect(row.weekStart).toBe('2026-10-04');
-    expect(row.users).toBe(3);
+    expect(row.signups).toBe(3);
+    expect(row.activated).toBe(3);
     expect(row.retention[1]).toBeCloseTo(66.67, 1); // alice and bob return on 10-11, carol does not
     expect(row.retention[7]).toBeNull();
     expect(row.retention[30]).toBeNull();
   });
 
-  it('reads only the requested window and skips users whose first day is the window start', async () => {
+  it('reads only the requested window and leaves signups before it out of every cohort', async () => {
     await seed();
 
-    // Window 2026-10-11..2026-10-13: alice and bob first appear on the window start, carol is out.
+    // Window 2026-10-11..2026-10-13: alice and bob are active on the window start but signed up 10-10.
     const report = await run({ days: 3 });
 
     expect(report.externalUsers).toBe(2);
     expect(report.dau.map(row => row.users)).toEqual([2, 0, 0]);
-    expect(report.cohorts).toEqual({ rows: [], skippedAtWindowStart: 2 });
+    expect(report.cohorts).toEqual({ rows: [] });
+  });
+
+  it('counts a pre-window signup toward DAU but in no cohort, and an idle in-window signup in signups only', async () => {
+    const veteran = await insertUser('vet@customer.example', { createdAt: at('2026-01-05') });
+    await insertUser('idle@customer.example', { createdAt: at('2026-10-05') });
+    await insertUser('staff-idle@staff.example.com', { createdAt: at('2026-10-05') });
+    await usage(veteran, '2026-10-10');
+
+    const report = await run();
+
+    expect(report.externalUsers).toBe(1);
+    expect(report.dau.find(row => row.day === '2026-10-10')?.users).toBe(1);
+    expect(report.cohorts.rows).toEqual([
+      expect.objectContaining({
+        weekStart: '2026-10-04',
+        signups: 1,
+        activated: 0,
+        activatedPercent: 0,
+        retention: { 1: 0, 7: null, 30: null },
+      }),
+    ]);
   });
 
   it('applies a custom --test-pattern', async () => {
@@ -198,8 +220,10 @@ describe('runExternalActivityReport', () => {
     const report = await run();
 
     expect(report.externalUsers).toBe(1); // erin only has the copy
-    expect(report.cohorts.rows).toEqual([expect.objectContaining({ weekStart: '2026-10-04', users: 1 })]);
-    expect(report.cohorts.skippedAtWindowStart).toBe(0);
+    // Both signed up 10-10 (default); only dave is activated, erin's only quest is a copy.
+    expect(report.cohorts.rows).toEqual([
+      expect.objectContaining({ weekStart: '2026-10-04', signups: 2, activated: 1 }),
+    ]);
     expect(report.dau.reduce((sum, row) => sum + row.users, 0)).toBe(1);
   });
 
@@ -212,7 +236,7 @@ describe('runExternalActivityReport', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('DAU (UTC, last 30 days)');
     expect(lines[0]).toContain('UsageEvent rows by source');
-    expect(lines[0]).toContain('Weekly cohorts');
+    expect(lines[0]).toContain('Weekly signup cohorts');
     expect(lines[0]).not.toContain('@');
   });
 });

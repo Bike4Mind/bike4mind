@@ -29,6 +29,9 @@ const UNSET_SOURCE = 'unset';
 export const toUtcDay = (date: Date): number => Math.floor(date.getTime() / MS_PER_DAY);
 export const formatUtcDay = (day: number): string => new Date(day * MS_PER_DAY).toISOString().slice(0, 10);
 
+/** UTC midnight of the first day of a `days`-day window ending on the UTC day of `now`. */
+export const windowStartDay = (now: Date, days: number): Date => new Date((toUtcDay(now) - days + 1) * MS_PER_DAY);
+
 /** Epoch day 0 (1970-01-01) was a Thursday, so Sunday-based weekday is (day + 4) % 7. */
 const utcWeekStart = (day: number): number => day - ((day + 4) % 7);
 
@@ -52,13 +55,17 @@ Usage: report:external-active-users [--days <n>] [--test-pattern <regex>] [--hel
   --help                 Show this text.
 
 An active user-day is a distinct userId with a UsageEvent (status ok), a Quest chat message or an
-AgentExecution on a UTC day. Excluded: admins, emails ending in a NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
-domain, emails matching --test-pattern, and userIds with no User document.
+AgentExecution (any status: starting a run is the user's action, a failure is ours) on a UTC day.
+Excluded: admins, emails ending in a NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS domain, emails matching
+--test-pattern, and userIds with no User document.
 
-Cohort = week (UTC Sunday start) of the user's first active day in the window. Users whose first
-day is the window start are skipped (they may predate it). D-N is the share of the cohort active
-exactly N days after their first day; '-' means the cohort's newest possible member has fewer than
-N full days behind them.
+Cohort = external users whose User.createdAt falls inside the window, grouped by the UTC Sunday-start
+week of their signup day. Users who signed up before the window count toward DAU but are in no
+cohort. Signups counts every in-window signup, including users who never became active; Activated
+is the share with at least one active day. D-N is retained / Signups, where retained means active
+exactly N days after the signup day. '-' means the cohort's newest possible signup has fewer than N
+full days behind them; a shown D-N therefore always covers every signup in the cohort. The first
+cohort can be partial: it holds only signups from the window start.
 
 Env: MONGODB_URI (or the SST config), NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS (comma-separated).`;
 
@@ -140,6 +147,7 @@ export type ExclusionReason = 'noUser' | 'admin' | 'staffDomain' | 'testPattern'
 export interface UserRecord {
   email?: string | null;
   isAdmin?: boolean | null;
+  createdAt?: Date | null;
 }
 
 export interface ExclusionRules {
@@ -175,6 +183,15 @@ export function selectExternal(
     else external.set(userId, days);
   }
   return { external, excluded };
+}
+
+/** userId -> UTC signup day for external users with a createdAt, whether or not they were ever active. */
+export function selectExternalSignups(users: Map<string, UserRecord>, rules: ExclusionRules): Map<string, number> {
+  const signups = new Map<string, number>();
+  for (const [userId, user] of users) {
+    if (user.createdAt && exclusionReason(user, rules) === null) signups.set(userId, toUtcDay(user.createdAt));
+  }
+  return signups;
 }
 
 // --- Series ---
@@ -215,45 +232,46 @@ export function countRowsBySource(sourceCounts: UserSourceCounts, external: User
 
 export interface CohortRow {
   weekStart: string;
-  users: number;
-  /** Percent of the cohort active exactly N days after their first day; null when the cohort is too young. */
+  /** External signups in the window that week, active or not. */
+  signups: number;
+  /** Signups with at least one active day. */
+  activated: number;
+  /** Percent of signups that activated. */
+  activatedPercent: number;
+  /** Percent of signups active exactly N days after their signup day; null when the cohort is too young. */
   retention: Record<RetentionOffset, number | null>;
 }
 
 export interface CohortTable {
   rows: CohortRow[];
-  /** Users whose first active day is the window start: they may predate it, so they are not a cohort. */
-  skippedAtWindowStart: number;
 }
 
 /**
- * Weekly cohorts by first active day. Today is a partial day, so a D-N value is measured only when
- * the cohort's last possible first day (week start + 6) plus N is at most yesterday; that keeps a
- * cohort's members all measurable or all not, instead of biasing toward early joiners.
+ * Weekly cohorts by signup week. Today is a partial day, so a D-N value is measured only when the
+ * cohort's last possible signup day (week start + 6) plus N is at most yesterday; that keeps a
+ * cohort's members all measurable or all not, instead of biasing toward early signups. Signups
+ * before `windowFirstDay` are not in any cohort.
  */
 export function buildCohorts(
   userDays: UserDayMap,
-  { todayDay, windowStartDay }: { todayDay: number; windowStartDay: number }
+  signups: Map<string, number>,
+  { todayDay, windowFirstDay }: { todayDay: number; windowFirstDay: number }
 ): CohortTable {
-  const weeks = new Map<number, { users: number; retained: Record<RetentionOffset, number> }>();
-  let skippedAtWindowStart = 0;
+  const weeks = new Map<number, { signups: number; activated: number; retained: Record<RetentionOffset, number> }>();
 
-  for (const activeDays of userDays.values()) {
-    if (activeDays.size === 0) continue;
-    const firstDay = Math.min(...activeDays);
-    if (firstDay === windowStartDay) {
-      skippedAtWindowStart += 1;
-      continue;
-    }
-    const week = utcWeekStart(firstDay);
+  for (const [userId, signupDay] of signups) {
+    if (signupDay < windowFirstDay) continue;
+    const week = utcWeekStart(signupDay);
     let cohort = weeks.get(week);
     if (!cohort) {
-      cohort = { users: 0, retained: { 1: 0, 7: 0, 30: 0 } };
+      cohort = { signups: 0, activated: 0, retained: { 1: 0, 7: 0, 30: 0 } };
       weeks.set(week, cohort);
     }
-    cohort.users += 1;
+    cohort.signups += 1;
+    const activeDays = userDays.get(userId);
+    if (activeDays && activeDays.size > 0) cohort.activated += 1;
     for (const offset of RETENTION_OFFSETS) {
-      if (activeDays.has(firstDay + offset)) cohort.retained[offset] += 1;
+      if (activeDays?.has(signupDay + offset)) cohort.retained[offset] += 1;
     }
   }
 
@@ -262,11 +280,17 @@ export function buildCohorts(
     .map(([week, cohort]): CohortRow => {
       const retention = { 1: null, 7: null, 30: null } as CohortRow['retention'];
       for (const offset of RETENTION_OFFSETS) {
-        if (week + 6 + offset <= todayDay - 1) retention[offset] = (cohort.retained[offset] / cohort.users) * 100;
+        if (week + 6 + offset <= todayDay - 1) retention[offset] = (cohort.retained[offset] / cohort.signups) * 100;
       }
-      return { weekStart: formatUtcDay(week), users: cohort.users, retention };
+      return {
+        weekStart: formatUtcDay(week),
+        signups: cohort.signups,
+        activated: cohort.activated,
+        activatedPercent: (cohort.activated / cohort.signups) * 100,
+        retention,
+      };
     });
-  return { rows, skippedAtWindowStart };
+  return { rows };
 }
 
 // --- Report ---
@@ -293,18 +317,21 @@ export function buildReport(input: {
 }): ExternalActivityReport {
   const { userDays, sourceCounts, users, rules, days, now } = input;
   const todayDay = toUtcDay(now);
-  const windowStartDay = todayDay - days + 1;
+  const windowStart = windowStartDay(now, days);
   const { external, excluded } = selectExternal(userDays, users, rules);
   return {
     today: formatUtcDay(todayDay),
-    windowStart: formatUtcDay(windowStartDay),
+    windowStart: formatUtcDay(toUtcDay(windowStart)),
     days,
     externalUsers: external.size,
     excluded,
     staffExclusionConfigured: rules.staffEmail !== null,
     dau: dauSeries(external, todayDay, Math.min(DAU_DAYS, days)),
     sources: countRowsBySource(sourceCounts, external),
-    cohorts: buildCohorts(external, { todayDay, windowStartDay }),
+    cohorts: buildCohorts(external, selectExternalSignups(users, rules), {
+      todayDay,
+      windowFirstDay: toUtcDay(windowStart),
+    }),
   };
 }
 
@@ -313,6 +340,7 @@ const pad = (cells: string[], widths: number[]): string =>
     .map((c, i) => c.padEnd(widths[i]))
     .join('  ')
     .trimEnd();
+const COHORT_WIDTHS = [10, 8, 10, 7, 7, 7, 7];
 const percent = (value: number | null): string => (value === null ? '-' : `${value.toFixed(1)}%`);
 
 export function formatReport(report: ExternalActivityReport): string {
@@ -343,22 +371,23 @@ export function formatReport(report: ExternalActivityReport): string {
   const sourceWidth = Math.max(6, ...report.sources.map(s => s.source.length));
   for (const row of report.sources) lines.push(pad([row.source, String(row.rows)], [sourceWidth, 8]));
 
-  lines.push('', 'Weekly cohorts (first active day in the window, UTC Sunday start)');
-  lines.push(pad(['Cohort', 'Users', 'D1', 'D7', 'D30'], [10, 6, 7, 7, 7]));
+  lines.push('', 'Weekly signup cohorts (external signups in the window, UTC Sunday start)');
+  lines.push(pad(['Cohort', 'Signups', 'Activated', 'Act %', 'D1', 'D7', 'D30'], COHORT_WIDTHS));
   for (const row of report.cohorts.rows) {
     lines.push(
       pad(
         [
           row.weekStart,
-          String(row.users),
+          String(row.signups),
+          String(row.activated),
+          percent(row.activatedPercent),
           percent(row.retention[1]),
           percent(row.retention[7]),
           percent(row.retention[30]),
         ],
-        [10, 6, 7, 7, 7]
+        COHORT_WIDTHS
       )
     );
   }
-  lines.push(`Skipped ${report.cohorts.skippedAtWindowStart} user(s) whose first active day is the window start.`);
   return lines.join('\n');
 }
