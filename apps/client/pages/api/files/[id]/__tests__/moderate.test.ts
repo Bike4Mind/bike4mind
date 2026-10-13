@@ -144,11 +144,23 @@ describe('POST /api/files/[id]/moderate', () => {
     expect(res.body).toEqual({ moderationStatus: 'pending' });
   });
 
-  it('hands the claim back and reports pending, never blocked, on a transient scan failure', async () => {
+  it('retries a transient scan failure once and lands the verdict when the retry succeeds', async () => {
+    h.scan.mockRejectedValueOnce(new Error('Rekognition throttled'));
+    const res = makeRes();
+    await handler(makeReq(), res);
+
+    expect(h.scan).toHaveBeenCalledTimes(2);
+    expect(h.release).not.toHaveBeenCalled();
+    expect(h.writeVerdict).toHaveBeenCalledWith('oid1', expect.any(Date), { moderationStatus: 'clean' });
+    expect(res.body).toEqual({ moderationStatus: 'clean' });
+  });
+
+  it('hands the claim back and reports pending, never blocked, when the retry also fails', async () => {
     h.scan.mockRejectedValue(new Error('Rekognition throttled'));
     const res = makeRes();
     await handler(makeReq(), res);
 
+    expect(h.scan).toHaveBeenCalledTimes(2);
     expect(h.writeVerdict).not.toHaveBeenCalled();
     expect(h.release).toHaveBeenCalledWith('oid1', expect.any(Date));
     expect(res.body).toEqual({ moderationStatus: 'pending' });
