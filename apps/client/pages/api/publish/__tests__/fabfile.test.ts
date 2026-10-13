@@ -232,4 +232,14 @@ describe('POST /api/publish/fabfile - re-publish updates the owner record in pla
     expect(update.$set).toMatchObject({ publicId: 'live1', visibility: 'private' });
     expect(mocks.invalidatePublishCdn).toHaveBeenCalledWith({ publicId: 'live1' }, expect.anything());
   });
+
+  it('answers 409, not a duplicate-key 500, when the page is removed between lookup and write', async () => {
+    mocks.findOneAndUpdate.mockImplementation(async (_f: unknown, _u: unknown, opts: { upsert?: boolean }) => {
+      if (opts.upsert) throw Object.assign(new Error('E11000 duplicate key error collection'), { code: 11000 });
+      return null;
+    });
+    const res = await run(makeReq());
+    expect(res.statusCode).toBe(409);
+    expect(mocks.invalidatePublishCdn).not.toHaveBeenCalled();
+  });
 });

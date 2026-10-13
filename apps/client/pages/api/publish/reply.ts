@@ -203,8 +203,13 @@ const handler = baseApi().post(async (req, res) => {
       },
       $setOnInsert: { ownerId: userId },
     },
-    { upsert: true, new: true }
+    // Upsert only for a first publish. If `existing` was deleted after the lookup, an upsert would
+    // try to re-insert its _id over the soft-deleted row and fail with a duplicate key.
+    { upsert: !existing, new: true }
   );
+  if (!saved) {
+    return res.status(409).json({ error: 'This page was removed while it was being updated. Please try again.' });
+  }
 
   // The serve route lets a CDN cache open-public pages, so a page that WAS public must be purged
   // or a downgrade to Private/Team keeps serving the cached public copy until its TTL runs out.

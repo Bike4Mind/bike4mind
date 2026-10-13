@@ -259,6 +259,18 @@ describe('POST /api/publish/reply - re-publish updates the owner record in place
     );
   });
 
+  it('answers 409, not a duplicate-key 500, when the page is removed between lookup and write', async () => {
+    // Models the store: the row is soft-deleted, so the in-place filter matches nothing, and an
+    // upsert would re-insert the same _id over it.
+    dbMocks.findOneAndUpdate.mockImplementation(async (_f: unknown, _u: unknown, opts: { upsert?: boolean }) => {
+      if (opts.upsert) throw Object.assign(new Error('E11000 duplicate key error collection'), { code: 11000 });
+      return null;
+    });
+    const res = await run({ id: OWNER }, { visibility: 'private' });
+    expect(res.statusCode).toBe(409);
+    expect(dbMocks.restrictDuplicatePublications).not.toHaveBeenCalled();
+  });
+
   it('does not purge when nothing public was or is being served', async () => {
     dbMocks.publishedFindOneLean.mockResolvedValue(null);
     await run({ id: OWNER }, { visibility: 'private' });
