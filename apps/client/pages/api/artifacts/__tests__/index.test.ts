@@ -42,7 +42,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@server/utils/resolveActiveOrg', () => ({
-  resolveActiveOrg: async (_req: unknown, orgId: string) => {
+  resolveActiveOrg: async (_req: unknown, orgId?: string) => {
+    if (!orgId?.trim()) return undefined;
     if (orgId === 'foreign-org') {
       const { ForbiddenError } = await import('@server/utils/errors');
       throw new ForbiddenError('You are not a member of the selected organization.');
@@ -204,6 +205,15 @@ describe('POST /api/artifacts organization scope', () => {
 
     await expect(Promise.resolve(mockRefs.postHandler!(req, res))).rejects.toMatchObject({ statusCode: 403 });
     expect(mockRefs.createArgs).toBeUndefined();
+  });
+
+  it.each(['', '  '])('stores no organization for a blank organizationId (%j)', async blank => {
+    const { req, res } = invokePost(body(blank));
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockRefs.createArgs?.[1]).toMatchObject({ organizationId: undefined });
   });
 
   it('creates under an organization the caller belongs to', async () => {

@@ -6,6 +6,7 @@ import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { Artifact, ArtifactContent, ArtifactVersion, Session, withTransaction } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
@@ -34,7 +35,10 @@ const USER = 'artifact-import-owner';
 
 beforeAll(async () => {
   mongoServer = await createMongoReplSet();
-  await mongoose.connect(mongoServer.getUri());
+  // No assertion depends on a schema index, so skip the builds and settle collection creates before
+  // the first transaction (see settleAutoIndexBuilds for the pool deadlock this avoids).
+  await mongoose.connect(mongoServer.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();

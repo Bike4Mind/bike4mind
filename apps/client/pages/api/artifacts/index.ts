@@ -129,9 +129,7 @@ const handler = baseApi()
 
       const validatedData = CreateArtifactSchema.parse(req.body);
 
-      if (validatedData.organizationId) {
-        validatedData.organizationId = await resolveActiveOrg(req as Request, validatedData.organizationId);
-      }
+      validatedData.organizationId = await resolveActiveOrg(req as Request, validatedData.organizationId);
 
       if (isAiAuthoredCreate(validatedData.metadata) && !(await areUserArtifactsEnabled(user))) {
         return res.status(403).json({ error: 'Artifacts are disabled for this user' });

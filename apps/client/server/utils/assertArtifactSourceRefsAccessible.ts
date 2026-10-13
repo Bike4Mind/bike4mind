@@ -14,7 +14,7 @@ export type ArtifactSourceRefs = artifactService.ArtifactSourceRefs;
  * check would wrongly 403 that flow, and a read-only sharee should not be able to reference the
  * session either. `canUpdateSession` therefore mirrors the session repo's update-access predicate
  * (owner OR update share OR group update share OR global-write share) - the same idiom used
- * elsewhere for writing into a shared object - and closes over the caller in the route.
+ * elsewhere for writing into a shared object - and closes over the acting user.
  *
  * A quest carries no user of its own, so its access is transitive through the session it belongs
  * to (top-level `sessionId`): resolve the quest's session, then apply the same update-access check.
@@ -32,8 +32,8 @@ export interface ArtifactRefAccessDeps {
 }
 
 /**
- * Reject caller-supplied provenance refs the caller is not entitled to reference. The artifact
- * create endpoint writes `sessionId` / `sourceQuestId` / `parentArtifactId` straight onto the new
+ * Reject caller-supplied provenance refs the caller is not entitled to reference. `artifactService.create`
+ * (for every caller: route, agent persistence, notebook import) writes `sessionId` / `sourceQuestId` / `parentArtifactId` straight onto the new
  * artifact with the caller's own id as owner, so without this an authenticated user could stamp
  * their artifact as sourced-from / session-of / child-of a session, quest, or artifact they have
  * no write access to (an object-level authorization / IDOR gap). Fails loud (403). Each ref is

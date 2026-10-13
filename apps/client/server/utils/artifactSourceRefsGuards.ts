@@ -46,14 +46,22 @@ export function createOwnedArtifactSourceRefsGuard(): ArtifactSourceRefsGuard {
 /**
  * Guard for a run that creates many artifacts: the acting user is loaded on the first call only
  * (concurrent calls share the load), and a failed load is not cached so a later call retries.
+ * A call for a different userId than the one loaded is refused rather than judged against the wrong user.
  */
 export function createLazyArtifactSourceRefsGuard(
   loadUser: (userId: string) => Promise<IUserDocument | null | undefined>
 ): ArtifactSourceRefsGuard {
   let guardPromise: Promise<ArtifactSourceRefsGuard> | undefined;
+  let guardUserId: string | undefined;
 
   const getGuard = (userId: string): Promise<ArtifactSourceRefsGuard> => {
-    if (guardPromise) return guardPromise;
+    if (guardPromise) {
+      if (guardUserId !== userId) {
+        return Promise.reject(new Error('Cannot persist artifact: guard is bound to a different user'));
+      }
+      return guardPromise;
+    }
+    guardUserId = userId;
     const pending = (async () => {
       const user = await loadUser(userId);
       if (!user) throw new Error('Cannot persist artifact: user not found');
@@ -61,7 +69,10 @@ export function createLazyArtifactSourceRefsGuard(
     })();
     guardPromise = pending;
     pending.catch(() => {
-      if (guardPromise === pending) guardPromise = undefined;
+      if (guardPromise === pending) {
+        guardPromise = undefined;
+        guardUserId = undefined;
+      }
     });
     return pending;
   };

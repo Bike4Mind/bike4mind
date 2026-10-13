@@ -158,6 +158,17 @@ describe('createLazyArtifactSourceRefsGuard', () => {
     expect(loadUser).toHaveBeenCalledWith('collab');
   });
 
+  it('refuses a call for a different user than the one loaded', async () => {
+    mocks.findUpdateAccessById.mockResolvedValue({ id: 's1' });
+    const loadUser = vi.fn().mockResolvedValue(user);
+    const guard = createLazyArtifactSourceRefsGuard(loadUser);
+
+    await guard('collab', { sessionId: 's1' });
+
+    await expect(guard('other', { sessionId: 's1' })).rejects.toThrow('different user');
+    expect(loadUser).toHaveBeenCalledTimes(1);
+  });
+
   it('throws when the user is not found and retries the load on the next call', async () => {
     mocks.findUpdateAccessById.mockResolvedValue({ id: 's1' });
     const loadUser = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(user);
