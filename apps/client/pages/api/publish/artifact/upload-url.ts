@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { v4 as uuidv4 } from 'uuid';
 import { getPublishedArtifactsStorage } from '@server/utils/storage';
+import { PublishedArtifact } from '@bike4mind/database';
 import {
   UploadUrlRequestSchema,
   PUBLISH_LIMITS,
@@ -14,6 +15,8 @@ import {
   resolveVisibility,
   checkPublishQuota,
   mintDraftUploadUrl,
+  mayRepublishSlug,
+  SLUG_OWNED_BY_OTHER,
   type PublishUser,
 } from '@server/services/publish';
 
@@ -96,6 +99,18 @@ const handler = baseApi().post(async (req, res) => {
   const viz = resolveVisibility(body.tier, body.visibility);
   if (!viz.ok) {
     return res.status(400).json({ error: viz.error, code: viz.code });
+  }
+
+  const existing = await PublishedArtifact.findOne({
+    tier: body.tier,
+    scopeId: body.scopeId,
+    slug: body.slug,
+    deletedAt: null,
+  })
+    .select('ownerId')
+    .lean<{ ownerId: string } | null>();
+  if (existing && !mayRepublishSlug(existing.ownerId, publishUser)) {
+    return res.status(403).json({ error: 'Only the owner can republish this slug', code: SLUG_OWNED_BY_OTHER });
   }
 
   // ── Cumulative per-owner quota (count + bytes) ──
