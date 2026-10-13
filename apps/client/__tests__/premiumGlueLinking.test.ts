@@ -123,9 +123,12 @@ describe('hydrated but UNLINKED overlay', () => {
     expect(nav).not.toContain(PKG_NAME);
     expect(nav).toContain('premiumNavItems: PremiumNavDescriptor[] = []');
 
-    const sidenav = readFileSync(join(clientRoot, 'app/premium-generated/premiumNotebookSidenav.generated.ts'), 'utf8');
+    const sidenav = readFileSync(
+      join(clientRoot, 'app/premium-generated/premiumNotebookSidenavs.generated.ts'),
+      'utf8'
+    );
     expect(sidenav).not.toContain(PKG_NAME);
-    expect(sidenav).toContain('premiumNotebookSidenav: PremiumNotebookSidenav = null');
+    expect(sidenav).toContain('premiumNotebookSidenavs: PremiumNotebookSidenavEntry[] = []');
 
     // PromptReplies imports this statically, so it must never name an unresolvable package.
     const accessories = readFileSync(
@@ -183,7 +186,10 @@ describe('hydrated AND linked overlay', () => {
     const nav = readFileSync(join(clientRoot, 'app/premium-generated/premiumNavItems.generated.ts'), 'utf8');
     expect(nav).toContain(`from '${PKG_NAME}/nav'`);
 
-    const sidenav = readFileSync(join(clientRoot, 'app/premium-generated/premiumNotebookSidenav.generated.ts'), 'utf8');
+    const sidenav = readFileSync(
+      join(clientRoot, 'app/premium-generated/premiumNotebookSidenavs.generated.ts'),
+      'utf8'
+    );
     expect(sidenav).toContain(`import('${PKG_NAME}/sidenav')`);
 
     const accessories = readFileSync(
