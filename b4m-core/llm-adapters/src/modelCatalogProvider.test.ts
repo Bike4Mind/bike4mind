@@ -3,6 +3,8 @@ import { ChatModels, ModelBackend } from '@bike4mind/common';
 import type { IModelCatalogRow } from '@bike4mind/common';
 import { getAvailableModels, setModelCatalogProvider, setModelPriceRowsProvider } from './index';
 import { replacedByOverlayEntries, resetReplacedByOverlay } from './resolveDeprecatedModel';
+import { AnthropicBackend } from './anthropicBackend';
+import { directTwinId } from './routeTwinNames';
 
 // apiKeys=null assembles only the keyless backends (Bedrock/AWS/BFL), all
 // static - no network. Pick a Bedrock text model as the overlay target.
@@ -40,6 +42,17 @@ describe('getAvailableModels model catalog provider', () => {
     const target = models.find(m => m.id === TARGET);
     expect(target).toBeDefined();
     expect(target!.rank).not.toBe(4242);
+  });
+
+  it('renames a Bedrock route after its direct twin even when a discovery row named it', async () => {
+    setModelCatalogProvider(async () => [{ ...row, ownedGroups: ['identity'], patch: { name: 'AWS Listing Name' } }]);
+
+    const models = await getAvailableModels(null);
+    const target = models.find(m => m.id === TARGET)!;
+    const twinId = directTwinId(target);
+    const direct = (await new AnthropicBackend('static-listing').getModelInfo()).find(m => m.id === twinId);
+    expect(direct).toBeDefined();
+    expect(target.name).toBe(direct!.name);
   });
 
   it('uses the adapter tables when no provider is wired', async () => {

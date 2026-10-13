@@ -1132,7 +1132,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               Via AWS Bedrock
             </Typography>
             <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-              The same models, served through AWS Bedrock instead of {backend}&apos;s own API.
+              Served through AWS Bedrock instead of the provider&apos;s own API.
             </Typography>
           </Box>
           {renderModelCards(bedrock)}

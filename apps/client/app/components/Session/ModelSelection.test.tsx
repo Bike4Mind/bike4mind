@@ -639,6 +639,31 @@ describe('ModelSelection direct and Bedrock routes', () => {
     expect(directCard.compareDocumentPosition(bedrockSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  // The catch-all "Other" group mixes makers, so the explanation must not name the group or claim
+  // the Bedrock rows are copies of the direct ones above them.
+  it('explains the Bedrock heading without naming the group', async () => {
+    extraTextModels.push(
+      { ...textModel, id: 'remote-mistral', name: 'Remote Mistral', backend: ModelBackend.Ollama } as ModelInfo,
+      {
+        ...textModel,
+        id: 'mistral.mistral-large-2407-v1:0',
+        name: 'Mistral Large',
+        backend: ModelBackend.Bedrock,
+      } as ModelInfo
+    );
+    renderSelection({});
+    // "Other" starts collapsed; a search expands every group.
+    fireEvent.change(screen.getByTestId('model-search-input').querySelector('input') as HTMLInputElement, {
+      target: { value: 'mistral' },
+    });
+
+    const bedrockSection = await screen.findByTestId('bedrock-route-section-Other-text');
+    expect(
+      within(bedrockSection).getByText("Served through AWS Bedrock instead of the provider's own API.")
+    ).toBeInTheDocument();
+    expect(within(bedrockSection).queryByText(/Other's/)).not.toBeInTheDocument();
+  });
+
   it('adds no route heading when a maker is served by one route only', () => {
     extraTextModels.push(bedrockHaiku);
     renderSelection({});
