@@ -421,5 +421,8 @@ describe('MultiStepLogin - passwordless email step copy', () => {
     // The email step exposes no password field and no forgot-password link.
     expect(document.querySelector('input[type="password"]')).toBeNull();
     expect(screen.queryByText(/forgot/i)).toBeNull();
+    // Accessible-name queries also catch an icon-only control labelled through aria-label.
+    expect(screen.queryByRole('link', { name: /forgot/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /forgot/i })).toBeNull();
   });
 });
