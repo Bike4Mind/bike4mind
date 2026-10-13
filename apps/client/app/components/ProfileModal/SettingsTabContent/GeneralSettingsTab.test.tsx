@@ -95,6 +95,7 @@ describe('GeneralSettingsTab danger zone', () => {
   it('confirming the notebooks delete runs only the sessions mutation', () => {
     renderTab();
     fireEvent.click(screen.getByTestId('settings-delete-all-notebooks-btn'));
+    fireEvent.change(screen.getByTestId('delete-all-confirm-input'), { target: { value: 'DELETE' } });
     fireEvent.click(screen.getByTestId('confirm-modal-confirm-btn'));
     expect(deleteSessionsMutation.mutate).toHaveBeenCalledTimes(1);
     expect(deleteFilesMutation.mutate).not.toHaveBeenCalled();
@@ -103,10 +104,24 @@ describe('GeneralSettingsTab danger zone', () => {
   it('confirming the knowledge files delete runs only the files mutation', () => {
     renderTab();
     fireEvent.click(screen.getByTestId('settings-delete-all-files-btn'));
+    fireEvent.change(screen.getByTestId('delete-all-confirm-input'), { target: { value: 'DELETE' } });
     fireEvent.click(screen.getByTestId('confirm-modal-confirm-btn'));
     expect(deleteFilesMutation.mutate).toHaveBeenCalledTimes(1);
     expect(deleteSessionsMutation.mutate).not.toHaveBeenCalled();
   });
+
+  it.each([['settings-delete-all-notebooks-btn'], ['settings-delete-all-files-btn']])(
+    'reopening the %s dialog starts with an empty field and a disabled delete',
+    openBtn => {
+      renderTab();
+      fireEvent.click(screen.getByTestId(openBtn));
+      fireEvent.change(screen.getByTestId('delete-all-confirm-input'), { target: { value: 'DELETE' } });
+      fireEvent.click(screen.getByTestId('confirm-modal-cancel-btn'));
+      fireEvent.click(screen.getByTestId(openBtn));
+      expect((screen.getByTestId('delete-all-confirm-input') as HTMLInputElement).value).toBe('');
+      expect((screen.getByTestId('confirm-modal-confirm-btn') as HTMLButtonElement).disabled).toBe(true);
+    }
+  );
 
   it('a delete that succeeds after its dialog was closed does not reopen it', async () => {
     renderTab();

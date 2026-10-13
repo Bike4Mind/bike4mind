@@ -22,7 +22,7 @@ vi.mock('@aws-sdk/client-cloudfront', () => ({
 // drive it per-test. Throwing models "not linked" (local/test) -> invalidation no-ops.
 vi.mock('@server/security/wafSharedHelpers', () => ({ resolveRouterDistributionId: resolveIdMock }));
 
-import { invalidatePublishCdn, publishCachePaths } from './invalidatePublishCdn';
+import { invalidatePublishCdn, invalidatePublishCdnMany, publishCachePaths } from './invalidatePublishCdn';
 
 const DIST_ID = 'E1A2B3C4D5E6F'; // valid CloudFront id format
 
@@ -101,5 +101,72 @@ describe('invalidatePublishCdn', () => {
     await expect(
       invalidatePublishCdn({ publicId: 'p1', tier: 'user', scopeId: 'u1', slug: 'r-p1', sourceKind: 'reply' })
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('invalidatePublishCdnMany', () => {
+  const short = (n: number, kind: 'reply' | 'fabfile') =>
+    Array.from({ length: n }, (_, i) => ({
+      publicId: `${kind}-${i}`,
+      tier: 'user' as const,
+      scopeId: 'u1',
+      slug: `x-${i}`,
+      sourceKind: kind,
+    }));
+  const sentPaths = () =>
+    sendMock.mock.calls.map(
+      ([cmd]) =>
+        (cmd as { input: { InvalidationBatch: { Paths: { Items: string[] } } } }).input.InvalidationBatch.Paths.Items
+    );
+
+  it('sends the paths of many replies and files in one request', async () => {
+    await invalidatePublishCdnMany([...short(3, 'reply'), ...short(2, 'fabfile')]);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sentPaths()[0]).toEqual([
+      '/p/r/reply-0',
+      '/p/r/reply-1',
+      '/p/r/reply-2',
+      '/p/f/fabfile-0',
+      '/p/f/fabfile-1',
+    ]);
+  });
+
+  it('splits a large takedown into batches of at most 1000 paths', async () => {
+    await invalidatePublishCdnMany(short(2500, 'reply'));
+
+    expect(sentPaths().map(p => p.length)).toEqual([1000, 1000, 500]);
+    const refs = sendMock.mock.calls.map(
+      ([cmd]) =>
+        (cmd as { input: { InvalidationBatch: { CallerReference: string } } }).input.InvalidationBatch.CallerReference
+    );
+    expect(new Set(refs).size).toBe(3);
+  });
+
+  it('keeps each bundle in its own request', async () => {
+    await invalidatePublishCdnMany([
+      { publicId: 'b1', tier: 'user', scopeId: 'u1', slug: 'one', sourceKind: 'bundle' },
+      ...short(1, 'reply'),
+      { publicId: 'b2', tier: 'user', scopeId: 'u1', slug: 'two', sourceKind: 'bundle' },
+    ]);
+
+    expect(sentPaths().map(p => p[0])).toEqual(['/p/u/u1/one', '/p/u/u1/two', '/p/r/reply-0']);
+  });
+
+  it('sends nothing for an empty list or an unconfigured distribution', async () => {
+    await invalidatePublishCdnMany([]);
+    resolveIdMock.mockImplementation(() => {
+      throw new Error('Router CloudFront distribution ID not available');
+    });
+    await invalidatePublishCdnMany(short(2, 'reply'));
+
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps going when one batch fails', async () => {
+    sendMock.mockRejectedValueOnce(new Error('Throttling'));
+
+    await expect(invalidatePublishCdnMany(short(1500, 'fabfile'))).resolves.toBeUndefined();
+    expect(sendMock).toHaveBeenCalledTimes(2);
   });
 });

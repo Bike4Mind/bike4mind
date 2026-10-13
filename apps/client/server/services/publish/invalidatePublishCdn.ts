@@ -95,21 +95,53 @@ interface MinimalLogger {
 export async function invalidatePublishCdn(target: PublishCacheTarget, logger?: MinimalLogger): Promise<void> {
   const distributionId = getRouterDistributionId(logger);
   if (!distributionId) return; // getRouterDistributionId already logged why
-  const paths = publishCachePaths(target);
+  await sendInvalidation(distributionId, target.publicId, publishCachePaths(target), logger);
+}
+
+// Well under CloudFront's cap on paths in flight per distribution.
+const MAX_PATHS_PER_BATCH = 1000;
+
+/**
+ * Invalidate many removed pages (a bulk takedown) without one CloudFront call per page. Replies and
+ * files have one wildcard-free path each, so they share batches. Bundles keep one call each: their
+ * paths carry wildcards, which CloudFront caps far lower, and a batch over that cap would fail
+ * every page in it. Never throws.
+ */
+export async function invalidatePublishCdnMany(targets: PublishCacheTarget[], logger?: MinimalLogger): Promise<void> {
+  if (targets.length === 0) return;
+  const distributionId = getRouterDistributionId(logger);
+  if (!distributionId) return;
+  const shortPaths: string[] = [];
+  for (const target of targets) {
+    if (target.sourceKind === 'bundle') {
+      await sendInvalidation(distributionId, target.publicId, publishCachePaths(target), logger);
+    } else {
+      shortPaths.push(...publishCachePaths(target));
+    }
+  }
+  for (let i = 0; i < shortPaths.length; i += MAX_PATHS_PER_BATCH) {
+    await sendInvalidation(distributionId, `batch-${i}`, shortPaths.slice(i, i + MAX_PATHS_PER_BATCH), logger);
+  }
+}
+
+async function sendInvalidation(
+  distributionId: string,
+  label: string,
+  paths: string[],
+  logger?: MinimalLogger
+): Promise<void> {
   try {
     await cfClient.send(
       new CreateInvalidationCommand({
         DistributionId: distributionId,
         InvalidationBatch: {
-          CallerReference: `publish-${target.publicId}-${Date.now()}`,
+          CallerReference: `publish-${label}-${Date.now()}`,
           Paths: { Quantity: paths.length, Items: paths },
         },
       })
     );
-    logger?.info(`[PUBLISH] CDN invalidation issued for ${target.publicId}: ${paths.join(', ')}`);
+    logger?.info(`[PUBLISH] CDN invalidation issued for ${label}: ${paths.join(', ')}`);
   } catch (err) {
-    logger?.warn(
-      `[PUBLISH] CDN invalidation failed for ${target.publicId}: ${err instanceof Error ? err.message : String(err)}`
-    );
+    logger?.warn(`[PUBLISH] CDN invalidation failed for ${label}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
