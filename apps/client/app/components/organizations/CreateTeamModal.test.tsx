@@ -40,6 +40,8 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
+const sizeValue = () => (screen.getByTestId('create-team-size-value') as HTMLInputElement).value;
+
 describe('CreateTeamModal', () => {
   beforeEach(() => {
     mutateAsync.mockReset();
@@ -68,7 +70,7 @@ describe('CreateTeamModal', () => {
           <CreateTeamModal />
         </TestWrapper>
       );
-      expect(screen.getByText('3')).toBeTruthy();
+      expect(sizeValue()).toBe('3');
 
       // Settings arrive with a higher floor than the default the modal was mounted with.
       seatLimits.current = { minSeats: 5, maxSeats: 7 };
@@ -77,7 +79,7 @@ describe('CreateTeamModal', () => {
           <CreateTeamModal />
         </TestWrapper>
       );
-      expect(screen.getByText('5')).toBeTruthy();
+      expect(sizeValue()).toBe('5');
 
       // ...and a ceiling below the current pick.
       seatLimits.current = { minSeats: 2, maxSeats: 2 };
@@ -86,7 +88,7 @@ describe('CreateTeamModal', () => {
           <CreateTeamModal />
         </TestWrapper>
       );
-      expect(screen.getByText('2')).toBeTruthy();
+      expect(sizeValue()).toBe('2');
       expect(screen.getByText(/Total Price: \$20\/month/)).toBeTruthy();
     });
   });
@@ -130,7 +132,7 @@ describe('CreateTeamModal', () => {
     renderModal();
 
     // Read the size back rather than assuming the seat floor, which the admin settings can move.
-    const seats = Number(screen.getByTestId('create-team-size-value').textContent);
+    const seats = Number(sizeValue());
     expect(seats).toBeGreaterThan(0);
     expect(screen.getByTestId('create-team-price-value').textContent).toBe(`Total Price: $${seats * 10}/month`);
   });
@@ -165,5 +167,69 @@ describe('CreateTeamModal', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     process.off('unhandledRejection', unhandled);
     expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  describe('typing the seat count', () => {
+    afterEach(() => {
+      seatLimits.current = { minSeats: 3, maxSeats: 7 };
+    });
+
+    const typeSize = async (value: string) => {
+      const user = userEvent.setup({ delay: null });
+      const input = screen.getByTestId('create-team-size-value');
+      await user.clear(input);
+      if (value) await user.type(input, value);
+      return { user, input };
+    };
+
+    it('accepts a typed seat count and prices it', async () => {
+      seatLimits.current = { minSeats: 3, maxSeats: 50 };
+      renderModal();
+      const { user } = await typeSize('25');
+
+      expect(sizeValue()).toBe('25');
+      expect(screen.getByTestId('create-team-price-value').textContent).toBe('Total Price: $250/month');
+
+      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      await user.click(screen.getByTestId('create-team-submit-btn'));
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ quantity: 25 })));
+    });
+
+    it('clamps a value above the maximum on blur', async () => {
+      renderModal();
+      const { user } = await typeSize('99');
+      await user.tab();
+
+      expect(sizeValue()).toBe('7');
+      expect(screen.getByTestId('create-team-price-value').textContent).toBe('Total Price: $70/month');
+    });
+
+    it('clamps a value below the minimum on blur', async () => {
+      renderModal();
+      const { user } = await typeSize('1');
+      await user.tab();
+
+      expect(sizeValue()).toBe('3');
+      expect(screen.getByTestId('create-team-price-value').textContent).toBe('Total Price: $30/month');
+    });
+
+    it('rounds a fractional value to an integer on blur', async () => {
+      renderModal();
+      const { user } = await typeSize('5.4');
+      await user.tab();
+
+      expect(sizeValue()).toBe('5');
+    });
+
+    it('disables Create Team while the field is empty', async () => {
+      renderModal();
+      const user = userEvent.setup({ delay: null });
+      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(false);
+
+      await typeSize('');
+      expect(sizeValue()).toBe('');
+      expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
+    });
   });
 });
