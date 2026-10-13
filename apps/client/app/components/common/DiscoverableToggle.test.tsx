@@ -44,8 +44,7 @@ describe('DiscoverableToggle', () => {
 
   it('keeps the switch from shrinking beside the long helper text on a narrow viewport', () => {
     renderToggle();
-    const switchRoot = toggle().closest('.MuiSwitch-root') as HTMLElement;
-    expect(getComputedStyle(switchRoot).flexShrink).toBe('0');
+    expect(getComputedStyle(screen.getByTestId('discoverable-switch')).flexShrink).toBe('0');
     const textColumn = screen.getByTestId('discoverable-control').firstElementChild as HTMLElement;
     expect(getComputedStyle(textColumn).minWidth).toBe('0px');
   });
