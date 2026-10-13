@@ -298,6 +298,27 @@ describe('useConversationalVoice - credit hold on a failed start', () => {
     expect(endCalls()).toHaveLength(0);
   });
 
+  it('settles nothing when a concurrent call wins the bootstrap (409, server refunded the reserve)', async () => {
+    apiPost.mockImplementation((url: string) =>
+      url === '/api/voice/v2/sessions'
+        ? Promise.reject(
+            Object.assign(new Error('Request failed with status code 409'), {
+              isAxiosError: true,
+              response: { status: 409, data: { error: 'A voice call on this notebook is already starting' } },
+            })
+          )
+        : Promise.resolve({ data: {} })
+    );
+
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+
+    const state = useConversationalVoiceStore.getState();
+    expect(state.phase).toBe('error');
+    expect(state.errorMessage).toMatch(/409/);
+    expect(endCalls()).toHaveLength(0);
+    expect(startSessionMock).not.toHaveBeenCalled();
+  });
+
   it('settles the bootstrapped session when the call is ended while /sessions is in flight', async () => {
     let resolveBootstrap: (value: { data: typeof BOOTSTRAP }) => void = () => {
       throw new Error('Bootstrap was not requested');
