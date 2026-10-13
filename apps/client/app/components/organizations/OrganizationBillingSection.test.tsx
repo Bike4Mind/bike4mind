@@ -69,13 +69,15 @@ const renderSection = () => {
   return render(wrapper(<OrganizationBillingSection organization={org} />));
 };
 
-describe('OrganizationBillingSection - delinquent organization', () => {
-  beforeEach(() => {
-    subscriptionsData.current = [];
-    teamPlanFlag.current = true;
-    plansData.current = [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, unit_amount: 1000 }];
-  });
+// The stripe price and the Team-plan flag feed every block, and the seat modal only renders when a
+// price is present. Reset them per test so a block run on its own (or reordered) still sees them.
+beforeEach(() => {
+  subscriptionsData.current = [];
+  teamPlanFlag.current = true;
+  plansData.current = [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, unit_amount: 1000 }];
+});
 
+describe('OrganizationBillingSection - delinquent organization', () => {
   it('keeps the Billing Portal and hides self-serve subscribe and seat changes', () => {
     subscriptionsData.current = [row('past_due')];
 
@@ -274,12 +276,6 @@ describe('OrganizationBillingSection - subscribe mode', () => {
 });
 
 describe('OrganizationBillingSection - Team plan gate', () => {
-  beforeEach(() => {
-    subscriptionsData.current = [];
-    teamPlanFlag.current = true;
-    plansData.current = [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, unit_amount: 1000 }];
-  });
-
   it('disables Subscribe Now and states why when Team plans are off', () => {
     teamPlanFlag.current = false;
 
