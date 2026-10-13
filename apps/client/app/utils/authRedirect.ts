@@ -66,6 +66,11 @@ export function buildLoginRedirectUrl(
   return `/login?${params.toString()}`;
 }
 
+/** True for the published-artifact viewer paths (`/p/...`, `/a/...`) the SPA router does not own. */
+export function isServerRenderedPath(path: string): boolean {
+  return /^\/(p|a)\//.test(path);
+}
+
 /**
  * Navigates to a sanitized `redirectTo` path using the router history, which
  * accepts a raw URL string (including a query string). Falls back to `/new`
@@ -92,6 +97,14 @@ export function applyRedirect(
   replace = false
 ): void {
   const target = sanitizeRedirectTo(rawRedirectTo) ?? fallback;
+  // Published pages are served by the API (next.config.mjs rewrites), not the SPA router, so a
+  // history push would land on the SPA's not-found page. Only reachable with an already
+  // sanitized same-origin path.
+  if (isServerRenderedPath(target)) {
+    if (replace) window.location.replace(target);
+    else window.location.assign(target);
+    return;
+  }
   if (replace) {
     history.replace(target);
   } else {

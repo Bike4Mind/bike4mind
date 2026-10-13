@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import useDrivePicker from 'react-google-drive-picker';
-import { api } from '@client/app/contexts/ApiContext';
+import { fetchDriveAccessToken } from '@client/app/hooks/data/driveAccessToken';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePickerStyles';
 
@@ -30,10 +30,6 @@ async function waitForPickerApi(): Promise<boolean> {
   if (!(await waitUntil(isPickerApiLoaded))) return false;
   await sleep(PICKER_READY_POLL_MS); // let the library's own loaded state render before calling it
   return true;
-}
-
-function httpStatus(e: unknown): number | undefined {
-  return (e as { response?: { status?: number } })?.response?.status;
 }
 
 /**
@@ -88,30 +84,15 @@ export function useDriveFolderPicker({
     if (isPicking || busy) return; // re-entrancy guard: never open a second picker
     setIsPicking(true);
     try {
-      let token: { accessToken?: string; authUrl?: string };
-      try {
-        const { data } = await api.get<{ accessToken?: string; authUrl?: string }>('/api/google-drive/token');
-        token = data;
-      } catch (e) {
-        // First-time user: /token 400s ("Google Drive not connected") when Drive was never linked.
-        // Send them to Google's consent screen (the same POST /connect the profile flow uses); they
-        // come back and can then pick a folder. Any other error falls through to the outer catch.
-        if (httpStatus(e) === 400) {
-          const { data } = await api.post<{ authUrl: string }>('/api/google-drive/connect');
-          redirectToConsent(data.authUrl);
-          return;
-        }
-        throw e;
-      }
-
-      // Not connected / refresh failed: /token hands back an authUrl instead of a token.
-      if (token.authUrl) {
+      const token = await fetchDriveAccessToken();
+      if (token.kind === 'consent') {
         redirectToConsent(token.authUrl);
         return;
       }
-      const configLoaded = token.accessToken ? await waitUntil(() => configRef.current !== undefined) : false;
+      const accessToken = token.kind === 'token' ? token.accessToken : undefined;
+      const configLoaded = accessToken ? await waitUntil(() => configRef.current !== undefined) : false;
       const googleClientId = configLoaded ? configRef.current?.googleClientId : undefined;
-      if (!token.accessToken || !googleClientId) {
+      if (!accessToken || !googleClientId) {
         toast.error('Google Drive is unavailable right now. Please try again.');
         setIsPicking(false);
         return;
@@ -129,7 +110,7 @@ export function useDriveFolderPicker({
         developerKey: '',
         viewId: 'FOLDERS', // folder-first browse; the user selects a folder to ingest
         viewMimeTypes: '',
-        token: token.accessToken,
+        token: accessToken,
         showUploadFolders: false,
         supportDrives: true,
         multiselect: false,

@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   params: undefined as unknown,
   users: [] as Array<Record<string, unknown>>,
-  currentUser: { id: 'owner-id', groups: [] as string[] } as { id: string; groups: string[] } | null,
+  currentUser: { id: 'owner-id', groups: [] as string[] } as { id: string; groups: string[]; email?: string } | null,
+  term: '',
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: mocks.currentUser }) }));
@@ -20,6 +21,10 @@ vi.mock('@client/app/hooks/data/user', () => ({
 }));
 vi.mock('@client/app/hooks/data/invites', () => ({
   useShareDocument: () => ({ mutate: mocks.mutate, isPending: false }),
+}));
+vi.mock('lodash', async importOriginal => ({
+  ...(await importOriginal<typeof import('lodash')>()),
+  debounce: <F,>(fn: F) => fn,
 }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn() }) }));
 vi.mock('react-i18next', () => ({
@@ -34,9 +39,13 @@ vi.mock('./GenericAddItemsModal', () => ({
     items: T[];
     getItemId: (item: T) => string;
     onAdd: (ids: string[]) => void;
+    onSearch: (term: string) => void;
+    renderNoResults?: (term: string) => ReactNode;
     renderItem: (item: T, isSelected: boolean, onSelect: () => void) => ReactNode;
   }) => (
     <div>
+      <button data-testid="search-btn" onClick={() => props.onSearch(mocks.term)} />
+      {props.items.length === 0 && mocks.term && props.renderNoResults?.(mocks.term)}
       {props.items.map(item => (
         <div key={props.getItemId(item)}>{props.renderItem(item, false, () => {})}</div>
       ))}
@@ -78,6 +87,7 @@ const sharedProject = (users: unknown[], groups: unknown[] = []) =>
 describe('ProjectAddMembersModal', () => {
   beforeEach(() => {
     mocks.mutate.mockReset();
+    mocks.term = '';
     mocks.currentUser = { id: OWNER, groups: [] };
     // The non-admin picker returns no email, and an exact-email match outside the caller's
     // workspaces carries no username either.
@@ -115,6 +125,43 @@ describe('ProjectAddMembersModal', () => {
     expect(invitee.getAttribute('data-selectable')).toBe('false');
     expect(colleague.getAttribute('data-invite-status')).toBe('');
     expect(colleague.getAttribute('data-selectable')).toBe('true');
+  });
+
+  describe('invite by email', () => {
+    const searchFor = (term: string) => {
+      mocks.term = term;
+      fireEvent.click(screen.getByTestId('search-btn'));
+    };
+
+    beforeEach(() => {
+      mocks.users = [];
+      mocks.currentUser = { id: OWNER, groups: [], email: 'owner@example.com' };
+    });
+
+    it('offers an email invite when an exact address matches nobody, and sends it to that address', () => {
+      render(<ProjectAddMembersModal project={project} ownerId={OWNER} />);
+      searchFor(' New.Person@Example.com');
+
+      fireEvent.click(screen.getByTestId('project-invite-by-email-btn'));
+      expect(mocks.mutate).toHaveBeenCalledTimes(1);
+      expect(mocks.mutate.mock.calls[0][0]).toMatchObject({
+        recipients: ['new.person@example.com'],
+        id: 'project-id',
+        type: 'Project',
+      });
+    });
+
+    it('does not offer an email invite for a partial term', () => {
+      render(<ProjectAddMembersModal project={project} ownerId={OWNER} />);
+      searchFor('new.person@');
+      expect(screen.queryByTestId('project-invite-by-email-btn')).toBeNull();
+    });
+
+    it('does not offer to invite the caller themselves', () => {
+      render(<ProjectAddMembersModal project={project} ownerId={OWNER} />);
+      searchFor('owner@example.com');
+      expect(screen.queryByTestId('project-invite-by-email-btn')).toBeNull();
+    });
   });
 
   describe('share access', () => {

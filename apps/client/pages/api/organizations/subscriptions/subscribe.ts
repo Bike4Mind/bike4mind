@@ -5,6 +5,7 @@ import { SubscriptionOwnerType, isDelinquentSubscriptionStatus } from '@client/l
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -127,6 +128,7 @@ const handler = baseApi()
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
+      ...USD_CHECKOUT_SESSION_PARAMS,
       customer: customerId,
       payment_method_types: ['card'],
       line_items: [

@@ -20,7 +20,8 @@ import {
 } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import { settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+import { REALTIME_VOICE_RESERVE_USD, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
 import { z } from 'zod';
@@ -89,8 +90,7 @@ const handler = baseApi().post(async (req, res) => {
 
   // Pre-reserve credits for max session duration (60 min x ~$0.77/hr audio)
   // Reservation prevents unbounded post-facto billing for long sessions.
-  const VOICE_RESERVE_USD = 0.77; // ~60 min worst-case cost
-  const reservedCredits = usdToCredits(VOICE_RESERVE_USD);
+  const reservedCredits = usdToCredits(REALTIME_VOICE_RESERVE_USD);
   if (enforceCredits && !isReconnect) {
     const currentCredits = req.user?.currentCredits ?? 0;
     if (currentCredits < reservedCredits) {
@@ -126,6 +126,12 @@ const handler = baseApi().post(async (req, res) => {
         },
       }
     );
+    // The credit hold lives on the session and is settled for, and refunded to, its owner
+    // (server/websocket/voiceSessionEnded.ts, server/voice/settleVoiceHold.ts), so only the owner
+    // may open one. Matches POST /api/v1/voice/sessions, which looks the session up by owner.
+    if (session.userId !== req.user.id) {
+      throw new ForbiddenError('Voice calls can only be started in your own notebooks');
+    }
   } else {
     session = await sessionService.createSession(
       req.user,
@@ -351,6 +357,11 @@ When you get the tool result back, summarize it conversationally for voice.`;
     },
   };
 
+  // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
+  if (!reuseHold && session) {
+    await settlePriorVoiceHold(session);
+  }
+
   // Deduct credits immediately before the API call - all pre-flight checks have passed.
   // Deferral from the original position ensures no pre-flight throw can strand credits.
   // A reconnect reuses the original hold (reuseHold), so it must not deduct again.
@@ -399,6 +410,8 @@ When you get the tool result back, summarize it conversationally for voice.`;
       id: session.id,
       voiceReservedCredits: enforceCredits ? reservedCredits : null,
       voiceSessionStartedAt,
+      // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).
+      voiceBilledCredits: 0,
     });
   }
 

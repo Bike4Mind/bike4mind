@@ -228,7 +228,10 @@ export async function toSharerInviteViews(
       const recipientUsers = new Map<string, SharerInviteRecipientUser>();
       const view = (entries?: string[]) =>
         (entries ?? []).map(entry => {
-          if (typeof entry !== 'string' || isDisclosed(plain, entry.toLowerCase())) return entry;
+          if (typeof entry !== 'string' || entry.toLowerCase() === viewerEmail) return entry;
+          // A typed address goes back in the normalized form it was typed in, not the matched
+          // account's stored casing, which would tell the inviter the address has an account.
+          if (isDisclosed(plain, entry.toLowerCase())) return entry.toLowerCase();
           const user = usersByEmail.get(entry.toLowerCase());
           if (!user) return maskEmail(entry);
           recipientUsers.set(user.userId, user);

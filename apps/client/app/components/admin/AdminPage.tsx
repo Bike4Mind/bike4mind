@@ -457,7 +457,12 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
                 flexShrink: 0,
               }}
             >
-              <IconButton onClick={() => setMobileDrawerOpen(true)} size="sm" data-testid="admin-mobile-menu-btn">
+              <IconButton
+                onClick={() => setMobileDrawerOpen(true)}
+                size="sm"
+                data-testid="admin-mobile-menu-btn"
+                aria-label="Open admin menu"
+              >
                 <MenuIcon />
               </IconButton>
               <Typography level="title-sm" sx={{ ml: 1 }}>

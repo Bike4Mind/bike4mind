@@ -12,6 +12,10 @@ const { state, sendPrompt, setChatInputValue } = vi.hoisted(() => ({
     balance: 9982,
     enforceCredits: true,
     hasComposer: true,
+    answerCostReference: { modelName: 'Claude 5.5 Sonnet', creditsPerAnswer: 54 } as {
+      modelName: string;
+      creditsPerAnswer: number;
+    } | null,
   },
   sendPrompt: vi.fn(() => Promise.resolve(true)),
   setChatInputValue: vi.fn(),
@@ -31,6 +35,9 @@ vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? state.enforceCredits : undefined),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.balance }));
+vi.mock('@client/app/hooks/useAnswerCostReference', () => ({
+  useAnswerCostReference: () => state.answerCostReference,
+}));
 vi.mock('@client/app/hooks/useChatActions', () => ({
   default: (selector: (s: { sendPrompt: unknown }) => unknown) =>
     selector({ sendPrompt: state.hasComposer ? sendPrompt : null }),
@@ -59,6 +66,7 @@ describe('NewUserWelcome', () => {
     state.balance = 9982;
     state.enforceCredits = true;
     state.hasComposer = true;
+    state.answerCostReference = { modelName: 'Claude 5.5 Sonnet', creditsPerAnswer: 54 };
     sendPrompt.mockClear();
     setChatInputValue.mockClear();
     localStorage.clear();
@@ -69,6 +77,20 @@ describe('NewUserWelcome', () => {
     expect(screen.getByTestId('new-user-welcome')).toBeInTheDocument();
     expect(screen.getByTestId('new-user-welcome-credits')).toHaveTextContent("You're starting with 9,982 credits.");
     expect(screen.getAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(3);
+  });
+
+  it('estimates how many mid-tier answers the starting credits cover, labelled as an estimate', () => {
+    renderWelcome();
+    expect(screen.getByTestId('new-user-welcome-answers-estimate')).toHaveTextContent(
+      /^Estimate: about 180 answers on Claude 5\.5 Sonnet, at about 4,000 tokens in and 1,000 out per answer\./
+    );
+  });
+
+  it('shows no estimate when no mid-tier model is priced', () => {
+    state.answerCostReference = null;
+    renderWelcome();
+    expect(screen.getByTestId('new-user-welcome-credits')).toBeInTheDocument();
+    expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
   });
 
   it('does not interrupt a returning user who already has notebooks', () => {
@@ -100,5 +122,12 @@ describe('NewUserWelcome', () => {
     unmount();
     renderWelcome();
     expect(screen.queryByTestId('new-user-welcome')).not.toBeInTheDocument();
+  });
+
+  it('links to the privacy page for data handling', () => {
+    renderWelcome();
+    const link = screen.getByTestId('new-user-welcome-privacy-link');
+    expect(link.getAttribute('href')).toMatch(/\/privacy$/);
+    expect(link.textContent).toBe('How your data is handled');
   });
 });

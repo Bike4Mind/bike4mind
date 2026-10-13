@@ -6,6 +6,7 @@ import { useGetOrganization } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { isCancellableSubscriptionStatus } from '@client/lib/subscriptions/types';
 import { getBrandName } from '@client/config/general';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { SubscribeButton, SessionCreditsButton } from './SessionCreditsButtons';
 import { useProCreditOffer } from './useProCreditOffer';
 
@@ -91,7 +92,7 @@ export function CreditOfferActions({ moment }: CreditOfferActionsProps) {
       {offer && (
         <Typography data-testid="credit-offer-pitch" level="body-xs" sx={{ color: 'text.tertiary' }}>
           {offer.priceLabel ? `${offer.priceLabel}/mo for ` : ''}
-          {offer.credits.toLocaleString()} credits every month
+          {formatCreditAmount(offer.credits)} credits every month
         </Typography>
       )}
     </Box>

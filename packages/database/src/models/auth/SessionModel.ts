@@ -275,6 +275,8 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     },
     voiceReservedCredits: { type: Number, required: false, default: null },
     voiceSessionStartedAt: { type: Date, required: false, default: null },
+    // No default: $inc needs the field absent or numeric, never null.
+    voiceBilledCredits: { type: Number, required: false },
     ...ShareableDocumentSchema,
   },
   {
@@ -647,6 +649,73 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     });
   }
 
+  async addVoiceBilledCredits(sessionId: string, startedAt: Date, credits: number) {
+    // Only a realtime hold (opened with the marker) is billed per response; a response frame against
+    // any other hold gets null and is charged from the balance, so it can never re-price that hold.
+    const before = await this.sessionModel.findOneAndUpdate(
+      { _id: sessionId, voiceSessionStartedAt: startedAt, voiceBilledCredits: { $exists: true } },
+      { $inc: { voiceBilledCredits: credits } },
+      { new: false, projection: { voiceBilledCredits: 1 } }
+    );
+    return before ? (before.voiceBilledCredits ?? 0) : null;
+  }
+
+  async findStaleVoiceHolds(startedBefore: Date, realtimeStartedBefore: Date, limit: number) {
+    const sessions = await this.sessionModel
+      .find(
+        {
+          voiceReservedCredits: { $gt: 0 },
+          $or: [
+            { voiceBilledCredits: { $exists: false }, voiceSessionStartedAt: { $lt: startedBefore } },
+            { voiceBilledCredits: { $exists: true }, voiceSessionStartedAt: { $lt: realtimeStartedBefore } },
+          ],
+        },
+        { userId: 1, voiceReservedCredits: 1, voiceSessionStartedAt: 1, voiceBilledCredits: 1 }
+      )
+      .sort({ voiceSessionStartedAt: 1 })
+      .limit(limit)
+      .lean();
+    return sessions.map(s => ({
+      id: s._id.toString(),
+      userId: s.userId,
+      voiceReservedCredits: s.voiceReservedCredits as number,
+      voiceSessionStartedAt: s.voiceSessionStartedAt as Date,
+      realtime: s.voiceBilledCredits != null,
+    }));
+  }
+
+  async claimVoiceHold(sessionId: string, startedAt: Date) {
+    // Matching on startedAt makes the claim one-shot per hold: only one of a concurrent
+    // end, sweep or settlement frame wins, and a newer call's hold is never touched. The
+    // pre-update billed total includes every response frame that charged the hold before it.
+    const before = await this.sessionModel.findOneAndUpdate(
+      { _id: sessionId, voiceSessionStartedAt: startedAt },
+      { $set: { voiceReservedCredits: null, voiceSessionStartedAt: null }, $unset: { voiceBilledCredits: '' } },
+      { new: false, projection: { voiceBilledCredits: 1 } }
+    );
+    return before ? { billedCredits: before.voiceBilledCredits ?? null } : null;
+  }
+
+  async restoreVoiceHold(
+    sessionId: string,
+    voiceReservedCredits: number,
+    startedAt: Date,
+    billedCredits: number | null
+  ) {
+    // Only while no newer call has started a hold on the session.
+    const { modifiedCount } = await this.sessionModel.updateOne(
+      { _id: sessionId, voiceSessionStartedAt: null },
+      {
+        $set: {
+          voiceReservedCredits,
+          voiceSessionStartedAt: startedAt,
+          ...(billedCredits !== null ? { voiceBilledCredits: billedCredits } : {}),
+        },
+      }
+    );
+    return modifiedCount === 1;
+  }
+
   async findSessionIdsByUserId(userId: string) {
     const deletedAtFilter = {
       $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
@@ -813,6 +882,12 @@ SessionSchema.index(
 
 // Index for countActiveVoiceSessionsByUserId - runs on every voice session creation
 SessionSchema.index({ userId: 1, voiceSessionStartedAt: 1 }, { sparse: true });
+// Index for findStaleVoiceHolds (the stale voice hold sweep). Partial: only sessions carrying a
+// voice marker (a reservation, or a bare marker when enforceCredits was off), so it stays tiny.
+SessionSchema.index(
+  { voiceSessionStartedAt: 1 },
+  { partialFilterExpression: { voiceSessionStartedAt: { $type: 'date' } } }
+);
 
 export const Session: ISessionModel =
   (mongoose.models[ModelName] as unknown as ISessionModel) ?? model<ISession, ISessionModel>(ModelName, SessionSchema);

@@ -3,8 +3,10 @@ import { FC, useState } from 'react';
 import { OpenInNew, FileDownload, AttachFile } from '@mui/icons-material';
 import { DiscoveredLink } from '@bike4mind/common';
 import axios from 'axios';
+import { toast } from 'sonner';
 import { getFabFileByIdFromServer } from '@client/app/utils/filesAPICalls';
-import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import { useActiveNotebook } from '@client/app/hooks/useActiveNotebook';
+import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 
 interface ResearchTaskDiscoveredLinkProps {
   link: DiscoveredLink;
@@ -13,8 +15,8 @@ interface ResearchTaskDiscoveredLinkProps {
 
 const ResearchTaskDiscoveredLink: FC<ResearchTaskDiscoveredLinkProps> = ({ link, getFabFileId }) => {
   const relevanceValue = (link.relevance ?? 0) * 100;
-  const { currentSessionId } = useSessions();
-  const { setWorkBenchFiles } = useWorkBenchActions();
+  const activeNotebook = useActiveNotebook();
+  const { addToNotebookContext } = useNotebookContextFiles();
   const [isAttaching, setIsAttaching] = useState(false);
 
   const getProgressColor = (value: number) => {
@@ -24,18 +26,33 @@ const ResearchTaskDiscoveredLink: FC<ResearchTaskDiscoveredLinkProps> = ({ link,
   };
 
   async function handleAttachFile() {
-    setIsAttaching(true);
-    if (link.researchDataId) {
-      const fabFileId = getFabFileId(link.researchDataId);
-      console.log('fabFileId', fabFileId);
-      if (fabFileId && currentSessionId) {
-        const response = await getFabFileByIdFromServer(fabFileId);
-        if (response) {
-          setWorkBenchFiles(currentSessionId, prev => [...prev, response]);
-        }
-      }
+    const fabFileId = link.researchDataId ? getFabFileId(link.researchDataId) : undefined;
+    if (!fabFileId) return;
+    if (!activeNotebook.onScreen) {
+      toast.info('Open a notebook to attach this file to it.');
+      return;
     }
-    setIsAttaching(false);
+
+    setIsAttaching(true);
+    try {
+      const fabFile = await fetchFabFile(fabFileId);
+      if (!fabFile) return;
+      await addToNotebookContext(activeNotebook.sessionId, fabFile).catch(() => {
+        // Already rolled back and surfaced by the hook.
+      });
+    } finally {
+      setIsAttaching(false);
+    }
+  }
+
+  async function fetchFabFile(fabFileId: string) {
+    try {
+      return await getFabFileByIdFromServer(fabFileId);
+    } catch (error) {
+      console.error('Failed to load research file', error);
+      toast.error('Could not load that file');
+      return null;
+    }
   }
 
   function handleDownload() {
@@ -173,6 +190,7 @@ const ResearchTaskDiscoveredLink: FC<ResearchTaskDiscoveredLinkProps> = ({ link,
               sx={{ gap: '5px' }}
               onClick={handleAttachFile}
               loading={isAttaching}
+              data-testid="research-link-attach-btn"
             >
               <AttachFile />
             </Button>

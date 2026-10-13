@@ -105,7 +105,7 @@ After repair, the page automatically reloads to display the corrected data. The 
 - **Version Before Changing** -- Always create a new meta-prompt version rather than editing the active one, so you can revert if needed
 - **Use the Default Template as a Starting Point** -- The built-in PromptCrafter template is well-tested; customize it incrementally
 - **Set Appropriate Rate Limits** -- A rate limit of 60 seconds prevents excessive API calls while still allowing prompt regeneration when agent metadata changes
-- **Choose the Right Model** -- Higher-capability models (Claude 4 Opus, O3) produce richer system prompts but cost more; balance quality with budget
+- **Choose the Right Model** -- Higher-capability models (Claude Opus 4, O3) produce richer system prompts but cost more; balance quality with budget
 - **Monitor Generation Count** -- The total generations counter helps track usage and costs over time
 - **Repair When Issues Arise** -- If agents appear to have missing or incorrect system prompts, run a database repair before investigating further
 

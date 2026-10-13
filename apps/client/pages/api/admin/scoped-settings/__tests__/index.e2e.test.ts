@@ -9,7 +9,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../packages/database/src/__test__/createMongoServer';
 import { adminSettingsRepository, scopedSettingsRepository } from '@bike4mind/database/infra';
-import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { isConvergenceHalted } from '@server/dataLakes/convergenceKillSwitch';
 
 /**
  * Agreement test for the scoped-override write surface, driving the REAL write service, repository,

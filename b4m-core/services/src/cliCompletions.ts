@@ -556,35 +556,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       );
     }
 
-    // Calculate credit usage for display purposes (always, regardless of enforcement)
-    // Calculate even when tokens are 0 (some models have minimum charges)
-    if (modelInfo && (info?.inputTokens || info?.outputTokens)) {
-      const currentInputTokens = info.inputTokens || 0;
-      const currentOutputTokens = info.outputTokens || 0;
-      const currentCacheReadTokens = info.cacheReadInputTokens || 0;
-      const currentCacheCreationTokens = info.cacheCreationInputTokens || 0;
-      const currentUsdCost = getTextModelCost(
-        modelInfo,
-        currentInputTokens,
-        currentOutputTokens,
-        currentCacheReadTokens,
-        currentCacheCreationTokens
-      );
-      const currentCredits = usdToCredits(currentUsdCost);
-
-      logger?.debug?.(
-        `[CLI_CREDITS] Calculated ${currentCredits} credits during streaming ($${currentUsdCost.toFixed(6)} USD)`
-      );
-
-      // Pass credit info to client via CompletionInfo
-      await onChunk(text, {
-        ...info,
-        creditsUsed: currentCredits,
-        usdCost: currentUsdCost,
-      });
-    } else {
-      await onChunk(text, info);
-    }
+    // Streaming frames carry token usage but never credits: the settlement event below is the
+    // only frame with `credits`, so a client reading credits sees exactly one number, and it is
+    // the one the ledger charged. A provisional round-up here (usdToCredits, minimum 1) used to
+    // precede a stochastic settlement of 0 on cheap calls, which read as a double charge.
+    await onChunk(text, info);
   };
 
   try {
