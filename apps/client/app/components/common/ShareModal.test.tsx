@@ -316,4 +316,11 @@ describe('ShareModal - Email tab', () => {
       String(MAX_EMAIL_MESSAGE_LENGTH)
     );
   });
+
+  it('shows how much of the message limit is used', async () => {
+    const user = await openEmailTab();
+    expect(screen.getByTestId('share-modal-email-message-count')).toHaveTextContent(`0/${MAX_EMAIL_MESSAGE_LENGTH}`);
+    await user.type(screen.getByTestId('share-modal-email-message-input'), 'hello');
+    expect(screen.getByTestId('share-modal-email-message-count')).toHaveTextContent(`5/${MAX_EMAIL_MESSAGE_LENGTH}`);
+  });
 });

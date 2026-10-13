@@ -674,6 +674,9 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                       onChange={e => setEmailMessage(e.target.value)}
                       placeholder="Add a personal message to include in the email..."
                     />
+                    <FormHelperText data-testid="share-modal-email-message-count">
+                      {emailMessage.length}/{MAX_EMAIL_MESSAGE_LENGTH}
+                    </FormHelperText>
                   </FormControl>
                 )}
               </Box>

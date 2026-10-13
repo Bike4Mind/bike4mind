@@ -18,6 +18,7 @@ import {
   RadioGroup,
   FormControl,
   FormLabel,
+  FormHelperText,
   Autocomplete,
   ListItemContent,
   Checkbox,
@@ -351,10 +352,9 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
       return;
     }
 
-    const validRecipients = emailRecipients.filter(email => {
-      const trimmed = email.trim();
-      return trimmed && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed);
-    });
+    const validRecipients = emailRecipients
+      .map(email => email.trim())
+      .filter(email => email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
 
     if (validRecipients.length === 0) {
       toast.error('Please enter at least one valid email address');
@@ -1225,6 +1225,9 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
                   maxRows={6}
                   slotProps={{ textarea: { maxLength: MAX_EMAIL_MESSAGE_LENGTH } }}
                 />
+                <FormHelperText>
+                  {emailMessage.length}/{MAX_EMAIL_MESSAGE_LENGTH}
+                </FormHelperText>
               </FormControl>
 
               {batchResult && batchResult.completedCount > 0 && (
