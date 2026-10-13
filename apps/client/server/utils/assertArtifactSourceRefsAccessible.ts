@@ -1,11 +1,8 @@
+import type { artifactService } from '@bike4mind/services';
 import { ForbiddenError } from '@server/utils/errors';
 
-/** Caller-supplied provenance refs recorded verbatim on a newly created artifact. */
-export interface ArtifactSourceRefs {
-  sessionId?: string;
-  sourceQuestId?: string;
-  parentArtifactId?: string;
-}
+/** Same type `artifactService.create` hands its `assertSourceRefsAccessible` adapter. */
+export type ArtifactSourceRefs = artifactService.ArtifactSourceRefs;
 
 /**
  * Access lookups, injected so this stays a pure, unit-testable guard.

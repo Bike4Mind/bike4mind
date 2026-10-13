@@ -44,6 +44,9 @@ const createArtifactSchema = z.object({
 
 type CreateArtifactParameters = z.infer<typeof createArtifactSchema>;
 
+/** Provenance refs recorded verbatim on a new artifact; each needs an access check before it is stored. */
+export type ArtifactSourceRefs = Pick<CreateArtifactParameters, 'sessionId' | 'sourceQuestId' | 'parentArtifactId'>;
+
 /**
  * Only `create` is used, so only `create` is asked for. Declaring the full repositories would make
  * a caller that legitimately has just the one method - the notebook import, which hands over three
@@ -52,14 +55,11 @@ type CreateArtifactParameters = z.infer<typeof createArtifactSchema>;
  */
 interface CreateArtifactAdapters {
   /**
-   * Required whenever a reference is supplied. Throws unless the actor may reference the given session, source quest and parent artifact.
+   * Throws unless the actor may reference the given session, source quest and parent artifact.
    * Supplied by the caller (which knows how to resolve the actor's access) and invoked here so the
    * check applies to every create path, not only the HTTP route.
    */
-  assertSourceRefsAccessible?: (
-    userId: string,
-    refs: { sessionId?: string; sourceQuestId?: string; parentArtifactId?: string }
-  ) => Promise<void>;
+  assertSourceRefsAccessible: (userId: string, refs: ArtifactSourceRefs) => Promise<void>;
   db: {
     artifacts: Pick<IArtifactRepository, 'create'>;
     artifactContents: Pick<IArtifactContentRepository, 'create'>;
@@ -100,11 +100,7 @@ export const create = async (
     metadata,
   } = secureParameters(parameters, createArtifactSchema);
 
-  if (adapters.assertSourceRefsAccessible) {
-    await adapters.assertSourceRefsAccessible(userId, { sessionId, sourceQuestId, parentArtifactId });
-  } else if (sessionId || sourceQuestId || parentArtifactId) {
-    throw new Error('assertSourceRefsAccessible adapter required when source references are supplied');
-  }
+  await adapters.assertSourceRefsAccessible(userId, { sessionId, sourceQuestId, parentArtifactId });
 
   // Use provided ID if available (for AI-generated artifacts), otherwise generate one. The type and
   // title are what make the minted id parseable by the client; see createArtifactId.

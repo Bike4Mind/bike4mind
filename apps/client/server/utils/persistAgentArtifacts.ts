@@ -18,6 +18,7 @@
  * guard of its own.
  */
 import type { ArtifactType } from '@bike4mind/common';
+import type { artifactService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 // Deliberately the CLIENT parser, not `@bike4mind/utils` (which the other server
@@ -41,6 +42,7 @@ import {
 // They stay because the barrel was already reachable from `agentExecute.ts` five other ways, so
 // nothing gets heavier either way; the injectable deps still earn their keep for test isolation.
 import { resolveAgentArtifactGate } from './artifactGate';
+import { createLazyArtifactSourceRefsGuard } from './artifactSourceRefsGuards';
 
 /** Upper bound on rows written per run; excess is dropped and logged, never silent. */
 export const MAX_AGENT_ARTIFACTS_PER_RUN = 25;
@@ -145,32 +147,16 @@ export interface PersistAgentArtifactsDeps {
   clearPartialArtifact: (artifactId: string) => Promise<void>;
 }
 
-type SourceRefsGuard = (
-  userId: string,
-  refs: { sessionId?: string; sourceQuestId?: string; parentArtifactId?: string }
-) => Promise<void>;
+type SourceRefsGuard = (userId: string, refs: artifactService.ArtifactSourceRefs) => Promise<void>;
 
-/**
- * `sourceRefsGuard` replaces the per-user access guard; only the storage-layer integration script
- * passes it, since its fixture ids are not real user/session/quest documents.
- */
-export function defaultDeps(options: { sourceRefsGuard?: SourceRefsGuard } = {}): PersistAgentArtifactsDeps {
-  // One user load and guard per run, shared by every artifact the run writes.
-  let guardPromise: Promise<SourceRefsGuard> | undefined;
-  const getGuard = (userId: string): Promise<SourceRefsGuard> => {
-    if (options.sourceRefsGuard) return Promise.resolve(options.sourceRefsGuard);
-    guardPromise ??= (async () => {
+/** `sourceRefsGuard` defaults to a per-run lazy guard that loads the acting user on first use. */
+function defaultDeps(sourceRefsGuard?: SourceRefsGuard): PersistAgentArtifactsDeps {
+  const guard =
+    sourceRefsGuard ??
+    createLazyArtifactSourceRefsGuard(async userId => {
       const { userRepository } = await import('@bike4mind/database');
-      const { createArtifactSourceRefsGuard } = await import('@server/utils/artifactSourceRefsGuards');
-      const user = await userRepository.findById(userId);
-      if (!user) throw new Error('Cannot persist artifact: user not found');
-      return createArtifactSourceRefsGuard(user);
-    })();
-    guardPromise.catch(() => {
-      guardPromise = undefined;
+      return userRepository.findById(userId);
     });
-    return guardPromise;
-  };
   // Dynamic imports (same reason as the eventBus import in persistRunAsQuest):
   // keep the barrels off this module's import graph so it stays cheap to load.
   return {
@@ -190,7 +176,6 @@ export function defaultDeps(options: { sourceRefsGuard?: SourceRefsGuard } = {})
       const { artifactService } = await import('@bike4mind/services');
       const { artifactRepository, artifactContentRepository, artifactVersionRepository } =
         await import('@bike4mind/database');
-      const guard = await getGuard(userId);
       await artifactService.create(userId, payload, {
         assertSourceRefsAccessible: guard,
         db: {
@@ -257,9 +242,11 @@ export async function persistAgentArtifacts(args: {
   enableArtifacts?: boolean;
   logger: Logger;
   deps?: PersistAgentArtifactsDeps;
+  /** Injection point for the storage-layer integration script, whose fixture ids are not real documents. */
+  sourceRefsGuard?: SourceRefsGuard;
 }): Promise<void> {
   const { replyText, questId, questCreatedAtMs, sessionId, userId, executionId, enableArtifacts, logger } = args;
-  const deps = args.deps ?? defaultDeps();
+  const deps = args.deps ?? defaultDeps(args.sourceRefsGuard);
 
   try {
     const payloads = buildAgentArtifactPayloads({ replyText, questId, questCreatedAtMs, sessionId });
