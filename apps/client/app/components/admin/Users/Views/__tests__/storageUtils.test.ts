@@ -19,18 +19,15 @@ describe('computeStoragePercent', () => {
   });
 
   it('returns 100 when usage equals the full limit', () => {
-    const limitMb = 100;
-    expect(computeStoragePercent(storageLimitToBytes(limitMb), limitMb)).toBe(100);
+    expect(computeStoragePercent(100_000_000, 100)).toBe(100);
   });
 
   it('returns 50 when usage is half the limit', () => {
-    const limitMb = 200;
-    expect(computeStoragePercent(storageLimitToBytes(limitMb) / 2, limitMb)).toBe(50);
+    expect(computeStoragePercent(100_000_000, 200)).toBe(50);
   });
 
   it('can exceed 100 when usage is over the allocated limit', () => {
-    const limitMb = 10;
-    expect(computeStoragePercent(storageLimitToBytes(limitMb) * 2, limitMb)).toBe(200);
+    expect(computeStoragePercent(20_000_000, 10)).toBe(200);
   });
 
   // The limit is decimal MB, as enforcement reads it: 920,000,000 bytes of a 1000 MB limit is 92%.
@@ -49,6 +46,8 @@ describe('storage limit parity across admin, user UI and enforcement', () => {
   it.each([1, 1000, 5000])('agrees on the byte limit for %i MB', async limitMb => {
     const limitBytes = getStorageQuota({ storageLimit: limitMb, currentStorageSize: 0 })!.limitBytes;
 
+    expect(limitBytes).toBe(1_000_000 * limitMb);
+    expect(storageLimitToBytes(limitMb)).toBe(limitBytes);
     expect(computeStoragePercent(limitBytes, limitMb)).toBe(100);
     await expect(checkStorageLimit(user({ storageLimit: limitMb, currentStorageSize: limitBytes }), 0)).resolves.toBe(
       undefined
