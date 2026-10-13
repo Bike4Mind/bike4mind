@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import { MAX_MUSIC_OUTPUT_BYTES, type ValidatedMusicRequest } from '@bike4mind/common';
@@ -8,8 +8,10 @@ import { describeSyncProviderConformance, type SyncConformanceScenario } from '.
 import { syntheticMp3, syntheticMp3Seconds } from '../__fixtures__/syntheticMp3';
 import { ProviderOutputTooLargeError, ProviderSubmitError } from '../types';
 import {
+  boundaryOf,
   buildElevenLabsMusicBody,
   ElevenLabsMusicProvider,
+  ElevenLabsPlanError,
   lyricsFromPlan,
   parseMultipart,
 } from './ElevenLabsMusicProvider';
@@ -211,12 +213,44 @@ describe('buildElevenLabsMusicBody', () => {
     expectValidDurations(chunks, 300_000);
   });
 
-  it('never exceeds 30 chunks even when the merged section is split past 120 s', () => {
+  it('keeps a long section within 30 lines a chunk, tag included, when the section count overflows', () => {
     const lyrics = [...Array.from({ length: 29 }, (_, i) => `[S${i + 1}]`), '[Long]', ...lines(200)].join('\n');
     const chunks = chunksOf(buildElevenLabsMusicBody(request({ durationSeconds: 300, lyrics })));
 
     expect(chunks.length).toBeLessThanOrEqual(30);
+    for (const chunk of chunks) expect(chunk.text.split('\n').length).toBeLessThanOrEqual(30);
+    expect(chunks.flatMap(chunk => chunk.text.split('\n').slice(1))).toEqual(lines(200));
     expectValidDurations(chunks, 300_000);
+  });
+
+  it('splits a v2 section over 29 lyric lines so each chunk stays within 30 lines with its tag', () => {
+    const chunks = chunksOf(buildElevenLabsMusicBody(request({ durationSeconds: 60, lyrics: lines(30).join('\n') })));
+
+    expect(chunks.map(chunk => chunk.text.split('\n'))).toEqual([
+      ['[Verse]', ...lines(29)],
+      ['[Verse]', 'line 30'],
+    ]);
+  });
+
+  it('repacks lines across sections when whole sections cannot fit the chunks the length allows', () => {
+    const lyrics = ['[A]', ...lines(20, 'a'), '[B]', ...lines(20, 'b'), '[C]', ...lines(20, 'c')].join('\n');
+    const sections = sectionsOf(buildElevenLabsMusicBody(request({ model: 'music_v1', durationSeconds: 6, lyrics })));
+
+    expect(sections.map(section => [section.section_name, section.lines])).toEqual([
+      ['A', [...lines(20, 'a'), ...lines(10, 'b')]],
+      ['B', [...lines(10, 'b').map((_, i) => `b ${i + 11}`), ...lines(20, 'c')]],
+    ]);
+    expectValidDurations(sections, 6000);
+  });
+
+  it('merges short sections rather than refusing lyrics that fit', () => {
+    const lyrics = Array.from({ length: 60 }, (_, i) => [`[S${i}]`, ...lines(i % 3, `s${i}`)].join('\n')).join('\n');
+    const sections = sectionsOf(buildElevenLabsMusicBody(request({ model: 'music_v1', durationSeconds: 300, lyrics })));
+
+    expect(sections.length).toBeLessThanOrEqual(28);
+    expect(sections.flatMap(section => section.lines)).toHaveLength(60);
+    for (const section of sections) expect(section.lines.length).toBeLessThanOrEqual(30);
+    expectValidDurations(sections, 300_000);
   });
 
   it('splits a section longer than 120 s into continuation chunks, lines with the first', () => {
@@ -230,18 +264,47 @@ describe('buildElevenLabsMusicBody', () => {
     expectValidDurations(chunks, 250_000);
   });
 
-  it('keeps every plan valid and exact across lengths and section counts', () => {
+  it('keeps every plan valid, exact and lossless across lengths, section counts and section sizes', () => {
+    const lineOf = (section: number, line: number) => `s${section} l${line} `.padEnd(line % 7 === 0 ? 200 : 20, 'x');
+    let refused = 0;
     for (const seconds of [3, 4, 7, 20, 59, 121, 240, 299, 300]) {
+      const allowedChunks = Math.min(30 - Math.floor(seconds / 120), Math.floor(seconds / 3));
       for (const sectionCount of [1, 2, 5, 31, 45]) {
-        const lyrics = Array.from({ length: sectionCount }, (_, i) => `[S${i}]\n${lines(i % 2).join('\n')}`).join('\n');
-        for (const model of ['music_v2_5', 'music_v1'] as const) {
-          const body = buildElevenLabsMusicBody(request({ model, durationSeconds: seconds, lyrics }));
-          const items = model === 'music_v1' ? sectionsOf(body) : chunksOf(body);
-          expect(items.length).toBeLessThanOrEqual(30);
-          expectValidDurations(items, seconds * 1000);
+        for (const linesPerSection of [
+          (i: number) => i % 2,
+          (i: number) => (i * 7) % 12,
+          (i: number) => 25 + (i % 40),
+        ]) {
+          const sections = Array.from({ length: sectionCount }, (_, i) =>
+            Array.from({ length: linesPerSection(i) }, (_, line) => lineOf(i, line))
+          );
+          const lyricLines = sections.flat();
+          const lyrics = sections.map((sectionLines, i) => [`[S${i}]`, ...sectionLines].join('\n')).join('\n');
+          for (const model of ['music_v2_5', 'music_v1'] as const) {
+            const cap = model === 'music_v1' ? 30 : 29;
+            const build = () => buildElevenLabsMusicBody(request({ model, durationSeconds: seconds, lyrics }));
+            if (lyricLines.length > allowedChunks * cap) {
+              expect(build).toThrow(ElevenLabsPlanError);
+              refused += 1;
+              continue;
+            }
+            const body = build();
+            const items = model === 'music_v1' ? sectionsOf(body) : chunksOf(body);
+            const itemLines = items.map(item => ('lines' in item ? item.lines : item.text.split('\n')));
+            expect(items.length).toBeLessThanOrEqual(30);
+            for (const linesOut of itemLines) {
+              expect(linesOut.length).toBeLessThanOrEqual(30);
+              for (const line of linesOut) expect(line.length).toBeLessThanOrEqual(200);
+            }
+            const lyricLinesOut =
+              model === 'music_v1' ? itemLines.flat() : itemLines.flatMap(linesOut => linesOut.slice(1));
+            expect(lyricLinesOut).toEqual(lyricLines);
+            expectValidDurations(items, seconds * 1000);
+          }
         }
       }
     }
+    expect(refused).toBeGreaterThan(0);
   });
 
   it('builds the v1 section plan with the prompt as the global style', () => {
@@ -292,10 +355,16 @@ describe('buildElevenLabsMusicBody', () => {
     expect(sections[0].section_name).toHaveLength(100);
   });
 
-  it('refuses v1 lyrics that cannot fit 30 lines per 3 s section', () => {
+  it('refuses lyrics with more lines than the allowed chunks can hold', () => {
     expect(() =>
       buildElevenLabsMusicBody(request({ model: 'music_v1', durationSeconds: 3, lyrics: lines(31).join('\n') }))
     ).toThrow('elevenlabs_music_lyrics_too_many_lines_for_duration');
+    expect(() => buildElevenLabsMusicBody(request({ durationSeconds: 6, lyrics: lines(59).join('\n') }))).toThrow(
+      ElevenLabsPlanError
+    );
+    expect(
+      chunksOf(buildElevenLabsMusicBody(request({ durationSeconds: 6, lyrics: lines(58).join('\n') })))
+    ).toHaveLength(2);
   });
 });
 
@@ -317,6 +386,63 @@ describe('parseMultipart', () => {
   it('returns undefined for a body that is not the declared multipart', () => {
     expect(parseMultipart(Buffer.from('{"a":1}'), BOUNDARY)).toBeUndefined();
     expect(parseMultipart(Buffer.from(`--${BOUNDARY}\r\nContent-Type: a/b\r\n\r\nno end`), BOUNDARY)).toBeUndefined();
+  });
+
+  it('accepts LF-only line endings, a preamble and padding after a delimiter', () => {
+    const body = Buffer.concat([
+      Buffer.from(`preamble --${BOUNDARY} mention\n--${BOUNDARY} \t\nContent-Type: application/json\n\n{"a":1}\n`),
+      Buffer.from(`--${BOUNDARY}\nContent-Type: audio/mpeg\n\n`),
+      AUDIO,
+      Buffer.from(`\n--${BOUNDARY}--  \nepilogue`),
+    ]);
+
+    const parts = parseMultipart(body, BOUNDARY);
+
+    expect(parts?.map(part => part.contentType)).toEqual(['application/json', 'audio/mpeg']);
+    expect(parts?.[0].body.toString('utf8')).toBe('{"a":1}');
+    expect(parts?.[1].body.equals(AUDIO)).toBe(true);
+  });
+
+  it('keeps the whole body of a headerless part, blank lines and all', () => {
+    const inner = Buffer.concat([Buffer.from('Content-Type: text/plain\r\n\r\nnot a header'), AUDIO]);
+    const parts = parseMultipart(
+      Buffer.concat([Buffer.from(`--${BOUNDARY}\r\n\r\n`), inner, Buffer.from(`\r\n--${BOUNDARY}--`)]),
+      BOUNDARY
+    );
+
+    expect(parts).toHaveLength(1);
+    expect(parts?.[0].contentType).toBe('');
+    expect(parts?.[0].body.equals(inner)).toBe(true);
+  });
+
+  it('keeps a part with no blank line and no header line whole', () => {
+    const parts = parseMultipart(Buffer.from(`--${BOUNDARY}\r\nraw\r\n\r\nbytes\r\n--${BOUNDARY}--`), BOUNDARY);
+
+    expect(parts?.[0].body.toString('latin1')).toBe('raw\r\n\r\nbytes');
+  });
+
+  it('ignores the boundary text inside a part when it does not open a delimiter line', () => {
+    const parts = parseMultipart(
+      Buffer.from(`--${BOUNDARY}\r\nContent-Type: a/b\r\n\r\nx --${BOUNDARY}\r\n--${BOUNDARY}x\r\n--${BOUNDARY}--`),
+      BOUNDARY
+    );
+
+    expect(parts?.[0].body.toString('latin1')).toBe(`x --${BOUNDARY}\r\n--${BOUNDARY}x`);
+  });
+});
+
+describe('boundaryOf', () => {
+  it('reads a quoted or bare boundary param', () => {
+    expect(boundaryOf('multipart/mixed; boundary="a b;c"')).toBe('a b;c');
+    expect(boundaryOf('multipart/mixed;boundary=abc; charset=x')).toBe('abc');
+    expect(boundaryOf('Multipart/Mixed; BOUNDARY=abc')).toBe('abc');
+  });
+
+  it('matches only a real boundary param on a multipart type', () => {
+    expect(boundaryOf('multipart/mixed; xboundary=wrong; boundary=right')).toBe('right');
+    expect(boundaryOf('multipart/mixed; xboundary=wrong')).toBeUndefined();
+    expect(boundaryOf('application/json; boundary=abc')).toBeUndefined();
+    expect(boundaryOf(null)).toBeUndefined();
   });
 });
 
@@ -389,17 +515,40 @@ describe('ElevenLabsMusicProvider', () => {
     expect(await provider.generate(request({ model: 'music_v1' }), {}, ctx())).toMatchObject({ lyrics: 'One' });
   });
 
-  it('reports a copyright refusal as blocked and not billed', async () => {
+  it('reports a copyright refusal as blocked with its reason, and not billed', async () => {
     const result = await generateWith(FIXTURES.blocked);
 
-    expect(result).toMatchObject({ status: 'blocked', reason: 'elevenlabs_music_copyright' });
+    expect(result).toMatchObject({ status: 'blocked', reason: 'elevenlabs_music_copyrighted_material_detected' });
     expect(result).not.toHaveProperty('billed');
   });
 
-  it('reports a refused composition plan as blocked', async () => {
-    respondWith(() => HttpResponse.json({ detail: { status: 'bad_composition_plan' } }, { status: 400 }));
+  it('names a refused composition plan by the reason the provider gives', async () => {
+    respondWith(() =>
+      HttpResponse.json(
+        { detail: { status: 'bad_composition_plan', data: { reason: 'Harmful Content' } } },
+        { status: 400 }
+      )
+    );
 
-    expect(await provider.generate(request(), {}, ctx())).toMatchObject({ status: 'blocked' });
+    expect(await provider.generate(request(), {}, ctx())).toMatchObject({
+      status: 'blocked',
+      reason: 'elevenlabs_music_harmful_content',
+    });
+  });
+
+  it.each([
+    ['no data', {}],
+    ['no reason', { data: {} }],
+    ['a non-string reason', { data: { reason: 7 } }],
+    ['an overlong reason', { data: { reason: 'x'.repeat(65) } }],
+    ['a reason with no word characters', { data: { reason: '!!' } }],
+  ])('falls back to the policy reason for a refusal with %s', async (_label, extra) => {
+    respondWith(() => HttpResponse.json({ detail: { status: 'bad_prompt', ...extra } }, { status: 400 }));
+
+    expect(await provider.generate(request(), {}, ctx())).toMatchObject({
+      status: 'blocked',
+      reason: 'elevenlabs_music_policy',
+    });
   });
 
   it('fails a validation 422 without retrying', async () => {
@@ -456,19 +605,20 @@ describe('ElevenLabsMusicProvider', () => {
     });
   });
 
-  it('fails an unreadable 2xx without retrying', async () => {
-    respondWith(() =>
-      multipartResponse([
-        { contentType: 'application/json', body: 'not json' },
-        { contentType: 'audio/mpeg', body: AUDIO },
-      ])
-    );
+  it.each([
+    ['unparseable', [{ contentType: 'application/json', body: 'not json' }]],
+    ['off-schema', [{ contentType: 'application/json', body: '{"composition_plan":{"chunks":"x"}}' }]],
+    ['missing', []],
+  ])('keeps the billed audio, without lyrics, when the metadata is %s', async (_label, metadataParts: Part[]) => {
+    respondWith(() => multipartResponse([...metadataParts, { contentType: 'audio/mpeg', body: AUDIO }]));
+    const context = ctx();
+    const warn = vi.spyOn(context.logger, 'warn');
 
-    expect(await provider.generate(request(), {}, ctx())).toMatchObject({
-      status: 'failed',
-      retryable: false,
-      message: 'elevenlabs_music_unparseable',
-    });
+    const result = await provider.generate(request({ lyrics: '[Verse]\nOne' }), {}, context);
+
+    expect(result).toMatchObject({ status: 'succeeded', output: { base64: AUDIO.toString('base64') } });
+    expect(result).not.toHaveProperty('lyrics');
+    expect(warn).toHaveBeenCalledWith('elevenlabs_music_metadata_unread', expect.anything());
   });
 
   it('fails a 2xx that is not multipart without retrying', async () => {
@@ -516,6 +666,36 @@ describe('ElevenLabsMusicProvider', () => {
 
     expect(error).toBeInstanceOf(ProviderSubmitError);
     expect(error).toMatchObject({ definitive: false, message: 'elevenlabs_music_transport' });
+  });
+
+  it('treats an error body cut off mid-read as an unknown outcome', async () => {
+    respondWith(
+      () =>
+        new HttpResponse(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"detail":'));
+              controller.error(new Error('connection reset'));
+            },
+          }),
+          { status: 503, headers: { 'content-type': 'application/json' } }
+        )
+    );
+
+    const error = await provider.generate(request(), {}, ctx()).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ProviderSubmitError);
+    expect(error).toMatchObject({ definitive: false, message: 'elevenlabs_music_transport' });
+  });
+
+  it('caps how much of an error body it reads', async () => {
+    respondWith(() => new HttpResponse('{}', { status: 500, headers: { 'content-length': String(70 * 1024) } }));
+
+    expect(await provider.generate(request(), {}, ctx())).toMatchObject({
+      status: 'failed',
+      message: 'elevenlabs_music_http_500',
+      raw: 'elevenlabs_music_error_body_over_65536_bytes',
+    });
   });
 
   it('throws on a transport error: the song may exist, so the job must not call again', async () => {

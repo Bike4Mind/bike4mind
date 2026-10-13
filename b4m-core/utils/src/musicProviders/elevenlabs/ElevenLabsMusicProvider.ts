@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { MAX_MUSIC_OUTPUT_BYTES, type ValidatedMusicRequest } from '@bike4mind/common';
-import { readJson } from '../../generationProviders/http';
 import { mp3DurationSeconds } from '../mp3Duration';
 import {
   ProviderOutputTooLargeError,
@@ -14,20 +13,24 @@ import {
 } from '../types';
 
 // Wire shapes are pinned by __fixtures__ (see record.ts). Measured 2026-10-13: the call blocks until the song is
-// ready (about 5 s for 10-15 s of audio) and answers multipart/mixed: the JSON metadata part, then the MP3 part.
+// ready (about 3-5 s for 10-20 s of audio) and answers multipart/mixed: the JSON metadata part, then the MP3 part.
 const MUSIC_URL = 'https://api.elevenlabs.io/v1/music/detailed?output_format=mp3_44100_128';
 const PREFIX = 'elevenlabs_music';
-const COPYRIGHT_REASON = 'elevenlabs_music_copyright';
+const POLICY_REASON = 'elevenlabs_music_policy';
+const MAX_REFUSAL_REASON_CHARS = 64;
 const NO_AUDIO_REASON = 'elevenlabs_music_no_audio';
 const MP3_CONTENT_TYPE = 'audio/mpeg';
 const MAX_RESPONSE_BYTES = MAX_MUSIC_OUTPUT_BYTES + 1024 * 1024;
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
 // Both statuses arrive on a 400 refused before generation, so nothing was billed.
 const REFUSAL_STATUSES = new Set(['bad_prompt', 'bad_composition_plan']);
 
 const MIN_CHUNK_MS = 3000;
 const MAX_CHUNK_MS = 120_000;
 const MAX_CHUNKS = 30;
+// A v1 section holds 30 lines besides its name; a v2 chunk's 30 lines include its leading [tag] line.
 const MAX_V1_SECTION_LINES = 30;
+const MAX_V2_CHUNK_LYRIC_LINES = 29;
 const MAX_V1_SECTION_NAME_CHARS = 100;
 const UNTAGGED_SECTION = 'Verse';
 
@@ -58,7 +61,7 @@ export type ElevenLabsMusicBody =
   | { model_id: ElevenLabsModelId; prompt: string; music_length_ms: number; force_instrumental: boolean }
   | { model_id: ElevenLabsModelId; composition_plan: ChunkPlan | SectionPlan };
 
-/** The lyrics fit no valid plan for the requested length (v1 only: too many lines for its 3 s sections). */
+/** The lyrics fit no valid plan: more lines than the chunks the length allows can hold at the per-chunk cap. */
 export class ElevenLabsPlanError extends RangeError {
   constructor(message: string) {
     super(message);
@@ -91,23 +94,82 @@ const splitLines = (section: Section, maxLines: number): Section[] => {
   return parts;
 };
 
+const mergeSections = (sections: Section[]): Section => ({
+  name: sections[0].name,
+  lines: sections.flatMap(section => section.lines),
+});
+
 /**
- * Keeps at most as many sections as the length allows at 3 s each, leaving room for the extra chunks that
- * splitting a section longer than 120 s adds (at most one per full 120 s of the total).
+ * Groups whole sections into at most `maxGroups` runs of at most `maxLines` lines, keeping the earliest sections
+ * apart and merging toward the tail; undefined when no such grouping exists. Each section must fit `maxLines`.
  */
-const fitSectionCount = (sections: Section[], totalMs: number): Section[] => {
+const groupWholeSections = (sections: Section[], maxGroups: number, maxLines: number): Section[] | undefined => {
+  const count = sections.length;
+  // reach[start]: one past the last section a group opening at `start` can hold.
+  const reach: number[] = [];
+  let end = 0;
+  let lines = 0;
+  for (let start = 0; start < count; start++) {
+    while (end < count && lines + sections[end].lines.length <= maxLines) lines += sections[end++].lines.length;
+    reach.push(end);
+    lines -= sections[start].lines.length;
+  }
+  // fewestGroups[start]: the fewest groups the sections from `start` on can be packed into.
+  const fewestGroups = new Array<number>(count + 1).fill(0);
+  for (let start = count - 1; start >= 0; start--) fewestGroups[start] = 1 + fewestGroups[reach[start]];
+  if (fewestGroups[0] > maxGroups) return undefined;
+
+  const groups: Section[] = [];
+  for (let start = 0; start < count;) {
+    const groupsLeft = maxGroups - groups.length - 1;
+    let stop = start + 1;
+    while (fewestGroups[stop] > groupsLeft) stop++;
+    groups.push(mergeSections(sections.slice(start, stop)));
+    start = stop;
+  }
+  return groups;
+};
+
+/**
+ * Packs every lyric line, in order, into at most `maxGroups` chunks of at most `maxLines`, ending a chunk at a
+ * section start when the rest still fits. A chunk takes the name of the section its first line belongs to.
+ */
+const packLines = (sections: Section[], maxGroups: number, maxLines: number): Section[] => {
+  const entries = sections.flatMap(section =>
+    section.lines.map((line, index) => ({ name: section.name, line, opensSection: index === 0 }))
+  );
+  const total = entries.length;
+  if (total > maxGroups * maxLines) throw new ElevenLabsPlanError(`${PREFIX}_lyrics_too_many_lines_for_duration`);
+  const restFits = (at: number, groupsLeft: number) => Math.ceil((total - at) / maxLines) <= groupsLeft;
+  const groups: Section[] = [];
+  for (let start = 0; start < total;) {
+    const groupsLeft = maxGroups - groups.length - 1;
+    const full = Math.min(total, start + maxLines);
+    let stop = full;
+    for (let at = full; at > start; at--) {
+      if ((at === total || entries[at].opensSection) && restFits(at, groupsLeft)) {
+        stop = at;
+        break;
+      }
+    }
+    groups.push({ name: entries[start].name, lines: entries.slice(start, stop).map(entry => entry.line) });
+    start = stop;
+  }
+  return groups;
+};
+
+/**
+ * Fits the sections into as many chunks as the length allows at 3 s each, leaving room for the extra chunks that
+ * splitting a chunk longer than 120 s adds (at most one per full 120 s of the total). Whole sections merge first;
+ * when they cannot, the lines are repacked across section boundaries.
+ */
+const fitSectionCount = (sections: Section[], totalMs: number, maxLines: number): Section[] => {
   const maxSections = Math.max(
     1,
     Math.min(MAX_CHUNKS - Math.floor(totalMs / MAX_CHUNK_MS), Math.floor(totalMs / MIN_CHUNK_MS))
   );
   if (sections.length <= maxSections) return sections;
-  const kept = sections.slice(0, maxSections);
-  const last = kept[maxSections - 1];
-  kept[maxSections - 1] = {
-    name: last.name,
-    lines: [...last.lines, ...sections.slice(maxSections).flatMap(section => section.lines)],
-  };
-  return kept;
+  return groupWholeSections(sections, maxSections, maxLines) ?? packLines(sections, maxSections, maxLines);
 };
 
 /** 3 s each, then the rest by line count (weight at least 1) with largest-remainder rounding, so the sum is exact. */
@@ -142,19 +204,15 @@ const splitLong = (section: TimedSection): TimedSection[] => {
   }));
 };
 
-const planSections = (lyrics: string, totalMs: number, maxLinesPerSection?: number): TimedSection[] => {
+const planSections = (lyrics: string, totalMs: number, maxLinesPerSection: number): TimedSection[] => {
   const parsed = parseSections(lyrics);
   const sections = parsed.length > 0 ? parsed : [{ name: UNTAGGED_SECTION, lines: [] }];
-  const split = maxLinesPerSection ? sections.flatMap(section => splitLines(section, maxLinesPerSection)) : sections;
-  const fitted = fitSectionCount(split, totalMs);
-  if (maxLinesPerSection && fitted.some(section => section.lines.length > maxLinesPerSection)) {
-    throw new ElevenLabsPlanError(`${PREFIX}_lyrics_too_many_lines_for_duration`);
-  }
-  return allocateDurations(fitted, totalMs).flatMap(splitLong);
+  const split = sections.flatMap(section => splitLines(section, maxLinesPerSection));
+  return allocateDurations(fitSectionCount(split, totalMs, maxLinesPerSection), totalMs).flatMap(splitLong);
 };
 
 const chunkPlan = (request: ValidatedMusicRequest, lyrics: string, totalMs: number): ChunkPlan => ({
-  chunks: planSections(lyrics, totalMs).map(section => ({
+  chunks: planSections(lyrics, totalMs, MAX_V2_CHUNK_LYRIC_LINES).map(section => ({
     text: [`[${section.name}]`, ...section.lines].join('\n'),
     duration_ms: section.durationMs,
     positive_styles: [request.prompt],
@@ -201,8 +259,9 @@ const MetadataSchema = z.looseObject({ composition_plan: PlanSchema.nullish() })
 type ReturnedPlan = z.infer<typeof PlanSchema>;
 
 const ErrorDetailSchema = z.looseObject({
-  detail: z.looseObject({ status: z.string().optional(), code: z.string().optional() }),
+  detail: z.looseObject({ status: z.string().optional(), code: z.string().optional(), data: z.unknown().optional() }),
 });
+const RefusalDataSchema = z.looseObject({ reason: z.string().max(MAX_REFUSAL_REASON_CHARS) });
 
 const chunkLines = (text: string): string[] => {
   const lines = text
@@ -225,37 +284,92 @@ export const lyricsFromPlan = (plan: ReturnedPlan | null | undefined): string | 
 
 type Part = { contentType: string; body: Buffer };
 
+const LF = 0x0a;
+const CR = 0x0d;
+const DASH = 0x2d;
+const SPACE = 0x20;
+const TAB = 0x09;
+
 export const boundaryOf = (contentType: string | null): string | undefined => {
   if (!contentType?.toLowerCase().startsWith('multipart/')) return undefined;
-  const match = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType);
+  const match = /(?:^|[;\s])boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType);
   return match?.[1] ?? match?.[2];
 };
 
+/** Length of the line break at `at` (CRLF or LF), or 0 when there is none. */
+const lineBreakAt = (buffer: Buffer, at: number): number => {
+  if (buffer[at] === LF) return 1;
+  return buffer[at] === CR && buffer[at + 1] === LF ? 2 : 0;
+};
+
+type Delimiter = { partEnd: number; next: number; close: boolean };
+
+/**
+ * The delimiter line whose dash-boundary sits at `at`: it must open a line and end in optional padding and a line
+ * break (a close delimiter may end the body instead). `partEnd` excludes the line break before it.
+ */
+const delimiterAt = (body: Buffer, at: number, dashLength: number): Delimiter | undefined => {
+  if (at > 0 && body[at - 1] !== LF) return undefined;
+  let cursor = at + dashLength;
+  const close = body[cursor] === DASH && body[cursor + 1] === DASH;
+  if (close) cursor += 2;
+  while (body[cursor] === SPACE || body[cursor] === TAB) cursor++;
+  const lineBreak = lineBreakAt(body, cursor);
+  if (lineBreak === 0 && !(close && cursor >= body.length)) return undefined;
+  const partEnd = at === 0 ? 0 : at - (at >= 2 && body[at - 2] === CR ? 2 : 1);
+  return { partEnd, next: cursor + lineBreak, close };
+};
+
+const findDelimiter = (body: Buffer, dashBoundary: Buffer, from: number): Delimiter | undefined => {
+  for (let at = body.indexOf(dashBoundary, from); at >= 0; at = body.indexOf(dashBoundary, at + 1)) {
+    const delimiter = delimiterAt(body, at, dashBoundary.length);
+    if (delimiter) return delimiter;
+  }
+  return undefined;
+};
+
+const HEADER_LINE = /^[!#$%&'*+.^_`|~0-9a-z-]+:/i;
+
+/** Where the header block ends and the body starts; a part opening with a blank line or no header has no headers. */
+const headerBlockOf = (raw: Buffer): { headersEnd: number; bodyStart: number } => {
+  const none = { headersEnd: 0, bodyStart: lineBreakAt(raw, 0) };
+  if (none.bodyStart > 0) return none;
+  const firstLineEnd = raw.indexOf(LF);
+  const firstLine = raw.subarray(0, firstLineEnd < 0 ? raw.length : firstLineEnd).toString('latin1');
+  if (!HEADER_LINE.test(firstLine)) return none;
+  for (let at = firstLineEnd; at >= 0; at = raw.indexOf(LF, at + 1)) {
+    const blank = lineBreakAt(raw, at + 1);
+    if (blank > 0) return { headersEnd: at, bodyStart: at + 1 + blank };
+  }
+  return none;
+};
+
 const partOf = (raw: Buffer): Part => {
-  const headerEnd = raw.indexOf('\r\n\r\n');
-  if (headerEnd < 0) return { contentType: '', body: raw };
-  const headers = raw.subarray(0, headerEnd).toString('latin1').split('\r\n');
-  const contentType = headers
+  const { headersEnd, bodyStart } = headerBlockOf(raw);
+  const contentType = raw
+    .subarray(0, headersEnd)
+    .toString('latin1')
+    .split(/\r?\n/)
     .find(header => header.toLowerCase().startsWith('content-type:'))
     ?.slice('content-type:'.length)
     .trim();
-  return { contentType: contentType ?? '', body: raw.subarray(headerEnd + 4) };
+  return { contentType: contentType ?? '', body: raw.subarray(bodyStart) };
 };
 
-/** Binary-safe multipart/mixed split (RFC 2046, CRLF line endings); undefined when the body is not one. */
+/**
+ * Binary-safe multipart split after RFC 2046: an optional preamble, CRLF or bare LF line breaks, and padding after a
+ * delimiter are accepted. Undefined when the body is not the declared multipart or is not closed.
+ */
 export const parseMultipart = (body: Buffer, boundary: string): Part[] | undefined => {
-  const delimiter = Buffer.from(`--${boundary}`, 'latin1');
-  const separator = Buffer.from(`\r\n--${boundary}`, 'latin1');
-  if (body.indexOf(delimiter) !== 0) return undefined;
+  const dashBoundary = Buffer.from(`--${boundary}`, 'latin1');
+  let delimiter = findDelimiter(body, dashBoundary, 0);
+  if (!delimiter) return undefined;
   const parts: Part[] = [];
-  let cursor = delimiter.length;
-  while (body.subarray(cursor, cursor + 2).toString('latin1') !== '--') {
-    if (body.subarray(cursor, cursor + 2).toString('latin1') !== '\r\n') return undefined;
-    const start = cursor + 2;
-    const end = body.indexOf(separator, start);
-    if (end < 0) return undefined;
-    parts.push(partOf(body.subarray(start, end)));
-    cursor = end + separator.length;
+  while (!delimiter.close) {
+    const next = findDelimiter(body, dashBoundary, delimiter.next);
+    if (!next) return undefined;
+    parts.push(partOf(body.subarray(delimiter.next, Math.max(delimiter.next, next.partEnd))));
+    delimiter = next;
   }
   return parts;
 };
@@ -275,14 +389,23 @@ const failed = (code: string, retryable: boolean, raw: unknown): ProviderTermina
   raw,
 });
 
+const toCode = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+
+/** The provider's own refusal reason (e.g. copyrighted_material_detected) when it gives a short one. */
+const refusalReason = (data: unknown): string => {
+  const parsed = RefusalDataSchema.safeParse(data);
+  const reason = parsed.success ? toCode(parsed.data.reason).replace(/^_+|_+$/g, '') : '';
+  return reason.length > 0 ? `${PREFIX}_${reason}` : POLICY_REASON;
+};
+
 const toFailure = (status: number, raw: unknown): ProviderTerminalResult => {
   const detail = ErrorDetailSchema.safeParse(raw);
   const providerStatus = detail.success ? detail.data.detail.status : undefined;
   if (providerStatus && REFUSAL_STATUSES.has(providerStatus)) {
-    return { status: 'blocked', reason: COPYRIGHT_REASON, raw };
+    return { status: 'blocked', reason: refusalReason(detail.success ? detail.data.detail.data : undefined), raw };
   }
   const providerCode = providerStatus ?? (detail.success ? detail.data.detail.code : undefined);
-  const code = providerCode ? providerCode.toLowerCase().replace(/[^a-z0-9]+/g, '_') : `http_${status}`;
+  const code = providerCode ? toCode(providerCode) : `http_${status}`;
   // Only a 429 proves nothing was generated; a 5xx may have rendered (and billed) a song, any other 4xx repeats.
   return failed(code, status === 429, raw);
 };
@@ -295,27 +418,49 @@ const toTerminal = (
 ): ProviderTerminalResult => {
   const boundary = boundaryOf(response.headers.get('content-type'));
   const parts = boundary ? parseMultipart(body, boundary) : undefined;
-  const jsonPart = parts?.find(part => part.contentType.toLowerCase().startsWith('application/json'));
-  const metadata = jsonPart ? MetadataSchema.safeParse(parseJson(jsonPart.body)) : undefined;
   // Answered and billed, but unreadable: a shape change to fix, not something a retry gets past.
-  if (!parts || !metadata?.success) return failed('unparseable', false, body.subarray(0, 2048).toString('utf8'));
+  if (!parts) return failed('unparseable', false, body.subarray(0, 2048).toString('utf8'));
+  const songId = response.headers.get('song-id');
+  const jsonPart = parts.find(part => part.contentType.toLowerCase().startsWith('application/json'));
+  const json = jsonPart ? parseJson(jsonPart.body) : undefined;
   const audio = parts.find(part => part.contentType.toLowerCase().startsWith('audio/') && part.body.length > 0);
   if (!audio) {
     // Not observed live; a response without audio must not bill the user for a song.
-    ctx.logger.warn(`${PREFIX}_succeeded_without_audio`, { songId: response.headers.get('song-id') });
-    return { status: 'blocked', reason: NO_AUDIO_REASON, raw: metadata.data };
+    ctx.logger.warn(`${PREFIX}_succeeded_without_audio`, { songId });
+    return { status: 'blocked', reason: NO_AUDIO_REASON, raw: json };
   }
+  // The audio is billed either way, so unreadable metadata only costs the lyrics.
+  const metadata = MetadataSchema.safeParse(json);
+  if (!metadata.success) ctx.logger.warn(`${PREFIX}_metadata_unread`, { songId, hasJsonPart: jsonPart !== undefined });
   const contentType = audio.contentType.split(';')[0].trim().toLowerCase();
   // The frame scan would false-sync on non-MP3 audio, so only MP3 is measured.
   const durationSeconds = contentType === MP3_CONTENT_TYPE ? mp3DurationSeconds(audio.body) : undefined;
   if (durationSeconds === undefined) ctx.logger.warn(`${PREFIX}_duration_unread`, { contentType });
-  const lyrics = request.instrumental ? undefined : lyricsFromPlan(metadata.data.composition_plan);
+  const lyrics = request.instrumental || !metadata.success ? undefined : lyricsFromPlan(metadata.data.composition_plan);
   return {
     status: 'succeeded',
     output: { kind: 'inline', base64: audio.body.toString('base64'), contentType },
     ...(durationSeconds !== undefined && { reportedDurationSeconds: durationSeconds }),
     ...(lyrics !== undefined && { lyrics }),
   };
+};
+
+/** The error body as JSON when it parses, else its text (like readJson), read within a small cap. */
+const readErrorBody = async (response: Response): Promise<unknown> => {
+  let body: Buffer;
+  try {
+    body = await readBoundedResponse(response, MAX_ERROR_BODY_BYTES);
+  } catch (error) {
+    if (error instanceof ProviderOutputTooLargeError) return `${PREFIX}_error_body_over_${MAX_ERROR_BODY_BYTES}_bytes`;
+    // A 5xx cut off mid-body may still have rendered (and billed) a song, so the outcome is unknown.
+    throw new ProviderSubmitError(`${PREFIX}_transport`, false, String(error));
+  }
+  const text = body.toString('utf8');
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 };
 
 /** ElevenLabs Music over the /v1/music/detailed REST endpoint, one blocking call per song. */
@@ -352,7 +497,7 @@ export class ElevenLabsMusicProvider implements SyncGenerationProvider<
       // Unknown outcome: the song may have been generated and billed, so the job must not call again.
       throw new ProviderSubmitError(`${PREFIX}_transport`, false, String(error));
     }
-    if (!response.ok) return toFailure(response.status, await readJson(response));
+    if (!response.ok) return toFailure(response.status, await readErrorBody(response));
     let body: Buffer;
     try {
       body = await readBoundedResponse(response, MAX_RESPONSE_BYTES);

@@ -9,8 +9,9 @@
  * With no arguments every scenario runs; name scenarios to re-record only those. `blocked` and `invalid-param`
  * are refused before generation and cost nothing.
  *
- * Audio bytes are never written: the multipart audio part is kept as `{ mimeType, bytes, durationSeconds }`, and
- * the test swaps in a synthetic MP3. The JSON part is kept verbatim.
+ * Binary bytes are never written: every non-JSON part is kept as `{ mimeType, bytes }` (plus `durationSeconds` for
+ * MP3), and the test swaps in a synthetic MP3. The JSON part is kept verbatim. A refusal's prompt suggestion is
+ * redacted, since it can describe the very artist it refused.
  */
 import { writeFileSync } from 'node:fs';
 import type { MusicGenerationRequest, ValidatedMusicRequest } from '@bike4mind/common';
@@ -31,22 +32,37 @@ const parseJson = (text: string): unknown => {
   }
 };
 
+const mimeTypeOf = (contentType: string) => contentType.split(';')[0].trim().toLowerCase();
+
 const recordParts = (body: Buffer, contentType: string) => {
   const boundary = boundaryOf(contentType);
   const parts = boundary ? parseMultipart(body, boundary) : undefined;
   if (!parts) throw new Error('success response is not a readable multipart body');
-  return parts.map(part =>
-    part.contentType.startsWith('audio/')
-      ? {
-          contentType: part.contentType,
-          audio: {
-            mimeType: part.contentType,
-            bytes: part.body.length,
-            durationSeconds: mp3DurationSeconds(part.body),
-          },
-        }
-      : { contentType: part.contentType, body: parseJson(part.body.toString('utf8')) }
-  );
+  return parts.map(part => {
+    const mimeType = mimeTypeOf(part.contentType);
+    if (mimeType === 'application/json') {
+      return { contentType: part.contentType, body: parseJson(part.body.toString('utf8')) };
+    }
+    const binary = {
+      mimeType: part.contentType,
+      bytes: part.body.length,
+      ...(mimeType === 'audio/mpeg' && { durationSeconds: mp3DurationSeconds(part.body) }),
+    };
+    return mimeType.startsWith('audio/')
+      ? { contentType: part.contentType, audio: binary }
+      : { contentType: part.contentType, binary };
+  });
+};
+
+const PROMPT_SUGGESTION_REDACTION = '<redacted:prompt-suggestion>';
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+
+const redactPromptSuggestion = (body: unknown): unknown => {
+  if (!isRecord(body) || !isRecord(body.detail) || !isRecord(body.detail.data)) return body;
+  if (!('prompt_suggestion' in body.detail.data)) return body;
+  const data = { ...body.detail.data, prompt_suggestion: PROMPT_SUGGESTION_REDACTION };
+  return { ...body, detail: { ...body.detail, data } };
 };
 
 const call = async (body: unknown) => {
@@ -69,7 +85,9 @@ const call = async (body: unknown) => {
         'content-type': contentType,
         ...(response.headers.has('song-id') && { 'song-id': '<redacted>' }),
       },
-      ...(multipart ? { parts: recordParts(bytes, contentType) } : { body: parseJson(bytes.toString('utf8')) }),
+      ...(multipart
+        ? { parts: recordParts(bytes, contentType) }
+        : { body: redactPromptSuggestion(parseJson(bytes.toString('utf8'))) }),
     },
   };
   return { exchange, elapsedMs };
@@ -101,8 +119,6 @@ const recordGeneration = async (scenario: string, body: unknown, requestedSecond
 };
 
 const BLOCKED_REDACTION = '<redacted:blocked-prompt>';
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
 // The prompt is replaced wherever it is echoed back, so the fixture never carries it.
 const redactBlocked = (value: unknown, prompt: string): unknown => {
