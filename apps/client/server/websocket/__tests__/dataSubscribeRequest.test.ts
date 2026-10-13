@@ -116,6 +116,7 @@ vi.mock('sst', () => ({
 import { func } from '../dataSubscribeRequest';
 import { Project, User } from '@bike4mind/database';
 import { inviteSubscriptionScope } from '@server/websocket/subscriptionScopes';
+import { UnauthorizedError } from '@server/utils/errors';
 
 const baseEvent = (accessToken = 'token-123') => ({
   requestContext: { connectionId: 'conn-1' },
@@ -254,12 +255,17 @@ describe('dataSubscribeRequest WS handler - account state', () => {
     mockIsWithinGraceWindow.mockReturnValue(false);
     mockVerifyToken.mockReturnValue({ id: 'caller-1' });
     (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', tokenVersion: undefined });
+    // Set here so the banned case doesn't borrow these from an earlier describe's mock state.
+    mockSessionFind.mockResolvedValue([]);
+    mockQuerySubscriptionFindOneAndUpdate.mockResolvedValue({ id: 'sub-doc-1' });
   });
 
   it('rejects a subscribe from a banned account before resolving or persisting the subscription', async () => {
     (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', isBanned: true });
 
-    await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toThrow('User not found or banned');
+    const promise = func(baseEvent() as any, {} as any, noopLogger as any);
+    await expect(promise).rejects.toBeInstanceOf(UnauthorizedError);
+    await expect(promise).rejects.toThrow('User not found or banned');
     expect(mockSessionFind).not.toHaveBeenCalled();
     expect(mockQuerySubscriptionFindOneAndUpdate).not.toHaveBeenCalled();
   });
