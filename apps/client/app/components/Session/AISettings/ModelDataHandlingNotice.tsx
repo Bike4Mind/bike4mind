@@ -21,16 +21,22 @@ const SERVING_PROVIDER: Record<ModelBackend, string | null> = {
   [ModelBackend.LocalImage]: null,
 };
 
-// Backends whose providers the privacy page names (OpenAI, Anthropic) or that are AWS-hosted, and
-// whose API terms exclude training by default for every key. Only these get the "do not use your
-// content for training" clause. Gemini is left out because its unpaid API tier does allow training
-// and the key in use may be a user's own; the AWS backend (Amazon Transcribe) is left out because
-// its service improvement use is on unless the AWS account opts out.
+// Backends that get the plain "do not use your content for training" clause. OpenAI and Anthropic
+// API terms exclude training by default for every key, including a user's own. Bedrock and AWS
+// (Amazon Transcribe) run only on the platform's AWS account, which is opted out of AI-service
+// content use; there is no user-supplied AWS credential path. Gemini is handled separately below.
 const TRAINING_EXCLUSION_STATED: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.OpenAI,
   ModelBackend.Anthropic,
   ModelBackend.Bedrock,
+  ModelBackend.AWS,
 ]);
+
+// The platform's Gemini key is on Google's paid API tier, which excludes training, but a user's own
+// Gemini key takes precedence server-side (getEffectiveLLMApiKeys) and may be on the unpaid tier,
+// which does not. The client cannot tell which key serves a call, so the line states both cases.
+const GEMINI_TEXT =
+  "This model is served by Google. With Bike4Mind's key, your session content is processed under Google's paid API terms, which do not use your content for training. If you use your own Google API key, your key's terms apply.";
 
 // Ollama lists models it proxies to its own hosted service with a `cloud` tag (`gpt-oss:120b-cloud`,
 // `glm-4.6:cloud`). Those leave the operator's server, so they must not get the self-hosted line.
@@ -49,6 +55,9 @@ export const getModelDataHandlingText = (model: ModelRoute): string => {
       : SERVING_PROVIDER[model.backend];
   if (provider === undefined) {
     return "Your session content is processed by this model's provider under its API terms.";
+  }
+  if (model.backend === ModelBackend.Gemini) {
+    return GEMINI_TEXT;
   }
   if (provider === null) {
     return 'This model runs on a self-hosted open-weight server, so no third-party model provider processes your session content.';

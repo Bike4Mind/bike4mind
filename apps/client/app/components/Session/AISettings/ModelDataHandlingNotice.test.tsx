@@ -35,31 +35,36 @@ describe('getModelDataHandlingText', () => {
   });
 
   it.each(THIRD_PARTY)('names the serving provider for %s', (backend, provider) => {
-    expect(getModelDataHandlingText(route(backend))).toContain(
-      `This model is served by ${provider}. Your session content is processed by ${provider} under its API terms`
-    );
+    expect(getModelDataHandlingText(route(backend))).toContain(`This model is served by ${provider}.`);
   });
 
-  it.each([ModelBackend.OpenAI, ModelBackend.Anthropic, ModelBackend.Bedrock])(
+  it.each([ModelBackend.OpenAI, ModelBackend.Anthropic, ModelBackend.Bedrock, ModelBackend.AWS])(
     'states the training exclusion for %s',
     backend => {
-      expect(getModelDataHandlingText(route(backend))).toContain('do not use your content for training');
+      const provider = THIRD_PARTY.find(([b]) => b === backend)?.[1];
+      expect(getModelDataHandlingText(route(backend))).toBe(
+        `This model is served by ${provider}. Your session content is processed by ${provider} under its API terms, which do not use your content for training.`
+      );
     }
   );
 
-  // Gemini: the unpaid API tier allows training and the key may be a user's own. AWS (Transcribe):
-  // service improvement use is on unless the account opts out.
-  it.each([
-    ModelBackend.Gemini,
-    ModelBackend.AWS,
-    ModelBackend.XAI,
-    ModelBackend.BFL,
-    ModelBackend.Kimi,
-    ModelBackend.DeepSeek,
-    ModelBackend.VoyageAI,
-  ])('makes no training claim for %s', backend => {
-    expect(getModelDataHandlingText(route(backend))).not.toContain('training');
+  // The platform key is on the paid tier; a user's own key may not be, and the client cannot tell
+  // which key serves the call.
+  it('scopes the Gemini training exclusion to the platform key and defers to a user key', () => {
+    expect(getModelDataHandlingText(route(ModelBackend.Gemini))).toBe(
+      "This model is served by Google. With Bike4Mind's key, your session content is processed under Google's paid API terms, which do not use your content for training. If you use your own Google API key, your key's terms apply."
+    );
   });
+
+  it.each([ModelBackend.XAI, ModelBackend.BFL, ModelBackend.Kimi, ModelBackend.DeepSeek, ModelBackend.VoyageAI])(
+    'makes no training claim for %s',
+    backend => {
+      const provider = THIRD_PARTY.find(([b]) => b === backend)?.[1];
+      expect(getModelDataHandlingText(route(backend))).toBe(
+        `This model is served by ${provider}. Your session content is processed by ${provider} under its API terms.`
+      );
+    }
+  );
 
   it('names Bedrock, not the model maker, for a Bedrock-served model', () => {
     const text = getModelDataHandlingText({ id: 'global.anthropic.claude-haiku-5-5', backend: ModelBackend.Bedrock });
