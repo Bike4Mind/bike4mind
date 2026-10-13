@@ -64,6 +64,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { MAX_EMAIL_MESSAGE_LENGTH } from '@client/types/api';
+import { normalizeRecipients } from './notebookRecipients';
 
 // Inferred type for uppercase API artifact types
 type CurationArtifactTypeAPI = z.infer<typeof CurationArtifactTypeSchema>;
@@ -352,9 +353,7 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
       return;
     }
 
-    const validRecipients = emailRecipients
-      .map(email => email.trim())
-      .filter(email => email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+    const validRecipients = normalizeRecipients(emailRecipients);
 
     if (validRecipients.length === 0) {
       toast.error('Please enter at least one valid email address');
