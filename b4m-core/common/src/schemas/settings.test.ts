@@ -305,6 +305,7 @@ describe('public settings projection (M2.5 security boundary)', () => {
         'deepseekApiKey',
         'geminiDemoKey',
         'voyageApiKey',
+        'typesafeApiKey',
       ]) {
         expect(keys).not.toContain(secret);
       }

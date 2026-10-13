@@ -61,10 +61,14 @@ OPENAI_API_KEY=         # GPT
 GEMINI_API_KEY=         # Google Gemini
 XAI_API_KEY=            # Grok
 DEEPSEEK_API_KEY=       # DeepSeek
+TYPESAFE_API_KEY=       # TypeSafe Jev (Decisions API models)
+SYSTEMONE_BASE_URL=     # optional: Jev-compatible server such as self-hosted Laya (default https://api.typesafe.ai); a malformed value logs an error and disables only the Jev models
 MOONSHOT_API_KEY=       # Kimi
 BFL_API_KEY=            # Black Forest Labs (FLUX image models)
 # ...plus optional GitHub/Google OAuth, Stripe, Slack - see the template
 ```
+
+Hosted (non-self-host) deployments set the TypeSafe key through the `typesafeApiKey` admin setting instead; `TYPESAFE_API_KEY` is read only when `B4M_SELF_HOST=true`.
 
 **Organization feedback summaries** - set **Organization Feedback Summary Model** (`OrgFeedbackSummaryModel`) in Admin Settings to an available model for your configured provider. The default remains Claude 4.5 Haiku via Bedrock. To run without Bedrock, explicitly select another provider's model, for example Claude 4.5 Haiku with `ANTHROPIC_API_KEY` available to the worker. The job uses the system provider credentials, not the requesting user's key. An unavailable selected model fails the job instead of silently choosing another model. Completed-job replay delivers completion again without generating or uploading another summary. Generation is capped at 2,000 output tokens; provider retries can still add cost.
 

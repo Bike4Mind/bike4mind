@@ -14,6 +14,7 @@ import type {
   IDataLakeBatchSummary,
   IDataLakeFindingDocument,
   ILakeFindingListItem,
+  LakeSkippedFilesResponse,
   InconsistencyKind,
   LakeCorpusAction,
   LakeCorpusActionTarget,
@@ -2499,6 +2500,37 @@ export function useDataLakeFindings(
     ...query,
     data: findings,
     isForbidden: isPermissionRejection(query.error),
+    hasMore: query.hasNextPage,
+    loadMore: query.fetchNextPage,
+    isLoadingMore: query.isFetchingNextPage,
+  };
+}
+
+const SKIPPED_FILES_PAGE_SIZE = 25;
+
+/** One lake's files the connected source holds but the sync did not ingest. Manage-gated server-side. */
+export function useDataLakeSkippedFiles(dataLakeId: string | undefined, enabled: boolean) {
+  const query = useInfiniteQuery({
+    queryKey: dataLakeKeys.skippedFiles(dataLakeId ?? null),
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const { data } = await api.get<LakeSkippedFilesResponse>(`/api/data-lakes/${dataLakeId}/skipped-files`, {
+        params: { limit: SKIPPED_FILES_PAGE_SIZE, offset: pageParam },
+      });
+      return data;
+    },
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.hasMore ? allPages.reduce((loaded, page) => loaded + page.data.length, 0) : undefined,
+    enabled: !!dataLakeId && enabled,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60,
+  });
+  const files = useMemo(() => query.data?.pages.flatMap(page => page.data) ?? [], [query.data]);
+  return {
+    ...query,
+    files,
+    total: query.data?.pages[0]?.total ?? 0,
     hasMore: query.hasNextPage,
     loadMore: query.fetchNextPage,
     isLoadingMore: query.isFetchingNextPage,
