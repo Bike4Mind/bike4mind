@@ -81,3 +81,28 @@ describe('PUT /api/webhooks/jira/config without rotateSecret', () => {
     expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'jcfg-1', events: ['jira:issue_updated'] });
   });
 });
+
+describe('GET /api/webhooks/jira/config with revealSecret', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getValidTokens.mockResolvedValue({ cloudId: 'cloud-1' });
+    h.findByAtlassianCloudId.mockResolvedValue({ ...storedConfig });
+    h.countByWebhookConfig.mockResolvedValue(0);
+  });
+
+  const get = async (user: { id: string; isAdmin?: boolean }) => {
+    const res = makeRes();
+    await h.handlers.get({ user, query: { revealSecret: 'true' } }, res);
+    return res.json.mock.calls[0][0] as { secret?: string; secretMasked?: string };
+  };
+
+  it('reveals the secret to the config creator or an admin only', async () => {
+    expect((await get({ id: 'user-1' })).secret).toBe('old-secret');
+    expect((await get({ id: 'admin-1', isAdmin: true })).secret).toBe('old-secret');
+
+    const other = await get({ id: 'user-2' });
+    expect(other.secret).toBeUndefined();
+    expect(other.secretMasked).toBeDefined();
+    expect(other.secretMasked).not.toContain('old-secret');
+  });
+});

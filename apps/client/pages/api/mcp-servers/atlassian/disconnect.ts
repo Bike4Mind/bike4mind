@@ -48,7 +48,7 @@ const handler = baseApi().delete(async (req, res) => {
       for (const resource of atlassianConnect.resources) {
         try {
           const webhookConfig = await jiraWebhookConfigRepository.findByAtlassianCloudId(resource.id);
-          if (webhookConfig) {
+          if (webhookConfig && (webhookConfig.createdBy === req.user.id || req.user.isAdmin)) {
             const deletedSubs = await jiraWebhookSubscriptionRepository.deleteByWebhookConfig(webhookConfig.id);
             await jiraWebhookConfigRepository.delete(webhookConfig.id);
             console.log(

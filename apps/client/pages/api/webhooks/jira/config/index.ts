@@ -160,11 +160,13 @@ const handler = baseApi()
 
       const subscriberCount = await jiraWebhookSubscriptionRepository.countByWebhookConfig(webhookConfig.id);
 
+      const canRevealSecret = revealSecret && (webhookConfig.createdBy === user.id || !!user.isAdmin);
+
       // Decrypt and optionally reveal secret
       let secretDisplay: string;
       const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
 
-      if (revealSecret && encryptionKey) {
+      if (canRevealSecret && encryptionKey) {
         const decryptedSecret = decryptSecret(webhookConfig.secret, encryptionKey);
         secretDisplay = decryptedSecret;
       } else if (encryptionKey) {
@@ -192,8 +194,8 @@ const handler = baseApi()
         createdAt: webhookConfig.createdAt,
         updatedAt: webhookConfig.updatedAt,
         webhookUrl: getWebhookUrl(webhookConfig.routingToken),
-        secret: revealSecret ? secretDisplay : undefined,
-        secretMasked: revealSecret ? undefined : secretDisplay,
+        secret: canRevealSecret ? secretDisplay : undefined,
+        secretMasked: canRevealSecret ? undefined : secretDisplay,
         subscriberCount,
         isRotating,
         previousSecretExpiresAt: isRotating ? webhookConfig.previousSecretExpiresAt : undefined,
