@@ -115,14 +115,24 @@ describe('POST /api/files/[id]/moderate', () => {
     expect(res.body).toEqual({ moderationStatus: 'blocked' });
   });
 
-  it('does not re-scan a file that already has a terminal verdict', async () => {
-    h.findById.mockResolvedValue(file({ moderationStatus: 'blocked' }));
+  it('400s a file with no storage path without claiming or scanning it', async () => {
+    h.findById.mockResolvedValue(file({ filePath: undefined }));
+    const res = makeRes();
+    await handler(makeReq(), res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(h.claim).not.toHaveBeenCalled();
+    expect(h.scan).not.toHaveBeenCalled();
+  });
+
+  it.each(['clean', 'blocked'])('does not re-scan a file that already has a %s verdict', async status => {
+    h.findById.mockResolvedValue(file({ moderationStatus: status }));
     const res = makeRes();
     await handler(makeReq(), res);
 
     expect(h.claim).not.toHaveBeenCalled();
     expect(h.scan).not.toHaveBeenCalled();
-    expect(res.body).toEqual({ moderationStatus: 'blocked' });
+    expect(res.body).toEqual({ moderationStatus: status });
   });
 
   it('reports pending without scanning when another invocation owns the claim', async () => {
@@ -162,6 +172,13 @@ describe('POST /api/files/[id]/moderate', () => {
       mimeType: 'image/jpeg',
     });
     expect(h.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('leaves the stored mime type alone when the scan confirms it', async () => {
+    h.scan.mockResolvedValue({ moderationStatus: 'clean', correctedMimeType: 'image/png' });
+    await handler(makeReq(), makeRes());
+
+    expect(h.writeVerdict).toHaveBeenCalledWith('oid1', expect.any(Date), { moderationStatus: 'clean' });
   });
 
   it('tells the owner the final verdict over the websocket', async () => {
