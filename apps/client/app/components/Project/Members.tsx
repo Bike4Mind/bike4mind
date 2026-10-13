@@ -8,13 +8,14 @@ import { redAlpha, red, brandAlpha } from '@client/app/utils/themes/colors';
 import { useQueryClient } from '@tanstack/react-query';
 import { debounce } from 'lodash';
 import { useNavigate } from '@tanstack/react-router';
-import { FC, useCallback, useMemo, useState } from 'react';
+import { FC, useCallback, useEffect, useMemo, useState } from 'react';
 import AddMembersModal from './AddMembersModal';
 import UserCard from './UserCard';
 import { SubscriptionCallbackFunction } from '@client/app/hooks/useCollection';
 import { toast } from 'sonner';
 import { updateAllQueryData, useSubscribeCollection } from '@client/app/utils/react-query';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
+import { useCoalescedInvalidate } from '@client/app/hooks/useCoalescedInvalidate';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import LogoutIcon from '@mui/icons-material/Logout';
 
@@ -80,6 +81,10 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
     return debounce(() => queryClient.invalidateQueries({ queryKey: getUserKey }), 500);
   }, [queryClient, getUserKey]);
 
+  useEffect(() => () => debouncedInvalidateUsers.cancel(), [debouncedInvalidateUsers]);
+
+  const coalescedInvalidateInvites = useCoalescedInvalidate(['invites', 'projects', project.id]);
+
   // Subscribe to the invites collection to invalidate the query whenever a new invite is received.
   useSubscribeCollection(
     'invites',
@@ -92,12 +97,12 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
           case 'insert':
           case 'update':
           case 'delete':
-            queryClient.invalidateQueries({ queryKey: ['invites', 'projects', project.id] });
+            coalescedInvalidateInvites();
             debouncedInvalidateUsers();
             break;
         }
       },
-      [debouncedInvalidateUsers, project.id, queryClient]
+      [coalescedInvalidateInvites, debouncedInvalidateUsers]
     )
   );
 
@@ -111,10 +116,10 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
         if (type === 'update') {
           updateAllQueryData(queryClient, 'projects', 'write', data);
           debouncedInvalidateUsers();
-          queryClient.invalidateQueries({ queryKey: ['invites', 'projects', project.id] });
+          coalescedInvalidateInvites();
         }
       },
-      [debouncedInvalidateUsers, project.id, queryClient]
+      [coalescedInvalidateInvites, debouncedInvalidateUsers, queryClient]
     )
   );
 
