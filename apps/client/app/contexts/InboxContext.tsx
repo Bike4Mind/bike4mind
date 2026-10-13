@@ -1,5 +1,5 @@
 import { IInboxDocument, IInviteDocument } from '@bike4mind/common';
-import React, { createContext, ReactNode, useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { createContext, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import InboxModal from '../components/inbox/Modal';
@@ -15,11 +15,21 @@ export type InviteEventListener = (type: string, data: IInviteDocument) => void;
 // replays one event per document in scope, so N subscribes cost N server-side bursts).
 const inviteListeners = new Set<InviteEventListener>();
 
+// The server resolves the `invites` scope (projects the caller may share) once per subscribe, so a
+// project created or shared after that is missing from it. Each newly requested project bumps
+// `projectIds`, and InboxProvider resubscribes (without a replay) to pick it up.
+const useInviteScope = create<{ projectIds: ReadonlySet<string>; request: (projectId: string) => void }>(set => ({
+  projectIds: new Set(),
+  request: projectId =>
+    set(state => (state.projectIds.has(projectId) ? state : { projectIds: new Set(state.projectIds).add(projectId) })),
+}));
+
 /**
  * Runs `listener` for every invites event InboxProvider receives. The listener is kept in a ref, so
- * an inline callback does not re-register on each render.
+ * an inline callback does not re-register on each render. Pass `projectId` when the listener needs
+ * that project's invites, so the shared subscription's scope is refreshed to cover it.
  */
-export const useInviteEvents = (listener: InviteEventListener) => {
+export const useInviteEvents = (listener: InviteEventListener, options?: { projectId?: string }) => {
   const listenerRef = useRef(listener);
   useEffect(() => {
     listenerRef.current = listener;
@@ -32,6 +42,24 @@ export const useInviteEvents = (listener: InviteEventListener) => {
       inviteListeners.delete(forward);
     };
   }, []);
+
+  const projectId = options?.projectId;
+  useEffect(() => {
+    if (projectId) useInviteScope.getState().request(projectId);
+  }, [projectId]);
+};
+
+const InviteSubscription: React.FC<{
+  callback: (type: string, data: IInviteDocument) => void;
+  fetchInitialData: boolean;
+}> = ({ callback, fetchInitialData }) => {
+  useSubscribeCollection<IInviteDocument>(
+    'invites',
+    useMemo(() => ({}), []),
+    callback,
+    { fetchInitialData }
+  );
+  return null;
 };
 
 interface InboxContextProps {
@@ -97,14 +125,21 @@ export const InboxProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     inboxCallback
   );
 
-  useSubscribeCollection<IInviteDocument>(
-    'invites',
-    useMemo(() => ({}), []),
-    inviteCallback
-  );
+  const scopeSize = useInviteScope(s => s.projectIds.size);
+  const [initialScopeSize] = useState(scopeSize);
+  const rescoped = scopeSize !== initialScopeSize;
+
+  // A rescope drops the old subscription before the new one is live, so refetch once afterwards
+  // to cover any event that fell in the gap.
+  const invalidateAllInvites = useCoalescedInvalidate(['invites']);
+  useEffect(() => {
+    if (scopeSize !== initialScopeSize) invalidateAllInvites();
+  }, [scopeSize, initialScopeSize, invalidateAllInvites]);
 
   return (
     <>
+      {/* Keyed on the scope so a newly requested project resubscribes; only the first subscribe replays. */}
+      <InviteSubscription key={scopeSize} callback={inviteCallback} fetchInitialData={!rescoped} />
       <InboxModal />
       {children}
     </>

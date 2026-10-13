@@ -91,11 +91,14 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
   // Listens to InboxProvider's single `invites` subscription instead of opening a second one.
   // Refetch rather than write the event's document: the subscription withholds `recipients`
   // (server/websocket/dataSubscribeFieldLimits.ts), and the REST list redacts them per viewer.
-  useInviteEvents((_type, data) => {
-    if (data?.documentId !== project.id || data?.type !== InviteType.Project) return;
-    coalescedInvalidateInvites();
-    debouncedInvalidateUsers();
-  });
+  useInviteEvents(
+    (_type, data) => {
+      if (data?.documentId !== project.id || data?.type !== InviteType.Project) return;
+      coalescedInvalidateInvites();
+      debouncedInvalidateUsers();
+    },
+    { projectId: project.id }
+  );
 
   // Update the users list whenever the project changes
   useSubscribeCollection(

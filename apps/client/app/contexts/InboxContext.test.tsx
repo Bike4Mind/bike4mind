@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => {
     queryClient: { invalidateQueries },
     callbacks: {} as Record<string, Callback>,
     subscribeCalls: [] as string[],
+    subscribes: [] as Array<{ collection: string; fetchInitialData: boolean }>,
   };
 });
 
@@ -33,13 +34,31 @@ vi.mock('../components/inbox/Modal', () => ({ default: () => null }));
 vi.mock('./UserContext', () => ({
   useUser: (selector: (s: { currentUser: unknown }) => unknown) => selector({ currentUser: { id: 'user-1' } }),
 }));
-vi.mock('../utils/react-query', () => ({
-  updateAllQueryData: vi.fn(),
-  useSubscribeCollection: (collection: string, _query: unknown, callback: Callback) => {
-    mocks.subscribeCalls.push(collection);
-    mocks.callbacks[collection] = callback;
-  },
-}));
+vi.mock('../utils/react-query', async () => {
+  const { useEffect } = await vi.importActual<typeof import('react')>('react');
+  return {
+    updateAllQueryData: vi.fn(),
+    useSubscribeCollection: (
+      collection: string,
+      _query: unknown,
+      callback: Callback,
+      options?: { fetchInitialData?: boolean }
+    ) => {
+      mocks.subscribeCalls.push(collection);
+      mocks.callbacks[collection] = callback;
+      // Mirrors the real hook: one subscribe per mounted instance.
+      useEffect(() => {
+        mocks.subscribes.push({ collection, fetchInitialData: options?.fetchInitialData ?? true });
+      }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    },
+  };
+});
+
+const ProjectConsumer = ({ projectId }: { projectId: string }) => {
+  useInviteEvents(() => {}, { projectId });
+  return null;
+};
+const inviteSubscribes = () => mocks.subscribes.filter(sub => sub.collection === 'invites');
 
 const fireInviteBurst = (count: number) => {
   act(() => {
@@ -55,6 +74,7 @@ describe('InboxProvider invites subscription', () => {
     mocks.invalidateQueries.mockReset();
     mocks.callbacks = {};
     mocks.subscribeCalls = [];
+    mocks.subscribes = [];
     received.length = 0;
   });
 
@@ -158,5 +178,44 @@ describe('InboxProvider invites subscription', () => {
     fireInviteBurst(2);
 
     expect(received).toHaveLength(2);
+  });
+
+  it('resubscribes without a replay when a consumer needs a project, then refetches invites once', () => {
+    const { rerender } = render(<InboxProvider>{null}</InboxProvider>);
+    expect(inviteSubscribes()).toEqual([{ collection: 'invites', fetchInitialData: true }]);
+
+    rerender(
+      <InboxProvider>
+        <ProjectConsumer projectId="rescope-project" />
+      </InboxProvider>
+    );
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    expect(inviteSubscribes()).toEqual([
+      { collection: 'invites', fetchInitialData: true },
+      { collection: 'invites', fetchInitialData: false },
+    ]);
+    expect(mocks.invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['invites'] });
+  });
+
+  it('does not resubscribe for a project it already requested', () => {
+    render(
+      <InboxProvider>
+        <ProjectConsumer projectId="repeat-project" />
+      </InboxProvider>
+    );
+    const before = inviteSubscribes().length;
+
+    render(
+      <InboxProvider>
+        <ProjectConsumer projectId="repeat-project" />
+      </InboxProvider>
+    );
+
+    expect(inviteSubscribes().length - before).toBe(1);
+    expect(inviteSubscribes().at(-1)).toEqual({ collection: 'invites', fetchInitialData: true });
   });
 });
