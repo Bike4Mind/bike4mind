@@ -7,6 +7,7 @@ import { issueBrowserSession } from '@server/auth/issueSession';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { ExtractJwt } from 'passport-jwt';
 
 // Per-user cap (req.user is set here, so rateLimit keys by user id, not IP). No legitimate
 // flow calls identify anywhere near 60/min - it fires on cold load, tab refocus and WS
@@ -15,6 +16,11 @@ import { redactUserSecretsForSelf } from '@bike4mind/common';
 // (an invalid token is rejected before the handler chain); that class of flood is bounded by
 // refreshToken's own per-IP rate limit and, when enabled, the edge WAF.
 const IDENTIFY_RATE_LIMIT = { limit: 60, windowMs: 60 * 1000 } as const;
+
+// The same extractor the jwt strategy uses (server/auth/auth.ts), so this route reads exactly the
+// token that authenticated the request. A hand-rolled parse disagrees on headers passport accepts
+// (e.g. extra whitespace), sees "no token", and would mint a session the caller never earned.
+const extractBearerToken = ExtractJwt.fromAuthHeaderAsBearerToken();
 
 const handler = baseApi()
   .use(rateLimit(IDENTIFY_RATE_LIMIT))
@@ -25,14 +31,17 @@ const handler = baseApi()
     // minted and no refresh cookie is set. Otherwise presenting one here would trade
     // it for a full browser session carrying the owner's whole account.
     const isApiKeyCaller = !!req.apiKeyInfo;
-    let accessToken: string | undefined = isApiKeyCaller ? undefined : req.headers?.authorization?.split(' ')[1];
+    // identify is reachable before the second factor (auth.ts mfaPending allowlist), so it must
+    // never upgrade that session: minting here would hand back a full session and refresh cookie.
+    const isMfaPending = !!(req.user as { mfaPending?: boolean } | undefined)?.mfaPending;
+    let accessToken: string | undefined = isApiKeyCaller ? undefined : (extractBearerToken(req) ?? undefined);
     req.logger.log(
       `Successful auth for "${req.user?.username}" (${req.user?.email}), ${
-        isApiKeyCaller ? 'api key - no' : accessToken ? 'have' : 'creating'
+        isApiKeyCaller ? 'api key - no' : isMfaPending ? 'mfa pending - no new' : accessToken ? 'have' : 'creating'
       } access token`
     );
 
-    if (!isApiKeyCaller) {
+    if (!isApiKeyCaller && !isMfaPending) {
       if (!accessToken) {
         ({ accessToken } = await issueBrowserSession(req, res, req.user!.id, {
           createdVia: 'identify',

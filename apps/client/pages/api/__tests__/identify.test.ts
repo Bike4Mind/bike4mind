@@ -118,14 +118,18 @@ import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@b
 
 const VALID_KEY = 'b4m_live_0123456789abcdef0123456789abcdef';
 
-function fire({ apiKey, bearer }: { apiKey?: string; bearer?: string } = {}) {
+function fire({
+  apiKey,
+  bearer,
+  authorization = bearer ? `Bearer ${bearer}` : undefined,
+}: { apiKey?: string; bearer?: string; authorization?: string } = {}) {
   const { req, res } = createMocks(
     {
       method: 'GET',
       url: '/api/identify',
       headers: {
         ...(apiKey ? { 'x-api-key': apiKey } : {}),
-        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+        ...(authorization ? { authorization } : {}),
       },
     },
     { eventEmitter: EventEmitter }
@@ -249,6 +253,22 @@ describe('GET /api/identify', () => {
       expect(res._getJSONData().accessToken).toBe('live-jwt');
     });
 
+    // passport-jwt splits the header on any run of whitespace, so these authenticate the token.
+    // The route must read that same token rather than its own parse of the header, or it sees
+    // no token and mints a fresh session for whoever the token belongs to.
+    it.each([
+      ['a doubled space', 'Bearer  live-jwt'],
+      ['a tab', 'Bearer\tlive-jwt'],
+    ])('reads the token passport authenticated when the header uses %s', async (_label, authorization) => {
+      const { req, res } = fire({ authorization });
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockIssueSession).not.toHaveBeenCalled();
+      expect(mockVerifyToken).toHaveBeenCalledWith('live-jwt', undefined);
+      expect(res._getJSONData().accessToken).toBe('live-jwt');
+    });
+
     // Regression guard: previousKey is stored encrypted at rest, so this reader must
     // decryptAtRest it before handing it to the verifier. A plaintext fixture cannot
     // catch a dropped decrypt (plaintext passes through); this holds real ciphertext and
@@ -270,6 +290,33 @@ describe('GET /api/identify', () => {
       } finally {
         configureSecretsAtRest(undefined);
       }
+    });
+
+    describe('before the second factor', () => {
+      function fireMfaPending(options?: Parameters<typeof fire>[0]) {
+        const fired = fire(options);
+        fired.req.user = { ...USER, mfaPending: true };
+        return fired;
+      }
+
+      it('never mints a session when no token is presented', async () => {
+        const { req, res } = fireMfaPending();
+        await handler(req, res);
+
+        expect(res._getStatusCode()).toBe(200);
+        expect(mockIssueSession).not.toHaveBeenCalled();
+        expect(res._getJSONData().accessToken).toBeUndefined();
+      });
+
+      it('never re-issues a session for an expired token', async () => {
+        mockVerifyToken.mockReturnValue({ exp: Math.floor(Date.now() / 1000) - 10 });
+        const { req, res } = fireMfaPending({ bearer: 'pending-jwt' });
+        await handler(req, res);
+
+        expect(res._getStatusCode()).toBe(200);
+        expect(mockIssueSession).not.toHaveBeenCalled();
+        expect(res._getJSONData().accessToken).toBe('pending-jwt');
+      });
     });
 
     it('is sanitized too - the raw document never leaves this route', async () => {
