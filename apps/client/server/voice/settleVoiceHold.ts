@@ -69,10 +69,15 @@ export async function settleVoiceHold(
     try {
       await userRepository.incrementCredits(hold.userId, refundedCredits);
     } catch (creditError) {
+      // An explicit end is the call's last activity, so the sweep's retry must bill up to it, not
+      // stop at the last beat or turn seen before it.
+      const lastActivity = hold.voiceLastActivityAt ? new Date(hold.voiceLastActivityAt) : null;
+      const restoredLastActivity =
+        source === 'end' && (!lastActivity || lastActivity < endedAt) ? endedAt : lastActivity;
       const restored = await sessionRepository
         .restoreVoiceHold(hold.id, reserved, hold.voiceSessionStartedAt, {
           voiceConnectedAt: hold.voiceConnectedAt ?? null,
-          voiceLastActivityAt: hold.voiceLastActivityAt ?? null,
+          voiceLastActivityAt: restoredLastActivity,
           voiceBilledCredits: billedCredits,
         })
         .catch(restoreError => {

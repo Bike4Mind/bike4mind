@@ -67,9 +67,9 @@ describe('voiceSessionSendTranscript authorization', () => {
     mocks.connectionFindOne.mockResolvedValue({ connectionId: 'conn-1', userId: 'user-1' });
     mocks.userFindById.mockResolvedValue({ id: 'user-1' });
     mocks.ofType.mockReturnValue({ scopeMarker: 'update-scope' });
-    mocks.sessionFindOne.mockResolvedValue({ _id: 'session-1' });
+    mocks.sessionFindOne.mockResolvedValue({ _id: 'session-1', userId: 'user-1', voiceBilledCredits: 0 });
     mocks.upsertVoiceTranscriptTurn.mockResolvedValue({});
-    mocks.recordVoiceActivity.mockResolvedValue(undefined);
+    mocks.recordVoiceActivity.mockResolvedValue(true);
   });
 
   const run = () => func(event as never, {} as never, logger as never);
@@ -95,7 +95,34 @@ describe('voiceSessionSendTranscript authorization', () => {
   it('records the frame as server-seen activity on the call', async () => {
     await run();
 
-    expect(mocks.recordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date));
+    expect(mocks.recordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date), null, {
+      realtimeOnly: true,
+    });
+  });
+
+  it("does not mark the owner's hold from a write-sharee's frame", async () => {
+    mocks.sessionFindOne.mockResolvedValue({ _id: 'session-1', userId: 'notebook-owner', voiceBilledCredits: 0 });
+
+    await run();
+
+    expect(mocks.upsertVoiceTranscriptTurn).toHaveBeenCalled();
+    expect(mocks.recordVoiceActivity).not.toHaveBeenCalled();
+  });
+
+  it("does not mark the owner's ElevenLabs hold, which carries no realtime marker", async () => {
+    mocks.sessionFindOne.mockResolvedValue({ _id: 'session-1', userId: 'user-1' });
+
+    await run();
+
+    expect(mocks.recordVoiceActivity).not.toHaveBeenCalled();
+  });
+
+  it('still delivers the frame when recording the activity fails', async () => {
+    mocks.recordVoiceActivity.mockRejectedValue(new Error('db blip'));
+
+    expect(await run()).toEqual({ statusCode: 200 });
+    expect(mocks.upsertVoiceTranscriptTurn).toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('voice activity'), expect.anything());
   });
 
   it('writes nothing when the session is readable but not writable by the caller', async () => {

@@ -45,7 +45,7 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
       voiceReservedCredits: reserved,
       voiceSessionStartedAt: startedAt,
       voiceConnectedAt: session.voiceConnectedAt ?? null,
-      // Carried for the restore if the refund fails, so a retry still bills up to this activity.
+      // Carried for the restore if the refund fails; settleVoiceHold advances it to the end time.
       voiceLastActivityAt: session.voiceLastActivityAt ?? null,
     },
     // Ending the call is itself the call's last activity.

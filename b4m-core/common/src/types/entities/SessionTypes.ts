@@ -1191,9 +1191,15 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   /**
    * Record that the session's open voice call is connected and alive at `at`: sets
    * voiceConnectedAt the first time and advances voiceLastActivityAt. With `holdStartedAt`, only the
-   * hold that started then is touched. A no-op without a matching open hold.
+   * hold that started then is touched; with `realtimeOnly`, only a realtime hold (one carrying
+   * voiceBilledCredits). Resolves false (and writes nothing) when no matching open hold exists.
    */
-  recordVoiceActivity: (sessionId: string, at: Date, holdStartedAt?: Date | null) => Promise<void>;
+  recordVoiceActivity: (
+    sessionId: string,
+    at: Date,
+    holdStartedAt?: Date | null,
+    options?: { realtimeOnly?: boolean }
+  ) => Promise<boolean>;
 
   /**
    * Atomically clear the voice hold that started at `startedAt`. Resolves, for the single caller

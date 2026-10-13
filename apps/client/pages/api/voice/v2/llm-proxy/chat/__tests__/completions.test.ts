@@ -137,7 +137,7 @@ function primeSuccessfulTurn() {
     reasoningModelId: 'test-model',
   });
   mockFindDuplicateQuests.mockResolvedValue([]);
-  mockRecordVoiceActivity.mockResolvedValue(undefined);
+  mockRecordVoiceActivity.mockResolvedValue(true);
   mockUserFindById.mockResolvedValue({ id: 'user-1' });
   mockGetSettingsMap.mockResolvedValue({});
   mockInvoke.mockResolvedValue({ id: 'quest-1', replies: [], reply: '' });
@@ -235,6 +235,36 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () =>
     await handler(makeReq() as never, res as never);
 
     expect(mockRecordVoiceActivity).not.toHaveBeenCalled();
+  });
+
+  it('refuses a turn with 402 and no LLM call once the hold its token names is settled', async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      voiceHoldStartedAt: '2026-10-12T12:00:00.000Z',
+    });
+    // POST /end claimed the hold, so the activity write matches nothing.
+    mockRecordVoiceActivity.mockResolvedValue(false);
+    const json = vi.fn();
+    const status = vi.fn(() => ({ json }));
+    const res = { ...makeRes(), status };
+
+    await handler(makeReq() as never, res as never);
+
+    expect(status).toHaveBeenCalledWith(402);
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.any(String) }));
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('serves a legacy token without a hold claim even when no hold matched', async () => {
+    mockRecordVoiceActivity.mockResolvedValue(false);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke).toHaveBeenCalled();
   });
 
   it('still answers the turn when recording the activity fails', async () => {

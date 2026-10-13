@@ -163,7 +163,8 @@ const handler = baseApi().post(async (req, res) => {
   // whole call (including reconnect gaps, against MAX_SESSION_SECONDS). Without
   // this, every mobile reconnect would burn another full reserve that's never
   // refunded. Guarded by an explicit live hold so a stray flag can't skip a real charge.
-  const reuseHold = shouldReuseVoiceHold(isReconnect, session);
+  // Realtime: only a hold carrying the realtime marker.
+  const reuseHold = shouldReuseVoiceHold(isReconnect, session, true);
 
   // Build voice instructions with conversation history context
   const brand = process.env.APP_NAME || '';
