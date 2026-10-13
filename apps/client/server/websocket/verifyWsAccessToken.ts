@@ -4,16 +4,15 @@ import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/service
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { NotFoundError, UnauthorizedError } from '@server/utils/errors';
 import jwt from 'jsonwebtoken';
 
 /**
  * Rotation-aware access-token verification for the data subscribe/unsubscribe WS actions.
  *
- * Applies the same three gates as the REST strategy (auth/verifyJwtPayload.ts) and the CLI
- * verifier (cli/auth.ts verifyJwtToken): signature (with the rotation grace window), the
- * `typ` claim, and the tokenVersion kill switch. MUST stay in sync with those two - any gate
- * missing here lets a revoked or wrong-type token ride the socket after REST already refused it.
+ * Applies the same session-admission gates as the REST strategy and CLI verifier. MUST stay in
+ * sync with those paths so a credential refused there cannot ride the socket instead.
  */
 export async function verifyWsAccessToken(accessToken: string | undefined) {
   const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
@@ -38,6 +37,9 @@ export async function verifyWsAccessToken(accessToken: string | undefined) {
   if ((decoded as { kind?: string }).kind === 'oauth') {
     throw new UnauthorizedError('OAuth access tokens are not accepted on the realtime socket');
   }
+  if (decoded.mfaPending) {
+    throw new UnauthorizedError('MFA verification required');
+  }
 
   const user = await User.findById(decoded.id);
   if (!user) throw new NotFoundError('User not found');
@@ -47,6 +49,7 @@ export async function verifyWsAccessToken(accessToken: string | undefined) {
   if (!isTokenVersionCurrent(decoded.tokenVersion, user.tokenVersion)) {
     throw new UnauthorizedError('Session expired');
   }
+  assertAccountStateUsable(user);
 
   return user;
 }

@@ -25,6 +25,7 @@ vi.mock('@client/app/hooks/data/invites', () => ({
   useDeleteInvite: () => ({ mutate: vi.fn() }),
   useGetProjectInvites: () => ({ data: { data: [] } }),
 }));
+vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => undefined }));
 vi.mock('@client/app/hooks/data/projects', () => ({ useLeaveProject: () => ({ mutate: vi.fn(), isPending: false }) }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetUsers: () => ({ data: { users: [] }, isPending: false, refetch: vi.fn() }),

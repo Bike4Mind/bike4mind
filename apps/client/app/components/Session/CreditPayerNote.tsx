@@ -18,6 +18,8 @@ interface PayerNoteArgs {
  * The composer's payer line, or null when the user is in their own notebook. The server bills the
  * organization the send carries, else the SENDER (ChatCompletionProcess credit
  * reservation) - never the notebook's or project's owner, which a member could easily assume.
+ * Restated statically in SHARED_USAGE_BILLING_NOTE (inbox/Invites.tsx) and
+ * PROJECT_MEMBERS_BILLING_NOTE (Project/Members.tsx) - keep in sync.
  */
 export function payerNoteText({ currentUserId, session, projects, account }: PayerNoteArgs): string | null {
   if (!currentUserId || !session) return null;
