@@ -132,22 +132,26 @@ export const deleteMessageFromSession = async (
   return await Quest.findOneAndUpdate({ _id: messageId, sessionId }, { $set: { deletedAt: new Date() } });
 };
 
-export const stopReply = async (sessionId: string, ability: Ability) => {
-  const latestQuest = await Quest.findOne({ sessionId }).sort({ timestamp: -1 });
+// Without questId this stops the session's latest quest; a caller that knows its own turn passes
+// questId so a newer turn in the same session is not stopped instead.
+export const stopReply = async (sessionId: string, ability: Ability, questId?: string) => {
+  const quest = questId
+    ? await Quest.findOne({ _id: questId, sessionId })
+    : await Quest.findOne({ sessionId }).sort({ timestamp: -1 });
   const session = await Session.findOne({
     _id: sessionId,
     ...accessibleBy(ability, Permission.update).ofType(SessionModel),
   });
   if (!session) throw new NotFoundError('Session not found');
-  if (!latestQuest) throw new NotFoundError('No active quest found');
+  if (!quest) throw new NotFoundError('No active quest found');
 
   // Only a quest still generating can be stopped. A Stop that raced the final chunk would
   // otherwise overwrite a finished answer and broadcast a late 'stopped' for it.
-  if (latestQuest.status !== 'stopped' && latestQuest.status !== 'done') {
+  if (quest.status !== 'stopped' && quest.status !== 'done') {
     // Emit a cancellation event through pub/sub if available
     try {
-      Logger.info(`Stopping quest generation for questId: ${latestQuest.id}`, {
-        questId: latestQuest.id,
+      Logger.info(`Stopping quest generation for questId: ${quest.id}`, {
+        questId: quest.id,
         sessionId,
         status: 'cancellation_requested',
       });
@@ -157,17 +161,17 @@ export const stopReply = async (sessionId: string, ability: Ability) => {
 
     // The status filter closes the same race between the read above and this write.
     const stopped = await Quest.findOneAndUpdate(
-      { _id: latestQuest.id, status: { $nin: ['done', 'stopped'] } },
+      { _id: quest.id, status: { $nin: ['done', 'stopped'] } },
       {
         status: 'stopped',
         statusMessage: 'Generation cancelled by user',
       },
       { new: true } // Return the updated document
     );
-    return stopped ?? latestQuest;
+    return stopped ?? quest;
   }
 
-  return latestQuest;
+  return quest;
 };
 
 export const summarizeSession = async (sessionId: string, trigger: PersistedSessionSummaryTrigger) => {

@@ -40,6 +40,7 @@ import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from '@server/utils/auth/createOAuthUser';
+import { applyOAuthSignupDomainGrant, releaseOAuthPendingFreeCredits } from '@server/utils/auth/oauthSignupGrants';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
@@ -414,6 +415,14 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         }
       }
       Object.assign(user, reflect);
+      // Mirrors verifyCallback.ts: promotion is this account's email verification, so release any
+      // deferred flat grant (OTC login and Resend no longer will once emailVerified is set).
+      if (promoteEmailVerified) {
+        await releaseOAuthPendingFreeCredits(
+          { id: user.id, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
+          'Okta account link (email verified)'
+        );
+      }
       // Invariant (mirrors verifyCallback.ts): the new-provider tokenVersion bump must also revoke
       // AuthSessions, else an opaque refresh token -- never checked against tokenVersion -- rotates
       // into a fresh access token stamped with the new version and survives the bump. Safe to revoke
@@ -443,6 +452,8 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       const baseUsername = deriveOAuthUsername(username ?? null, name, emailForNewAccount);
       user = await createUniqueOAuthUser({ name, baseUsername, email: emailForNewAccount, oauthCredentials });
       Logger.debug('[Okta Callback] Created new user:', user.id);
+      // Never reaches /api/email/verify, so the verified domain's grant runs here (no flat grant for Okta).
+      if (emailForNewAccount) await applyOAuthSignupDomainGrant(user.id, emailForNewAccount);
     }
 
     // Parity with verifyCallback.ts, which omits the password hash from the user
