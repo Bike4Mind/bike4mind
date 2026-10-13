@@ -133,12 +133,12 @@ const CreateTeamModal = () => {
             testId="create-team-size-value"
             classNamePrefix="create-team-size"
           />
-          {!isTeamSizeInvalid && (
-            <Typography level="body-xs" sx={{ mt: 0.5 }} className="create-team-size-note">
-              One flat price covers up to {minSeats} people, so a smaller team pays the same, and everyone shares one
-              credit pool. Add room for more, up to {maxSeats}, at the per-person price.
-            </Typography>
-          )}
+          {/* Stays up alongside the range error: a pair typing 2 is exactly who needs to read that the flat
+              price already covers them. */}
+          <Typography level="body-xs" sx={{ mt: 0.5 }} className="create-team-size-note">
+            One flat price covers up to {minSeats} people, so a smaller team pays the same, and everyone shares one
+            credit pool. Add room for more, up to {maxSeats}, at the per-person price.
+          </Typography>
           <Box sx={{ mt: 1 }} className="create-team-price-container">
             {isLoading ? (
               <Skeleton variant="text" width={140} level="body-sm" className="create-team-price-loading">

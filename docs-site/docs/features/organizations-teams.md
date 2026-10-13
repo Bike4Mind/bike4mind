@@ -17,7 +17,7 @@ Open the account menu in the sidebar and choose **Teams**. The page lists every 
 
 1. On the Teams page, click **Create Team**.
 2. In the **Create New Team** dialog, type a **Team Name**.
-3. Under **People on the plan**, use the minus and plus buttons to pick how many people the plan covers. It starts at the number one flat price covers (4 today), so a team of two or three leaves it there and pays the same. Go higher only to make room for more people. The note under the picker states the range, which Bike4Mind sets and can change.
+3. Under **People on the plan**, use the minus and plus buttons to pick how many people the plan covers. It starts at 4, the number of people one flat price covers, so a team of two or three leaves it at 4 and pays the same. Raise it only to make room for more people. The note under the picker states the range, which Bike4Mind sets and can change.
 4. Read the **Total Price** line, which shows the monthly total for the number you picked.
 5. Click **Create Team**. You are sent to a secure checkout to pay for the subscription.
 
