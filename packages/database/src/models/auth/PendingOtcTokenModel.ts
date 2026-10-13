@@ -9,6 +9,8 @@ import { randomUUID } from 'crypto';
  *
  * Up to MAX_LIVE_OTC_CODES codes stay live per email, so a stranger requesting a code for an
  * address cannot void the owner's in-flight one; a successful verify consumes them all.
+ * Each live code keeps the hash of its emailed code here, so the pending token carries only
+ * email, attempts, nonce (jti) and expiry.
  *
  * Documents auto-expire via MongoDB TTL (10 minutes, matching OTC expiry).
  */
@@ -21,6 +23,8 @@ const OTC_CODE_TTL_MS = 10 * 60 * 1000;
 interface IPendingOtcCode {
   nonce: string;
   expiresAt: Date;
+  /** bcrypt hash of the emailed code; never leaves the server (the pending token carries only the nonce). */
+  otcHash?: string;
 }
 
 interface IPendingOtcToken {
@@ -33,7 +37,7 @@ interface IPendingOtcToken {
   /**
    * Plaintext OTC - written ONLY on non-production stages (gated by isE2EEnabled in
    * the route) so the test-only /api/test/otc-code endpoint can hand it to Playwright.
-   * Never written on production; production only ever stores the bcrypt hash (in the JWT).
+   * Never written on production; production only ever stores the bcrypt hash (on the live code entry).
    */
   debugCode?: string;
 }
@@ -44,7 +48,12 @@ const pendingOtcTokenSchema = new Schema<IPendingOtcTokenDocument>({
   email: { type: String, required: true, unique: true },
   nonce: { type: String, required: true },
   codes: {
-    type: [new Schema<IPendingOtcCode>({ nonce: String, expiresAt: Date }, { _id: false })],
+    type: [
+      new Schema<IPendingOtcCode>(
+        { nonce: String, expiresAt: Date, otcHash: { type: String, select: false } },
+        { _id: false }
+      ),
+    ],
     default: [],
   },
   createdAt: { type: Date, default: Date.now },
@@ -60,8 +69,12 @@ const modelName = 'PendingOtcToken';
  * Update pipeline that makes `nonce` the newest live code: expired codes are dropped and the list is
  * capped at MAX_LIVE_OTC_CODES, evicting the oldest.
  */
-function pushLiveCodePipeline(nonce: string, debugCode: string | undefined, now: Date) {
-  const code = { nonce: { $literal: nonce }, expiresAt: new Date(now.getTime() + OTC_CODE_TTL_MS) };
+function pushLiveCodePipeline(nonce: string, otcHash: string, debugCode: string | undefined, now: Date) {
+  const code = {
+    nonce: { $literal: nonce },
+    expiresAt: new Date(now.getTime() + OTC_CODE_TTL_MS),
+    otcHash: { $literal: otcHash },
+  };
   const stillLive = {
     $filter: { input: { $ifNull: ['$codes', []] }, cond: { $gt: ['$$this.expiresAt', now] } },
   };
@@ -92,17 +105,16 @@ export class PendingOtcTokenRepository {
   }
 
   /**
-   * Store (or replace) the nonce for a given email.
-   * Called when /api/otc/send issues a new pending token.
+   * Add a live code (nonce + code hash) for a given email without a cooldown reservation.
    *
    * `debugCode` is the plaintext OTC and MUST only be passed on non-production stages
    * (the caller gates this via isE2EEnabled). It powers the test-only otc-code endpoint.
    */
-  async storeNonce(email: string, nonce: string, debugCode?: string): Promise<void> {
+  async storeNonce(email: string, nonce: string, otcHash: string, debugCode?: string): Promise<void> {
     const now = new Date();
     await PendingOtcTokenModel.updateOne(
       { email },
-      [...pushLiveCodePipeline(nonce, debugCode, now), { $set: { createdAt: now } }],
+      [...pushLiveCodePipeline(nonce, otcHash, debugCode, now), { $set: { createdAt: now } }],
       { upsert: true }
     );
   }
@@ -202,7 +214,7 @@ export class PendingOtcTokenRepository {
   }
 
   /**
-   * Persist the real nonce for a reservation made by `tryReserveSlot`, guarded by a
+   * Persist the real nonce and code hash for a reservation made by `tryReserveSlot`, guarded by a
    * compare-and-swap on `reservedAt`. OTC generation runs between the reservation and
    * this call (and may await IO); if a *newer* reservation for the same email lands
    * in that window - e.g. a genuinely concurrent resend - this CAS fails and returns
@@ -210,10 +222,16 @@ export class PendingOtcTokenRepository {
    * holding would never verify, since another request has already superseded this
    * record. On success the nonce joins the live codes (see pushLiveCodePipeline).
    */
-  async confirmReservation(email: string, reservedAt: Date, nonce: string, debugCode?: string): Promise<boolean> {
+  async confirmReservation(
+    email: string,
+    reservedAt: Date,
+    nonce: string,
+    otcHash: string,
+    debugCode?: string
+  ): Promise<boolean> {
     const result = await PendingOtcTokenModel.findOneAndUpdate(
       { email, createdAt: reservedAt },
-      pushLiveCodePipeline(nonce, debugCode, new Date()),
+      pushLiveCodePipeline(nonce, otcHash, debugCode, new Date()),
       { new: true }
     );
     return result !== null;
@@ -221,23 +239,21 @@ export class PendingOtcTokenRepository {
 
   /**
    * Validate that the provided nonce is one of the live codes for this email, then atomically
-   * replace it with a new nonce (for the re-issued token), keeping that code's expiry.
-   * Returns true if the nonce was valid and replaced, false if stale/missing/expired.
+   * replace it with a new nonce (for the re-issued token), keeping that code's expiry and hash.
+   * Returns the code hash to compare the submitted code against, or null if the nonce is
+   * stale/missing/expired or its entry has no hash (written before hashes lived here), in which
+   * case nothing is rotated and the caller must treat it as an invalid code.
    */
-  async validateAndRotateNonce(email: string, currentNonce: string, newNonce: string): Promise<boolean> {
+  async validateAndRotateNonce(email: string, currentNonce: string, newNonce: string): Promise<string | null> {
     const rotated = await PendingOtcTokenModel.findOneAndUpdate(
-      { email, codes: { $elemMatch: { nonce: currentNonce, expiresAt: { $gt: new Date() } } } },
+      {
+        email,
+        codes: { $elemMatch: { nonce: currentNonce, expiresAt: { $gt: new Date() }, otcHash: { $type: 'string' } } },
+      },
       { $set: { 'codes.$.nonce': newNonce } },
       { new: true }
-    );
-    if (rotated) return true;
-    // A record written before `codes` existed keeps its single nonce (its TTL is 10 minutes).
-    const legacy = await PendingOtcTokenModel.findOneAndUpdate(
-      { email, nonce: currentNonce, codes: { $exists: false } },
-      { $set: { nonce: newNonce } },
-      { new: true }
-    );
-    return legacy !== null;
+    ).select('+codes.otcHash');
+    return rotated?.codes.find(c => c.nonce === newNonce)?.otcHash ?? null;
   }
 
   /**

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { randomInt } from 'crypto';
+import bcrypt from 'bcryptjs';
 import { sendOTC, OTC_CODE_LENGTH, OTC_EXPIRY_MS } from './sendOTC';
 
 vi.mock('crypto', async importOriginal => {
@@ -84,7 +85,6 @@ describe('sendOTC', () => {
     await sendOTC({ email: 'test@example.com' }, adapters);
     expect(mocks.signPendingToken).toHaveBeenCalledWith({
       email: 'test@example.com',
-      otcHash: expect.any(String),
       attempts: 0,
       exp: expect.any(Number),
       jti: expect.any(String),
@@ -96,5 +96,21 @@ describe('sendOTC', () => {
     expect(expMs).toBeLessThanOrEqual(Date.now() + OTC_EXPIRY_MS + 1000);
     // jti should be a UUID
     expect(payload.jti).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/i);
+  });
+
+  it('pending token carries no code material', async () => {
+    const { adapters, mocks } = makeAdapters();
+    const result = await sendOTC({ email: 'test@example.com' }, adapters);
+    const payload = mocks.signPendingToken.mock.calls[0][0];
+    expect(Object.keys(payload).sort()).toEqual(['attempts', 'email', 'exp', 'jti']);
+    expect(JSON.stringify(payload)).not.toContain(result.code);
+    expect(JSON.stringify(payload)).not.toContain(result.otcHash);
+  });
+
+  it('returns the code hash bound to the token nonce for server-side storage', async () => {
+    const { adapters, mocks } = makeAdapters();
+    const result = await sendOTC({ email: 'test@example.com' }, adapters);
+    expect(mocks.signPendingToken.mock.calls[0][0].jti).toBe(result.nonce);
+    expect(await bcrypt.compare(result.code, result.otcHash)).toBe(true);
   });
 });

@@ -119,7 +119,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           }
         );
         if (result.nonce) {
-          await pendingOtcTokenRepository.storeNonce(newUser.email!, result.nonce);
+          await pendingOtcTokenRepository.storeNonce(newUser.email!, result.nonce, result.otcHash);
         }
       } catch (err) {
         req.logger.error('Failed to send OTC welcome email for admin-created user', err);

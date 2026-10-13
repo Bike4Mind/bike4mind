@@ -134,7 +134,6 @@ function makeReqRes(email = DOMAIN_EMAIL) {
   // jwt payload for this address - a correct, unexpired, single-use code.
   mockJwtVerify.mockReturnValue({
     email: email.toLowerCase().trim(),
-    otcHash: 'hash',
     attempts: 0,
     exp: Math.floor(Date.now() / 1000) + 600,
     jti: 'jti-1',
@@ -179,7 +178,7 @@ describe('/api/otc/verify per-email budget', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
-    mockValidateNonce.mockResolvedValue(true);
+    mockValidateNonce.mockResolvedValue('hash');
     mockVerifyPendingOTC.mockResolvedValue(false);
   });
 
@@ -193,13 +192,13 @@ describe('/api/otc/verify per-email budget', () => {
         mockJwtVerify.mockImplementation(() => {
           throw new Error('bad signature');
         }),
-      () => mockValidateNonce.mockResolvedValue(false),
+      () => mockValidateNonce.mockResolvedValue(null),
     ]) {
       const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
       setup();
       await expect(handler(req, res)).rejects.toThrow();
       mockJwtVerify.mockReset();
-      mockValidateNonce.mockResolvedValue(true);
+      mockValidateNonce.mockResolvedValue('hash');
     }
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
     req.body.pendingToken = undefined;
@@ -336,7 +335,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
   beforeEach(() => {
     vi.clearAllMocks();
     mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
-    mockValidateNonce.mockResolvedValue(true);
+    mockValidateNonce.mockResolvedValue('hash');
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockFindByEmail.mockResolvedValue(null); // new user -> registration branch
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 1000 });

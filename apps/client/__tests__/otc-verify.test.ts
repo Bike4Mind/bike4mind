@@ -128,7 +128,6 @@ vi.mock('jsonwebtoken', () => ({
 
 const validToken = (over: Record<string, unknown> = {}) => ({
   email: 'user@example.com',
-  otcHash: '$2a$hash',
   attempts: 0,
   exp: Math.floor(Date.now() / 1000) + 600,
   jti: 'nonce-1',
@@ -157,7 +156,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockJwtSign.mockReturnValue('reissued-token');
-    mockValidateAndRotateNonce.mockResolvedValue(true);
+    mockValidateAndRotateNonce.mockResolvedValue('$2a$hash');
     mockUserHasMFA.mockReturnValue(false);
     mockCountPasskeys.mockResolvedValue(0);
     sentCookies = [];
@@ -234,9 +233,73 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(mockFindByEmail).not.toHaveBeenCalled();
   });
 
+  it('verify checks the code against the server-side record', async () => {
+    mockJwtVerify.mockReturnValue(validToken({ otcHash: 'token-hash' }));
+    mockValidateAndRotateNonce.mockResolvedValue('server-hash');
+    mockVerifyPendingOTC.mockResolvedValue(false);
+
+    await handler(makeReq({ email: 'user@example.com', code: '00000000', pendingToken: 'tok' }), mockRes);
+
+    expect(mockValidateAndRotateNonce).toHaveBeenCalledWith('user@example.com', 'nonce-1', expect.any(String));
+    expect(mockVerifyPendingOTC).toHaveBeenCalledWith('00000000', 'server-hash');
+  });
+
+  it('a token without a server-side record is rejected', async () => {
+    // A token minted with a code hash inside it, before the hash moved to the server record.
+    mockJwtVerify.mockReturnValue(validToken({ otcHash: await bcrypt.hash('12345678', 4) }));
+    mockValidateAndRotateNonce.mockResolvedValue(null);
+    mockVerifyPendingOTC.mockImplementation((code: string, hash: string) => bcrypt.compare(code, hash));
+
+    await expect(
+      handler(makeReq({ email: 'user@example.com', code: '12345678', pendingToken: 'tok' }), mockRes)
+    ).rejects.toThrow('Invalid code.');
+    expect(mockVerifyPendingOTC).not.toHaveBeenCalled();
+    expect(mockFindByEmail).not.toHaveBeenCalled();
+  });
+
+  describe('re-issued pending tokens carry no code material', () => {
+    const signedPayloads = () => mockJwtSign.mock.calls.map(([payload]) => payload as Record<string, unknown>);
+    const expectNoCodeMaterial = () => {
+      expect(signedPayloads().length).toBeGreaterThan(0);
+      for (const payload of signedPayloads()) {
+        expect(Object.keys(payload).sort()).toEqual(['attempts', 'email', 'jti']);
+      }
+    };
+
+    beforeEach(() => {
+      mockJwtVerify.mockReturnValue(validToken({ otcHash: 'token-hash' }));
+      mockFindByEmail.mockResolvedValue(null);
+    });
+
+    it('on a wrong code', async () => {
+      mockVerifyPendingOTC.mockResolvedValue(false);
+      await handler(makeReq({ email: 'user@example.com', code: '00000000', pendingToken: 'tok' }), mockRes);
+      expectNoCodeMaterial();
+    });
+
+    it('when registration is required', async () => {
+      mockVerifyPendingOTC.mockResolvedValue(true);
+      await handler(makeReq({ email: 'user@example.com', code: '12345678', pendingToken: 'tok' }), mockRes);
+      expect(mockRes.json.mock.calls[0][0].registrationRequired).toBe(true);
+      expectNoCodeMaterial();
+    });
+
+    it('when registration fails', async () => {
+      mockVerifyPendingOTC.mockResolvedValue(true);
+      mockRegisterViaOTC.mockRejectedValue(new HTTPError(400, 'This username is already registered'));
+      await expect(
+        handler(
+          makeReq({ email: 'user@example.com', code: '12345678', username: 'taken', pendingToken: 'tok' }),
+          mockRes
+        )
+      ).rejects.toThrow();
+      expectNoCodeMaterial();
+    });
+  });
+
   it('throws a generic "Invalid code." (no existence read) for a stale/replayed nonce', async () => {
     mockJwtVerify.mockReturnValue(validToken());
-    mockValidateAndRotateNonce.mockResolvedValue(false);
+    mockValidateAndRotateNonce.mockResolvedValue(null);
     await expect(
       handler(makeReq({ email: 'user@example.com', code: '123456', pendingToken: 'tok' }), mockRes)
     ).rejects.toThrow('Invalid code.');
@@ -298,7 +361,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
   });
 
   // Rollout: a 6-digit code issued just before 8-digit codes shipped must still work while its token
-  // is live, and only by matching that token's hash.
+  // is live, and only by matching the hash stored for that token's nonce.
   describe('legacy 6-digit codes', () => {
     beforeEach(() => {
       // What verifyPendingOTC does (see verifyOTC.test.ts): a bcrypt compare with no length check.
@@ -314,7 +377,8 @@ describe('/api/otc/verify — enumeration resistance', () => {
     });
 
     it('signs in with a 6-digit code that matches a live token', async () => {
-      mockJwtVerify.mockReturnValue(validToken({ otcHash: await bcrypt.hash('012345', 4) }));
+      mockJwtVerify.mockReturnValue(validToken());
+      mockValidateAndRotateNonce.mockResolvedValue(await bcrypt.hash('012345', 4));
 
       await handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes);
 
@@ -323,7 +387,8 @@ describe('/api/otc/verify — enumeration resistance', () => {
     });
 
     it('rejects a 6-digit code against an 8-digit token as a wrong guess', async () => {
-      mockJwtVerify.mockReturnValue(validToken({ otcHash: await bcrypt.hash('01234567', 4) }));
+      mockJwtVerify.mockReturnValue(validToken());
+      mockValidateAndRotateNonce.mockResolvedValue(await bcrypt.hash('01234567', 4));
 
       await handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes);
 
@@ -332,8 +397,8 @@ describe('/api/otc/verify — enumeration resistance', () => {
     });
 
     it('rejects a 6-digit code whose token nonce is no longer live', async () => {
-      mockJwtVerify.mockReturnValue(validToken({ otcHash: await bcrypt.hash('012345', 4) }));
-      mockValidateAndRotateNonce.mockResolvedValue(false);
+      mockJwtVerify.mockReturnValue(validToken());
+      mockValidateAndRotateNonce.mockResolvedValue(null);
 
       await expect(
         handler(makeReq({ email: 'user@example.com', code: '012345', pendingToken: 'tok' }), mockRes)

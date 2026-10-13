@@ -103,6 +103,7 @@ describe('PendingOtcToken.tryReserveSlot — atomic cooldown enforcement', () =>
       EMAIL,
       reservation.reservedAt,
       'real-nonce-abc',
+      'hash-abc',
       'debug-code'
     );
 
@@ -126,13 +127,17 @@ describe('PendingOtcToken.tryReserveSlot — atomic cooldown enforcement', () =>
       const first = await pendingOtcTokenRepository.tryReserveSlot(EMAIL, 0);
       expect(first.allowed).toBe(true);
       if (!first.allowed) throw new Error('unreachable');
-      expect(await pendingOtcTokenRepository.confirmReservation(EMAIL, first.reservedAt, 'nonce-1')).toBe(true);
+      expect(await pendingOtcTokenRepository.confirmReservation(EMAIL, first.reservedAt, 'nonce-1', 'hash-1')).toBe(
+        true
+      );
 
       await clockTickPast(first.reservedAt);
       const second = await pendingOtcTokenRepository.tryReserveSlot(EMAIL, 0);
       expect(second.allowed).toBe(true);
       if (!second.allowed) throw new Error('unreachable');
-      expect(await pendingOtcTokenRepository.confirmReservation(EMAIL, second.reservedAt, 'nonce-2')).toBe(true);
+      expect(await pendingOtcTokenRepository.confirmReservation(EMAIL, second.reservedAt, 'nonce-2', 'hash-2')).toBe(
+        true
+      );
 
       const doc = await PendingOtcTokenModel.findOne({ email: EMAIL });
       expect(doc?.nonce).toBe('nonce-2');
@@ -181,7 +186,8 @@ describe('PendingOtcToken.tryReserveSlot — atomic cooldown enforcement', () =>
         const confirmed = await pendingOtcTokenRepository.confirmReservation(
           EMAIL,
           w.reservedAt,
-          `nonce-${w.reservedAt.getTime()}`
+          `nonce-${w.reservedAt.getTime()}`,
+          'hash'
         );
         expect(confirmed).toBe(w === latest);
       }
@@ -200,10 +206,20 @@ describe('PendingOtcToken.tryReserveSlot — atomic cooldown enforcement', () =>
       expect(second.allowed).toBe(true);
       if (!second.allowed) throw new Error('unreachable');
 
-      const firstConfirmed = await pendingOtcTokenRepository.confirmReservation(EMAIL, first.reservedAt, 'nonce-a');
+      const firstConfirmed = await pendingOtcTokenRepository.confirmReservation(
+        EMAIL,
+        first.reservedAt,
+        'nonce-a',
+        'hash-a'
+      );
       expect(firstConfirmed).toBe(false);
 
-      const secondConfirmed = await pendingOtcTokenRepository.confirmReservation(EMAIL, second.reservedAt, 'nonce-b');
+      const secondConfirmed = await pendingOtcTokenRepository.confirmReservation(
+        EMAIL,
+        second.reservedAt,
+        'nonce-b',
+        'hash-b'
+      );
       expect(secondConfirmed).toBe(true);
 
       // Only the winner's nonce is ever persisted - never a value from a request
@@ -229,21 +245,25 @@ describe('PendingOtcToken live codes', () => {
     await PendingOtcTokenModel.updateOne({ email: EMAIL }, { $set: { createdAt: new Date(0) } });
     const reservation = await pendingOtcTokenRepository.tryReserveSlot(EMAIL, 0);
     if (!reservation.allowed) throw new Error('reservation refused');
-    expect(await pendingOtcTokenRepository.confirmReservation(EMAIL, reservation.reservedAt, nonce)).toBe(true);
+    expect(
+      await pendingOtcTokenRepository.confirmReservation(EMAIL, reservation.reservedAt, nonce, `hash-${nonce}`)
+    ).toBe(true);
   };
 
   it("keeps the owner's code live after someone else requests a newer one", async () => {
     await send('owner');
     await send('attacker');
 
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-2')).toBe(true);
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'attacker', 'attacker-2')).toBe(true);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-2')).toBe('hash-owner');
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'attacker', 'attacker-2')).toBe(
+      'hash-attacker'
+    );
   });
 
   it('rotation retires the presented nonce for replay', async () => {
     await send('owner');
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-2')).toBe(true);
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-3')).toBe(false);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-2')).toBe('hash-owner');
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-3')).toBeNull();
   });
 
   it('caps the live codes, evicting the oldest', async () => {
@@ -255,38 +275,64 @@ describe('PendingOtcToken live codes', () => {
     const doc = await PendingOtcTokenModel.findOne({ email: EMAIL });
     expect(doc?.codes.map(c => c.nonce)).toEqual(['d', 'c', 'b']);
     expect(doc?.codes).toHaveLength(MAX_LIVE_OTC_CODES);
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'a', 'a-2')).toBe(false);
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'b', 'b-2')).toBe(true);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'a', 'a-2')).toBeNull();
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'b', 'b-2')).toBe('hash-b');
   });
 
   it('does not accept an expired code', async () => {
     await send('old');
     await PendingOtcTokenModel.updateOne({ email: EMAIL }, { $set: { 'codes.0.expiresAt': new Date(Date.now() - 1) } });
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'old', 'old-2')).toBe(false);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'old', 'old-2')).toBeNull();
   });
 
   it('consumeOtherCodes leaves only the kept nonce live', async () => {
     await send('owner');
     await send('attacker');
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-2')).toBe(true);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-2')).toBe('hash-owner');
 
     await pendingOtcTokenRepository.consumeOtherCodes(EMAIL, 'owner-2');
 
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'attacker', 'attacker-2')).toBe(false);
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner-2', 'owner-3')).toBe(true);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'attacker', 'attacker-2')).toBeNull();
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner-2', 'owner-3')).toBe('hash-owner');
   });
 
-  it('still verifies a record written before live codes existed', async () => {
+  it('a record written before live codes existed is rejected', async () => {
     await PendingOtcTokenModel.collection.insertOne({ email: EMAIL, nonce: 'legacy', createdAt: new Date() });
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'legacy', 'legacy-2')).toBe(true);
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'legacy', 'legacy-3')).toBe(false);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'legacy', 'legacy-2')).toBeNull();
+  });
+
+  it('a live code without a server-side hash is rejected and left unrotated', async () => {
+    const expiresAt = new Date(Date.now() + 60_000);
+    await PendingOtcTokenModel.collection.insertOne({
+      email: EMAIL,
+      nonce: 'nohash',
+      codes: [{ nonce: 'nohash', expiresAt }],
+      createdAt: new Date(),
+    });
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'nohash', 'nohash-2')).toBeNull();
+    const doc = await PendingOtcTokenModel.findOne({ email: EMAIL });
+    expect(doc?.codes.map(c => c.nonce)).toEqual(['nohash']);
+  });
+
+  it('keeps the code hash out of default reads', async () => {
+    await send('owner');
+    const doc = await PendingOtcTokenModel.findOne({ email: EMAIL });
+    expect(doc?.codes[0].nonce).toBe('owner');
+    expect(doc?.codes[0].otcHash).toBeUndefined();
+  });
+
+  it('returns the hash bound to the presented nonce', async () => {
+    await send('owner');
+    await send('other');
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-2')).toBe('hash-owner');
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner-2', 'owner-3')).toBe('hash-owner');
   });
 
   it('storeNonce adds a live code without voiding earlier ones', async () => {
-    await pendingOtcTokenRepository.storeNonce(EMAIL, 'first');
-    await pendingOtcTokenRepository.storeNonce(EMAIL, 'second');
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'first', 'first-2')).toBe(true);
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'second', 'second-2')).toBe(true);
+    await pendingOtcTokenRepository.storeNonce(EMAIL, 'first', 'hash-first');
+    await pendingOtcTokenRepository.storeNonce(EMAIL, 'second', 'hash-second');
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'first', 'first-2')).toBe('hash-first');
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'second', 'second-2')).toBe('hash-second');
   });
 
   describe('releaseReservation', () => {
