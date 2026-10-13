@@ -69,9 +69,15 @@ jobs:
 
       - name: Restore integrity hashes
         run: |
-          if ! bash .github/scripts/repair-lockfile-integrity.sh pr/pnpm-lock.yaml pnpm-lock.yaml 2>missing.txt; then
+          rc=0
+          bash .github/scripts/repair-lockfile-integrity.sh pr/pnpm-lock.yaml pnpm-lock.yaml 2>missing.txt || rc=$?
+          if [ "$rc" -eq 1 ]; then
             urls=$(paste -sd ' ' missing.txt)
             echo "::error::pnpm-lock.yaml has tarball entries with no integrity hash and no hashed entry on main to copy: $urls. Regenerate the lockfile locally (outside Dependabot) with the pinned pnpm and push the integrity hash by hand."
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::lockfile repair script failed (rc=$rc): $(paste -sd ' ' missing.txt)"
             exit 1
           fi
 
