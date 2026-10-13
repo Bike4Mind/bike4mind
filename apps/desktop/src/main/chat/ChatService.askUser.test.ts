@@ -177,6 +177,19 @@ describe('ChatService ask_user', () => {
     expect(done.input.outcome).toEqual({ status: 'cancelled' });
   });
 
+  it('asks a call whose header is too long, with the card and the record agreeing on it', async () => {
+    await startTurn();
+    const card = await ask({ questions: [{ ...QUESTIONS[0], header: 'board-watchers' }] });
+    const headerOf = (call: ChatToolCall) => (call.input.questions as { header: string }[])[0].header;
+    expect(headerOf(card)).toBe('board-watch…');
+
+    approvals.resolve(card.approvalId as string, { decision: 'once', answers: [{ selected: ['API keys'] }] });
+    const done = await awaitStatus('done');
+    expect(headerOf(done)).toBe('board-watch…');
+    expect(done.preview).toContain('"Which auth method?" -> "API keys"');
+    expect(calls('error')).toHaveLength(0);
+  });
+
   it('refuses a malformed call with the reason, without raising a card', async () => {
     await startTurn();
     streams[0].write(

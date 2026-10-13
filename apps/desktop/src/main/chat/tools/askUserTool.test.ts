@@ -28,6 +28,15 @@ describe('ask_user', () => {
     expect(await askUser.run({ questions, outcome: { status: 'cancelled' } }, context)).toMatch(/cancelled/);
   });
 
+  it('asks a question whose header is over the limit, shortened', async () => {
+    const long = [{ ...questions[0], header: 'board-watchers' }];
+    const result = await askUser.run(
+      { questions: long, outcome: { status: 'answered', answers: [{ selected: ['API keys'] }] } },
+      context
+    );
+    expect(result).toContain('"Which auth method?" -> "API keys"');
+  });
+
   it('refuses invalid input with the reason', async () => {
     await expect(askUser.run({ questions: [] }, context)).rejects.toThrow(/non-empty array/);
   });

@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { formatQuestionResult, parseOutcome, parseQuestions, sanitizeAnswers, type ChatQuestion } from './questions';
+import {
+  fitText,
+  formatQuestionResult,
+  MAX_DESCRIPTION_CHARS,
+  MAX_HEADER_CHARS,
+  MAX_LABEL_CHARS,
+  parseOutcome,
+  parseQuestions,
+  sanitizeAnswers,
+  type ChatQuestion,
+} from './questions';
 
 const option = (label: string, description = 'd') => ({ label, description });
 const question = (overrides: Record<string, unknown> = {}) => ({
@@ -33,9 +43,56 @@ describe('parseQuestions', () => {
     expect(error([question({ options: ['a', 'b', 'c', 'd', 'e'].map(l => option(l)) })])).toMatch(/2 to 4 options/);
   });
 
-  it('holds the header to 12 characters', () => {
-    expect(error([question({ header: 'Thirteen char' })])).toMatch(/12 characters/);
-    expect(error([question({ header: '' })])).toMatch(/header/);
+  const parsed = (value: unknown): ChatQuestion[] => {
+    const result = parseQuestions(value);
+    if ('error' in result) throw new Error(result.error);
+    return result.questions;
+  };
+  const headerOf = (header: unknown) => parsed([question({ header })])[0].header;
+
+  it('shortens a long header at a word boundary instead of refusing it', () => {
+    expect(headerOf('Deployment target')).toBe('Deployment\u2026');
+    expect(headerOf('API/auth flow')).toBe('API/auth\u2026');
+  });
+
+  it('hard-cuts a long header with no boundary in reach', () => {
+    expect(headerOf('board-watchers')).toBe('board-watch\u2026');
+    expect(headerOf('Supercalifragilistic')).toBe('Supercalifr\u2026');
+    expect(headerOf('board-watchers')).toHaveLength(MAX_HEADER_CHARS);
+  });
+
+  it('falls back when the header is empty or missing', () => {
+    expect(headerOf('   ')).toBe('Question');
+    expect(headerOf(undefined)).toBe('Question');
+    expect(headerOf('  Auth  ')).toBe('Auth');
+  });
+
+  it('is idempotent, so a stored call parses back to what the card showed', () => {
+    const once = parsed([
+      question({
+        header: 'board-watchers',
+        options: [option(`${'x'.repeat(70)} (Recommended)`, 'y '.repeat(200)), option('B')],
+      }),
+    ]);
+    expect(parsed(once)).toEqual(once);
+  });
+
+  it('shortens a long label and description, keeping the recommendation', () => {
+    const [entry] = parsed([
+      question({
+        options: [
+          option('Revert the scrub and ship the migration as its own pull request (Recommended)', 'z'.repeat(400)),
+          option('B'),
+        ],
+      }),
+    ]);
+    expect(entry.options[0].label).toBe('Revert the scrub and ship the migration as\u2026 (Recommended)');
+    expect(entry.options[0].description).toHaveLength(MAX_DESCRIPTION_CHARS);
+  });
+
+  it('refuses labels that only collide once shortened, saying why', () => {
+    const stem = 'a'.repeat(MAX_LABEL_CHARS);
+    expect(error([question({ options: [option(`${stem} one`), option(`${stem} two`)] })])).toMatch(/differ sooner/);
   });
 
   it('accepts a long label and refuses an Other option', () => {
@@ -56,6 +113,27 @@ describe('parseQuestions', () => {
 
   it('rejects a non-boolean multiSelect', () => {
     expect(error([question({ multiSelect: 'yes' })])).toMatch(/multiSelect/);
+  });
+
+  it('still refuses a missing or over-long question', () => {
+    expect(error([question({ question: '  ' })])).toMatch(/non-empty "question"/);
+    expect(error([question({ question: `${'q'.repeat(300)}?` })])).toMatch(/300 characters/);
+  });
+});
+
+describe('fitText', () => {
+  it('leaves text within the limit alone', () => {
+    expect(fitText('Auth method', 12)).toBe('Auth method');
+  });
+
+  it('cuts at a hyphen, plus or slash boundary when that keeps half the room', () => {
+    expect(fitText('Single-tenant-db', 12)).toBe('Single\u2026');
+    expect(fitText('Cache+CDN layer', 12)).toBe('Cache+CDN\u2026');
+    expect(fitText('Read-only mode', 12)).toBe('Read-only\u2026');
+  });
+
+  it('hard-cuts when the only boundary would keep less than half', () => {
+    expect(fitText('ab-cdefghijklmn', 12)).toBe('ab-cdefghij\u2026');
   });
 });
 

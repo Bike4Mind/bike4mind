@@ -34,11 +34,44 @@ export interface ChatQuestionAnswer {
 export type ChatQuestionOutcome =
   { status: 'answered'; answers: ChatQuestionAnswer[] } | { status: 'skipped' } | { status: 'cancelled' };
 
+const FALLBACK_HEADER = 'Question';
+const RECOMMENDED_SUFFIX = ' (Recommended)';
+const ELLIPSIS = '\u2026';
+const CUT_BOUNDARY = /[\s\-+/]/;
+
+/**
+ * `text` fitted to `max` characters, ending in an ellipsis when it had to be cut.
+ *
+ * Cuts at a word, hyphen, `+` or `/` boundary when that keeps at least half the room, so
+ * "deployment target" reads "deployment..." rather than "deployment t...".
+ */
+export function fitText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const room = max - ELLIPSIS.length;
+  for (let index = room; index >= Math.ceil(room / 2); index--) {
+    if (!CUT_BOUNDARY.test(text[index])) continue;
+    const head = text.slice(0, index).replace(/[\s\-+/]+$/, '');
+    if (head.length >= Math.ceil(room / 2)) return head + ELLIPSIS;
+  }
+  return text.slice(0, room).trimEnd() + ELLIPSIS;
+}
+
+/** A label fitted to `max`, keeping a trailing " (Recommended)" the model put on its pick. */
+function fitLabel(text: string, max: number): string {
+  if (text.length <= max || !text.endsWith(RECOMMENDED_SUFFIX)) return fitText(text, max);
+  return fitText(text.slice(0, -RECOMMENDED_SUFFIX.length), max - RECOMMENDED_SUFFIX.length) + RECOMMENDED_SUFFIX;
+}
+
+const oneLine = (value: unknown): string => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '');
+
 /**
  * The questions an `ask_user` call carries, or why it is not a valid one.
  *
  * Shared by the tool, which refuses a bad call so the model corrects it, and by the renderer,
- * which draws the card from the call's own input.
+ * which draws the card from the call's own input. Only what the model must fix is refused; a
+ * header, label or description over its display length is fitted instead, so a cosmetic limit
+ * never costs the user the question. Fitting is idempotent: ChatService stores the fitted
+ * questions on the call, and every later parse of them returns them unchanged.
  */
 export function parseQuestions(value: unknown): { questions: ChatQuestion[] } | { error: string } {
   if (!Array.isArray(value) || value.length === 0) {
@@ -61,11 +94,7 @@ export function parseQuestions(value: unknown): { questions: ChatQuestion[] } | 
     if (seenQuestions.has(question.toLowerCase())) return { error: `${label} repeats an earlier question.` };
     seenQuestions.add(question.toLowerCase());
 
-    const header = typeof item.header === 'string' ? item.header.trim() : '';
-    if (!header) return { error: `${label} needs a short non-empty "header".` };
-    if (header.length > MAX_HEADER_CHARS) {
-      return { error: `${label} header "${header}" is over ${MAX_HEADER_CHARS} characters; shorten it.` };
-    }
+    const header = fitText(oneLine(item.header), MAX_HEADER_CHARS) || FALLBACK_HEADER;
 
     if (!Array.isArray(item.options)) return { error: `${label} needs an "options" array.` };
     if (item.options.length < MIN_OPTIONS || item.options.length > MAX_OPTIONS) {
@@ -81,24 +110,24 @@ export function parseQuestions(value: unknown): { questions: ChatQuestion[] } | 
       const where = `${label} option ${optionIndex + 1}`;
       const option = rawOption as Record<string, unknown> | null;
       if (typeof option !== 'object' || option === null) return { error: `${where} must be an object.` };
-      const optionLabel = typeof option.label === 'string' ? option.label.trim() : '';
-      if (!optionLabel) return { error: `${where} needs a non-empty "label".` };
-      if (optionLabel.length > MAX_LABEL_CHARS) {
-        return { error: `${where} label must be ${MAX_LABEL_CHARS} characters or fewer; put detail in "description".` };
-      }
-      if (/^other\b/i.test(optionLabel)) {
+      const givenLabel = oneLine(option.label);
+      if (!givenLabel) return { error: `${where} needs a non-empty "label".` };
+      if (/^other\b/i.test(givenLabel)) {
         return { error: `${where} is an "Other" option; do not include one, the UI adds it.` };
       }
+      const optionLabel = fitLabel(givenLabel, MAX_LABEL_CHARS);
       if (seenLabels.has(optionLabel.toLowerCase())) {
-        return { error: `${label} has two options labelled "${optionLabel}"; labels must be unique.` };
+        // Two labels that only collide once shortened were distinct as sent, so say why.
+        return optionLabel === givenLabel
+          ? { error: `${label} has two options labelled "${optionLabel}"; labels must be unique.` }
+          : {
+              error: `${label} has two options that both read "${optionLabel}" at ${MAX_LABEL_CHARS} characters; make the labels differ sooner.`,
+            };
       }
       seenLabels.add(optionLabel.toLowerCase());
       const description = typeof option.description === 'string' ? option.description.trim() : '';
       if (!description) return { error: `${where} needs a non-empty "description".` };
-      if (description.length > MAX_DESCRIPTION_CHARS) {
-        return { error: `${where} description is over ${MAX_DESCRIPTION_CHARS} characters; shorten it.` };
-      }
-      options.push({ label: optionLabel, description });
+      options.push({ label: optionLabel, description: fitText(description, MAX_DESCRIPTION_CHARS) });
     }
 
     questions.push({ question, header, options, ...(item.multiSelect === true ? { multiSelect: true } : {}) });

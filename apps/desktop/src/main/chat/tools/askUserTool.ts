@@ -3,7 +3,9 @@ import {
   formatQuestionResult,
   MAX_DESCRIPTION_CHARS,
   MAX_HEADER_CHARS,
+  MAX_LABEL_CHARS,
   MAX_OPTIONS,
+  MAX_QUESTION_CHARS,
   MAX_QUESTIONS,
   MIN_OPTIONS,
   parseOutcome,
@@ -47,9 +49,14 @@ export const askUser: ToolDefinition = {
           items: {
             type: 'object',
             properties: {
-              question: { type: 'string', description: 'The full question, ending with a question mark.' },
+              question: {
+                type: 'string',
+                maxLength: MAX_QUESTION_CHARS,
+                description: 'The full question, ending with a question mark.',
+              },
               header: {
                 type: 'string',
+                maxLength: MAX_HEADER_CHARS,
                 description: `A short label for the question, at most ${MAX_HEADER_CHARS} characters.`,
               },
               options: {
@@ -60,10 +67,12 @@ export const askUser: ToolDefinition = {
                   properties: {
                     label: {
                       type: 'string',
+                      maxLength: MAX_LABEL_CHARS,
                       description: 'The choice, kept short (a few words); put detail in the description.',
                     },
                     description: {
                       type: 'string',
+                      maxLength: MAX_DESCRIPTION_CHARS,
                       description: `What choosing it means or implies, at most ${MAX_DESCRIPTION_CHARS} characters.`,
                     },
                   },
