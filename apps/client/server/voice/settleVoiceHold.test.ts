@@ -5,13 +5,19 @@ const { claimVoiceHold, restoreVoiceHold, incrementCredits } = vi.hoisted(() => 
   restoreVoiceHold: vi.fn(),
   incrementCredits: vi.fn(),
 }));
+const logError = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/observability', () => ({
+  Logger: class {
+    error = logError;
+  },
+}));
 vi.mock('@bike4mind/database', () => ({
   sessionRepository: { claimVoiceHold, restoreVoiceHold },
   userRepository: { incrementCredits },
 }));
 
 import { settleVoiceHold } from './settleVoiceHold';
-import { MAX_SESSION_SECONDS } from './voiceSessionLimits';
+import { MAX_SESSION_SECONDS, REALTIME_VOICE_HOLD_SECONDS } from './voiceSessionLimits';
 
 const STARTED = new Date('2026-10-11T12:00:00Z');
 const HOLD = { id: 's1', userId: 'u1', voiceReservedCredits: 600, voiceSessionStartedAt: STARTED };
@@ -19,8 +25,9 @@ const HOLD = { id: 's1', userId: 'u1', voiceReservedCredits: 600, voiceSessionSt
 describe('settleVoiceHold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    claimVoiceHold.mockResolvedValue(true);
+    claimVoiceHold.mockResolvedValue({ billedCredits: null });
     restoreVoiceHold.mockResolvedValue(true);
+    incrementCredits.mockResolvedValue(undefined);
   });
 
   it('claims the hold, then refunds what the elapsed time does not owe', async () => {
@@ -42,7 +49,7 @@ describe('settleVoiceHold', () => {
   });
 
   it('moves no credits when another settler claimed the hold first', async () => {
-    claimVoiceHold.mockResolvedValue(false);
+    claimVoiceHold.mockResolvedValue(null);
 
     expect(await settleVoiceHold(HOLD, 0)).toEqual({ settled: false });
     expect(incrementCredits).not.toHaveBeenCalled();
@@ -53,7 +60,54 @@ describe('settleVoiceHold', () => {
     incrementCredits.mockRejectedValue(failure);
 
     await expect(settleVoiceHold(HOLD, 0)).rejects.toBe(failure);
-    expect(restoreVoiceHold).toHaveBeenCalledWith('s1', 600, STARTED);
+    expect(restoreVoiceHold).toHaveBeenCalledWith('s1', 600, STARTED, null);
+  });
+
+  it('logs the lost refund when a newer hold blocks restoring this one', async () => {
+    incrementCredits.mockRejectedValue(new Error('db blip'));
+    restoreVoiceHold.mockResolvedValue(false);
+
+    await expect(settleVoiceHold(HOLD, 0)).rejects.toThrow('db blip');
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('newer hold blocks restoring'), {
+      sessionId: 's1',
+      userId: 'u1',
+      startedAt: STARTED.toISOString(),
+      refund: 600,
+    });
+  });
+
+  it('logs nothing when the hold is restored for a retry', async () => {
+    incrementCredits.mockRejectedValue(new Error('db blip'));
+
+    await expect(settleVoiceHold(HOLD, 0)).rejects.toThrow('db blip');
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it('keeps what realtime responses already drew from the hold, even with no call time evidenced', async () => {
+    claimVoiceHold.mockResolvedValue({ billedCredits: 250 });
+
+    expect(await settleVoiceHold(HOLD, 0)).toEqual({ settled: true, owed: 250, refund: 350 });
+    expect(incrementCredits).toHaveBeenCalledWith('u1', 350);
+  });
+
+  it("prices a realtime hold's call time at its own rate, never past the hold", async () => {
+    claimVoiceHold.mockResolvedValue({ billedCredits: 0 });
+    expect(await settleVoiceHold(HOLD, REALTIME_VOICE_HOLD_SECONDS / 2)).toEqual({
+      settled: true,
+      owed: 300,
+      refund: 300,
+    });
+
+    claimVoiceHold.mockResolvedValue({ billedCredits: 900 });
+    expect(await settleVoiceHold(HOLD, 0)).toEqual({ settled: true, owed: 600, refund: 0 });
+  });
+
+  it('restores the billed total along with a realtime hold whose refund failed', async () => {
+    claimVoiceHold.mockResolvedValue({ billedCredits: 250 });
+    incrementCredits.mockRejectedValue(new Error('db blip'));
+
+    await expect(settleVoiceHold(HOLD, 0)).rejects.toThrow('db blip');
+    expect(restoreVoiceHold).toHaveBeenCalledWith('s1', 600, STARTED, 250);
   });
 
   it('surfaces both errors when the hold cannot be restored either', async () => {

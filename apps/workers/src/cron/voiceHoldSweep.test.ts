@@ -27,17 +27,24 @@ vi.mock('@bike4mind/observability', () => ({
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
-import { handler, runVoiceHoldSweep, VOICE_HOLD_STALE_AFTER_MS, VOICE_HOLD_SWEEP_LIMIT } from './voiceHoldSweep';
-import { MAX_SESSION_SECONDS } from '@server/voice/voiceSessionLimits';
+import {
+  handler,
+  REALTIME_VOICE_HOLD_STALE_AFTER_MS,
+  runVoiceHoldSweep,
+  VOICE_HOLD_STALE_AFTER_MS,
+  VOICE_HOLD_SWEEP_LIMIT,
+} from './voiceHoldSweep';
+import { MAX_SESSION_SECONDS, REALTIME_VOICE_HOLD_SECONDS } from '@server/voice/voiceSessionLimits';
 
 const NOW = new Date('2026-10-11T12:00:00Z');
 const STARTED = new Date(NOW.getTime() - 60 * 60 * 1000);
 const RESERVED = 1000;
-const hold = (id: string) => ({
+const hold = (id: string, realtime = false) => ({
   id,
   userId: `user-${id}`,
   voiceReservedCredits: RESERVED,
   voiceSessionStartedAt: STARTED,
+  realtime,
 });
 const turnAt = (secondsAfterStart: number) => ({ timestamp: new Date(STARTED.getTime() + secondsAfterStart * 1000) });
 
@@ -45,7 +52,7 @@ describe('voiceHoldSweep', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     findStaleVoiceHolds.mockResolvedValue([]);
-    claimVoiceHold.mockResolvedValue(true);
+    claimVoiceHold.mockResolvedValue({ billedCredits: null });
     restoreVoiceHold.mockResolvedValue(true);
     findTurns.mockResolvedValue([]);
   });
@@ -53,10 +60,23 @@ describe('voiceHoldSweep', () => {
   it('only asks for holds older than the longest call plus the safety margin, bounded per run', async () => {
     await runVoiceHoldSweep(NOW);
 
-    const [startedBefore, limit] = findStaleVoiceHolds.mock.calls[0];
+    const [startedBefore, realtimeStartedBefore, limit] = findStaleVoiceHolds.mock.calls[0];
     expect(NOW.getTime() - startedBefore.getTime()).toBe(VOICE_HOLD_STALE_AFTER_MS);
     expect(VOICE_HOLD_STALE_AFTER_MS).toBeGreaterThan(MAX_SESSION_SECONDS * 1000);
+    expect(NOW.getTime() - realtimeStartedBefore.getTime()).toBe(REALTIME_VOICE_HOLD_STALE_AFTER_MS);
+    expect(REALTIME_VOICE_HOLD_STALE_AFTER_MS).toBeGreaterThan(REALTIME_VOICE_HOLD_SECONDS * 1000);
     expect(limit).toBe(VOICE_HOLD_SWEEP_LIMIT);
+  });
+
+  it('keeps a realtime hold for what its responses billed and counts turns across its whole window', async () => {
+    findStaleVoiceHolds.mockResolvedValue([hold('a', true)]);
+    claimVoiceHold.mockResolvedValue({ billedCredits: 100 });
+    findTurns.mockResolvedValue([turnAt(REALTIME_VOICE_HOLD_SECONDS / 4)]);
+
+    await runVoiceHoldSweep(NOW);
+
+    // A quarter of the hold's own window owes a quarter of it, more than the 100 already billed.
+    expect(incrementCredits).toHaveBeenCalledWith('user-a', RESERVED - RESERVED / 4);
   });
 
   it('refunds the whole hold when the call never produced a turn', async () => {
@@ -109,7 +129,7 @@ describe('voiceHoldSweep', () => {
 
   it('moves no credits for a hold another settler claimed first', async () => {
     findStaleVoiceHolds.mockResolvedValue([hold('a')]);
-    claimVoiceHold.mockResolvedValue(false);
+    claimVoiceHold.mockResolvedValue(null);
 
     const result = await runVoiceHoldSweep(NOW);
 
@@ -134,7 +154,7 @@ describe('voiceHoldSweep', () => {
 
     const result = await runVoiceHoldSweep(NOW);
 
-    expect(restoreVoiceHold).toHaveBeenCalledWith('a', RESERVED, STARTED);
+    expect(restoreVoiceHold).toHaveBeenCalledWith('a', RESERVED, STARTED, null);
     expect(result).toMatchObject({ settled: 0, failed: 1 });
   });
 
