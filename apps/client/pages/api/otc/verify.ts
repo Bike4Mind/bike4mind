@@ -43,6 +43,9 @@ import { mfaService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
+import * as z from 'zod';
+import { selfUserResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 
 interface PendingTokenPayload {
   email: string;
@@ -57,6 +60,10 @@ const MAX_PENDING_OTC_ATTEMPTS = 5;
 function parseSourceClientId(value: unknown): string | undefined {
   return isOAuthClientIdShape(value) ? value : undefined;
 }
+
+// Existing-user login spreads the self-view user at the top level next to the access token.
+const otcLoginResponseSchema = selfUserResponseSchema.extend({ accessToken: z.string() });
+const otcRegistrationResponseSchema = z.object({ user: selfUserResponseSchema, accessToken: z.string() });
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
@@ -311,7 +318,7 @@ const handler = baseApi({ auth: false })
       // response carries the same redacted shape as GET /users/[id]. `select:false` alone
       // does not cover every secret field, so serialize at the boundary here too.
       const safeUser = redactUserSecretsForSelf(existingUser);
-      return res.status(200).json({ ...safeUser, ...tokens });
+      return respond(res, otcLoginResponseSchema, { ...safeUser, ...tokens });
     }
 
     // --- NEW USER REGISTRATION ---
@@ -475,7 +482,7 @@ const handler = baseApi({ auth: false })
       }
     );
     setRefreshCookie(res, registrationSession.refreshToken);
-    return res.status(200).json({
+    return respond(res, otcRegistrationResponseSchema, {
       user: redactUserSecretsForSelf(newUser),
       accessToken: registrationSession.accessToken,
     });

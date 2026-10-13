@@ -1,5 +1,6 @@
 import { userRepository } from '@bike4mind/database';
-import { ApiKeyScope, AuthEvents, redactUserSecretsForSelf } from '@bike4mind/common';
+import { ApiKeyScope, AuthEvents, redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { userService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -26,6 +27,16 @@ interface UserImportRow {
   startingStorage?: number;
   tags?: string[];
 }
+
+const bulkCreateResponseSchema = z.object({
+  success: z.literal(true),
+  results: z.array(
+    z.discriminatedUnion('success', [
+      z.object({ success: z.literal(true), email: z.string(), user: selfUserResponseSchema }),
+      z.object({ success: z.literal(false), email: z.string(), error: z.string() }),
+    ])
+  ),
+});
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler<{}, unknown, { users: UserImportRow[] }>(async (req, res) => {
@@ -149,7 +160,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       })
     );
 
-    return res.json({
+    return respond(res, bulkCreateResponseSchema, {
       success: true,
       results,
     });
