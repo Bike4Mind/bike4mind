@@ -163,6 +163,7 @@ describe('CreateTeamModal', () => {
     renderModal();
 
     expect(screen.getByTestId('create-team-unavailable').textContent).toBe('Team plans are not available right now.');
+    expect(screen.getByTestId('create-team-size-value').hasAttribute('disabled')).toBe(true);
     // Even with a valid name and live price, the button stays disabled and nothing is submitted.
     await userEvent.setup({ delay: null }).type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
     const submit = screen.getByTestId('create-team-submit-btn');
@@ -190,6 +191,7 @@ describe('CreateTeamModal', () => {
       );
 
       expect(screen.queryByTestId('create-team-unavailable')).toBeNull();
+      expect(screen.getByTestId('create-team-size-value').hasAttribute('disabled')).toBe(false);
       const user = userEvent.setup({ delay: null });
       await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
       await user.click(screen.getByTestId('create-team-submit-btn'));
