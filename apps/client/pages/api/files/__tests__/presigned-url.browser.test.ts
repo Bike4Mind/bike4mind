@@ -85,9 +85,9 @@ describe('generic file browser download signing', () => {
     expect(h.findAccessibleById).toHaveBeenCalled();
   });
 
-  it('rejects an unsupported audience before any lookup or signing', async () => {
+  it.each(['unsupported', ''])('rejects an invalid audience (%s) with a validation error', async audience => {
     const sign = vi.spyOn(S3Storage.prototype, 'getSignedUrl');
-    await expect(urls(['owned/report.txt'], '600', 'unsupported')).rejects.toThrow();
+    await expect(urls(['owned/report.txt'], '600', audience)).rejects.toMatchObject({ name: 'ZodError' });
     expect(h.findOne).not.toHaveBeenCalled();
     expect(sign).not.toHaveBeenCalled();
     sign.mockRestore();
