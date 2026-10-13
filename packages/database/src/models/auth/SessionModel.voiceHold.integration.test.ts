@@ -238,7 +238,8 @@ describe('sessionRepository voice holds', () => {
     const newStart = minutesAgo(2);
     const id = await seed('call', 100, newStart);
 
-    await sessionRepository.recordVoiceActivity(id, minutesAgo(1), oldStart);
+    // A reconnect's token names the replaced hold, so the proxy sees no match and refuses the turn (402).
+    expect(await sessionRepository.recordVoiceActivity(id, minutesAgo(1), oldStart)).toBe(false);
     expect(await Session.findById(id).lean()).toMatchObject({ voiceConnectedAt: null, voiceLastActivityAt: null });
 
     const at = minutesAgo(1);
