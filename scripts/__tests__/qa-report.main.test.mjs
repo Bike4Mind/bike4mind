@@ -240,6 +240,30 @@ describe('main', () => {
     });
   });
 
+  it('includes the gate tests in the counts file when a breach is flagged', async () => {
+    await writeFixture();
+    await fs.mkdir(path.join(dir, 'lat'), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'lat', 'ai-latency-short-answers-results.json'),
+      JSON.stringify({ model: 'model-a', thresholdSec: 5, averageResponseTimeSec: 9 })
+    );
+    const { fetch } = fakeFetch();
+    const out = path.join(dir, 'qa-counts.json');
+    await main(
+      ['--results', path.join(dir, 'pw-results.json'), '--latency-dir', path.join(dir, 'lat'), '--counts-out', out],
+      { ...ENV, QA_LATENCY_BREACH: 'true' },
+      { fetch, sleep: noSleep, log: makeLog() }
+    );
+    expect(JSON.parse(await fs.readFile(out, 'utf8'))).toEqual({
+      passed: 3,
+      failed: 2,
+      skipped: 0,
+      notStarted: 1,
+      ran: 5,
+      total: 5,
+    });
+  });
+
   it('merges a downloaded matrix with per-artifact labels and latency metrics', async () => {
     const report = JSON.parse(await fs.readFile(path.join(here, 'fixtures/pw-results.json'), 'utf8'));
     report.stats.unexpected = 0;
