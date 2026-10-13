@@ -23,6 +23,7 @@ describe('artifactService - create', () => {
     };
 
     adapters = {
+      assertSourceRefsAccessible: vi.fn().mockResolvedValue(undefined),
       db: {
         artifacts: mockArtifactRepo,
         artifactContents: mockContentRepo,
@@ -157,5 +158,22 @@ describe('artifactService - create', () => {
         }),
       })
     );
+  });
+
+  it('rejects a source quest the actor cannot access before writing anything', async () => {
+    adapters.assertSourceRefsAccessible.mockRejectedValueOnce(new Error('no access to quest'));
+
+    await expect(
+      create(userId, { type: 'react', title: 'T', content: 'x', sourceQuestId: 'foreign-quest' } as any, adapters)
+    ).rejects.toThrow('no access to quest');
+
+    expect(adapters.assertSourceRefsAccessible).toHaveBeenCalledWith(userId, {
+      sessionId: undefined,
+      sourceQuestId: 'foreign-quest',
+      parentArtifactId: undefined,
+    });
+    expect(mockContentRepo.create).not.toHaveBeenCalled();
+    expect(mockVersionRepo.create).not.toHaveBeenCalled();
+    expect(mockArtifactRepo.create).not.toHaveBeenCalled();
   });
 });

@@ -165,7 +165,12 @@ function defaultDeps(): PersistAgentArtifactsDeps {
       const { artifactService } = await import('@bike4mind/services');
       const { artifactRepository, artifactContentRepository, artifactVersionRepository } =
         await import('@bike4mind/database');
+      const { userRepository } = await import('@bike4mind/database');
+      const { createArtifactSourceRefsGuard } = await import('@server/utils/artifactSourceRefsGuards');
+      const user = await userRepository.findById(userId);
+      if (!user) throw new Error('Cannot persist artifact: user not found');
       await artifactService.create(userId, payload, {
+        assertSourceRefsAccessible: createArtifactSourceRefsGuard(user),
         db: {
           // any: mirrors pages/api/artifacts/index.ts - the concrete Mongoose
           // repositories are structurally compatible with the service's

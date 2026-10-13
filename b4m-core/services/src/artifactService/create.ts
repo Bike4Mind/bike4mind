@@ -51,6 +51,15 @@ type CreateArtifactParameters = z.infer<typeof createArtifactSchema>;
  * rest of.
  */
 interface CreateArtifactAdapters {
+  /**
+   * Throws unless the actor may reference the given session, source quest and parent artifact.
+   * Supplied by the caller (which knows how to resolve the actor's access) and invoked here so the
+   * check applies to every create path, not only the HTTP route.
+   */
+  assertSourceRefsAccessible: (
+    userId: string,
+    refs: { sessionId?: string; sourceQuestId?: string; parentArtifactId?: string }
+  ) => Promise<void>;
   db: {
     artifacts: Pick<IArtifactRepository, 'create'>;
     artifactContents: Pick<IArtifactContentRepository, 'create'>;
@@ -90,6 +99,8 @@ export const create = async (
     permissions,
     metadata,
   } = secureParameters(parameters, createArtifactSchema);
+
+  await adapters.assertSourceRefsAccessible(userId, { sessionId, sourceQuestId, parentArtifactId });
 
   // Use provided ID if available (for AI-generated artifacts), otherwise generate one. The type and
   // title are what make the minted id parseable by the client; see createArtifactId.
