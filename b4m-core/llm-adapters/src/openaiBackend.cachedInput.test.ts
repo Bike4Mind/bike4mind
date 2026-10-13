@@ -277,7 +277,7 @@ describe('OpenAI cached-input rates', () => {
   // Rates read from OpenAI's published pricing table on 2026-08-19
   // (https://developers.openai.com/api/docs/pricing). The CACHE_READ_MULTIPLIER
   // fallback is 0.1x, which matches the GPT-5 family but NOT the older ones - OpenAI
-  // bills their cached input at 0.25x (4.1 family, o3, o4-mini) or 0.5x (4o family).
+  // bills their cached input at 0.25x (4.1 family, o3, o4-mini) or 0.5x (4o family, o1, o3-mini).
   // Publishing the real rate is what keeps the new discount from settling those models
   // BELOW what OpenAI charges us.
   it.each([
@@ -286,7 +286,9 @@ describe('OpenAI cached-input rates', () => {
     [ChatModels.GPT4_1_NANO, 0.025],
     [ChatModels.GPT4o, 1.25],
     [ChatModels.GPT4o_MINI, 0.075],
+    [ChatModels.O1, 7.5],
     [ChatModels.O3, 0.5],
+    [ChatModels.O3_MINI, 0.55],
     [ChatModels.O4_MINI, 0.275],
   ])('publishes an explicit cache_read rate for %s', async (id, perMTok) => {
     const model = await modelById(id);
@@ -300,6 +302,28 @@ describe('OpenAI cached-input rates', () => {
     // 400 x $2.50/M + 1600 x $1.25/M
     expect(cost).toBeCloseTo((400 * 2.5 + 1600 * 1.25) / 1_000_000, 12);
   });
+
+  // Standard-tier rates from OpenAI's pricing page, checked 2026-10-13. Both context
+  // bands are pinned; the cached rate is exactly 0.1x input in each, so no override.
+  // Sol is pinned at its regular list price, not the $4 / $20 promotion OpenAI runs
+  // through at least 2026-11-21.
+  it.each([
+    [ChatModels.GPT5_6_SOL, 272_000, 5, 30],
+    [ChatModels.GPT5_6_SOL, 1_050_000, 10, 45],
+    [ChatModels.GPT5_6_TERRA, 272_000, 2, 12],
+    [ChatModels.GPT5_6_TERRA, 1_050_000, 4, 18],
+    [ChatModels.GPT5_6_LUNA, 272_000, 0.2, 1.2],
+    [ChatModels.GPT5_6_LUNA, 1_050_000, 0.4, 1.8],
+  ])(
+    'prices %s at the published %i-token band ($%s in / $%s out per 1M, cache read on the 0.1x default)',
+    async (id, band, inPerM, outPerM) => {
+      const model = await modelById(id);
+      const tier = model.pricing[band];
+      expect(tier.input).toBeCloseTo(inPerM / 1_000_000, 12);
+      expect(tier.output).toBeCloseTo(outPerM / 1_000_000, 12);
+      expect(tier.cache_read).toBeUndefined();
+    }
+  );
 
   it("leaves the GPT-5 family on the 0.1x default, matching OpenAI's published rate", async () => {
     const model = await modelById(ChatModels.GPT5_5);
