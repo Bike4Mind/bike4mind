@@ -507,7 +507,7 @@ describe('updateSessionsQueryData', () => {
 // Clone, fork and snip write their copy through updateSessionsQueryData, so a copy failing a cached list's Content/Origin filter must not be
 // spliced into it - the same "Hide API" regression the gate exists for.
 describe('copy-path cache writes', () => {
-  // restoreAllMocks only undoes the `api.post` spies; the module-level `vi.fn()`s (toast, cloneSession) need clearing too.
+  // restoreAllMocks only restores vi.spyOn spies; module-level vi.fn()s (toast, cloneSession) keep their calls unless cleared.
   beforeEach(() => {
     vi.clearAllMocks();
     vi.restoreAllMocks();
