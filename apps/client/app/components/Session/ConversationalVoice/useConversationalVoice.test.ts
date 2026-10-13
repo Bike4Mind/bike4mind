@@ -28,7 +28,13 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   },
 }));
 
-import { useConversationalVoiceStore } from './useConversationalVoice';
+// A fresh module per test: the hook keeps its /end chain and call state at module level, so a link
+// left hanging by one test must not stall the next.
+let useConversationalVoiceStore: typeof import('./useConversationalVoice').useConversationalVoiceStore;
+beforeEach(async () => {
+  vi.resetModules();
+  ({ useConversationalVoiceStore } = await import('./useConversationalVoice'));
+});
 
 const stopTrack = vi.fn();
 const getUserMedia = vi.fn();
@@ -155,9 +161,10 @@ describe('useConversationalVoice — auto-reconnect', () => {
   it('lets a new call start when an earlier /end never answers', async () => {
     await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
     onConnect();
-    apiPost.mockImplementation((url: string) =>
-      url === '/api/voice/v2/sessions' ? Promise.resolve({ data: BOOTSTRAP }) : new Promise(() => {})
-    );
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/voice/v2/sessions') return Promise.resolve({ data: BOOTSTRAP });
+      return endCalls().length === 1 ? new Promise(() => {}) : Promise.resolve({ data: {} });
+    });
     onDisconnect({ reason: 'agent', context: new CloseEvent('close') });
 
     void useConversationalVoiceStore.getState().start({ sessionId: 's1' });
@@ -165,7 +172,28 @@ describe('useConversationalVoice — auto-reconnect', () => {
     expect(apiPost.mock.calls.filter(([url]) => url === '/api/voice/v2/sessions')).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(apiPost.mock.calls.filter(([url]) => url === '/api/voice/v2/sessions')).toHaveLength(2);
-    apiPost.mockImplementation(() => Promise.resolve({ data: {} }));
+  });
+
+  it('holds a new call until the /end of a call that ran out of reconnects has answered', async () => {
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    onConnect();
+    let bootstrapsFail = true;
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/voice/v2/sessions')
+        return bootstrapsFail ? Promise.reject(new Error('network down')) : Promise.resolve({ data: BOOTSTRAP });
+      return endCalls().length === 1 ? new Promise(() => {}) : Promise.resolve({ data: {} });
+    });
+    const bootstrapCalls = () => apiPost.mock.calls.filter(([url]) => url === '/api/voice/v2/sessions');
+    onDisconnect({ reason: 'error', message: 'drop', context: new Event('close') });
+    await vi.advanceTimersByTimeAsync(1000 + 2000 + 4000);
+    expect(useConversationalVoiceStore.getState().phase).toBe('error');
+    expect(endCalls()).toHaveLength(1);
+    bootstrapsFail = false;
+    void useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(bootstrapCalls()).toHaveLength(4);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(bootstrapCalls()).toHaveLength(5);
   });
 
   it('settles the hold when every reconnect bootstrap fails', async () => {
@@ -574,6 +602,29 @@ describe('useConversationalVoice - credit hold on a failed start', () => {
         '/api/voice/v2/sessions/s1/end',
         '/api/voice/v2/sessions/s1/end',
       ]);
+    });
+
+    it('settles a stale bootstrap once the newer call on that notebook ran out of reconnects', async () => {
+      const { first, second } = await endThenRestart();
+      pending[1].resolve({ data: BOOTSTRAP });
+      await second;
+      onConnect();
+      vi.useFakeTimers();
+      try {
+        onDisconnect({ reason: 'error', message: 'drop', context: new Event('close') });
+        for (let i = 2; i < 5; i++) {
+          await vi.advanceTimersByTimeAsync(4000);
+          pending[i].reject(new Error('network down'));
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        expect(useConversationalVoiceStore.getState().phase).toBe('error');
+        expect(endCalls()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+      pending[0].resolve({ data: BOOTSTRAP });
+      await first;
+      await vi.waitFor(() => expect(endCalls()).toHaveLength(2));
     });
 
     it('settles a stale bootstrap once the newer call on that notebook failed to connect', async () => {
