@@ -12,6 +12,10 @@ import { getFilesStorage } from '@server/utils/storage';
 const GetPresignedUrlRequestInput = z.object({
   filePaths: z.array(z.string()),
   expiresIn: z.number().prefault(3600), // Default to 1 hour
+  // `server` exists for the in-process RLM `getArticle` loopback (see server/tavern/rlm/tools.ts),
+  // whose container may not reach the browser origin. It only picks the signing client: the
+  // moderation/ACL/lake gates all run before signing, and the SigV4 signature is host-bound.
+  audience: z.enum(['browser', 'server']).prefault('browser'),
 });
 
 /** Minimal shape a FabFile lookup needs to expose for the moderation + ownership gates below. */
@@ -69,16 +73,29 @@ export async function filterServeableFilePaths(
 }
 
 const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
-  async (req: Request<unknown, unknown, unknown, { 'filePaths[]'?: string | string[]; expiresIn?: string }>, res) => {
+  async (
+    req: Request<
+      unknown,
+      unknown,
+      unknown,
+      { 'filePaths[]'?: string | string[]; expiresIn?: string; audience?: string }
+    >,
+    res
+  ) => {
     let filePathsQuery = req.query['filePaths[]'];
 
     if (typeof filePathsQuery === 'string') {
       filePathsQuery = [filePathsQuery];
     }
 
-    const { filePaths: validatedFilePaths, expiresIn } = GetPresignedUrlRequestInput.parse({
+    const {
+      filePaths: validatedFilePaths,
+      expiresIn,
+      audience,
+    } = GetPresignedUrlRequestInput.parse({
       filePaths: filePathsQuery,
       expiresIn: req.query.expiresIn ? parseInt(req.query.expiresIn as string, 10) : undefined,
+      audience: req.query.audience,
     });
 
     try {
@@ -113,7 +130,10 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       const presignedUrls = await Promise.all(
         serveableFileKeys.map(decodedFilePath => {
           if (!decodedFilePath) return null;
-          return getFilesStorage().getSignedUrl(decodedFilePath, 'get', { expiresIn, audience: 'browser' });
+          return getFilesStorage().getSignedUrl(decodedFilePath, 'get', {
+            expiresIn,
+            ...(audience === 'browser' && { audience: 'browser' as const }),
+          });
         })
       );
 

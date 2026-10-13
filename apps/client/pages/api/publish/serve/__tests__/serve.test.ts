@@ -2119,6 +2119,37 @@ describe('GET /api/publish/serve - external view counting (Published gear feed)'
     await promise;
     expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
   });
+
+  // An anonymous navigation can't identify a signed-in viewer, so the wrapper asks the widget to
+  // report one through /api/publish/view - but only while the gear still waits on a first view.
+  describe('the widget view-report marker', () => {
+    const bundleHtml = Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>');
+    const WIDGET_TAG = /<script src="\/api\/publish\/widget"([^>]*) defer><\/script>/;
+
+    it('marks the widget on a bundle with no external view yet', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(bundleHtml);
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      expect((res._getData() as string).match(WIDGET_TAG)?.[1]).toBe(' data-b4m-count-view');
+    });
+
+    it('marks it on a share-link view too', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', externalViewCount: 0 }));
+      mockDownload.mockResolvedValue(bundleHtml);
+      const { res, promise } = run(['a', 'tok123']);
+      await promise;
+      expect((res._getData() as string).match(WIDGET_TAG)?.[1]).toBe(' data-b4m-count-view');
+    });
+
+    it('drops the marker once an external view has landed, so readers stop exchanging tokens', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle({ externalViewCount: 1 }));
+      mockDownload.mockResolvedValue(bundleHtml);
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      expect((res._getData() as string).match(WIDGET_TAG)?.[1]).toBe('');
+    });
+  });
 });
 
 describe('GET /api/publish/serve - embed allowlist', () => {
@@ -2868,7 +2899,7 @@ describe('GET /api/publish/serve - Save as PDF', () => {
 
     const data = res._getData() as string;
     expect(data).toContain('class="b4m-bar-print"');
-    expect(data).toContain('<script src="/api/publish/widget" defer></script>');
+    expect(data).toMatch(/<script src="\/api\/publish\/widget"[^>]* defer><\/script>/);
     expect(data).not.toContain('b4m-annotate-root'); // the comment mount stays opt-in
     // Shipped hidden: the widget reveals it, so no-JS viewers never see a dead button.
     expect(data).toContain('<button class="b4m-bar-print" type="button" hidden>');

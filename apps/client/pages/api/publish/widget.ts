@@ -7,12 +7,17 @@ import type { NextApiRequest, NextApiResponse } from 'next';
  * there), which is why both features below live in this one file. The serve handler
  * emits it on every non-embed wrapper.
  *
- * Two independent parts, in order:
+ * Four independent parts, in order:
  *  1. The PRINT binder - shows the wrapper's "Save as PDF" button and asks the artifact
  *     frame to print ITSELF (printing the wrapper captures only the frame's visible first
  *     screen). The in-frame half is server/services/publish/printBridge.ts. It runs for
  *     every wrapper, including artifacts with comments turned off.
- *  2. The comment overlay, which early-returns unless the #b4m-annotate-root mount node
+ *  2. The signed-in-viewer gate drop - hides the sign-up gate in a frame marked
+ *     `data-b4m-gate` and reveals the bar's "Try" link. The in-frame half is
+ *     server/services/publish/signupGateBridge.ts.
+ *  3. The Published-gear view report - tells /api/publish/view about a signed-in viewer,
+ *     only when the serve route marked this script tag with `data-b4m-count-view`.
+ *  4. The comment overlay, which early-returns unless the #b4m-annotate-root mount node
  *     is present - that node's absence is how an artifact opts out of comments.
  *
  * Self-contained vanilla JS (no framework), building its DOM with createElement/
@@ -67,6 +72,16 @@ const WIDGET_JS = String.raw`(function () {
     });
   })();
 
+  // The app's persisted, non-sensitive session flag - not a credential. Read once for the two
+  // signed-in-viewer parts below. MUST STAY IN SYNC with ACCESS_TOKEN_STORAGE_KEY and partialize
+  // in app/hooks/useAccessToken.ts. ITP can evict it while the cookie survives; both parts then
+  // fall back to the anonymous behavior.
+  var hasSession = false;
+  try {
+    var persisted = JSON.parse(window.localStorage.getItem('access-token-storage') || 'null');
+    hasSession = !!(persisted && persisted.state && persisted.state.hasSession === true);
+  } catch (e) {}
+
   // ---- signed-in viewer: drop the sign-up CTAs ----
   // The serve route cannot recognize a session on a plain navigation, so a signed-in viewer of
   // an open-public artifact gets the anonymous render. Read the app's persisted session flag
@@ -75,12 +90,6 @@ const WIDGET_JS = String.raw`(function () {
   // gate bridge (server/services/publish/signupGateBridge.ts) to hide the gate. A stale flag
   // only hides a marketing card; an evicted one (WebKit ITP) leaves the anonymous page as-is.
   (function () {
-    var hasSession = false;
-    try {
-      // MUST STAY IN SYNC with ACCESS_TOKEN_STORAGE_KEY and partialize in app/hooks/useAccessToken.ts.
-      var saved = JSON.parse(window.localStorage.getItem('access-token-storage') || 'null');
-      hasSession = !!(saved && saved.state && saved.state.hasSession === true);
-    } catch (e) {}
     if (!hasSession) return;
     var ctas = document.querySelectorAll('.b4m-bar-cta[hidden]');
     for (var i = 0; i < ctas.length; i++) ctas[i].hidden = false;
@@ -98,24 +107,6 @@ const WIDGET_JS = String.raw`(function () {
     tell();
   })();
 
-  var root = document.getElementById('b4m-annotate-root');
-  if (!root) return;
-  var publicId = root.getAttribute('data-public-id');
-  if (!publicId) return;
-  var policy = root.getAttribute('data-comment-policy') || 'none';
-  var origin = window.location.origin;
-  var API = origin + '/api/publish/annotations/' + encodeURIComponent(publicId);
-
-  // justPosted holds EVERY comment of ours the server list has not caught up to yet,
-  // as [{id, at}] - a single slot would leave an earlier comment unprotected as soon
-  // as a second one was posted, and the next stale poll would drop it. Entries expire
-  // after PENDING_TTL_MS so a comment deleted before it ever appeared in the list
-  // cannot be resurrected indefinitely. Must stay well above the poll cadence (60s
-  // closed / 15s open) and the list's cache staleness, or a comment would be dropped
-  // while it is still legitimately waiting to show up.
-  var PENDING_TTL_MS = 300000;
-  var state = { comments: [], canComment: false, open: false, pinMode: false, pendingAnchor: null, draft: '', justPosted: [] };
-
   // ---- credential ----
   // The viewer's session lives in an HttpOnly refresh cookie; the access token is memory-only
   // and nothing is readable from script storage (see app/hooks/useAccessToken.ts partialize).
@@ -128,22 +119,14 @@ const WIDGET_JS = String.raw`(function () {
   // artifacts who need no credential at all - /api/auth/refreshToken is rate-limited per IP, so
   // an exchange on every view would let one widely-shared artifact behind a NAT exhaust the limit
   // and break real logins from that address. Instead the token is fetched only when something
-  // actually needs it: a list request that came back gated, or the panel being opened.
+  // actually needs it: a list request that came back gated, the panel being opened, or the
+  // view report below on a browser that believes it is signed in.
+  //
+  // Above the comment overlay's early return because the view report needs it on artifacts
+  // with comments turned off; sharing it keeps the two to ONE exchange per page.
+  var origin = window.location.origin;
   var token = null;
   var tokenPromise = null;
-  /**
-   * Latched once a request has 401ed with a FRESH token AND the gate-proof cookie attached -
-   * i.e. nothing this page can hold will satisfy it (a passphrase gate the viewer has not
-   * unlocked, a revoked session). Without this the retry ladder restarts on every poll, and
-   * because a token IS held each cycle takes the force branch and mints a NEW one: one exchange
-   * per poll, forever, which is precisely the rate-limit exhaustion the lazy design exists to
-   * prevent. A page reload clears it, which is the right granularity - if the viewer unlocks the
-   * gate in another tab, they reload to see comments anyway.
-   *
-   * NOTE it is a single page-lifetime latch shared by the list, can-comment and the POST, not
-   * one per endpoint: a 401 no credential can fix on any of them stops the others retrying too.
-   */
-  var authCannotFix = false;
 
   /** Single-flight cookie exchange. Caches the NEGATIVE result too, so an anonymous viewer
    *  makes exactly one attempt per page. The force flag re-arms it after a 401 (expired mid-session). */
@@ -161,6 +144,61 @@ const WIDGET_JS = String.raw`(function () {
       .catch(function () { token = null; return null; });
     return tokenPromise;
   }
+
+  // ---- Published-gear view report ----
+  // A navigation to a published page carries no credential, so the serve route counts every
+  // viewer of an open-public page or open share link as anonymous - and an anonymous view can
+  // never pay the owner's Published gear (it could be the owner). The server marks this script
+  // tag while that payout still waits on a first external view; a signed-in viewer is then
+  // reported to /api/publish/view, which decides whether they count (not the owner, allowed to
+  // see the page). Credentials ride along for a passphrase gate's proof cookie.
+  //
+  // Gated on hasSession so an anonymous reader still costs ZERO refresh-token exchanges; an
+  // evicted flag only skips the report, which is best-effort.
+  (function () {
+    if (!document.querySelector('script[data-b4m-count-view]')) return;
+    if (!hasSession) return;
+    ensureToken(false).then(function (t) {
+      if (!t) return;
+      fetch(origin + '/api/publish/view', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + t },
+        credentials: 'same-origin',
+        body: JSON.stringify({ path: window.location.pathname })
+      }).catch(function () {});
+    });
+  })();
+
+  var root = document.getElementById('b4m-annotate-root');
+  if (!root) return;
+  var publicId = root.getAttribute('data-public-id');
+  if (!publicId) return;
+  var policy = root.getAttribute('data-comment-policy') || 'none';
+  var API = origin + '/api/publish/annotations/' + encodeURIComponent(publicId);
+
+  // justPosted holds EVERY comment of ours the server list has not caught up to yet,
+  // as [{id, at}] - a single slot would leave an earlier comment unprotected as soon
+  // as a second one was posted, and the next stale poll would drop it. Entries expire
+  // after PENDING_TTL_MS so a comment deleted before it ever appeared in the list
+  // cannot be resurrected indefinitely. Must stay well above the poll cadence (60s
+  // closed / 15s open) and the list's cache staleness, or a comment would be dropped
+  // while it is still legitimately waiting to show up.
+  var PENDING_TTL_MS = 300000;
+  var state = { comments: [], canComment: false, open: false, pinMode: false, pendingAnchor: null, draft: '', justPosted: [] };
+
+  /**
+   * Latched once a request has 401ed with a FRESH token AND the gate-proof cookie attached -
+   * i.e. nothing this page can hold will satisfy it (a passphrase gate the viewer has not
+   * unlocked, a revoked session). Without this the retry ladder restarts on every poll, and
+   * because a token IS held each cycle takes the force branch and mints a NEW one: one exchange
+   * per poll, forever, which is precisely the rate-limit exhaustion the lazy design exists to
+   * prevent. A page reload clears it, which is the right granularity - if the viewer unlocks the
+   * gate in another tab, they reload to see comments anyway.
+   *
+   * NOTE it is a single page-lifetime latch shared by the list, can-comment and the POST, not
+   * one per endpoint: a 401 no credential can fix on any of them stops the others retrying too.
+   */
+  var authCannotFix = false;
 
   function headers(json) {
     var h = {};

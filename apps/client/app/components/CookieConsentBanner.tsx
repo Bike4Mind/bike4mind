@@ -8,6 +8,8 @@ import Typography from '@mui/joy/Typography';
 import { APP_NAME } from '@client/config/general';
 import { loadMetaPixel } from '@client/app/utils/metaPixel';
 import { loadRedditPixel } from '@client/app/utils/redditPixel';
+import { loadMailerLite } from '@client/app/utils/mailerLite';
+import { clearTrackingCookies } from '@client/app/utils/trackingCookies';
 import { CONSENT_KEY, publishResolvedConsent, resolveConsent } from '@client/app/utils/consentRegion';
 import { clearAttributionCookies, flushUtmCapture } from '@client/app/utils/utmCapture';
 
@@ -56,11 +58,13 @@ function activateConsent(value: Consent) {
   if (value === 'granted') {
     loadRedditPixel();
     loadMetaPixel();
+    loadMailerLite();
     // The campaign this visitor landed on, held unwritten since module load if they were
     // still being asked at the time. No-op once written, or when there was none.
     flushUtmCapture();
   } else {
     clearAttributionCookies();
+    clearTrackingCookies();
   }
 }
 
