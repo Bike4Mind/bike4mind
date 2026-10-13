@@ -264,6 +264,17 @@ describe('migrateLedgerVectorsForPrincipal', () => {
     expect(rewriteEmbedding).not.toHaveBeenCalled();
   });
 
+  it('retries the build after a transient failure in dry-run, same as the execute path', async () => {
+    getEffectiveLLMApiKeys.mockRejectedValueOnce(new Error('connection reset'));
+    chain = [ev('h1'), ev('h2')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake, { dryRun: true });
+
+    expect(stats).toMatchObject({ backfilled: 1, embedderUnavailable: 1, noProviderKey: 0, providerCalls: 1 });
+    expect(generateEmbedding).not.toHaveBeenCalled();
+    expect(rewriteEmbedding).not.toHaveBeenCalled();
+  });
+
   it('stops at the provider-call limit without charging truncations to it', async () => {
     chain = [ev('full', vec('text-embedding-3-small')), ev('h1'), ev('h2')];
 
