@@ -235,13 +235,24 @@ export interface IEmbedBranding {
   hideBranding?: boolean;
 }
 
+/**
+ * The stored secret a validation matched the raw key against. Rotation always writes a new digest
+ * and drops any bcrypt hash, so conditioning a write on this value makes it miss after a rotation.
+ */
+export type ApiKeyStoredSecret = { keyDigest: string } | { keyHash: string };
+
 export interface IUserApiKey {
   id: string;
   userId: string;
   name: string; // Human-friendly name
-  keyHash: string; // Hashed secret (never store plain text)
   /**
-   * Hex SHA-256 of the raw key: the fast validation path. Keys are 128-bit random
+   * Legacy bcrypt hash, present only on keys minted before `keyDigest` existed. New and
+   * rotated keys never get one (rotation removes it), so a stored digest is the only
+   * secret a current key has.
+   */
+  keyHash?: string;
+  /**
+   * Hex SHA-256 of the raw key: the validation path. Keys are 128-bit random
    * tokens, so an unkeyed digest is not brute-forceable and needs no server secret.
    * Absent on keys minted before it existed; validate falls back to bcrypt `keyHash`
    * and writes it back on first successful use. Never serialized (see toJSON).
@@ -368,10 +379,10 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    */
   setKeyDigest: (id: string, keyDigest: string, expectedKeyHash: string) => Promise<void>;
   /**
-   * Upgrades a legacy short prefix to the current length, under the same `expectedKeyHash` guard as
-   * setKeyDigest, so a heal racing a rotation cannot repoint the doc at the rotated-away key.
+   * Upgrades a legacy short prefix to the current length. A no-op unless `matchedSecret` is still
+   * stored, so a heal racing a rotation cannot repoint the doc at the rotated-away key.
    */
-  healKeyPrefix: (id: string, keyPrefix: string, expectedKeyHash: string) => Promise<void>;
+  healKeyPrefix: (id: string, keyPrefix: string, matchedSecret: ApiKeyStoredSecret) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
   /**

@@ -12,10 +12,11 @@ import { useRouter, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { useNotebookSearch } from '@client/app/contexts/NotebookSearchContext';
 import SearchBarWithToggle from '@client/app/components/Session/SearchBarWithToggle';
-import { useGetFavoriteSessions } from '@client/app/hooks/data/sessions';
+import { useGetFavoriteSessions, useGetSession } from '@client/app/hooks/data/sessions';
 import { gray } from '@client/app/utils/themes/colors';
 import SessionOwnerBadge from '@client/app/components/Session/SessionOwnerBadge';
 import Typography from '@mui/joy/Typography';
+import { useMemo } from 'react';
 import { useMobileHeaderStore } from '@client/app/hooks/useMobileHeader';
 import { gearsMenuDot, useGearsNavSignal } from '@client/app/hooks/useVisibleGears';
 import { rewardGreen } from '@client/app/components/common/gearRewardStyles';
@@ -27,6 +28,16 @@ const NotebookHeader = () => {
   const theme = useTheme();
   const mode = theme.palette.mode;
   const { currentSession } = useSessions();
+  // The auto-title lands in the query cache (session subscription), not in the context's
+  // currentSession, so the name comes from the same source as the sidenav and SessionTop.
+  const { data: cachedSession } = useGetSession(currentSession?.id ?? null);
+  const headerSession = useMemo(
+    () =>
+      currentSession && cachedSession?.id === currentSession.id && cachedSession.name !== currentSession.name
+        ? { ...currentSession, name: cachedSession.name }
+        : currentSession,
+    [currentSession, cachedSession]
+  );
   const router = useRouter();
   const navigate = useNavigate();
   const isNotebookPage = router.state.location.pathname.startsWith('/notebooks/');
@@ -91,7 +102,7 @@ const NotebookHeader = () => {
           />
         )}
       </IconButton>
-      {isNotebookPage && currentSession ? (
+      {isNotebookPage && headerSession ? (
         <Box
           className="notebook-header-session-container"
           sx={{
@@ -111,13 +122,13 @@ const NotebookHeader = () => {
           >
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <SessionSidenavItem
-                session={currentSession}
+                session={headerSession}
                 location="header"
                 favoriteSessions={favoriteSessions}
                 showMessageCount={showMessageCounts}
               />
             </Box>
-            <SessionOwnerBadge session={currentSession} variant="compact" />
+            <SessionOwnerBadge session={headerSession} variant="compact" />
           </Box>
 
           {/* Icon Buttons */}

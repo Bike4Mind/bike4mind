@@ -45,11 +45,12 @@ describe('sessionRepository realtime voice billing', () => {
     expect((await Session.findById(id).lean())?.voiceBilledCredits).toBe(50);
   });
 
-  it('starts from zero on a hold opened before billed credits were tracked', async () => {
+  it('never bills a response against a hold opened without the realtime marker', async () => {
     const startedAt = new Date();
     const id = await seedHold(startedAt);
 
-    expect(await sessionRepository.addVoiceBilledCredits(id, startedAt, 30)).toBe(0);
+    expect(await sessionRepository.addVoiceBilledCredits(id, startedAt, 30)).toBeNull();
+    expect((await Session.findById(id).lean())?.voiceBilledCredits).toBeUndefined();
   });
 
   it('claims a hold exactly once, reports what was billed and clears the billing state', async () => {

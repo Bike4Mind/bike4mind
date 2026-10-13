@@ -1,5 +1,7 @@
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
+import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
+import OtcRateLimitNotice from './OtcRateLimitNotice';
 import { useVerifyMFA, useSetupMFA, useVerifyMFASetup, MFASetupResponse } from '@client/app/hooks/data/mfa';
 import { describePasskeyMfaError, passkeysSupported, useVerifyPasskeyMFA } from '@client/app/hooks/data/passkeys';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
@@ -69,6 +71,7 @@ const Register: React.FC = () => {
   const { t } = useTranslation();
 
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
+  const rateLimit = useOtcRateLimit();
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
 
   const [createError, setCreateError] = React.useState<string | null>(null);
@@ -156,6 +159,8 @@ const Register: React.FC = () => {
     };
   }, []);
 
+  const resendBlockedSeconds = Math.max(resendCooldown, rateLimit.secondsLeft);
+
   const startResendCooldown = () => {
     // Match the server-side OTC_SEND_COOLDOWN_MS (30s) in /api/otc/send so the client
     // countdown doesn't block a resend the server would already allow.
@@ -194,6 +199,7 @@ const Register: React.FC = () => {
   useBrandingSettings();
 
   const onSubmit = async (data: RegisterFormData) => {
+    if (rateLimit.secondsLeft > 0) return;
     setCreateError(null);
     setServerUsernameError(null);
     setServerEmailError(null);
@@ -208,20 +214,21 @@ const Register: React.FC = () => {
       startResendCooldown();
       toastOtcCodeSent(t('auth.codeSent'));
     } catch (error: unknown) {
-      const serverMsg: string = (error as Record<string, string>)?.message || '';
-      setCreateError(serverMsg || t('auth.errors.registrationFailed'));
+      if (rateLimit.handleError(error)) return;
+      setCreateError(rateLimit.errorMessage(error, t('auth.errors.registrationFailed')));
     }
   };
 
   const handleResendCode = async () => {
-    if (resendCooldown > 0 || !submittedData) return;
+    if (resendCooldown > 0 || rateLimit.secondsLeft > 0 || !submittedData) return;
     try {
       const result = await sendOTC({ email: submittedData.email });
       setPendingToken(result.pendingToken);
       toastOtcCodeSent(t('auth.codeSent'));
       startResendCooldown();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to resend code';
+      if (rateLimit.handleError(error)) return;
+      const errorMessage = rateLimit.errorMessage(error, 'Failed to resend code');
       toast.error(errorMessage);
     }
   };
@@ -621,9 +628,18 @@ const Register: React.FC = () => {
                             setUsernameBlurred(true);
                           }}
                           error={usernameShowError || !!serverUsernameError}
+                          slotProps={{
+                            input: {
+                              'aria-invalid': usernameShowError || !!serverUsernameError,
+                              'aria-describedby': 'register-username-error',
+                            },
+                          }}
                           sx={inputStyles}
                         />
                         <Typography
+                          id="register-username-error"
+                          role="alert"
+                          data-testid="register-username-error"
                           className="register-username-error"
                           level="body-xs"
                           color="danger"
@@ -660,9 +676,18 @@ const Register: React.FC = () => {
                             setEmailBlurred(true);
                           }}
                           error={emailShowError || !!serverEmailError}
+                          slotProps={{
+                            input: {
+                              'aria-invalid': emailShowError || !!serverEmailError,
+                              'aria-describedby': 'register-email-error',
+                            },
+                          }}
                           sx={inputStyles}
                         />
                         <Typography
+                          id="register-email-error"
+                          role="alert"
+                          data-testid="register-email-error"
                           className="register-email-error"
                           level="body-xs"
                           color="danger"
@@ -758,7 +783,7 @@ const Register: React.FC = () => {
                         type="submit"
                         fullWidth
                         color="primary"
-                        disabled={!isValid || isSendingOTC}
+                        disabled={!isValid || isSendingOTC || rateLimit.secondsLeft > 0}
                         sx={[
                           { borderRadius: '8px', display: 'flex', gap: 1, alignItems: 'center' },
                           isDarkMode ? darkInactive : lightInactive,
@@ -772,9 +797,16 @@ const Register: React.FC = () => {
                             fontSize: '14px',
                           }}
                         >
-                          {t('auth.continue')}
+                          {rateLimit.secondsLeft > 0
+                            ? t('auth.retryIn', { time: formatCountdown(rateLimit.secondsLeft) })
+                            : t('auth.continue')}
                         </Typography>
                       </Button>
+                      <OtcRateLimitNotice
+                        initialSeconds={rateLimit.initialSeconds}
+                        capped={rateLimit.capped}
+                        testId="register-rate-limit-alert"
+                      />
                     </FormControl>
 
                     <Box
@@ -876,15 +908,22 @@ const Register: React.FC = () => {
                   sx={{
                     fontWeight: 500,
                     fontSize: '14px',
-                    cursor: resendCooldown > 0 ? 'default' : 'pointer',
-                    opacity: resendCooldown > 0 ? 0.5 : 1,
+                    cursor: resendBlockedSeconds > 0 ? 'default' : 'pointer',
+                    opacity: resendBlockedSeconds > 0 ? 0.5 : 1,
                     transition: 'color 0.2s ease-in-out, opacity 0.2s ease-in-out',
-                    '&:hover': { textDecoration: resendCooldown > 0 ? 'none' : 'underline' },
+                    '&:hover': { textDecoration: resendBlockedSeconds > 0 ? 'none' : 'underline' },
                   }}
                 >
-                  {resendCooldown > 0 ? `${t('auth.resendCode')} (${resendCooldown}s)` : t('auth.resendCode')}
+                  {resendBlockedSeconds > 0
+                    ? `${t('auth.resendCode')} (${formatCountdown(resendBlockedSeconds)})`
+                    : t('auth.resendCode')}
                 </Link>
               </Box>
+              <OtcRateLimitNotice
+                initialSeconds={rateLimit.initialSeconds}
+                capped={rateLimit.capped}
+                testId="register-otc-rate-limit-alert"
+              />
 
               <Box sx={{ display: 'flex', justifyContent: 'center', mt: '12px' }}>
                 <Link

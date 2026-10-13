@@ -115,18 +115,41 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     // The sweep settles an abandoned hold up to the last response the server saw.
     await sessionRepository.recordVoiceActivity(session.id, new Date());
     const startedAt = session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
-    const billedBefore = startedAt
-      ? await sessionRepository.addVoiceBilledCredits(session.id, startedAt, actualCredits)
-      : null;
-    // Only the part past the hold leaves the balance now; the hold already covers the rest. With the
-    // hold already closed (a close frame that overtook this one) the whole response is charged.
-    const fromBalance =
-      billedBefore === null
-        ? actualCredits
-        : Math.max(0, billedBefore + actualCredits - (session.voiceReservedCredits ?? 0)) -
-          Math.max(0, billedBefore - (session.voiceReservedCredits ?? 0));
-    if (fromBalance > 0) {
-      await userRepository.incrementCredits(user.id, -fromBalance);
+    let billedBefore: number | null = null;
+    try {
+      billedBefore = startedAt
+        ? await sessionRepository.addVoiceBilledCredits(session.id, startedAt, actualCredits)
+        : null;
+      // Only the part past the hold leaves the balance now; the hold already covers the rest. With the
+      // hold already closed (a close frame that overtook this one) the whole response is charged.
+      const fromBalance =
+        billedBefore === null
+          ? actualCredits
+          : Math.max(0, billedBefore + actualCredits - (session.voiceReservedCredits ?? 0)) -
+            Math.max(0, billedBefore - (session.voiceReservedCredits ?? 0));
+      if (fromBalance > 0) {
+        await userRepository.incrementCredits(user.id, -fromBalance);
+      }
+    } catch (billingError) {
+      // The ledger row is this response's replay gate, so a row left behind would make a retried
+      // frame a no-op and the response would never be charged. Undo the row and the billed total.
+      const billed = billedBefore !== null && startedAt;
+      const [unbilled, unrecorded] = await Promise.allSettled([
+        billed ? sessionRepository.addVoiceBilledCredits(session.id, startedAt, -actualCredits) : null,
+        creditTransactionRepository.delete(recorded.id),
+      ]);
+      // A null from the revert means the hold was claimed meanwhile, with this response counted in it.
+      const undone =
+        unrecorded.status === 'fulfilled' && unbilled.status === 'fulfilled' && (!billed || unbilled.value !== null);
+      if (!undone) {
+        logger.error('voiceSessionEnded: response billing failed and could not be undone', {
+          sessionId,
+          userId: user.id,
+          responseId,
+          actualCredits,
+        });
+      }
+      throw billingError;
     }
     if (billedBefore !== null) {
       holdLeft = Math.max(0, (session.voiceReservedCredits ?? 0) - billedBefore - actualCredits);
@@ -178,13 +201,54 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       actualCredits = floor - billed;
     }
 
-    if (actualCredits > 0) {
-      await recordUsage(actualCredits);
-    }
     // Already taken: the hold, plus anything billed past it. Owed: everything billed plus this frame.
+    // The balance moves before the ledger row, so a failed ledger write loses only the audit row,
+    // never the refund. If the balance move fails the hold is restored (as settleVoiceHold does)
+    // so a retried frame or the stale-hold sweep can still settle it.
     const delta = Math.max(0, reserved - billed) - actualCredits;
     if (delta !== 0) {
-      await userRepository.incrementCredits(user.id, delta);
+      try {
+        await userRepository.incrementCredits(user.id, delta);
+      } catch (creditError) {
+        const restored = await sessionRepository
+          .restoreVoiceHold(session.id, reserved, startedAt, {
+            voiceConnectedAt: session.voiceConnectedAt ?? null,
+            voiceLastActivityAt: session.voiceLastActivityAt ?? null,
+            voiceBilledCredits: claimed.billedCredits,
+          })
+          .catch(restoreError => {
+            throw new AggregateError(
+              [creditError, restoreError],
+              `voice hold ${sessionId}: settlement failed and the hold could not be restored`
+            );
+          });
+        // A newer call already holds the session, so no retry can settle this hold.
+        if (!restored) {
+          logger.error('voiceSessionEnded: settlement failed and a newer hold blocks restoring this one', {
+            sessionId,
+            userId: user.id,
+            startedAt: startedAt.toISOString(),
+            actualCredits,
+            delta,
+          });
+        }
+        throw creditError;
+      }
+    }
+    if (actualCredits > 0) {
+      // Deterministic per hold, so an operator replaying this row after a failure cannot add it twice.
+      try {
+        await recordUsage(actualCredits, `realtime-voice-close:${sessionId}:${startedAt.toISOString()}`);
+      } catch (ledgerError) {
+        logger.error('voiceSessionEnded: balance settled but the closing ledger row was not written', {
+          sessionId,
+          userId: user.id,
+          startedAt: startedAt.toISOString(),
+          actualCredits,
+          delta,
+        });
+        throw ledgerError;
+      }
     }
   }
 

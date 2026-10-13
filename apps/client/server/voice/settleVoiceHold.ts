@@ -69,7 +69,7 @@ export async function settleVoiceHold(
     try {
       await userRepository.incrementCredits(hold.userId, refundedCredits);
     } catch (creditError) {
-      await sessionRepository
+      const restored = await sessionRepository
         .restoreVoiceHold(hold.id, reserved, hold.voiceSessionStartedAt, {
           voiceConnectedAt: hold.voiceConnectedAt ?? null,
           voiceLastActivityAt: hold.voiceLastActivityAt ?? null,
@@ -81,6 +81,16 @@ export async function settleVoiceHold(
             `voice hold ${hold.id}: refund failed and the hold could not be restored`
           );
         });
+      // A newer call already holds the session, so no retry can settle this hold: the refund is
+      // owed by hand.
+      if (!restored) {
+        logger.error('[settleVoiceHold] refund failed and a newer hold blocks restoring this one', {
+          sessionId: hold.id,
+          userId: hold.userId,
+          startedAt: hold.voiceSessionStartedAt.toISOString(),
+          refund: refundedCredits,
+        });
+      }
       throw creditError;
     }
   }

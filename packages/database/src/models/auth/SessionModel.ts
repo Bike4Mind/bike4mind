@@ -653,8 +653,10 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   }
 
   async addVoiceBilledCredits(sessionId: string, startedAt: Date, credits: number) {
+    // Only a realtime hold (opened with the marker) is billed per response; a response frame against
+    // any other hold gets null and is charged from the balance, so it can never re-price that hold.
     const before = await this.sessionModel.findOneAndUpdate(
-      { _id: sessionId, voiceSessionStartedAt: startedAt },
+      { _id: sessionId, voiceSessionStartedAt: startedAt, voiceBilledCredits: { $exists: true } },
       { $inc: { voiceBilledCredits: credits } },
       { new: false, projection: { voiceBilledCredits: 1 } }
     );

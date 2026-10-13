@@ -22,13 +22,12 @@ import {
   finalizeBatchIfComplete,
   completedBatchStatus,
   deferFailureIfRetryable,
-} from '@server/queueHandlers/dataLakeBatchProgress';
-import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
-import { isChunkClaimLostError, isSupportedEmbeddingModel } from '@bike4mind/common';
+} from '@server/dataLakes/dataLakeBatchProgress';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
+import { isChunkClaimLostError, isSupportedEmbeddingModel, provenancePayloadShape } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { CHUNK_CLAIM_STALE_MS } from '@server/s3/chunkScan';
-import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
-import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
+import { isConvergenceHalted } from '@server/dataLakes/convergenceKillSwitch';
 import type { Logger } from '@bike4mind/observability';
 import type { SQSEvent } from 'aws-lambda';
 import { Resource } from 'sst';

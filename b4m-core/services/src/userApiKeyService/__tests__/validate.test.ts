@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import { createUserApiKey } from '../create';
 import { validateUserApiKey, validateUserApiKeyById } from '../validate';
 import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
-import type { IUserApiKeyDocument } from '@bike4mind/common';
+import type { ApiKeyStoredSecret, IUserApiKeyDocument } from '@bike4mind/common';
 import { KEY_PREFIX_LENGTH } from '../constants';
 
 vi.mock('bcryptjs', async () => {
@@ -28,14 +28,17 @@ function makeSyncedRepo() {
       .fn()
       .mockImplementation((prefix: string) => Promise.resolve(stored?.keyPrefix === prefix ? stored : null)),
     updateLastUsed: vi.fn().mockResolvedValue(undefined),
-    // Both heals mirror the Mongo filter in UserApiKeyModel: they only land while the hash the
+    // Both heals mirror the Mongo filter in UserApiKeyModel: they only land while the secret the
     // caller validated against is still the stored one.
     setKeyDigest: vi.fn().mockImplementation((_id: string, keyDigest: string, expectedKeyHash: string) => {
       if (stored && stored.keyHash === expectedKeyHash && !stored.keyDigest) stored.keyDigest = keyDigest;
       return Promise.resolve();
     }),
-    healKeyPrefix: vi.fn().mockImplementation((_id: string, keyPrefix: string, expectedKeyHash: string) => {
-      if (stored && stored.keyHash === expectedKeyHash) stored.keyPrefix = keyPrefix;
+    healKeyPrefix: vi.fn().mockImplementation((_id: string, keyPrefix: string, matchedSecret: ApiKeyStoredSecret) => {
+      const stillStored = Object.entries(matchedSecret).every(
+        ([field, value]) => (stored as unknown as Record<string, unknown> | null)?.[field] === value
+      );
+      if (stored && stillStored) stored.keyPrefix = keyPrefix;
       return Promise.resolve();
     }),
   };
@@ -56,11 +59,19 @@ const mintParams = {
   productId: 'vibeswire',
 };
 
+const sha256 = (k: string) => createHash('sha256').update(k).digest('hex');
+
+/** Turns a freshly minted (digest-only) doc into a pre-digest one: bcrypt keyHash, no keyDigest. */
+function makeLegacyBcrypt(doc: IUserApiKeyDocument, key: string) {
+  doc.keyHash = `__h__:${key}`; // what the bcrypt test stub produces for `key`
+  delete doc.keyDigest;
+}
+
 /**
  * Mints a key, then rewrites the stored keyPrefix to the legacy 12-char length
  * used by create.ts/validate.ts before Jun 2026 (KEY_PREFIX_LENGTH was 12).
  * Keys minted back then are stored in Mongo with 12-char prefixes and cannot
- * be re-derived from the bcrypt keyHash - validate must fall back to a
+ * be re-derived from the stored secret - validate must fall back to a
  * 12-char lookup or every pre-existing key 401s.
  */
 async function mintLegacyKey() {
@@ -98,7 +109,21 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
 
     await validateUserApiKey(key, adapters);
 
-    expect(repo.healKeyPrefix).toHaveBeenCalledWith('key-1', key.substring(0, KEY_PREFIX_LENGTH), getStored()!.keyHash);
+    expect(repo.healKeyPrefix).toHaveBeenCalledWith('key-1', key.substring(0, KEY_PREFIX_LENGTH), {
+      keyDigest: sha256(key),
+    });
+    expect(getStored()!.keyPrefix).toBe(key.substring(0, KEY_PREFIX_LENGTH));
+  });
+
+  it('self-heals a bcrypt-validated legacy key under its keyHash', async () => {
+    const { key, repo, getStored, adapters } = await mintLegacyKey();
+    makeLegacyBcrypt(getStored()!, key);
+
+    await validateUserApiKey(key, adapters);
+
+    expect(repo.healKeyPrefix).toHaveBeenCalledWith('key-1', key.substring(0, KEY_PREFIX_LENGTH), {
+      keyHash: `__h__:${key}`,
+    });
     expect(getStored()!.keyPrefix).toBe(key.substring(0, KEY_PREFIX_LENGTH));
   });
 
@@ -132,7 +157,7 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
   // the digest path indefinitely and K2 never did.
   it('does not let a heal racing a rotation revive the rotated-away key', async () => {
     const { key, repo, getStored, setStored, adapters } = await mintLegacyKey();
-    delete getStored()!.keyDigest;
+    makeLegacyBcrypt(getStored()!, key);
     const loaded = getStored()!;
     const rotated = {
       ...loaded,
@@ -151,11 +176,41 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
     await new Promise(resolve => setImmediate(resolve));
 
     expect(result.isValid).toBe(true); // K1 was valid when the request read it
-    expect(repo.healKeyPrefix).toHaveBeenCalledWith('key-1', key.substring(0, KEY_PREFIX_LENGTH), loaded.keyHash);
+    expect(repo.healKeyPrefix).toHaveBeenCalledWith('key-1', key.substring(0, KEY_PREFIX_LENGTH), {
+      keyHash: loaded.keyHash,
+    });
     expect(repo.setKeyDigest).toHaveBeenCalledWith('key-1', expect.any(String), loaded.keyHash);
     expect(getStored()).toMatchObject({ keyDigest: 'b'.repeat(64), keyPrefix: 'b4m_live_rotated' });
     expect(await validateUserApiKey(key, adapters)).toMatchObject({ isValid: false });
     compare.mockRestore();
+  });
+
+  // Rotation drops the legacy hash and writes a new digest, so a digest-validated heal that loses
+  // the race must miss on the digest it validated against.
+  it('does not let a digest-only heal racing a rotation repoint the rotated key', async () => {
+    const { key, repo, getStored, setStored, adapters } = await mintLegacyKey();
+    const loaded = getStored()!;
+    const rotated = {
+      ...loaded,
+      keyDigest: 'b'.repeat(64),
+      keyPrefix: 'b4m_live_rotated',
+    } as IUserApiKeyDocument;
+    repo.findActiveByKeyPrefix.mockImplementationOnce(async () => null); // current-length lookup misses
+    repo.findActiveByKeyPrefix.mockImplementationOnce(async (prefix: string) => {
+      if (loaded.keyPrefix !== prefix) return null;
+      setStored(rotated); // the rotation lands right after the legacy-prefix lookup read the old doc
+      return loaded;
+    });
+
+    const result = await validateUserApiKey(key, adapters);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(result.isValid).toBe(true); // K1 was valid when the request read it
+    expect(repo.healKeyPrefix).toHaveBeenCalledWith('key-1', key.substring(0, KEY_PREFIX_LENGTH), {
+      keyDigest: sha256(key),
+    });
+    expect(getStored()).toMatchObject({ keyDigest: 'b'.repeat(64), keyPrefix: 'b4m_live_rotated' });
+    expect(await validateUserApiKey(key, adapters)).toMatchObject({ isValid: false });
   });
 
   it('still rejects unknown keys when both prefix lookups miss', async () => {
@@ -343,8 +398,6 @@ describe('validateUserApiKeyById + shared finalize gates', () => {
 });
 
 describe('validateUserApiKey - SHA-256 digest fast path', () => {
-  const sha256 = (k: string) => createHash('sha256').update(k).digest('hex');
-
   async function mint() {
     const { repo, getStored } = makeSyncedRepo();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -364,6 +417,33 @@ describe('validateUserApiKey - SHA-256 digest fast path', () => {
     expect(result.keyId).toBe('key-1');
     expect(compare).not.toHaveBeenCalled();
     expect(repo.setKeyDigest).not.toHaveBeenCalled();
+    compare.mockRestore();
+  });
+
+  it('validates a digest-only key (no keyHash at all) without bcrypt or a backfill', async () => {
+    const { key, repo, getStored, adapters } = await mint();
+    expect(getStored()).not.toHaveProperty('keyHash');
+    const compare = vi.spyOn(bcrypt, 'compare');
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result).toMatchObject({ isValid: true, keyId: 'key-1' });
+    expect(compare).not.toHaveBeenCalled();
+    expect(repo.setKeyDigest).not.toHaveBeenCalled();
+    compare.mockRestore();
+  });
+
+  it('fails closed on a record that has neither keyDigest nor keyHash', async () => {
+    const { key, repo, getStored, adapters } = await mint();
+    delete getStored()!.keyDigest;
+    const compare = vi.spyOn(bcrypt, 'compare');
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result).toEqual({ isValid: false, reason: 'invalid_hash' });
+    expect(compare).not.toHaveBeenCalled();
+    expect(repo.setKeyDigest).not.toHaveBeenCalled();
+    expect(repo.updateLastUsed).not.toHaveBeenCalled();
     compare.mockRestore();
   });
 
@@ -392,7 +472,7 @@ describe('validateUserApiKey - SHA-256 digest fast path', () => {
 
   it('validates a pre-digest key via bcrypt and backfills its digest', async () => {
     const { key, repo, getStored, adapters } = await mint();
-    delete getStored()!.keyDigest; // minted before the digest existed
+    makeLegacyBcrypt(getStored()!, key); // minted before the digest existed
     const compare = vi.spyOn(bcrypt, 'compare');
 
     const result = await validateUserApiKey(key, adapters);
@@ -412,7 +492,7 @@ describe('validateUserApiKey - SHA-256 digest fast path', () => {
 
   it('does not backfill a digest from a failed bcrypt check', async () => {
     const { key, repo, getStored, adapters } = await mint();
-    delete getStored()!.keyDigest;
+    makeLegacyBcrypt(getStored()!, key);
 
     const impostor = key.substring(0, KEY_PREFIX_LENGTH) + 'f'.repeat(key.length - KEY_PREFIX_LENGTH);
     const result = await validateUserApiKey(impostor, adapters);
@@ -424,7 +504,7 @@ describe('validateUserApiKey - SHA-256 digest fast path', () => {
 
   it('does not backfill the digest of an expired pre-digest key', async () => {
     const { key, repo, getStored, adapters } = await mint();
-    delete getStored()!.keyDigest;
+    makeLegacyBcrypt(getStored()!, key);
     getStored()!.expiresAt = new Date(Date.now() - 1000);
 
     const result = await validateUserApiKey(key, adapters);
@@ -435,7 +515,7 @@ describe('validateUserApiKey - SHA-256 digest fast path', () => {
 
   it('a failed digest backfill does not fail the request', async () => {
     const { key, repo, getStored, adapters } = await mint();
-    delete getStored()!.keyDigest;
+    makeLegacyBcrypt(getStored()!, key);
     repo.setKeyDigest.mockRejectedValueOnce(new Error('db down'));
 
     const result = await validateUserApiKey(key, adapters);

@@ -33,7 +33,7 @@ vi.mock('@server/queueHandlers/utils', () => ({
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.upload, delete: h.storageDelete }) }));
-vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({ finalizeBatchIfComplete: vi.fn() }));
+vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({ finalizeBatchIfComplete: vi.fn() }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getSettingByName: async (key: string) =>

@@ -23,7 +23,8 @@ const MOVED = [
 /**
  * Modules moved out of a directory that can't be guarded whole: apps/client/server/queueHandlers
  * keeps questProcessor (the in-process chat-completion path imports it), so it never empties.
- * Guarded per module instead, by file stem.
+ * Guarded per module instead, by file stem. Shared helpers that apps/client itself imports moved to
+ * client-side homes rather than to apps/workers, because apps/client must never import apps/workers.
  */
 const MOVED_MODULES = [
   {
@@ -33,8 +34,11 @@ const MOVED_MODULES = [
       'agentProactiveMessage',
       'createZipBuffer',
       'dataLakeBatchRetryGating',
+      'dataLakeCleanup',
+      'dataLakeCleanupRetrievalIndex',
       'dataLakeResearchRun',
       'dataLakeTaxonomyAnalysis',
+      'driveDisconnectPurge',
       'driveLakeIngest',
       'emailBatch',
       'emailJobOrchestrator',
@@ -69,6 +73,14 @@ const MOVED_MODULES = [
       'whatsNewHighlights',
     ],
   },
+  {
+    from: 'apps/client/server/queueHandlers',
+    to: 'apps/client/server/dataLakes',
+    stems: ['convergenceKillSwitch', 'dataLakeBatchProgress'],
+  },
+  // A deleted re-export shim, not a move: its vocabulary lives in common.
+  { from: 'apps/client/server/queueHandlers', to: '@bike4mind/common', stems: ['convergenceProvenance'] },
+  { from: 'apps/client/server/queueHandlers', to: 'apps/client/server/utils', stems: ['sqsDelivery'] },
 ] as const;
 
 const MOVED_MODULE_CASES = MOVED_MODULES.flatMap(({ from, to, stems }) => stems.map(stem => ({ from, to, stem })));
@@ -98,7 +110,7 @@ function infraHandlers(): { file: string; handler: string }[] {
     });
 }
 
-describe('directories and modules moved into apps/workers stay moved', () => {
+describe('directories and modules moved out of apps/client/server stay moved', () => {
   it.each(MOVED)('$from has no files (they belong in $to)', ({ from, to }) => {
     expect(filesUnder(path.join(REPO_ROOT, from)), `move these into ${to}`).toEqual([]);
   });
@@ -130,6 +142,8 @@ describe('directories and modules moved into apps/workers stay moved', () => {
         'apps/workers/src/queueHandlers/imageEdit.dispatch',
         // infra/emailMarketing.ts, which no other moved handler lives in.
         'apps/workers/src/queueHandlers/emailBatch.dispatch',
+        'apps/workers/src/queueHandlers/dataLakeCleanup.dispatch',
+        'apps/workers/src/queueHandlers/driveDisconnectPurge.dispatch',
       ])
     );
     const stale = handlers
