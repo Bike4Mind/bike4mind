@@ -15,18 +15,18 @@ describe('PendingOtcToken debugCode (test-only OTC retrieval)', () => {
   });
 
   it('persists and returns the debugCode when provided (non-prod path)', async () => {
-    await pendingOtcTokenRepository.storeNonce('a-e2e@test.com', 'nonce-1', '123456');
+    await pendingOtcTokenRepository.storeNonce('a-e2e@test.com', 'nonce-1', 'hash', '123456');
     expect(await pendingOtcTokenRepository.getDebugCode('a-e2e@test.com')).toBe('123456');
   });
 
   it('stores null debugCode when none is provided (production path)', async () => {
-    await pendingOtcTokenRepository.storeNonce('b-e2e@test.com', 'nonce-2');
+    await pendingOtcTokenRepository.storeNonce('b-e2e@test.com', 'nonce-2', 'hash');
     expect(await pendingOtcTokenRepository.getDebugCode('b-e2e@test.com')).toBeNull();
   });
 
   it('overwrites the debugCode on re-send', async () => {
-    await pendingOtcTokenRepository.storeNonce('c-e2e@test.com', 'nonce-3', '111111');
-    await pendingOtcTokenRepository.storeNonce('c-e2e@test.com', 'nonce-4', '222222');
+    await pendingOtcTokenRepository.storeNonce('c-e2e@test.com', 'nonce-3', 'hash', '111111');
+    await pendingOtcTokenRepository.storeNonce('c-e2e@test.com', 'nonce-4', 'hash', '222222');
     expect(await pendingOtcTokenRepository.getDebugCode('c-e2e@test.com')).toBe('222222');
   });
 

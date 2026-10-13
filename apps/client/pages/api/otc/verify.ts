@@ -50,7 +50,6 @@ import { randomUUID } from 'crypto';
 
 interface PendingTokenPayload {
   email: string;
-  otcHash: string;
   attempts: number;
   exp: number;
   jti: string;
@@ -71,9 +70,9 @@ const handler = baseApi({ auth: false })
     const normalizedEmail = (email as string).toLowerCase().trim();
 
     // --- UNIFORM CODE VERIFICATION (enumeration-resistant by construction) ---
-    // Both login and registration verify the emailed code against the signed
-    // pending token issued by /api/otc/send (which returns an identical token for
-    // every address). NOTHING in this block reads account state, so the response
+    // Both login and registration verify the emailed code against the server-side
+    // record for the signed pending token issued by /api/otc/send (which returns an
+    // identical token and writes an identical record for every address). NOTHING in this block reads account state, so the response
     // never reveals whether an account exists. Account existence only affects what
     // happens AFTER a correct code proves ownership (see "CODE PROVEN" below).
     //
@@ -115,26 +114,23 @@ const handler = baseApi({ auth: false })
 
     // Server-side nonce: single-use + JWT-replay protection. Rotating to a fresh
     // nonce invalidates the presented token (the client must use the re-issued token
-    // below to retry). A stale/replayed token fails this check -> generic invalid.
+    // below to retry). A stale/replayed token, or one whose record holds no code hash,
+    // fails this check -> generic invalid. The code hash is only ever read from here.
     const newNonce = randomUUID();
-    const nonceValid = await pendingOtcTokenRepository.validateAndRotateNonce(
-      normalizedEmail,
-      tokenPayload.jti,
-      newNonce
-    );
-    if (!nonceValid) {
+    const otcHash = await pendingOtcTokenRepository.validateAndRotateNonce(normalizedEmail, tokenPayload.jti, newNonce);
+    if (!otcHash) {
       await budget.refund();
       throw new UnprocessableEntityError('Invalid code.');
     }
 
-    const isValid = await userService.verifyPendingOTC(code, tokenPayload.otcHash);
+    const isValid = await userService.verifyPendingOTC(code, otcHash);
     if (!isValid) {
       // Re-issue the token with an incremented attempt count + the rotated nonce so
       // the user can retry. Identical response for existing and non-existent accounts
       // (no existence lookup has happened yet).
       const nextAttempts = attempts + 1;
       const updatedToken = jwt.sign(
-        { email: tokenPayload.email, otcHash: tokenPayload.otcHash, attempts: nextAttempts, jti: newNonce },
+        { email: tokenPayload.email, attempts: nextAttempts, jti: newNonce },
         Config.JWT_SECRET,
         { algorithm: 'HS256', expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)) }
       );
@@ -301,15 +297,14 @@ const handler = baseApi({ auth: false })
     // If no username was supplied, this is a login attempt for an email with no account:
     // signal the client to collect a username and finish registration inline. The code is
     // single-use (the nonce was already rotated above), so hand back a re-issued token
-    // carrying the rotated nonce + same code hash - this lets the client complete
+    // carrying the rotated nonce (whose record keeps the same code hash) - this lets the client complete
     // registration in one continuous flow with NO second OTC email (same pattern as the
     // wrong-code re-issue above). Only reachable post-verification, so it leaks nothing.
     if (!username || typeof username !== 'string') {
-      const registrationToken = jwt.sign(
-        { email: tokenPayload.email, otcHash: tokenPayload.otcHash, attempts, jti: newNonce },
-        Config.JWT_SECRET,
-        { algorithm: 'HS256', expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)) }
-      );
+      const registrationToken = jwt.sign({ email: tokenPayload.email, attempts, jti: newNonce }, Config.JWT_SECRET, {
+        algorithm: 'HS256',
+        expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)),
+      });
       return res.status(200).json({
         registrationRequired: true,
         email: normalizedEmail,
@@ -375,7 +370,7 @@ const handler = baseApi({ auth: false })
       // Post-code-proven, so the specific error message leaks nothing about email existence.
       const nextAttempts = attempts + 1;
       const reissuedToken = jwt.sign(
-        { email: tokenPayload.email, otcHash: tokenPayload.otcHash, attempts: nextAttempts, jti: newNonce },
+        { email: tokenPayload.email, attempts: nextAttempts, jti: newNonce },
         Config.JWT_SECRET,
         { algorithm: 'HS256', expiresIn: Math.max(0, tokenPayload.exp - Math.floor(Date.now() / 1000)) }
       );
