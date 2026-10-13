@@ -1,3 +1,5 @@
+import { isMac } from './platform';
+
 /**
  * Where the PR bar's GitHub links open: this conversation's built-in browser pane by default,
  * the system browser on a Cmd-click (Ctrl-click off macOS), and the system browser too when
@@ -20,8 +22,6 @@ export interface PrLinkTargets {
   openExternal(url: string): Promise<void>;
   navigate(request: { sessionId: string; url: string }): Promise<unknown>;
 }
-
-const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent);
 
 export const SYSTEM_BROWSER_HINT = `${isMac ? 'Cmd' : 'Ctrl'}-click to open in your system browser`;
 

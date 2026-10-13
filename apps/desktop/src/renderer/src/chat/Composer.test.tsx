@@ -321,3 +321,107 @@ describe('the suggested next prompt', () => {
     expect(dismissed).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('the attach shortcut', () => {
+  const withPick = (overrides: Partial<AttachmentDraft> = {}) => {
+    const pick = vi.fn(async () => {});
+    return { pick, attachments: { ...draft, pick, ...overrides } };
+  };
+
+  function chord(target: EventTarget, init: KeyboardEventInit = { key: 'u', metaKey: true }): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  it('opens the picker on Cmd+U from the page and from the draft, and claims the key', () => {
+    const { pick, attachments } = withPick();
+    mount({ attachments });
+
+    const fromPage = chord(document.body);
+    expect(pick).toHaveBeenCalledTimes(1);
+    expect(fromPage.defaultPrevented).toBe(true);
+
+    chord(input(), { key: 'u', ctrlKey: true });
+    expect(pick).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores Cmd+Shift+U, Cmd+Alt+U and a plain U', () => {
+    const { pick, attachments } = withPick();
+    mount({ attachments });
+
+    chord(document.body, { key: 'U', metaKey: true, shiftKey: true });
+    chord(document.body, { key: 'u', metaKey: true, altKey: true });
+    chord(input(), { key: 'u' });
+    expect(pick).not.toHaveBeenCalled();
+  });
+
+  it('does nothing while the composer is disabled or an attachment is busy', () => {
+    const disabled = withPick();
+    mount({ attachments: disabled.attachments, disabled: true });
+    chord(document.body);
+    expect(disabled.pick).not.toHaveBeenCalled();
+    act(() => root?.unmount());
+    host?.remove();
+
+    const busy = withPick({ busy: true });
+    mount({ attachments: busy.attachments });
+    chord(document.body);
+    expect(busy.pick).not.toHaveBeenCalled();
+  });
+
+  it('leaves other text fields and open modals alone', () => {
+    const { pick, attachments } = withPick();
+    mount({ attachments });
+
+    const search = document.createElement('input');
+    document.body.appendChild(search);
+    const fromSearch = chord(search);
+    expect(fromSearch.defaultPrevented).toBe(false);
+    search.remove();
+
+    const modal = document.createElement('div');
+    modal.setAttribute('aria-modal', 'true');
+    document.body.appendChild(modal);
+    chord(document.body);
+    modal.remove();
+
+    expect(pick).not.toHaveBeenCalled();
+  });
+
+  it('ignores the auto-repeat of a held chord', () => {
+    const { pick, attachments } = withPick();
+    mount({ attachments });
+    chord(document.body, { key: 'u', metaKey: true, repeat: true });
+    expect(pick).not.toHaveBeenCalled();
+  });
+
+  it('binds one window listener for its lifetime and removes it on unmount', () => {
+    const add = vi.spyOn(window, 'addEventListener');
+    const remove = vi.spyOn(window, 'removeEventListener');
+    const { pick, attachments } = withPick();
+    mount({ attachments });
+    type('hello');
+    type('hello there');
+
+    const bound = add.mock.calls.filter(([name]) => name === 'keydown');
+    expect(bound).toHaveLength(1);
+
+    act(() => root?.unmount());
+    root = null;
+    expect(remove.mock.calls.some(([name, listener]) => name === 'keydown' && listener === bound[0]?.[1])).toBe(true);
+
+    chord(document.body);
+    expect(pick).not.toHaveBeenCalled();
+    add.mockRestore();
+    remove.mockRestore();
+  });
+
+  it('advertises the chord on the attach button', () => {
+    mount();
+    const button = host?.querySelector('[data-testid="composer-attach-btn"]');
+    expect(button?.getAttribute('aria-keyshortcuts')).toBe('Control+U');
+  });
+});

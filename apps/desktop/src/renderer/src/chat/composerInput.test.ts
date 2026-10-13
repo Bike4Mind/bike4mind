@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { matchCommands, parseCommandInvocation } from './commands';
 import {
+  attachShortcut,
   COMPOSER_BUTTON_LABELS,
   composerButtonAction,
   composerEscapeAction,
@@ -8,6 +9,7 @@ import {
   composerMenuAction,
   composerPlaceholder,
   composerSubmitAction,
+  isAttachChord,
   shownSuggestion,
 } from './composerInput';
 import { skillQuery } from './skillMenu';
@@ -267,4 +269,24 @@ describe('composerSubmitAction', () => {
       expect(parseCommandInvocation(text, 'code')).toBeNull();
     }
   );
+});
+
+describe('the attach shortcut', () => {
+  const chord = (key: string, held: Partial<Record<'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey', boolean>> = {}) =>
+    isAttachChord({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...held });
+
+  it('matches the modifier plus U and nothing else', () => {
+    expect(chord('u', { metaKey: true })).toBe(true);
+    expect(chord('u', { ctrlKey: true })).toBe(true);
+    expect(chord('U', { metaKey: true })).toBe(true);
+    expect(chord('u')).toBe(false);
+    expect(chord('U', { metaKey: true, shiftKey: true })).toBe(false);
+    expect(chord('u', { metaKey: true, altKey: true })).toBe(false);
+    expect(chord('i', { metaKey: true })).toBe(false);
+  });
+
+  it('names the chord the way each platform does', () => {
+    expect(attachShortcut(true)).toEqual({ label: '\u2318U', aria: 'Meta+U' });
+    expect(attachShortcut(false)).toEqual({ label: 'Ctrl+U', aria: 'Control+U' });
+  });
 });

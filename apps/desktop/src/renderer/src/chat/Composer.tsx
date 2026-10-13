@@ -11,6 +11,7 @@ import type { ChatQueuedMessage, ChatSessionMode } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
 import { matchCommands, type ComposerCommand } from './commands';
 import {
+  attachShortcut,
   COMPOSER_BUTTON_LABELS,
   composerButtonAction,
   composerEscapeAction,
@@ -18,10 +19,12 @@ import {
   composerMenuAction,
   composerPlaceholder,
   composerSubmitAction,
+  isAttachChord,
   shownSuggestion,
 } from './composerInput';
 import { ArrowUpIcon, StopIcon } from './icons';
 import { contentColumnSx } from './layout';
+import { isMac } from './platform';
 import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
 import { matchSkills, skillQuery } from './skillMenu';
@@ -36,6 +39,13 @@ import {
 } from './statusLine';
 import { toAttachmentInputs, type AttachmentDraft } from './useAttachments';
 import type { SkillsController } from './useSkills';
+
+const ATTACH_SHORTCUT = attachShortcut(isMac);
+
+function isTextField(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || target.matches('input, textarea, select');
+}
 
 export function Composer({
   sessionId,
@@ -349,6 +359,30 @@ export function Composer({
     if (shown) setText(shown);
   };
 
+  // Read inside the window listener so it is bound once, not rebuilt on every draft keystroke.
+  const attach = useRef({ blocked: disabled || attachments.busy, pick: attachments.pick });
+  attach.current = { blocked: disabled || attachments.busy, pick: attachments.pick };
+
+  /**
+   * Cmd/Ctrl+U opens the picker wherever focus is on the conversation screen - the draft, a
+   * button, or nothing - except another text field, which is someone typing elsewhere, and
+   * under a modal. The settings, customize and artifacts screens need no check: they replace
+   * the conversation, and unmount this component with it.
+   */
+  useEffect(() => {
+    const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || !isAttachChord(event)) return;
+      if (event.target !== textareaRef.current && isTextField(event.target)) return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      // A held chord auto-repeats, and each repeat would queue another OS dialog behind this one.
+      if (event.repeat || attach.current.blocked) return;
+      void attach.current.pick();
+    };
+    window.addEventListener('keydown', onWindowKeyDown);
+    return () => window.removeEventListener('keydown', onWindowKeyDown);
+  }, []);
+
   /**
    * The screenshot path, and the one that has to feel free: cmd-shift-4 then cmd-v.
    *
@@ -514,17 +548,22 @@ export function Composer({
         {/* No correction of its own: its box goes on the content edge like every other control
             in the column, and the '+' rides inside it. Pulling the box left so the glyph alone
             sat on the line is what used to send its hover surface outside the column. */}
-        <IconButton
-          size="sm"
-          variant="plain"
-          color="neutral"
-          disabled={disabled || attachments.busy}
-          onClick={() => void attachments.pick()}
-          aria-label="Attach a file"
-          data-testid="composer-attach-btn"
-        >
-          <Typography level="body-lg">+</Typography>
-        </IconButton>
+        <Tooltip title={`Attach a file (${ATTACH_SHORTCUT.label})`} size="sm" variant="soft" placement="top">
+          <Box component="span" sx={{ display: 'inline-flex' }}>
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              disabled={disabled || attachments.busy}
+              onClick={() => void attachments.pick()}
+              aria-label="Attach a file"
+              aria-keyshortcuts={ATTACH_SHORTCUT.aria}
+              data-testid="composer-attach-btn"
+            >
+              <Typography level="body-lg">+</Typography>
+            </IconButton>
+          </Box>
+        </Tooltip>
 
         {leading}
 

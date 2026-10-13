@@ -133,6 +133,23 @@ export const COMPOSER_BUTTON_LABELS: Record<ComposerButtonAction, string> = {
   queue: 'Queue message',
 };
 
+/**
+ * Cmd/Ctrl+U with nothing else held opens the file picker. Either modifier counts, the same as
+ * the sidebar's window bindings, so the label below is what is advertised rather than the only
+ * chord that works.
+ */
+export function isAttachChord(
+  event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>
+): boolean {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return false;
+  return event.key === 'u' || event.key === 'U';
+}
+
+/** The attach shortcut as each platform names it: the tooltip's glyph and `aria-keyshortcuts`. */
+export function attachShortcut(mac: boolean): { label: string; aria: string } {
+  return mac ? { label: '\u2318U', aria: 'Meta+U' } : { label: 'Ctrl+U', aria: 'Control+U' };
+}
+
 /** What Escape in the composer's input means. */
 export type ComposerEscapeAction =
   /** Close the `/` menu, leaving the text alone. */
