@@ -131,6 +131,8 @@ describe('useConversationalVoice — auto-reconnect', () => {
     // Budget exhausted - the next drop ends the call and reconciles credits.
     drop();
     expect(useConversationalVoiceStore.getState().phase).toBe('ended');
+    // /end is queued behind any earlier settles, so it goes out a microtask later.
+    await vi.advanceTimersByTimeAsync(0);
     expect(endCalls()).toHaveLength(1);
   });
 
@@ -466,6 +468,93 @@ describe('useConversationalVoice - credit hold on a failed start', () => {
       await second;
       expect(sessionCalls()).toHaveLength(1);
       expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+    });
+
+    it('holds a same-notebook restart until the deferred /end has landed', async () => {
+      let resolveDeferredEnd: () => void = () => {
+        throw new Error('Deferred /end was not sent');
+      };
+      apiPost.mockImplementation((url: string) => {
+        if (url === '/api/voice/v2/sessions') {
+          return new Promise((resolve, reject) => {
+            pending.push({ resolve, reject });
+          });
+        }
+        if (endCalls().length === 1) {
+          return new Promise(resolve => {
+            resolveDeferredEnd = () => resolve({ data: {} });
+          });
+        }
+        return Promise.resolve({ data: {} });
+      });
+      const { first, second } = await endThenRestart();
+      pending[0].resolve({ data: BOOTSTRAP });
+      await first;
+      pending[1].reject(conflict());
+      await second;
+      await vi.waitFor(() => expect(endCalls()).toHaveLength(1));
+
+      const third = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(sessionCalls()).toHaveLength(2);
+
+      resolveDeferredEnd();
+      await vi.waitFor(() => expect(sessionCalls()).toHaveLength(3));
+      pending[2].resolve({ data: BOOTSTRAP });
+      await third;
+      expect(useConversationalVoiceStore.getState().phase).toBe('connecting');
+    });
+
+    it('does not let a failed /end block a later start', async () => {
+      apiPost.mockImplementation((url: string) =>
+        url === '/api/voice/v2/sessions'
+          ? new Promise((resolve, reject) => {
+              pending.push({ resolve, reject });
+            })
+          : Promise.reject(new Error('network down'))
+      );
+      const { first, second } = await endThenRestart();
+      pending[0].resolve({ data: BOOTSTRAP });
+      await first;
+      pending[1].reject(conflict());
+      await second;
+      await vi.waitFor(() => expect(endCalls()).toHaveLength(1));
+
+      const third = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+      await vi.waitFor(() => expect(sessionCalls()).toHaveLength(3));
+      pending[2].resolve({ data: BOOTSTRAP });
+      await third;
+      expect(useConversationalVoiceStore.getState().phase).toBe('connecting');
+    });
+
+    it('settles a stale bootstrap once the newer call on that notebook has ended on its own', async () => {
+      const { first, second } = await endThenRestart();
+      pending[1].resolve({ data: BOOTSTRAP });
+      await second;
+      onConnect();
+      onDisconnect({ reason: 'agent', context: new CloseEvent('close') });
+      await vi.waitFor(() => expect(endCalls()).toHaveLength(1));
+
+      pending[0].resolve({ data: BOOTSTRAP });
+      await first;
+      await vi.waitFor(() => expect(endCalls()).toHaveLength(2));
+      expect(endCalls().map(([url]) => url)).toEqual([
+        '/api/voice/v2/sessions/s1/end',
+        '/api/voice/v2/sessions/s1/end',
+      ]);
+    });
+
+    it('settles a stale bootstrap once the newer call on that notebook failed to connect', async () => {
+      startSessionMock.mockRejectedValueOnce(new Error('websocket refused'));
+      const { first, second } = await endThenRestart();
+      pending[1].resolve({ data: BOOTSTRAP });
+      await second;
+      expect(useConversationalVoiceStore.getState().phase).toBe('error');
+      await vi.waitFor(() => expect(endCalls()).toHaveLength(1));
+
+      pending[0].resolve({ data: BOOTSTRAP });
+      await first;
+      await vi.waitFor(() => expect(endCalls()).toHaveLength(2));
     });
   });
 

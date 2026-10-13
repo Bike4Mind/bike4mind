@@ -64,7 +64,8 @@ let activeSessionId: string | null = null;
 let startGen = 0;
 
 // Notebook the newest live start() targets (undefined sessionId = a fresh notebook), and whether its
-// first bootstrap has succeeded. Cleared by end(), a failed mic check and a failed first bootstrap.
+// first bootstrap has succeeded. Cleared whenever that call ends: end(), a failed mic check, a failed
+// bootstrap, a terminal transport failure and a terminal disconnect.
 // A superseded bootstrap skips its own /end only when the newer call is on the same notebook, since
 // /end is keyed by notebook.
 let liveStart: { sessionId?: string; bootstrapped: boolean } | null = null;
@@ -75,8 +76,22 @@ let liveStart: { sessionId?: string; bootstrapped: boolean } | null = null;
 const deferredSettles = new Set<string>();
 
 function settleDeferredHolds(): void {
-  for (const id of deferredSettles) void reconcileVoiceSession(id);
+  const ids = [...deferredSettles];
   deferredSettles.clear();
+  void queueSettle(...ids);
+}
+
+// /end settles whatever hold its notebook has open, so one landing after a restart's /sessions
+// would settle the new call's hold. Every /end goes through this chain and start() waits for it
+// before bootstrapping. allSettled keeps a failed /end from stalling later ones.
+let pendingSettles: Promise<unknown> = Promise.resolve();
+
+function queueSettle(...ids: (string | null)[]): Promise<unknown> {
+  const toSettle = ids.filter((id): id is string => id !== null);
+  if (toSettle.length > 0) {
+    pendingSettles = pendingSettles.then(() => Promise.allSettled(toSettle.map(id => reconcileVoiceSession(id))));
+  }
+  return pendingSettles;
 }
 
 // Bounded auto-reconnect after an abnormal disconnect (network drop - common on
@@ -266,15 +281,13 @@ async function establishConnection(
     // prior hold, so a superseded same-notebook bootstrap must now settle its own.
     const sid = activeSessionId;
     activeSessionId = null;
-    if (!isReconnect) {
-      liveStart = null;
-      settleDeferredHolds();
-    }
+    liveStart = null;
+    settleDeferredHolds();
     set({
       phase: 'error',
       errorMessage: `Failed to ${isReconnect ? 'reconnect' : 'create'} voice session: ${formatSessionsError(err)}`,
     });
-    void reconcileVoiceSession(sid);
+    void queueSettle(sid);
     return;
   }
 
@@ -292,7 +305,7 @@ async function establishConnection(
     const newerSameNotebook = liveStart !== null && resolvedId !== null && liveStart.sessionId === resolvedId;
     if (isReconnect || !resolvedId) return;
     if (isNewSession || !newerSameNotebook) {
-      void reconcileVoiceSession(resolvedId);
+      void queueSettle(resolvedId);
     } else if (!liveStart?.bootstrapped) {
       deferredSettles.add(resolvedId);
     }
@@ -347,6 +360,7 @@ async function establishConnection(
         }
         const sid = activeSessionId;
         activeSessionId = null;
+        liveStart = null;
         set({
           phase: 'ended',
           mode: null,
@@ -354,7 +368,7 @@ async function establishConnection(
             ? { errorMessage: details.message || 'Voice connection lost. Tap to start again.' }
             : {}),
         });
-        void reconcileVoiceSession(sid);
+        void queueSettle(sid);
       },
       onError: message => {
         if (isStale()) return;
@@ -393,9 +407,10 @@ async function establishConnection(
     // now rather than leave the whole reservation to the sweep.
     const sid = activeSessionId;
     activeSessionId = null;
+    liveStart = null;
     clearReconnectTimer();
     set({ phase: 'error', errorMessage: formatConnectError(err) });
-    void reconcileVoiceSession(sid);
+    void queueSettle(sid);
   }
 }
 
@@ -424,6 +439,8 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     }
     // Ended during the permission prompt: nothing was reserved, and nothing should be.
     if (myGen !== startGen) return;
+    await pendingSettles;
+    if (myGen !== startGen) return;
     await establishConnection(set, myGen, { sessionId, reasoningModelId, onSessionResolved }, false);
   },
 
@@ -443,13 +460,9 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     conversation = null;
     activeSessionId = null;
     set({ phase: 'ended', mode: null });
-    if (conv) {
-      try {
-        await conv.endSession();
-      } catch {
-        // already torn down
-      }
-    }
-    await reconcileVoiceSession(sid);
+    // Chained synchronously so a restart issued before the transport closes still waits for this /end.
+    const closed = conv ? conv.endSession().catch(() => {}) : Promise.resolve();
+    pendingSettles = pendingSettles.then(() => closed);
+    await queueSettle(sid);
   },
 }));
