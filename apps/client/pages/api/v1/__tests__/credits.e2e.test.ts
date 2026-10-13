@@ -63,16 +63,15 @@ async function mintExchangeKey(scopes: ApiKeyScope[]) {
     // ai-token refuses to mint for a user who has not accepted the policies.
     aupAcceptedVersion: '2026-01-01',
   });
-  const minted = await userApiKeyService.createUserApiKey(
+  const minted = await userApiKeyService.createExchangeUserApiKey(
     user.id,
     {
       name: 'AI (federated: Satellite)',
       scopes,
-      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      expiresAt: new Date(Date.now() + userApiKeyService.MAX_EXCHANGE_KEY_TTL_MS),
       metadata: {
         clientIP: '127.0.0.1',
         userAgent: 'vitest',
-        createdFrom: 'oauth-exchange',
         oauthClientId: 'b4m_sat_0123abcd',
       },
     },
