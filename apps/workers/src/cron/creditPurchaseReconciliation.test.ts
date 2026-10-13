@@ -131,6 +131,7 @@ describe('creditPurchaseReconciliation cron', () => {
     expect(message).toContain('pi_missing');
     expect(message).toContain('$10.00 USD');
     expect(message).not.toContain('pi_granted');
+    expect(message).not.toContain('Balance never credited');
     expect(mockEmitMetric).toHaveBeenCalledWith(
       'Lumina5/CreditPurchases',
       'UngrantedPurchases',
