@@ -391,7 +391,7 @@ const handler = baseApi().post(async (req, res) => {
     throw err;
   });
   if (!saved) {
-    return res.status(409).json({ error: 'This slug changed owner during publish', code: SLUG_OWNED_BY_OTHER });
+    return res.status(409).json({ error: 'This slug was published by another request', code: SLUG_OWNED_BY_OTHER });
   }
 
   // 7b. Re-publish overwrites the origin in place, but the public `/p/...` page is
