@@ -74,8 +74,8 @@ import { validateUserCredits as validateImageUserCredits } from './tools/base/ut
 import { getQuestErrorCode } from '@bike4mind/common';
 import { recordGeneratedImages } from './recordGeneratedImages';
 
-// Bounded fallback for the mask gate when the client's on-demand scan did not finish (it normally
-// arrives already 'clean'); both values are in ms.
+// Bounded wait at the mask gate for a scan still in flight: the client's on-demand call returned
+// 'pending', or the S3 event owns the claim ('scanning'). Both values are in ms.
 const MODERATION_WAIT_MS = 12_000;
 const MODERATION_POLL_INTERVAL_MS = 750;
 
@@ -428,6 +428,7 @@ export class ImageEditService {
         { userId: access.userId, userGroups: access.userGroups },
         access.lakeAccess
       );
+      // A mask that vanished or is no longer accessible stops the wait; the last-seen row then fails the gate.
       if (!refreshed) break;
       current = refreshed;
     }
@@ -656,8 +657,9 @@ export class ImageEditService {
       // while it's held (pending scan) or blocked. Checked once here, before the per-model
       // branches below each call `fabFileStorage.getSignedUrl` on it.
       //
-      // Normally already scanned by the client's on-demand call; if that fell back to the S3 event,
-      // wait for the verdict here. Still fail-closed: not 'clean' by the deadline is rejected.
+      // Normally already 'clean' from the client's on-demand scan; otherwise the scan is still in
+      // flight under that call ('pending') or the S3 event ('scanning'), so wait for the verdict
+      // here. Still fail-closed: not 'clean' by the deadline is rejected.
       if (fileImage && isModerationInFlight(fileImage)) {
         fileImage = await this.waitForModerationScan(fileImage, {
           userId,
