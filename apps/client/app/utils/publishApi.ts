@@ -13,6 +13,7 @@ import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX } from '@bike4mind/common';
 import { detectElidedSafe } from '@client/app/utils/artifactParser';
 import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
 import { exportHref, type PublishExportFormat } from '@client/app/utils/publishExport';
+import { SLUG_OWNED_BY_OTHER } from '@server/services/publish/slugOwnership';
 
 /** Summary row for the published-artifacts management list. */
 export interface ManagedArtifact {
@@ -677,9 +678,8 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-/** Must stay in sync with `SLUG_OWNED_BY_OTHER` in `server/services/publish/slugOwnership.ts`. */
 function isSlugOwnedByOther(err: unknown): boolean {
-  return isAxiosError<{ code?: string }>(err) && err.response?.data?.code === 'slug_owned_by_other';
+  return isAxiosError<{ code?: string }>(err) && err.response?.data?.code === SLUG_OWNED_BY_OTHER;
 }
 
 function slugify(s: string): string {
