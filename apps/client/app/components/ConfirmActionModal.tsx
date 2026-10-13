@@ -18,6 +18,8 @@ export interface ConfirmActionModalProps {
   disabledConfirm?: boolean;
   loading?: boolean;
   ['data-testid']?: string;
+  // Extra content between the description and the buttons, e.g. a typed-confirmation field.
+  children?: React.ReactNode;
 }
 
 const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
@@ -32,6 +34,7 @@ const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
   disabledConfirm = false,
   loading = false,
   'data-testid': testId = '',
+  children,
 }) => {
   return (
     <Modal open={open} onClose={() => !loading && onGoBackward()}>
@@ -40,6 +43,7 @@ const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
         <DialogTitle sx={{ color: 'text.primary' }}>{title}</DialogTitle>
         <DialogContent sx={{ display: 'grid', gap: '24px' }}>
           <Typography sx={{ color: 'text.tertiary' }}>{description}</Typography>
+          {children}
 
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', justifyContent: 'end' }}>
             <Button

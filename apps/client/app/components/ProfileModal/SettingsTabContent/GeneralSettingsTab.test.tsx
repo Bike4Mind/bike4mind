@@ -95,6 +95,7 @@ describe('GeneralSettingsTab danger zone', () => {
   it('confirming the notebooks delete runs only the sessions mutation', () => {
     renderTab();
     fireEvent.click(screen.getByTestId('settings-delete-all-notebooks-btn'));
+    fireEvent.change(screen.getByTestId('delete-all-confirm-input'), { target: { value: 'DELETE' } });
     fireEvent.click(screen.getByTestId('confirm-modal-confirm-btn'));
     expect(deleteSessionsMutation.mutate).toHaveBeenCalledTimes(1);
     expect(deleteFilesMutation.mutate).not.toHaveBeenCalled();
@@ -103,6 +104,7 @@ describe('GeneralSettingsTab danger zone', () => {
   it('confirming the knowledge files delete runs only the files mutation', () => {
     renderTab();
     fireEvent.click(screen.getByTestId('settings-delete-all-files-btn'));
+    fireEvent.change(screen.getByTestId('delete-all-confirm-input'), { target: { value: 'DELETE' } });
     fireEvent.click(screen.getByTestId('confirm-modal-confirm-btn'));
     expect(deleteFilesMutation.mutate).toHaveBeenCalledTimes(1);
     expect(deleteSessionsMutation.mutate).not.toHaveBeenCalled();
