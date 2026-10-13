@@ -12,9 +12,13 @@ import { ForbiddenError } from '@server/utils/errors';
  *   confirmed_csam  -> submit an NCMEC CyberTip and mark the incident 'reported'.
  *   false_positive  -> mark the incident 'false_positive' (no NCMEC submission).
  *
- * The NCMEC submission is idempotent: `updateReviewStatus` uses a `$ne: 'reported'`
- * guard, so a duplicate POST after a successful submission returns 409 rather than
- * re-submitting to NCMEC.
+ * Concurrency safety: `confirmed_csam` first atomically claims the incident by
+ * transitioning it to 'confirmed_csam' (the intermediate state). Only one concurrent
+ * request can claim a given incident; others receive 409. This prevents two simultaneous
+ * operator verdicts from each submitting an independent CyberTip to NCMEC.
+ *
+ * The NCMEC reportId is logged immediately after NCMEC accepts the submission and before
+ * the DB update so it is recoverable from logs even if the DB write subsequently fails.
  */
 const bodySchema = z.object({
   verdict: z.enum(['confirmed_csam', 'false_positive']),
@@ -34,24 +38,25 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
   const { verdict } = parsed.data;
 
-  const incident = await imageModerationIncidentRepository.findById(incidentId);
-  if (!incident) {
-    return res.status(404).json({ error: 'Incident not found' });
-  }
-
   if (verdict === 'confirmed_csam') {
-    if (incident.reviewStatus === 'reported') {
-      return res.status(409).json({ error: 'Incident already reported to NCMEC' });
+    // Atomically claim the incident: transitions pending_review/absent -> confirmed_csam.
+    // Only one concurrent request can succeed; all others receive 409.
+    const claimed = await imageModerationIncidentRepository.claimForNcmecSubmission(incidentId);
+    if (!claimed) {
+      const incident = await imageModerationIncidentRepository.findById(incidentId);
+      if (!incident) return res.status(404).json({ error: 'Incident not found' });
+      if (incident.reviewStatus === 'reported') return res.status(409).json({ error: 'Incident already reported to NCMEC' });
+      return res.status(409).json({ error: 'Incident is already being processed or has been reviewed' });
     }
 
     let ncmecReportId: string;
     try {
       const result = await ncmecService.submitNcmecReport({
         incidentId,
-        userId: incident.userId,
-        detectedAt: incident.createdAt,
-        labels: (incident.labels ?? []).map(l => ({ name: l.name, confidence: l.confidence })),
-        fabFileId: incident.fabFileId,
+        userId: claimed.userId,
+        detectedAt: claimed.createdAt,
+        labels: (claimed.labels ?? []).map(l => ({ name: l.name, confidence: l.confidence })),
+        fabFileId: claimed.fabFileId,
       });
       ncmecReportId = result.reportId;
     } catch (err) {
@@ -59,20 +64,25 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       return res.status(502).json({ error: `NCMEC submission failed: ${(err as Error).message}` });
     }
 
+    // Log before the DB write: if the write fails, the reportId is still recoverable from logs.
+    req.logger.info(`[NCMEC] submission accepted for incident ${incidentId}, reportId=${ncmecReportId}; persisting to DB`);
+
     const updated = await imageModerationIncidentRepository.updateReviewStatus(incidentId, 'reported', ncmecReportId);
     if (!updated) {
-      // Race: another request already flipped it to 'reported' between our fetch and update.
+      req.logger.warn(`[NCMEC] DB update skipped for incident ${incidentId} (already reported); NCMEC reportId=${ncmecReportId}`);
       return res.status(409).json({ error: 'Incident already reported to NCMEC (concurrent request)' });
     }
 
-    req.logger.info(`[NCMEC] reported incident ${incidentId} -> reportId ${ncmecReportId} by admin=${req.user.id}`);
+    req.logger.info(`[NCMEC] incident ${incidentId} marked reported, reportId=${ncmecReportId}, by admin=${req.user.id}`);
     return res.status(200).json({ ok: true, ncmecReportId });
   }
 
   // false_positive: no NCMEC submission, just update the status.
   const updated = await imageModerationIncidentRepository.updateReviewStatus(incidentId, 'false_positive');
   if (!updated) {
-    return res.status(404).json({ error: 'Incident not found or already reported' });
+    const incident = await imageModerationIncidentRepository.findById(incidentId);
+    if (!incident) return res.status(404).json({ error: 'Incident not found' });
+    return res.status(409).json({ error: 'Incident already reported or being processed' });
   }
 
   req.logger.info(`[Moderation] incident ${incidentId} marked false_positive by admin=${req.user.id}`);

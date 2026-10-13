@@ -97,9 +97,21 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   }
 
   /**
-   * Atomically transition an incident to a new reviewStatus. `ncmecReportId` is required
-   * when `status === 'reported'`. Throws if the incident is already 'reported' (idempotency
-   * guard: the NCMEC submission may not be re-sent once completed).
+   * Atomically claim an incident for NCMEC submission. Transitions from absent/pending_review
+   * to 'confirmed_csam'. Only one concurrent request can succeed for a given incident; all
+   * others get null, preventing duplicate NCMEC filings.
+   */
+  async claimForNcmecSubmission(id: string): Promise<IImageModerationIncidentDocument | null> {
+    return this.model.findOneAndUpdate(
+      { _id: id, reviewStatus: { $in: ['pending_review', null] } },
+      { $set: { reviewStatus: 'confirmed_csam' } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Transition an incident to a terminal reviewStatus. `ncmecReportId` is set when
+   * `status === 'reported'`. Returns null when already 'reported' (idempotency guard).
    */
   async updateReviewStatus(
     id: string,
@@ -108,7 +120,6 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   ): Promise<IImageModerationIncidentDocument | null> {
     const update: Record<string, unknown> = { reviewStatus: status };
     if (ncmecReportId) update.ncmecReportId = ncmecReportId;
-    // $ne guard prevents a duplicate NCMEC submission if the route is called twice.
     return this.model.findOneAndUpdate(
       { _id: id, reviewStatus: { $ne: 'reported' } },
       { $set: update },

@@ -1,5 +1,5 @@
 /**
- * NCMEC CyberTipline reporting service (18 U.S.C. §2258A).
+ * NCMEC CyberTipline reporting service (18 U.S.C. section 2258A).
  *
  * Submits a CyberTip to NCMEC when a human admin confirms a detected incident is CSAM.
  * Only the admin verdict route calls this; the detection/block path does not.

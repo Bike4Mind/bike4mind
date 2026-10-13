@@ -127,7 +127,7 @@ export const secrets = {
   IS_SOURCE_DEPLOYMENT: new sst.Secret('IS_SOURCE_DEPLOYMENT', 'false'),
   // Shared secret for authenticating rate limit ingest requests from MCP Lambda
   RATE_LIMIT_INGEST_TOKEN: new sst.Secret('RATE_LIMIT_INGEST_TOKEN', 'not-configured'),
-  // NCMEC CyberTipline ESP credentials for 18 U.S.C. §2258A reporting.
+  // NCMEC CyberTipline ESP credentials for 18 U.S.C. section 2258A reporting.
   // Obtain from your NCMEC ESP representative. Set per stage via `sst secret set`.
   // NCMEC_USE_SANDBOX must be 'true' on non-production stages.
   NCMEC_ESP_ID: new sst.Secret('NCMEC_ESP_ID', 'not-configured'),

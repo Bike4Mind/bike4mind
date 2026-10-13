@@ -3,7 +3,7 @@ import { z } from 'zod';
 /**
  * ImageModerationIncident - audit record for a generated image blocked by
  * auto-moderation. Metadata-only (no image bytes). S3 objects are preserved
- * by convention for 18 U.S.C. §2258A; confirmed incidents must be reported
+ * by convention for 18 U.S.C. section 2258A; confirmed incidents must be reported
  * to NCMEC via the admin triage flow.
  */
 
