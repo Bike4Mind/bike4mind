@@ -26,6 +26,8 @@ const THIRD_PARTY: Array<[ModelBackend, string]> = [
 ];
 const SELF_HOSTED = [ModelBackend.Ollama, ModelBackend.LocalImage];
 
+const route = (backend: ModelBackend) => ({ id: 'some-model', backend });
+
 describe('getModelDataHandlingText', () => {
   it('covers every backend', () => {
     const covered = new Set([...THIRD_PARTY.map(([backend]) => backend), ...SELF_HOSTED]);
@@ -33,44 +35,62 @@ describe('getModelDataHandlingText', () => {
   });
 
   it.each(THIRD_PARTY)('names the serving provider for %s', (backend, provider) => {
-    expect(getModelDataHandlingText(backend)).toContain(
+    expect(getModelDataHandlingText(route(backend))).toContain(
       `This model is served by ${provider}. Your session content is processed by ${provider} under its API terms`
     );
   });
 
-  it.each([ModelBackend.OpenAI, ModelBackend.Anthropic, ModelBackend.Gemini, ModelBackend.Bedrock, ModelBackend.AWS])(
+  it.each([ModelBackend.OpenAI, ModelBackend.Anthropic, ModelBackend.Bedrock])(
     'states the training exclusion for %s',
     backend => {
-      expect(getModelDataHandlingText(backend)).toContain('do not use your content for training');
+      expect(getModelDataHandlingText(route(backend))).toContain('do not use your content for training');
     }
   );
 
-  it.each([ModelBackend.XAI, ModelBackend.BFL, ModelBackend.Kimi, ModelBackend.DeepSeek, ModelBackend.VoyageAI])(
-    'makes no training claim for %s, which the privacy page does not name',
-    backend => {
-      expect(getModelDataHandlingText(backend)).not.toContain('training');
-    }
-  );
+  // Gemini: the unpaid API tier allows training and the key may be a user's own. AWS (Transcribe):
+  // service improvement use is on unless the account opts out.
+  it.each([
+    ModelBackend.Gemini,
+    ModelBackend.AWS,
+    ModelBackend.XAI,
+    ModelBackend.BFL,
+    ModelBackend.Kimi,
+    ModelBackend.DeepSeek,
+    ModelBackend.VoyageAI,
+  ])('makes no training claim for %s', backend => {
+    expect(getModelDataHandlingText(route(backend))).not.toContain('training');
+  });
 
   it('names Bedrock, not the model maker, for a Bedrock-served model', () => {
-    expect(getModelDataHandlingText(ModelBackend.Bedrock)).not.toContain('Anthropic');
+    const text = getModelDataHandlingText({ id: 'global.anthropic.claude-haiku-5-5', backend: ModelBackend.Bedrock });
+    expect(text).not.toContain('Anthropic');
   });
 
   it.each(SELF_HOSTED)('names no third-party provider for %s', backend => {
-    expect(getModelDataHandlingText(backend)).toBe(
+    expect(getModelDataHandlingText(route(backend))).toBe(
       'This model runs on a self-hosted open-weight server, so no third-party model provider processes your session content.'
     );
   });
 
+  it.each(['gpt-oss:120b-cloud', 'glm-4.6:cloud'])('names Ollama for the Ollama cloud model %s', id => {
+    expect(getModelDataHandlingText({ id, backend: ModelBackend.Ollama })).toBe(
+      'This model is served by Ollama. Your session content is processed by Ollama under its API terms.'
+    );
+  });
+
+  it('keeps the self-hosted line for a local Ollama model whose name contains "cloud"', () => {
+    expect(getModelDataHandlingText({ id: 'cloudy-llama:7b', backend: ModelBackend.Ollama })).toContain('self-hosted');
+  });
+
   it('makes no training claim for an unrecognised backend', () => {
-    const text = getModelDataHandlingText('unknown' as ModelBackend);
+    const text = getModelDataHandlingText(route('unknown' as ModelBackend));
     expect(text).toBe("Your session content is processed by this model's provider under its API terms.");
   });
 });
 
 describe('ModelDataHandlingNotice', () => {
   it('renders the line with a link to the privacy page', () => {
-    render(<ModelDataHandlingNotice backend={ModelBackend.Anthropic} />, { wrapper: TestWrapper });
+    render(<ModelDataHandlingNotice model={route(ModelBackend.Anthropic)} />, { wrapper: TestWrapper });
 
     expect(screen.getByTestId('model-details-data-handling-notice')).toHaveTextContent(
       'This model is served by Anthropic.'

@@ -663,7 +663,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   // Provider and capability notices, rendered as one stacked block below the description.
   const notices: Array<{ key: string; content: React.ReactNode }> = [
     // Every model gets this line, named for the route that serves it (see ModelDataHandlingNotice).
-    { key: 'data-handling', content: <ModelDataHandlingNotice backend={modelInfo.backend} /> },
+    { key: 'data-handling', content: <ModelDataHandlingNotice model={modelInfo} /> },
     // The tools section is hidden outright for these models, so this line is the only
     // thing that explains the absence.
     ...(modelInfo.supportsTools ? [] : [{ key: 'no-tools', content: 'Selected AI model does not support tools' }]),
