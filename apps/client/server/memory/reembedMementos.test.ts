@@ -11,6 +11,16 @@ let chain: Array<Record<string, unknown>> = [];
 let dek: Buffer | null = Buffer.alloc(32);
 let missingKey: string | undefined;
 const rewriteEmbedding = vi.fn(async () => 1);
+const hasVector = (e: Record<string, unknown>) => Boolean(e.embeddingCipher && e.embeddingIv && e.embeddingTag);
+// A faithful projection: a fake that quietly returned the vectors anyway would let a two-pass bug pass.
+const listChain = vi.fn(async (_k: string, _i: string, _o: string, opts?: { withEmbeddings?: boolean }) =>
+  opts?.withEmbeddings === false
+    ? chain.map(({ embeddingCipher: _c, embeddingIv: _iv, embeddingTag: _t, ...rest }) => rest)
+    : chain
+);
+const listEmbeddings = vi.fn(async (_k: string, _i: string, _o: string, hashes: string[]) =>
+  chain.filter(e => hashes.includes(e.hash as string) && e.embeddingCipher)
+);
 // The key lookup is the first step of building the embedding service, so it stands in for the build.
 const getEffectiveLLMApiKeys = vi.fn(async (): Promise<Record<string, string>> => ({}));
 
@@ -23,7 +33,9 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: {},
   memoryLedgerRepository: {
-    listChain: async () => chain,
+    listChain: (...a: Parameters<typeof listChain>) => listChain(...a),
+    listHashesWithEmbedding: async () => chain.filter(hasVector).map(e => e.hash),
+    listEmbeddings: (...a: Parameters<typeof listEmbeddings>) => listEmbeddings(...a),
     rewriteEmbedding: (...a: unknown[]) => rewriteEmbedding(...(a as [])),
   },
   memoryPrincipalKeyRepository: {},
@@ -154,6 +166,8 @@ describe('migrateLedgerVectorsForPrincipal', () => {
     generateEmbedding.mockClear();
     rewriteEmbedding.mockReset();
     rewriteEmbedding.mockResolvedValue(1);
+    listChain.mockClear();
+    listEmbeddings.mockClear();
     chain = [];
     dek = Buffer.alloc(32);
     missingKey = undefined;
@@ -199,6 +213,37 @@ describe('migrateLedgerVectorsForPrincipal', () => {
       failed: 0,
     });
     expect(generateEmbedding.mock.calls).toEqual([['fact ada'], ['plain fact']]);
+  });
+
+  it.each([{}, { dryRun: true }])(
+    'reads the chain without vectors and fetches only truncation candidates %o',
+    async opts => {
+      chain = [
+        ev('cur', vec(PINNED)),
+        ev('full', vec('text-embedding-3-small')),
+        ev('ada', vec()),
+        ev('none'),
+        ev('ret', { kind: 'retract', ...vec('text-embedding-3-small') }),
+        ev('shr', { shredded: true, ...vec('text-embedding-3-small') }),
+      ];
+
+      const stats = await migrateLedgerVectorsForPrincipal(lake, opts);
+
+      expect(stats).toMatchObject({ alreadyCurrent: 1, truncated: 1, reembedded: 1, backfilled: 1, failed: 0 });
+      expect(listChain).toHaveBeenCalledWith('lake', 'lake:a', 'owner1', { withEmbeddings: false });
+      expect(listEmbeddings).toHaveBeenCalledTimes(1);
+      expect(listEmbeddings).toHaveBeenCalledWith('lake', 'lake:a', 'owner1', ['full']);
+    }
+  );
+
+  it('re-embeds a truncation candidate whose vector vanished between reads', async () => {
+    chain = [ev('full', vec('text-embedding-3-small'))];
+    listEmbeddings.mockResolvedValueOnce([]);
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake);
+
+    expect(stats).toMatchObject({ truncated: 0, reembedded: 1, failed: 0 });
+    expect(generateEmbedding).toHaveBeenCalledWith('fact full');
   });
 
   it('returns empty stats when the principal has no key', async () => {
