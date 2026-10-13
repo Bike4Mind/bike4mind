@@ -10,8 +10,10 @@
  * $inc. apps/client/server/billing/grantCreditPurchase.ts now wraps both in one transaction, but rows
  * written before that, or by any purchase grant that bypasses it, can hold no balance behind them.
  * The $inc stamps the user's lastCreditsPurchasedAt in the same update, so a stamp older than the
- * row (beyond clock-skew tolerance) means the increment never ran. A later purchase or admin grant
+ * row (beyond a small tolerance) means the increment never ran. A later purchase or admin grant
  * overwrites the stamp, so this can miss a failed increment; it is tuned not to flag an applied one.
+ * A row repaired by packages/scripts/src/auditPartialCreditPurchases.ts carries metadata.balanceBackfilledAt
+ * (that script does not stamp the user), so it is treated as applied.
  *
  * Read-only against Stripe and the ledger: it never grants, so a rerun only repeats the alert, and
  * an unresolved purchase is reported on every run whose window still covers it.
@@ -45,7 +47,7 @@ export const GRACE_MS = 30 * 60 * 1000;
 const PAGE_SIZE = 100;
 export const MAX_PAGES = 20;
 const MAX_ALERT_LINES = 20;
-// Row createdAt and lastCreditsPurchasedAt come from different hosts' clocks.
+// Slack for the row and the stamp being written by separate statements.
 export const CLOCK_SKEW_TOLERANCE_MS = 60 * 1000;
 
 // Derived rather than imported: the stripe package is a dependency of apps/client, not of workers.
@@ -58,7 +60,7 @@ const contextToLogs = (context: Context) => ({
   stage: Resource.App.stage,
 });
 
-export type UngrantedReason = 'no_transaction' | 'balance_not_applied';
+export type UngrantedReason = 'no_transaction' | 'balance_not_applied' | 'owner_missing';
 
 export interface UngrantedPurchase {
   paymentIntentId: string;
@@ -87,6 +89,7 @@ function isStageCreditPurchase(intent: PaymentIntent, stage: string): boolean {
 const REASON_LABELS: Record<UngrantedReason, string> = {
   no_transaction: 'no purchase transaction',
   balance_not_applied: 'transaction recorded but balance never credited',
+  owner_missing: 'transaction recorded but owner user no longer exists',
 };
 
 // The webhook only grants purchases to users, so other owner types are not balance-checked.
@@ -94,8 +97,10 @@ async function findUngrantedReason(intentId: string): Promise<UngrantedReason | 
   const tx = await creditTransactionRepository.findByPaymentIntentId(intentId);
   if (!tx) return 'no_transaction';
   if (tx.ownerType !== CreditHolderType.User) return null;
+  if (tx.metadata?.balanceBackfilledAt) return null;
   const owner = await userRepository.findById(tx.ownerId);
-  const appliedAt = owner?.lastCreditsPurchasedAt;
+  if (!owner) return 'owner_missing';
+  const appliedAt = owner.lastCreditsPurchasedAt;
   const applied = appliedAt && appliedAt.getTime() >= tx.createdAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
   return applied ? null : 'balance_not_applied';
 }
@@ -122,10 +127,13 @@ function formatAlert(stage: string, result: CreditPurchaseReconciliationResult):
       : []),
     ...(result.ungranted.some(p => p.reason === 'balance_not_applied')
       ? [
-          'Balance never credited: verify in Stripe, then add the credits with an admin credit adjustment. Do not ' +
-            're-grant the purchase (the row exists, so a redelivery will not grant). The adjustment is not a ' +
-            'purchase, so this alert repeats until the intent leaves the lookback window.',
+          'Balance never credited: check the user balance and credit ledger first, then add the credits with an ' +
+            'admin credit adjustment, which clears this alert on the next run. Do not re-grant the purchase (the ' +
+            'row exists, so a redelivery will not grant).',
         ]
+      : []),
+    ...(result.ungranted.some(p => p.reason === 'owner_missing')
+      ? ['Owner missing: the purchasing user was deleted; there is no balance to credit, so refund or review manually.']
       : []),
   ].join('\n');
 }

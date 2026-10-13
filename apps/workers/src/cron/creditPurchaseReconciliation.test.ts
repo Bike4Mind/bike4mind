@@ -62,6 +62,15 @@ import {
 
 const NOW = new Date('2026-10-11T07:00:00Z');
 
+const TX_CREATED_AT = new Date('2026-10-11T06:00:05Z');
+const purchaseRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 'tx_1',
+  ownerId: 'user_1',
+  ownerType: 'User',
+  createdAt: TX_CREATED_AT,
+  ...overrides,
+});
+
 const intent = (id: string, overrides: Record<string, unknown> = {}, metadata: Record<string, string> = {}) => ({
   id,
   status: 'succeeded',
@@ -101,7 +110,7 @@ describe('creditPurchaseReconciliation cron', () => {
 
   it('alerts on a succeeded credit purchase with no purchase transaction', async () => {
     mockList.mockResolvedValue({ data: [intent('pi_granted'), intent('pi_missing')], has_more: false });
-    mockFindByPaymentIntentId.mockImplementation(async (id: string) => (id === 'pi_granted' ? { id: 'tx_1' } : null));
+    mockFindByPaymentIntentId.mockImplementation(async (id: string) => (id === 'pi_granted' ? purchaseRow() : null));
 
     const result = await runCreditPurchaseReconciliation(undefined, NOW);
 
@@ -136,15 +145,6 @@ describe('creditPurchaseReconciliation cron', () => {
   });
 
   describe('purchase transaction exists', () => {
-    const TX_CREATED_AT = new Date('2026-10-11T06:00:05Z');
-    const purchaseRow = (overrides: Record<string, unknown> = {}) => ({
-      id: 'tx_1',
-      ownerId: 'user_1',
-      ownerType: 'User',
-      createdAt: TX_CREATED_AT,
-      ...overrides,
-    });
-
     beforeEach(() => {
       mockList.mockResolvedValue({ data: [intent('pi_1')], has_more: false });
       mockFindByPaymentIntentId.mockResolvedValue(purchaseRow());
@@ -171,7 +171,7 @@ describe('creditPurchaseReconciliation cron', () => {
       const message = mockPostMessageToSlack.mock.calls[0][0] as string;
       expect(message).toContain('pi_1 (transaction recorded but balance never credited)');
       expect(message).toContain('admin credit adjustment');
-      expect(message).not.toContain('clears this alert');
+      expect(message).toContain('clears this alert on the next run');
       expect(message).not.toContain('No purchase transaction:');
       expect(mockEmitMetric).toHaveBeenCalledWith(
         'Lumina5/CreditPurchases',
@@ -203,7 +203,24 @@ describe('creditPurchaseReconciliation cron', () => {
 
       const result = await runCreditPurchaseReconciliation(undefined, NOW);
 
-      expect(result.ungranted.map(p => p.reason)).toEqual(['balance_not_applied']);
+      expect(result.ungranted.map(p => p.reason)).toEqual(['owner_missing']);
+      expect(mockPostMessageToSlack.mock.calls[0][0]).toContain('Owner missing');
+    });
+
+    it('treats a row repaired by the audit script (balanceBackfilledAt) as applied', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(purchaseRow({ metadata: { balanceBackfilledAt: new Date() } }));
+      mockFindUserById.mockResolvedValue({ lastCreditsPurchasedAt: null });
+
+      const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+      expect(result.ungranted).toEqual([]);
+    });
+
+    it('fails loudly when the owner lookup rejects, without emitting a partial result', async () => {
+      mockFindUserById.mockRejectedValueOnce(new Error('db'));
+
+      await expect(runCreditPurchaseReconciliation(undefined, NOW)).rejects.toThrow('db');
+      expect(mockEmitMetric).not.toHaveBeenCalled();
     });
 
     it('skips the balance check for non-user owners', async () => {
@@ -230,7 +247,7 @@ describe('creditPurchaseReconciliation cron', () => {
       expect(message).toContain('pi_no_row (no purchase transaction)');
       expect(message).toContain('pi_no_balance (transaction recorded but balance never credited)');
       expect(message).toContain('No purchase transaction: verify in Stripe');
-      expect(message).toContain('Balance never credited: verify in Stripe');
+      expect(message).toContain('Balance never credited: check the user balance');
     });
   });
 
@@ -295,7 +312,7 @@ describe('creditPurchaseReconciliation cron', () => {
 
   it('connects to this stage database and reports the counts when configured', async () => {
     mockList.mockResolvedValue({ data: [intent('pi_granted'), intent('pi_missing')], has_more: false });
-    mockFindByPaymentIntentId.mockImplementation(async (id: string) => (id === 'pi_granted' ? { id: 'tx_1' } : null));
+    mockFindByPaymentIntentId.mockImplementation(async (id: string) => (id === 'pi_granted' ? purchaseRow() : null));
 
     const response = await handler(undefined, {} as never);
 

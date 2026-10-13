@@ -1,8 +1,16 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { CreditHolderType, CreditPurchaseStatus } from '@bike4mind/common';
-import { CreditTransaction, User, creditTransactionRepository, userRepository } from '@bike4mind/database';
-import { creditService } from '@bike4mind/services';
+import {
+  CreditTransaction,
+  Organization,
+  User,
+  creditTransactionRepository,
+  friendshipRepository,
+  userApiKeyRepository,
+  userRepository,
+} from '@bike4mind/database';
+import { creditService, userService } from '@bike4mind/services';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
@@ -105,28 +113,36 @@ describe('credit purchase reconciliation against the real ledger', () => {
     expect(mockPostMessageToSlack).not.toHaveBeenCalled();
   });
 
-  // Same addCredits call as the admin credit-adjustment path (userService/adminUpdate.ts): it heals
-  // the balance but is not a purchase, so it leaves lastCreditsPurchasedAt unset.
-  it('keeps flagging after an admin adjustment heals the balance', async () => {
+  it('stops flagging once an admin credit adjustment heals the balance', async () => {
     const userId = await seedUser();
+    const admin = await User.create({
+      username: `admin-${new mongoose.Types.ObjectId()}`,
+      name: 'Admin fixture',
+      isAdmin: true,
+    });
     vi.spyOn(userRepository, 'incrementCredits').mockRejectedValueOnce(new Error('fixture increment failure'));
     await expect(purchase(userId, 'pi_healed')).rejects.toThrow();
-    await creditService.addCredits(
+
+    stripeReturns(userId, 'pi_healed');
+    expect((await runCreditPurchaseReconciliation()).ungranted).toHaveLength(1);
+
+    await userService.adminUpdateUser(
+      String(admin._id),
+      { id: userId, creditDelta: 5000, creditReason: 'repair failed purchase increment' },
       {
-        type: 'generic_add',
-        reason: 'admin_adjustment',
-        ownerId: userId,
-        ownerType: CreditHolderType.User,
-        credits: 5000,
-        description: 'Admin credit adjustment',
-      },
-      adapters
+        db: {
+          users: userRepository,
+          organizations: Organization,
+          friendship: friendshipRepository,
+          userApiKeys: userApiKeyRepository,
+          creditTransactions: creditTransactionRepository,
+        },
+      }
     );
     expect((await User.findById(userId).lean())?.currentCredits).toBe(5100);
 
-    stripeReturns(userId, 'pi_healed');
     const result = await runCreditPurchaseReconciliation();
 
-    expect(result.ungranted).toEqual([expect.objectContaining({ reason: 'balance_not_applied' })]);
+    expect(result.ungranted).toEqual([]);
   });
 });
