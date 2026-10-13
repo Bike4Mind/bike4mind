@@ -348,6 +348,8 @@ describe('persistAgentArtifacts', () => {
     const count = vi.fn().mockResolvedValue(1);
     vi.doMock('@bike4mind/database', () => ({
       artifactRepository: { count },
+      artifactContentRepository: {},
+      artifactVersionRepository: {},
       adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(true) },
     }));
     vi.resetModules();
