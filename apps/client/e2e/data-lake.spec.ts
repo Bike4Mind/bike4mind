@@ -502,6 +502,7 @@ test.describe('Data Lake - research presets', () => {
     await expect(modal.getByTestId('datalake-research-cost-ceiling-input')).toHaveValue('0.25');
 
     await preset('deep').click();
+    await expect(preset('deep')).toHaveAttribute('aria-pressed', 'true');
     await expect(modal.getByTestId('datalake-research-max-results-input')).toHaveValue('50');
     await expect(modal.getByTestId('datalake-research-max-proposals-input')).toHaveValue('25');
     await expect(modal.getByTestId('datalake-research-cost-ceiling-input')).toHaveValue('1');
