@@ -29,10 +29,9 @@ import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
   OTC_LIMITS,
   OTC_VERIFY_EMAIL_BUDGETS,
-  chargeOtcEmailBudget,
   ipSubject,
   otcCounterLimit,
-  otcEmailBudgetRetryAfter,
+  reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
@@ -103,12 +102,14 @@ const handler = baseApi({ auth: false })
     }
 
     // Brute-force bound per (address, source) across every token; the per-token attempt cap alone
-    // resets with each new code. Only a wrong guess against a live token spends it, and another
-    // source's guesses never do (see OTC_VERIFY_EMAIL_BUDGETS); tokenless junk is bounded per IP.
+    // resets with each new code. The unit is reserved atomically before the compare so concurrent
+    // guesses cannot overshoot the limit, then refunded unless the guess was wrong against a live
+    // token: another source's guesses never spend it (see OTC_VERIFY_EMAIL_BUDGETS) and tokenless
+    // junk is bounded per IP.
     const ipBucket = ipSubject(req);
-    const budgetRetryAfter = await otcEmailBudgetRetryAfter(normalizedEmail, ipBucket, OTC_VERIFY_EMAIL_BUDGETS);
-    if (budgetRetryAfter !== undefined) {
-      res.setHeader('Retry-After', String(budgetRetryAfter));
+    const budget = await reserveOtcEmailBudget(normalizedEmail, ipBucket, OTC_VERIFY_EMAIL_BUDGETS);
+    if ('retryAfter' in budget) {
+      res.setHeader('Retry-After', String(budget.retryAfter));
       return res.status(429).json({ error: 'Too many attempts. Please try again later.' });
     }
 
@@ -122,12 +123,12 @@ const handler = baseApi({ auth: false })
       newNonce
     );
     if (!nonceValid) {
+      await budget.refund();
       throw new UnprocessableEntityError('Invalid code.');
     }
 
     const isValid = await userService.verifyPendingOTC(code, tokenPayload.otcHash);
     if (!isValid) {
-      await chargeOtcEmailBudget(normalizedEmail, ipBucket, OTC_VERIFY_EMAIL_BUDGETS);
       // Re-issue the token with an incremented attempt count + the rotated nonce so
       // the user can retry. Identical response for existing and non-existent accounts
       // (no existence lookup has happened yet).
@@ -145,8 +146,16 @@ const handler = baseApi({ auth: false })
     }
 
     // --- CODE PROVEN - only the email owner can reach here. Branch on existence now. ---
+    // A correct code costs nothing against the guess budget.
+    await budget.refund();
     // Up to MAX_LIVE_OTC_CODES codes stay live per address; a proven one retires the rest.
-    await pendingOtcTokenRepository.consumeOtherCodes(normalizedEmail, newNonce);
+    // Best-effort like the writes below: the nonce is already rotated, so a failure here must not
+    // 500 a proven login. Leftover codes still expire and are capped per address.
+    try {
+      await pendingOtcTokenRepository.consumeOtherCodes(normalizedEmail, newNonce);
+    } catch (err) {
+      req.logger.error('OTC login consumeOtherCodes failed', err);
+    }
     const existingUser = await userRepository.findByEmail(normalizedEmail);
 
     if (existingUser) {

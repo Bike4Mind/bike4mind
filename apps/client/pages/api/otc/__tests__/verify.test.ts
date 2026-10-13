@@ -58,7 +58,12 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 const mockFindByEmail = vi.fn();
 const mockValidateNonce = vi.fn();
 const mockConsumeOtherCodes = vi.fn();
-const mockTryIncrement = vi.fn();
+const mockTryIncrement = vi.fn(async (_key: string, _limit: number, _ttlMs: number) => ({
+  success: true,
+  count: 1,
+  expiresAt: new Date(Date.now() + 60_000),
+}));
+const mockDecrement = vi.fn();
 const mockTryAdd = vi.fn(async (_key: string, _amount: number, _limit: number, _ttlMs: number) => ({
   success: true,
   count: 0,
@@ -67,6 +72,7 @@ const mockTryAdd = vi.fn(async (_key: string, _amount: number, _limit: number, _
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: (...a: any[]) => mockTryIncrement(...a),
+    decrementCounter: (...a: any[]) => mockDecrement(...a),
     tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a),
   },
   adminSettingsRepository: { findBySettingName: vi.fn() },
@@ -199,7 +205,8 @@ describe('/api/otc/verify per-email budget', () => {
     req.body.pendingToken = undefined;
     await expect(handler(req, res)).rejects.toThrow();
 
-    expect(mockTryIncrement).not.toHaveBeenCalled();
+    // The unit is reserved up front and handed back once the nonce proves stale.
+    expect(mockDecrement).toHaveBeenCalledTimes(mockTryIncrement.mock.calls.length);
   });
 
   it('spends the budget on a wrong guess against a live token', async () => {
@@ -235,6 +242,9 @@ describe('/api/otc/verify per-email budget', () => {
         if (count + 1 > limit) return { success: false, count, expiresAt: window() };
         counts.set(key, count + 1);
         return { success: true, count: count + 1, expiresAt: window() };
+      });
+      mockDecrement.mockImplementation(async (key: string) => {
+        counts.set(key, (counts.get(key) ?? 0) - 1);
       });
       mockTryAdd.mockImplementation(async (key: string) => ({
         success: true,
@@ -275,6 +285,23 @@ describe('/api/otc/verify per-email budget', () => {
       expect(refused.getHeader('Retry-After')).toBeDefined();
       expect(mockVerifyPendingOTC).toHaveBeenCalledTimes(limit);
     });
+
+    it('cannot overshoot the limit under concurrent wrong guesses', async () => {
+      const { limit } = OTC_LIMITS.verify.perEmailPerIp;
+      const results = await Promise.all(Array.from({ length: limit + 3 }, () => verifyFrom(OWNER_IP)));
+      const statuses = results.map(r => r._getStatusCode());
+      expect(statuses.filter(c => c === 422)).toHaveLength(limit);
+      expect(statuses.filter(c => c === 429)).toHaveLength(3);
+      expect(mockVerifyPendingOTC).toHaveBeenCalledTimes(limit);
+      expect(counts.get(budgetKeyFor(NON_DOMAIN_EMAIL, OWNER_IP))).toBe(limit);
+    });
+
+    it('refunds a correct code so it leaves the budget untouched', async () => {
+      mockVerifyPendingOTC.mockResolvedValue(true);
+      mockFindByEmail.mockResolvedValue(null);
+      expect((await verifyFrom(OWNER_IP))._getStatusCode()).toBe(200);
+      expect(counts.get(budgetKeyFor(NON_DOMAIN_EMAIL, OWNER_IP))).toBe(0);
+    });
   });
 
   it('does not spend the budget on a correct code', async () => {
@@ -285,30 +312,30 @@ describe('/api/otc/verify per-email budget', () => {
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockTryIncrement).not.toHaveBeenCalled();
+    expect(mockDecrement).toHaveBeenCalledTimes(mockTryIncrement.mock.calls.length);
+    expect(mockDecrement).toHaveBeenCalledWith(budgetKey);
   });
 
   it('refuses with 429 and Retry-After before evaluating a guess once the budget is spent', async () => {
-    mockTryAdd.mockImplementation(async (_key, _amount, limit) => ({
-      success: true,
-      count: limit,
+    mockTryIncrement.mockResolvedValue({
+      success: false,
+      count: OTC_LIMITS.verify.perEmailPerIp.limit,
       expiresAt: new Date(Date.now() + 60_000),
-    }));
+    });
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(429);
     expect(res.getHeader('Retry-After')).toBeDefined();
-    expect(mockTryAdd).toHaveBeenCalledWith(budgetKey, 0, OTC_LIMITS.verify.perEmailPerIp.limit, expect.anything());
     expect(mockValidateNonce).not.toHaveBeenCalled();
     expect(mockVerifyPendingOTC).not.toHaveBeenCalled();
-    expect(mockTryIncrement).not.toHaveBeenCalled();
   });
 });
 
 describe('/api/otc/verify — domain-grant signup credits (Register now flow)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
     mockValidateNonce.mockResolvedValue(true);
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockFindByEmail.mockResolvedValue(null); // new user -> registration branch
@@ -532,6 +559,17 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().user.id).toBe('user-1');
     expect((req as any).logger.error).toHaveBeenCalled();
+  });
+
+  it('still logs the user in when consumeOtherCodes throws, and logs the error', async () => {
+    mockConsumeOtherCodes.mockRejectedValueOnce(new Error('db down'));
+    mockFindByEmail.mockResolvedValue(null);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect((req as any).logger.error).toHaveBeenCalledWith('OTC login consumeOtherCodes failed', expect.any(Error));
   });
 
   it('grants the DB rule signupCredits (per-partner amount) over the env amount', async () => {
