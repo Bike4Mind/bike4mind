@@ -14,6 +14,8 @@ vi.mock('@bike4mind/database', () => ({
   },
   questRepository: { findById: mocks.questFindById },
   artifactRepository: { findOne: mocks.artifactFindOne },
+  artifactContentRepository: {},
+  artifactVersionRepository: {},
 }));
 
 import {

@@ -1,31 +1,19 @@
-import { questRepository, sessionRepository, artifactRepository } from '@bike4mind/database';
+import { artifactRepository, questRepository, sessionRepository } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
-import {
-  assertArtifactSourceRefsAccessible,
-  type ArtifactRefAccessDeps,
-  type ArtifactSourceRefs,
-} from '@server/utils/assertArtifactSourceRefsAccessible';
+import type { artifactService } from '@bike4mind/services';
+import { assertArtifactSourceRefsAccessible } from '@server/utils/assertArtifactSourceRefsAccessible';
+import { artifactSourceRefDeps } from '@server/artifacts/artifactAccess';
 
-type ArtifactSourceRefsGuard = (userId: string, refs: ArtifactSourceRefs) => Promise<void>;
-
-/** Quest and parent-artifact lookups are the same for every guard; only session access differs. */
-function buildRefAccessDeps(canUpdateSession: (sessionId: string) => Promise<boolean>): ArtifactRefAccessDeps {
-  return {
-    canUpdateSession,
-    getQuestSessionId: async id => (await questRepository.findById(id))?.sessionId ?? null,
-    getArtifactOwner: async id => (await artifactRepository.findOne({ id }))?.userId ?? null,
-  };
-}
+type ArtifactSourceRefsGuard = artifactService.ArtifactSourceRefsGuard;
+type GuardUser = Parameters<typeof artifactSourceRefDeps>[0];
 
 /**
  * Ref guard for a create made on behalf of `user`: session access is the session repo's update
  * predicate (owner, update/group-update share, or global-write share), quests resolve through
  * their session, and a parent artifact must be the actor's own.
  */
-export function createArtifactSourceRefsGuard(user: IUserDocument): ArtifactSourceRefsGuard {
-  const deps = buildRefAccessDeps(
-    async id => !!(await sessionRepository.shareable.findUpdateAccessById(user, id, { includeGlobalWrite: true }))
-  );
+export function createArtifactSourceRefsGuard(user: GuardUser): ArtifactSourceRefsGuard {
+  const deps = artifactSourceRefDeps(user);
   return (userId, refs) => assertArtifactSourceRefsAccessible(userId, refs, deps);
 }
 
@@ -36,11 +24,11 @@ export function createArtifactSourceRefsGuard(user: IUserDocument): ArtifactSour
  */
 export function createOwnedArtifactSourceRefsGuard(): ArtifactSourceRefsGuard {
   return (userId, refs) =>
-    assertArtifactSourceRefsAccessible(
-      userId,
-      refs,
-      buildRefAccessDeps(async id => (await sessionRepository.findById(id))?.userId === userId)
-    );
+    assertArtifactSourceRefsAccessible(userId, refs, {
+      canUpdateSession: async id => (await sessionRepository.findById(id))?.userId === userId,
+      getQuestSessionId: async id => (await questRepository.findById(id))?.sessionId ?? null,
+      getArtifactOwner: async id => (await artifactRepository.findOne({ id }))?.userId ?? null,
+    });
 }
 
 /**
