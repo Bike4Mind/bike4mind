@@ -1,0 +1,156 @@
+import {
+  dataLakeRepository,
+  dataLakeBatchRepository,
+  dataLakeAccessGrantRepository,
+  dataLakeCorpusActionRepository,
+  dataLakeFindingRepository,
+  dataLakeProposalRepository,
+  dataLakeResearchConfigRepository,
+  dataLakeResearchRunRepository,
+  lakeMembershipDecisionRepository,
+  fabFileRepository,
+  fabFileChunkRepository,
+  memoryLedgerRepository,
+  memoryPrincipalKeyRepository,
+} from '@bike4mind/database';
+import { dataLakeService } from '@bike4mind/services';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
+import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
+import { releaseDriveConnectionForLake } from '@server/integrations/google/drive/common';
+import { releaseGitHubLakeConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
+import { createKeyProvider } from '@server/memory/factCipher';
+import { getFilesStorage } from '@server/utils/storage';
+import { BadRequestError } from '@bike4mind/utils';
+import { ZodError } from 'zod';
+import { CleanupPayload } from '@server/dataLakes/dataLakeCleanupPayload';
+
+/**
+ * Background consumer for the phase-2 data-lake hard-delete sweep, offloaded off the request path
+ * (a large lake can blow the request Lambda's timeout). Re-runs the same guarded, idempotent
+ * `cleanupDeletedDataLake` service, so a duplicate/stale delivery is safe.
+ */
+export const dispatch = dispatchWithLogger(async (event, context, logger) => {
+  // Hoisted so the catch can name the lake it is releasing. Stays undefined when parsing itself
+  // failed, which is exactly the case that has no purge to release.
+  let parsedLakeId: string | undefined;
+  let parsedClaimId: string | undefined;
+  try {
+    // Parse INSIDE the try: a malformed body (bad JSON / wrong shape) is permanently invalid, so
+    // it must be swallowed like the other permanent errors below, not retried into the DLQ.
+    const { dataLakeId, actor, purgeClaimId } = CleanupPayload.parse(JSON.parse(event.Records[0].body));
+    parsedLakeId = dataLakeId;
+    parsedClaimId = purgeClaimId;
+    logger.updateMetadata({ handler: 'dataLakeCleanup', dataLakeId, userId: actor.userId });
+
+    await dataLakeService.cleanupDeletedDataLake(actor, dataLakeId, {
+      purgeClaimId,
+      beginPurge: () => dataLakeRepository.beginPurgeExecution(dataLakeId, purgeClaimId),
+      deleteFileAndChunks: id => fabFileRepository.hardDeleteWithChunks(id),
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        dataLakeProposals: dataLakeProposalRepository,
+        dataLakeFindings: dataLakeFindingRepository,
+        dataLakeCorpusActions: dataLakeCorpusActionRepository,
+        dataLakeResearchConfigs: dataLakeResearchConfigRepository,
+        dataLakeResearchRuns: dataLakeResearchRunRepository,
+        lakeMembershipDecisions: lakeMembershipDecisionRepository,
+        batches: dataLakeBatchRepository,
+        fabFiles: fabFileRepository,
+        fabFileChunks: fabFileChunkRepository,
+      },
+      // Deletes each purged file's stored object(s) before its row. Needs `fabFileBucket` linked on
+      // this subscriber (infra/queues.ts); unlinked, this throws and every purge lands in the DLQ.
+      storage: getFilesStorage(),
+      // Undefined everywhere except self-host OpenSearch - Atlas's vector index lives on the
+      // FabFileChunk collection itself, so the chunk-sweep two steps below already removes it.
+      retrievalIndex: selfHostOpenSearchEnabled()
+        ? dataLakeService.openSearchRetrievalIndex({
+            db: { fabFileChunks: fabFileChunkRepository },
+            searchIndex: FabFileChunkSearchIndex,
+          })
+        : undefined,
+      // Crypto-shred the lake's memory profile as part of the purge - destroy the DEK and mark
+      // the ledger shredded, so a deleted lake leaves no readable belief ledger behind.
+      //
+      // LOG IT. This is a data-retention operation, and until it logged, a successful shred and a
+      // shred that never ran were indistinguishable from the outside: the port is optional, so a host
+      // that failed to wire it would still exit 0 and look identical in CloudWatch. Verified live on a
+      // preview - the cleanup Lambda ran clean and emitted nothing, which is exactly the evidence gap
+      // this closes. The log is the only artifact that says a given lake's beliefs were destroyed.
+      shredMemory: async ({ datalakeTag, ownerUserId }) => {
+        await shredPrincipalMemory(
+          memoryLedgerRepository,
+          createKeyProvider(memoryPrincipalKeyRepository),
+          { kind: 'lake', id: datalakeTag },
+          ownerUserId
+        );
+        // Raise the purge fence too, so an extraction already in flight stops instead of re-appending
+        // facts under a fresh DEK for the rest of the sweep. The lake RECORD is what the fence lives
+        // on and it survives until step 5, several unbounded chunked deletes from here, so `exists`
+        // alone does not cover this window. Best-effort: the shred above is the irreversible half and
+        // has already succeeded, so a failed stamp must not abort the sweep and send it to the DLQ.
+        await dataLakeRepository.stampLakeMemoryPurge(dataLakeId, new Date()).catch(error => {
+          logger.error('[lakeMemory] could not raise the purge fence for a lake being deleted', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            dataLakeId,
+          });
+        });
+        logger.info('[lakeMemory] crypto-shredded the lake memory profile', { datalakeTag, ownerUserId });
+      },
+      // Release the lake's Drive folder claim as part of the purge. Wired here for the same reason as
+      // shredMemory: the revoke needs the app layer's crypto. LOG IT - the row's driveFolderId is
+      // globally unique and unreachable once the lake is gone, so "the folder is free again" is a
+      // claim an operator has to be able to check after the fact.
+      releaseDriveConnection: async ({ dataLakeId }) => {
+        const released = await releaseDriveConnectionForLake(dataLakeId);
+        if (released) {
+          logger.info('[driveLake] released the purged lake Drive connection and its folder claim', { dataLakeId });
+        }
+      },
+      releaseGitHubConnection: async ({ dataLakeId }) => {
+        const released = await releaseGitHubLakeConnectionForLake(dataLakeId);
+        if (released) {
+          logger.info('[githubLake] released the purged lake GitHub connection and its repository claim', {
+            dataLakeId,
+            installationRetained: released.installationRetained,
+          });
+        }
+      },
+      logger,
+    });
+  } catch (err) {
+    // Release only an unstarted matching generation. Started cleanup must remain replayable and hidden.
+    if (err instanceof BadRequestError) {
+      if (parsedLakeId) {
+        const released = await dataLakeRepository.releasePurgingToDeleted(parsedLakeId, parsedClaimId);
+        if (released) {
+          logger.error('[dataLakes] cleanup guard refused; releasing the accepted purge', {
+            dataLakeId: parsedLakeId,
+            purgeClaimId: parsedClaimId,
+            reason: err.message,
+          });
+          return;
+        }
+        const lake = await dataLakeRepository.findById(parsedLakeId);
+        if (lake?.purgeStartedAt && lake.purgeClaimId === parsedClaimId) throw err;
+      }
+      logger.warn('[dataLakes] skipping refused cleanup generation without releasing another claim', {
+        dataLakeId: parsedLakeId,
+        purgeClaimId: parsedClaimId,
+        reason: err.message,
+      });
+      return;
+    }
+    // Malformed payload (SyntaxError/ZodError): permanently invalid and unattributable - there is no
+    // lake id to release, since parsing it is what failed. Retrying cannot fix it, so swallow with a
+    // WARN rather than burn retries into the DLQ.
+    if (err instanceof ZodError || err instanceof SyntaxError) {
+      logger.warn(`Skipping data-lake cleanup message: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    throw err;
+  }
+});

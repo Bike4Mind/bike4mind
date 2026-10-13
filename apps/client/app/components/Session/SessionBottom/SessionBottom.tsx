@@ -59,6 +59,7 @@ import { ContextUsageWarning } from '../ContextUsageWarning';
 import { useAttachmentFitWarning } from '@client/app/hooks/useAttachmentFitWarning';
 import { ContextCompactionNote } from '../ContextCompactionNote';
 import { MemberCreditBudgetNote } from '../MemberCreditBudgetNote';
+import { CreditPayerNote } from '../CreditPayerNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
@@ -389,7 +390,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const sendBlockedReason = getSendBlockedReason({
     isGenerating: shouldShowStopButton,
     submitting,
-    isModelsLoading,
+    // Until LLMProvider resolves the default there is no model to send with; hold the send rather
+    // than let it run on whatever the store held before the account's own default arrived.
+    isModelsLoading: isModelsLoading || (hasModels && !model),
     isModelsError,
     hasModels,
     isSocketOpen: readyState === ReadyState.OPEN,
@@ -653,6 +656,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   onDismiss={() => setCompactionNoteDismissed(true)}
                 />
                 {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
+                {!creditUi.replaceComposer && <CreditPayerNote session={currentSession} />}
                 {creditUi.replaceComposer ? (
                   <CreditsWarning show />
                 ) : (

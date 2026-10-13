@@ -1,6 +1,7 @@
 // Purchase conversion tracking: fires the GA4 `purchase` event and the Reddit
 // `Purchase` / Meta `Subscribe` conversions when a subscription checkout
-// completes, stamped with the same acquisition attribution as signup (see
+// completes, and the same with Meta `Purchase` when a credit purchase does,
+// stamped with the same acquisition attribution as signup (see
 // attributionCookies.ts). Meta's standard event for a recurring plan is
 // `Subscribe`, not `Purchase` - using the wrong name leaves Events Manager
 // with a custom event that campaigns cannot optimize toward.
@@ -10,10 +11,11 @@
 // optimized toward cheap clicks, never toward customers.
 //
 // The figures are NOT taken from the browser. The caller reads them from the
-// Stripe checkout session server-side (see pages/api/subscriptions/
-// checkout-session.ts) because a value that came from a URL or from client
-// storage could be forged, and forged revenue in the ad platforms is worse than
-// no revenue at all - it would train bidding on fiction.
+// Stripe checkout session or payment intent server-side (see pages/api/
+// subscriptions/checkout-session.ts and pages/api/stripe/payment-intent.ts)
+// because a value that came from a URL or from client storage could be
+// forged, and forged revenue in the ad platforms is worse than no revenue at
+// all - it would train bidding on fiction.
 //
 // Consent is handled upstream: GA4 runs in consent mode and both ad pixel
 // scripts are consent-deferred, so calling this is safe in any consent state.
@@ -37,6 +39,11 @@ export interface PurchaseConversion {
   planName?: string;
   /** Seats/units purchased. Defaults to 1. */
   quantity?: number;
+  /**
+   * What was bought. A subscription is Meta's `Subscribe`; a one-off credit
+   * purchase is a plain `Purchase` there. Defaults to subscription.
+   */
+  kind?: 'subscription' | 'credits';
 }
 
 /**
@@ -48,7 +55,7 @@ export interface PurchaseConversion {
 export function trackPurchaseConversion(purchase: PurchaseConversion): void {
   if (typeof window === 'undefined') return;
 
-  const { transactionId, value, currency, priceId, planName, quantity = 1 } = purchase;
+  const { transactionId, value, currency, priceId, planName, quantity = 1, kind = 'subscription' } = purchase;
 
   if (typeof gtag !== 'undefined') {
     const params: Record<string, unknown> = {
@@ -73,5 +80,5 @@ export function trackPurchaseConversion(purchase: PurchaseConversion): void {
   }
 
   trackRedditEvent('Purchase', { value, currency, transactionId });
-  trackMetaEvent('Subscribe', { value, currency, eventId: transactionId });
+  trackMetaEvent(kind === 'credits' ? 'Purchase' : 'Subscribe', { value, currency, eventId: transactionId });
 }

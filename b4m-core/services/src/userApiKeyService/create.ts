@@ -16,7 +16,6 @@ import {
 import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { encryptAtRest } from '@bike4mind/utils/security';
 import { randomBytes } from 'crypto';
-import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
 import { API_KEY_RATE_LIMIT_DEFAULTS, apiKeyRateLimitSchema } from './rateLimit';
@@ -141,14 +140,13 @@ export interface CreateUserApiKeyResult {
 /**
  * Generate a secure API key with the format: b4m_live_[32_random_chars]
  */
-function generateApiKey(): { key: string; keyPrefix: string; keyHash: string; keyDigest: string } {
+function generateApiKey(): { key: string; keyPrefix: string; keyDigest: string } {
   const randomPart = randomBytes(16).toString('hex'); // 32 chars
   const key = `b4m_live_${randomPart}`;
   const keyPrefix = key.substring(0, KEY_PREFIX_LENGTH);
-  const keyHash = bcrypt.hashSync(key, 12);
   const keyDigest = computeKeyDigest(key);
 
-  return { key, keyPrefix, keyHash, keyDigest };
+  return { key, keyPrefix, keyDigest };
 }
 
 export const createUserApiKey = async (
@@ -268,7 +266,7 @@ export const createUserApiKey = async (
   const pool = isExchangeKey ? 'oauth-exchange' : 'standard';
   const cap = isExchangeKey ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER : MAX_ACTIVE_KEYS_PER_USER;
 
-  const { key, keyPrefix, keyHash, keyDigest } = generateApiKey();
+  const { key, keyPrefix, keyDigest } = generateApiKey();
   const callbackSigningSecret = generateCallbackSigningSecret();
 
   const rateLimit = params.rateLimit || API_KEY_RATE_LIMIT_DEFAULTS;
@@ -276,7 +274,6 @@ export const createUserApiKey = async (
   const docToCreate = {
     userId,
     name: params.name,
-    keyHash,
     keyDigest,
     keyPrefix,
     callbackSigningSecret: encryptAtRest(callbackSigningSecret),

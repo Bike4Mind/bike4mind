@@ -15,7 +15,7 @@ const WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL_SLOW_RESPONSES || '';
  *   prompt_tokens_details.cached_tokens is captured but deliberately not
  *   forwarded), so every turn bills the full input rate. Whether that is
  *   correct COGS or an overcharge is still open.
- * - Claude 4.7 Opus averages ~50 whenever warmup.setup.ts's warm has aged past
+ * - Claude Opus 4.7 averages ~50 whenever warmup.setup.ts's warm has aged past
  *   the 5m prompt-cache TTL: run 1 re-pays the 1.25x cache write (~91 credits)
  *   and run 2 reads it back (~8). Cold/warm differ by ~12.5x, which is the
  *   cache multipliers, not prompt growth.

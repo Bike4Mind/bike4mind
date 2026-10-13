@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Box,
   Card,
@@ -29,12 +29,14 @@ import { useUser } from '@client/app/contexts/UserContext';
 import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy/styles';
 import { useTranslation } from 'react-i18next';
-import { getModels } from '@client/app/utils/llm';
-import { ModelInfo, resolveModelName, usdToCredits } from '@bike4mind/common';
+import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
+import { ModelBackend, ModelInfo, resolveModelName, usdToCredits } from '@bike4mind/common';
+import { dedupePricingRows, textModelPriceCells } from './modelPricingRows';
 import SectionContainer from './SectionContainer';
 import { TYPE } from './settingsStyles';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import { FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
+import { computeBurnStats, MIN_DAYS_FOR_PROJECTION } from './creditBurnRate';
 
 const TIME_PERIODS = {
   WEEK: '7d',
@@ -49,9 +51,14 @@ const CreditAnalyticsTabContent: React.FC = () => {
   const { currentUser } = useUser();
   const [timePeriod, setTimePeriod] = useState(TIME_PERIODS.MONTH);
   const [viewMode, setViewMode] = useState<'credits_added' | 'usage' | 'all_types'>('usage');
-  const [models, setModels] = useState<ModelInfo[]>([]);
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
-  const [modelLoadError, setModelLoadError] = useState<string | null>(null);
+  // The picker's own list, so the table prices exactly the models (and names) a user can pick.
+  const {
+    accessibleTextModels,
+    accessibleImageModels,
+    isLoading: isLoadingModels,
+    isModelsError,
+  } = useAccessibleModels();
+  const modelLoadError = isModelsError ? 'Failed to load model pricing information' : null;
 
   const {
     data: transactions,
@@ -62,28 +69,8 @@ const CreditAnalyticsTabContent: React.FC = () => {
     days: parseInt(timePeriod, 10),
   });
 
-  // Fetch model pricing on mount. The parent gates mount on the Usage tab being active,
-  // so on-mount == on-tab-open.
-  useEffect(() => {
-    const fetchModels = async () => {
-      setIsLoadingModels(true);
-      setModelLoadError(null);
-      try {
-        const modelsData = await getModels();
-        setModels(modelsData);
-      } catch (error) {
-        console.error('Failed to fetch models:', error);
-        setModelLoadError('Failed to load model pricing information');
-      } finally {
-        setIsLoadingModels(false);
-      }
-    };
-
-    fetchModels();
-  }, []);
-
   // Process transactions for the chart
-  const { chartData, usageByModel, burnRate, usageTrend, daysRemaining } = useMemo(() => {
+  const { chartData, usageByModel, burnRate, usageTrend, daysRemaining, observedDays } = useMemo(() => {
     if (!transactions || transactions.length === 0) {
       return {
         chartData: [],
@@ -91,6 +78,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
         burnRate: 0,
         usageTrend: 'stable',
         daysRemaining: null,
+        observedDays: 0,
       };
     }
 
@@ -112,6 +100,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const genericDeductTransactions = sortedTransactions.filter(t => t.type === 'generic_deduct');
     const textUsageTransactions = sortedTransactions.filter(t => t.type === 'text_generation_usage');
     const completionApiUsageTransactions = sortedTransactions.filter(t => t.type === 'completion_api_usage');
+    const decisionUsageTransactions = sortedTransactions.filter(t => t.type === 'decision_usage');
     const imageUsageTransactions = sortedTransactions.filter(t => t.type === 'image_generation_usage');
     const imageEditUsageTransactions = sortedTransactions.filter(t => t.type === 'image_edit_usage');
     const voiceUsageTransactions = sortedTransactions.filter(t => t.type === 'realtime_voice_usage');
@@ -126,6 +115,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...genericDeductTransactions,
       ...textUsageTransactions,
       ...completionApiUsageTransactions,
+      ...decisionUsageTransactions,
       ...imageUsageTransactions,
       ...imageEditUsageTransactions,
       ...voiceUsageTransactions,
@@ -136,54 +126,12 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...musicUsageTransactions,
     ];
 
-    // Calculate burn rate (average daily usage)
-    let burnRate = 0;
-    let usageTrend: 'increasing' | 'decreasing' | 'stable' = 'stable';
-    let daysRemaining: number | null = null;
-
-    if (allDeductTransactions.length > 0) {
-      // Total credits used (as positive numbers)
-      const totalUsage = allDeductTransactions.reduce((sum, t) => sum + Math.abs(t.credits), 0);
-
-      const daysDiff = Math.max(1, endDate.diff(startDate, 'day'));
-      burnRate = totalUsage / daysDiff;
-
-      // Calculate trend by comparing first half to second half of the period
-      if (daysDiff >= 6) {
-        // Only calculate trend if we have at least 6 days of data
-        const midPoint = startDate.add(Math.floor(daysDiff / 2), 'day');
-
-        const firstHalfTransactions = allDeductTransactions.filter(t => dayjs(t.createdAt).isBefore(midPoint));
-
-        const secondHalfTransactions = allDeductTransactions.filter(
-          t => dayjs(t.createdAt).isAfter(midPoint) || dayjs(t.createdAt).isSame(midPoint, 'day')
-        );
-
-        const firstHalfUsage = firstHalfTransactions.reduce((sum, t) => sum + Math.abs(t.credits), 0);
-        const secondHalfUsage = secondHalfTransactions.reduce((sum, t) => sum + Math.abs(t.credits), 0);
-
-        // Calculate daily rates for each half
-        const firstHalfDays = Math.max(1, midPoint.diff(startDate, 'day'));
-        const secondHalfDays = Math.max(1, endDate.diff(midPoint, 'day'));
-
-        const firstHalfRate = firstHalfUsage / firstHalfDays;
-        const secondHalfRate = secondHalfUsage / secondHalfDays;
-
-        // Determine trend with 10% threshold for meaningful change
-        const changePercent = ((secondHalfRate - firstHalfRate) / firstHalfRate) * 100;
-
-        if (changePercent > 10) {
-          usageTrend = 'increasing';
-        } else if (changePercent < -10) {
-          usageTrend = 'decreasing';
-        }
-      }
-
-      // Calculate estimated days remaining based on current balance and burn rate
-      if (burnRate > 0 && currentUser?.currentCredits) {
-        daysRemaining = Math.floor(currentUser.currentCredits / burnRate);
-      }
-    }
+    const { burnRate, usageTrend, daysRemaining, observedDays } = computeBurnStats({
+      usage: allDeductTransactions,
+      periodDays: parseInt(timePeriod, 10),
+      accountCreatedAt: currentUser?.createdAt,
+      balance: currentUser?.currentCredits,
+    });
 
     const modelUsageMap: Record<string, number> = {};
 
@@ -210,6 +158,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const speechToTextUsageDailyData = new Map<string, { x: string; y: number }>();
     const textToSpeechUsageDailyData = new Map<string, { x: string; y: number }>();
     const soundEffectsUsageDailyData = new Map<string, { x: string; y: number }>();
+    const decisionUsageDailyData = new Map<string, { x: string; y: number }>();
     const musicUsageDailyData = new Map<string, { x: string; y: number }>();
     const creditsAddedDailyData = new Map<string, { x: string; y: number }>(); // Combined purchases, subscriptions, and generic adds
     const allUsageDailyData = new Map<string, { x: string; y: number }>(); // Combined all usage types including generic deducts
@@ -245,6 +194,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     processTransactionType(textToSpeechUsageTransactions, textToSpeechUsageDailyData);
     processTransactionType(soundEffectsUsageTransactions, soundEffectsUsageDailyData);
     processTransactionType(musicUsageTransactions, musicUsageDailyData);
+    processTransactionType(decisionUsageTransactions, decisionUsageDailyData);
 
     // Create combined credits added (purchases + subscriptions + generic adds)
     [...purchaseTransactions, ...subscriptionTransactions, ...genericAddTransactions].forEach(transaction => {
@@ -261,6 +211,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...genericDeductTransactions,
       ...textUsageTransactions,
       ...completionApiUsageTransactions,
+      ...decisionUsageTransactions,
       ...imageUsageTransactions,
       ...imageEditUsageTransactions,
       ...voiceUsageTransactions,
@@ -298,6 +249,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
         textToSpeechUsageDailyData,
         soundEffectsUsageDailyData,
         musicUsageDailyData,
+        decisionUsageDailyData,
         creditsAddedDailyData,
         allUsageDailyData,
       ].forEach(dataMap => {
@@ -327,6 +279,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const textToSpeechUsageDataPoints = sortDataPoints(textToSpeechUsageDailyData);
     const soundEffectsUsageDataPoints = sortDataPoints(soundEffectsUsageDailyData);
     const musicUsageDataPoints = sortDataPoints(musicUsageDailyData);
+    const decisionUsageDataPoints = sortDataPoints(decisionUsageDailyData);
     const creditsAddedDataPoints = sortDataPoints(creditsAddedDailyData);
     const allUsageDataPoints = sortDataPoints(allUsageDailyData);
 
@@ -469,6 +422,14 @@ const CreditAnalyticsTabContent: React.FC = () => {
         });
       }
 
+      if (decisionUsageDataPoints.some(p => p.y > 0)) {
+        lines.push({
+          id: 'decision_usage',
+          data: decisionUsageDataPoints,
+          color: theme.palette.neutral[400],
+        });
+      }
+
       dataToReturn = lines;
     }
 
@@ -478,17 +439,24 @@ const CreditAnalyticsTabContent: React.FC = () => {
       burnRate,
       usageTrend,
       daysRemaining,
+      observedDays,
     };
   }, [transactions, timePeriod, viewMode, theme.palette, currentUser]);
 
   // Tooltip text for days remaining, adjusted based on selected time period
+  // Only when a projection would otherwise exist: no burn or no balance is N/A, not "too early".
+  const tooEarlyToProject =
+    burnRate > 0 && (currentUser?.currentCredits ?? 0) > 0 && observedDays < MIN_DAYS_FOR_PROJECTION;
   const daysTooltipText = useMemo(() => {
+    if (tooEarlyToProject) {
+      return `Shown once there are ${MIN_DAYS_FOR_PROJECTION} days of usage to project from`;
+    }
     const selectedDays = parseInt(timePeriod, 10);
     if (Number.isFinite(selectedDays)) {
-      return `Based on your usage pattern from the last ${selectedDays} days`;
+      return `Based on your usage pattern from the last ${Math.min(selectedDays, Math.round(observedDays) || selectedDays)} days`;
     }
     return 'Based on your recent usage pattern';
-  }, [timePeriod]);
+  }, [timePeriod, observedDays, tooEarlyToProject]);
 
   // Calculate tick interval based on time period to avoid overcrowding
   const tickInterval = useMemo(() => {
@@ -552,53 +520,24 @@ const CreditAnalyticsTabContent: React.FC = () => {
     },
   };
 
-  // Group models by type
   const { textModels, imageModels } = useMemo(() => {
-    const text: ModelInfo[] = [];
-    const image: ModelInfo[] = [];
-
-    models.forEach(model => {
-      if (model.type === 'text') {
-        text.push(model);
-      } else if (model.type === 'image') {
-        image.push(model);
-      }
-    });
-
-    // Sort by name within each category
+    const byName = (a: ModelInfo, b: ModelInfo) => a.name.localeCompare(b.name);
     return {
-      textModels: text.sort((a, b) => a.name.localeCompare(b.name)),
-      imageModels: image.sort((a, b) => a.name.localeCompare(b.name)),
+      textModels: dedupePricingRows(accessibleTextModels).sort(byName),
+      imageModels: dedupePricingRows(accessibleImageModels).sort(byName),
     };
-  }, [models]);
+  }, [accessibleTextModels, accessibleImageModels]);
 
-  const calculateModelCost = (model: ModelInfo): { inputCost: string; outputCost: string } => {
-    // Most models use the pricing for 1000 tokens as a standard measure
+  const calculateImageModelCost = (model: ModelInfo): string => {
     const defaultKeys = Object.keys(model.pricing || {}).map(Number);
     // Use the first pricing tier, or 0 if none available
     const firstKey = defaultKeys.length > 0 ? defaultKeys[0] : 0;
 
-    if (!model.pricing || !model.pricing[firstKey]) {
-      return { inputCost: 'N/A', outputCost: 'N/A' };
-    }
+    if (!model.pricing || !model.pricing[firstKey]) return 'N/A';
 
-    // Calculate credits based on model type. Uses the shared billing conversion
-    // (usdToCredits) so displayed prices can't drift from what's charged.
-    const calculateCredits = (usdCost: number): string => {
-      if (model.type === 'image') {
-        // Image models: pricing stored in ten-thousandths of a dollar
-        // E.g., a value of 550 means $0.055
-        return usdToCredits(usdCost * 0.0001).toLocaleString();
-      } else {
-        // Text models: pricing stored per token; display credits per 1K tokens
-        return usdToCredits(usdCost * 1000).toLocaleString();
-      }
-    };
-
-    return {
-      inputCost: calculateCredits(model.pricing[firstKey].input),
-      outputCost: calculateCredits(model.pricing[firstKey].output),
-    };
+    // Pricing stored in ten-thousandths of a dollar (550 means $0.055); usdToCredits is the
+    // conversion image billing reserves with, so the display can't drift from the charge.
+    return usdToCredits(model.pricing[firstKey].input * 0.0001).toLocaleString();
   };
 
   const renderPriceTier = (model: ModelInfo): React.JSX.Element => {
@@ -776,8 +715,12 @@ const CreditAnalyticsTabContent: React.FC = () => {
                   </Typography>
                   <FieldTooltip content={daysTooltipText} ariaLabel="Help: Days remaining" iconSize={16} />
                 </Box>
-                <Typography level={TYPE.statValue} sx={{ color: 'text.primary', mt: '4px' }}>
-                  {daysRemaining !== null ? daysRemaining : 'N/A'}
+                <Typography
+                  level={TYPE.statValue}
+                  sx={{ color: 'text.primary', mt: '4px' }}
+                  data-testid="credit-analytics-days-remaining"
+                >
+                  {daysRemaining !== null ? daysRemaining.toLocaleString() : tooEarlyToProject ? 'Too early' : 'N/A'}
                 </Typography>
               </Box>
             </Box>
@@ -980,6 +923,8 @@ const CreditAnalyticsTabContent: React.FC = () => {
                       return 'Sound Effects';
                     case 'music_generation_usage':
                       return 'Music Generation';
+                    case 'decision_usage':
+                      return 'Decisions';
                     case 'usage':
                       return t('credits.credits_used');
                     case 'credits_added':
@@ -1115,7 +1060,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                 level="body-sm"
                 sx={{ fontSize: '14px', fontWeight: 600, color: theme => theme.palette.primary[500] }}
               >
-                {t('credits.pricing_per_1k_tokens')}
+                {t('credits.pricing_per_1m_tokens')}
               </Typography>
               <Typography level="body-xs" sx={{ fontSize: '13px', color: theme => `${theme.palette.text.primary}80` }}>
                 Note: Prices are approximate and may vary based on model parameters. Price tiers: $ (lowest), $$
@@ -1160,13 +1105,18 @@ const CreditAnalyticsTabContent: React.FC = () => {
                 <tbody>
                   {textModels.length > 0 ? (
                     textModels.map(model => {
-                      const { inputCost, outputCost } = calculateModelCost(model);
+                      const { inputCost, outputCost } = textModelPriceCells(model);
                       return (
-                        <tr key={model.id}>
+                        <tr key={model.id} data-testid={`model-pricing-row-${model.id}`}>
                           <td>
                             <Typography level="body-sm" fontWeight="md">
                               {model.name}
                             </Typography>
+                            {model.backend === ModelBackend.Bedrock && (
+                              <Chip size="sm" variant="soft" data-testid={`model-pricing-bedrock-${model.id}`}>
+                                AWS Bedrock
+                              </Chip>
+                            )}
                             {model.description && (
                               <Typography
                                 level="body-xs"
@@ -1266,7 +1216,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                 <tbody>
                   {imageModels.length > 0 ? (
                     imageModels.map(model => {
-                      const { inputCost } = calculateModelCost(model);
+                      const inputCost = calculateImageModelCost(model);
                       return (
                         <tr key={model.id}>
                           <td>

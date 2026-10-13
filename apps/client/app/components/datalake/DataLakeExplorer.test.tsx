@@ -30,6 +30,7 @@ const tree = () => screen.getByTestId('mock-tree');
 // attached the file and of the viewer opening or closing afterward.
 const {
   setWorkBenchFiles,
+  addToNotebookContext,
   setSessionLayout,
   sessionState,
   removeFileMutate,
@@ -37,10 +38,13 @@ const {
   lakesState,
   workBenchState,
   mockFileOwnerId,
+  mockFileScan,
   lakesHookSessionIds,
 } = vi.hoisted(() => ({
   lakesHookSessionIds: [] as Array<string | null | undefined>,
   setWorkBenchFiles: vi.fn(),
+  // The persisting writer an existing session attaches through (it writes session.knowledgeIds).
+  addToNotebookContext: vi.fn(),
   setSessionLayout: vi.fn(),
   // Mutable so the /new (deferred creation, no session yet) case can null it per-test.
   // `current` is the session document the lake scope now lives on: the picker reads its
@@ -72,6 +76,7 @@ const {
   },
   // Mutable so a test can exercise the non-owner copy branch of the remove-confirm dialog.
   mockFileOwnerId: { value: 'owner-1' },
+  mockFileScan: { mimeType: 'application/pdf', moderationStatus: 'clean' },
 }));
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
@@ -255,6 +260,19 @@ const { setModeSpy, setLakeScopeSpy, toastInfo, toastError, toastSuccess } = vi.
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
+vi.mock('@client/app/hooks/useNotebookContextFiles', async importOriginal => {
+  const actual = await importOriginal<typeof import('@client/app/hooks/useNotebookContextFiles')>();
+  return {
+    rejectUnscannedImage: actual.rejectUnscannedImage,
+    useNotebookContextFiles: () => ({ addToNotebookContext }),
+  };
+});
+const { activeNotebook } = vi.hoisted(() => ({
+  activeNotebook: {
+    value: { onScreen: true, sessionId: 'sess-1' } as { onScreen: boolean; sessionId?: string | null },
+  },
+}));
+vi.mock('@client/app/hooks/useActiveNotebook', () => ({ useActiveNotebook: () => activeNotebook.value }));
 vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => setModeSpy }));
 // Mocked for the same reason as its sibling above: the real hook reaches useUpdateSession, and
 // this harness deliberately has no QueryClient. The double also REPLAYS the real hook's
@@ -300,6 +318,8 @@ vi.mock('./DataLakeChatTree', () => ({
       id: 'file-123',
       fileName: 'x.pdf',
       userId: mockFileOwnerId.value,
+      mimeType: mockFileScan.mimeType,
+      moderationStatus: mockFileScan.moderationStatus,
       tags: [{ name: 'datalake:lake-a' }],
     };
     return (
@@ -390,10 +410,13 @@ describe('DataLakeExplorer chat-first surface', () => {
     vi.clearAllMocks();
     removeFileLakeIds.length = 0;
     mockFileOwnerId.value = 'owner-1';
+    mockFileScan.mimeType = 'application/pdf';
+    mockFileScan.moderationStatus = 'clean';
     lakesState.value = [
       { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
     ];
     workBenchState.files = [];
+    activeNotebook.value = { onScreen: true, sessionId: 'sess-1' };
     // Re-applied each test since clearAllMocks only clears call history, not implementation -
     // runs the functional updater the way the real zustand store does, persists the result, and
     // notifies useSyncExternalStore subscribers (see the useWorkBenchFiles mock comment above),
@@ -408,6 +431,13 @@ describe('DataLakeExplorer chat-first surface', () => {
     // The store defaults to 'hide'; start from the docked layout an external-chat host runs, so
     // a close request is an actual transition rather than a no-op write.
     useSessionLayoutStore.setState({ layout: 'dockRight' });
+    // Mirrors the real hook's contract: a no-op (false) for a file already attached, otherwise an
+    // optimistic workbench append (which drives the highlight) and true once persisted.
+    addToNotebookContext.mockImplementation(async (sessionId: string, file: { id: string; fileName: string }) => {
+      if (workBenchState.files.some(f => f.id === file.id)) return false;
+      setWorkBenchFiles(sessionId, (prev: typeof workBenchState.files) => [...prev, file]);
+      return true;
+    });
   });
 
   it('asks for the lake labels of the current session and surfaces a server false on the header', () => {
@@ -454,11 +484,15 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(setSessionLayout).not.toHaveBeenCalled();
   });
 
-  it('attach action adds the file to the workbench and toasts, never touching layout', async () => {
+  it('attach on an existing session persists it to the notebook and toasts, never touching layout', async () => {
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-attach'));
-    await vi.waitFor(() => expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function)));
-    expect(toastSuccess).toHaveBeenCalled();
+    // Through the persisting writer, not a bare workbench write: a workbench-only file rides one
+    // send as fabFileIds and then drops out of context.
+    await vi.waitFor(() =>
+      expect(addToNotebookContext).toHaveBeenCalledWith('sess-1', expect.objectContaining({ id: 'file-123' }))
+    );
+    await vi.waitFor(() => expect(toastSuccess).toHaveBeenCalled());
     expect(setSessionLayout).not.toHaveBeenCalled();
     // Attaching alone (no View, no viewer ever opened) still highlights the row: the highlight
     // tracks workbench membership (#1693), not viewer state. waitFor (not vi.waitFor) because
@@ -467,8 +501,72 @@ describe('DataLakeExplorer chat-first surface', () => {
     await waitFor(() => expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123'));
   });
 
+  it('attach of an already-attached file is a silent no-op', async () => {
+    workBenchState.files = [{ id: 'file-123', fileName: 'Attached.md' }];
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await vi.waitFor(() => expect(addToNotebookContext).toHaveBeenCalled());
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it('embedded attach while no notebook is on screen writes nothing and explains why', async () => {
+    activeNotebook.value = { onScreen: false };
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(addToNotebookContext).not.toHaveBeenCalled();
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastInfo).toHaveBeenCalledWith('Wait for the notebook to finish opening, then attach the file.');
+  });
+
+  it('embedded attach off screen never creates a session', async () => {
+    activeNotebook.value = { onScreen: false };
+    sessionState.currentSessionId = null;
+    const createSessionForFile = vi.fn();
+    renderExplorer({ createSessionForFile });
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await vi.waitFor(() => expect(toastInfo).toHaveBeenCalled());
+    expect(createSessionForFile).not.toHaveBeenCalled();
+  });
+
+  it('docked overlay attach persists to the current chat outside notebook routes', async () => {
+    activeNotebook.value = { onScreen: false };
+    renderExplorer({ chatEmbedded: false });
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await vi.waitFor(() =>
+      expect(addToNotebookContext).toHaveBeenCalledWith('sess-1', expect.objectContaining({ id: 'file-123' }))
+    );
+    await vi.waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+  });
+
+  it('hands an optimistic session id to the shared writer, which owns the refusal', async () => {
+    sessionState.currentSessionId = 'optimistic-session-1';
+    activeNotebook.value = { onScreen: true, sessionId: 'optimistic-session-1' };
+    addToNotebookContext.mockResolvedValueOnce(false);
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await vi.waitFor(() =>
+      expect(addToNotebookContext).toHaveBeenCalledWith(
+        'optimistic-session-1',
+        expect.objectContaining({ id: 'file-123' })
+      )
+    );
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it('attach whose persist fails reports no success (the writer rolls back and toasts)', async () => {
+    addToNotebookContext.mockRejectedValueOnce(new Error('PUT failed'));
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await vi.waitFor(() => expect(addToNotebookContext).toHaveBeenCalled());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
   it('attach on /new with createSessionForFile mints the session, then attaches', async () => {
     sessionState.currentSessionId = null;
+    activeNotebook.value = { onScreen: true, sessionId: null };
     const createSessionForFile = vi.fn().mockResolvedValue('sess-new');
     renderExplorer({ createSessionForFile });
     fireEvent.click(screen.getByTestId('mock-attach'));
@@ -479,18 +577,47 @@ describe('DataLakeExplorer chat-first surface', () => {
     // The minting host needs the file: the session must be created already holding it
     // (knowledgeIds), or the adoption-time workbench rehydration wipes the store write.
     expect(createSessionForFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-123' }));
+    // The create call already persisted the file; a second knowledgeIds write would be redundant.
+    expect(addToNotebookContext).not.toHaveBeenCalled();
   });
 
   it('attach with no session and no create path guides via toast, writes nothing', () => {
     sessionState.currentSessionId = null;
+    activeNotebook.value = { onScreen: true, sessionId: null };
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-attach'));
     expect(toastInfo).toHaveBeenCalled();
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
   });
 
+  it('does not create a session holding an unscanned image', async () => {
+    sessionState.currentSessionId = null;
+    activeNotebook.value = { onScreen: true, sessionId: null };
+    mockFileScan.mimeType = 'image/png';
+    mockFileScan.moderationStatus = 'scanning';
+    const createSessionForFile = vi.fn();
+    renderExplorer({ createSessionForFile });
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await vi.waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(createSessionForFile).not.toHaveBeenCalled();
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it('creates a session for a clean image on the mint path', async () => {
+    sessionState.currentSessionId = null;
+    activeNotebook.value = { onScreen: true, sessionId: null };
+    mockFileScan.mimeType = 'image/png';
+    mockFileScan.moderationStatus = 'clean';
+    const createSessionForFile = vi.fn().mockResolvedValue('sess-new');
+    renderExplorer({ createSessionForFile });
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    await vi.waitFor(() => expect(createSessionForFile).toHaveBeenCalledTimes(1));
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
   it('attach create rejection toasts an error and attaches nothing', async () => {
     sessionState.currentSessionId = null;
+    activeNotebook.value = { onScreen: true, sessionId: null };
     const createSessionForFile = vi.fn().mockRejectedValue(new Error('boom'));
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     renderExplorer({ createSessionForFile });

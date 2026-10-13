@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Box, Tooltip, Typography } from '@mui/joy';
+import { useMediaQuery } from '@mui/system';
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
 import CheckIcon from '@mui/icons-material/Check';
 import ConstructionIcon from '@mui/icons-material/Construction';
@@ -132,6 +133,48 @@ const frameSx = (size: number, filled: boolean) => ({
   ...(filled && { backgroundColor: 'var(--joy-palette-aiSettings-modelCard-background)' }),
 });
 
+/** How long a tapped indicator's tooltip stays up on a touch screen, in ms. */
+const TOUCH_TOOLTIP_MS = 3000;
+
+/**
+ * Tap-to-toggle tooltip for devices with no hover. Joy's own touch path needs a 700ms press,
+ * and a plain tap falls through to the model card underneath and selects the model, so on a
+ * phone the cost, speed and capability meanings were unreachable. Returns no overrides where
+ * hover exists, leaving desktop behaviour untouched.
+ */
+const useTapTooltip = () => {
+  const noHover = useMediaQuery('(hover: none)');
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(() => setOpen(false), TOUCH_TOOLTIP_MS);
+    // Joy only closes a controlled tooltip on blur or mouseleave, neither of which a tap
+    // elsewhere fires on this unfocusable anchor. The anchor's own tap toggles via onClick.
+    const closeOnTapAway = (event: PointerEvent) => {
+      if (!anchorRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnTapAway);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('pointerdown', closeOnTapAway);
+    };
+  }, [open]);
+
+  if (!noHover) return { tooltipProps: {}, anchorProps: {} };
+  return {
+    tooltipProps: { open, onClose: () => setOpen(false), disableTouchListener: true },
+    anchorProps: {
+      ref: anchorRef,
+      onClick: (event: React.MouseEvent) => {
+        event.stopPropagation();
+        setOpen(prev => !prev);
+      },
+    },
+  };
+};
+
 // Read-only indicator. The frame is what separates these from the star and settings icons
 // sitting beside them on a card - without it, informational glyphs read as pressable.
 export const MetricIcon = ({
@@ -147,23 +190,28 @@ export const MetricIcon = ({
   /** Fills the frame with the model-card surface. Off on a card, where it would be invisible. */
   filled?: boolean;
   children: React.ReactNode;
-}) => (
-  <Tooltip title={tooltip} placement="top">
-    <Box
-      role="img"
-      aria-label={label}
-      data-testid={`model-indicator-${label.toLowerCase().replace(/\s+/g, '-')}`}
-      sx={{
-        ...frameSx(size, filled),
-        justifyContent: 'center',
-        width: `${size}px`,
-        borderRadius: '50%',
-      }}
-    >
-      {children}
-    </Box>
-  </Tooltip>
-);
+}) => {
+  const { tooltipProps, anchorProps } = useTapTooltip();
+  return (
+    // Capped so the longer cost tooltip wraps instead of running off a phone screen
+    <Tooltip title={tooltip} placement="top" sx={{ maxWidth: 'min(280px, calc(100vw - 16px))' }} {...tooltipProps}>
+      <Box
+        role="img"
+        aria-label={label}
+        data-testid={`model-indicator-${label.toLowerCase().replace(/\s+/g, '-')}`}
+        {...anchorProps}
+        sx={{
+          ...frameSx(size, filled),
+          justifyContent: 'center',
+          width: `${size}px`,
+          borderRadius: '50%',
+        }}
+      >
+        {children}
+      </Box>
+    </Tooltip>
+  );
+};
 
 /**
  * A read-only spec as a pill: short inline label plus its value. Shares the icon frame's
@@ -176,35 +224,43 @@ export const SpecPill: React.FC<{
   tooltip: string;
   size?: number;
   filled?: boolean;
-}> = ({ label, value, tooltip, size = DEFAULT_INDICATOR_SIZE, filled = false }) => (
-  <Tooltip title={tooltip} placement="top">
-    <Box
-      sx={{
-        ...frameSx(size, filled),
-        gap: '4px',
-        px: '12px',
-        borderRadius: `${size / 2}px`,
-        whiteSpace: 'nowrap',
-      }}
-    >
-      <Typography sx={{ color: 'text.primary50', fontSize: '12px', lineHeight: 1 }}>{label}</Typography>
-      <Typography sx={{ color: 'text.primary', fontSize: '12px', fontWeight: 500, lineHeight: 1 }}>{value}</Typography>
-    </Box>
-  </Tooltip>
-);
+}> = ({ label, value, tooltip, size = DEFAULT_INDICATOR_SIZE, filled = false }) => {
+  const { tooltipProps, anchorProps } = useTapTooltip();
+  return (
+    <Tooltip title={tooltip} placement="top" {...tooltipProps}>
+      <Box
+        {...anchorProps}
+        sx={{
+          ...frameSx(size, filled),
+          gap: '4px',
+          px: '12px',
+          borderRadius: `${size / 2}px`,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <Typography sx={{ color: 'text.primary50', fontSize: '12px', lineHeight: 1 }}>{label}</Typography>
+        <Typography sx={{ color: 'text.primary', fontSize: '12px', fontWeight: 500, lineHeight: 1 }}>
+          {value}
+        </Typography>
+      </Box>
+    </Tooltip>
+  );
+};
 
 /** Cost and speed: always-present dimensions whose colour carries the value. */
 export const MetricIndicators: React.FC<{
   priceTier: { tier: string; variant: ChipVariant };
   modelSpeed: ModelSpeed | null;
   statsLoading: boolean;
+  /** Adds the credit figure to the cost tooltip; without it the tooltip names the tier only. */
+  model?: ModelInfo;
   size?: number;
   filled?: boolean;
-}> = ({ priceTier, modelSpeed, statsLoading, size = DEFAULT_INDICATOR_SIZE, filled = false }) => (
+}> = ({ priceTier, modelSpeed, statsLoading, model, size = DEFAULT_INDICATOR_SIZE, filled = false }) => (
   <>
     <MetricIcon
       label={`${priceTier.tier} cost`}
-      tooltip={getPriceTierTooltip(priceTier.tier)}
+      tooltip={getPriceTierTooltip(priceTier.tier, model)}
       size={size}
       filled={filled}
     >

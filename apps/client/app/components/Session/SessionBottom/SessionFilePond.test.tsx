@@ -162,11 +162,17 @@ describe('SessionFilePond attachment scope', () => {
     // image would never be promoted. Consuming the buffer here is the last chance.
     const add = vi.fn().mockResolvedValue(undefined);
     mockCreateFabFile.mockResolvedValue({ id: 'img1', fileName: 'shot.png', mimeType: 'image/png' });
-    mockConsumeBuffered.mockReturnValue({ moderationStatus: 'clean' });
+    mockConsumeBuffered.mockReturnValue({ moderationStatus: 'clean', fileUrl: 'https://cdn.example/shot.png' });
 
     await upload('notebook', makeFile('shot.png', 'image/png'), add);
 
     expect(add).toHaveBeenCalledOnce();
+    // The upload response still says 'pending'; the hook's scan guard needs the buffered verdict.
+    expect(add.mock.calls[0][1]).toMatchObject({
+      id: 'img1',
+      moderationStatus: 'clean',
+      fileUrl: 'https://cdn.example/shot.png',
+    });
   });
 
   it('does NOT promote when the buffered scan says blocked', async () => {

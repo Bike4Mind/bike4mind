@@ -46,6 +46,8 @@ const TOOL_PATTERNS: ToolPattern[] = [
       /\bwho\s+(is|was|are|were)\b/i,
       /\bwhat\s+(happened|is\s+happening)\b/i,
       /\b(google|search\s+the\s+web|search\s+online)\b/i,
+      // An explicit ask ("use web search: ...", "do an internet search") names the tool outright.
+      /\b(web|internet|online)\s+search\b/i,
     ],
   },
   {

@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => ({
   listPublicVoiceAgents: vi.fn(),
   countActiveVoiceSessions: vi.fn(),
   sessionUpdate: vi.fn(),
+  claimVoiceHold: vi.fn(),
+  findTurns: vi.fn(),
   findByIdAndUserId: vi.fn(),
   incrementCredits: vi.fn(),
   getSession: vi.fn(),
@@ -111,6 +113,11 @@ vi.mock('@bike4mind/database', async orig => {
       countActiveVoiceSessionsByUserId: (...a: unknown[]) => mocks.countActiveVoiceSessions(...a),
       update: (...a: unknown[]) => mocks.sessionUpdate(...a),
       findByIdAndUserId: (...a: unknown[]) => mocks.findByIdAndUserId(...a),
+      claimVoiceHold: (...a: unknown[]) => mocks.claimVoiceHold(...a),
+    },
+    questRepository: {
+      ...(actual.questRepository as object),
+      findAllBySessionIdAndGreaterThanOrEqualToTimestamp: (...a: unknown[]) => mocks.findTurns(...a),
     },
     userRepository: {
       ...(actual.userRepository as object),
@@ -205,6 +212,8 @@ beforeEach(() => {
   mocks.countActiveVoiceSessions.mockResolvedValue(0);
   mocks.sessionUpdate.mockResolvedValue(undefined);
   mocks.incrementCredits.mockResolvedValue(undefined);
+  mocks.claimVoiceHold.mockResolvedValue({ billedCredits: null });
+  mocks.findTurns.mockResolvedValue([]);
   mocks.findByIdAndUserId.mockResolvedValue({ id: SESSION_ID, name: 'My notebook' });
   mocks.createSession.mockResolvedValue({ id: SESSION_ID, name: 'Voice' });
   mocks.signVoiceSessionToken.mockReturnValue('signed-session-token');
@@ -409,6 +418,27 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.findByIdAndUserId).toHaveBeenCalledWith(SESSION_ID, 'user-1');
   });
 
+  it('settles an earlier call left open before a fresh connect overwrites its hold', async () => {
+    const startedAt = new Date(Date.now() - 20 * 60 * 1000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      userId: 'user-1',
+      name: 'My notebook',
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: startedAt,
+    });
+    // Its last turn came a minute in: the earlier call keeps that minute and gets the rest back.
+    mocks.findTurns.mockResolvedValue([{ timestamp: new Date(startedAt.getTime() + 60 * 1000) }]);
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, startedAt);
+    expect(mocks.incrementCredits.mock.calls).toEqual([
+      ['user-1', RESERVED_CREDITS - Math.ceil(RESERVED_CREDITS / 5)],
+      ['user-1', -RESERVED_CREDITS],
+    ]);
+  });
+
   it('creates a session when no sessionId is sent', async () => {
     const { res, run } = fireSessions({ body: { reasoningModelId: 'claude-sonnet-4-6' } });
     await run();
@@ -509,10 +539,11 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
   });
 
   it('refunds the unused part of the hold', async () => {
+    const startedAt = new Date(Date.now() - 1000);
     mocks.findByIdAndUserId.mockResolvedValue({
       id: SESSION_ID,
       voiceReservedCredits: RESERVED_CREDITS,
-      voiceSessionStartedAt: new Date(Date.now() - 1000),
+      voiceSessionStartedAt: startedAt,
     });
     const { res, run } = fireEnd();
     await run();
@@ -521,15 +552,25 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     expect(EndVoiceSessionResponseSchema.safeParse(body).success).toBe(true);
     expect(body.refunded).toBeGreaterThan(0);
     expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', body.refunded);
-    // The hold is cleared before the refund so a duplicate end cannot double-refund.
-    expect(mocks.sessionUpdate).toHaveBeenCalledWith({
-      id: SESSION_ID,
-      voiceReservedCredits: null,
-      voiceSessionStartedAt: null,
-    });
-    expect(mocks.sessionUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+    // The hold is claimed before the refund so a duplicate end cannot double-refund.
+    expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, startedAt);
+    expect(mocks.claimVoiceHold.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.incrementCredits.mock.invocationCallOrder[0]
     );
+  });
+
+  it('refunds nothing when a concurrent end or the stale hold sweep settled the hold first', async () => {
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: new Date(Date.now() - 1000),
+    });
+    mocks.claimVoiceHold.mockResolvedValue(null);
+    const { res, run } = fireEnd();
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ refunded: 0, alreadyReconciled: true });
+    expect(mocks.incrementCredits).not.toHaveBeenCalled();
   });
 
   it('is a no-op once reconciled', async () => {
@@ -539,5 +580,22 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ refunded: 0, alreadyReconciled: true });
     expect(mocks.incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('drops the realtime billed-credits marker when there is no hold to settle', async () => {
+    // enforceCredits off: a realtime bootstrap leaves no reservation but does write the marker.
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      voiceReservedCredits: null,
+      voiceSessionStartedAt: new Date(Date.now() - 1000),
+      voiceBilledCredits: 0,
+    });
+    const { res, run } = fireEnd();
+    await run();
+    expect(res._getJSONData()).toEqual({ refunded: 0, alreadyReconciled: true });
+    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
+      { id: SESSION_ID, voiceReservedCredits: null, voiceSessionStartedAt: null },
+      { unset: ['voiceBilledCredits'] }
+    );
   });
 });

@@ -37,8 +37,14 @@ vi.mock('@server/models/Subscription', () => ({
   },
 }));
 
-// Needed only so importing the handler resolves; the guard rejects long before it is reached.
-vi.mock('@server/services/organizationService', () => ({ resolveSubscriptionSource: vi.fn() }));
+const mockResolveSubscriptionSource = vi.fn();
+vi.mock('@server/services/organizationService', () => ({
+  resolveSubscriptionSource: (...args: unknown[]) => mockResolveSubscriptionSource(...args),
+}));
+
+vi.mock('@server/services/teamPlanSettings', () => ({
+  getTeamPlanSettings: async () => ({ minSeats: 3, maxSeats: 100 }),
+}));
 
 const mockLogAuditEvent = vi.fn();
 vi.mock('@server/utils/auditLog', () => ({
@@ -134,5 +140,35 @@ describe('POST /api/admin/organizations/[id]/convert-to-paid - callbackUrl origi
 
     expect(mockIsAllowedCallbackOrigin).toHaveBeenCalledWith(CALLBACK_URL);
     expect(mockOrgFindById).toHaveBeenCalledWith('org_1');
+  });
+});
+
+describe('POST /api/admin/organizations/[id]/convert-to-paid - checkout currency', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockOrgFindById.mockResolvedValue({
+      id: '507f1f77bcf86cd799439011',
+      userId: '507f1f77bcf86cd799439012',
+      name: 'Org One',
+      seats: 5,
+      stripeCustomerId: 'cus_org',
+    });
+    mockFindActiveByOwner.mockResolvedValue([{ id: 'sub_grant' }]);
+    mockResolveSubscriptionSource.mockReturnValue('admin_grant');
+    mockSessionsCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe/session' });
+  });
+
+  it('pins the session to USD with Adaptive Pricing off, whatever the visitor location', async () => {
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
+    expect(mockSessionsCreate.mock.calls[0][0]).toMatchObject({
+      currency: 'usd',
+      adaptive_pricing: { enabled: false },
+    });
+    expect(res.statusCode).toBe(200);
   });
 });

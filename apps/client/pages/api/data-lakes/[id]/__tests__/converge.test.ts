@@ -42,7 +42,7 @@ vi.mock('@bike4mind/services', () => ({
     MAX_CONVERGENCE_WAVE: 200,
   },
 }));
-vi.mock('@server/queueHandlers/convergenceKillSwitch', () => ({ isConvergenceHalted: h.isConvergenceHalted }));
+vi.mock('@server/dataLakes/convergenceKillSwitch', () => ({ isConvergenceHalted: h.isConvergenceHalted }));
 vi.mock('@bike4mind/database', () => ({
   withTransaction: async (fn: () => unknown) => {
     h.tx.push('enter');

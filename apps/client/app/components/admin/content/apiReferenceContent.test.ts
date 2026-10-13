@@ -57,7 +57,12 @@ describe('API reference scopes table', () => {
   });
 
   it('names no premium scope when built from the list offered without Opti access', () => {
-    expect(getApiReferenceContent('https://b4m.test', genericApiKeyScopesFor(false))).not.toContain('optihashi:');
+    expect(
+      getApiReferenceContent(
+        'https://b4m.test',
+        genericApiKeyScopesFor({ hasOptiAccess: false, hasOverwatchAccess: false, hearthEnabled: false })
+      )
+    ).not.toContain('optihashi:');
   });
 
   it('escapes pipes so a description cannot split its table row', () => {

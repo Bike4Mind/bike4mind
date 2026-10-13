@@ -122,10 +122,16 @@ describe('projectService - create', () => {
     });
   });
 
+  it('creates a project with no description', async () => {
+    await createProject({ id: userId }, { name: 'No description' }, adapters);
+
+    expect(mockProjectRepo.create).toHaveBeenCalledWith(expect.objectContaining({ description: '' }));
+  });
+
   it('should throw validation error for invalid parameters', async () => {
     const invalidParams = {
       name: '', // Invalid: empty string
-      description: '', // Invalid: empty string
+      description: '',
     };
 
     await expect(createProject({ id: userId }, invalidParams, adapters)).rejects.toThrow();

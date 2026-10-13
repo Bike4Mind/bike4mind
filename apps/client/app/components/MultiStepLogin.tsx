@@ -13,6 +13,7 @@ import {
   Container,
   Divider,
   FormControl,
+  FormHelperText,
   FormLabel,
   Input,
   Stack,
@@ -26,6 +27,8 @@ import GoogleColorIcon from './svgs/flags/GoogleColorIcon';
 
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
+import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
+import OtcRateLimitNotice from './OtcRateLimitNotice';
 import { useVerifyMFA, useSetupMFA, useVerifyMFASetup, MFASetupResponse } from '@client/app/hooks/data/mfa';
 import { describePasskeyMfaError, passkeysSupported, useVerifyPasskeyMFA } from '@client/app/hooks/data/passkeys';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
@@ -115,6 +118,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const navigate = useNavigate();
   const router = useRouter();
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
+  const rateLimit = useOtcRateLimit();
+  const [emailError, setEmailError] = useState<string | null>(null);
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
   const verifyMFA = useVerifyMFA();
   const verifyPasskeyMFA = useVerifyPasskeyMFA();
@@ -190,17 +195,21 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     }, 1000);
   };
 
+  const resendBlockedSeconds = Math.max(resendCooldown, rateLimit.secondsLeft);
+
   const handleEmailSubmit = async (e: React.FormEvent | React.KeyboardEvent) => {
     e.preventDefault();
     const trimmedEmail = email.trim();
+    if (rateLimit.secondsLeft > 0) return;
+    setEmailError(null);
     if (!trimmedEmail) {
-      toast.error(t('auth.emailRequired'));
+      setEmailError(t('auth.emailRequired'));
       return;
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(trimmedEmail)) {
-      toast.error(t('no_valid_emails_error'));
+      setEmailError(t('auth.fieldErrors.invalidEmail'));
       return;
     }
 
@@ -232,7 +241,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       // useSendOTC rejects with a plain { message, code } object (not an Error instance),
       // so read .message off either shape - otherwise real server messages like the OTC
       // rate-limit's "try again in N seconds" collapse into "An unexpected error occurred".
-      const errorMessage = (error as { message?: string })?.message || 'An unexpected error occurred';
+      if (rateLimit.handleError(error)) return;
+      const errorMessage = rateLimit.errorMessage(error, 'An unexpected error occurred');
       toast.error(errorMessage);
     } finally {
       setIsCheckingStrategy(false);
@@ -240,7 +250,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   };
 
   const handleResendCode = async () => {
-    if (resendCooldown > 0) return;
+    if (resendCooldown > 0 || rateLimit.secondsLeft > 0) return;
     try {
       const sendResult = await sendOTC({ email: email.trim() });
       setPendingToken(sendResult.pendingToken);
@@ -248,7 +258,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       startResendCooldown();
     } catch (error) {
       // Same plain-object rejection shape as handleEmailSubmit above.
-      const errorMessage = (error as { message?: string })?.message || 'Failed to resend code';
+      if (rateLimit.handleError(error)) return;
+      const errorMessage = rateLimit.errorMessage(error, 'Failed to resend code');
       toast.error(errorMessage);
     }
   };
@@ -545,6 +556,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     setAcceptPolicies(false);
     setConfirmAdult(false);
     setPendingToken(null);
+    rateLimit.clear();
   };
 
   if (isLoggedIn) {
@@ -758,6 +770,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   className="email-control"
                   required
                   id="email"
+                  error={!!emailError}
                   sx={{ width: '100%', maxWidth: '700px', margin: '0 auto 16px' }}
                 >
                   <FormLabel sx={visuallyHidden}>Email</FormLabel>
@@ -769,9 +782,18 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     name="email"
                     type="email"
                     value={email}
-                    onChange={e => setEmail(e.target.value)}
+                    onChange={e => {
+                      setEmail(e.target.value);
+                      setEmailError(null);
+                    }}
                     onKeyDown={e => {
-                      if (e.key === 'Enter' && email.trim() && !isCheckingStrategy && !isSendingOTC) {
+                      if (
+                        e.key === 'Enter' &&
+                        email.trim() &&
+                        !isCheckingStrategy &&
+                        !isSendingOTC &&
+                        rateLimit.secondsLeft === 0
+                      ) {
                         handleEmailSubmit(e);
                       }
                     }}
@@ -779,8 +801,16 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     autoComplete="email"
                     autoFocus
                     disabled={isCheckingStrategy || isSendingOTC}
+                    slotProps={{ input: { 'aria-invalid': !!emailError } }}
                     sx={{ ...inputStyles, '--Input-minHeight': '40px' }}
                   />
+                  {emailError ? (
+                    <FormHelperText role="alert" data-testid="login-email-error" sx={{ color: 'danger.plainColor' }}>
+                      {emailError}
+                    </FormHelperText>
+                  ) : (
+                    <FormHelperText data-testid="login-passwordless-hint">{t('auth.passwordlessHint')}</FormHelperText>
+                  )}
                 </FormControl>
                 <Button
                   className="continue-button"
@@ -792,13 +822,29 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     { marginTop: '0.5vh', minHeight: '40px', display: 'flex', gap: '.5rem', borderRadius: '8px' },
                     isDarkMode ? darkInactive : lightInactive,
                   ]}
-                  disabled={!email.trim() || isCheckingStrategy || isSendingOTC}
+                  disabled={!email.trim() || isCheckingStrategy || isSendingOTC || rateLimit.secondsLeft > 0}
                 >
                   {(isCheckingStrategy || isSendingOTC) && <CircularProgress />}
                   <Typography sx={{ color: 'common.white', fontWeight: '500', fontSize: '14px' }}>
-                    {isCheckingStrategy || isSendingOTC ? t('auth.checking') : t('auth.continue')}
+                    {isCheckingStrategy || isSendingOTC
+                      ? t('auth.checking')
+                      : rateLimit.secondsLeft > 0
+                        ? t('auth.retryIn', { time: formatCountdown(rateLimit.secondsLeft) })
+                        : t('auth.continue')}
                   </Typography>
                 </Button>
+                <OtcRateLimitNotice
+                  initialSeconds={rateLimit.initialSeconds}
+                  capped={rateLimit.capped}
+                  testId="login-rate-limit-alert"
+                />
+                <Typography
+                  data-testid="login-no-password-hint"
+                  level="body-xs"
+                  sx={{ mt: 1.5, textAlign: 'center', color: 'text.tertiary' }}
+                >
+                  {t('auth.noPasswordNeeded')}
+                </Typography>
 
                 {enableRegister && (
                   <Box
@@ -852,7 +898,9 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     variant="outlined"
                     name="otc-code"
                     type="text"
-                    inputMode="numeric"
+                    // Joy's Input forwards autoComplete to the <input> but not inputMode (that lands on the
+                    // root div), so the numeric keypad hint has to go through the input slot.
+                    slotProps={{ input: { inputMode: 'numeric', pattern: '[0-9]*' } }}
                     placeholder="000000"
                     value={otcCode}
                     onChange={e => {
@@ -913,20 +961,27 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   <Link
                     className="resend-code-link"
                     data-testid="login-resend-btn"
-                    color={resendCooldown > 0 ? 'neutral' : 'primary'}
+                    color={resendBlockedSeconds > 0 ? 'neutral' : 'primary'}
                     onClick={handleResendCode}
                     sx={{
                       fontWeight: 500,
                       fontSize: '14px',
-                      color: resendCooldown > 0 ? 'text.tertiary' : undefined,
-                      cursor: resendCooldown > 0 ? 'default' : 'pointer',
+                      color: resendBlockedSeconds > 0 ? 'text.tertiary' : undefined,
+                      cursor: resendBlockedSeconds > 0 ? 'default' : 'pointer',
                       transition: 'color 0.2s ease-in-out',
-                      '&:hover': { textDecoration: resendCooldown > 0 ? 'none' : 'underline' },
+                      '&:hover': { textDecoration: resendBlockedSeconds > 0 ? 'none' : 'underline' },
                     }}
                   >
-                    {resendCooldown > 0 ? `${t('auth.resendCode')} (${resendCooldown}s)` : t('auth.resendCode')}
+                    {resendBlockedSeconds > 0
+                      ? `${t('auth.resendCode')} (${formatCountdown(resendBlockedSeconds)})`
+                      : t('auth.resendCode')}
                   </Link>
                 </Box>
+                <OtcRateLimitNotice
+                  initialSeconds={rateLimit.initialSeconds}
+                  capped={rateLimit.capped}
+                  testId="login-otc-rate-limit-alert"
+                />
               </form>
             )}
 

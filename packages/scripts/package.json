@@ -56,6 +56,7 @@
     "migrate:encrypt-tokens": "tsx migrate/encrypt-tokens-at-rest.ts",
     "migrate:encrypt-admin-secrets": "tsx migrate/encrypt-admin-settings-and-apikeys.ts",
     "backfill:pending-free-credits": "tsx backfillPendingFreeCredits.ts",
+    "audit:partial-credit-purchases": "tsx src/audit-partial-credit-purchases.ts",
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
     "backfill:session-image-count": "tsx src/backfill-session-image-count.ts",
     "backfill:orphaned-published-artifacts": "tsx src/backfill-orphaned-published-artifacts.ts",
@@ -82,7 +83,6 @@
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/services": "workspace:*",
     "@bike4mind/utils": "workspace:*",
-    "@faker-js/faker": "^10.5.0",
     "@inquirer/prompts": "^8.5.2",
     "axios": "1.20.0",
     "bcryptjs": "^3.0.3",
@@ -94,9 +94,10 @@
     "mongoose": "^8.24.1",
     "p-limit": "^7.3.2",
     "sst": "4.17.1",
+    "stripe": "^22.6.2",
     "typescript": "^5.9.3",
     "yargs": "^18.1.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/mailparser": "^3.4.6",

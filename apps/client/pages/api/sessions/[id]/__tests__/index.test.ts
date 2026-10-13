@@ -94,7 +94,7 @@ vi.mock('@bike4mind/database', async orig => {
   };
 });
 
-vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
+vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: (...a: unknown[]) => mockCreateLakeAccess(...a),
 }));
 
