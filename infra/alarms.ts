@@ -1503,6 +1503,94 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: Quest callback delivery exhausted its retries
+   *
+   * A generation callback that exhausted its redispatch allowance was moved to `failed`. Steady
+   * state is 0: the sweep only reaches this after every retry window elapsed without a successful
+   * delivery, so sustained non-zero means a caller's webhook is not receiving quest callbacks.
+   * Three periods (15 min) so a single transient redispatch does not page.
+   *
+   * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> failExhaustedCallbacks.
+   * Namespace: QUESTS_NAMESPACE, dimensioned by Stage only (the sweep emits { Stage }).
+   */
+  new aws.cloudwatch.MetricAlarm('questCallbackLimitReached', {
+    name: `${$app.name}-${$app.stage}-quest-callback-limit-reached`,
+    alarmDescription: 'Quest generation callbacks are failing: redispatch retries exhausted',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    metricName: QUEST_METRICS.TimeoutSweepCallbacksFailedLimitReached,
+    namespace: QUESTS_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Quest callback past the redispatch horizon
+   *
+   * A callback whose last claim aged past the 72h redispatch horizon was failed. Steady state is
+   * ~0, so non-zero after the one-time historical backlog drain means the sweep itself is not
+   * running. Fires on a single period: the failure is rare enough that any occurrence is a signal.
+   * Expected to fire ONCE on the first sweep after deploy while that backlog is failed.
+   *
+   * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> failExhaustedCallbacks.
+   */
+  new aws.cloudwatch.MetricAlarm('questCallbackHorizonPassed', {
+    name: `${$app.name}-${$app.stage}-quest-callback-horizon-passed`,
+    alarmDescription: 'Quest generation callbacks aged past the 72h redispatch horizon and were failed',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: QUEST_METRICS.TimeoutSweepCallbacksFailedHorizonPassed,
+    namespace: QUESTS_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Quest callback re-enqueued after a lost claim
+   *
+   * The sweep re-enqueued callbacks stuck at `dispatched` whose queue message never arrived - a
+   * message lost after its claim, distinct from a claim never made. Some rate is normal; a
+   * sustained one means the queue is dropping claimed callbacks. Three periods to ride out a
+   * single stale re-send.
+   *
+   * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> redispatchStaleCallbacks.
+   */
+  new aws.cloudwatch.MetricAlarm('questStaleCallbackReenqueued', {
+    name: `${$app.name}-${$app.stage}-quest-stale-callback-reenqueued`,
+    alarmDescription: 'Quest generation callbacks are being re-enqueued after their claim message was lost',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    metricName: QUEST_METRICS.TimeoutSweepStaleCallbacksReenqueued,
+    namespace: QUESTS_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
    * Alarm: Session Reuse Revoked
    *
    * Fires on any occurrence of a refresh token being presented after its rotation window,
