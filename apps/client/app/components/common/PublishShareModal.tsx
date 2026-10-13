@@ -116,6 +116,12 @@ const PUBLIC_OPTION: VisibilityOption = {
   icon: <PublicIcon />,
 };
 const PRIVATE_OPTION: VisibilityOption = { value: 'private', label: 'Private', hint: 'Only you', icon: <LockIcon /> };
+const TEAM_FALLBACK_OPTION: VisibilityOption = {
+  value: 'organization',
+  label: 'Team',
+  hint: 'Members of your team',
+  icon: <GroupIcon />,
+};
 
 /** Amber accent for the currently-selected visibility - draws the eye to the
  *  active choice (and signals exposure when Public is selected). */
@@ -367,10 +373,10 @@ export function PublishShareModal({
       ? { value: 'organization', ...orgOption, icon: <GroupIcon /> }
       : null;
     if (result) {
+      // A reopened Team page keeps its Team choice even when the dialog was opened outside a team
+      // context (no `orgOption`), so its current visibility is shown rather than leaving only Public.
       return result.tier === 'organization'
-        ? orgEntry
-          ? [PUBLIC_OPTION, orgEntry]
-          : [PUBLIC_OPTION]
+        ? [PUBLIC_OPTION, orgEntry ?? TEAM_FALLBACK_OPTION]
         : [PUBLIC_OPTION, PRIVATE_OPTION];
     }
     return orgEntry ? [PUBLIC_OPTION, orgEntry, PRIVATE_OPTION] : [PUBLIC_OPTION, PRIVATE_OPTION];

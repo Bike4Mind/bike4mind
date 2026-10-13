@@ -757,6 +757,27 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     expect(screen.queryByTestId('publish-share-url')).toBeNull();
   });
 
+  it('a reopened Team page shows Team as selected even outside a team context', async () => {
+    renderReopened(() =>
+      Promise.resolve({ ...live, tier: 'organization', scopeId: 'org1', visibility: 'organization' })
+    );
+    apiGet.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/share-token')
+          ? { data: { shareToken: null } }
+          : {
+              data: {
+                artifact: { visibility: 'organization', accessGate: null, commentPolicy: 'none', discoverable: false },
+              },
+            }
+      )
+    );
+    await screen.findByTestId('publish-share-url');
+    await waitFor(() => expect(radio('organization')?.checked).toBe(true));
+    expect(radio('public')?.checked).toBe(false);
+    expect(radio('private')).toBeNull();
+  });
+
   it('closing mid-lookup does not hold the create button on the next open without a lookup', async () => {
     const publish = vi.fn();
     const { rerender } = render(
