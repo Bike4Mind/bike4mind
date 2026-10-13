@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { purgeDataLakeConnectionFiles, type PurgeableConnectionFile } from './purgeDataLakeConnectionFiles';
+import { lakeMembershipScope } from './lakeMembershipScope';
 
-const SCOPE = { datalakeTag: 'datalake:sales', fileTagPrefix: 'sales', createdByUserId: 'owner-1' } as never;
+const SCOPE = lakeMembershipScope({
+  datalakeTag: 'datalake:sales',
+  fileTagPrefix: 'sales',
+  createdByUserId: 'owner-1',
+});
 
 const file = (id: string, userId: string, fileSize: number, extra: Record<string, unknown> = {}) =>
   ({ id, userId, fileSize, tags: [], storageChargedAt: new Date(), ...extra }) as PurgeableConnectionFile;
