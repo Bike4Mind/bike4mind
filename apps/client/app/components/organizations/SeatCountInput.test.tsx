@@ -104,4 +104,76 @@ describe('SeatCountInput', () => {
     await user.click(screen.getByRole('button', { name: 'Decrease seats' }));
     expect(onChange).toHaveBeenCalledWith(9);
   });
+
+  it('steps from the displayed draft, clears the error and re-enables submit', async () => {
+    const { onChange, onInvalidChange, input } = renderInput();
+    const user = userEvent.setup({ delay: null });
+    fireEvent.change(input, { target: { value: '999' } });
+    expect(onInvalidChange).toHaveBeenLastCalledWith(true);
+
+    await user.click(screen.getByRole('button', { name: 'Decrease seats' }));
+    expect(onChange).toHaveBeenLastCalledWith(9);
+    expect(screen.queryByTestId('seat-count-input-error')).toBeNull();
+    expect(onInvalidChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('accepts 2.6 as 3 with a minimum of 3', () => {
+    const { onChange, onInvalidChange, input } = renderInput();
+    fireEvent.change(input, { target: { value: '2.6' } });
+
+    expect(onChange).toHaveBeenCalledWith(3);
+    expect(onInvalidChange).not.toHaveBeenCalledWith(true);
+  });
+
+  it('rejects 10.5 with a maximum of 10', () => {
+    const { onChange, onInvalidChange, input } = renderInput();
+    fireEvent.change(input, { target: { value: '10.5' } });
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onInvalidChange).toHaveBeenLastCalledWith(true);
+  });
+
+  describe('when min or max change under a held draft', () => {
+    const element = (props: Partial<ComponentProps<typeof SeatCountInput>>) => (
+      <TestWrapper>
+        <SeatCountInput
+          value={5}
+          min={3}
+          max={10}
+          onChange={props.onChange ?? vi.fn()}
+          onInvalidChange={props.onInvalidChange}
+          ariaLabel="Seats"
+          testId="seat-count-input"
+          classNamePrefix="seat-count"
+          {...props}
+        />
+      </TestWrapper>
+    );
+
+    it('reports an invalid draft that becomes valid when max rises', () => {
+      const onChange = vi.fn();
+      const onInvalidChange = vi.fn();
+      const { rerender } = render(element({ onChange, onInvalidChange }));
+      fireEvent.change(screen.getByTestId('seat-count-input'), { target: { value: '30' } });
+      expect(onChange).not.toHaveBeenCalled();
+      expect(onInvalidChange).toHaveBeenLastCalledWith(true);
+
+      rerender(element({ onChange, onInvalidChange, max: 50 }));
+      expect(onChange).toHaveBeenLastCalledWith(30);
+      expect(onInvalidChange).toHaveBeenLastCalledWith(false);
+      expect(screen.queryByTestId('seat-count-input-error')).toBeNull();
+    });
+
+    it('flags a valid draft that becomes invalid when max drops', () => {
+      const onChange = vi.fn();
+      const onInvalidChange = vi.fn();
+      const { rerender } = render(element({ onChange, onInvalidChange }));
+      fireEvent.change(screen.getByTestId('seat-count-input'), { target: { value: '8' } });
+      expect(onInvalidChange).toHaveBeenLastCalledWith(false);
+
+      rerender(element({ onChange, onInvalidChange, value: 5, max: 6 }));
+      expect(onInvalidChange).toHaveBeenLastCalledWith(true);
+      expect(screen.getByTestId('seat-count-input-error').textContent).toBe('Must be between 3 and 6');
+    });
+  });
 });

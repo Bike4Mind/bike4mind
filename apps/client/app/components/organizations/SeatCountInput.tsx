@@ -47,6 +47,13 @@ const SeatCountInput = ({
     return () => onInvalidChange?.(false);
   }, [isInvalid, onInvalidChange]);
 
+  // A held draft can become valid when min/max move (e.g. a member leaves); report it so the parent
+  // submits the number on screen rather than the last valid value.
+  useEffect(() => {
+    if (parsedDraft !== null && !isInvalid && parsedDraft !== value) onChange(parsedDraft);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only min/max moving should re-report a held draft
+  }, [min, max]);
+
   const handleChange = (text: string) => {
     setDraft(text);
     const parsed = Math.round(Number.parseFloat(text));
@@ -54,8 +61,11 @@ const SeatCountInput = ({
   };
 
   const step = (delta: number) => {
+    // Step from the number on screen, not the hidden last valid value.
+    const base =
+      parsedDraft !== null && Number.isFinite(parsedDraft) ? Math.min(Math.max(parsedDraft, min), max) : value;
     setDraft(null);
-    onChange(Math.min(Math.max(value + delta, min), max));
+    onChange(Math.min(Math.max(base + delta, min), max));
   };
 
   return (

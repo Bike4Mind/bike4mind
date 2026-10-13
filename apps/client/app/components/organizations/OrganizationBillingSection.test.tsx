@@ -20,10 +20,11 @@ import OrganizationBillingSection from './OrganizationBillingSection';
 
 const subscriptionsData = vi.hoisted(() => ({ current: [] as unknown[] }));
 const updateSeatsMutate = vi.hoisted(() => vi.fn());
+const subscribeMutate = vi.hoisted(() => vi.fn());
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptionsByOwner: () => ({ data: subscriptionsData.current, isPending: false }),
-  useSubscribeTeamPlan: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useSubscribeTeamPlan: () => ({ mutateAsync: subscribeMutate, isPending: false }),
   useUpdateSubscriptionSeats: () => ({ mutateAsync: updateSeatsMutate, isPending: false, error: null }),
 }));
 
@@ -173,6 +174,17 @@ describe('OrganizationBillingSection - seat editor', () => {
     expect(updateSeatsMutate).not.toHaveBeenCalled();
   });
 
+  it('shows the decrease and maximum warnings for a valid draft', async () => {
+    const { user, input } = await openSeatEditor();
+    await user.clear(input);
+    await user.type(input, '4');
+    expect(screen.getByText(/Decreasing seats will not affect/)).toBeTruthy();
+
+    await user.clear(input);
+    await user.type(input, '100');
+    expect(screen.getByText(/Maximum number of seats/)).toBeTruthy();
+  });
+
   it('shows no decrease or maximum warning for a partial or invalid draft', async () => {
     const { user, input } = await openSeatEditor();
     await user.clear(input);
@@ -205,5 +217,53 @@ describe('OrganizationBillingSection - seat editor', () => {
     expect(link.getAttribute('href')).toBe(ExternalLinks.support);
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+});
+
+describe('OrganizationBillingSection - subscribe mode', () => {
+  const openSubscribe = async () => {
+    subscriptionsData.current = [];
+    subscribeMutate.mockReset();
+    subscribeMutate.mockResolvedValue({});
+    renderSection();
+    const user = userEvent.setup({ delay: null });
+    await user.click(screen.getByRole('button', { name: /subscribe now/i }));
+    const input = screen.getByTestId('organization-billing-seats-input') as HTMLInputElement;
+    return { user, input, submit: screen.getByRole('button', { name: 'Subscribe' }) };
+  };
+
+  it('sends the typed seat count to checkout as the quantity', async () => {
+    const { user, input, submit } = await openSubscribe();
+    await user.clear(input);
+    await user.type(input, '12');
+    await user.click(submit);
+
+    expect(subscribeMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ quantity: 12, organizationId: 'org1', priceId: ORGANIZATION_SUBSCRIPTION_PRICE_ID })
+    );
+  });
+
+  it('keeps Subscribe disabled for an out-of-range count, even after blur, and never calls checkout', async () => {
+    const { user, input, submit } = await openSubscribe();
+    await user.clear(input);
+    await user.type(input, '500');
+    expect(submit.hasAttribute('disabled')).toBe(true);
+
+    await user.tab();
+    expect(submit.hasAttribute('disabled')).toBe(true);
+
+    fireEvent.click(submit);
+    expect(subscribeMutate).not.toHaveBeenCalled();
+  });
+
+  it('keeps Subscribe disabled while the field is empty', async () => {
+    const { user, input, submit } = await openSubscribe();
+    await user.clear(input);
+    expect(submit.hasAttribute('disabled')).toBe(true);
+
+    await user.tab();
+    expect(submit.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(submit);
+    expect(subscribeMutate).not.toHaveBeenCalled();
   });
 });
