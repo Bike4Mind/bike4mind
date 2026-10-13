@@ -25,7 +25,7 @@ import { Link } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { CREDIT_SOURCE } from '@client/app/constants/agentForm';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
-import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
+import CreditIcon from '../svgs/icons/CreditIcon';
 import { AgentAvatar } from './AgentAvatar';
 
 interface AgentViewProps {
@@ -245,14 +245,15 @@ const AgentView: React.FC<AgentViewProps> = ({ agent, title, subtitle, headerAct
                               mb: 0,
                             }}
                           >
-                            <Bike4MindIcon
-                              size="12"
-                              fill={
-                                (useOwnCredits ? currentCredits : currentUser?.currentCredits || 0) <
-                                lowCreditsThreshold
-                                  ? 'var(--joy-palette-danger-500)'
-                                  : 'var(--joy-palette-text-tertiary)'
-                              }
+                            <CreditIcon
+                              sx={{
+                                fontSize: 12,
+                                color:
+                                  (useOwnCredits ? currentCredits : currentUser?.currentCredits || 0) <
+                                  lowCreditsThreshold
+                                    ? 'danger.500'
+                                    : 'text.tertiary',
+                              }}
                             />
                             {(useOwnCredits ? currentCredits : currentUser?.currentCredits || 0).toLocaleString()}
                           </Typography>
