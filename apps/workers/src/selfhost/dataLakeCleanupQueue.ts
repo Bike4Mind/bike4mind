@@ -1,6 +1,6 @@
 import type { Context, SQSEvent } from 'aws-lambda';
 import type { Logger } from '@bike4mind/observability';
-import { dispatch } from '@server/queueHandlers/dataLakeCleanup';
+import { dispatch } from '@workers/queueHandlers/dataLakeCleanup';
 import { changeMessageVisibility } from '@server/utils/sqs';
 import type { SelfHostWorker } from './selfHostWorker';
 

@@ -1,6 +1,7 @@
 // One- or two-digit numbers, alone or comma-listed, so a bracketed year or count (`[2016]`,
-// `[146]`) is never read as a citation.
-const CITATION_MARKER = /\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]/g;
+// `[146]`) is never read as a citation. Spaces and tabs only between numbers: the reply renderer
+// splits text at a line break, so a list spanning one could not be linked there.
+const CITATION_MARKER = /\[(\d{1,2}(?:[ \t]*,[ \t]*\d{1,2})*)\]/g;
 const MARKER_NUMBER = /\d{1,2}/g;
 
 export type CitationMarkerNumber = {

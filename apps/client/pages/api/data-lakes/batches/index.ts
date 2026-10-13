@@ -15,7 +15,7 @@ import { CreateBatchRequestInput, isLakeIngestable } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { recordReconcilerForcedTerminal } from '@server/utils/cloudwatch';
-import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
+import { enqueueTaxonomyAnalysisIfWanted } from '@server/dataLakes/dataLakeBatchProgress';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })

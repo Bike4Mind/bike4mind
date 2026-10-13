@@ -71,7 +71,8 @@ export class S3Storage extends BaseStorage {
   }
 
   /**
-   * @param input Input can be a string, a buffer or a path to a file(but not external URL)
+   * @param input A string (stored as literal content) or a buffer. Never interpreted as a path;
+   * use `uploadFile` for local files.
    * @param destination Destination path with filename
    *
    * @returns The path where the file is uploaded
@@ -82,22 +83,39 @@ export class S3Storage extends BaseStorage {
     options?: Omit<PutObjectCommandInput, 'Bucket' | 'Key' | 'Body'>,
     abortSignal?: AbortSignal
   ): Promise<string> {
-    let content: Buffer | Readable | string;
-
     let contentType = mime.lookup(destination);
 
     if (Buffer.isBuffer(input)) {
       const fileType = await fileTypeFromBuffer(input);
       if (fileType) contentType = fileType.mime;
-      content = input;
-    } else if (fs.existsSync(input)) {
-      content = fs.createReadStream(input);
-    } else if (typeof input === 'string') {
-      content = input;
-    } else {
-      content = Readable.from(input);
     }
 
+    return this.put(input, destination, contentType, options, abortSignal);
+  }
+
+  /**
+   * Streams a local file to storage.
+   * @param localPath Path of a file on the local filesystem
+   * @param destination Destination path with filename
+   *
+   * @returns The path where the file is uploaded
+   */
+  async uploadFile(
+    localPath: string,
+    destination: string,
+    options?: Omit<PutObjectCommandInput, 'Bucket' | 'Key' | 'Body'>,
+    abortSignal?: AbortSignal
+  ): Promise<string> {
+    return this.put(fs.createReadStream(localPath), destination, mime.lookup(destination), options, abortSignal);
+  }
+
+  private async put(
+    content: Buffer | Readable | string,
+    destination: string,
+    contentType: string | false,
+    options?: Omit<PutObjectCommandInput, 'Bucket' | 'Key' | 'Body'>,
+    abortSignal?: AbortSignal
+  ): Promise<string> {
     await this.s3.send(
       new PutObjectCommand({
         Bucket: this.bucketName,

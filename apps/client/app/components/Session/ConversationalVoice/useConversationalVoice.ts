@@ -93,6 +93,31 @@ async function reconcileVoiceSession(sessionId: string | null): Promise<void> {
   }
 }
 
+// Connected-time billing reads these reports: the first marks the call connected, each one
+// advances its last activity, so a tab closed mid-call is billed up to its last beat. Best-effort -
+// a lost beat only shortens the billed time.
+const VOICE_HEARTBEAT_MS = 30_000;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+// The session token names the hold this call bills against, so a beat never marks a newer one.
+function reportVoiceActivity(sessionId: string, sessionToken: string): void {
+  api.post(`/api/voice/v2/sessions/${sessionId}/activity`, { sessionToken }).catch(() => {});
+}
+
+function startHeartbeat(sessionId: string | null, sessionToken: string): void {
+  stopHeartbeat();
+  if (!sessionId) return;
+  reportVoiceActivity(sessionId, sessionToken);
+  heartbeatTimer = setInterval(() => reportVoiceActivity(sessionId, sessionToken), VOICE_HEARTBEAT_MS);
+}
+
+function stopHeartbeat(): void {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
 function formatSessionsError(err: unknown): string {
   if (axios.isAxiosError(err)) {
     const status = err.response?.status;
@@ -227,11 +252,13 @@ async function establishConnection(
         // drop gets its own full set of retries.
         reconnectAttempts = 0;
         clearReconnectTimer();
+        startHeartbeat(activeSessionId, bootstrap.clientBootstrap.sessionToken);
         set({ phase: 'connected', errorMessage: null });
       },
       onDisconnect: details => {
         if (isStale()) return;
         conversation = null;
+        stopHeartbeat();
         // Abnormal close (network drop - common on mobile) -> bounded auto-reconnect
         // on the SAME session. A user-/agent-initiated end is a real end: reconcile
         // the credit hold and stop.
@@ -311,6 +338,7 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     // exactly once - here.
     startGen++;
     clearReconnectTimer();
+    stopHeartbeat();
     reconnectAttempts = 0;
     const conv = conversation;
     const sid = activeSessionId;

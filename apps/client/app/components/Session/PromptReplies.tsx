@@ -45,8 +45,7 @@ import ImageDisplay from './ImageDisplay';
 import { InsufficientCreditsNotice } from './InsufficientCreditsNotice';
 import MementoIndicator from './MementoIndicator';
 import { agentAvatarFallbackSx } from '@client/app/components/Agent/AgentAvatar';
-import { remarkGfmNoSingleTilde, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
-import remarkMath from 'remark-math';
+import { assistantReplyRemarkPlugins, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import rehypeKatex from 'rehype-katex';
 import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
@@ -66,7 +65,6 @@ import { isAxiosError } from 'axios';
 import { z } from 'zod';
 import { useConfig } from '@client/app/hooks/data/settings';
 import {
-  hasCompleteOpeningTag,
   parseArtifactsWithFallback,
   shouldWarnElidedArtifact,
   validateMermaidSyntax,
@@ -83,11 +81,12 @@ import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/a
 import NavigationButtons from './NavigationButtons';
 import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';
+import EnableWebSearchAction from './EnableWebSearchAction';
 import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
-import { getReplyTruncationState } from '@client/app/utils/replyTruncation';
+import { getReplyTruncationState, repairTruncatedArtifact } from '@client/app/utils/replyTruncation';
 
 import SearchResultCards from './SearchResultCards';
 import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
@@ -1318,8 +1317,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   const linksCitationMarkers = shouldLinkCitationMarkers(promptMeta?.citables ?? NO_CITABLES, !!completed);
   const replyRemarkPlugins = useMemo(
     (): ReactMarkdownOptions['remarkPlugins'] => [
-      remarkGfmNoSingleTilde,
-      [remarkMath, { singleDollarTextMath: false }],
+      ...assistantReplyRemarkPlugins,
       ...(linksCitationMarkers ? [remarkCitationMarkers] : []),
     ],
     [linksCitationMarkers]
@@ -1362,23 +1360,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
         preprocessedContent = preprocessedContent.substring(0, artifactIndex).trim();
       }
     } else if (isTruncatedArtifact) {
-      // Completed but truncated mid-artifact. Target the LAST opening tag - that's the
-      // dangling one; any earlier artifacts are already closed and must be left intact.
-      // If that opening tag is complete (has a closing `>`), best-effort close the
-      // artifact so the partial parses into a previewable/downloadable card (a truncation
-      // banner is rendered above it). If the opening tag itself was cut off mid-attribute,
-      // drop the partial from that tag onward so no raw HTML leaks into the bubble.
-      const artifactIndex = preprocessedContent.lastIndexOf('<artifact');
-      const tail = artifactIndex !== -1 ? preprocessedContent.substring(artifactIndex) : '';
-      if (hasCompleteOpeningTag(tail)) {
-        preprocessedContent = `${preprocessedContent.trimEnd()}\n</artifact>`;
-      } else {
-        // Opening tag truncated mid-attribute - nothing renderable. Log the dropped
-        // length so mid-attribute truncations are observable if they occur in prod.
-        console.warn(`[Artifacts] Dropping truncated artifact with incomplete opening tag (${tail.length} chars)`);
-        preprocessedContent =
-          artifactIndex === -1 ? preprocessedContent : preprocessedContent.substring(0, artifactIndex).trim();
-      }
+      preprocessedContent = repairTruncatedArtifact(preprocessedContent);
     }
 
     // Parse explicit <artifact> tags, then promote any bare/fenced HTML document left in the
@@ -1881,6 +1863,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                     )}
 
                     {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
+                    {completed && <EnableWebSearchAction reply={cleanReply} />}
                     {replyActions}
                   </Typography>
                 </Box>

@@ -629,6 +629,16 @@ describe('POST /api/embed/chat - server-side tools', () => {
     return mockExecuteCompletion.mock.calls[0][0];
   }
 
+  it('builds the tools as an internal-origin caller with no api key', async () => {
+    hydrateWith();
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+
+    const deps = mockBuildSharedTools.mock.calls[0][0] as { authOrigin: string; apiKeyId?: string };
+    expect(deps.authOrigin).toBe('internal');
+    expect(deps.apiKeyId).toBeUndefined();
+  });
+
   it('KB is on by default, scoped to the agent project file set, with a capped tool loop', async () => {
     hydrateWith();
     const res = await post(CHAT);

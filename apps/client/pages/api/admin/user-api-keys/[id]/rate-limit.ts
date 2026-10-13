@@ -5,7 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 
 /**
@@ -50,7 +50,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       // Attributed to the key owner. Best-effort for the same reason as the
       // reset route: the write already landed, and an orphaned key (owner doc
       // deleted) is exactly the case an admin edit exists for.
-      await logEvent(
+      await logEventSafe(
         {
           userId: apiKey.userId,
           type: UserApiKeyEvents.UPDATED,
@@ -63,10 +63,10 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
             ],
           },
         },
-        { ability: req.ability }
-      ).catch(error => {
-        req.logger.warn(`Failed to log rate-limit update event for API key ${apiKey.id}: ${error}`);
-      });
+        { ability: req.ability },
+        req.logger,
+        `API key ${apiKey.id}`
+      );
 
       req.logger.info(
         `Admin ${req.user.username} (${req.user.id}) set rate limits ${updated.rateLimit.requestsPerMinute}/min, ` +

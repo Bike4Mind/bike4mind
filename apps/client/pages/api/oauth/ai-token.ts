@@ -34,7 +34,7 @@ import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 
 /** Minted key lifetime. The app caches the key per-user and re-exchanges only when it expires. */
-const AI_TOKEN_TTL_SECONDS = 15 * 60; // 900s
+const AI_TOKEN_TTL_SECONDS = userApiKeyService.MAX_EXCHANGE_KEY_TTL_MS / 1000;
 
 /** Per-`client_id` mint budget. A federated app calls ~once per user per TTL window. */
 const PER_CLIENT_RATE_LIMIT = 300;
@@ -209,8 +209,9 @@ const handler = baseApi({ auth: false })
     //    key can't be re-read (only its hash is stored), so we revoke any prior one and mint
     //    fresh. Tagged via metadata.oauthClientId - NOT productId, which carries a global
     //    per-product active-key cap that would reject mints past 20 concurrent users.
-    //    createdFrom 'oauth-exchange' puts the key in its own per-user cap pool (ApiKeyCapPool),
-    //    so live authorizations across many clients never consume the user's standard key slots.
+    //    createExchangeUserApiKey stamps createdFrom 'oauth-exchange', putting the key in its own
+    //    per-user cap pool (ApiKeyCapPool), so live authorizations across many clients never
+    //    consume the user's standard key slots.
     const existingKeys = await userApiKeyRepository.findByUserId(b4mUserId);
     const priorExchangeKeys = existingKeys.filter(
       k =>
@@ -226,9 +227,9 @@ const handler = baseApi({ auth: false })
       );
     }
 
-    let minted: Awaited<ReturnType<typeof userApiKeyService.createUserApiKey>>;
+    let minted: Awaited<ReturnType<typeof userApiKeyService.createExchangeUserApiKey>>;
     try {
-      minted = await userApiKeyService.createUserApiKey(
+      minted = await userApiKeyService.createExchangeUserApiKey(
         b4mUserId,
         {
           name: `AI (federated: ${client.name})`,
@@ -237,7 +238,6 @@ const handler = baseApi({ auth: false })
           metadata: {
             clientIP: clientIp,
             userAgent,
-            createdFrom: 'oauth-exchange',
             oauthClientId: client_id,
           },
         },
@@ -256,7 +256,7 @@ const handler = baseApi({ auth: false })
       throw err;
     }
 
-    // 8. Audit - a single `mint` entry (createUserApiKey does not emit one).
+    // 8. Audit - a single `mint` entry (createExchangeUserApiKey does not emit one).
     await UserApiKeyAuditLog.create({
       action: 'mint',
       keyId: minted.id,

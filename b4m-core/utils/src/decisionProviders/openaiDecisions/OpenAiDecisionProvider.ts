@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { DecisionModelId, RawDecisionAnswer } from '@bike4mind/common';
-import { readJson } from '../../videoProviders/http';
+import { readJson } from '../../generationProviders/http';
 import { classifyStatus, parseRetryAfterMs, postJson } from '../http';
 import {
   DecisionProviderError,

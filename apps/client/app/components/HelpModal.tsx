@@ -162,7 +162,7 @@ export const HelpModal: React.FC = () => {
           <>
             Beta users, please enjoy experimenting{productTitle ? ` with ${productTitle}` : ''}!
             <ul>
-              <li>Q&A with the OpenAI GPT 3.5 and 4 models</li>
+              <li>Chat with leading AI models from OpenAI, Anthropic, Google, xAI and more</li>
               <li>Try the voice to text and dictate your prompts</li>
               <li>
                 Upload new <Link href="/knowledge" onClick={handleLinkClick}></Link> - Add your own PDF, TXT, CSV, and

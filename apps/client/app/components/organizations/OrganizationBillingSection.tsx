@@ -5,8 +5,8 @@ import {
   useSubscribeTeamPlan,
   useUpdateSubscriptionSeats,
 } from '@client/app/hooks/data/subscriptions';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
-import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
+import { useTeamPlanAvailable, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import {
   SubscriptionOwnerType,
   ISubscription,
@@ -14,7 +14,6 @@ import {
   pickDisplayedSubscription,
 } from '@client/lib/subscriptions/types';
 import AddIcon from '@mui/icons-material/Add';
-import RemoveIcon from '@mui/icons-material/Remove';
 import GroupIcon from '@mui/icons-material/Group';
 import PaymentIcon from '@mui/icons-material/Payment';
 import EventIcon from '@mui/icons-material/Event';
@@ -27,11 +26,11 @@ import {
   CircularProgress,
   FormControl,
   FormLabel,
-  IconButton,
   Modal,
   ModalClose,
   ModalDialog,
   Stack,
+  Tooltip,
   Typography,
   Divider,
   Card,
@@ -39,6 +38,8 @@ import {
   LinearProgress,
 } from '@mui/joy';
 import dayjs from 'dayjs';
+import SeatCountInput from './SeatCountInput';
+import ContactSalesNote from './ContactSalesNote';
 import { useState, useEffect, useMemo } from 'react';
 
 type OrganizationBillingSectionProps = {
@@ -71,6 +72,7 @@ const SubscriptionModal = ({
   // Clamped on read: the initial pick can predate the seat settings loading, or sit outside a range an
   // admin has since changed, and update-seats/subscribe reject anything outside it.
   const seats = Math.min(Math.max(requestedSeats, minimumSeats), planMaxSeats);
+  const [isSeatsInvalid, setIsSeatsInvalid] = useState(false);
   const updateSeats = useUpdateSubscriptionSeats();
 
   // Update seats when organization.seats changes
@@ -103,19 +105,11 @@ const SubscriptionModal = ({
     }
   };
 
-  const handleIncreaseSeats = () => {
-    setSeats(Math.min(seats + 1, planMaxSeats));
-  };
-
-  const handleDecreaseSeats = () => {
-    setSeats(Math.max(seats - 1, minimumSeats));
-  };
-
   // Calculate if we're decreasing seats from current allocation
-  const isDecreasingSeats = subscription && seats < organization.seats;
+  const isDecreasingSeats = !isSeatsInvalid && subscription && seats < organization.seats;
 
   // Add warning message for max seats
-  const isAtMaxSeats = seats >= planMaxSeats;
+  const isAtMaxSeats = !isSeatsInvalid && seats >= planMaxSeats;
 
   const renderPrice = (price: number) => {
     return `$${price}`;
@@ -152,33 +146,18 @@ const SubscriptionModal = ({
               }}
               className="organization-billing-seats-container"
             >
-              <IconButton
-                variant="soft"
-                color="neutral"
-                disabled={seats <= minimumSeats}
-                onClick={handleDecreaseSeats}
+              <SeatCountInput
+                value={seats}
+                min={minimumSeats}
+                max={planMaxSeats}
+                onChange={setSeats}
+                onInvalidChange={setIsSeatsInvalid}
                 size="lg"
-                className="organization-billing-seats-decrease"
-              >
-                <RemoveIcon />
-              </IconButton>
-              <Typography
-                level="h4"
-                sx={{ minWidth: '60px', textAlign: 'center' }}
-                className="organization-billing-seats-value"
-              >
-                {seats}
-              </Typography>
-              <IconButton
-                variant="soft"
-                color="neutral"
-                onClick={handleIncreaseSeats}
-                size="lg"
-                disabled={isAtMaxSeats}
-                className="organization-billing-seats-increase"
-              >
-                <AddIcon />
-              </IconButton>
+                buttonVariant="soft"
+                ariaLabel="Number of seats"
+                testId="organization-billing-seats-input"
+                classNamePrefix="organization-billing-seats"
+              />
             </Box>
           </FormControl>
 
@@ -271,6 +250,8 @@ const SubscriptionModal = ({
             )}
           </Typography>
 
+          <ContactSalesNote testIdPrefix="organization-billing" mt={2} />
+
           {updateSeats.error && (
             <Typography level="body-sm" color="danger" mt={2}>
               {updateSeats.error.message}
@@ -294,6 +275,7 @@ const SubscriptionModal = ({
           <Button
             onClick={handleSubmit}
             loading={loading || updateSeats.isPending}
+            disabled={isSeatsInvalid}
             size="lg"
             className="organization-billing-submit-button"
           >
@@ -310,6 +292,7 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
   const subscriptions = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
   const stripePortal = useStripePortal();
   const subscribeTeamPlan = useSubscribeTeamPlan();
+  const teamPlanAvailable = useTeamPlanAvailable();
   const subscription = pickDisplayedSubscription(subscriptions.data ?? []);
   // A delinquent plan is still a plan: the row exists so the Billing Portal stays reachable,
   // but it must not read as healthy - Stripe is dunning it and entitlements deny access.
@@ -462,16 +445,22 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
                     )}
                   </Box>
                 ) : (
-                  <Button
-                    variant="solid"
-                    color="primary"
-                    onClick={handleOpenSubscriptionModal}
-                    loading={subscribeTeamPlan.isPending}
-                    disabled={pricePerSeat === null}
-                    className="organization-billing-subscribe-button"
-                  >
-                    Subscribe Now
-                  </Button>
+                  <Tooltip title={teamPlanAvailable ? undefined : TEAM_PLAN_UNAVAILABLE_MESSAGE} placement="bottom">
+                    {/* Span so the tooltip still fires on hover/focus while the button is disabled. */}
+                    <span tabIndex={teamPlanAvailable ? undefined : 0}>
+                      <Button
+                        variant="solid"
+                        color="primary"
+                        onClick={handleOpenSubscriptionModal}
+                        loading={subscribeTeamPlan.isPending}
+                        disabled={pricePerSeat === null || !teamPlanAvailable}
+                        className="organization-billing-subscribe-button"
+                        data-testid="organization-billing-subscribe-btn"
+                      >
+                        Subscribe Now
+                      </Button>
+                    </span>
+                  </Tooltip>
                 )}
               </Box>
 

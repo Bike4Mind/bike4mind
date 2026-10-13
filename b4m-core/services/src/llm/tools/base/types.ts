@@ -27,6 +27,7 @@ import {
   ILakeConfigChangeEventRepository,
   ILakeMembershipChangeEventRepository,
   ModelInfo,
+  type AuthOrigin,
 } from '@bike4mind/common';
 
 /**
@@ -230,10 +231,17 @@ export interface ToolContext {
    */
   organizationId?: string;
   /**
+   * How the turn was authenticated (see AuthOrigin). Required so that every door that runs tools
+   * has to decide it: a tool that must refuse non-session turns checks `authOrigin === 'session'`
+   * and fails closed, never reading a missing `apiKeyId` as a session. Agrees with `apiKeyId`
+   * (enforced where the context is built - see generateTools).
+   */
+  authOrigin: AuthOrigin;
+  /**
    * The `b4m_live_` key that authenticated the turn, when one did (`/api/chat`, `/api/ai/llm`).
    * Server-derived from `req.apiKeyInfo`, never from a request body. Attribution only: a lake
    * write the tool drives is audited under the key (see buildToolAccessContext), while
-   * authorization still runs as `userId`. Absent = a session turn.
+   * authorization still runs as `userId`. Present exactly when `authOrigin` is `apiKey`.
    */
   apiKeyId?: string;
   /**

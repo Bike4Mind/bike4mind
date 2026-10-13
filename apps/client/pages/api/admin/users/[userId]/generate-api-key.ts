@@ -12,7 +12,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import { toObjectIdString } from '@server/utils/objectId';
 import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 import { ADMIN_ONLY_API_KEY_SCOPES, USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
@@ -242,7 +242,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       // tenant's asset and is invisible on the lake side - it grants nothing there, so it appears in
       // no grant listing. Recording it here makes "which keys are bound to this lake" answerable
       // without grepping logs.
-      await logEvent(
+      await logEventSafe(
         {
           userId: targetUserId,
           type: UserApiKeyEvents.CREATED,
@@ -257,7 +257,9 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
             preauthorizedLakeIds: lakeBinding,
           },
         },
-        { ability: req.ability }
+        { ability: req.ability },
+        req.logger,
+        `API key ${newApiKey.id}`
       );
 
       // Audit trail with admin details. `name` is escaped for the same reason the usernames inside
