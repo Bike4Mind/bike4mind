@@ -67,7 +67,7 @@ Anthropic models are available via both the Anthropic API and AWS Bedrock. Your 
 
 ### Local Models (Ollama)
 
-If your organization has Ollama configured, you can access any locally-hosted models installed on your organization's Ollama instance. Nothing leaves your machine.
+If your organization has Ollama configured, you can access any locally-hosted models installed on your organization's Ollama instance. Requests go only to that instance, never to an external provider.
 
 ### Retiring Soon
 
