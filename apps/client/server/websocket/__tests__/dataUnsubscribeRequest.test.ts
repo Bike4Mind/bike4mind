@@ -41,11 +41,6 @@ vi.mock('@bike4mind/database', () => ({
   QuerySubscription: { updateOne: (...args: unknown[]) => mockUpdateOne(...args) },
 }));
 
-const mockAssertAccountStateUsable = vi.fn();
-vi.mock('@server/cli/auth', () => ({
-  assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
-}));
-
 vi.mock('@server/utils/errors', () => ({
   NotFoundError: class NotFoundError extends Error {},
 }));
@@ -127,12 +122,10 @@ describe('dataUnsubscribeRequest WS handler - rotation grace window', () => {
     expect(mockUpdateOne).not.toHaveBeenCalled();
   });
 
-  it('still removes the subscriber for a blocked account', async () => {
+  it('still removes the subscriber for a banned account', async () => {
     mockFindByKeyName.mockResolvedValue(null);
     mockIsWithinGraceWindow.mockReturnValue(false);
-    mockAssertAccountStateUsable.mockImplementation(() => {
-      throw new Error('User not found or banned');
-    });
+    mockFindById.mockResolvedValue({ id: 'user-1', isBanned: true });
 
     const result = await func(baseEvent() as any, {} as any, noopLogger as any);
 

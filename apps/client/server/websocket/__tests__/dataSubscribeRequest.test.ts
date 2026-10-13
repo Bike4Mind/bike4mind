@@ -65,11 +65,6 @@ vi.mock('@casl/mongoose', () => ({
   accessibleBy: vi.fn().mockReturnValue({ ofType: vi.fn().mockReturnValue({}) }),
 }));
 
-const mockAssertAccountStateUsable = vi.fn();
-vi.mock('@server/cli/auth', () => ({
-  assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
-}));
-
 vi.mock('@server/models/Subscription', () => ({
   Subscription: {},
 }));
@@ -81,6 +76,7 @@ vi.mock('@server/websocket/subscriptionScopes', () => ({
 
 vi.mock('@server/utils/errors', () => ({
   NotFoundError: class NotFoundError extends Error {},
+  UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 
 vi.mock('@server/websocket/utils', () => ({
@@ -260,13 +256,10 @@ describe('dataSubscribeRequest WS handler - account state', () => {
     (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', tokenVersion: undefined });
   });
 
-  it('rejects a subscribe from a blocked account before resolving or persisting the subscription', async () => {
-    mockAssertAccountStateUsable.mockImplementationOnce(() => {
-      throw new Error('User not found or banned');
-    });
+  it('rejects a subscribe from a banned account before resolving or persisting the subscription', async () => {
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', isBanned: true });
 
     await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toThrow('User not found or banned');
-    expect(mockAssertAccountStateUsable).toHaveBeenCalledWith({ id: 'caller-1', tokenVersion: undefined });
     expect(mockSessionFind).not.toHaveBeenCalled();
     expect(mockQuerySubscriptionFindOneAndUpdate).not.toHaveBeenCalled();
   });
@@ -326,6 +319,26 @@ describe('dataSubscribeRequest WS handler - filters on withheld fields', () => {
     await func(inviteEvent({ documentId: 'doc-1', type: 'Project' }) as any, {} as any, noopLogger as any);
 
     expect(find).toHaveBeenCalled();
+    expect(mockQuerySubscriptionFindOneAndUpdate).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a dispute-pending account', { disputePending: true }],
+    ['a moderation-suspended account', { moderation: { status: 'suspended' } }],
+  ])('still persists the subscription for %s', async (_label, accountState) => {
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'caller-1',
+      tokenVersion: undefined,
+      ...accountState,
+    });
+    const find = vi.fn().mockReturnValue({
+      setOptions: vi.fn().mockReturnValue({ getQuery: () => ({}), then: (r: (v: unknown[]) => void) => r([]) }),
+    });
+    mockFindModelByCollectionName.mockReturnValue({ find });
+    vi.mocked(inviteSubscriptionScope).mockReturnValue({ $or: [] });
+
+    await func(inviteEvent({ documentId: 'doc-1', type: 'Project' }) as any, {} as any, noopLogger as any);
+
     expect(mockQuerySubscriptionFindOneAndUpdate).toHaveBeenCalled();
   });
 });
