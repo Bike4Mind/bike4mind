@@ -368,4 +368,129 @@ describe('useConversationalVoice - credit hold on a failed start', () => {
     await second;
     expect(startSessionMock).toHaveBeenCalledOnce();
   });
+
+  it('settles a superseded fresh-notebook bootstrap even when a newer call has started', async () => {
+    const resolvers: ((value: { data: typeof BOOTSTRAP }) => void)[] = [];
+    apiPost.mockImplementation((url: string) =>
+      url === '/api/voice/v2/sessions'
+        ? new Promise(resolve => {
+            resolvers.push(resolve);
+          })
+        : Promise.resolve({ data: {} })
+    );
+
+    const first = useConversationalVoiceStore.getState().start({});
+    await vi.waitFor(() => expect(sessionCalls()).toHaveLength(1));
+    await useConversationalVoiceStore.getState().end();
+    const second = useConversationalVoiceStore.getState().start({});
+    await vi.waitFor(() => expect(sessionCalls()).toHaveLength(2));
+
+    resolvers[0]({ data: BOOTSTRAP });
+    await first;
+    expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+
+    resolvers[1]({ data: { ...BOOTSTRAP, session: { id: 's2', name: 'Voice' } } });
+    await second;
+  });
+
+  it('still settles a superseded bootstrap when the newer start fails its mic check', async () => {
+    let resolveBootstrap: (value: { data: typeof BOOTSTRAP }) => void = () => {
+      throw new Error('Bootstrap was not requested');
+    };
+    apiPost.mockImplementation((url: string) =>
+      url === '/api/voice/v2/sessions'
+        ? new Promise(resolve => {
+            resolveBootstrap = resolve;
+          })
+        : Promise.resolve({ data: {} })
+    );
+
+    const first = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await vi.waitFor(() => expect(sessionCalls()).toHaveLength(1));
+    await useConversationalVoiceStore.getState().end();
+    getUserMedia.mockRejectedValue(Object.assign(new Error('nope'), { name: 'NotAllowedError' }));
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    expect(useConversationalVoiceStore.getState().phase).toBe('error');
+
+    resolveBootstrap({ data: BOOTSTRAP });
+    await first;
+    expect(endCalls().map(([url]) => url)).toEqual(['/api/voice/v2/sessions/s1/end']);
+  });
+
+  it('clears a pending reconnect timer when the first transport connect fails', async () => {
+    vi.useFakeTimers();
+    try {
+      startSessionMock.mockImplementationOnce(async options => {
+        capturedOptions = options;
+        options.onDisconnect?.({ reason: 'error', message: 'drop', context: new Event('close') });
+        throw new Error('websocket refused');
+      });
+
+      await useConversationalVoiceStore.getState().start({});
+      expect(useConversationalVoiceStore.getState().phase).toBe('error');
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(sessionCalls()).toHaveLength(1);
+      expect(endCalls()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('useConversationalVoice - microphone permission preflight', () => {
+  const query = vi.fn();
+
+  beforeEach(() => {
+    getUserMedia.mockReset();
+    getUserMedia.mockResolvedValue(micStream());
+    query.mockReset();
+    apiPost.mockReset();
+    apiPost.mockResolvedValue({ data: BOOTSTRAP });
+  });
+
+  afterEach(async () => {
+    await useConversationalVoiceStore.getState().end();
+    Object.defineProperty(navigator, 'permissions', { value: undefined, configurable: true });
+  });
+
+  const withPermissions = (impl: () => Promise<{ state: string }>) => {
+    query.mockImplementation(impl);
+    Object.defineProperty(navigator, 'permissions', { value: { query }, configurable: true });
+  };
+  const sessionCalls = () => apiPost.mock.calls.filter(([url]) => url === '/api/voice/v2/sessions');
+
+  it('skips the getUserMedia probe when permission is already granted', async () => {
+    withPermissions(async () => ({ state: 'granted' }));
+    await useConversationalVoiceStore.getState().start({});
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(sessionCalls()).toHaveLength(1);
+  });
+
+  it('probes when the permission state is prompt', async () => {
+    withPermissions(async () => ({ state: 'prompt' }));
+    await useConversationalVoiceStore.getState().start({});
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(sessionCalls()).toHaveLength(1);
+  });
+
+  it('never bootstraps or probes when permission is denied', async () => {
+    withPermissions(async () => ({ state: 'denied' }));
+    await useConversationalVoiceStore.getState().start({});
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(sessionCalls()).toHaveLength(0);
+    expect(useConversationalVoiceStore.getState().errorMessage).toMatch(/Microphone access denied/);
+  });
+
+  it('probes when the permissions query throws or the API is absent', async () => {
+    withPermissions(() => Promise.reject(new TypeError('unsupported')));
+    await useConversationalVoiceStore.getState().start({});
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    await useConversationalVoiceStore.getState().end();
+
+    getUserMedia.mockClear();
+    Object.defineProperty(navigator, 'permissions', { value: undefined, configurable: true });
+    await useConversationalVoiceStore.getState().start({});
+    expect(getUserMedia).toHaveBeenCalledOnce();
+  });
 });

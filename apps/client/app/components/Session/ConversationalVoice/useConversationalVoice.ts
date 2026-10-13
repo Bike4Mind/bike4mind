@@ -63,6 +63,11 @@ let activeSessionId: string | null = null;
 // credit-burning WebSocket the UI can no longer reach.
 let startGen = 0;
 
+// Notebook the newest live start() targets (undefined sessionId = a fresh notebook). Cleared by
+// end() and a failed mic check. A superseded bootstrap skips its own /end only when the newer call
+// is on the same notebook, since /end is keyed by notebook.
+let liveStart: { sessionId?: string } | null = null;
+
 // Bounded auto-reconnect after an abnormal disconnect (network drop - common on
 // mobile when Wi-Fi<->cellular handoff or a signal dip kills the WebSocket). We
 // re-establish against the SAME B4M session id, so server-side conversation
@@ -128,6 +133,18 @@ async function ensureMicrophone(): Promise<void> {
       name: window.isSecureContext ? 'NotSupportedError' : 'SecurityError',
     });
   }
+  // Where the Permissions API answers, skip the probe unless the user would be prompted: on
+  // browsers that do not persist a grant (Safari/iOS) a probe plus the SDK's own open prompts twice.
+  let state: PermissionState | undefined;
+  try {
+    state = (await navigator.permissions?.query({ name: 'microphone' as PermissionName }))?.state;
+  } catch {
+    // microphone is not a queryable permission in every browser - fall through to the probe
+  }
+  if (state === 'denied') {
+    throw Object.assign(new Error('Microphone permission denied'), { name: 'NotAllowedError' });
+  }
+  if (state === 'granted') return;
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   stream.getTracks().forEach(track => track.stop());
 }
@@ -247,11 +264,14 @@ async function establishConnection(
 
   // Superseded during the /sessions request - don't open a connection we'd orphan. A first
   // bootstrap already reserved credits, and end() ran before the id was known, so settle it here.
-  // Skipped when a newer start() is under way: /end is keyed by notebook, so it could settle that
-  // call's hold, and a new bootstrap on the same notebook settles the old hold itself.
+  // A bootstrap that created its own notebook is always settled: no other call can know that id.
+  // Otherwise skipped only when a newer start() targets the same notebook, because /end is keyed by
+  // notebook (it could settle that call's hold) and that bootstrap settles the old hold itself.
   if (isStale()) {
-    if (!isReconnect && useConversationalVoiceStore.getState().phase === 'ended') {
-      void reconcileVoiceSession(bootstrap.session?.id ?? null);
+    const id = bootstrap.session?.id ?? null;
+    const newerSameNotebook = liveStart !== null && id !== null && liveStart.sessionId === id;
+    if (!isReconnect && (isNewSession || !newerSameNotebook)) {
+      void reconcileVoiceSession(id);
     }
     return;
   }
@@ -346,6 +366,7 @@ async function establishConnection(
     // now rather than leave the whole reservation to the sweep.
     const sid = activeSessionId;
     activeSessionId = null;
+    clearReconnectTimer();
     set({ phase: 'error', errorMessage: formatConnectError(err) });
     void reconcileVoiceSession(sid);
   }
@@ -363,11 +384,13 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     clearReconnectTimer();
     reconnectAttempts = 0;
     const myGen = ++startGen;
+    liveStart = { sessionId };
     set({ phase: 'requesting-session', errorMessage: null, mode: null, lastUserMessage: null });
     try {
       await ensureMicrophone();
     } catch (err) {
       if (myGen !== startGen) return;
+      liveStart = null;
       set({ phase: 'error', errorMessage: formatConnectError(err) });
       return;
     }
@@ -382,6 +405,7 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     // triggers) now see a changed generation and no-op, so reconciliation happens
     // exactly once - here.
     startGen++;
+    liveStart = null;
     clearReconnectTimer();
     stopHeartbeat();
     reconnectAttempts = 0;
