@@ -17,6 +17,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/agents',
   },
+  createArtifact: {
+    method: 'POST',
+    path: '/api/v1/artifacts',
+  },
   createCompletion: {
     method: 'POST',
     path: '/api/ai/v1/completions',
@@ -41,6 +45,14 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/sessions',
   },
+  createTranscription: {
+    method: 'POST',
+    path: '/api/v1/transcriptions',
+  },
+  createTranscriptionUpload: {
+    method: 'POST',
+    path: '/api/v1/transcriptions/uploads',
+  },
   createVideoGeneration: {
     method: 'POST',
     path: '/api/v1/video-generations',
@@ -52,6 +64,10 @@ export const operations = {
   deleteAgent: {
     method: 'DELETE',
     path: '/api/v1/agents/{id}',
+  },
+  deleteArtifact: {
+    method: 'DELETE',
+    path: '/api/v1/artifacts/{id}',
   },
   deleteFile: {
     method: 'DELETE',
@@ -97,6 +113,14 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/agent-executions/{id}',
   },
+  getArtifact: {
+    method: 'GET',
+    path: '/api/v1/artifacts/{id}',
+  },
+  getArtifactVersion: {
+    method: 'GET',
+    path: '/api/v1/artifacts/{id}/versions/{version}',
+  },
   getCreditBalance: {
     method: 'GET',
     path: '/api/v1/credits',
@@ -137,6 +161,14 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/agents',
   },
+  listArtifactVersions: {
+    method: 'GET',
+    path: '/api/v1/artifacts/{id}/versions',
+  },
+  listArtifacts: {
+    method: 'GET',
+    path: '/api/v1/artifacts',
+  },
   listDataLakes: {
     method: 'GET',
     path: '/api/v1/data-lakes',
@@ -156,6 +188,10 @@ export const operations = {
   listProjects: {
     method: 'GET',
     path: '/api/v1/projects',
+  },
+  listQuestFiles: {
+    method: 'GET',
+    path: '/api/v1/quests/{id}/files',
   },
   listSessions: {
     method: 'GET',
@@ -200,6 +236,10 @@ export const operations = {
   updateAgent: {
     method: 'PATCH',
     path: '/api/v1/agents/{id}',
+  },
+  updateArtifact: {
+    method: 'PATCH',
+    path: '/api/v1/artifacts/{id}',
   },
   updateFile: {
     method: 'PATCH',
