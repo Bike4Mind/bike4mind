@@ -341,7 +341,8 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       await runHandler(makeReq({ verdict: 'retry_finish' }), res);
 
       expect(mockFinishNcmecReport).toHaveBeenCalledOnce();
-      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith('inc-1', { status: 'reported', ncmecReportId: 'RPT-STORED' });
+      // staleAfterMs=0 bypasses the stale guard -- outcome is known after /finish succeeds
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith('inc-1', { status: 'reported', ncmecReportId: 'RPT-STORED' }, 0);
       expect(res.status).toHaveBeenCalledWith(200);
       const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { ok: boolean; ncmecReportId: string };
       expect(body.ncmecReportId).toBe('RPT-STORED');
@@ -376,6 +377,20 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
 
       expect(mockResolveConfirmedCsam).not.toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(502);
+    });
+
+    it('returns 200 with reportId even when resolveConfirmedCsam returns null (concurrent resolution)', async () => {
+      const incident = { ...CLAIMED_INCIDENT, reviewStatus: 'confirmed_csam', ncmecReportId: 'RPT-STORED' };
+      mockFindById.mockResolvedValue(incident);
+      mockFinishNcmecReport.mockResolvedValue(undefined);
+      mockResolveConfirmedCsam.mockResolvedValue(null); // concurrent mark_reported already closed it
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { ok: boolean; ncmecReportId: string };
+      expect(body.ncmecReportId).toBe('RPT-STORED');
     });
   });
 

@@ -128,10 +128,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       return res.status(502).json({ error: `NCMEC /finish retry failed: ${(err as Error).message}` });
     }
     req.logger.info(`[NCMEC] retry_finish succeeded for incident ${incidentId}, reportId=${incident.ncmecReportId}; marking reported`);
-    await imageModerationIncidentRepository.resolveConfirmedCsam(incidentId, {
-      status: 'reported',
-      ncmecReportId: incident.ncmecReportId,
-    });
+    // Pass staleAfterMs=0: /finish just succeeded so the outcome is known; the stale filter
+    // is not appropriate here (it exists to prevent mark_reported/requeue from racing a live
+    // in-flight submission, not to gate a retry we just confirmed succeeded).
+    const updated = await imageModerationIncidentRepository.resolveConfirmedCsam(
+      incidentId,
+      { status: 'reported', ncmecReportId: incident.ncmecReportId },
+      0
+    );
+    if (!updated) {
+      // Concurrent mark_reported or requeue resolved the incident between our /finish call
+      // and this DB write. The reportId is in the log above; the incident is already closed.
+      req.logger.warn(`[NCMEC] retry_finish: /finish succeeded but DB update found no matching document (concurrent resolution?) for incident ${incidentId}`);
+    }
     return res.status(200).json({ ok: true, ncmecReportId: incident.ncmecReportId });
   }
 
