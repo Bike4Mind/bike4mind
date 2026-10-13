@@ -58,7 +58,10 @@ export type ILakeSkippedFile = z.infer<typeof LakeSkippedFile>;
 export interface ILakeSkippedFileDocument extends ILakeSkippedFile, IMongoDocument {}
 
 /** What a producer reports at skip time; the repository owns the timestamps. */
-export type LakeSkippedFileInput = Omit<ILakeSkippedFile, 'firstSeenAt' | 'lastSeenAt'>;
+export type LakeSkippedFileInput = Omit<ILakeSkippedFile, 'firstSeenAt' | 'lastSeenAt'> & {
+  /** relativePath is only the file name; keep a stored path and use this only on insert. */
+  relativePathIsPartial?: boolean;
+};
 
 export interface ILakeSkippedFileRepository extends IBaseRepository<ILakeSkippedFileDocument> {
   /**

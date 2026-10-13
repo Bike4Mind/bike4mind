@@ -59,12 +59,13 @@ class LakeSkippedFileRepository extends BaseRepository<ILakeSkippedFileDocument>
     // re-recorded on every slice. bulkWrite skips mongoose update validators, so the enums are
     // checked here instead.
     const operations = inputs.map(input => {
-      const { dataLakeId, sourceKind, sourceId, name, relativePath, mimeType, size, reason } = input;
+      const { dataLakeId, sourceKind, sourceId, name, relativePath, relativePathIsPartial, mimeType, size, reason } =
+        input;
       LakeSkippedFileSourceKindSchema.parse(sourceKind);
       LakeSkippedFileReasonSchema.parse(reason);
       // Optional fields are $set or $unset explicitly, so a refreshed row never keeps a stale size
       // or mime type from an earlier skip of the same file.
-      const optional = { relativePath, mimeType, size };
+      const optional = relativePathIsPartial ? { mimeType, size } : { relativePath, mimeType, size };
       const set = Object.fromEntries(Object.entries(optional).filter(([, value]) => value !== undefined));
       const unset: Record<string, ''> = Object.fromEntries(
         Object.entries(optional)
@@ -77,7 +78,10 @@ class LakeSkippedFileRepository extends BaseRepository<ILakeSkippedFileDocument>
           update: {
             $set: { name, reason, lastSeenAt: now, ...set },
             ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
-            $setOnInsert: { firstSeenAt: now },
+            $setOnInsert: {
+              firstSeenAt: now,
+              ...(relativePathIsPartial && relativePath !== undefined ? { relativePath } : {}),
+            },
           },
           upsert: true,
         },

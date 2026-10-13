@@ -1144,6 +1144,7 @@ describe('driveLakeIngest consumer', () => {
         sourceId: 'big',
         name: 'huge.pdf',
         relativePath: 'a/huge.pdf',
+        relativePathIsPartial: false,
         mimeType: 'application/pdf',
         size: 200 * 1024 * 1024,
         reason: 'oversized',
@@ -1212,12 +1213,13 @@ describe('driveLakeIngest consumer', () => {
       h.walkFolder.mockResolvedValue([
         { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
         { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+        { id: 'big', name: 'big.pdf', mimeType: 'application/pdf', relativePath: 'big.pdf', size: 200 * 1024 * 1024 },
       ]);
       h.fetchDriveFileContent.mockResolvedValue(okBytes());
 
       await run();
 
-      expect(h.pruneMissingSkips).toHaveBeenCalledWith('lake1', 'google_drive', new Set(['d1', 'd2']));
+      expect(h.pruneMissingSkips).toHaveBeenCalledWith('lake1', 'google_drive', new Set(['d1', 'd2', 'big']));
     });
   });
 

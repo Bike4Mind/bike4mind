@@ -39,6 +39,20 @@ describe('LakeSkippedFileRepository', () => {
     expect(all[0].lastSeenAt.getTime()).toBeGreaterThanOrEqual(first.lastSeenAt.getTime());
   });
 
+  it('a partial relativePath keeps the stored path on refresh and is used on first insert', async () => {
+    await repo.recordSkip(skip({ relativePath: 'dir/a.txt' }));
+    await repo.recordSkip(skip({ relativePath: 'a.txt', relativePathIsPartial: true }));
+    await repo.recordSkip(skip({ sourceId: 'drive-2', relativePath: 'b.txt', relativePathIsPartial: true }));
+
+    const all = await rows();
+    const byId = Object.fromEntries(all.map(row => [row.sourceId, row]));
+
+    expect(all).toHaveLength(2);
+    expect(byId['drive-1'].relativePath).toBe('dir/a.txt');
+    expect(byId['drive-2'].relativePath).toBe('b.txt');
+    expect(all.every(row => !('relativePathIsPartial' in row))).toBe(true);
+  });
+
   it('recordSkips upserts a whole set in one call, idempotently', async () => {
     const set = [skip({ sourceId: 'a' }), skip({ sourceId: 'b', reason: 'storage_limit' })];
     await repo.recordSkips(set);

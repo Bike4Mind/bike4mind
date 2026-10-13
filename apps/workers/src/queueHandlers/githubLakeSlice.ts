@@ -282,7 +282,7 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
     // vanishes with no trace in the batch - mirrors driveLakeIngest.ts's own pre-fetch size skip.
     // The lake skip-list row was already written above, so only the batch record is needed here.
     for (const { path: oversizedPath, size } of newOversized) {
-      await skip(oversizedPath, 'oversized', size);
+      await skip(oversizedPath, oversizedReason, size);
     }
 
     for (const [index, { candidate, prior }] of toIngest.entries()) {

@@ -1181,6 +1181,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           // Drive allows an empty name; the id still identifies the file.
           name: file.name || file.id,
           relativePath: file.relativePath,
+          relativePathIsPartial: syncMode === 'incremental',
           mimeType: file.mimeType,
           size,
           reason,
