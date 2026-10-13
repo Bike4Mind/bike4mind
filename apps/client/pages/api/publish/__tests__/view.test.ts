@@ -186,6 +186,18 @@ describe('POST /api/publish/view - whose view counts', () => {
     expect(mocks.updateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { externalViewCount: 1 } });
   });
 
+  it('does not count a share-link viewer the share grant refuses', async () => {
+    mocks.parse.mockReturnValue({ kind: 'share', shareToken: 'tok123', assetPath: null });
+    published({ visibility: 'private', accessGate: { kind: 'domain', allowedDomains: ['example.com'] } });
+    mocks.checkShareGrant.mockResolvedValue({ ok: false, status: 403, error: 'Forbidden', reason: 'domain' });
+
+    const { res, promise } = run({ path: '/a/tok123' }, { id: 'stranger' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(mocks.updateOne).not.toHaveBeenCalled();
+  });
+
   it('404s an unknown artifact', async () => {
     mocks.lean.mockReturnValue(null);
 
