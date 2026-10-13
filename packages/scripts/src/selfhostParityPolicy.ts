@@ -133,7 +133,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'function:infra/agentExecutor.ts:AgentExecutor',
-    '00d4555f6a208289054c958832d6ba88f17730777584e46aebae9a13911d8b81',
+    'dd357e4dcc8e4f94cbf3f2d23be2db8a3fb1bca1723b01a2d2bfc52b0e132939',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   gap('function:infra/database.ts:DatabaseCleaner', 'ab828f690cdda6172736a412bcd33e138f35f0525c8306dc0c6a1c31e12b07b2'),
@@ -223,7 +223,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
-    'e60c086717cd00367a15603b1e40320dec23c60b6a2313c66b942118be76466b',
+    'eac469edc46eeafcbcaee5bf5c2e8391e138d3020999fb33729dd2fb4b764432',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   broker(

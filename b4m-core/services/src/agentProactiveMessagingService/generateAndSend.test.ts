@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 /**
  * generateAndSendProactiveMessage has no harness (it needs an LLM, storage and every repository),
  * so the tool deps it hands generateTools are pinned at the source, like the agentExecutor wiring in
- * apps/client/server/queueHandlers/agentExecutor.lakeWriteTools.e2e.test.ts.
+ * apps/workers/src/queueHandlers/agentExecutor.lakeWriteTools.e2e.test.ts.
  */
 describe('generateAndSendProactiveMessage tool deps', () => {
   const source = readFileSync(join(__dirname, 'generateAndSend.ts'), 'utf8');
