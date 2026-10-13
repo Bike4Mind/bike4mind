@@ -26,8 +26,14 @@ vi.mock('@client/app/hooks/data/mfa', () => ({
   useVerifyMFASetup: () => mutation,
   useCancelMFASetup: () => mutation,
 }));
-vi.mock('@client/app/hooks/data/fabFiles', () => ({ useDeleteAllFiles: () => deleteFilesMutation }));
-vi.mock('@client/app/hooks/data/sessions', () => ({ useDeleteAllSessions: () => deleteSessionsMutation }));
+vi.mock('@client/app/hooks/data/fabFiles', () => ({
+  useDeleteAllFiles: () => deleteFilesMutation,
+  useGetFabFiles: () => ({ data: undefined }),
+}));
+vi.mock('@client/app/hooks/data/sessions', () => ({
+  useDeleteAllSessions: () => deleteSessionsMutation,
+  useOwnSessionCount: () => ({ data: undefined }),
+}));
 vi.mock('@client/app/hooks/useDownload', () => ({ useDownload: () => mutation }));
 vi.mock('@client/app/components/common/MFAModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/LanguageSelector', () => ({ default: () => null }));
@@ -65,18 +71,18 @@ describe('GeneralSettingsTab danger zone', () => {
 
   it('opens the notebooks confirm modal', () => {
     renderTab();
-    expect(screen.queryByText('Delete All Sessions')).toBeNull();
+    expect(screen.queryByTestId('delete-all-notebooks-confirm')).toBeNull();
     fireEvent.click(screen.getByTestId('settings-delete-all-notebooks-btn'));
-    expect(screen.getByText('Delete All Sessions')).toBeTruthy();
-    expect(screen.queryByText('Delete All Files')).toBeNull();
+    expect(screen.getByTestId('delete-all-notebooks-confirm')).toBeTruthy();
+    expect(screen.queryByTestId('delete-all-files-confirm')).toBeNull();
   });
 
   it('opens the knowledge files confirm modal', () => {
     renderTab();
-    expect(screen.queryByText('Delete All Files')).toBeNull();
+    expect(screen.queryByTestId('delete-all-files-confirm')).toBeNull();
     fireEvent.click(screen.getByTestId('settings-delete-all-files-btn'));
-    expect(screen.getByText('Delete All Files')).toBeTruthy();
-    expect(screen.queryByText('Delete All Sessions')).toBeNull();
+    expect(screen.getByTestId('delete-all-files-confirm')).toBeTruthy();
+    expect(screen.queryByTestId('delete-all-notebooks-confirm')).toBeNull();
   });
 
   it('confirming the notebooks delete runs only the sessions mutation', () => {

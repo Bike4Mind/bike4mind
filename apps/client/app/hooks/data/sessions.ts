@@ -66,8 +66,17 @@ export function useDeleteAllSessions(options: { onSuccess?: () => void } = {}) {
     },
     onError: error => {
       console.error(error);
-      toast.error('Failed to download files');
+      toast.error('Failed to delete notebooks');
     },
+  });
+}
+
+/** Number of notebooks the caller owns: the same set DELETE /api/sessions removes. */
+export function useOwnSessionCount() {
+  return useQuery({
+    queryKey: ['sessions', 'count'],
+    queryFn: async () => (await api.get<{ count: number }>('/api/sessions/count')).data.count,
+    refetchOnWindowFocus: false,
   });
 }
 
