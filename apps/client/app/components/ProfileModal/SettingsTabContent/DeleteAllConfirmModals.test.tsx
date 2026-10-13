@@ -14,6 +14,9 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({ useGetFabFiles: () => fabFil
 const appTheme = extendTheme({ ...getThemeConfig() });
 const wrap = (ui: React.ReactElement) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
 const props = () => ({ onCancel: vi.fn(), onConfirm: vi.fn(), pending: false });
+const typeWord = (value: string) =>
+  fireEvent.change(screen.getByTestId('delete-all-confirm-input'), { target: { value } });
+const confirmBtn = () => screen.getByTestId('confirm-modal-confirm-btn') as HTMLButtonElement;
 
 describe('DeleteAllNotebooksConfirm', () => {
   beforeEach(() => {
@@ -35,7 +38,8 @@ describe('DeleteAllNotebooksConfirm', () => {
     expect(text).toContain('This deletes 12 notebooks you own');
     expect(text).toContain('inside projects');
     expect(text).toContain('Notebooks others shared with you');
-    expect(text).toContain('stay online');
+    expect(text).toContain('Pages you published from these notebooks are taken down too');
+    expect(text).not.toContain('stay online');
     expect(text).toContain('cannot be undone');
   });
 
@@ -53,6 +57,7 @@ describe('DeleteAllNotebooksConfirm', () => {
     const p = props();
     wrap(<DeleteAllNotebooksConfirm {...p} />);
     fireEvent.click(screen.getByTestId('confirm-modal-cancel-btn'));
+    typeWord('DELETE');
     fireEvent.click(screen.getByTestId('confirm-modal-confirm-btn'));
     expect(p.onCancel).toHaveBeenCalledTimes(1);
     expect(p.onConfirm).toHaveBeenCalledTimes(1);
@@ -85,6 +90,8 @@ describe('DeleteAllKnowledgeFilesConfirm', () => {
     expect(text).toContain('archived data lakes');
     expect(text).toContain('attached to projects or notebooks');
     expect(text).toContain('Files others shared with you are only removed from your list');
+    expect(text).toContain('Pages you published from these files are taken down too');
+    expect(text).not.toContain('stay online');
     expect(text).toContain('cannot be undone');
   });
 
@@ -94,5 +101,47 @@ describe('DeleteAllKnowledgeFilesConfirm', () => {
     expect((screen.getByTestId('confirm-modal-confirm-btn') as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByTestId('confirm-modal-cancel-btn'));
     expect(p.onCancel).not.toHaveBeenCalled();
+  });
+});
+
+describe.each([
+  ['DeleteAllNotebooksConfirm', DeleteAllNotebooksConfirm],
+  ['DeleteAllKnowledgeFilesConfirm', DeleteAllKnowledgeFilesConfirm],
+])('%s typed confirmation', (_name, Dialog) => {
+  it('labels the field with the word to type', () => {
+    wrap(<Dialog {...props()} />);
+    expect(screen.getByLabelText('Type DELETE to confirm')).toBe(screen.getByTestId('delete-all-confirm-input'));
+  });
+
+  it('keeps the delete button disabled until the exact word is typed', () => {
+    const p = props();
+    wrap(<Dialog {...p} />);
+    expect(confirmBtn().disabled).toBe(true);
+    fireEvent.click(confirmBtn());
+    expect(p.onConfirm).not.toHaveBeenCalled();
+
+    typeWord('DELET');
+    expect(confirmBtn().disabled).toBe(true);
+    typeWord('DELETE');
+    expect(confirmBtn().disabled).toBe(false);
+    fireEvent.click(confirmBtn());
+    expect(p.onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['delete', 'Delete', ' DELETE', 'DELETE '])('is case- and whitespace-sensitive: rejects %j', value => {
+    wrap(<Dialog {...props()} />);
+    typeWord(value);
+    expect(confirmBtn().disabled).toBe(true);
+  });
+
+  it('stays disabled while the delete is pending even with the word typed', () => {
+    const { rerender } = wrap(<Dialog {...props()} />);
+    typeWord('DELETE');
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <Dialog {...props()} pending />
+      </CssVarsProvider>
+    );
+    expect(confirmBtn().disabled).toBe(true);
   });
 });
