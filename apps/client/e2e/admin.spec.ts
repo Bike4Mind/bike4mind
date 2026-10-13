@@ -78,7 +78,6 @@ test.describe('Admin - User Search & Sort', () => {
   });
 });
 
-// Dependent tests - must run in order (create -> edit -> delete)
 test.describe('Admin - Growth & Pricing', () => {
   test('should list the Team plan settings without the retired Enable Team Plan toggle', async ({
     page,
@@ -95,6 +94,7 @@ test.describe('Admin - Growth & Pricing', () => {
   });
 });
 
+// Dependent tests - must run in order (create -> edit -> delete)
 test.describe('Admin - User CRUD', () => {
   test('should create, edit, and delete a user', async ({ adminPage }) => {
     test.slow();
