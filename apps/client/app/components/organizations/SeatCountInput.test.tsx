@@ -117,6 +117,15 @@ describe('SeatCountInput', () => {
     expect(onInvalidChange).toHaveBeenLastCalledWith(false);
   });
 
+  it('matches the stepper disabled state to an out-of-range draft, not the hidden value', () => {
+    const { input } = renderInput({ value: 3 });
+    fireEvent.change(input, { target: { value: '999' } });
+
+    // The draft clamps to the maximum, so decrease is live and increase is not.
+    expect(screen.getByRole('button', { name: 'Decrease seats' }).hasAttribute('disabled')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Increase seats' }).hasAttribute('disabled')).toBe(true);
+  });
+
   it('accepts 2.6 as 3 with a minimum of 3', () => {
     const { onChange, onInvalidChange, input } = renderInput();
     fireEvent.change(input, { target: { value: '2.6' } });
@@ -174,6 +183,32 @@ describe('SeatCountInput', () => {
       rerender(element({ onChange, onInvalidChange, value: 5, max: 6 }));
       expect(onInvalidChange).toHaveBeenLastCalledWith(true);
       expect(screen.getByTestId('seat-count-input-error').textContent).toBe('Must be between 3 and 6');
+    });
+  });
+
+  describe('when the parent value changes under a valid draft', () => {
+    const element = (value: number) => (
+      <TestWrapper>
+        <SeatCountInput
+          value={value}
+          min={3}
+          max={10}
+          onChange={vi.fn()}
+          ariaLabel="Seats"
+          testId="seat-count-input"
+          classNamePrefix="seat-count"
+        />
+      </TestWrapper>
+    );
+
+    it('shows the new parent value instead of the stale draft', () => {
+      const { rerender } = render(element(5));
+      const input = screen.getByTestId('seat-count-input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '7' } });
+      expect(input.value).toBe('7');
+
+      rerender(element(6));
+      expect(input.value).toBe('6');
     });
   });
 });

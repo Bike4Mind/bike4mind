@@ -38,9 +38,22 @@ const SeatCountInput = ({
 }: SeatCountInputProps) => {
   // Raw text while editing, so it can be empty or out of range; null shows the last valid value.
   const [draft, setDraft] = useState<string | null>(null);
+  const [lastValue, setLastValue] = useState(value);
   const parsedDraft = draft === null ? null : Math.round(Number.parseFloat(draft));
   const isInvalid = parsedDraft !== null && !(Number.isFinite(parsedDraft) && parsedDraft >= min && parsedDraft <= max);
+  // The number the field stands for, clamped. The stepper works from it so its disabled state matches
+  // the value on screen even while a draft sits out of range.
+  const displayed =
+    parsedDraft !== null && Number.isFinite(parsedDraft) ? Math.min(Math.max(parsedDraft, min), max) : value;
   const label = ariaLabel.toLowerCase();
+
+  // A parent reset while a valid draft is held (e.g. a refetch) should win: drop the draft so the
+  // field shows the value submit will use. Adjusting state during render is how React reconciles a
+  // controlled input with a changed prop without an extra commit.
+  if (value !== lastValue) {
+    setLastValue(value);
+    if (parsedDraft !== null && !isInvalid && parsedDraft !== value) setDraft(null);
+  }
 
   useEffect(() => {
     onInvalidChange?.(isInvalid);
@@ -61,11 +74,8 @@ const SeatCountInput = ({
   };
 
   const step = (delta: number) => {
-    // Step from the number on screen, not the hidden last valid value.
-    const base =
-      parsedDraft !== null && Number.isFinite(parsedDraft) ? Math.min(Math.max(parsedDraft, min), max) : value;
     setDraft(null);
-    onChange(Math.min(Math.max(base + delta, min), max));
+    onChange(Math.min(Math.max(displayed + delta, min), max));
   };
 
   return (
@@ -75,7 +85,7 @@ const SeatCountInput = ({
           variant={buttonVariant}
           color="neutral"
           size={size}
-          disabled={disabled || value <= min}
+          disabled={disabled || displayed <= min}
           onClick={() => step(-1)}
           aria-label={`Decrease ${label}`}
           className={`${classNamePrefix}-decrease`}
@@ -101,7 +111,7 @@ const SeatCountInput = ({
           variant={buttonVariant}
           color="neutral"
           size={size}
-          disabled={disabled || value >= max}
+          disabled={disabled || displayed >= max}
           onClick={() => step(1)}
           aria-label={`Increase ${label}`}
           className={`${classNamePrefix}-increase`}
