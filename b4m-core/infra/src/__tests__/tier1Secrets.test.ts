@@ -37,6 +37,9 @@ describe('TIER1_SECRET_SPECS', () => {
       'SECOPS_PROWLER_INGEST_TOKEN',
       'SECOPS_ATTACK_SIMULATION_INGEST_TOKEN',
       'RATE_LIMIT_INGEST_TOKEN',
+      'NCMEC_ESP_ID',
+      'NCMEC_API_KEY',
+      'NCMEC_ESP_EMAIL',
     ]);
   });
 
