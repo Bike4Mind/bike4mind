@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ApiKeyEvents } from '@bike4mind/common';
 
 /**
  * delete and set-active commit their change before the analytics write, so a
@@ -73,7 +74,11 @@ describe('api-keys/[id] writes - failed analytics write', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ id: 'k1', type: 'openai', isActive: true });
     expect(deleteApiKey).toHaveBeenCalledTimes(1);
-    expect(incrementUserCounter).toHaveBeenCalledTimes(1);
+    expect(incrementUserCounter).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ action: ApiKeyEvents.DELETE_API_KEY, metadata: { id: 'k1' } }),
+      expect.anything()
+    );
     expect((req as any).logger.error).toHaveBeenCalledWith(
       expect.stringMatching(/analytics.*API key k1/),
       expect.any(Error)
@@ -89,7 +94,11 @@ describe('api-keys/[id] writes - failed analytics write', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ id: 'k1', type: 'openai', isActive: true });
     expect(setApiKey).toHaveBeenCalledTimes(1);
-    expect(incrementUserCounter).toHaveBeenCalledTimes(1);
+    expect(incrementUserCounter).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ action: ApiKeyEvents.SET_API_KEY, metadata: { id: 'k1' } }),
+      expect.anything()
+    );
     expect((req as any).logger.error).toHaveBeenCalledWith(
       expect.stringMatching(/analytics.*API key k1/),
       expect.any(Error)

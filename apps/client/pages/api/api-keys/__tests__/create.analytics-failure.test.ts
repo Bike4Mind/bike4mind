@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ApiKeyEvents } from '@bike4mind/common';
 
 /**
  * The key is stored before the analytics write runs, so a failed write must not
@@ -59,7 +60,11 @@ describe('POST /api/api-keys/create - failed analytics write', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual(expect.objectContaining({ id: 'k1' }));
     expect(createApiKey).toHaveBeenCalledTimes(1);
-    expect(incrementUserCounter).toHaveBeenCalledTimes(1);
+    expect(incrementUserCounter).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ action: ApiKeyEvents.CREATE_API_KEY, metadata: expect.objectContaining({ id: 'k1' }) }),
+      expect.anything()
+    );
     expect((req as any).logger.error).toHaveBeenCalledWith(
       expect.stringMatching(/analytics.*API key k1/),
       expect.any(Error)
@@ -71,7 +76,11 @@ describe('POST /api/api-keys/create - failed analytics write', () => {
     await mockRefs.postHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(incrementUserCounter).toHaveBeenCalledTimes(1);
+    expect(incrementUserCounter).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ action: ApiKeyEvents.CREATE_API_KEY, metadata: expect.objectContaining({ id: 'k1' }) }),
+      expect.anything()
+    );
     expect((req as any).logger.error).not.toHaveBeenCalled();
   });
 });
