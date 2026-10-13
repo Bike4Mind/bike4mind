@@ -37,6 +37,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeResearchConfigRepository: {},
   dataLakeResearchRunRepository: {},
   lakeMembershipDecisionRepository: {},
+  lakeSkippedFileRepository: {},
   fabFileRepository: { hardDeleteWithChunks: h.hardDeleteWithChunks },
   fabFileChunkRepository: {},
 }));
@@ -99,6 +100,7 @@ describe('dataLakeCleanup consumer', () => {
           // reason once more: an unwired repo here would leave the trail behind every purge with no
           // symptom, since the sweep call itself is a silent no-op on a missing port.
           dataLakeCorpusActions: expect.anything(),
+          lakeSkippedFiles: expect.anything(),
         }),
         logger,
       })

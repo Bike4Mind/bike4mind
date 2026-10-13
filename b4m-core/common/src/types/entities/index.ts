@@ -108,6 +108,7 @@ export * from './DataLakeFindingTypes';
 export * from './DataLakeProposalTypes';
 export * from './DataLakeResearchTypes';
 export * from './LakeMembershipDecisionTypes';
+export * from './LakeSkippedFileTypes';
 export * from './SreTypes';
 export * from './SecopsTriageTypes';
 export * from './MarketingReportTypes';

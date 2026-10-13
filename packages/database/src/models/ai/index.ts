@@ -26,6 +26,7 @@ export * from './LakeConfigChangeEventModel';
 export * from './LakeMembershipChangeEventModel';
 export * from './LakeMembershipDecisionModel';
 export * from './LakeMembershipRemovalModel';
+export * from './LakeSkippedFileModel';
 export * from './LatticeModel';
 export * from './McpServerModel';
 export * from './MemoryLedgerEventModel';

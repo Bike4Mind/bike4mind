@@ -37,6 +37,9 @@ const h = vi.hoisted(() => ({
   incrementCounter: vi.fn(),
   setTotalFilesIfActive: vi.fn(),
   recordSkippedDriveFile: vi.fn(),
+  recordSkip: vi.fn(),
+  clearSkipSources: vi.fn(),
+  pruneMissingSkips: vi.fn(),
   findDriveFileIdsByBatchId: vi.fn(),
   markUploaded: vi.fn(),
   adoptSyncClaim: vi.fn(),
@@ -94,6 +97,11 @@ vi.mock('@bike4mind/database', () => ({
   fabFileChunkRepository: {},
   // The membership-audit repo the handler wires into every lake add/remove it drives.
   lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  lakeSkippedFileRepository: {
+    recordSkip: h.recordSkip,
+    clearSources: h.clearSkipSources,
+    pruneMissing: h.pruneMissingSkips,
+  },
   sessionRepository: { findAllWithKnowledgeId: h.sessionsWithKnowledgeId, update: h.sessionUpdate },
   userRepository: { findById: h.userRepoFindById },
   orgGoogleDriveConnectionRepository: {
@@ -243,6 +251,9 @@ describe('driveLakeIngest consumer', () => {
     h.markUploaded.mockResolvedValue(undefined);
     h.setTotalFilesIfActive.mockResolvedValue(null);
     h.recordSkippedDriveFile.mockResolvedValue(true);
+    h.recordSkip.mockResolvedValue(undefined);
+    h.clearSkipSources.mockResolvedValue(0);
+    h.pruneMissingSkips.mockResolvedValue(0);
     // A successful release returns the healed doc; null means the claim was taken away first.
     h.releaseSyncClaim.mockResolvedValue({ id: 'conn1', status: 'connected' });
     h.lakeFindById.mockResolvedValue({
@@ -1103,6 +1114,91 @@ describe('driveLakeIngest consumer', () => {
     expect(h.removeFileFromLake).not.toHaveBeenCalled();
     expect(h.batchCreate).not.toHaveBeenCalled();
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+    // Same guard for the not-ingested list: an untrusted empty walk must not wipe it.
+    expect(h.pruneMissingSkips).not.toHaveBeenCalled();
+  });
+
+  describe('not-ingested list', () => {
+    it('records each skipped file on the lake by name, path and reason', async () => {
+      h.walkFolder.mockResolvedValue([
+        {
+          id: 'big',
+          name: 'huge.pdf',
+          mimeType: 'application/pdf',
+          relativePath: 'a/huge.pdf',
+          size: 200 * 1024 * 1024,
+        },
+        { id: 'form', name: 'Survey', mimeType: 'application/vnd.google-apps.form', relativePath: 'a/Survey' },
+        { id: 'full', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+      ]);
+      h.fetchDriveFileContent
+        .mockResolvedValueOnce({ ok: false, reason: 'unsupported', detail: 'application/vnd.google-apps.form' })
+        .mockResolvedValueOnce(okBytes());
+      h.checkStorageLimit.mockRejectedValueOnce(new BadRequestError('storage limit exceeded'));
+
+      await run();
+
+      expect(h.recordSkip).toHaveBeenCalledWith({
+        dataLakeId: 'lake1',
+        sourceKind: 'google_drive',
+        sourceId: 'big',
+        name: 'huge.pdf',
+        relativePath: 'a/huge.pdf',
+        mimeType: 'application/pdf',
+        size: 200 * 1024 * 1024,
+        reason: 'oversized',
+      });
+      expect(h.recordSkip).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceId: 'form', name: 'Survey', reason: 'unsupported' })
+      );
+      // The fetched byte count, not the (absent) listed size, is what the quota refused.
+      expect(h.recordSkip).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceId: 'full', reason: 'storage_limit', size: 10 })
+      );
+    });
+
+    it('records the skip on the lake list even when the chain already counted it', async () => {
+      // recordSkippedDriveFile's false is a per-chain de-dup, not "not skipped".
+      h.recordSkippedDriveFile.mockResolvedValue(false);
+      h.walkFolder.mockResolvedValue([
+        { id: 'big', name: 'huge.pdf', mimeType: 'application/pdf', relativePath: 'huge.pdf', size: 200 * 1024 * 1024 },
+      ]);
+
+      await run();
+
+      expect(h.recordSkip).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'big', reason: 'oversized' }));
+    });
+
+    it('never records a rate-limited fetch, which is deferred rather than skipped', async () => {
+      h.walkFolder.mockResolvedValue([{ id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+      h.fetchDriveFileContent.mockResolvedValue({ ok: false, reason: 'rate_limited' });
+
+      await run();
+
+      expect(h.recordSkip).not.toHaveBeenCalled();
+    });
+
+    it("clears a file's row once it ingests", async () => {
+      h.walkFolder.mockResolvedValue([{ id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+      await run();
+
+      expect(h.upload).toHaveBeenCalledTimes(1);
+      expect(h.clearSkipSources).toHaveBeenCalledWith('lake1', 'google_drive', ['file-1']);
+    });
+
+    it('prunes rows for files a full walk no longer sees', async () => {
+      h.walkFolder.mockResolvedValue([
+        { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
+        { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+      ]);
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+      await run();
+
+      expect(h.pruneMissingSkips).toHaveBeenCalledWith('lake1', 'google_drive', new Set(['d1', 'd2']));
+    });
   });
 
   it('refuses a folder over the candidate cap before creating any batch or FabFile', async () => {
@@ -2686,6 +2782,24 @@ describe('driveLakeIngest consumer', () => {
       });
     });
 
+    it('clears not-ingested rows for files that left the folder, tracked or not', async () => {
+      // `skipped` never ingested, so it has no FabFile and only the untracked arm can report it.
+      withCursor();
+      setExisting([{ id: 'ff-d1', driveFileId: 'd1', userId: 'user1' }]);
+      h.listChanges.mockResolvedValue({
+        changes: [
+          { fileId: 'skipped', removed: true },
+          { fileId: 'd1', removed: true },
+        ],
+        newStartPageToken: 'cursor-1',
+      });
+
+      await run();
+
+      expect(h.clearSkipSources).toHaveBeenCalledWith('lake1', 'google_drive', ['skipped', 'd1']);
+      expect(h.pruneMissingSkips).not.toHaveBeenCalled();
+    });
+
     it('still ingests the adds in a window that also carries an unconfirmed removal', async () => {
       // A mixed window must not let the removal handling swallow the adds (the removed all-or-nothing
       // guard this replaced dropped `pureAdds`/`changed` when it fired).
@@ -2926,6 +3040,7 @@ describe('classifyDriveChanges', () => {
       changed: [],
       removedFileIds: [],
       unconfirmedRemovalIds: [],
+      untrackedGoneIds: [],
       ambiguous: 0,
     });
   });
@@ -2946,6 +3061,7 @@ describe('classifyDriveChanges', () => {
       logger
     );
     expect(result.adds).toEqual([]);
+    expect(result.untrackedGoneIds).toEqual(['d1']);
   });
 
   it('ignores a new (never-tracked) file that Drive reports removed - nothing to add or prune', async () => {
@@ -2956,7 +3072,15 @@ describe('classifyDriveChanges', () => {
       () => undefined,
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], unconfirmedRemovalIds: [], ambiguous: 0 });
+    // Nothing to add or unpick, but a not-ingested row for it (if the sync skipped it) must go.
+    expect(result).toEqual({
+      adds: [],
+      changed: [],
+      removedFileIds: [],
+      unconfirmedRemovalIds: [],
+      untrackedGoneIds: ['d1'],
+      ambiguous: 0,
+    });
     expect(h.isUnderRoot).not.toHaveBeenCalled();
   });
 
@@ -3059,7 +3183,14 @@ describe('classifyDriveChanges', () => {
       id => (id === 'd1' ? { driveMd5Checksum: 'A' } : undefined),
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], unconfirmedRemovalIds: [], ambiguous: 1 });
+    expect(result).toEqual({
+      adds: [],
+      changed: [],
+      removedFileIds: [],
+      unconfirmedRemovalIds: [],
+      untrackedGoneIds: [],
+      ambiguous: 1,
+    });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('tracked file'),
       expect.objectContaining({ fileId: 'd1' })
@@ -3075,7 +3206,14 @@ describe('classifyDriveChanges', () => {
       () => undefined,
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], unconfirmedRemovalIds: [], ambiguous: 1 });
+    expect(result).toEqual({
+      adds: [],
+      changed: [],
+      removedFileIds: [],
+      unconfirmedRemovalIds: [],
+      untrackedGoneIds: [],
+      ambiguous: 1,
+    });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('new file'),
       expect.objectContaining({ fileId: 'd1' })
@@ -3097,7 +3235,14 @@ describe('classifyDriveChanges', () => {
       id => (id === 'd1' ? { driveMd5Checksum: 'SAME' } : undefined),
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], unconfirmedRemovalIds: [], ambiguous: 0 });
+    expect(result).toEqual({
+      adds: [],
+      changed: [],
+      removedFileIds: [],
+      unconfirmedRemovalIds: [],
+      untrackedGoneIds: [],
+      ambiguous: 0,
+    });
   });
 
   it('collapses repeated entries for one fileId to the last one (the feed is a log, not a snapshot)', async () => {

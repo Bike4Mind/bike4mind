@@ -11,6 +11,9 @@ const h = vi.hoisted(() => ({
   batchCreate: vi.fn(),
   setTotalFilesIfActive: vi.fn(),
   recordSkippedDriveFile: vi.fn(),
+  recordSkip: vi.fn(),
+  clearSkipSources: vi.fn(),
+  pruneMissingSkips: vi.fn(),
   retire: vi.fn(),
   flush: vi.fn(),
   ingest: vi.fn(),
@@ -32,6 +35,11 @@ vi.mock('@bike4mind/database', () => ({
     recordSkippedDriveFile: h.recordSkippedDriveFile,
   },
   fabFileRepository: { findByGitHubConnectionIdInDataLake: h.findByGitHubConnectionIdInDataLake },
+  lakeSkippedFileRepository: {
+    recordSkip: h.recordSkip,
+    clearSources: h.clearSkipSources,
+    pruneMissing: h.pruneMissingSkips,
+  },
 }));
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -111,6 +119,9 @@ beforeEach(() => {
   h.batchCreate.mockResolvedValue({ id: 'batch1' });
   h.batchFindById.mockResolvedValue(null);
   h.recordSkippedDriveFile.mockResolvedValue(true);
+  h.recordSkip.mockResolvedValue(undefined);
+  h.clearSkipSources.mockResolvedValue(0);
+  h.pruneMissingSkips.mockResolvedValue(0);
   h.retire.mockImplementation(async (copy: { id: string }, replacement: string | null) => {
     h.order.push(`retire:${copy.id}->${replacement}`);
     return 'deleted';
@@ -385,5 +396,63 @@ describe('runGitHubLakeSlice', () => {
     });
     expect(h.order).toEqual(['retire:gone->null']);
     expect(h.batchCreate).not.toHaveBeenCalled();
+  });
+
+  describe('not-ingested list', () => {
+    it('records content skips by path and reason, and clears the row of a file that ingests', async () => {
+      tree(blob('docs/bin.md', 's1'), blob('ok.md', 's2'));
+      h.getBlobBytes.mockResolvedValueOnce(Buffer.from([0x61, 0x00]));
+
+      await runGitHubLakeSlice(input());
+
+      expect(h.recordSkip).toHaveBeenCalledWith({
+        dataLakeId: 'lake1',
+        sourceKind: 'github',
+        sourceId: 'docs/bin.md',
+        name: 'bin.md',
+        relativePath: 'docs/bin.md',
+        mimeType: expect.any(String),
+        size: 2,
+        reason: 'binary',
+      });
+      expect(h.clearSkipSources).toHaveBeenCalledWith('lake1', 'github', ['ok.md']);
+    });
+
+    it('records an oversized file even on a sync with no other work, which creates no batch', async () => {
+      tree(blob('big.md', 's1', 2 * 1024 * 1024));
+
+      await runGitHubLakeSlice(input());
+
+      expect(h.batchCreate).not.toHaveBeenCalled();
+      expect(h.recordSkip).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceId: 'big.md', reason: 'oversized', size: 2 * 1024 * 1024 })
+      );
+    });
+
+    it('lists a storage-limit file as retryable while keeping it out of the chain skips', async () => {
+      tree(blob('a.md', 's1'));
+      h.checkStorageLimit.mockRejectedValue(new BadRequestError('File size exceeds storage limit'));
+
+      await runGitHubLakeSlice(input());
+
+      expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+      expect(h.recordSkip).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'a.md', reason: 'storage_limit' }));
+    });
+
+    it('prunes rows against every path in the tree, oversized included', async () => {
+      tree(blob('a.md', 's1'), blob('big.md', 's2', 2 * 1024 * 1024));
+
+      await runGitHubLakeSlice(input());
+
+      expect(h.pruneMissingSkips).toHaveBeenCalledWith('lake1', 'github', new Set(['a.md', 'big.md']));
+    });
+
+    it('never prunes against a truncated tree', async () => {
+      h.getRecursiveTree.mockResolvedValue({ truncated: true, entries: [blob('a.md', 's1')] });
+
+      await runGitHubLakeSlice(input());
+
+      expect(h.pruneMissingSkips).not.toHaveBeenCalled();
+    });
   });
 });
