@@ -62,7 +62,7 @@ export async function buildDataLakeAccessContext(
   return {
     userId: principal.id,
     isAdmin,
-    // source: tags are self-assertable attribution; drop them so a legacy requiredUserTag cannot match.
+    // source: tags are self-assertable attribution, so keep them out of this context. Gates refuse the namespace at write time.
     userTags: (principal.tags ?? []).filter(tag => !isOAuthSourceTag(tag)),
     organizationIds,
     entitlementKeys,
