@@ -5,6 +5,7 @@ import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGra
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { refuseBlockedRotatedSession } from '@server/auth/refreshAccountGate';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -71,9 +72,7 @@ const handler = baseApi({ auth: false })
         logger: req.logger,
       });
       requireNonSystemUser(rotated.user);
-      // Same gate verifyJwtPayload applies per request: a blocked account must not keep
-      // exchanging its refresh token for new access tokens. Throwing here sets no cookie.
-      assertAccountStateUsable(rotated.user);
+      await refuseBlockedRotatedSession(rotated, req.logger);
       return respond(
         {
           // Redact before returning: the bootstrap refresh feeds this straight into the client's
@@ -107,6 +106,7 @@ const handler = baseApi({ auth: false })
     if (!user) throw new UnauthorizedError('Unauthorized');
 
     requireNonSystemUser(user);
+    // Refused before a session is minted, so nothing is left to revoke.
     assertAccountStateUsable(user);
 
     // Kill switch: a stale refresh token must not be exchangeable for fresh

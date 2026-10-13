@@ -6,12 +6,11 @@ import {
   userRepository,
   friendshipRepository,
   creditTransactionRepository,
-  withTransaction,
   TelemetryAuditLogModel,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
-import { endAllUserSessions, type SessionEndReason } from '@server/auth/endUserSessions';
+import { commitWithSessionEnd, type SessionEndReason } from '@server/auth/endUserSessions';
 import { ApiKeyScope, ForbiddenError, redactUserSecretsForSelf } from '@bike4mind/common';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@server/utils/ip';
@@ -177,17 +176,24 @@ const handler = baseApi().put(
         : undefined;
 
       req.logger.updateMetadata({ body: req.body });
-      await withTransaction(() =>
-        userService.adminUpdateUser(currentUser.id, body, {
-          db: {
-            users: userRepository,
-            organizations: Organization,
-            friendship: friendshipRepository,
-            userApiKeys: userApiKeyRepository,
-            // Audits admin `currentCredits` changes as CreditTransactions.
-            creditTransactions: creditTransactionRepository,
-          },
-        })
+      await commitWithSessionEnd(
+        req,
+        () =>
+          userService.adminUpdateUser(currentUser.id, body, {
+            db: {
+              users: userRepository,
+              organizations: Organization,
+              friendship: friendshipRepository,
+              userApiKeys: userApiKeyRepository,
+              // Audits admin `currentCredits` changes as CreditTransactions.
+              creditTransactions: creditTransactionRepository,
+            },
+          }),
+        // adminUpdateUser returns the user as written, read inside the same transaction.
+        updated => {
+          const reason = adminEditSessionEndReason(!!body.password, before, updated);
+          return reason && { userId, reason, actorUserId: currentUser.id !== userId ? currentUser.id : undefined };
+        }
       );
 
       // Log consent change only after successful update
@@ -197,14 +203,6 @@ const handler = baseApi().put(
 
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
-
-      const sessionEndReason = adminEditSessionEndReason(!!body.password, before, finalUser);
-      if (sessionEndReason) {
-        await endAllUserSessions(req, userId, {
-          reason: sessionEndReason,
-          actorUserId: currentUser.id !== userId ? currentUser.id : undefined,
-        });
-      }
       // Admin branch: symmetric with the admin view of GET /users/[id].
       const safeUser = redactUserSecretsForSelf(finalUser, {
         keep: ['securityQuestions'],
@@ -230,14 +228,17 @@ const handler = baseApi().put(
         ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
         : undefined;
 
-      await userService.updateUser(userId, body, {
-        db: {
-          users: userRepository,
-        },
-      });
-
+      const update = () =>
+        userService.updateUser(userId, body, {
+          db: {
+            users: userRepository,
+          },
+        });
+      // Only a password change needs the transaction; ordinary profile and preference saves skip it.
       if (body.password) {
-        await endAllUserSessions(req, userId, { reason: 'password_changed' });
+        await commitWithSessionEnd(req, update, () => ({ userId, reason: 'password_changed' }));
+      } else {
+        await update();
       }
 
       // Log consent change only after successful update

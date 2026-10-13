@@ -27,9 +27,15 @@ vi.mock('@server/utils/auditLog', () => ({
 }));
 vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
 
-const mockEndAllUserSessions = vi.fn();
+// Runs the change and the session-end decision as the real helper does (its transaction and
+// revoke are covered in server/auth/endUserSessions.test.ts); a decided end is recorded.
+const mockSessionEnded = vi.fn();
 vi.mock('@server/auth/endUserSessions', () => ({
-  endAllUserSessions: (...a: unknown[]) => mockEndAllUserSessions(...a),
+  commitWithSessionEnd: async (_req: unknown, change: () => Promise<unknown>, sessionEndFor: () => unknown) => {
+    const result = await change();
+    await mockSessionEnded(sessionEndFor());
+    return result;
+  },
 }));
 
 const mockFindByPendingToken = vi.fn();
@@ -61,7 +67,7 @@ describe('POST /api/email/verify-change', () => {
     vi.clearAllMocks();
     mockFindByPendingToken.mockResolvedValue(USER);
     mockVerifyEmailChange.mockResolvedValue(undefined);
-    mockEndAllUserSessions.mockResolvedValue(1);
+    mockSessionEnded.mockResolvedValue(undefined);
   });
 
   it('signs the user out everywhere once the new email is confirmed', async () => {
@@ -69,10 +75,7 @@ describe('POST /api/email/verify-change', () => {
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockEndAllUserSessions).toHaveBeenCalledWith(req, 'user-1', { reason: 'email_changed' });
-    expect(mockVerifyEmailChange.mock.invocationCallOrder[0]).toBeLessThan(
-      mockEndAllUserSessions.mock.invocationCallOrder[0]
-    );
+    expect(mockSessionEnded).toHaveBeenCalledWith({ userId: 'user-1', reason: 'email_changed' });
   });
 
   it('leaves sessions alone when the change itself fails', async () => {
@@ -80,17 +83,17 @@ describe('POST /api/email/verify-change', () => {
     const { req, res } = fire();
 
     await expect(handler(req, res)).rejects.toThrow('Token has expired');
-    expect(mockEndAllUserSessions).not.toHaveBeenCalled();
+    expect(mockSessionEnded).not.toHaveBeenCalled();
     expect(mockLogAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ action: 'expired' }), req.logger);
   });
 
-  it('fails the request without auditing a failed change when only the revoke fails', async () => {
-    mockEndAllUserSessions.mockRejectedValue(new Error('db down'));
+  it('fails the request, audited as a failed change, when the session end rolls it back', async () => {
+    mockSessionEnded.mockRejectedValue(new Error('db down'));
     const { req, res } = fire();
 
     await expect(handler(req, res)).rejects.toThrow('db down');
-    // The email did change, so the audit trail must not record the change as failed.
-    expect(mockLogAuditEvent).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'failed' }), req.logger);
+    expect(mockLogAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ action: 'failed' }), req.logger);
+    expect(mockLogAuditEvent).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'success' }), req.logger);
   });
 
   it('rejects an unknown token without touching sessions', async () => {
@@ -99,6 +102,6 @@ describe('POST /api/email/verify-change', () => {
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(400);
-    expect(mockEndAllUserSessions).not.toHaveBeenCalled();
+    expect(mockSessionEnded).not.toHaveBeenCalled();
   });
 });

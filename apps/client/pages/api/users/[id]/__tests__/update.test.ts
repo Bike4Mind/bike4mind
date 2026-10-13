@@ -3,16 +3,27 @@ import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
 import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
 
-const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount, mockEndAllUserSessions } = vi.hoisted(() => ({
+const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount, mockSessionEnded } = vi.hoisted(() => ({
   mockUserFindById: vi.fn(),
   mockAdminUpdateUser: vi.fn(),
   mockUpdateUser: vi.fn(),
   mockCount: vi.fn(),
-  mockEndAllUserSessions: vi.fn(),
+  mockSessionEnded: vi.fn(),
 }));
 
+// Runs the change and the session-end decision exactly as the real helper does (its transaction
+// and revoke are covered in server/auth/endUserSessions.test.ts); a decided end is recorded.
 vi.mock('@server/auth/endUserSessions', () => ({
-  endAllUserSessions: (...a: unknown[]) => mockEndAllUserSessions(...a),
+  commitWithSessionEnd: async (
+    _req: unknown,
+    change: () => Promise<unknown>,
+    sessionEndFor: (result: unknown) => unknown
+  ) => {
+    const result = await change();
+    const end = sessionEndFor(result);
+    if (end) await mockSessionEnded(end);
+    return result;
+  },
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -42,8 +53,10 @@ vi.mock('@server/utils/ip', () => ({
   truncateIp: (ip: string) => ip,
 }));
 
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async orig => ({
   userService: {
+    // The real block-state rules, so a snapshot missing any block field is caught.
+    entersBlockedState: (await orig<typeof import('@bike4mind/services')>()).userService.entersBlockedState,
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
     // Both stand-ins are real allowlists (not passthrough) so the discarded-field
@@ -58,15 +71,13 @@ vi.mock('@bike4mind/services', () => ({
       password: z.string().nullable().optional(),
       email: z.string().optional(),
       isBanned: z.boolean().optional(),
+      moderationStatus: z.string().optional(),
     }),
     updateUserSchema: z.object({
       name: z.string().optional(),
       role: z.string().optional(),
       password: z.string().nullable().optional(),
     }),
-    // Stand-in for accountState.entersBlockedState, reduced to the ban flag these tests drive.
-    entersBlockedState: (before: { isBanned?: boolean }, next: { isBanned?: boolean }) =>
-      !before.isBanned && !!next.isBanned,
   },
 }));
 
@@ -77,9 +88,18 @@ vi.mock('@bike4mind/database', () => ({
       // Mirrors Mongoose's Query: chainable via .select()/.lean(), but also
       // directly awaitable (the handler awaits User.findById(userId) bare in
       // its post-update refetch), so `then` needs to resolve to the same result.
+      let projected = result;
       const query = {
-        select: () => query,
-        lean: () => Promise.resolve(result),
+        // Applies the projection like Mongo would, so a field dropped from a .select() is absent.
+        select: (fields: string) => {
+          const keep = fields.split(' ');
+          projected =
+            result && typeof result === 'object'
+              ? Object.fromEntries(Object.entries(result).filter(([key]) => keep.includes(key)))
+              : result;
+          return query;
+        },
+        lean: () => Promise.resolve(projected),
         then: (onFulfilled: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
           Promise.resolve(result).then(onFulfilled, onRejected),
       };
@@ -126,7 +146,7 @@ beforeEach(() => {
   mockAdminUpdateUser.mockReset().mockResolvedValue(undefined);
   mockUpdateUser.mockReset().mockResolvedValue(undefined);
   mockCount.mockReset().mockResolvedValue(2);
-  mockEndAllUserSessions.mockReset().mockResolvedValue(1);
+  mockSessionEnded.mockReset().mockResolvedValue(undefined);
 });
 
 describe('PUT /api/users/:id/update - lockout guard', () => {
@@ -379,49 +399,51 @@ describe('PUT /api/users/:id/update - real allowlist binds the ignoredFields gua
 
 describe('PUT /api/users/:id/update - ends sessions on credential and account-state changes', () => {
   const SELF = { id: 'u1', isAdmin: false };
-  const BEFORE = { id: 'target', email: 'old@example.com', isBanned: false };
+  const BEFORE = { id: 'target', email: 'old@example.com', isBanned: false, disputePending: false };
 
-  /** First findById is the pre-update snapshot, the second the post-update refetch. */
-  function snapshots(before: object, after: object) {
-    mockUserFindById.mockReturnValueOnce(before).mockReturnValueOnce(after);
+  /** The pre-update snapshot (findById) and the user as adminUpdateUser wrote it. */
+  function adminEdit(before: object, written: object) {
+    mockUserFindById.mockReturnValue(before);
+    mockAdminUpdateUser.mockResolvedValue(written);
   }
 
   it('signs the user out everywhere after a self-service password change', async () => {
     const { promise } = run({ user: SELF, userId: 'u1', body: { password: 'n3w-Passw0rd!' } });
     await promise;
 
-    expect(mockEndAllUserSessions).toHaveBeenCalledTimes(1);
-    expect(mockEndAllUserSessions).toHaveBeenCalledWith(expect.anything(), 'u1', {
-      reason: 'password_changed',
-      actorUserId: undefined,
-    });
+    expect(mockSessionEnded).toHaveBeenCalledTimes(1);
+    expect(mockSessionEnded).toHaveBeenCalledWith({ userId: 'u1', reason: 'password_changed' });
   });
 
   it('leaves sessions alone for a self-service update that sets no password', async () => {
     const { promise } = run({ user: SELF, userId: 'u1', body: { name: 'New Name', password: null } });
     await promise;
 
-    expect(mockEndAllUserSessions).not.toHaveBeenCalled();
+    expect(mockUpdateUser).toHaveBeenCalledTimes(1);
+    expect(mockSessionEnded).not.toHaveBeenCalled();
   });
 
   it.each([
     ['sets their password', { password: 'n3w-Passw0rd!' }, BEFORE, 'password_changed'],
     ['changes their email', { email: 'new@example.com' }, { ...BEFORE, email: 'new@example.com' }, 'email_changed'],
     ['bans them', { isBanned: true }, { ...BEFORE, isBanned: true }, 'account_blocked'],
-  ])('signs the target out everywhere when an admin %s', async (_label, body, after, reason) => {
-    snapshots(BEFORE, after);
+    [
+      'suspends them',
+      { moderationStatus: 'suspended' },
+      { ...BEFORE, moderation: { status: 'suspended' } },
+      'account_blocked',
+    ],
+  ])('signs the target out everywhere when an admin %s', async (_label, body, written, reason) => {
+    adminEdit(BEFORE, written);
     const { promise } = run({ user: ADMIN, userId: 'target', body });
     await promise;
 
-    expect(mockEndAllUserSessions).toHaveBeenCalledTimes(1);
-    expect(mockEndAllUserSessions).toHaveBeenCalledWith(expect.anything(), 'target', {
-      reason,
-      actorUserId: ADMIN.id,
-    });
+    expect(mockSessionEnded).toHaveBeenCalledTimes(1);
+    expect(mockSessionEnded).toHaveBeenCalledWith({ userId: 'target', reason, actorUserId: ADMIN.id });
   });
 
   it('ends sessions once, under the account-block reason, when one admin edit does several', async () => {
-    snapshots(BEFORE, { ...BEFORE, email: 'new@example.com', isBanned: true });
+    adminEdit(BEFORE, { ...BEFORE, email: 'new@example.com', isBanned: true });
     const { promise } = run({
       user: ADMIN,
       userId: 'target',
@@ -429,37 +451,47 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     });
     await promise;
 
-    expect(mockEndAllUserSessions).toHaveBeenCalledTimes(1);
-    expect(mockEndAllUserSessions.mock.calls[0][2].reason).toBe('account_blocked');
+    expect(mockSessionEnded).toHaveBeenCalledTimes(1);
+    expect(mockSessionEnded.mock.calls[0][0].reason).toBe('account_blocked');
   });
 
   it('records no separate actor when an admin changes their own password', async () => {
-    snapshots({ ...BEFORE, id: ADMIN.id }, { ...BEFORE, id: ADMIN.id });
+    adminEdit({ ...BEFORE, id: ADMIN.id }, { ...BEFORE, id: ADMIN.id });
     const { promise } = run({ user: ADMIN, userId: ADMIN.id, body: { password: 'n3w-Passw0rd!' } });
     await promise;
 
-    expect(mockEndAllUserSessions).toHaveBeenCalledWith(expect.anything(), ADMIN.id, {
-      reason: 'password_changed',
-      actorUserId: undefined,
-    });
+    expect(mockSessionEnded).toHaveBeenCalledWith({ userId: ADMIN.id, reason: 'password_changed' });
   });
 
   it.each([
-    ['a name-only edit', { name: 'New Name' }, BEFORE],
-    ['re-saving the same email', { email: 'old@example.com' }, BEFORE],
-    ['re-saving a ban on an already banned user', { isBanned: true }, { ...BEFORE, isBanned: true }],
-  ])('leaves sessions alone for %s', async (_label, body, after) => {
-    const before = body.isBanned ? { ...BEFORE, isBanned: true } : BEFORE;
-    snapshots(before, after);
-    const { promise } = run({ user: ADMIN, userId: 'target', body });
+    ['a name-only edit', BEFORE, BEFORE],
+    ['re-saving the same email', BEFORE, BEFORE],
+    ['saving a banned user', { ...BEFORE, isBanned: true }, { ...BEFORE, isBanned: true }],
+    [
+      'saving a user already under a dispute hold',
+      { ...BEFORE, disputePending: true },
+      { ...BEFORE, disputePending: true },
+    ],
+    [
+      'saving an already suspended user',
+      { ...BEFORE, moderation: { status: 'suspended' } },
+      { ...BEFORE, moderation: { status: 'suspended' } },
+    ],
+  ])('leaves sessions alone for %s', async (_label, before, written) => {
+    adminEdit(before, written);
+    const { promise } = run({ user: ADMIN, userId: 'target', body: { name: 'x', email: 'old@example.com' } });
     await promise;
 
-    expect(mockEndAllUserSessions).not.toHaveBeenCalled();
+    expect(mockSessionEnded).not.toHaveBeenCalled();
   });
 
-  it('fails the request when the session revoke fails', async () => {
-    mockEndAllUserSessions.mockRejectedValue(new Error('db down'));
-    const { promise } = run({ user: SELF, userId: 'u1', body: { password: 'n3w-Passw0rd!' } });
+  it.each([
+    ['self-service', SELF, 'u1'],
+    ['admin', ADMIN, 'target'],
+  ])('fails the %s request when the session end fails', async (_label, user, userId) => {
+    adminEdit(BEFORE, BEFORE);
+    mockSessionEnded.mockRejectedValue(new Error('db down'));
+    const { promise } = run({ user, userId, body: { password: 'n3w-Passw0rd!' } });
 
     await expect(promise).rejects.toThrow('db down');
   });

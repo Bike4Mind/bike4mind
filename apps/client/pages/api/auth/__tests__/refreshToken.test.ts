@@ -1,15 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockRotateSession, mockIssueSession, mockIsOpaque, mockFindById, mockVerifyRefreshToken, mockSetCookie } =
-  vi.hoisted(() => ({
-    mockRotateSession: vi.fn(),
-    mockIssueSession: vi.fn(),
-    mockIsOpaque: vi.fn(),
-    mockFindById: vi.fn(),
-    mockVerifyRefreshToken: vi.fn(),
-    mockSetCookie: vi.fn(),
-  }));
+const {
+  mockRotateSession,
+  mockIssueSession,
+  mockIsOpaque,
+  mockFindById,
+  mockVerifyRefreshToken,
+  mockSetCookie,
+  mockRevokeSession,
+} = vi.hoisted(() => ({
+  mockRevokeSession: vi.fn(),
+  mockRotateSession: vi.fn(),
+  mockIssueSession: vi.fn(),
+  mockIsOpaque: vi.fn(),
+  mockFindById: vi.fn(),
+  mockVerifyRefreshToken: vi.fn(),
+  mockSetCookie: vi.fn(),
+}));
 
 // Middleware is stripped so the handler body runs directly.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,6 +54,7 @@ vi.mock('@bike4mind/services', () => ({
     isOpaqueRefreshToken: (...a: unknown[]) => mockIsOpaque(...a),
     rotateSession: (...a: unknown[]) => mockRotateSession(...a),
     issueSession: (...a: unknown[]) => mockIssueSession(...a),
+    revokeSession: (...a: unknown[]) => mockRevokeSession(...a),
   },
   // Stand-in for accountState.accountBlockReasons, which assertAccountStateUsable reads.
   userService: {
@@ -72,6 +81,7 @@ describe('POST /api/auth/refreshToken - account state', () => {
     vi.clearAllMocks();
     mockRotateSession.mockResolvedValue({
       status: 'rotated',
+      sid: 'sid-1',
       user: USER,
       accessToken: 'new-access',
       refreshToken: 'new-refresh',
@@ -88,6 +98,7 @@ describe('POST /api/auth/refreshToken - account state', () => {
       const { req, res } = fire();
       await handler(req, res);
 
+      expect(mockRevokeSession).not.toHaveBeenCalled();
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().accessToken).toBe('new-access');
       expect(mockSetCookie).toHaveBeenCalledWith(res, 'new-refresh');
@@ -96,9 +107,10 @@ describe('POST /api/auth/refreshToken - account state', () => {
     it.each([
       ['banned', { isBanned: true }, 'User not found or banned'],
       ['dispute-suspended', { disputePending: true }, 'pending dispute'],
-    ])('refuses a %s account and hands back no token', async (_label, state, message) => {
+    ])('refuses a %s account, revokes the rotated session and hands back no token', async (_label, state, message) => {
       mockRotateSession.mockResolvedValue({
         status: 'rotated',
+        sid: 'sid-1',
         user: { ...USER, ...state },
         accessToken: 'new-access',
         refreshToken: 'new-refresh',
@@ -107,6 +119,8 @@ describe('POST /api/auth/refreshToken - account state', () => {
 
       await expect(handler(req, res)).rejects.toThrow(message);
       expect(mockSetCookie).not.toHaveBeenCalled();
+      // Rotation already advanced the row; leaving it would strand the client at the recovery cap.
+      expect(mockRevokeSession).toHaveBeenCalledWith('sid-1', expect.anything());
     });
   });
 
