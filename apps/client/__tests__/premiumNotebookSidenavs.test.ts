@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { OPTI_SURFACE, getWorkspaceSurface } from '@bike4mind/common';
 
 /**
  * Guard for the per-route notebook sidenav slot. The slot took a single contribution
@@ -98,13 +99,19 @@ describe('notebook sidenav codegen', () => {
     expect(out).toContain('{ ssr: false }');
   });
 
-  it('keeps the legacy bare-specifier form working on /opti, with a deprecation warning', () => {
+  it('keeps the legacy bare-specifier form working on the registered route, with a deprecation warning', () => {
+    // The legacy form emits a fixed route that must equal the workspace's own `routePrefix`, so
+    // assert against the surface value rather than a literal: moving the workspace's route without
+    // moving the constant fails here, instead of silently dropping the legacy overlay's nav.
+    const legacyRoute = getWorkspaceSurface(OPTI_SURFACE)?.routePrefix;
+    expect(legacyRoute).toBeTruthy();
+
     writeOverlay('legacy', { notebookSidenavExport: '@bike4mind/premium-legacy/sidenav' });
 
     const result = runCodegen();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain('deprecated');
-    expect(readFileSync(join(clientRoot, GENERATED), 'utf8')).toContain("{ path: '/opti', component: Sidenav0 }");
+    expect(readFileSync(join(clientRoot, GENERATED), 'utf8')).toContain(`{ path: '${legacyRoute}', component: Sidenav0 }`);
   });
 
   it('warns when two overlays claim the same route, keeps the first, and emits only that one', () => {

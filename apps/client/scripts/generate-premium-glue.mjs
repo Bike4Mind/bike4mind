@@ -316,9 +316,10 @@ function generateRouteIndexing(packages) {
 // per-route list, so it keeps `LEGACY_SIDENAV_PATH` and warns. Delete this branch - and
 // the constant - once every overlay declares its own path.
 //
-// `LEGACY_SIDENAV_PATH` MUST stay in sync with the `routePrefix` of the workspace registered
-// in WORKSPACE_SURFACES (b4m-core/common/src/surfaces.ts): a legacy overlay keeps its nav on
-// hosting routes only while the two are equal.
+// `LEGACY_SIDENAV_PATH` MUST stay equal to `OPTI_SURFACE`'s `routePrefix` in
+// b4m-core/common/src/surfaces.ts - the one registered workspace with a non-null id, so the bare
+// specifier's route is unambiguous today. A legacy overlay keeps its nav on hosting routes only
+// while the two match.
 const LEGACY_SIDENAV_PATH = '/opti';
 
 // An appShell route path, interpolated raw into a generated string literal and compared
