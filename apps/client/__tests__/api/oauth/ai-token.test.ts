@@ -60,6 +60,7 @@ const mockRevokeUserApiKey = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   API_KEY_USER_CAP_ERROR_CODE: 'api_key_user_cap',
   userApiKeyService: {
+    MAX_EXCHANGE_KEY_TTL_MS: 15 * 60 * 1000,
     createExchangeUserApiKey: (...a: any[]) => mockCreateUserApiKey(...a),
     revokeUserApiKey: (...a: any[]) => mockRevokeUserApiKey(...a),
   },

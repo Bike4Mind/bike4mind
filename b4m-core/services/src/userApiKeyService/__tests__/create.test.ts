@@ -443,6 +443,7 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
 });
 
 describe('createUserApiKey - per-user cap pools', () => {
+  const SHARED_PATH_EXCHANGE_ERROR = 'oauth-exchange keys are minted only by the AI-token exchange';
   const exchangeParams = {
     name: 'AI (federated: VibesWire)',
     scopes: [ApiKeyScope.AI_GENERATE],
@@ -554,6 +555,7 @@ describe('createUserApiKey - per-user cap pools', () => {
       createUserApiKey
     );
     expect(error).toBeInstanceOf(BadRequestError);
+    expect(error?.message).toBe(SHARED_PATH_EXCHANGE_ERROR);
     expect(repo.createIfUnderCap).not.toHaveBeenCalled();
     expect(repo.create).not.toHaveBeenCalled();
   });
@@ -561,11 +563,16 @@ describe('createUserApiKey - per-user cap pools', () => {
   it('keeps the shared mint path out of the exchange pool for the system user too', async () => {
     const repo = makeRepo();
     const error = await mintError(
-      { ...dashboardParams, metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'client-a' } } as never,
+      {
+        ...dashboardParams,
+        expiresAt: exchangeParams.expiresAt,
+        metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'client-a' },
+      } as never,
       repo,
       (_u: string, p: never, a: never) => createUserApiKey('sys-1', p, a)
     );
     expect(error).toBeInstanceOf(BadRequestError);
+    expect(error?.message).toBe(SHARED_PATH_EXCHANGE_ERROR);
     expect(repo.create).not.toHaveBeenCalled();
   });
 

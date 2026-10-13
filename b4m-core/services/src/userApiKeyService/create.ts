@@ -297,7 +297,9 @@ const mintUserApiKey = async (
     throw new BadRequestError('An oauth-exchange key requires expiresAt and metadata.oauthClientId');
   }
   if (isExchangeKey && params.expiresAt && params.expiresAt.getTime() - Date.now() > MAX_EXCHANGE_KEY_TTL_MS) {
-    throw new BadRequestError('An oauth-exchange key may not expire more than 15 minutes from now');
+    throw new BadRequestError(
+      `An oauth-exchange key may not expire more than ${MAX_EXCHANGE_KEY_TTL_MS / 60_000} minutes from now`
+    );
   }
 
   // Per-user caps, one per ApiKeyCapPool: 10 standard keys, and a separate ceiling on
