@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => {
     callbacks: {} as Record<string, Callback>,
     subscribeCalls: [] as string[],
     inviteListener: undefined as Listener | undefined,
+    inviteOptions: undefined as { projectId?: string } | undefined,
+    invitesQueryOptions: undefined as unknown,
+    usersQueryOptions: undefined as unknown,
     enforceCredits: true,
   };
 });
@@ -27,11 +30,17 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 }));
 vi.mock('@client/app/hooks/data/invites', () => ({
   useDeleteInvite: () => ({ mutate: vi.fn() }),
-  useGetProjectInvites: () => ({ data: { data: [] } }),
+  useGetProjectInvites: (_params: unknown, options: unknown) => {
+    mocks.invitesQueryOptions = options;
+    return { data: { data: [] } };
+  },
 }));
 vi.mock('@client/app/hooks/data/projects', () => ({ useLeaveProject: () => ({ mutate: vi.fn(), isPending: false }) }));
 vi.mock('@client/app/hooks/data/user', () => ({
-  useGetUsers: () => ({ data: { users: [] }, isPending: false, refetch: vi.fn() }),
+  useGetUsers: (_params: unknown, options: unknown) => {
+    mocks.usersQueryOptions = options;
+    return { data: { users: [] }, isPending: false, refetch: vi.fn() };
+  },
   useUserRevokeSharing: () => ({ mutate: vi.fn() }),
 }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => vi.fn() }));
@@ -44,8 +53,9 @@ vi.mock('@client/app/utils/react-query', () => ({
 }));
 // The provider owns the invites subscription; Members registers a listener instead of subscribing.
 vi.mock('@client/app/contexts/InboxContext', () => ({
-  useInviteEvents: (listener: Listener) => {
+  useInviteEvents: (listener: Listener, options?: { projectId?: string }) => {
     mocks.inviteListener = listener;
+    mocks.inviteOptions = options;
   },
 }));
 vi.mock('./AddMembersModal', () => ({ default: () => null }));
@@ -162,6 +172,17 @@ describe('ProjectMembersSection invite refetch', () => {
     renderMembers();
     expect(mocks.subscribeCalls).not.toContain('invites');
     expect(mocks.subscribeCalls).toContain('projects');
+  });
+
+  it('scopes the shared invites subscription to this project', () => {
+    renderMembers();
+    expect(mocks.inviteOptions).toEqual({ projectId: 'project-1' });
+  });
+
+  it('refetches invites and users on every mount', () => {
+    renderMembers();
+    expect(mocks.invitesQueryOptions).toMatchObject({ refetchOnMount: 'always' });
+    expect(mocks.usersQueryOptions).toMatchObject({ refetchOnMount: 'always' });
   });
 });
 

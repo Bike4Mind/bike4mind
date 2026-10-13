@@ -40,13 +40,13 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const getProjectInvites = useGetProjectInvites(
     { projectId: project.id, limit: 10, page: 1, statuses: 'pending' },
-    { enabled: !!project.id && project.userId === ownerId }
+    { enabled: !!project.id && project.userId === ownerId, refetchOnMount: 'always' }
   );
   const queryClient = useQueryClient();
   const getUserKey = useMemo(() => ['users', 'projects', project.id, search], [project.id, search]);
   const getUsers = useGetUsers(
     { projectId: project.id, limit: 10, page: 1, publicView: true, search },
-    { enabled: !!project.id, queryKey: getUserKey }
+    { enabled: !!project.id, queryKey: getUserKey, refetchOnMount: 'always' }
   );
   const { mutate: revokeAccess } = useUserRevokeSharing({
     onSuccess: () => {
