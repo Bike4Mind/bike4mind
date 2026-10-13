@@ -142,6 +142,9 @@ export const func = withContext(async (event, context, logger) => {
         if (current?.moderationStatus === 'clean' || current?.moderationStatus === 'blocked') {
           moderationStatus = current.moderationStatus;
         }
+        // The winner may have persisted a byte-sniffed type; carry it so the lake stats and the
+        // media-only check below do not run on the stale client-declared one.
+        if (current?.mimeType) metadata.mimeType = current.mimeType;
         logger.info(
           `[Q2b] moderationStatus claim lost for ${objectKey} (current=${current?.moderationStatus ?? 'unset'}); skipping re-scan (owned by another invocation)`
         );
