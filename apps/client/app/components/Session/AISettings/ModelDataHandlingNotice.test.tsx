@@ -33,10 +33,24 @@ describe('getModelDataHandlingText', () => {
   });
 
   it.each(THIRD_PARTY)('names the serving provider for %s', (backend, provider) => {
-    expect(getModelDataHandlingText(backend)).toBe(
-      `This model is served by ${provider}. Your session content is processed by ${provider} under its API terms, which do not use your content for training.`
+    expect(getModelDataHandlingText(backend)).toContain(
+      `This model is served by ${provider}. Your session content is processed by ${provider} under its API terms`
     );
   });
+
+  it.each([ModelBackend.OpenAI, ModelBackend.Anthropic, ModelBackend.Gemini, ModelBackend.Bedrock, ModelBackend.AWS])(
+    'states the training exclusion for %s',
+    backend => {
+      expect(getModelDataHandlingText(backend)).toContain('do not use your content for training');
+    }
+  );
+
+  it.each([ModelBackend.XAI, ModelBackend.BFL, ModelBackend.Kimi, ModelBackend.DeepSeek, ModelBackend.VoyageAI])(
+    'makes no training claim for %s, which the privacy page does not name',
+    backend => {
+      expect(getModelDataHandlingText(backend)).not.toContain('training');
+    }
+  );
 
   it('names Bedrock, not the model maker, for a Bedrock-served model', () => {
     expect(getModelDataHandlingText(ModelBackend.Bedrock)).not.toContain('Anthropic');

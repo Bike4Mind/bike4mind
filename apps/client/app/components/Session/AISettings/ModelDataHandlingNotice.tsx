@@ -21,6 +21,17 @@ const SERVING_PROVIDER: Record<ModelBackend, string | null> = {
   [ModelBackend.LocalImage]: null,
 };
 
+// Backends whose providers the privacy page names (OpenAI, Anthropic, Google) or that are AWS-hosted.
+// Only these get the "do not use your content for training" clause; the page makes no such statement
+// for the other providers by name, so the line must not either.
+const TRAINING_EXCLUSION_STATED: ReadonlySet<ModelBackend> = new Set([
+  ModelBackend.OpenAI,
+  ModelBackend.Anthropic,
+  ModelBackend.Gemini,
+  ModelBackend.Bedrock,
+  ModelBackend.AWS,
+]);
+
 /**
  * The data-handling sentence for a model's serving route. Claims must stay within what the
  * "Model Provider Processing" section of the public privacy page (ExternalLinks.privacy) states.
@@ -32,6 +43,9 @@ export const getModelDataHandlingText = (backend: ModelBackend): string => {
   }
   if (provider === null) {
     return 'This model runs on a self-hosted open-weight server, so no third-party model provider processes your session content.';
+  }
+  if (!TRAINING_EXCLUSION_STATED.has(backend)) {
+    return `This model is served by ${provider}. Your session content is processed by ${provider} under its API terms.`;
   }
   return `This model is served by ${provider}. Your session content is processed by ${provider} under its API terms, which do not use your content for training.`;
 };
