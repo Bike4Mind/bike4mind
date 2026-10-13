@@ -1,6 +1,6 @@
 /**
  * Error `code` a bundle publish returns when its target slug is owned by another user.
- * Must stay in sync with the web client's retry in `app/utils/publishApi.ts`.
+ * Also read by the web client's derived-slug retry in `app/utils/publishApi.ts`.
  */
 export const SLUG_OWNED_BY_OTHER = 'slug_owned_by_other';
 
