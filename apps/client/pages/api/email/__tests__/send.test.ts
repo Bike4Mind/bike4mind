@@ -25,7 +25,7 @@ vi.mock('@server/utils/mailer/emailAttachments', () => ({
 }));
 
 import handler from '../send';
-import { MAX_EMAIL_RECIPIENTS } from '../../../../types/api';
+import { MAX_EMAIL_MESSAGE_LENGTH, MAX_EMAIL_RECIPIENTS } from '../../../../types/api';
 
 const run = async (body: Record<string, unknown>, name = 'Pat') => {
   const { req, res } = createMocks({ method: 'POST', body });
@@ -81,6 +81,56 @@ describe('email send', () => {
     expect(body).not.toContain('<script>alert(1)</script>');
     expect(body).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
     expect(body).toContain('&lt;b onclick=&quot;x&quot;&gt;hi&lt;/b&gt;<br/>line2');
+  });
+
+  it('escapes html-special characters in sender name and message in notebook emails', async () => {
+    mockFindSession.mockResolvedValue({ userId: 'u1', name: 'nb', curatedNotebookFileId: 'c1' });
+    await run(
+      {
+        type: 'notebooks',
+        sessionIds: ['s1'],
+        recipients: ['a@example.com'],
+        format: 'markdown',
+        message: '<b>hi</b>\nbye',
+      },
+      '<script>x</script>'
+    );
+    const body: string = mockSend.mock.calls[0][0].body;
+    expect(body).not.toContain('<script>');
+    expect(body).not.toContain('<b>hi</b>');
+    expect(body).toContain('<p>&lt;script&gt;x&lt;/script&gt; has shared');
+    expect(body).toContain('please contact &lt;script&gt;x&lt;/script&gt;.');
+    expect(body).toContain('&lt;b&gt;hi&lt;/b&gt;<br/>bye');
+  });
+
+  it('accepts a message at the maximum length', async () => {
+    const res = await run({
+      type: 'files',
+      fileIds: ['f1'],
+      recipients: ['a@example.com'],
+      message: 'a'.repeat(MAX_EMAIL_MESSAGE_LENGTH),
+    });
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSend).toHaveBeenCalled();
+  });
+
+  it('rejects a message over the maximum length', async () => {
+    const res = await run({
+      type: 'files',
+      fileIds: ['f1'],
+      recipients: ['a@example.com'],
+      message: 'a'.repeat(MAX_EMAIL_MESSAGE_LENGTH + 1),
+    });
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().errors[0].field).toBe('message');
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it('accepts a recipient list at the maximum', async () => {
+    const recipients = Array.from({ length: MAX_EMAIL_RECIPIENTS }, (_, i) => `u${i}@example.com`);
+    const res = await run({ type: 'files', fileIds: ['f1'], recipients });
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSend).toHaveBeenCalled();
   });
 
   it('rejects recipient lists over the maximum', async () => {

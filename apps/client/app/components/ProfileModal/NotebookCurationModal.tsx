@@ -62,6 +62,7 @@ import { CurationType, ExportFormat, CurationArtifactTypeSchema } from '@bike4mi
 import { useUser } from '@client/app/contexts/UserContext';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { MAX_EMAIL_MESSAGE_LENGTH } from '@client/types/api';
 
 // Inferred type for uppercase API artifact types
 type CurationArtifactTypeAPI = z.infer<typeof CurationArtifactTypeSchema>;
@@ -1222,6 +1223,7 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
                   onChange={e => setEmailMessage(e.target.value)}
                   minRows={3}
                   maxRows={6}
+                  slotProps={{ textarea: { maxLength: MAX_EMAIL_MESSAGE_LENGTH } }}
                 />
               </FormControl>
 

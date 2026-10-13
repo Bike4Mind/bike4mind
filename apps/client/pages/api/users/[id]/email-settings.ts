@@ -17,7 +17,7 @@ const PLATFORM_EMAIL_SUFFIX = PLATFORM_EMAIL_DOMAIN
     : `@${PLATFORM_EMAIL_DOMAIN}`
   : '';
 
-export const RESERVED_EMAIL_LOCAL_PARTS: ReadonlySet<string> = new Set([
+const RESERVED_EMAIL_LOCAL_PARTS: ReadonlySet<string> = new Set([
   'admin',
   'administrator',
   'postmaster',
@@ -44,10 +44,10 @@ export const RESERVED_EMAIL_LOCAL_PARTS: ReadonlySet<string> = new Set([
   'ftp',
 ]);
 
-export const isReservedPlatformEmail = (email: string): boolean =>
+const isReservedPlatformEmail = (email: string): boolean =>
   RESERVED_EMAIL_LOCAL_PARTS.has(email.split('@')[0].toLowerCase());
 
-export const EmailSettingsSchema = z.object({
+const EmailSettingsSchema = z.object({
   platformEmailAddress: z
     .email()
     .toLowerCase()

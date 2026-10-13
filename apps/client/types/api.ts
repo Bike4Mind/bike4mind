@@ -181,13 +181,15 @@ export const NotebookDownloadRequestSchema = z.object({
 });
 
 export const MAX_EMAIL_RECIPIENTS = 20;
+export const MAX_EMAIL_RECIPIENTS_ERROR = `Maximum ${MAX_EMAIL_RECIPIENTS} recipients per email`;
+export const MAX_EMAIL_MESSAGE_LENGTH = 5000;
 
 const BaseEmailRequestSchema = z.object({
   recipients: z
     .array(z.email())
     .min(1, 'At least one recipient email is required')
-    .max(MAX_EMAIL_RECIPIENTS, `Maximum ${MAX_EMAIL_RECIPIENTS} recipients per email`),
-  message: z.string().max(5000).optional(),
+    .max(MAX_EMAIL_RECIPIENTS, MAX_EMAIL_RECIPIENTS_ERROR),
+  message: z.string().max(MAX_EMAIL_MESSAGE_LENGTH).optional(),
 });
 
 // sessionIds/fileIds below are loose by design, not an oversight - see the comment above

@@ -38,6 +38,8 @@ const patch = async (body: Record<string, unknown>) => {
   return res;
 };
 
+const RESERVED_ERROR = 'Platform email local part is reserved';
+
 const stored = (platformEmailAddress: string | null) => ({
   select: () => Promise.resolve({ platformEmailAddress }),
 });
@@ -61,6 +63,7 @@ describe('email-settings platformEmailAddress local part', () => {
     ]) {
       const res = await patch({ platformEmailAddress: address });
       expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData()).toEqual({ error: RESERVED_ERROR });
     }
     expect(mockUpdate).not.toHaveBeenCalled();
   });
@@ -76,5 +79,38 @@ describe('email-settings platformEmailAddress local part', () => {
     const res = await patch({ platformEmailAddress: 'info@example.com', authorizedEmailAddresses: ['a@example.com'] });
     expect(res._getStatusCode()).toBe(200);
     expect(mockUpdate).toHaveBeenCalled();
+  });
+
+  it('keeps a held address editable when the stored copy differs only in case', async () => {
+    mockFindById.mockReturnValue(stored('Info@example.com'));
+    const res = await patch({ platformEmailAddress: 'info@example.com' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdate).toHaveBeenCalled();
+  });
+
+  it('refuses a reserved local part even for a user who already holds another one', async () => {
+    mockFindById.mockReturnValue(stored('info@example.com'));
+    const res = await patch({ platformEmailAddress: 'admin@example.com' });
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toEqual({ error: RESERVED_ERROR });
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('reports a reserved local part before checking whether the address is in use', async () => {
+    mockFindById.mockReturnValue(stored(null));
+    mockFindOne.mockResolvedValue({ _id: 'u2' });
+    const res = await patch({ platformEmailAddress: 'admin@example.com' });
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toEqual({ error: RESERVED_ERROR });
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-reserved address already held by another user', async () => {
+    mockFindById.mockReturnValue(stored(null));
+    mockFindOne.mockResolvedValue({ _id: 'u2' });
+    const res = await patch({ platformEmailAddress: 'jane@example.com' });
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'This platform email address is already in use by another user' });
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });

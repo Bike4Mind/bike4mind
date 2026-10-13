@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
-import { MAX_EMAIL_RECIPIENTS } from '@client/types/api';
+import { MAX_EMAIL_RECIPIENTS, MAX_EMAIL_RECIPIENTS_ERROR } from '@client/types/api';
 import type { ExportFormat } from '@bike4mind/common';
 import type { z } from 'zod';
 import type { CurationArtifactTypeSchema } from '@bike4mind/common';
@@ -139,7 +139,7 @@ export function useSendNotebooksEmail(callbacks?: {
   return useMutation({
     mutationFn: async (request: SendNotebooksEmailRequest) => {
       if (request.recipients.length > MAX_EMAIL_RECIPIENTS) {
-        throw new Error(`Maximum ${MAX_EMAIL_RECIPIENTS} recipients`);
+        throw new Error(MAX_EMAIL_RECIPIENTS_ERROR);
       }
       const response = await api.post<SendNotebooksEmailResponse>('/api/email/send', request);
       if (!response.data.success) {
