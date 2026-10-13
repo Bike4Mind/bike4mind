@@ -639,11 +639,23 @@ function stripArtifactTagsFromRawBody(body: string): string {
 }
 
 /**
+ * Names an error for a log line without its message. This runs on the server chat path, which
+ * must log no reply text, and V8's JSON.parse message quotes the input it failed on.
+ */
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
+}
+
+/**
  * Detects tool outputs (JSON responses from tools) and converts them to artifact syntax.
  * Ids are derived from the body (hashBody), not a clock: this now runs server-side too, and the
  * same reply must mint the same identifier on every pass for persistence to stay idempotent.
  */
-function convertToolOutputsToArtifacts(content: string, holds: (value: string) => boolean): string {
+function convertToolOutputsToArtifacts(
+  content: string,
+  holds: (value: string) => boolean,
+  isToolEcho?: (body: string) => boolean
+): string {
   // Look for any JSON-like structure that contains type field with our target types
   // This approach is more forgiving of escaping variations
   const typePattern = /(?:rechart|recharts|mermaid)/g;
@@ -674,7 +686,7 @@ function convertToolOutputsToArtifacts(content: string, holds: (value: string) =
 
   for (const step of steps) {
     processedContent = step(processedContent, (match, captured) => {
-      if (holds(match)) return match;
+      if (holds(match) || isToolEcho?.(captured || match)) return match;
       try {
         let jsonString = captured || match;
 
@@ -700,7 +712,7 @@ function convertToolOutputsToArtifacts(content: string, holds: (value: string) =
             iterations++;
           }
         } catch (unescapeError) {
-          Logger.globalInstance.warn('Error during string unescaping, using original:', unescapeError);
+          Logger.globalInstance.warn('Error during string unescaping, using original:', errorName(unescapeError));
           jsonString = captured || match; // Fallback to original
         }
 
@@ -733,7 +745,7 @@ function convertToolOutputsToArtifacts(content: string, holds: (value: string) =
 ${escapeArtifactBodyJson(rechartsBody)}
 </artifact>`;
           } catch (validationError) {
-            Logger.globalInstance.warn('Failed to validate recharts content:', validationError);
+            Logger.globalInstance.warn('Failed to validate recharts content:', errorName(validationError));
             return match; // Return original if validation fails
           }
         }
@@ -750,8 +762,9 @@ ${mermaidBody}
           return artifactSyntax;
         }
       } catch (error) {
-        Logger.globalInstance.warn('Failed to parse tool output JSON:', error instanceof Error ? error.message : error);
-        Logger.globalInstance.warn('Problematic string:', (captured || match)?.substring(0, 100));
+        Logger.globalInstance.warn('Failed to parse tool output JSON:', errorName(error), {
+          length: (captured || match).length,
+        });
       }
 
       return match;
@@ -828,6 +841,19 @@ function hasReactIndicators(code: string): boolean {
   return [hasReactHooks, hasJSXSyntax, hasReactImport, hasReactComponent, hasJSXReturn].filter(Boolean).length >= 2;
 }
 
+// A closed fence, or an inline code span.
+const CODE_SPAN = /(```[\s\S]*?```|`[^`\n]+`)/g;
+// A json fence holding nothing but a tool-output object is a shape models use, so it stays eligible.
+const JSON_FENCE_OPENER = /^```json\b/i;
+
+/** Applies transform outside code spans (and inside json fences); other spans pass through untouched. */
+function outsideCodeSpans(content: string, transform: (text: string) => string): string {
+  return content
+    .split(CODE_SPAN)
+    .map((piece, index) => (index % 2 === 1 && !JSON_FENCE_OPENER.test(piece) ? piece : transform(piece)))
+    .join('');
+}
+
 function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions, echoOnly: boolean): string {
   const mask = maskToolOutputRegions(content);
   const spans = protectArtifactSpans(mask.masked, mask);
@@ -855,15 +881,21 @@ function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions,
   // stretch across an svg or mermaid fence cannot eat its opener.
   const reactCodeBlockRegex = /```(tsx?|jsx|javascript|typescript)([\s\S]*?)```/gi;
   const promoteReactFences = (accepts: (language: string, code: string) => boolean) => {
-    content = content.replace(reactCodeBlockRegex, (match, language: string, codeContent: string) => {
-      if (echoOnly || holds(codeContent) || !accepts(language, codeContent)) return match;
-      const componentName = extractComponentName(codeContent) || 'component';
-      const identifier = componentName.toLowerCase().replace(/[^a-z0-9]/g, '-');
+    content = content.replace(
+      reactCodeBlockRegex,
+      (match, language: string, codeContent: string, offset: number, whole: string) => {
+        if (holds(codeContent) || !accepts(language, codeContent)) return match;
+        const echoed = echoFence(language, codeContent, whole, offset, offset + match.length);
+        if (echoed !== null) return echoed;
+        if (echoOnly) return match;
+        const componentName = extractComponentName(codeContent) || 'component';
+        const identifier = componentName.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
-      return `<artifact identifier="${identifier}" type="application/vnd.ant.react" title="${componentName}">
+        return `<artifact identifier="${identifier}" type="application/vnd.ant.react" title="${componentName}">
 ${codeContent.trim()}
 </artifact>`;
-    });
+      }
+    );
   };
   promoteReactFences((_language, code) => looksLikeReactLoose(code));
 
@@ -932,8 +964,8 @@ ${codeContent.trim()}
 
       return `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">${cleanedContent}</artifact>`;
     } else {
-      // If validation fails, keep the original content and log errors
-      Logger.globalInstance.warn('Mermaid validation failed:', errors);
+      // Count only: the messages quote diagram lines, and reply text stays out of server logs.
+      Logger.globalInstance.warn('Mermaid validation failed:', { errorCount: errors.length });
       return fullMatch;
     }
   });
@@ -947,38 +979,45 @@ ${codeContent.trim()}
   content = protectArtifactSpans(content, mask).masked;
 
   // Bare tool-output JSON a model pasted into the reply. Never under echoOnly: it promotes.
-  if (!echoOnly) content = convertToolOutputsToArtifacts(content, holds);
+  // Code spans are skipped, so a dict literal in a python fence stays code.
+  if (!echoOnly) {
+    content = outsideCodeSpans(content, text => convertToolOutputsToArtifacts(text, holds, isToolEcho));
+  }
 
   promoteReactFences((language, code) => language === 'tsx' || language === 'jsx' || hasReactIndicators(code));
 
   // Detect Python code blocks - convert substantial Python code to Python artifacts
-  const pythonCodeBlockRegex = /```(?:python|py)([\s\S]*?)```/gi;
+  const pythonCodeBlockRegex = /```(python|py)([\s\S]*?)```/gi;
 
-  content = content.replace(pythonCodeBlockRegex, (match, codeContent: string) => {
-    if (echoOnly || holds(codeContent)) return match;
-    const trimmedCode = codeContent.trim();
+  content = content.replace(
+    pythonCodeBlockRegex,
+    (match, language: string, codeContent: string, offset: number, whole: string) => {
+      if (holds(codeContent)) return match;
+      const trimmedCode = codeContent.trim();
 
-    // Only convert if it's substantial code (more than a simple one-liner)
-    // This helps avoid converting simple inline examples
-    const lineCount = trimmedCode.split('\n').length;
-    const hasImports = /^(?:import|from)\s+\w+/m.test(trimmedCode);
-    const hasDefinitions = /^(?:def|class)\s+\w+/m.test(trimmedCode);
-    const hasPrint = /print\s*\(/.test(trimmedCode);
-    const hasSubstantialCode = lineCount >= 3 || hasImports || hasDefinitions;
+      // Only convert if it's substantial code (more than a simple one-liner)
+      // This helps avoid converting simple inline examples
+      const lineCount = trimmedCode.split('\n').length;
+      const hasImports = /^(?:import|from)\s+\w+/m.test(trimmedCode);
+      const hasDefinitions = /^(?:def|class)\s+\w+/m.test(trimmedCode);
+      const hasPrint = /print\s*\(/.test(trimmedCode);
+      const hasSubstantialCode = lineCount >= 3 || hasImports || hasDefinitions;
 
-    // Convert to Python artifact if it looks like runnable code
-    if (hasSubstantialCode || (hasPrint && lineCount >= 2)) {
-      const title = extractPythonTitle(trimmedCode) || 'Python Script';
+      // Keep simple examples as regular code blocks
+      if (!hasSubstantialCode && !(hasPrint && lineCount >= 2)) return match;
+
+      const echoed = echoFence(language, codeContent, whole, offset, offset + match.length);
+      if (echoed !== null) return echoed;
+      if (echoOnly) return match;
+
+      const title = sanitizeHTMLTitle(extractPythonTitle(trimmedCode), 'Python Script');
       const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
       return `<artifact identifier="${identifier}" type="application/vnd.ant.python" title="${title}">
 ${trimmedCode}
 </artifact>`;
     }
-
-    // Keep simple examples as regular code blocks
-    return match;
-  });
+  );
 
   // See ConvertCodeBlocksOptions.rewriteNestedMarkdown. Never under echoOnly, which must leave
   // every other byte alone.

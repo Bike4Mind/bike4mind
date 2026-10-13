@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import {
   convertCodeBlocksToArtifacts,
   extractArtifactBlocks,
@@ -1785,6 +1786,27 @@ describe('convertCodeBlocksToArtifacts - detectors shared with the client render
     expect(convertCodeBlocksToArtifacts(oneLiner)).toBe(oneLiner);
   });
 
+  it('strips < and > from a python docstring title so [^>] attribute matchers read the whole tag', () => {
+    const script = `${F}python\n\"\"\"Keep rows where a > b\"\"\"\nimport pandas\n${F}`;
+    const out = convertCodeBlocksToArtifacts(script);
+    expect(out).toContain('title="Keep rows where a  b"');
+    expect(/<artifact [^>]*>/.exec(out)?.[0]).toMatch(/title="Keep rows where a {2}b"/);
+  });
+
+  it('marks python and React fences quoted verbatim from a tool result instead of promoting them', () => {
+    const py =
+      'import os\n\ndef main():\n    for name in sorted(os.listdir(".")):\n        print(name, os.path.getsize(name))';
+    const tsx =
+      "import React, { useState } from 'react';\nexport default function App() { const [n] = useState(0); return <div>{n}</div>; }";
+    const isToolEcho = createToolEchoMatcher([{ text: `Fetched:\n${py}\n${tsx}`, truncated: false }]);
+    const reply = `${F}python\n${py}\n${F}\n\n${F}tsx\n${tsx}\n${F}`;
+    const out = convertCodeBlocksToArtifacts(reply, { isToolEcho });
+    expect(parseArtifacts(out).artifacts).toHaveLength(0);
+    expect(out).toMatch(new RegExp(`^~{3,}python ${TOOL_OUTPUT_MARKER}$`, 'm'));
+    expect(out).toMatch(new RegExp(`^~{3,}tsx ${TOOL_OUTPUT_MARKER}$`, 'm'));
+    expect(markToolEchoes(reply, isToolEcho)).toBe(out);
+  });
+
   it('promotes a typescript fence that carries two React indicators', () => {
     const code = `import React, { useState } from 'react';\nfunction Counter() { const [n] = useState(0); return <b>{n}</b>; }`;
     expect(types(convertCodeBlocksToArtifacts(`${F}typescript\n${code}\n${F}`))).toEqual(['react']);
@@ -1831,6 +1853,60 @@ describe('convertCodeBlocksToArtifacts - detectors shared with the client render
     it('promotes a bare mermaid object with a content-derived id', () => {
       const out = convertCodeBlocksToArtifacts(`See ${mermaid}`);
       expect(out).toMatch(/<artifact identifier="mermaid-tool-[0-9a-z]+" type="application\/vnd\.ant\.mermaid"/);
+    });
+
+    it('logs no reply text when a tool-output object fails to parse (this runs on the server chat path)', () => {
+      const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+      try {
+        // The unescape turns the \\n into a raw newline, so JSON.parse fails on it.
+        const input = `${F}json\n{"type":"mermaid","content":"graph TD\\nA-->B"}\n${F}`;
+        expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+        expect(warn).toHaveBeenCalled();
+        const logged = JSON.stringify(warn.mock.calls);
+        expect(logged).not.toContain('graph TD');
+        expect(logged).not.toContain('mermaid');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('logs no diagram lines when a mermaid fence fails validation', () => {
+      const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+      try {
+        convertCodeBlocksToArtifacts(`${F}mermaid\ngraph TD\n    A[Start] --> B(secret-line\n${F}`);
+        expect(warn).toHaveBeenCalled();
+        expect(JSON.stringify(warn.mock.calls)).not.toContain('secret-line');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('leaves a tool-output object inside a python fence or inline code as code', () => {
+      const script = `${F}python\nimport json\ndata = ${mermaid}\nprint(data)\n${F}`;
+      const out = convertCodeBlocksToArtifacts(script);
+      expect(out).not.toContain('mermaid-tool-');
+      expect(parseArtifacts(out).artifacts.map(a => a.content)).toEqual([
+        `import json\ndata = ${mermaid}\nprint(data)`,
+      ]);
+
+      const inline = `Pass \`${mermaid}\` to the tool.`;
+      expect(convertCodeBlocksToArtifacts(inline)).toBe(inline);
+    });
+
+    it('still promotes a tool-output object that is the whole body of a json fence, and one after it', () => {
+      const out = convertCodeBlocksToArtifacts(`${F}json\n${mermaid}\n${F}\nand ${mermaid.replace('A-->B', 'C-->D')}`);
+      expect(out.match(/identifier="mermaid-tool-/g)).toHaveLength(2);
+    });
+
+    it('does not promote a tool-output object quoted verbatim from a tool result', () => {
+      // Long enough to clear the echo matcher's minimum length.
+      const echoed = JSON.stringify({
+        type: 'mermaid',
+        content: 'graph TD; Fetch-->Parse; Parse-->Render; Render-->Done',
+      });
+      const isToolEcho = createToolEchoMatcher([{ text: `Result: ${echoed}`, truncated: false }]);
+      const input = `See ${echoed}`;
+      expect(convertCodeBlocksToArtifacts(input, { isToolEcho })).toBe(input);
     });
 
     it('mints the same id for the same body on every call, and a different one for another body', () => {
