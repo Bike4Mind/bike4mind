@@ -1,14 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
- * Guard for the per-route notebook sidenav slot. The slot used to be a single
- * component that core matched against a hardcoded '/opti', so a second overlay's nav was
- * warned about and dropped. Now each overlay names the route its nav owns, and codegen
- * emits one entry per overlay.
+ * Guard for the per-route notebook sidenav slot. The slot took a single contribution
+ * across all overlays; now each overlay names the route its nav owns, and codegen emits
+ * one entry per overlay.
  *
  * The route path is interpolated raw into a generated string literal, so its validator is
  * a build-time control, not a nicety - the rejection cases below are the control.
@@ -144,6 +143,19 @@ describe('notebook sidenav codegen', () => {
     const result = runCodegen();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('is not an origin-relative route path');
+  });
+
+  it('removes the stale single-slot generated file, so a leftover copy cannot break the fork build', () => {
+    writeOverlay('plain', { llmToolsExport: '@bike4mind/premium-plain/llm-tools' });
+    const stale = join(clientRoot, 'app/premium-generated/premiumNotebookSidenav.generated.ts');
+    mkdirSync(join(clientRoot, 'app/premium-generated'), { recursive: true });
+    writeFileSync(stale, 'export const premiumNotebookSidenav = null;\n');
+
+    generate();
+
+    // The file is gitignored, so an existing tree still has yesterday's copy; nothing imports
+    // it, but a stale generated file naming an overlay is what the fork build must not find.
+    expect(existsSync(stale)).toBe(false);
   });
 
   it('rejects a non-bare exportFrom', () => {
