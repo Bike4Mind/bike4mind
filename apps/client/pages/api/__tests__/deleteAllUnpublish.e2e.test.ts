@@ -57,6 +57,7 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedVal
 vi.mock('@server/services/publish/invalidatePublishCdn', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/services/publish/invalidatePublishCdn')>()),
   invalidatePublishCdn: vi.fn().mockResolvedValue(undefined),
+  invalidatePublishCdnMany: vi.fn().mockResolvedValue(undefined),
 }));
 
 let replSet: MongoMemoryReplSet;

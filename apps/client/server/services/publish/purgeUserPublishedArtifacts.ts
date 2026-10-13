@@ -5,7 +5,7 @@ import {
   type PurgedPublishedArtifact,
   type PurgeOwnerPublishedArtifactsResult,
 } from '@bike4mind/database';
-import { invalidatePublishCdn, toCacheTarget } from './invalidatePublishCdn';
+import { invalidatePublishCdnMany, toCacheTarget } from './invalidatePublishCdn';
 
 interface MinimalLogger {
   info: (msg: string) => void;
@@ -18,8 +18,8 @@ interface MinimalLogger {
  * their last publisher are invalidated too, so a cached copy stops naming the deleted owner.
  * Idempotent.
  *
- * Awaited one at a time rather than fire-and-forget: this runs once per account deletion, and a
- * Lambda can freeze before a dangling promise sends. invalidatePublishCdn never throws.
+ * Awaited rather than fire-and-forget: this runs once per account deletion, and a Lambda can
+ * freeze before a dangling promise sends. invalidatePublishCdnMany never throws.
  */
 export async function purgeUserPublishedArtifacts(
   userId: string,
@@ -55,7 +55,6 @@ export async function unpublishUserArtifactsBySource(
 }
 
 async function invalidatePublicPages(artifacts: PurgedPublishedArtifact[], logger?: MinimalLogger) {
-  for (const artifact of artifacts) {
-    if (artifact.visibility === 'public') await invalidatePublishCdn(toCacheTarget(artifact), logger);
-  }
+  const targets = artifacts.filter(a => a.visibility === 'public').map(toCacheTarget);
+  await invalidatePublishCdnMany(targets, logger);
 }
