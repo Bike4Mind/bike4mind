@@ -61,4 +61,23 @@ describe('JiraNotificationsForm secret controls', () => {
     renderForm();
     expect(screen.getByTestId('toggle-jira-secret-visibility')).toBeTruthy();
   });
+
+  it('shows Enable, Disable and Delete only to the config creator or an admin', () => {
+    const testIds = ['jira-notifications-disable', 'jira-notifications-delete'];
+
+    h.currentUser = { id: 'user-2', isAdmin: false };
+    const other = renderForm();
+    for (const id of testIds) expect(screen.queryByTestId(id)).toBeNull();
+    expect(screen.getByTestId('jira-notifications-save')).toBeTruthy();
+    other.unmount();
+
+    h.currentUser = { id: 'user-1', isAdmin: false };
+    const creator = renderForm();
+    for (const id of testIds) expect(screen.getByTestId(id)).toBeTruthy();
+    creator.unmount();
+
+    h.currentUser = { id: 'admin-1', isAdmin: true };
+    renderForm();
+    for (const id of testIds) expect(screen.getByTestId(id)).toBeTruthy();
+  });
 });

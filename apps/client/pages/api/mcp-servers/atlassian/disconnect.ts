@@ -48,6 +48,7 @@ const handler = baseApi().delete(async (req, res) => {
       for (const resource of atlassianConnect.resources) {
         try {
           const webhookConfig = await jiraWebhookConfigRepository.findByAtlassianCloudId(resource.id);
+          // Admins are deliberately excluded: they remove a shared config via DELETE /api/webhooks/jira/config
           if (webhookConfig?.createdBy === req.user.id) {
             const deletedSubs = await jiraWebhookSubscriptionRepository.deleteByWebhookConfig(webhookConfig.id);
             await jiraWebhookConfigRepository.delete(webhookConfig.id);

@@ -23,11 +23,12 @@ import { jiraWebhookConfigRepository, jiraWebhookSubscriptionRepository } from '
 import {
   generateRoutingToken,
   generateWebhookSecret,
+  canManageConfig,
   ROTATION_WINDOW_MS,
 } from '@server/integrations/jira/webhookUtils';
 import { encryptSecret, decryptSecret } from '@server/security/secretEncryption';
 import { Config } from '@server/utils/config';
-import { BadRequestError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
 import {
   IJiraWebhookConfigRequest,
   IJiraWebhookConfigResponse,
@@ -160,7 +161,7 @@ const handler = baseApi()
 
       const subscriberCount = await jiraWebhookSubscriptionRepository.countByWebhookConfig(webhookConfig.id);
 
-      const canRevealSecret = revealSecret && (webhookConfig.createdBy === user.id || !!user.isAdmin);
+      const canRevealSecret = revealSecret && canManageConfig(webhookConfig, user);
 
       // Decrypt and optionally reveal secret
       let secretDisplay: string;
@@ -222,9 +223,9 @@ const handler = baseApi()
         throw new NotFoundError('Webhook configuration not found');
       }
 
-      // Only the creator can update
-      if (existingConfig.createdBy !== user.id && !user.isAdmin) {
-        throw new UnauthorizedError('Only the creator can update this webhook configuration');
+      // 403, not 401: the client treats 401 as an expired session and signs the user out
+      if (!canManageConfig(existingConfig, user)) {
+        throw new ForbiddenError('Only the creator can update this webhook configuration');
       }
 
       const { events, enabled, rotateSecret } = req.body || {};
@@ -328,9 +329,9 @@ const handler = baseApi()
         throw new NotFoundError('Webhook configuration not found');
       }
 
-      // Only the creator or admin can delete
-      if (webhookConfig.createdBy !== user.id && !user.isAdmin) {
-        throw new UnauthorizedError('Only the creator can delete this webhook configuration');
+      // 403, not 401: see PUT
+      if (!canManageConfig(webhookConfig, user)) {
+        throw new ForbiddenError('Only the creator can delete this webhook configuration');
       }
 
       // Cascade delete all subscriptions

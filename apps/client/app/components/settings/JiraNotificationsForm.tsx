@@ -74,7 +74,7 @@ const JiraNotificationsForm: FC = () => {
 
   // Derived state (404 returns null from queryFn, so isError is only for real failures)
   const hasConfig = !!config;
-  const canRevealSecret = !!config && (config.createdBy === currentUser?.id || !!currentUser?.isAdmin);
+  const canManageConfig = !!config && (config.createdBy === currentUser?.id || !!currentUser?.isAdmin);
   const isEnabled = hasConfig && config.enabled;
   const existingSub = subscriptions?.[0]; // First subscription (simplified single-sub model)
   const isLoading = configLoading || subsLoading;
@@ -270,14 +270,14 @@ const JiraNotificationsForm: FC = () => {
             <Input
               readOnly
               size="sm"
-              type={showSecret && canRevealSecret ? 'text' : 'password'}
+              type={showSecret && canManageConfig ? 'text' : 'password'}
               value={
-                showSecret && canRevealSecret
+                showSecret && canManageConfig
                   ? config.secret || config.secretMasked || ''
                   : config.secretMasked || '****'
               }
               endDecorator={
-                canRevealSecret && (
+                canManageConfig && (
                   <Box sx={{ display: 'flex', gap: 0.5 }}>
                     <IconButton
                       variant="plain"
@@ -437,21 +437,23 @@ const JiraNotificationsForm: FC = () => {
 
           {/* Actions */}
           <Box sx={{ display: 'flex', gap: 1 }}>
-            <Button
-              onClick={
-                isEnabled
-                  ? handleSave
-                  : async () => {
-                      await updateConfig.mutateAsync({ enabled: true });
-                      toast.success('Jira notifications enabled');
-                    }
-              }
-              loading={isSaving}
-              data-testid="jira-notifications-save"
-            >
-              {isEnabled ? 'Save Settings' : 'Enable Notifications'}
-            </Button>
-            {isEnabled && (
+            {(isEnabled || canManageConfig) && (
+              <Button
+                onClick={
+                  isEnabled
+                    ? handleSave
+                    : async () => {
+                        await updateConfig.mutateAsync({ enabled: true });
+                        toast.success('Jira notifications enabled');
+                      }
+                }
+                loading={isSaving}
+                data-testid="jira-notifications-save"
+              >
+                {isEnabled ? 'Save Settings' : 'Enable Notifications'}
+              </Button>
+            )}
+            {isEnabled && canManageConfig && (
               <Button
                 variant="plain"
                 color="neutral"
@@ -462,16 +464,18 @@ const JiraNotificationsForm: FC = () => {
                 Disable
               </Button>
             )}
-            <Button
-              variant="plain"
-              color="danger"
-              onClick={handleDelete}
-              loading={deleteConfig.isPending}
-              data-testid="jira-notifications-delete"
-              sx={{ ml: 'auto' }}
-            >
-              Delete
-            </Button>
+            {canManageConfig && (
+              <Button
+                variant="plain"
+                color="danger"
+                onClick={handleDelete}
+                loading={deleteConfig.isPending}
+                data-testid="jira-notifications-delete"
+                sx={{ ml: 'auto' }}
+              >
+                Delete
+              </Button>
+            )}
           </Box>
         </>
       )}

@@ -76,4 +76,33 @@ describe('DELETE /api/mcp-servers/atlassian/disconnect', () => {
     expect(h.deleteSub).not.toHaveBeenCalled();
     expect(h.update).toHaveBeenLastCalledWith({ id: 'user-1', atlassianConnect: null });
   });
+
+  it('still disconnects the user when they have no own subscription', async () => {
+    h.findOwnSub.mockResolvedValue(null);
+    const res = makeRes();
+    await h.handlers.delete({ user: { id: 'user-2' } }, res);
+    expect(h.deleteSub).not.toHaveBeenCalled();
+    expect(h.update).toHaveBeenCalledWith({ id: 'user-2', atlassianConnect: null });
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('still disconnects the user and returns 200 when subscription cleanup rejects', async () => {
+    h.findOwnSub.mockRejectedValue(new Error('db down'));
+    const res = makeRes();
+    await h.handlers.delete({ user: { id: 'user-2' } }, res);
+    expect(h.update).toHaveBeenCalledWith({ id: 'user-2', atlassianConnect: null });
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('cascades only the configs the caller created across resources', async () => {
+    h.findById.mockResolvedValue({ atlassianConnect: { resources: [{ id: 'cloud-1' }, { id: 'cloud-2' }] } });
+    h.findByAtlassianCloudId.mockImplementation(async (cloudId: string) =>
+      cloudId === 'cloud-1' ? { id: 'jcfg-1', createdBy: 'user-1' } : { id: 'jcfg-2', createdBy: 'user-9' }
+    );
+    await h.handlers.delete({ user: { id: 'user-1' } }, makeRes());
+    expect(h.deleteConfig).toHaveBeenCalledTimes(1);
+    expect(h.deleteConfig).toHaveBeenCalledWith('jcfg-1');
+    expect(h.deleteSub).toHaveBeenCalledTimes(1);
+    expect(h.deleteSub).toHaveBeenCalledWith('sub-user-1');
+  });
 });
