@@ -29,7 +29,9 @@ permissions:
 
 concurrency:
   group: dependabot-lockfile-repair-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # Only a newer Dependabot push supersedes a run; the bot's own repair push must not
+  # cancel the run that made it while its cleanup and token-revoke steps finish.
+  cancel-in-progress: ${{ github.actor == 'dependabot[bot]' }}
 
 jobs:
   repair:
@@ -55,6 +57,8 @@ jobs:
         with:
           client-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          # Least privilege: this token sits beside an untrusted checkout.
+          permission-contents: write
 
       # PR head as data only. The token persists in pr/.git/config for the push.
       - uses: actions/checkout@v6
@@ -67,7 +71,7 @@ jobs:
         run: |
           if ! bash .github/scripts/repair-lockfile-integrity.sh pr/pnpm-lock.yaml pnpm-lock.yaml 2>missing.txt; then
             urls=$(paste -sd ' ' missing.txt)
-            echo "::error::pnpm-lock.yaml has tarball entries with no integrity hash and no hashed entry on main to copy: $urls. Regenerate the lockfile under pnpm >=10.34.1 and push the integrity hash by hand."
+            echo "::error::pnpm-lock.yaml has tarball entries with no integrity hash and no hashed entry on main to copy: $urls. Regenerate the lockfile locally (outside Dependabot) with the pinned pnpm and push the integrity hash by hand."
             exit 1
           fi
 
