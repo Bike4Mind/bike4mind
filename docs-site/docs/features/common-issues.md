@@ -70,7 +70,7 @@ If the issue persists, contact your organization admin to confirm your account e
 
 Credits are the currency used to run AI operations on Bike4Mind. Each message, image generation, Smart Tool use, or Subagent run consumes credits based on the cost of the underlying AI model.
 
-- **More powerful models cost more** — flagship models such as Claude Opus and GPT-6.1 Sol use significantly more credits per message than smaller models like Claude Haiku or Gemini Flash or Claude Haiku.
+- **More powerful models cost more** — flagship models such as Claude Opus and GPT-6.1 Sol use significantly more credits per message than smaller models like Claude Haiku or Gemini Flash.
 - **Longer conversations cost more** — The full conversation history is sent to the model on every turn, so credit cost grows as a conversation gets longer.
 - **Tools and subagents each consume credits** — Web search, image generation, and Subagents each bill independently.
 
