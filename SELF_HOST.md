@@ -238,11 +238,11 @@ Authenticate with any one of: `x-api-key: b4m_...`, `Authorization: ApiKey b4m_.
 
 **Response** - a **custom SSE contract, not OpenAI's**: there is no `choices[].delta`. Each frame is either an SSE comment (a line starting with `:`) or a `data:` line carrying one JSON object, and every frame ends with a blank line (`\n\n`). The stream opens and closes in the order below, but the middle is a stream: `content` and `tool_use` frames interleave one per chunk (a tool-calling turn emits `tool_use` frames among the `content` ones), and keep-alive comments keep recurring (about every 10s) throughout:
 
-1. `: keep-alive` - an SSE comment sent immediately and then roughly every 10s so an intermediary does not drop an idle stream. EventSource ignores comment lines; a raw reader should skip any line starting with `:`.
+1. `: keep-alive` - an SSE comment sent once the provider call begins and then roughly every 10s so an intermediary does not drop an idle stream. EventSource ignores comment lines; a raw reader should skip any line starting with `:`.
 2. `data: {"type":"meta","requestId":"..."}` - always the first JSON event; use `requestId` to correlate with server logs.
 3. `data: {"type":"content","text":"...","usage":{...}}` - zero or more content chunks. `text` is the incremental output; `usage`, when present, carries `inputTokens`/`outputTokens` (and Anthropic cache-token deltas).
 4. `data: {"type":"tool_use","text":"...","tools":[...]}` - sent instead of `content` for a chunk in which the model invoked a tool.
-5. `data: {"type":"error","message":"...","requestId":"..."}` - on failure (invalid body, auth failure, or a mid-stream error); the stream then ends.
+5. `data: {"type":"error","message":"...","requestId":"..."}` - on a failure after the stream has started; the stream then ends. A failure before the stream starts (invalid body, auth, rate limit, billing) is a JSON error response with a real HTTP status instead, so check the status before reading the stream.
 6. `data: [DONE]` - terminal sentinel on success.
 
 **Example** - a local Ollama model (`-N` disables curl buffering so the stream prints live):

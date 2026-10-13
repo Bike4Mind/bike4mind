@@ -3,6 +3,7 @@ import { z } from 'zod';
 // completions.contract.ts, which must stay off the barrel (see the note there).
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 import type { ReasoningEffort } from '../types/common';
+import type { ApiErrorCode } from '../apiErrorCodes';
 
 const REASONING_EFFORT_VALUES = [
   'none',
@@ -177,26 +178,35 @@ const CompletionContentEventSchema = z.object({
 });
 
 /**
- * The in-band terminal failure frame. Because this endpoint flushes SSE headers
- * before it authenticates or prices anything, EVERY failure past the malformed-body
- * check arrives here under a 200 - there is no pre-stream 422 on this surface the
- * way there is on /api/chat and /api/embed/chat.
+ * Classifiers the completions `error` frame may carry: the persisted quest codes plus the two
+ * provider codes. A separate tuple because QUEST_ERROR_CODES is stored on quests and must not widen.
+ */
+export const COMPLETION_SSE_ERROR_CODES = [
+  ...QUEST_ERROR_CODES,
+  'provider_error',
+  'provider_rejected',
+  'content_blocked',
+] as const satisfies readonly ApiErrorCode[];
+export type CompletionSseErrorCode = (typeof COMPLETION_SSE_ERROR_CODES)[number];
+
+/**
+ * The in-band terminal failure frame, sent only once the stream has opened. Failures found before
+ * the provider call (auth, scope, validation, rate limit, model, credits) are JSON errors with a
+ * real status instead; see completions.contract.ts.
  *
- * `code` is the machine-readable classifier, drawn from QUEST_ERROR_CODES (itself a
- * narrowing of the platform-wide API_ERROR_CODES, so it cannot drift from the codes
- * the JSON surfaces use). It is what makes mid-generation credit exhaustion
- * detectable: the `message` is prose and callers must never match on it. Absent for
- * unclassified failures, so treat it as optional.
+ * `code` is the machine-readable classifier: a billing code when settlement runs out mid-generation,
+ * `provider_rejected` / `provider_error` when the model provider fails, `content_blocked` when the
+ * model's safety classifier declined the request. Optional; callers must never match on the prose
+ * `message`.
  *
- * The field is `code` rather than the conventions' `errorCode` because this frame
- * shipped that way and is a published wire shape; the vocabulary is what had to be
- * shared, not the key.
+ * The field is `code` rather than the conventions' `errorCode` because this frame shipped that way
+ * and is a published wire shape.
  */
 export const CompletionSseErrorEventSchema = z.object({
   type: z.literal('error'),
   message: z.string(),
   requestId: z.string().optional(),
-  code: z.enum(QUEST_ERROR_CODES).optional(),
+  code: z.enum(COMPLETION_SSE_ERROR_CODES).optional(),
 });
 
 /** One `data:` event in the `text/event-stream` completions response. */

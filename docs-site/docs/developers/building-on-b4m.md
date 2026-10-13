@@ -261,24 +261,42 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 
 ### Before you start
 
-`GET https://<your-b4m-host>/api/v1/credits` with the user's `ai:generate` key returns `{ "balance": 31667 }`. Use it as an advisory pre-flight check before a batch of work, not as a gate: when the deployment does not enforce credits (the self-hosted default), balances can sit at 0 while completions succeed. The in-band `insufficient_credits` event below is the authoritative signal. A 401 means the key itself was rejected (see "One re-mint" above).
+`GET https://<your-b4m-host>/api/v1/credits` with the user's `ai:generate` key returns `{ "balance": 31667 }`. Use it as an advisory pre-flight check before a batch of work, not as a gate: when the deployment does not enforce credits (the self-hosted default), balances can sit at 0 while completions succeed. The completion's own `insufficient_credits` answer below is the authoritative signal. A 401 means the key itself was rejected (see "One re-mint" above).
 
 ### During a completion
 
-`POST /api/ai/v1/completions` answers with a Server-Sent Events stream, and once the stream opens the HTTP status is **always 200**. Only a request that never reaches the stream (malformed JSON, a body over 25 MB, a wrong method) gets a plain HTTP error. Authentication failures, invalid requests, rate limits and credit exhaustion all arrive as an in-band event:
+`POST /api/ai/v1/completions` checks everything it can before it opens the stream: the JSON body, the key and its scopes, the rate limit, the model and the user's credits. Any of those failing returns a JSON error with a real HTTP status and no stream:
+
+| Status | Meaning | `errorCode` |
+|--------|---------|-------------|
+| 400 | Malformed JSON, or a `model` B4M does not know or cannot serve you. | - |
+| 401 | The key was rejected. Re-mint once (see "One re-mint" above). | - |
+| 403 | The key lacks a scope this endpoint needs; `required_scopes` names them. | - |
+| 405 | Wrong HTTP method; use `POST`. | - |
+| 413 | The body is over 25 MB. | - |
+| 422 | The user or their org is out of credits, or the org's per-member credit cap is reached. Prompt them to top up their B4M balance. | `insufficient_credits` |
+| 422 | The body failed validation; `error` names the failing fields. | - |
+| 429 | Rate limited. Wait `Retry-After` seconds, then retry. When called with an API key, `X-RateLimit-*` headers show the window state. | - |
+| 500 | Internal error. Retry, and log `request_id` if it persists. | - |
+| 503 | The database is unavailable, or the model's provider is not configured on this deployment. Retry later or pick another model. | `provider_not_configured` for the model case |
+
+The body is `{ "error": "...", "request_id": "...", "errorCode": "..." }` (`errorCode` only where the table shows one), and `request_id` also arrives as the `X-Request-ID` header. Branch on the status and `errorCode`, never on `error`, which is prose and can change. The public API never returns 402.
+
+Once the stream opens the status is 200 and stays 200. A failure after that point arrives as one in-band event:
 
 ```json
-{ "type": "error", "message": "...", "requestId": "...", "code": "insufficient_credits" }
+{ "type": "error", "message": "...", "requestId": "...", "code": "provider_error" }
 ```
 
-- `code: "insufficient_credits"`: the user is out of credits. Prompt them to top up their B4M balance.
-- `code: "spend_cap_exceeded"`: reserved. The key hit an admin-set spending ceiling, so topping up does not help. Keys from the exchange do not carry a cap today, so you should not see it, but handle it defensively.
-- `code` absent: an unclassified failure (including a rejected key, a rate limit or an invalid body). Show `message` and log `requestId`. A rate limit has no `Retry-After` here (the headers were already sent), so back off before retrying.
-- Any other `code`: a classified failure your app has no special handling for. Treat it like an absent `code`.
+- `code: "insufficient_credits"`: the user ran out of credits mid-generation. Prompt them to top up their B4M balance.
+- `code: "provider_rejected"`: the model provider refused B4M's credentials. Your key is fine; retry later or pick another model.
+- `code: "content_blocked"`: the model declined the request. Retrying the same prompt gets the same answer; rephrase it or pick another model.
+- `code: "provider_error"`: the model provider failed. Retry, or pick another model. The provider's own response body is never forwarded.
+- `code` absent, or any other `code`: show `message` and log `requestId`.
 
 The stream opens with keep-alive comments and a `{ "type": "meta", "requestId": "..." }` event; ignore both. Text arrives as `content` events with a `text` field. With a reasoning model, the text can contain `<think>...</think>` spans (possibly several) holding the model's reasoning; strip them before you show the reply, and never show or log a `thinking` field. A successful stream ends with `data: [DONE]`. An `error` event is terminal and is not followed by `[DONE]`; a stream that ends with neither is incomplete. A `stopReason` of `max_tokens` on the last event means the reply was cut off. Any other `stopReason` that is not a clean finish (`end_turn`, `stop`, `tool_use`, `stop_sequence`), such as `degenerate_repetition`, `refusal` or a provider-specific value, means the reply is not usable even though `[DONE]` still arrives.
 
-Branch on `code`, never on `message`, which is prose and can change. The HTTP status tells you nothing here, and the public API never returns 402. (The JSON, non-streaming B4M APIs report the same condition as HTTP 422 with `errorCode: "insufficient_credits"`.)
+Branch on `code`, never on `message`, which is prose and can change. (The JSON, non-streaming B4M APIs report the credit condition the same way this endpoint does before the stream: HTTP 422 with `errorCode: "insufficient_credits"`.)
 
 ## 7. Read the user's state
 
@@ -474,7 +492,11 @@ async function mintKey(userId: string, idToken: string): Promise<string> {
 
 ```ts
 class OutOfCreditsError extends Error {}
-class SpendCapError extends Error {}
+class RateLimitedError extends Error {
+  constructor(readonly retryAfterS: number) {
+    super(`Rate limited; retry in ${retryAfterS}s`);
+  }
+}
 class TruncatedReplyError extends Error {
   constructor(readonly partial: string) {
     super('Reply was cut off at max_tokens');
@@ -495,7 +517,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
   let key = await getUserKey(userId, idToken);
 
   // Pre-flight: a 401 here means the cached key was rejected. Re-mint exactly once.
-  // The balance is advisory; the in-band insufficient_credits event is authoritative.
+  // The balance is advisory; the completion's own insufficient_credits answer is authoritative.
   let pre = await checkBalance(key);
   if (pre.status === 401) {
     key = await getUserKey(userId, idToken, { rejectedKey: key });
@@ -513,9 +535,16 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
       messages: [{ role: 'user', content: prompt }],
     }),
   });
-  if (!res.ok || !res.body) throw new Error(`Completion request failed: ${res.status}`);
+  if (!res.ok) {
+    // Failures found before the stream opens are JSON with a real status.
+    const err: { error?: string; errorCode?: string; request_id?: string } = await res.json().catch(() => ({}));
+    if (err.errorCode === 'insufficient_credits') throw new OutOfCreditsError(err.error);
+    if (res.status === 429) throw new RateLimitedError(Number(res.headers.get('Retry-After')) || 60);
+    throw new Error(`Completion failed (${res.status} ${err.errorCode ?? ''}, request_id ${err.request_id}): ${err.error}`);
+  }
+  if (!res.body) throw new Error('Completion response had no body');
 
-  // The status is 200 even on failure; read the events.
+  // From here the status is 200; a failure arrives as an error event.
   let text = '';
   let stopReason: string | undefined;
   let buffer = '';
@@ -538,7 +567,6 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
       const event = JSON.parse(data);
       if (event.type === 'error') {
         if (event.code === 'insufficient_credits') throw new OutOfCreditsError(event.message);
-        if (event.code === 'spend_cap_exceeded') throw new SpendCapError(event.message);
         throw new Error(`Completion failed (requestId ${event.requestId}): ${event.message}`);
       }
       if (event.stopReason) stopReason = event.stopReason;
@@ -549,7 +577,7 @@ async function complete(userId: string, idToken: string, prompt: string): Promis
 }
 ```
 
-Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `SpendCapError`, tell them a B4M spending cap was reached (topping up will not help). On `TruncatedReplyError`, show `partial` marked as incomplete, or retry with a higher `max_tokens`. For a model that reasons inside its output budget, omitting `max_tokens` lets B4M size the ceiling. On `UnusableReplyError` (for example `degenerate_repetition` or `refusal`), do not show the text; retry or tell the user the reply failed.
+Catch `OutOfCreditsError` in your UI and send the user to top up their B4M balance. On `RateLimitedError`, wait `retryAfterS` seconds before retrying. On `TruncatedReplyError`, show `partial` marked as incomplete, or retry with a higher `max_tokens`. For a model that reasons inside its output budget, omitting `max_tokens` lets B4M size the ceiling. On `UnusableReplyError` (for example `degenerate_repetition` or `refusal`), do not show the text; retry or tell the user the reply failed.
 
 ## Further reading
 
