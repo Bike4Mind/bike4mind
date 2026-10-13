@@ -17,7 +17,7 @@ Open the account menu in the sidebar and choose **Teams**. The page lists every 
 
 1. On the Teams page, click **Create Team**.
 2. In the **Create New Team** dialog, type a **Team Name**.
-3. Under **People on the plan**, use the minus and plus buttons to pick how many people the plan covers. It starts at 4, the number of people one flat price covers, so a team of two or three leaves it at 4 and pays the same. Raise it only to make room for more people. The note under the picker states the range, which Bike4Mind sets and can change.
+3. Under **People on the plan**, type a number or use the minus and plus buttons to pick how many people the plan covers. It starts at 4, the number of people one flat price covers, so a team of two or three leaves it at 4 and pays the same. Raise it only to make room for more people. The note under the picker states the range, which Bike4Mind sets and can change. If you type a number outside the range, the field shows a "Must be between" error and **Create Team** stays disabled until you fix it. A decimal such as 7.4 is rounded to the nearest whole number. If you need a PO, invoice or other custom billing, use the **Contact us** link in the dialog, which opens the Bike4Mind support page in a new tab.
 4. Read the **Total Price** line, which shows the monthly total for the number you picked.
 5. Click **Create Team**. You are sent to a secure checkout to pay for the subscription.
 
@@ -64,7 +64,7 @@ The Billing tab shows **Billing & Subscription**:
 - Plan status: **Team Plan** with Active, Canceled or Payment issue, and the renewal or end date.
 - **Subscribe Now** if the Team has no subscription yet.
 - **Team Seats Usage**, for example "5 / 10 seats used", with the number of seats still available.
-- **Manage Seats** to change the number of seats. The dialog is called **Update Team Seats**, and it shows the price per seat per month and the new total. You cannot go below the number of people already on the Team (the owner counts) or below the minimum Team size, and the changes show up on your next billing cycle. While the Team has a payment issue, Manage Seats is hidden until the payment is fixed.
+- **Manage Seats** to change the number of seats. The dialog is called **Update Team Seats**; type the number of seats or use the minus and plus buttons, and it shows the price per seat per month and the new total. You cannot go below the number of people already on the Team (the owner counts) or below the minimum Team size (the lowest number the dialog accepts is the larger of the two, and typing a number outside the range shows an error). People you have invited who have not yet accepted also count toward the minimum when you save: the dialog does not include them in its limit, so if you enter fewer seats than your members plus pending invites, the update is rejected with a message naming the minimum, and you can cancel invites or enter a higher number. The changes show up on your next billing cycle. While the Team has a payment issue, Manage Seats is hidden until the payment is fixed.
 - **Billing Portal** to update your payment method, view invoices and manage or cancel the subscription.
 
 If a payment fails, the Team shows **Payment Issue** and the Billing Portal is where you update your card.

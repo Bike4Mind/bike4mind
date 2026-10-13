@@ -306,8 +306,8 @@ const SubscriptionModalContent = () => {
               answersEstimate={formatAnswersEstimate(teamPlanCredits, answerCostReference)}
               interval="month"
               features={[
-                // One flat price for up to teamMinSeats people (MillionOnMars/b4m-web#499): a pair or trio pays the same, so
-                // don't present the floor as a headcount to fill.
+                // One flat price covers up to teamMinSeats people, so a pair or trio pays the same: don't present the floor
+                // as a headcount to fill.
                 teamSeatPrice === undefined
                   ? `Up to ${teamMinSeats} people at one flat price`
                   : `Up to ${teamMinSeats} people at one flat price; $${centsToDollars(teamSeatPrice).toFixed(2)} per month for each person after that`,
