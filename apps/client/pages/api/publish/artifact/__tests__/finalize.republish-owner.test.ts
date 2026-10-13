@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // Republishing an existing slug is limited to the artifact owner (or an admin); other callers get 403
-// before any storage or database write.
+// before any storage or database write - at upload-url, and again at finalize.
 
 const { mockFindOne, mockFindOneAndUpdate, mockDownload, mockUpload } = vi.hoisted(() => ({
   mockFindOne: vi.fn(),
@@ -51,10 +51,12 @@ vi.mock('@server/services/publish', async importOriginal => {
     buildPublishUrlPath: () => '/p/u/owner1/art',
     invalidatePublishCdn: () => undefined,
     toCacheTarget: () => ({}),
+    mintDraftUploadUrl: () => Promise.resolve('https://example.invalid/put'),
   };
 });
 
 import handler from '../finalize';
+import uploadUrlHandler from '../upload-url';
 
 const DRAFT_ID = '33333333-3333-4333-8333-333333333333';
 
@@ -80,13 +82,14 @@ const setDraft = (m: Record<string, unknown>, rawIndexHtml: string) => {
   );
 };
 
-const run = (body: unknown, userId = 'owner1') => {
+const post = (h: unknown, body: unknown, userId: string, isAdmin: boolean) => {
   const { req, res } = createMocks({ method: 'POST', body });
   const r = req as Record<string, unknown>;
-  r.user = { id: userId, isAdmin: false, organizationId: null };
+  r.user = { id: userId, isAdmin, organizationId: null };
   r.logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-  return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
+  return { res, promise: (h as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
+const run = (body: unknown, userId = 'owner1', isAdmin = false) => post(handler, body, userId, isAdmin);
 
 beforeEach(() => {
   mockFindOne.mockReset().mockResolvedValue(null);
@@ -110,6 +113,7 @@ describe('finalize - republish ownership', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().code).toBe('slug_owned_by_other');
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
     expect(mockUpload).not.toHaveBeenCalled();
   });
@@ -122,5 +126,73 @@ describe('finalize - republish ownership', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockFindOneAndUpdate).toHaveBeenCalled();
+  });
+
+  it('lets an admin republish a slug they do not own, keeping the original owner', async () => {
+    mockFindOne.mockResolvedValue(existing);
+    setDraft(manifest({ createdBy: 'admin9' }), '<h1>x</h1>');
+    const { res, promise } = run({ draftId: DRAFT_ID }, 'admin9', true);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const [filter, update] = mockFindOneAndUpdate.mock.calls[0] as [
+      Record<string, unknown>,
+      { $set: Record<string, unknown> },
+    ];
+    expect(filter.ownerId).toBe('owner1');
+    expect(update.$set.ownerId).toBe('owner1');
+  });
+
+  it('guards the upsert on the owner it checked, so a first publish cannot land on a row created meanwhile', async () => {
+    setDraft(manifest({}), '<h1>x</h1>');
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect((mockFindOneAndUpdate.mock.calls[0][0] as Record<string, unknown>).ownerId).toBe('owner1');
+  });
+
+  it('returns 409 when the slug changed owner between the check and the write', async () => {
+    mockFindOneAndUpdate.mockReturnValue(
+      Promise.reject(Object.assign(new Error('E11000 duplicate key error collection'), { code: 11000 }))
+    );
+    setDraft(manifest({}), '<h1>x</h1>');
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData().code).toBe('slug_owned_by_other');
+  });
+});
+
+describe('upload-url - republish ownership', () => {
+  const uploadBody = {
+    tier: 'user',
+    scopeId: 'owner1',
+    slug: 'art',
+    title: 'My Artifact',
+    files: [{ path: 'index.html', size: 10, mimeType: 'text/html' }],
+  };
+
+  it('refuses a non-owner before issuing upload URLs or writing a draft', async () => {
+    mockFindOne.mockResolvedValue(existing);
+    const { res, promise } = post(uploadUrlHandler, uploadBody, 'member2', false);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().code).toBe('slug_owned_by_other');
+    expect(mockUpload).not.toHaveBeenCalled();
+  });
+
+  it('issues a draft to the owner and to an admin', async () => {
+    mockFindOne.mockResolvedValue(existing);
+    for (const [userId, isAdmin] of [
+      ['owner1', false],
+      ['admin9', true],
+    ] as const) {
+      const { res, promise } = post(uploadUrlHandler, uploadBody, userId, isAdmin);
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+    }
   });
 });

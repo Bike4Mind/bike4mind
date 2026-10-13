@@ -179,6 +179,48 @@ describe('publishArtifactBundle', () => {
     });
     expect(uploadedScope()).toEqual({ tier: 'organization', scopeId: 'org_42' });
   });
+
+  /** An axios-shaped 403 for a slug another user owns. */
+  const slugOwnedByOther = () =>
+    Object.assign(new Error('Request failed with status code 403'), {
+      isAxiosError: true,
+      response: { status: 403, data: { error: 'Only the owner can republish this slug', code: 'slug_owned_by_other' } },
+    });
+
+  it('retries a DERIVED slug with a unique suffix when another user owns it', async () => {
+    wirePublishPosts();
+    apiPost.mockImplementationOnce(() => Promise.reject(slugOwnedByOther()));
+    const result = await publishArtifactBundle({
+      artifactId: 'artifact_abcdef123456',
+      type: 'react',
+      content: 'export default () => null;',
+      title: 'Chronosphere',
+      userId: 'u1',
+    });
+    const slugs = apiPost.mock.calls
+      .filter(c => c[0] === '/api/publish/artifact/upload-url')
+      .map(c => (c[1] as { slug: string }).slug);
+    expect(slugs).toHaveLength(2);
+    expect(slugs[0]).toBe('chronosphere-artifa');
+    expect(slugs[1]).toMatch(/^chronosphere-artifa-[a-z0-9]{6}$/);
+    expect(result).toEqual(RESULT);
+  });
+
+  it('surfaces the refusal for a PINNED slug instead of publishing a different page', async () => {
+    wirePublishPosts();
+    apiPost.mockImplementationOnce(() => Promise.reject(slugOwnedByOther()));
+    await expect(
+      publishArtifactBundle({
+        artifactId: 'artifact_abcdef123456',
+        type: 'react',
+        content: 'export default () => null;',
+        title: 'Chronosphere',
+        userId: 'u1',
+        slug: 'chronosphere-artifa',
+      })
+    ).rejects.toMatchObject({ response: { status: 403 } });
+    expect(apiPost.mock.calls.filter(c => c[0] === '/api/publish/artifact/upload-url')).toHaveLength(1);
+  });
 });
 
 describe('findPublishedByArtifact', () => {
