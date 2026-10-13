@@ -21,6 +21,9 @@ vi.mock('@casl/mongoose', () => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: vi.fn().mockResolvedValue({ artifacts: [] }),
+}));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ delete: storageDelete }),
 }));
@@ -72,7 +75,10 @@ describe('DELETE /api/files scoping', () => {
     vi.mocked(FabFile.find)
       .mockReset()
       .mockReturnValue({
-        select: () => ({ session: async () => [{ filePath: 'owned/mine.txt' }] }),
+        select: () => ({
+          session: async () => [{ filePath: 'owned/mine.txt' }],
+          lean: async () => [{ _id: 'mine' }],
+        }),
       } as never);
     vi.mocked(User.findById)
       .mockReset()
