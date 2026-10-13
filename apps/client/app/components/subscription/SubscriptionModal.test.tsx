@@ -188,6 +188,7 @@ describe('SubscriptionModal', () => {
     expect(screen.queryByText(/Phi-4/)).not.toBeInTheDocument();
     expect(screen.queryByText(/prompt engineering tools/)).not.toBeInTheDocument();
     expect(screen.queryByText(/cost optimization/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Priority support/)).not.toBeInTheDocument();
   });
 
   it('does not badge a lone plan as Most Popular on either tab', async () => {
@@ -200,6 +201,7 @@ describe('SubscriptionModal', () => {
 
     expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeInTheDocument();
     expect(screen.queryByTestId('plan-card-popular-badge')).not.toBeInTheDocument();
+    expect(screen.getByText('Priority support')).toBeInTheDocument();
   });
 
   it('shows a delinquent plan as the current plan and lets the user cancel it', async () => {
