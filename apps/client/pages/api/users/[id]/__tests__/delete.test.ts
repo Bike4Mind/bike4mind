@@ -84,7 +84,7 @@ describe('DELETE /api/users/[id]/delete', () => {
     expect(mockPurge).not.toHaveBeenCalled();
   });
 
-  it('returns the serialized user shape without secret fields', async () => {
+  it('returns the serialized user shape with none of the USER_SECRET_FIELDS', async () => {
     const secrets = Object.fromEntries(USER_SECRET_FIELDS.map(f => [f, 'x']));
     mockAdminDeleteUser.mockResolvedValue({ id: 'u1', name: 'N', email: 'n@example.com', ...secrets });
 

@@ -26,7 +26,7 @@ const makeRow = () => ({
     name: 'Org',
     userId: 'owner',
     stripeCustomerId: 'cus_123',
-    billingContact: { email: 'billing@example.com' },
+    billingContact: 'billing@example.com',
   },
 });
 
@@ -72,6 +72,15 @@ describe('GET /api/users - populated organization', () => {
     expect(JSON.stringify(body)).not.toContain('stripeCustomerId');
     expect(JSON.stringify(body)).not.toContain('cus_123');
     for (const f of USER_SECRET_FIELDS) expect(body.users[0]).not.toHaveProperty(f);
+  });
+
+  it('omits billingContact and stripeCustomerId for a non-admin viewer', async () => {
+    const body = await listAs({}, false);
+    const org = body.users[0].organizationId;
+
+    expect(org).toMatchObject({ id: 'o1', name: 'Org' });
+    expect(org).not.toHaveProperty('billingContact');
+    expect(org).not.toHaveProperty('stripeCustomerId');
   });
 
   it('returns the serialized organization shape in the downloadAll list', async () => {
