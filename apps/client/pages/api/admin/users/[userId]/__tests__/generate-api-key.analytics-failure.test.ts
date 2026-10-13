@@ -78,7 +78,10 @@ describe('POST /api/admin/users/[userId]/generate-api-key - failed analytics wri
     expect(res._getStatusCode()).toBe(201);
     expect(res._getJSONData()).toEqual(expect.objectContaining({ id: 'k1' }));
     expect(createUserApiKey).toHaveBeenCalledTimes(1);
-    expect((req as any).logger.error).toHaveBeenCalledWith(expect.stringMatching(/analytics/i), expect.any(Error));
+    expect((req as any).logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(/analytics.*API key k1/),
+      expect.any(Error)
+    );
   });
 
   it('answers 201 on the happy path without logging an error', async () => {
