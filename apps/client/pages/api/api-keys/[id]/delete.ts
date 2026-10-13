@@ -25,7 +25,8 @@ const handler = baseApi().delete(
     await logEventSafe(
       { userId, type: ApiKeyEvents.DELETE_API_KEY, metadata: { id } },
       { ability: req.ability },
-      req.logger
+      req.logger,
+      `API key ${id}`
     );
 
     // Never echo the stored key (ciphertext at rest) back to the browser; the client only

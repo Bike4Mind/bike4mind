@@ -60,7 +60,10 @@ describe('POST /api/api-keys/create - failed analytics write', () => {
     expect(res._getJSONData()).toEqual(expect.objectContaining({ id: 'k1' }));
     expect(createApiKey).toHaveBeenCalledTimes(1);
     expect(incrementUserCounter).toHaveBeenCalledTimes(1);
-    expect((req as any).logger.error).toHaveBeenCalledWith(expect.stringMatching(/analytics/i), expect.any(Error));
+    expect((req as any).logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(/analytics.*API key k1/),
+      expect.any(Error)
+    );
   });
 
   it('answers 200 on the happy path without logging an error', async () => {

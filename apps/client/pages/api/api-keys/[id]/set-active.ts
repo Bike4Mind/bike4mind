@@ -26,7 +26,8 @@ const handler = baseApi().post(
     await logEventSafe(
       { userId, type: ApiKeyEvents.SET_API_KEY, metadata: { id } },
       { ability: req.ability },
-      req.logger
+      req.logger,
+      `API key ${id}`
     );
 
     // setApiKey returns the stored document, whose apiKey is ciphertext at rest. Never echo the

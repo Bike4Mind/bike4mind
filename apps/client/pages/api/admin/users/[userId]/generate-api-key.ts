@@ -258,7 +258,8 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
           },
         },
         { ability: req.ability },
-        req.logger
+        req.logger,
+        `API key ${newApiKey.id}`
       );
 
       // Audit trail with admin details. `name` is escaped for the same reason the usernames inside

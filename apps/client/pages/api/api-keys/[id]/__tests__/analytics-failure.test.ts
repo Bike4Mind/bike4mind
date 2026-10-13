@@ -74,7 +74,10 @@ describe('api-keys/[id] writes - failed analytics write', () => {
     expect(res._getJSONData()).toEqual({ id: 'k1', type: 'openai', isActive: true });
     expect(deleteApiKey).toHaveBeenCalledTimes(1);
     expect(incrementUserCounter).toHaveBeenCalledTimes(1);
-    expect((req as any).logger.error).toHaveBeenCalledWith(expect.stringMatching(/analytics/i), expect.any(Error));
+    expect((req as any).logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(/analytics.*API key k1/),
+      expect.any(Error)
+    );
   });
 
   it('set-active still answers 200 when the counter write throws', async () => {
@@ -87,7 +90,10 @@ describe('api-keys/[id] writes - failed analytics write', () => {
     expect(res._getJSONData()).toEqual({ id: 'k1', type: 'openai', isActive: true });
     expect(setApiKey).toHaveBeenCalledTimes(1);
     expect(incrementUserCounter).toHaveBeenCalledTimes(1);
-    expect((req as any).logger.error).toHaveBeenCalledWith(expect.stringMatching(/analytics/i), expect.any(Error));
+    expect((req as any).logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(/analytics.*API key k1/),
+      expect.any(Error)
+    );
   });
 
   it('both answer 200 on the happy path without logging an error', async () => {

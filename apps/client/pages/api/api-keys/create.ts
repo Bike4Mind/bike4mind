@@ -26,7 +26,8 @@ const handler = baseApi().post(async (req, res) => {
       },
     },
     { ability: req.ability },
-    req.logger
+    req.logger,
+    `API key ${newApiKey.id}`
   );
 
   return res.status(200).json(newApiKey);
