@@ -239,6 +239,24 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('API-key scope fields', () => {
+    it('round-trips scopeDeniedTools and apiKeyId through Mongo', async () => {
+      const exec = await agentExecutionRepository.create(
+        makeBaseExecution({ scopeDeniedTools: ['create_data_lake'], apiKeyId: 'k1' })
+      );
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.scopeDeniedTools).toEqual(['create_data_lake']);
+      expect(loaded?.apiKeyId).toBe('k1');
+    });
+
+    it('reads both back as undefined when omitted, never []', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.scopeDeniedTools).toBeUndefined();
+      expect(loaded?.apiKeyId).toBeUndefined();
+    });
+  });
+
   describe('addChildExecution', () => {
     it('links a child id to the parent without duplicating', async () => {
       const parent = await agentExecutionRepository.create(makeBaseExecution());
@@ -1251,9 +1269,14 @@ describe('AgentExecutionRepository', () => {
       const executions = await Promise.all(
         Array.from({ length: 3 }, () => agentExecutionRepository.create(makeBaseExecution({ status: 'failed' })))
       );
-      await agentExecutionRepository.markQuestSettlementFailed(executions.map(e => e.id));
+      const failedAt = new Date('2026-01-01T00:00:00.000Z');
+      const cutoff = new Date('2026-01-01T00:00:01.000Z');
+      await AgentExecutionModel.collection.updateMany(
+        { _id: { $in: executions.map(e => new mongoose.Types.ObjectId(e.id)) } },
+        { $set: { questSettlementFailedAt: failedAt } }
+      );
 
-      const results = await agentExecutionRepository.findFailedQuestSettlementIds({ limit: 2, olderThan: new Date() });
+      const results = await agentExecutionRepository.findFailedQuestSettlementIds({ limit: 2, olderThan: cutoff });
 
       expect(results).toHaveLength(2);
     });

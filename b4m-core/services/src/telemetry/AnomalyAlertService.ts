@@ -1,6 +1,26 @@
-import type { ContextTelemetry, ContextTelemetryAlerts, ICacheRepository } from '@bike4mind/common';
-import { ALERT_THRESHOLDS, sanitizeTelemetryError } from '@bike4mind/common';
+import type {
+  ContextTelemetry,
+  ContextTelemetryAlerts,
+  ICacheRepository,
+  PerformanceTelemetry,
+} from '@bike4mind/common';
+import { ALERT_THRESHOLDS, sanitizeTelemetryError, ttfvtState } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+
+/**
+ * TTFVT for a Slack field. An absent firstTokenTime is the never-rendered signal (the frozen-turn
+ * case), so it must not render as N/A; unknown (neither stamp) is the only genuine N/A. See ttfvt.ts.
+ */
+function formatFirstToken(performance: PerformanceTelemetry): string {
+  switch (ttfvtState(performance.firstTokenTimeMs, performance.firstChunkTimeMs)) {
+    case 'measured':
+      return `${(performance.firstTokenTimeMs ?? 0).toLocaleString()}ms`;
+    case 'never-rendered':
+      return 'never rendered';
+    default:
+      return 'N/A';
+  }
+}
 
 /**
  * Slack Block Kit message structure
@@ -321,7 +341,7 @@ export class AnomalyAlertService {
     ];
 
     // Anomaly details section
-    const anomalyDetails = this.buildAnomalyDetails(anomalies);
+    const anomalyDetails = this.buildAnomalyDetails(anomalies, performance);
     if (anomalyDetails.length > 0) {
       blocks.push({
         type: 'section',
@@ -350,7 +370,7 @@ export class AnomalyAlertService {
         },
         {
           type: 'mrkdwn',
-          text: `*First Token:*\n${performance.firstTokenTimeMs?.toLocaleString() ?? 'N/A'}ms`,
+          text: `*First Token:*\n${formatFirstToken(performance)}`,
         },
       ],
     });
@@ -447,7 +467,10 @@ export class AnomalyAlertService {
   /**
    * Build list of detected anomaly details
    */
-  private buildAnomalyDetails(anomalies: ContextTelemetry['anomalies']): string[] {
+  private buildAnomalyDetails(
+    anomalies: ContextTelemetry['anomalies'],
+    performance: ContextTelemetry['performance']
+  ): string[] {
     const details: string[] = [];
 
     if (anomalies.contextOverflow) {
@@ -476,7 +499,11 @@ export class AnomalyAlertService {
       details.push('🐌 Slow total response time (>60s)');
     }
     if (anomalies.slowFirstToken) {
-      details.push('🐌 Slow first token time (>10s)');
+      details.push(
+        ttfvtState(performance.firstTokenTimeMs, performance.firstChunkTimeMs) === 'never-rendered'
+          ? '🧊 First token never rendered (streamed, nothing visible)'
+          : '🐌 Slow first token time (>10s)'
+      );
     }
 
     return details;

@@ -47,6 +47,7 @@ const EXPECTED_CORE_DISALLOWED = [
   '/quests',
   '/skills',
   '/status',
+  '/studio',
   '/subscribe',
   '/subscriptions',
 ];

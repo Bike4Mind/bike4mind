@@ -17,6 +17,23 @@ export class EmptyCompletionError extends Error {
   }
 }
 
+/**
+ * Thrown when a stream finished normally (it carried a stop reason) but produced no reply,
+ * e.g. a reasoning model that spent its whole output budget thinking: the server drops
+ * reasoning text, so such a turn arrives blank. Not retried - the same request would
+ * finish the same way and be billed again.
+ */
+export class NoReplyCompletionError extends Error {
+  constructor(readonly stopReason: string) {
+    super(
+      stopReason === 'max_tokens'
+        ? 'The model used its whole output limit on reasoning and produced no reply. Raise the max tokens setting or ask a narrower question.'
+        : `The model finished (stop reason: ${stopReason}) without producing a reply.`
+    );
+    this.name = 'NoReplyCompletionError';
+  }
+}
+
 /** User-facing message when a transient network drop survives all retries. */
 const TRANSIENT_EXHAUSTED_MESSAGE =
   'The connection dropped mid-response (likely a network timeout during a long thinking step). ' +
@@ -81,7 +98,10 @@ export async function runCompletion(
         return; // delivered exactly once
       }
 
-      // Empty: fall through to backoff + retry (do NOT deliver a blank turn).
+      // Empty but finished normally: retrying would repeat (and re-bill) the same outcome.
+      if (accumulator.finalStopReason) throw new NoReplyCompletionError(accumulator.finalStopReason);
+
+      // Empty with no terminal metadata: fall through to backoff + retry (do NOT deliver a blank turn).
       lastError = new EmptyCompletionError();
       logger.warn('[runCompletion] Stream produced no content; treating as retryable.');
     } catch (error) {
@@ -90,7 +110,7 @@ export async function runCompletion(
       // User cancel mid-attempt: settle without surfacing an error or retrying.
       if (signal?.aborted) return;
 
-      if (!policy.isRetryable(lastError)) throw lastError;
+      if (lastError instanceof NoReplyCompletionError || !policy.isRetryable(lastError)) throw lastError;
 
       logger.warn(`[runCompletion] Transient stream failure (attempt ${attempt + 1}): ${lastError.message}`);
     }

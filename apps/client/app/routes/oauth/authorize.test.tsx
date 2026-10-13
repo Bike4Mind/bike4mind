@@ -68,7 +68,7 @@ const relativeLuminance = (color: string, backdrop: string) => {
  * WCAG 2.1 contrast of a text token against the consent card. The card is the outlined Sheet, which
  * Joy paints with background.surface - confirmed against the live preview, which measured #F4F7F9.
  */
-const contrastOnCard = (mode: (typeof MODES)[number], token: 'primary' | 'tertiary') => {
+const contrastOnCard = (mode: (typeof MODES)[number], token: 'primary' | 'icon') => {
   const palette = appTheme.colorSchemes[mode].palette;
   const card = palette.background.surface;
   const text = relativeLuminance(palette.text[token], card);
@@ -270,9 +270,10 @@ describe('OAuthAuthorizePage scope label readability', () => {
     expect(getComputedStyle(message).color).toContain('text-primary');
   });
 
-  it.each(MODES)('%s: the body-sm default it replaced would not have cleared AA', mode => {
+  it.each(MODES)('%s: the measurement rejects a token below AA', mode => {
     // Positive control. Without it the assertion above could pass against any token and prove
-    // nothing. These reproduce the ratios measured on the preview: 2.23 light, 4.35 dark.
-    expect(contrastOnCard(mode, 'tertiary')).toBeLessThan(WCAG_AA_NORMAL_TEXT);
+    // nothing. text.tertiary used to serve here, until the theme raised it to AA (contrast.test.ts);
+    // text.icon is a non-text token held only to 3:1, so it still sits below the text bar.
+    expect(contrastOnCard(mode, 'icon')).toBeLessThan(WCAG_AA_NORMAL_TEXT);
   });
 });

@@ -25,6 +25,7 @@ import { recordSessionActivity } from '@client/app/utils/sessionActivityCleanup'
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { useQueryClient } from '@tanstack/react-query';
 import { useFileDropZone } from './hooks/useFileDropZone';
+import { SessionReadOnlyProvider, useSessionReadOnly } from './SessionReadOnlyContext';
 import { applySessionCreated } from './hooks/applySessionCreated';
 import { useSessionCacheMigration } from './hooks/useSessionCacheMigration';
 import { ChatCompletionProvider } from '@client/app/contexts/ChatCompletionContext';
@@ -98,6 +99,8 @@ interface SessionLayoutProps {
   dockedChatTitle?: React.ReactNode;
   /** Called when the server auto-creates a session (e.g. first prompt with no session). Lets parent pages like /opti sync their local session state. */
   onSessionCreated?: (sessionId: string) => void;
+  /** Show the conversation for reading only: no composer, no drop zone, no writing message actions. See SessionReadOnlyContext. */
+  readOnly?: boolean;
 }
 
 /**
@@ -210,7 +213,7 @@ const DropFilesOverlay: FC = () => (
   </Box>
 );
 
-const SessionContainer: FC<SessionLayoutProps> = ({
+const SessionContainerBody: FC<Omit<SessionLayoutProps, 'readOnly'>> = ({
   listClosed,
   currentSessionId,
   isLoading,
@@ -221,6 +224,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
   dockedChatTitle,
   onSessionCreated,
 }) => {
+  const readOnly = useSessionReadOnly();
   const containerRef = useRef<HTMLDivElement>(null);
   const { changeSession, currentSessionId: contextSessionId, setCurrentSessionId, setCurrentSession } = useSessions();
   const queryClient = useQueryClient();
@@ -238,6 +242,9 @@ const SessionContainer: FC<SessionLayoutProps> = ({
     handleDrop,
     handleConfirmUpload,
   } = useFileDropZone({ containerRef, filepondRef });
+  const dropZoneHandlers = readOnly
+    ? {}
+    : { onDragEnter: handleDragEnter, onDragLeave: handleDragLeave, onDragOver: handleDragOver, onDrop: handleDrop };
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const knowledgeRef = useRef<HTMLDivElement>(null);
   const { projectId: searchProjectId } = useSearch({ strict: false }) as { projectId?: string };
@@ -476,13 +483,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
             position: layout === 'pip' ? 'fixed' : 'relative',
           }}
         >
-          <Box
-            flexGrow={1}
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-          >
+          <Box flexGrow={1} {...dropZoneHandlers}>
             {isDraggingOver && <DropFilesOverlay />}
             <Box
               sx={{
@@ -578,14 +579,14 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                       zIndex: 10,
                     }}
                   >
-                    <SessionBottom ref={sessionBottomRef} />
+                    {!readOnly && <SessionBottom ref={sessionBottomRef} />}
                   </Box>
                 </>
               )}
             </Box>
           </Box>
 
-          {!!pastedFile && (
+          {!readOnly && !!pastedFile && (
             <Modal open onClose={() => handleConfirmUpload(false)}>
               <ModalDialog maxWidth="sm">
                 <Typography component="h2">Confirm Upload</Typography>
@@ -615,10 +616,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                 flexDirection: 'column',
                 backgroundColor: 'background.surface',
               }}
-              onDragEnter={handleDragEnter}
-              onDragLeave={handleDragLeave}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
+              {...dropZoneHandlers}
             >
               {isDraggingOver && <DropFilesOverlay />}
               {/* Chat content without SessionTop header for compact floating view.
@@ -674,7 +672,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                   backgroundColor: 'background.body',
                 }}
               >
-                <SessionBottom ref={sessionBottomRef} />
+                {!readOnly && <SessionBottom ref={sessionBottomRef} />}
               </Box>
             </Box>
           </FloatingChatWindow>
@@ -692,10 +690,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                 flexDirection: 'column',
                 backgroundColor: 'background.surface',
               }}
-              onDragEnter={handleDragEnter}
-              onDragLeave={handleDragLeave}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
+              {...dropZoneHandlers}
             >
               {isDraggingOver && <DropFilesOverlay />}
               {/* pb keeps the last message's action row from touching the input divider
@@ -733,13 +728,23 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                   backgroundColor: 'background.body',
                 }}
               >
-                <SessionBottom ref={sessionBottomRef} />
+                {!readOnly && <SessionBottom ref={sessionBottomRef} />}
               </Box>
             </Box>
           </DockedChatPanel>
         )}
       </Box>
     </ChatCompletionProvider>
+  );
+};
+
+// An enclosing SessionReadOnlyProvider also counts, so a host can set read-only once for a whole subtree.
+const SessionContainer: FC<SessionLayoutProps> = ({ readOnly = false, ...props }) => {
+  const inheritedReadOnly = useSessionReadOnly();
+  return (
+    <SessionReadOnlyProvider readOnly={inheritedReadOnly || readOnly}>
+      <SessionContainerBody {...props} />
+    </SessionReadOnlyProvider>
   );
 };
 

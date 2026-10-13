@@ -126,6 +126,33 @@ describe('buildPublicSSEEvent', () => {
 });
 
 describe('buildSSEEvent', () => {
+  it('drops the text of a reasoning-tagged frame but keeps its accounting', () => {
+    const e = buildSSEEvent(['<think>weighing the options'], {
+      channel: 'reasoning',
+      outputTokens: 7,
+      thinking: [{ type: 'thinking', thinking: 'x', signature: 's' }] as never,
+    });
+    expect(e.text).toBe('');
+    expect(buildSSEEvent(['', '<think>'], { channel: 'reasoning' }).text).toBe('');
+    expect(e.usage?.outputTokens).toBe(7);
+    expect(e.thinking).toHaveLength(1);
+  });
+
+  it('blanks reasoning text on a tool_use frame too', () => {
+    // In a tool loop the reasoning frame carries toolsUsed, so it goes out as tool_use.
+    const e = buildSSEEvent(['<think>x'], {
+      channel: 'reasoning',
+      toolsUsed: [{ name: 'search', arguments: '{}' }] as never,
+    });
+    expect(e.type).toBe('tool_use');
+    expect(e.text).toBe('');
+  });
+
+  it('keeps the text of untagged and tool-artifact frames', () => {
+    expect(buildSSEEvent(['', 'the answer']).text).toBe('the answer');
+    expect(buildSSEEvent(['artifact'], { channel: 'tool-artifact' }).text).toBe('artifact');
+  });
+
   it('still forwards usdCost to authenticated first-party surfaces', () => {
     const e = buildSSEEvent(['', 'the answer'], { creditsUsed: 2, usdCost: 0.0123 });
     expect(e.credits).toMatchObject({ used: 2, usdCost: 0.0123 });
@@ -145,6 +172,22 @@ describe('buildSSEEvent', () => {
     });
     expect(e.tools).toEqual([{ name: 'web_search', arguments: '{}', id: 't1' }]);
     expect(serializeSSEEvent(e)).not.toContain('returnValue');
+  });
+});
+
+describe('toolStarted', () => {
+  const info = { toolStarted: { name: 'file_write', id: 'call_1' } };
+
+  it('reaches a first-party stream as an empty content frame', () => {
+    expect(buildSSEEvent([], info)).toEqual({
+      type: 'content',
+      text: '',
+      toolStarted: { name: 'file_write', id: 'call_1' },
+    });
+  });
+
+  it('stays off the public stream, which names no tools', () => {
+    expect(buildPublicSSEEvent([], info)).not.toHaveProperty('toolStarted');
   });
 });
 

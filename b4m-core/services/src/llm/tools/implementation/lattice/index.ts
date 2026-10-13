@@ -9,7 +9,7 @@ import { Logger } from '@bike4mind/observability';
 
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
-import { buildNewModel, isModelOwner } from '../../../../latticeService/latticeModelService';
+import { buildNewModel, getModelForWrite } from '../../../../latticeService/latticeModelService';
 import { splitEquals } from '@bike4mind/common';
 import type { ILatticeModel, LatticeEntityType, LatticeDataType, LatticeOperation } from '@bike4mind/common';
 import { escapeArtifactBodyJson, sanitizeArtifactTitle } from '../../utils/artifactEmission';
@@ -392,45 +392,38 @@ export const latticeAddEntityTool: ToolDefinition = {
       // Try to persist to database if model is persisted
       if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
-          const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only, via the same predicate `latticeModelService.getModelForWrite` uses: these
-          // tools MUTATE, and read access to a model (owner OR same org) is not write access.
-          if (model && isModelOwner(model, { id: context.userId })) {
-            // Check if entity already exists
-            const existingIndex = model.data.entities.findIndex(e => e.id === entityId);
-            if (existingIndex >= 0) {
-              // Update existing entity
-              model.data.entities[existingIndex] = entityData;
-            } else {
-              // Add new entity
-              model.data.entities.push(entityData);
-            }
-
-            // Save the updated model
-            await context.db.latticeModels.update({
-              id: modelId,
-              data: model.data,
-              updatedAt: new Date(),
-            });
-            context.logger.info(`[Lattice] Added entity ${entityId} to model ${modelId}`);
-          } else if (model) {
-            // Model exists but is owned by another user: deny, do not report success
-            context.logger.warn(`[Lattice] Access denied: caller does not own model ${modelId}`);
+          const model = await getModelForWrite(
+            { id: context.userId, organizationId: context.user?.organizationId },
+            modelId,
+            { db: { latticeModels: context.db.latticeModels } }
+          );
+          if (!model) {
+            context.logger.warn(`[Lattice] Model ${modelId} not found or access denied for user ${context.userId}`);
             return JSON.stringify({
               success: false,
               action: 'ADD_ENTITY',
               modelId,
-              error: `Access denied: you do not have permission to modify model ${modelId}`,
-            });
-          } else {
-            context.logger.warn(`[Lattice] Model ${modelId} not found in database`);
-            return JSON.stringify({
-              success: false,
-              action: 'ADD_ENTITY',
-              modelId,
-              error: `Model ${modelId} not found`,
+              error: `Model ${modelId} not found or you do not have permission to modify it`,
             });
           }
+
+          // Check if entity already exists
+          const existingIndex = model.data.entities.findIndex(e => e.id === entityId);
+          if (existingIndex >= 0) {
+            // Update existing entity
+            model.data.entities[existingIndex] = entityData;
+          } else {
+            // Add new entity
+            model.data.entities.push(entityData);
+          }
+
+          // Save the updated model
+          await context.db.latticeModels.update({
+            id: modelId,
+            data: model.data,
+            updatedAt: new Date(),
+          });
+          context.logger.info(`[Lattice] Added entity ${entityId} to model ${modelId}`);
         } catch (error) {
           context.logger.error(`[Lattice] Failed to persist entity to database:`, error);
           return JSON.stringify({
@@ -551,63 +544,56 @@ export const latticeSetValueTool: ToolDefinition = {
       // Try to persist to database if model is persisted
       if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
-          const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only, via the same predicate `latticeModelService.getModelForWrite` uses: these
-          // tools MUTATE, and read access to a model (owner OR same org) is not write access.
-          if (model && isModelOwner(model, { id: context.userId })) {
-            const entity = model.data.entities.find(e => e.id === entityId || toEntityId(e.name) === entityId);
-            if (!entity) {
-              context.logger.warn(`[Lattice] Entity ${entityName} not found in model ${modelId}`);
-              return JSON.stringify({
-                success: false,
-                action: 'SET_VALUE',
-                modelId,
-                error: entityNotFoundError(model.data.entities, entityName, attributeKey),
-              });
-            }
-            // Find or create attribute
-            const attrIndex = entity.attributes.findIndex(a => a.key === attributeKey);
-            const dataType = typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string';
-            const attributeData = {
-              key: attributeKey,
-              value,
-              dataType: dataType as LatticeDataType,
-              isComputed: false,
-            };
-
-            if (attrIndex >= 0) {
-              entity.attributes[attrIndex] = attributeData;
-            } else {
-              entity.attributes.push(attributeData);
-            }
-
-            entity.updatedAt = new Date();
-
-            // Save the updated model
-            await context.db.latticeModels.update({
-              id: modelId,
-              data: model.data,
-              updatedAt: new Date(),
-            });
-            context.logger.info(`[Lattice] Set ${entityId}.${attributeKey} = ${value} in model ${modelId}`);
-          } else if (model) {
-            // Model exists but is owned by another user: deny, do not report success
-            context.logger.warn(`[Lattice] Access denied: caller does not own model ${modelId}`);
+          const model = await getModelForWrite(
+            { id: context.userId, organizationId: context.user?.organizationId },
+            modelId,
+            { db: { latticeModels: context.db.latticeModels } }
+          );
+          if (!model) {
+            context.logger.warn(`[Lattice] Model ${modelId} not found or access denied for user ${context.userId}`);
             return JSON.stringify({
               success: false,
               action: 'SET_VALUE',
               modelId,
-              error: `Access denied: you do not have permission to modify model ${modelId}`,
-            });
-          } else {
-            context.logger.warn(`[Lattice] Model ${modelId} not found in database`);
-            return JSON.stringify({
-              success: false,
-              action: 'SET_VALUE',
-              modelId,
-              error: `Model ${modelId} not found`,
+              error: `Model ${modelId} not found or you do not have permission to modify it`,
             });
           }
+
+          const entity = model.data.entities.find(e => e.id === entityId || toEntityId(e.name) === entityId);
+          if (!entity) {
+            context.logger.warn(`[Lattice] Entity ${entityName} not found in model ${modelId}`);
+            return JSON.stringify({
+              success: false,
+              action: 'SET_VALUE',
+              modelId,
+              error: entityNotFoundError(model.data.entities, entityName, attributeKey),
+            });
+          }
+          // Find or create attribute
+          const attrIndex = entity.attributes.findIndex(a => a.key === attributeKey);
+          const dataType = typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string';
+          const attributeData = {
+            key: attributeKey,
+            value,
+            dataType: dataType as LatticeDataType,
+            isComputed: false,
+          };
+
+          if (attrIndex >= 0) {
+            entity.attributes[attrIndex] = attributeData;
+          } else {
+            entity.attributes.push(attributeData);
+          }
+
+          entity.updatedAt = new Date();
+
+          // Save the updated model
+          await context.db.latticeModels.update({
+            id: modelId,
+            data: model.data,
+            updatedAt: new Date(),
+          });
+          context.logger.info(`[Lattice] Set ${entityId}.${attributeKey} = ${value} in model ${modelId}`);
         } catch (error) {
           context.logger.error(`[Lattice] Failed to persist value to database:`, error);
           return JSON.stringify({
@@ -720,80 +706,73 @@ export const latticeCreateRuleTool: ToolDefinition = {
       // Try to persist to database if model is persisted
       if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
-          const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only, via the same predicate `latticeModelService.getModelForWrite` uses: these
-          // tools MUTATE, and read access to a model (owner OR same org) is not write access.
-          if (model && isModelOwner(model, { id: context.userId })) {
-            // Check if output entity exists, if not create it
-            const outputEntityExists = model.data.entities.some(
-              e => e.id === outputEntityId || e.name.toLowerCase() === parsedRule.outputEntity.toLowerCase()
-            );
-
-            if (!outputEntityExists && parsedRule.outputEntity !== 'unknown') {
-              // Auto-create the output entity as a computed line item
-              const now = new Date();
-              const newEntity = {
-                id: outputEntityId,
-                type: 'line_item' as const,
-                name: parsedRule.outputEntity,
-                displayName: parsedRule.outputEntity,
-                attributes: [
-                  {
-                    key: 'value',
-                    value: 0,
-                    dataType: 'currency' as const,
-                    isComputed: true,
-                  },
-                  {
-                    key: 'category',
-                    value: 'Computed',
-                    dataType: 'string' as const,
-                    isComputed: false,
-                  },
-                ],
-                metadata: { isComputed: true },
-                createdAt: now,
-                updatedAt: now,
-              };
-              model.data.entities.push(newEntity);
-              entityCreatedMessage = ` Created output entity "${parsedRule.outputEntity}".`;
-              context.logger.info(`[Lattice] Auto-created output entity ${outputEntityId} for rule ${ruleId}`);
-            }
-
-            // Check if rule already exists
-            const existingIndex = model.rules.rules.findIndex(r => r.id === ruleId || r.name === name);
-            if (existingIndex >= 0) {
-              model.rules.rules[existingIndex] = ruleData;
-            } else {
-              model.rules.rules.push(ruleData);
-            }
-
-            // Save the updated model (both entities and rules if entity was created)
-            await context.db.latticeModels.update({
-              id: modelId,
-              data: model.data,
-              rules: model.rules,
-              updatedAt: new Date(),
-            });
-            context.logger.info(`[Lattice] Created rule ${ruleId} in model ${modelId}`);
-          } else if (model) {
-            // Model exists but is owned by another user: deny, do not report success
-            context.logger.warn(`[Lattice] Access denied: caller does not own model ${modelId}`);
+          const model = await getModelForWrite(
+            { id: context.userId, organizationId: context.user?.organizationId },
+            modelId,
+            { db: { latticeModels: context.db.latticeModels } }
+          );
+          if (!model) {
+            context.logger.warn(`[Lattice] Model ${modelId} not found or access denied for user ${context.userId}`);
             return JSON.stringify({
               success: false,
               action: 'CREATE_RULE',
               modelId,
-              error: `Access denied: you do not have permission to modify model ${modelId}`,
-            });
-          } else {
-            context.logger.warn(`[Lattice] Model ${modelId} not found in database`);
-            return JSON.stringify({
-              success: false,
-              action: 'CREATE_RULE',
-              modelId,
-              error: `Model ${modelId} not found`,
+              error: `Model ${modelId} not found or you do not have permission to modify it`,
             });
           }
+
+          // Check if output entity exists, if not create it
+          const outputEntityExists = model.data.entities.some(
+            e => e.id === outputEntityId || e.name.toLowerCase() === parsedRule.outputEntity.toLowerCase()
+          );
+
+          if (!outputEntityExists && parsedRule.outputEntity !== 'unknown') {
+            // Auto-create the output entity as a computed line item
+            const now = new Date();
+            const newEntity = {
+              id: outputEntityId,
+              type: 'line_item' as const,
+              name: parsedRule.outputEntity,
+              displayName: parsedRule.outputEntity,
+              attributes: [
+                {
+                  key: 'value',
+                  value: 0,
+                  dataType: 'currency' as const,
+                  isComputed: true,
+                },
+                {
+                  key: 'category',
+                  value: 'Computed',
+                  dataType: 'string' as const,
+                  isComputed: false,
+                },
+              ],
+              metadata: { isComputed: true },
+              createdAt: now,
+              updatedAt: now,
+            };
+            model.data.entities.push(newEntity);
+            entityCreatedMessage = ` Created output entity "${parsedRule.outputEntity}".`;
+            context.logger.info(`[Lattice] Auto-created output entity ${outputEntityId} for rule ${ruleId}`);
+          }
+
+          // Check if rule already exists
+          const existingIndex = model.rules.rules.findIndex(r => r.id === ruleId || r.name === name);
+          if (existingIndex >= 0) {
+            model.rules.rules[existingIndex] = ruleData;
+          } else {
+            model.rules.rules.push(ruleData);
+          }
+
+          // Save the updated model (both entities and rules if entity was created)
+          await context.db.latticeModels.update({
+            id: modelId,
+            data: model.data,
+            rules: model.rules,
+            updatedAt: new Date(),
+          });
+          context.logger.info(`[Lattice] Created rule ${ruleId} in model ${modelId}`);
         } catch (error) {
           context.logger.error(`[Lattice] Failed to persist rule to database:`, error);
           return JSON.stringify({

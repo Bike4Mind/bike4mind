@@ -2,6 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
 import { resolveAttachmentLakeAccess } from '../../base/resolveAttachmentLakeAccess';
+import { resolveOwnedGeneratedImageUrl } from '../../base/resolveOwnedGeneratedImage';
 import {
   ApiKeyType,
   ImageModels,
@@ -126,17 +127,21 @@ export async function getImageFromFileId(fileId: string, context: ToolContext): 
  * image is NOT addressable as a fabFile ObjectId. Resolving it against the image
  * bucket is what lets a follow-up edit ("make it cartoonish") target a
  * previously generated image. The model learns these keys from the "Recently
- * generated images" system note assembled in ChatCompletionProcess.
+ * generated images" system note assembled in ChatCompletionProcess. Only the caller's own
+ * generated images resolve - see resolveOwnedGeneratedImageUrl.
  */
 async function getGeneratedImageUrl(storageKey: string, context: ToolContext): Promise<ResolvedImageUrl> {
   try {
-    const url = await context.imageGenerateStorage.getSignedUrl(storageKey);
+    const url = await resolveOwnedGeneratedImageUrl(storageKey, context);
     // Freshly minted from `getSignedUrl` - trusted provenance for the self-host storage exemption.
     return { url, trustConfiguredStorageOrigin: true };
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    // A refusal is expected and stays quiet; any other failure (the DB, signing) is logged, never shown to the model.
+    if (!(error instanceof NotFoundError)) {
+      context.logger.error('[edit_image] Generated image resolution failed', error);
+    }
     throw new Error(
-      `Could not resolve generated image "${storageKey}". Use the exact id from the "Recently generated images" system note, a fabFile ID from "Available Files", or a full URL. (${detail})`
+      `Could not resolve generated image "${storageKey}". Use the exact id from the "Recently generated images" system note, a fabFile ID from "Available Files", or a full URL.`
     );
   }
 }
@@ -366,6 +371,12 @@ Please select a supported edit model in your image settings modal.`;
       // separate question from billing, and is not settled here.
       const provider = isBFLModel ? 'bfl' : isGeminiModel ? 'gemini' : 'openai';
 
+      // Resolve the source and mask (URL, fabFile ObjectId, or generated-image key) BEFORE onStart:
+      // a refused or unknown image must not leave a credit reservation behind, and the chat rail
+      // has no refund for a call that throws.
+      const sourceImage = await resolveImageInputUrl(toolImage, context);
+      const maskImage = toolMask ? await resolveImageInputUrl(toolMask, context) : null;
+
       // Call onStart callback for credit validation. Bills `editModel`, NOT the
       // configured generation model: `editModel` is what the render below actually
       // dispatches to (and what BFL/Gemini/OpenAI charges us for), and the two diverge
@@ -383,15 +394,9 @@ Please select a supported edit model in your image settings modal.`;
         prompt,
       });
 
-      // Resolve the source image (URL, fabFile ObjectId, or generated-image key)
-      // so the model can edit a previously generated image, not just uploads.
-      const sourceImage = await resolveImageInputUrl(toolImage, context);
       const sourceBase64Image = await imageUrlToBase64(sourceImage.url, sourceImage.trustConfiguredStorageOrigin);
-
-      // Mask (optional) uses the same resolution as the source.
       let maskBase64Image: string | null = null;
-      if (toolMask) {
-        const maskImage = await resolveImageInputUrl(toolMask, context);
+      if (maskImage) {
         maskBase64Image = await imageUrlToBase64(maskImage.url, maskImage.trustConfiguredStorageOrigin);
       }
 
@@ -613,7 +618,7 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           background: {
             type: 'string',
             description:
-              'Background handling (gpt-image only). Use "transparent" when the user asks for a cutout, sprite, icon, sticker or a logo with no backdrop; it needs an alpha-capable output_format (png or webp).',
+              'Background handling. "transparent" gives a real alpha channel on gpt-image-1.x and gpt-image-2.5 (gpt-image-2 steps down to 1.5; other providers ignore it). Use for a cutout, sprite, icon, sticker or logo; needs output_format png or webp.',
             enum: ['transparent', 'opaque', 'auto'],
           },
           output_format: {

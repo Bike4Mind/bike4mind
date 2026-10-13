@@ -84,7 +84,7 @@ const makeRes = () => {
   return { res: { json, status } as never, json, status };
 };
 const makeReq = (body: Record<string, unknown>, userId: string) =>
-  ({ method: 'POST', body, user: { id: userId, isAdmin: false }, logger: { error: vi.fn() } }) as never;
+  ({ method: 'POST', body, user: { id: userId, isAdmin: false }, logger: { error: vi.fn(), warn: vi.fn() } }) as never;
 const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
 
 /** A real user carrying the encrypted Drive credential readUserDriveCredential copies. */
@@ -101,7 +101,7 @@ async function seedUser() {
   return user.id as string;
 }
 
-async function seedLake(userId: string, organizationId: string) {
+async function seedLake(userId: string, organizationId: string, pendingConnector?: 'googleDrive') {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const lake = await DataLakeModel.create({
     name: `drive-claim-${suffix}`,
@@ -114,6 +114,7 @@ async function seedLake(userId: string, organizationId: string) {
     // that declares it takes connector content.
     origin: 'connector-fed',
     status: 'active',
+    ...(pendingConnector ? { pendingConnector } : {}),
   });
   return lake.id as string;
 }
@@ -251,5 +252,23 @@ describe('POST /api/data-lakes/drive-sync - the global Drive folder claim surviv
     );
 
     expect(await orgGoogleDriveConnectionRepository.findByOrganizationIdAny(ORG_A)).toEqual([]);
+  });
+
+  it('clears the lake pending connector once the ingest is queued, and keeps it when the enqueue fails', async () => {
+    const userId = await seedUser();
+    const lakeId = await seedLake(userId, ORG_A, 'googleDrive');
+    const pendingConnectorOf = async () => (await DataLakeModel.findById(lakeId).lean())?.pendingConnector;
+
+    h.sendToQueue.mockRejectedValue(new Error('SQS unavailable: connect ETIMEDOUT'));
+    await expect(run(makeReq({ dataLakeId: lakeId, driveFolderId: FOLDER_ID }, userId), makeRes().res)).rejects.toThrow(
+      /could not queue/i
+    );
+    expect(await pendingConnectorOf()).toBe('googleDrive');
+
+    h.sendToQueue.mockResolvedValue(undefined);
+    const { res, status } = makeRes();
+    await run(makeReq({ dataLakeId: lakeId, driveFolderId: FOLDER_ID }, userId), res);
+    expect(status).toHaveBeenCalledWith(202);
+    expect(await pendingConnectorOf()).toBeUndefined();
   });
 });

@@ -21,8 +21,10 @@ import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dat
 // The name, its slug rule, and the duplicate-name hint moved to the source step (#824), so
 // their imports live there now. tagPrefixIssue covers both prefix problems this step reports:
 // the reserved namespace and an overlap with another lake's prefix.
-import { slugifyDataLakeName, submittedTagPrefix, tagPrefixIssue } from '@bike4mind/common';
+import { deriveTagPrefixFromLakeName, submittedTagPrefix, tagPrefixIssue } from '@bike4mind/common';
 import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
+import { useWizardIdentityPreview } from '@client/app/hooks/data/useWizardIdentityPreview';
+import { useWizardLakeSlug } from '@client/app/components/DataLakeWizard/useWizardLakeSlug';
 import { EmbeddingBudgetEstimate } from '@client/app/components/DataLakeWizard/EmbeddingBudgetEstimate';
 
 export default function ConfigStep() {
@@ -38,16 +40,38 @@ export default function ConfigStep() {
   // The overlap lookup needs the submitted form: normalizeTagPrefix drops a colon-less value,
   // so "acme" would match no lake and its collision with an existing "acme:" go unreported.
   const duplicatePrefixLake = useDuplicatePrefixLake(submittedTagPrefix(config.tagPrefix), !!targetLake);
-  const prefixIssue = tagPrefixIssue(config.tagPrefix, duplicatePrefixLake);
+  const adoptAutoTagPrefix = useDataLakeWizardStore(s => s.adoptAutoTagPrefix);
   const hashingProgress = useDataLakeWizardStore(s => s.hashingProgress);
 
   const computeHashes = useComputeHashes();
   const checkDuplicates = useCheckDuplicates();
 
-  // Append mode reuses the target lake's real slug (which may be disambiguated, e.g.
-  // "niche-2"), so show that rather than what its name slugifies to. Name and slug are set
-  // on the source step; they appear here read-only in the summary.
-  const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
+  // Name and slug are set on the source step; they appear here read-only in the summary.
+  const slug = useWizardLakeSlug();
+  // The slug-preview round trip also reports the first free tag prefix: an auto-derived one held by
+  // a lake this form cannot see (archived, deleted, gated) is swapped for it; a typed one is only flagged.
+  const { reusedLake, isAutoPrefix, suggestedTagPrefix, heldTypedPrefix } = useWizardIdentityPreview(true);
+
+  useEffect(() => {
+    if (isAutoPrefix && suggestedTagPrefix && suggestedTagPrefix !== config.tagPrefix) {
+      adoptAutoTagPrefix(suggestedTagPrefix);
+    }
+  }, [isAutoPrefix, suggestedTagPrefix, config.tagPrefix, adoptAutoTagPrefix]);
+
+  const prefixIssue =
+    tagPrefixIssue(config.tagPrefix, duplicatePrefixLake) ??
+    (heldTypedPrefix
+      ? `This prefix is held by another lake (archived and deleted lakes keep theirs until purged). Try "${suggestedTagPrefix}".`
+      : null);
+  const derivedTagPrefix = deriveTagPrefixFromLakeName(config.name);
+  const autoPickNote =
+    isAutoPrefix &&
+    !reusedLake &&
+    derivedTagPrefix &&
+    suggestedTagPrefix === config.tagPrefix &&
+    config.tagPrefix !== derivedTagPrefix
+      ? `"${derivedTagPrefix}" is held by another lake (archived and deleted lakes keep their prefix until purged), so this one uses "${config.tagPrefix}". If you meant an archived or deleted lake, restore or unarchive it instead.`
+      : null;
 
   // The Tag Prefix's only editable home is here (the taxonomy step, its former competing
   // owner, was removed - AI tag suggestion now runs post-upload and never touches the prefix).
@@ -154,6 +178,7 @@ export default function ConfigStep() {
           />
           <FormHelperText data-testid="datalake-config-tagprefix-help">
             {prefixIssue ??
+              autoPickNote ??
               (prefixEditable
                 ? 'All tags will be prefixed with this (must end with ":"). Derived from the name - change it if you like.'
                 : 'Inherited from the existing data lake.')}

@@ -85,4 +85,18 @@ describe('GET /api/generated-content/[ref] object-level authz', () => {
     expect(res.redirect).not.toHaveBeenCalled();
     expect(h.getMetadata).not.toHaveBeenCalled();
   });
+
+  // Serves any generated file, not just editable images: GENERATED_CONTENT_KEY_RE, not GENERATED_IMAGE_KEY_RE.
+  it.each([
+    ['a video', '9db8f846-08d5-47d7-9166-a039d3c3d4d7.webm'],
+    ['an uppercase ref', '9DB8F846-08D5-47D7-9166-A039D3C3D4D7.PNG'],
+  ])('redirects for %s the caller created', async (_label, ref) => {
+    h.findSessionIdsByImage.mockResolvedValue(['s1']);
+    h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+
+    const res = makeRes();
+    await handler(req('me', ref), res);
+
+    expect(res.redirect).toHaveBeenCalledWith(302, 'https://signed.example/img');
+  });
 });

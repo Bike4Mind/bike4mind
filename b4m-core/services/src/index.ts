@@ -37,7 +37,7 @@ export * as imageTemplateService from './imageTemplateService';
 export * as cheerioService from './lib/cheerio';
 export * as turndownService from './lib/turndown';
 export * as speechToTextService from './speech';
-export * as mfaService from './mfaService';
+export * as mfaService from '@bike4mind/auth/mfaService';
 export * as adminSettingsService from './adminSettingsService';
 export * as creditService from './creditService';
 export * from './billing';
@@ -84,7 +84,7 @@ export { buildCorrectionPairs, type EvalPair, type CorrectionPairReader } from '
 export * as cliTools from './cliTools';
 export * from './latticeService';
 export * from './telemetry';
-export { safeCompareTokens } from './utils/crypto';
+export { safeCompareTokens } from '@bike4mind/auth/crypto';
 export { SreAgentService, type SrePatternLookup } from './sreAgentService';
 export { RATE_LIMITED_SENTINEL } from './sreAgentService/tools';
 export * from './audienceVariants';

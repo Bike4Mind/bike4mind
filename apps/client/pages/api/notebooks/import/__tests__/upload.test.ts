@@ -29,7 +29,7 @@ vi.mock('@bike4mind/common', () => ({ Permission: { create: 'create' } }));
 vi.mock('@bike4mind/database/auth', () => ({ Session: class Session {} }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   S3Storage: class {
-    upload = uploadMock;
+    uploadFile = uploadMock;
   },
 }));
 vi.mock('sst', () => ({ Resource: { historyImportBucket: { name: 'history-bucket' } } }));

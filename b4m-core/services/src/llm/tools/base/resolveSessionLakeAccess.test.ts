@@ -5,7 +5,7 @@ vi.mock('../../../dataLakeService/getDynamicDataLakeTags', () => ({
   getDynamicDataLakeAccess: (...args: unknown[]) => getDynamicDataLakeAccessMock(...args),
 }));
 
-import { resolveSessionLakeAccess } from './resolveSessionLakeAccess';
+import { resolveSessionLakeAccess, sessionExcludesLibrary } from './resolveSessionLakeAccess';
 import type { ToolContext } from './types';
 import type { ResolvedLakeAccessSet } from '../../../dataLakeService/narrowLakeAccessToSession';
 
@@ -147,5 +147,37 @@ describe('resolveSessionLakeAccess', () => {
     const out = await resolveSessionLakeAccess(makeContext({ sessionRetrievalTags: undefined }));
 
     expect(out.lakes.map(l => l.id)).toEqual(['alpha']);
+  });
+});
+
+describe('sessionExcludesLibrary', () => {
+  const ctx = (o: Partial<ToolContext>) => o as ToolContext;
+  const owner = () => Promise.resolve(RESOLVED);
+
+  it.each([
+    ['plain chat', {}, false],
+    ['legacy lake chat (named lake, no sidecar)', { sessionRetrievalTags: ['datalake:alpha'] }, true],
+    ['lake named by its file-tag prefix', { sessionRetrievalTags: ['alpha:'] }, true],
+    ['explicit named lake, unset', { sessionRetrievalTags: ['datalake:a'], sessionLakeScopeExplicit: true }, true],
+    ['content tag naming no lake, unset', { sessionRetrievalTags: ['legal:x'], sessionLakeScopeExplicit: true }, false],
+    [
+      'explicit named lake, on',
+      { sessionRetrievalTags: ['datalake:a'], sessionLakeScopeExplicit: true, sessionIncludeLibraryFiles: true },
+      false,
+    ],
+    ['all lakes, off', { sessionRetrievalTags: [], sessionIncludeLibraryFiles: false }, true],
+    ['agent kbScope, off', { kbScope: { fileIds: ['f'] }, sessionIncludeLibraryFiles: false }, false],
+  ])('%s -> %s', async (_, overrides, expected) => {
+    expect(await sessionExcludesLibrary(ctx(overrides as Partial<ToolContext>), owner)).toBe(expected);
+  });
+
+  it('does not resolve lake access when the answer cannot depend on it', async () => {
+    const loader = vi.fn(owner);
+    await sessionExcludesLibrary(
+      ctx({ sessionRetrievalTags: ['datalake:a'], sessionIncludeLibraryFiles: false }),
+      loader
+    );
+    await sessionExcludesLibrary(ctx({}), loader);
+    expect(loader).not.toHaveBeenCalled();
   });
 });

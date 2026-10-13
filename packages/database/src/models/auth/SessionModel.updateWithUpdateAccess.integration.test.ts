@@ -103,3 +103,85 @@ describe('SessionRepository.updateWithUpdateAccess', () => {
     expect(await sessionRepository.updateWithUpdateAccess(OWNER, { id: 'not-an-object-id', name: 'x' })).toBeNull();
   });
 });
+
+describe('SessionRepository.addKnowledgeIdsWithUpdateAccess', () => {
+  const knowledgeOf = async (id: string) =>
+    (await Session.collection.findOne({ _id: new mongoose.Types.ObjectId(id) }))?.knowledgeIds;
+
+  it('adds to the stored list, so a detach landing after the caller read survives', async () => {
+    const id = await seed({ knowledgeIds: ['a', 'b'] });
+    // The caller read [a, b]; the user detaches b before the caller's write lands.
+    await Session.updateOne({ _id: id }, { $pull: { knowledgeIds: 'b' } });
+
+    const updated = await sessionRepository.addKnowledgeIdsWithUpdateAccess(OWNER, { id, name: 'Renamed' }, ['c', 'a']);
+
+    expect(updated?.name).toBe('Renamed');
+    expect(await knowledgeOf(id)).toEqual(['a', 'c']);
+  });
+
+  it('treats an empty addition as a no-op that still writes the other fields', async () => {
+    const id = await seed({ knowledgeIds: ['a'] });
+
+    const updated = await sessionRepository.addKnowledgeIdsWithUpdateAccess(OWNER, { id, name: 'Renamed' }, []);
+
+    expect(updated?.name).toBe('Renamed');
+    expect(await knowledgeOf(id)).toEqual(['a']);
+  });
+
+  it('ignores a knowledgeIds list smuggled into the field set instead of replacing the stored one', async () => {
+    const id = await seed({ knowledgeIds: ['a', 'b'] });
+
+    await sessionRepository.addKnowledgeIdsWithUpdateAccess(
+      OWNER,
+      { id, knowledgeIds: ['stale'] } as Parameters<typeof sessionRepository.addKnowledgeIdsWithUpdateAccess>[1],
+      ['c']
+    );
+
+    expect(await knowledgeOf(id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it.each([
+    ['owner', OWNER],
+    ['user sharee', SHAREE],
+    ['group sharee', GROUP_MEMBER],
+  ])('adds for the %s and returns the updated doc', async (_label, user) => {
+    const id = await seed({ knowledgeIds: ['a'] });
+
+    const updated = await sessionRepository.addKnowledgeIdsWithUpdateAccess(user, { id }, ['c']);
+
+    expect(updated).toBeTruthy();
+    expect(await knowledgeOf(id)).toEqual(['a', 'c']);
+  });
+
+  it('honours a global-write share only when includeGlobalWrite is passed', async () => {
+    const id = await seed({ knowledgeIds: ['a'], isGlobalWrite: true });
+
+    expect(await sessionRepository.addKnowledgeIdsWithUpdateAccess(STRANGER, { id }, ['c'])).toBeNull();
+    expect(await knowledgeOf(id)).toEqual(['a']);
+
+    await sessionRepository.addKnowledgeIdsWithUpdateAccess(STRANGER, { id }, ['c'], { includeGlobalWrite: true });
+    expect(await knowledgeOf(id)).toEqual(['a', 'c']);
+  });
+
+  it('returns null and adds nothing once the sharee entry is removed', async () => {
+    const id = await seed({ knowledgeIds: ['a'] });
+    await Session.updateOne({ _id: id }, { $set: { users: [] } });
+
+    expect(await sessionRepository.addKnowledgeIdsWithUpdateAccess(SHAREE, { id }, ['c'])).toBeNull();
+    expect(await knowledgeOf(id)).toEqual(['a']);
+  });
+
+  it('returns null and adds nothing on a soft-deleted session, even for the owner', async () => {
+    const id = await seed({ knowledgeIds: ['a'] });
+    await Session.updateOne({ _id: id }, { $set: { deletedAt: new Date() } });
+
+    expect(await sessionRepository.addKnowledgeIdsWithUpdateAccess(OWNER, { id }, ['c'])).toBeNull();
+    expect(await knowledgeOf(id)).toEqual(['a']);
+  });
+
+  it('returns null for an id that cannot address a row', async () => {
+    expect(
+      await sessionRepository.addKnowledgeIdsWithUpdateAccess(OWNER, { id: 'not-an-object-id' }, ['c'])
+    ).toBeNull();
+  });
+});

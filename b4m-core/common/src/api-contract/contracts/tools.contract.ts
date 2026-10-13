@@ -42,6 +42,7 @@ export const executeToolContract = defineEndpoint({
     },
     400: { description: 'Malformed JSON body.', schema: ApiErrorSchema },
     401: { description: 'Missing or invalid JWT (an API key is rejected here).', schema: ApiErrorSchema },
+    403: { description: 'Valid JWT, but the account is suspended or has a dispute pending.', schema: ApiErrorSchema },
     429: { description: 'Rate limit exceeded (100 requests/hour per user for this endpoint).', schema: ApiErrorSchema },
     // Two 500 shapes: a failed-but-executed tool returns the full ToolExecutionResponse
     // (`success: false` with `error`); an unexpected throw is shaped by defineLambdaRoute

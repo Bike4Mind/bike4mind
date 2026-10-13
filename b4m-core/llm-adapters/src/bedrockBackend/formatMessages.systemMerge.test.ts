@@ -28,7 +28,7 @@ describe('AnthropicBedrockBackend.formatMessages - consecutive same-role merge',
       sys('ARTIFACT OUTPUT: ...'),
       sys('HELP CENTER: ...'),
       sys('[Memory] User favorite color is green'),
-      sys('[Memory] User works in quantum computing'),
+      sys('[Memory] User works in marine biology'),
     ];
 
     const out = backend.formatMessages(messages);
@@ -41,7 +41,7 @@ describe('AnthropicBedrockBackend.formatMessages - consecutive same-role merge',
       'ARTIFACT OUTPUT: ...',
       'HELP CENTER: ...',
       '[Memory] User favorite color is green',
-      '[Memory] User works in quantum computing',
+      '[Memory] User works in marine biology',
     ]);
   });
 

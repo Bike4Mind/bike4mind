@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "Assinatura",
-    "description": "Acesse todos os principais modelos de IA através de uma interface unificada. Execute modelos avançados como o Deepseek R1 de forma privada.",
+    "description": "Acesse todos os principais modelos de IA através de uma interface unificada.",
     "no_free_tier": "SEM CAMADA GRÁTIS - FOCO EM PROFISSIONAIS.",
     "credits_rollover": "Créditos não utilizados são acumulados por 3 meses.",
     "monthly_billing": "Faturamento Mensal",

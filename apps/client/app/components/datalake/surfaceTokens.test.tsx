@@ -3,6 +3,14 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+
+// The empty state's GitHub sync watch reaches the admin settings cache and a QueryClient; neither is under test here.
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({ isAdminFeatureEnabled: () => false, isFeatureEnabled: () => false, isLoading: false }),
+}));
+vi.mock('@client/app/hooks/data/githubLake', () => ({
+  useLakeGitHubConnection: () => ({ data: undefined }),
+}));
 import DataLakeLakePicker from './DataLakeLakePicker';
 import DataLakeTreeEmptyState from './DataLakeTreeEmptyState';
 import { DataLakeSurfaceProvider } from './surfaceTokens';

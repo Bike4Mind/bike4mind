@@ -94,8 +94,8 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
    * fabricated id. Same choice, for the same reason, as `usableObjectIds` in ../utils/mongo.
    *
    * Both misses report `null`. The row-not-found path used to resolve `undefined` while claiming
-   * `T | null`, so a caller narrowing with `!== null` (queueHandlers/emailBatch.ts) got past the
-   * guard and dereferenced it; two different miss values out of one method would be worse.
+   * `T | null`, so a caller narrowing with `!== null` (apps/workers/src/queueHandlers/emailBatch.ts)
+   * got past the guard and dereferenced it; two different miss values out of one method would be worse.
    */
   async findById(id: string) {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
@@ -156,7 +156,14 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
   protected async _plainUpdate<D = T>(
     idFilter: Record<string, unknown>,
     data: Record<string, unknown>,
-    options?: Record<string, unknown>
+    options?: Record<string, unknown>,
+    /**
+     * Extra update operators merged beside the `$set` (e.g. a `$addToSet`). Lets a repo override
+     * with a non-`$set` write while keeping this core's `__v` strip, query-option handling and
+     * transaction propagation in one place. The `$set`/`$unset` this core builds win over any the
+     * extra operators try to carry, so they cannot clobber the field set.
+     */
+    extraOps?: Record<string, unknown>
   ): Promise<D | null> {
     // Strip `__v` from the `$set`. A whole-doc `update` from a stale in-memory copy would otherwise
     // write the read-time version straight back, rewinding the monotonic counter `updateGuarded`
@@ -167,7 +174,9 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     const { setData, unsetOperand, queryOptions } = splitUnsetOption(writable, options);
     const query = this.model.findOneAndUpdate(
       idFilter as mongoose.FilterQuery<T>,
-      (unsetOperand ? { $set: setData, $unset: unsetOperand } : { $set: setData }) as mongoose.UpdateQuery<T>,
+      (unsetOperand
+        ? { ...extraOps, $set: setData, $unset: unsetOperand }
+        : { ...extraOps, $set: setData }) as mongoose.UpdateQuery<T>,
       { new: true, ...queryOptions }
     );
     // Only attach an explicit session when one is set. Passing `.session(null)` tells Mongoose "no
@@ -216,6 +225,8 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     // past ours. Only the race is worth surfacing; a genuine not-found keeps `update`'s null contract.
     if (versioned) {
       const existsQuery = this.model.exists(idFilter as mongoose.FilterQuery<T>);
+      // A write that may reach a tombstone must also see one here, or a race on it reads as not-found.
+      if (queryOptions.includeDeleted) existsQuery.setOptions({ includeDeleted: true });
       if (this._txn) existsQuery.session(this._txn);
       if (await existsQuery) {
         throw new ConcurrencyConflictError(this.model.modelName, { filter: idFilter });

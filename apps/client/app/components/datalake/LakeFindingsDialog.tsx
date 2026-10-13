@@ -21,12 +21,14 @@ import RuleFolderOutlinedIcon from '@mui/icons-material/RuleFolderOutlined';
 import RadarIcon from '@mui/icons-material/Radar';
 import type {
   IDataLakeFindingDocument,
+  ILakeFindingListItem,
   InconsistencyKind,
   LakeFindingStatus,
   LakeHealthApiResponse,
 } from '@bike4mind/common';
 import { INCONSISTENCY_KINDS, LAKE_FINDING_RESOLUTION_MAX_CHARS, LAKE_FINDING_STATUSES } from '@bike4mind/common';
 import {
+  useApplyCorpusAction,
   useDataLakeFindings,
   useGetDataLakeHealth,
   useLakeAccessView,
@@ -315,11 +317,15 @@ function FindingDetail({
   canManage,
   onBack,
 }: {
-  finding: IDataLakeFindingDocument;
+  finding: ILakeFindingListItem;
   dataLakeId: string;
   canManage: boolean;
   onBack: () => void;
 }) {
+  const applyCorpusAction = useApplyCorpusAction();
+  const supersededIds = new Set(finding.supersededFabFileIds);
+  const pendingBody = applyCorpusAction.isPending ? applyCorpusAction.variables?.body : undefined;
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%', gap: 1.5 }}>
       <Box>
@@ -379,7 +385,22 @@ function FindingDetail({
         }}
       >
         {finding.sources.map(source => (
-          <FindingSourcePane key={source.fabFileId} source={source} />
+          <FindingSourcePane
+            key={source.fabFileId}
+            source={source}
+            superseded={supersededIds.has(source.fabFileId)}
+            returning={pendingBody?.action === 'unsupersede' && pendingBody.fabFileId === source.fabFileId}
+            onReturnToRanking={
+              finding.status === 'open'
+                ? () =>
+                    applyCorpusAction.mutate({
+                      dataLakeId,
+                      findingId: finding.id,
+                      body: { action: 'unsupersede', fabFileId: source.fabFileId },
+                    })
+                : undefined
+            }
+          />
         ))}
       </Box>
     </Box>

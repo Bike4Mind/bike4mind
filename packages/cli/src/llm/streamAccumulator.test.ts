@@ -68,8 +68,17 @@ describe('StreamAccumulator', () => {
       expect(acc.isEmpty()).toBe(false);
     });
 
+    it('counts blank reasoning frames as empty but keeps their stop reason', () => {
+      // The server blanks tagged reasoning, so a thinking-only turn arrives as empty text.
+      const acc = new StreamAccumulator();
+      acc.apply({ type: 'content', text: '', usage: { outputTokens: 900 }, stopReason: 'max_tokens' });
+      expect(acc.isEmpty()).toBe(true);
+      expect(acc.finalStopReason).toBe('max_tokens');
+    });
+
     it('counts think-block-only content as non-empty (raw text exists)', () => {
-      // isEmpty checks raw text - stripping happens in finalize
+      // Families that inline reasoning untagged still send it as text. isEmpty checks raw
+      // text - stripping happens in finalize
       const acc = new StreamAccumulator();
       acc.apply(content('<think>thoughts</think>'));
       expect(acc.isEmpty()).toBe(false);

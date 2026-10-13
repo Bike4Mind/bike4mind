@@ -19,7 +19,10 @@ import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/er
 import { z } from 'zod';
 import { isValidObjectId } from '@server/utils/objectId';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import type { LiveOpsTriageJobMessage } from '@server/utils/liveopsTriageJobMessage';
+import {
+  LiveOpsTriageJobMessageSchema,
+  type LiveOpsTriageJobMessage,
+} from '@server/utils/liveopsTriageJobMessage';
 
 const DEBOUNCE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -28,7 +31,8 @@ const DEBOUNCE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
  */
 const TriggerRequestSchema = z.object({
   dryRun: z.boolean().optional().default(false),
-  lookbackHours: z.number().int().min(1).max(168).optional(),
+  // Reuse the queue-message bound so the route cannot accept a window the worker drops.
+  lookbackHours: LiveOpsTriageJobMessageSchema.shape.lookbackHours,
 });
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {

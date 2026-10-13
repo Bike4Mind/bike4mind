@@ -6,6 +6,7 @@ import InboxModal from '../components/inbox/Modal';
 import { useUser } from './UserContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { updateAllQueryData, useSubscribeCollection } from '../utils/react-query';
+import { useCoalescedInvalidate } from '../hooks/useCoalescedInvalidate';
 
 interface InboxContextProps {
   inboxIndex: number;
@@ -45,15 +46,9 @@ export const InboxProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     [queryClient]
   );
 
-  const inviteCallback = useCallback(
-    (type: string, data: IInviteDocument) => {
-      const operation = type === 'delete' ? type : 'write';
-      updateAllQueryData(queryClient, 'invites', operation, data, {
-        keysAllowedToCreate: [['invites', 'inbox']],
-      });
-    },
-    [queryClient]
-  );
+  // Refetch rather than write the event's document: the subscription withholds `recipients` from
+  // non-admins (server/websocket/dataSubscribeFieldLimits.ts), and the inbox filters on it.
+  const inviteCallback = useCoalescedInvalidate(['invites', 'inbox']);
 
   useSubscribeCollection<IInboxDocument>(
     'inboxes',

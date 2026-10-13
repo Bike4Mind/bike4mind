@@ -56,7 +56,7 @@ vi.mock('@bike4mind/services', () => ({
 
 // Pulled in transitively by @server/utils/artifactGate, which imports it from the ./llm subpath -
 // mocking it on the barrel intercepted nothing and let the real module load.
-vi.mock('@bike4mind/services/llm', () => ({
+vi.mock('@bike4mind/services/llm/artifactGating', () => ({
   resolveArtifactsEnabled: (adminEnabled: boolean, requestedByCaller: boolean | undefined) =>
     adminEnabled && requestedByCaller !== false,
 }));

@@ -4,6 +4,7 @@ import {
   buildSSEEvent,
   IMessage,
   normalizeCompletionRequest,
+  resolveRequestClient,
   type CompletionSource,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -31,6 +32,7 @@ import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { sendToConnection } from '@server/websocket/utils';
 import { Config } from '@server/utils/config';
 import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
+import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
@@ -84,9 +86,9 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
     const headers = flattenHeaders(req.headers);
     const logger = new Logger({ metadata: { service: 'chatCompletion', endpoint: WS_COMPLETIONS_ENDPOINT } });
 
-    // This endpoint is the CLI's HTTP->WS completion path - it requires an
-    // already-registered CLI WebSocket connection, so it can only be reached by
-    // the CLI. Hardcode 'cli' to match the WS-frame handler (cliCompletion.ts).
+    // This endpoint is the HTTP->WS completion path - it requires an already-registered
+    // WebSocket connection. Hardcode 'cli' to match the WS-frame handler (cliCompletion.ts);
+    // a matched client such as desktop changes only its rate-limit cap, never this source.
     const source: CompletionSource = 'cli';
 
     let body: z.infer<typeof WsCompletionRequestSchema>;
@@ -129,7 +131,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           const user = await verifyJwtToken(token);
           userId = user.id;
           logger.info('[CLI_WS_HTTP] Authenticated via JWT', { userId });
-          await checkRateLimit(userId, source);
+          await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
         } catch {
           res.status(401).json({ error: 'Authentication failed' });
           return;
@@ -139,6 +141,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
       logger.error('[CLI_WS_HTTP] Pre-completion error', {
         error: error instanceof Error ? error.message : String(error),
       });
+      track(emitProcessingFailed('cli-ws', error));
       res.status(500).json({ error: sanitizeErrorMessage(error) });
       return;
     }
@@ -246,6 +249,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           });
         } catch (error) {
           logger.error('[CLI_WS_HTTP] Completion error:', error);
+          track(emitProcessingFailed('cli-ws', error));
 
           // The 202 is long gone - the error must reach the CLI over the WebSocket.
           try {

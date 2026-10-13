@@ -127,6 +127,29 @@ describe('useStreamingMessageMerge', () => {
     });
   });
 
+  describe('videoJobIds', () => {
+    const mergedJobIds = (quest: IChatCompletion['quest'], cached: IChatHistoryItem[]) => {
+      const { result } = renderHook(() =>
+        useStreamingMessageMerge(baseParams({ chatCompletion: makeChatCompletion({ quest }), flattenQuests: cached }))
+      );
+      return result.current.streamingMessageData?.videoJobIds;
+    };
+
+    it('takes the frame list when it extends the cached one', () => {
+      const cached = [makeQuest({ status: 'running', videoJobIds: ['a'] })];
+      expect(mergedJobIds(makeStreamQuest({ videoJobIds: ['a', 'b'] }), cached)).toEqual(['a', 'b']);
+    });
+
+    it('keeps the cached list when a frame omits the field', () => {
+      const cached = [makeQuest({ status: 'running', videoJobIds: ['a'] })];
+      expect(mergedJobIds(makeStreamQuest(), cached)).toEqual(['a']);
+    });
+
+    it('uses the frame list when the quest is not cached yet', () => {
+      expect(mergedJobIds(makeStreamQuest({ videoJobIds: ['a'] }), [])).toEqual(['a']);
+    });
+  });
+
   it('does not bleed a quest from a different session', () => {
     const chatCompletion = makeChatCompletion({
       quest: makeStreamQuest({ id: 'qX', sessionId: 'other-session' }),

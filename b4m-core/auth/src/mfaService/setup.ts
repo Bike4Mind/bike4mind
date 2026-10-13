@@ -99,7 +99,7 @@ export async function verifyMFASetup(
   // state in this SAME write - so the secrets survive. Clearing from this function's
   // (not-+selected) return value would omit and `$set`-replace-wipe the secrets, leaving
   // totpEnabled:true with no secret and permanently bricking sign-in.
-  const updatedMFA = clearFailedAttempts(user);
+  const updatedMFA = clearFailedAttempts(user.mfa);
   updatedMFA.totpEnabled = true;
   updatedMFA.lastUsedAt = new Date();
 

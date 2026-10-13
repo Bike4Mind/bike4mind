@@ -1,5 +1,33 @@
 # @bike4mind/infra
 
+## 2.1.0
+
+### Minor Changes
+
+- [#4042](https://github.com/Bike4Mind/bike4mind/pull/4042) [`3e5efa7`](https://github.com/Bike4Mind/bike4mind/commit/3e5efa790ed3bd5daa6824577cfd0025502d6a76) Thanks [@vinchi777](https://github.com/vinchi777)! - emit ProcessingFailed metric from CLI and embed completion paths
+
+### Patch Changes
+
+- [#2411](https://github.com/Bike4Mind/bike4mind/pull/2411) [`b83d2c9`](https://github.com/Bike4Mind/bike4mind/commit/b83d2c901d66b46de6b95818cb0088f3564e2a05) Thanks [@poysama](https://github.com/poysama)! - refuse to deploy a stage whose tier-1 secrets are unset
+
+- [#4031](https://github.com/Bike4Mind/bike4mind/pull/4031) [`7aa174a`](https://github.com/Bike4Mind/bike4mind/commit/7aa174ab29c4682a44fca39fb68b06cda8475265) Thanks [@julsanchez](https://github.com/julsanchez)! - share Lumina5/Quests metric names via @bike4mind/infra
+
+## 2.0.0
+
+### Major Changes
+
+- [#3884](https://github.com/Bike4Mind/bike4mind/pull/3884) [`31d4623`](https://github.com/Bike4Mind/bike4mind/commit/31d46236619fd7e0c2be3f3bc4d34ee69314e682) Thanks [@onoya](https://github.com/onoya)! - deliver all generated audio through one shared module, by URL when oversized
+
+### Patch Changes
+
+- [#3891](https://github.com/Bike4Mind/bike4mind/pull/3891) [`c4d2bd4`](https://github.com/Bike4Mind/bike4mind/commit/c4d2bd49a6bc6bccec224924e899f89de9dca269) Thanks [@aflordelis](https://github.com/aflordelis)! - move comms and ops queue handlers into apps/workers
+
+## 1.2.1
+
+### Patch Changes
+
+- [#3754](https://github.com/Bike4Mind/bike4mind/pull/3754) [`1b883fa`](https://github.com/Bike4Mind/bike4mind/commit/1b883fac5df1d24f7cea23a5c3e72efcfd05ee70) Thanks [@aflordelis](https://github.com/aflordelis)! - move server/jobs and server/emailIngestion into apps/workers
+
 ## 1.2.0
 
 ### Minor Changes

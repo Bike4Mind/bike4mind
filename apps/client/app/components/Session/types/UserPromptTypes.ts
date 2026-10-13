@@ -38,6 +38,7 @@ export interface PromptReplyProps {
     replies?: string[];
     images?: string[];
     videos?: string[];
+    videoJobIds?: string[];
     status?: string;
     promptMeta?: PromptMeta;
     deepResearchState?: IChatHistoryItem['deepResearchState'];
@@ -59,6 +60,8 @@ export interface ReplyContainerProps {
   /** Non-image files a tool generated this turn (e.g. .xlsx), rendered as download chips. */
   generatedFiles?: { name: string; url: string }[];
   videos?: string[];
+  /** Video generation job ids started by the agent tool this turn, one live card each. */
+  videoJobIds?: string[];
   /** Audio tracks a tool generated this turn (music_generation), rendered as inline players. */
   audio?: string[];
   search?: string;

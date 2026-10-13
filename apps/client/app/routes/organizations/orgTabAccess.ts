@@ -1,5 +1,7 @@
 // Tab identity and visibility rules for the organization detail route.
 
+import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
+
 export enum OrganizationTabs {
   Overview = 'overview',
   Members = 'members',
@@ -22,15 +24,7 @@ export enum OrganizationTabs {
  * Exported rather than left inline in $id.tsx so the spec can exercise the predicate the page
  * actually runs; a copy of the logic declared in the test passes whatever the page does.
  */
-export const canViewOrgUsage = (
-  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
-  organization: { userId: string; managerId?: string | null } | null | undefined
-): boolean => {
-  if (!currentUser || !organization) return false;
-  if (currentUser.isAdmin) return true;
-  if (currentUser.id === organization.userId) return true;
-  return organization.managerId === currentUser.id;
-};
+export const canViewOrgUsage = hasOrgUpdateAccess;
 
 /**
  * Who may see the Billing & Subscription tab. Owner only - NOT `canManageOrg`, which is satisfied

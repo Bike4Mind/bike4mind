@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ImageModels, ModelBackend } from '@bike4mind/common';
+import { ImageModels, ModelBackend, type ImageModelCapabilities } from '@bike4mind/common';
 
 /**
  * T9, the /api/models parity suite. The route delegates its fan-out to
@@ -110,7 +110,9 @@ async function callRoute(userId?: string) {
     logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn() },
   });
   await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
-  const body = JSON.parse(res._getData()) as { models: Array<{ id: string; backend: string; private?: boolean }> };
+  const body = JSON.parse(res._getData()) as {
+    models: Array<{ id: string; backend: string; type: string; private?: boolean; image?: ImageModelCapabilities }>;
+  };
   return body.models;
 }
 
@@ -185,6 +187,19 @@ describe('/api/models parity with getAvailableModels', () => {
     const models = await callRoute('user-1');
 
     expect(models.some(m => m.id === LOCAL_IMAGE_MODEL)).toBe(true);
+  });
+
+  it('attaches image capabilities to known image models only', async () => {
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ...noKeys, bfl: 'bfl-key', imageGen: 'http://imagegen:7860' });
+
+    const models = await callRoute('user-1');
+
+    expect(models.find(m => m.id === PUBLIC_BFL_MODEL)?.image?.sizing.kind).toBe('dimensions');
+    expect(models.find(m => m.id === LOCAL_IMAGE_MODEL)).toBeDefined();
+    expect(models.find(m => m.id === LOCAL_IMAGE_MODEL)?.image).toBeUndefined();
+    const textModels = models.filter(m => m.type === 'text');
+    expect(textModels.length).toBeGreaterThan(0);
+    expect(textModels.every(m => m.image === undefined)).toBe(true);
   });
 
   it('gives two callers with different Ollama base URLs different lists', async () => {

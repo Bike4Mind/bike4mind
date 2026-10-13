@@ -287,8 +287,11 @@ async function runOnce(
       abortSignal: controller.signal,
     },
     async (chunks, completionInfo) => {
-      for (const chunk of chunks) {
-        if (chunk != null) accumulated += chunk;
+      // Reasoning frames (<think>...</think>) are not the JSON answer; adaptive Claude streams them first.
+      if (completionInfo?.channel !== 'reasoning') {
+        for (const chunk of chunks) {
+          if (chunk != null) accumulated += chunk;
+        }
       }
       if (completionInfo?.responseFormatMode) {
         responseFormatMode = completionInfo.responseFormatMode;

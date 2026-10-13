@@ -6,6 +6,7 @@ import { B4MLLMTools, BRIEFCASE_DISALLOWED_TOOLS } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import type { LLMSettings } from '@client/app/components/commands/LLMCommand';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
+import { isToolDenied } from '@client/app/utils/toolMapping';
 
 export interface AssembleSettingsParams {
   /** Whether the send streams chunks (forwarded straight into the payload). */
@@ -29,6 +30,11 @@ export interface ResolveToolsParams {
    * silently adding its own.
    */
   skipAutoOffers?: boolean;
+  /**
+   * The session's `disabledTools`. Only shapes the "Smart tools" toast, so it never names a tool
+   * the server will withhold. The payload is untouched on purpose: the server denylist is the gate.
+   */
+  deniedTools?: readonly string[];
 }
 
 export interface ResolveToolsResult {
@@ -77,7 +83,7 @@ export function useLLMSettingsAssembly(): {
   );
 
   const resolveTools = useCallback(
-    ({ prompt, supportsTools, toolsOverride, skipAutoOffers }: ResolveToolsParams): ResolveToolsResult => {
+    ({ prompt, supportsTools, toolsOverride, skipAutoOffers, deniedTools }: ResolveToolsParams): ResolveToolsResult => {
       // Briefcase per-message tools override: a one-click prompt declares exactly
       // the tools its send must run with, for THIS message only - without mutating
       // the user's sticky tool selection. It short-circuits the Smart/Fast ladder
@@ -114,7 +120,7 @@ export function useLLMSettingsAssembly(): {
           return { effectiveTools: tools, refused: false };
         }
         const recommendations = recommendTools(prompt);
-        const autoSelected = recommendations.filter(r => !tools.includes(r.tool));
+        const autoSelected = recommendations.filter(r => !tools.includes(r.tool) && !isToolDenied(r.tool, deniedTools));
         if (autoSelected.length > 0) {
           const names = autoSelected.map(r => r.reason).join(', ');
           toast.info(`Smart tools: ${names}`);

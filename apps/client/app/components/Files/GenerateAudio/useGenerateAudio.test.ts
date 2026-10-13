@@ -110,6 +110,33 @@ describe('useGenerateAudio provider substitution', () => {
   });
 });
 
+describe('useGenerateAudio oversized audio', () => {
+  it('plays a url-delivery response straight from its URL without building a blob', async () => {
+    mocks.post.mockResolvedValue({
+      data: {
+        delivery: 'url',
+        url: 'https://s3/audio.mp3',
+        bytes: 5_000_000,
+        format: 'mp3',
+        contentType: 'audio/mpeg',
+        saved: true,
+        fabFileId: 'fab-1',
+      },
+    });
+
+    const result = await generate();
+
+    expect(result.current.result).toEqual({
+      url: 'https://s3/audio.mp3',
+      isObjectUrl: false,
+      saved: true,
+      fabFileId: 'fab-1',
+      contentType: 'audio/mpeg',
+    });
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+});
+
 /**
  * TTS reports "out of credits" as a 422 tagged `insufficient_credits`, the same as
  * every other credit-metered route. This branch keys off the CLASSIFIER, not the
@@ -149,5 +176,79 @@ describe('useGenerateAudio credit exhaustion', () => {
     await generate();
 
     expect(mocks.toastError).toHaveBeenCalledWith("The openai provider does not support the 'wav' output format");
+  });
+});
+
+describe('useGenerateAudio sound effects', () => {
+  beforeEach(() => {
+    mocks.getState.mockReturnValue({ mode: 'sound-effects', durationSeconds: 3, promptInfluence: 0.5 });
+  });
+
+  it('requests base64 JSON and plays the inline audio from a blob URL', async () => {
+    mocks.post.mockResolvedValue({
+      data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: true, fabFileId: 'fab-2' },
+    });
+
+    const result = await generate();
+
+    expect(mocks.post).toHaveBeenCalledWith(
+      '/api/ai/sound-effects',
+      { text: 'hello', durationSeconds: 3, promptInfluence: 0.5, encoding: 'base64' },
+      expect.not.objectContaining({ responseType: expect.anything() })
+    );
+    expect(result.current.result).toEqual({
+      url: 'blob:audio',
+      isObjectUrl: true,
+      saved: true,
+      fabFileId: 'fab-2',
+      contentType: 'audio/mpeg',
+    });
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Sound effect generated and saved to your Files.');
+  });
+
+  it('plays a url-delivery response without creating an object URL', async () => {
+    mocks.post.mockResolvedValue({
+      data: { delivery: 'url', url: 'https://s3/sfx.mp3', bytes: 9_000_000, contentType: 'audio/mpeg' },
+    });
+
+    const result = await generate();
+
+    expect(result.current.result).toMatchObject({ url: 'https://s3/sfx.mp3', isObjectUrl: false, saved: false });
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Sound effect generated.');
+  });
+
+  it('explains why a generated sound effect was not saved', async () => {
+    mocks.post.mockResolvedValue({
+      data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: false, saveSkippedReason: 'storage_limit' },
+    });
+
+    await generate();
+
+    expect(mocks.toastInfo).toHaveBeenCalledWith(
+      'Sound effect generated, but your storage is full so it was not saved to Files.'
+    );
+  });
+
+  it('shows the generic too-large message on a 413', async () => {
+    mocks.post.mockRejectedValue(axiosFailure(413, { error: 'too big' }));
+
+    await generate();
+
+    expect(mocks.toastError).toHaveBeenCalledWith(
+      'The generated audio was too large to return. Try again, or use shorter text.'
+    );
+  });
+});
+
+describe('useGenerateAudio tts save outcome', () => {
+  it('names the save skip reason for audio', async () => {
+    mocks.post.mockResolvedValue({
+      data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: false, saveSkippedReason: 'error' },
+    });
+
+    await generate();
+
+    expect(mocks.toastInfo).toHaveBeenCalledWith('Audio generated, but saving to Files failed.');
   });
 });

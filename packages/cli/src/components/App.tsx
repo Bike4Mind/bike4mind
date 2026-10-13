@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Box, Text, Static, useInput } from 'ink';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { Box, Text, Static, useInput, measureElement, type DOMElement } from 'ink';
 import { StatusBar } from './StatusBar';
 import { InputPrompt } from './InputPrompt';
 import { AgentThinking } from './AgentThinking';
@@ -25,9 +25,19 @@ import { processFileReferences, hasFileReferences } from '../utils/processFileRe
 import type { CommandDefinition } from '../config/commands.js';
 import { useStdoutDimensions } from '../hooks/useStdoutDimensions.js';
 /**
- * Live-frame rows reserved for everything outside the step trace: the thinking
- * line and its margin, the bordered input box and the status bar come to six,
- * and the rest is headroom for the background agent/shell status blocks.
+ * Live-frame rows reserved for everything outside the step trace and any open
+ * prompt: the thinking line and its margin, the bordered input box and the
+ * status bar come to six, and the rest is headroom for the background
+ * agent/shell status blocks.
+ *
+ * Known limits: open prompts are the larger headroom risk. A prompt is
+ * measured after layout (see `promptRows` in App), so when one grows in place -
+ * a UserQuestionPrompt moving to a taller question, a review-gate note - the
+ * frame that grows it is painted before the re-measure lands, and only this
+ * headroom plus the two rows the hidden thinking line frees absorb it. A prompt
+ * taller than the viewport on its own still overflows; the permission preview is
+ * deliberately not truncated, since it is what the user approves. The background
+ * agent/shell status blocks render nothing when idle.
  */
 const LIVE_CHROME_ROWS = 10;
 
@@ -126,6 +136,29 @@ export function App({
   // Agent thought visibility (default shown - user can hide via config)
   const showThoughts = config?.preferences.showThoughts ?? true;
 
+  // Open prompts render on top of the live trace, so their height comes out of
+  // its budget. A prompt has no height until Ink lays it out, and Ink paints on
+  // the leading edge, so an unmeasured prompt reserves everything: the trace
+  // drops out for that first frame rather than overflowing the viewport.
+  const promptKey = [permissionPrompt, userQuestionPrompt, reviewGatePrompt, exitHandoffPrompt]
+    .map(prompt => prompt?.id)
+    .filter(Boolean)
+    .join('|');
+  const promptRef = useRef<DOMElement>(null);
+  const [measuredPrompt, setMeasuredPrompt] = useState<{ key: string; rows: number } | null>(null);
+  const [, setPromptInputTick] = useState(0);
+  useLayoutEffect(() => {
+    // No node while a full-screen view (config editor, MCP viewer) replaces the
+    // live frame; recording 0 there would hand the trace its full budget on return.
+    const node = promptRef.current;
+    const next = promptKey && node ? { key: promptKey, rows: measureElement(node).height } : null;
+    setMeasuredPrompt(prev => (prev?.key === next?.key && prev?.rows === next?.rows ? prev : next));
+  });
+  // Prompts change height from their own keypress state (next question, note
+  // mode) without re-rendering App; re-render so the layout effect re-measures.
+  useInput(() => setPromptInputTick(tick => tick + 1), { isActive: promptKey !== '' });
+  const promptRows = promptKey === '' ? 0 : measuredPrompt?.key === promptKey ? measuredPrompt.rows : Infinity;
+
   // Terminal width - needed to pad queued-message rows so the background
   // color fills the entire row (same pattern as the sent user-prompt
   // highlight in MessageItem.tsx). Subscribes to resize so the live frame
@@ -136,7 +169,7 @@ export function App({
   // (see liveStepWindow.ts), so the trace only gets the rows left over. On a
   // terminal too short to have any left over it drops out entirely - keeping
   // scrollback usable matters more than a two-line trace.
-  const liveTraceRows = Math.max(0, terminalRows - LIVE_CHROME_ROWS - messageQueue.length);
+  const liveTraceRows = Math.max(0, terminalRows - LIVE_CHROME_ROWS - messageQueue.length - promptRows);
 
   const handleSubmit = React.useCallback(
     async (input: string) => {
@@ -237,59 +270,61 @@ export function App({
               ))}
             </Box>
 
-            {/* Permission Prompt - rendered alongside messages, not instead of them */}
-            {/* Key forces React to unmount/remount when switching between queued prompts,
-                ensuring SelectInput re-initializes keyboard handling for each new prompt */}
-            {permissionPrompt && (
-              <Box key={permissionPrompt.id} flexDirection="column" paddingX={1}>
-                <PermissionPrompt
-                  toolName={permissionPrompt.toolName}
-                  args={permissionPrompt.args}
-                  preview={permissionPrompt.preview}
-                  canBeTrusted={permissionPrompt.canBeTrusted}
-                  // Capture the id at render time so the response carries the
-                  // prompt it was rendered against - closes the tavern/Ink race
-                  // where a buffered keypress for the active prompt could land
-                  // after the tavern dequeued it and made the next prompt active.
-                  onResponse={response => onPermissionResponse(response, permissionPrompt.id)}
-                />
-              </Box>
-            )}
+            <Box ref={promptRef} flexDirection="column">
+              {/* Permission Prompt - rendered alongside messages, not instead of them */}
+              {/* Key forces React to unmount/remount when switching between queued prompts,
+                  ensuring SelectInput re-initializes keyboard handling for each new prompt */}
+              {permissionPrompt && (
+                <Box key={permissionPrompt.id} flexDirection="column" paddingX={1}>
+                  <PermissionPrompt
+                    toolName={permissionPrompt.toolName}
+                    args={permissionPrompt.args}
+                    preview={permissionPrompt.preview}
+                    canBeTrusted={permissionPrompt.canBeTrusted}
+                    // Capture the id at render time so the response carries the
+                    // prompt it was rendered against - closes the tavern/Ink race
+                    // where a buffered keypress for the active prompt could land
+                    // after the tavern dequeued it and made the next prompt active.
+                    onResponse={response => onPermissionResponse(response, permissionPrompt.id)}
+                  />
+                </Box>
+              )}
 
-            {/* User question prompt */}
-            {userQuestionPrompt && (
-              <Box key={userQuestionPrompt.id} flexDirection="column" paddingX={1}>
-                <UserQuestionPrompt
-                  payload={userQuestionPrompt.payload}
-                  onResponse={response => onUserQuestionResponse(response, userQuestionPrompt.id)}
-                />
-              </Box>
-            )}
+              {/* User question prompt */}
+              {userQuestionPrompt && (
+                <Box key={userQuestionPrompt.id} flexDirection="column" paddingX={1}>
+                  <UserQuestionPrompt
+                    payload={userQuestionPrompt.payload}
+                    onResponse={response => onUserQuestionResponse(response, userQuestionPrompt.id)}
+                  />
+                </Box>
+              )}
 
-            {/* Review gate prompt */}
-            {reviewGatePrompt && (
-              <Box key={reviewGatePrompt.id} flexDirection="column" paddingX={1}>
-                <ReviewGatePrompt
-                  description={reviewGatePrompt.description}
-                  options={reviewGatePrompt.options}
-                  recommendation={reviewGatePrompt.recommendation}
-                  onResponse={response => onReviewGateResponse(response, reviewGatePrompt.id)}
-                />
-              </Box>
-            )}
+              {/* Review gate prompt */}
+              {reviewGatePrompt && (
+                <Box key={reviewGatePrompt.id} flexDirection="column" paddingX={1}>
+                  <ReviewGatePrompt
+                    description={reviewGatePrompt.description}
+                    options={reviewGatePrompt.options}
+                    recommendation={reviewGatePrompt.recommendation}
+                    onResponse={response => onReviewGateResponse(response, reviewGatePrompt.id)}
+                  />
+                </Box>
+              )}
 
-            {/* Exit-time handoff prompt */}
-            {exitHandoffPrompt && (
-              <Box key={exitHandoffPrompt.id} flexDirection="column" paddingX={1}>
-                <ExitHandoffPrompt
-                  onResponse={generate => {
-                    const target = exitHandoffPrompt;
-                    setExitHandoffPrompt(null);
-                    target.resolve(generate);
-                  }}
-                />
-              </Box>
-            )}
+              {/* Exit-time handoff prompt */}
+              {exitHandoffPrompt && (
+                <Box key={exitHandoffPrompt.id} flexDirection="column" paddingX={1}>
+                  <ExitHandoffPrompt
+                    onResponse={generate => {
+                      const target = exitHandoffPrompt;
+                      setExitHandoffPrompt(null);
+                      target.resolve(generate);
+                    }}
+                  />
+                </Box>
+              )}
+            </Box>
 
             {/* Agent thinking display - hidden when an interactive prompt is active */}
             {!permissionPrompt && !userQuestionPrompt && !reviewGatePrompt && !exitHandoffPrompt && <AgentThinking />}

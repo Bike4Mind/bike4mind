@@ -8,8 +8,11 @@ const isAdminFeatureEnabled = vi.fn();
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isAdminFeatureEnabled, isFeatureEnabled: vi.fn(), isLoading: false }),
 }));
+vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({ default: () => null }));
+vi.mock('@client/app/components/DataLakeWizard/steps/GitHubConnectAction', () => ({ default: () => null }));
 
 import ConnectSourceMenu from './ConnectSourceMenu';
+import { LAKE_MANAGER_ONLY_REASON } from './lakeSources';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const wrap = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
@@ -23,47 +26,33 @@ describe('ConnectSourceMenu', () => {
   });
 
   it('lists Google Drive as a connectable source on an org lake', () => {
-    const onConnectDrive = vi.fn();
+    const onConnect = vi.fn();
     wrap(
-      <ConnectSourceMenu
-        lake={{ organizationId: 'org-1', isCreator: false }}
-        onConnectDrive={onConnectDrive}
-        onConnectGitHub={vi.fn()}
-      />
+      <ConnectSourceMenu lake={{ organizationId: 'org-1', canManage: true, isCreator: false }} onConnect={onConnect} />
     );
     openMenu();
 
     const item = screen.getByTestId('datalake-connect-source-drive-item');
     expect(item).not.toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(item);
-    expect(onConnectDrive).toHaveBeenCalledOnce();
+    expect(onConnect).toHaveBeenCalledWith('googleDrive');
   });
 
   it('enables Google Drive on a personal lake the caller created', () => {
-    const onConnectDrive = vi.fn();
-    wrap(
-      <ConnectSourceMenu
-        lake={{ organizationId: null, isCreator: true }}
-        onConnectDrive={onConnectDrive}
-        onConnectGitHub={vi.fn()}
-      />
-    );
+    const onConnect = vi.fn();
+    wrap(<ConnectSourceMenu lake={{ organizationId: null, canManage: true, isCreator: true }} onConnect={onConnect} />);
     openMenu();
 
     const item = screen.getByTestId('datalake-connect-source-drive-item');
     expect(item).not.toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(item);
-    expect(onConnectDrive).toHaveBeenCalledOnce();
+    expect(onConnect).toHaveBeenCalledWith('googleDrive');
   });
 
   it("keeps Google Drive listed but disabled on someone else's personal lake, with the reason inline", () => {
-    const onConnectDrive = vi.fn();
+    const onConnect = vi.fn();
     wrap(
-      <ConnectSourceMenu
-        lake={{ organizationId: null, isCreator: false }}
-        onConnectDrive={onConnectDrive}
-        onConnectGitHub={vi.fn()}
-      />
+      <ConnectSourceMenu lake={{ organizationId: null, canManage: false, isCreator: false }} onConnect={onConnect} />
     );
     openMenu();
 
@@ -71,57 +60,74 @@ describe('ConnectSourceMenu', () => {
     expect(item).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByTestId('datalake-connect-source-drive-hint')).toHaveTextContent(/Only the person who created/);
     fireEvent.click(item);
-    expect(onConnectDrive).not.toHaveBeenCalled();
+    expect(onConnect).not.toHaveBeenCalled();
   });
 
   it('lists GitHub as a connectable source on an org lake', () => {
-    const onConnectGitHub = vi.fn();
+    const onConnect = vi.fn();
     wrap(
-      <ConnectSourceMenu
-        lake={{ organizationId: 'org-1', isCreator: false }}
-        onConnectDrive={vi.fn()}
-        onConnectGitHub={onConnectGitHub}
-      />
+      <ConnectSourceMenu lake={{ organizationId: 'org-1', canManage: true, isCreator: false }} onConnect={onConnect} />
     );
     openMenu();
 
     const item = screen.getByTestId('datalake-connect-source-github-item');
     expect(item).not.toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(item);
-    expect(onConnectGitHub).toHaveBeenCalledOnce();
+    expect(onConnect).toHaveBeenCalledWith('github');
   });
 
   it('keeps GitHub listed but disabled on a personal lake, with the reason inline', () => {
-    const onConnectGitHub = vi.fn();
-    wrap(
-      <ConnectSourceMenu
-        lake={{ organizationId: null, isCreator: true }}
-        onConnectDrive={vi.fn()}
-        onConnectGitHub={onConnectGitHub}
-      />
-    );
+    const onConnect = vi.fn();
+    wrap(<ConnectSourceMenu lake={{ organizationId: null, canManage: true, isCreator: true }} onConnect={onConnect} />);
     openMenu();
 
     const item = screen.getByTestId('datalake-connect-source-github-item');
     expect(item).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByTestId('datalake-connect-source-github-hint')).toHaveTextContent(/organization/);
     fireEvent.click(item);
-    expect(onConnectGitHub).not.toHaveBeenCalled();
+    expect(onConnect).not.toHaveBeenCalled();
   });
 
   it('hides GitHub entirely while EnableDataLakeGitHub is off', () => {
     isAdminFeatureEnabled.mockReturnValue(false);
     wrap(
-      <ConnectSourceMenu
-        lake={{ organizationId: 'org-1', isCreator: false }}
-        onConnectDrive={vi.fn()}
-        onConnectGitHub={vi.fn()}
-      />
+      <ConnectSourceMenu lake={{ organizationId: 'org-1', canManage: true, isCreator: false }} onConnect={vi.fn()} />
     );
     openMenu();
 
     expect(screen.getByTestId('datalake-connect-source-drive-item')).toBeInTheDocument();
     expect(screen.queryByTestId('datalake-connect-source-github-item')).toBeNull();
     expect(isAdminFeatureEnabled).toHaveBeenCalledWith('EnableDataLakeGitHub');
+  });
+
+  it('disables both sources, with the manager-only reason inline, for an org member who cannot manage the lake', () => {
+    const onConnect = vi.fn();
+    wrap(
+      <ConnectSourceMenu lake={{ organizationId: 'org-1', canManage: false, isCreator: false }} onConnect={onConnect} />
+    );
+    openMenu();
+
+    for (const slug of ['drive', 'github']) {
+      expect(screen.getByTestId(`datalake-connect-source-${slug}-item`)).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByTestId(`datalake-connect-source-${slug}-hint`)).toHaveTextContent(LAKE_MANAGER_ONLY_REASON);
+    }
+    fireEvent.click(screen.getByTestId('datalake-connect-source-github-item'));
+    fireEvent.click(screen.getByTestId('datalake-connect-source-drive-item'));
+    expect(onConnect).not.toHaveBeenCalled();
+  });
+
+  it('reports the chosen source kind to onConnect', () => {
+    const onConnect = vi.fn();
+    wrap(
+      <ConnectSourceMenu lake={{ organizationId: 'org-1', canManage: true, isCreator: false }} onConnect={onConnect} />
+    );
+    openMenu();
+    fireEvent.click(screen.getByTestId('datalake-connect-source-github-item'));
+    expect(onConnect).toHaveBeenLastCalledWith('github');
+
+    openMenu();
+    fireEvent.click(screen.getByTestId('datalake-connect-source-drive-item'));
+    expect(onConnect).toHaveBeenLastCalledWith('googleDrive');
+    expect(onConnect).toHaveBeenCalledTimes(2);
   });
 });

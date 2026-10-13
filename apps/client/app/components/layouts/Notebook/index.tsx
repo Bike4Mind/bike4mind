@@ -1,11 +1,11 @@
 import Grid from '@mui/joy/Grid';
-import { FC, PropsWithChildren, ReactNode, useEffect, useState } from 'react';
+import { FC, PropsWithChildren, ReactNode, useEffect, useRef, useState } from 'react';
 import { useLocation } from '@tanstack/react-router';
 import NotebookSideNav from './Sidenav';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useShallow } from 'zustand/react/shallow';
-import { Box, Drawer } from '@mui/joy';
+import { Box, Drawer, Typography } from '@mui/joy';
 import CollapseButton from '../../Session/CollapseButton';
 import { useMediaQuery } from '@mui/system';
 import { useTheme as useJoyTheme } from '@mui/joy';
@@ -23,6 +23,8 @@ import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 import type { NotebookContentFilter, NotebookOriginFilter } from './Sidenav/sidenavFilters';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { edgeToEdgePaths, isEdgeToEdgePath } from '@client/app/utils/premiumEdgeToEdge';
+import { visuallyHidden } from '@client/app/utils/a11yStyles';
+import { routeHeading } from './routeHeading';
 
 // Empty in the open-core build, where premiumRoutes is empty.
 const EDGE_TO_EDGE_PATHS = edgeToEdgePaths(premiumRoutes);
@@ -94,6 +96,26 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
   const { pathname } = useLocation();
   const isOptiRoute = pathname.startsWith('/opti');
   const dataLakeModeOn = useDataLakeMode(s => s.enabled);
+  const heading = routeHeading(pathname);
+  const mainRef = useRef<HTMLDivElement>(null);
+
+  // A route change that unmounts the focused control (an account menu item, a dialog's opener)
+  // drops focus to <body>, sending keyboard and screen reader users back to the top of the page.
+  // Land them on the new screen's heading instead; a screen that focuses its own control wins.
+  // Skipped on first load: focusing main there would start keyboard users past the sidebar.
+  const lastPathnameRef = useRef(pathname);
+  useEffect(() => {
+    if (lastPathnameRef.current === pathname) return;
+    lastPathnameRef.current = pathname;
+    const frame = requestAnimationFrame(() => {
+      if (document.activeElement && document.activeElement !== document.body) return;
+      const target = mainRef.current?.querySelector<HTMLElement>('h1') ?? mainRef.current;
+      if (!target) return;
+      if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+      target.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pathname]);
 
   // Opti hub / in-chat Data Lake mode / edgeToEdge premium routes own their edge-to-edge layout;
   // the notebook gutter would double up as a visible frame around them. The 36px left is
@@ -123,11 +145,16 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
         <NotebookSideNav />
       </SideNavWrapper>
 
-      {/* Main */}
+      {/* Main: a sibling of the header and sidebar nav landmarks, never their parent */}
       <Grid
+        ref={mainRef}
+        component="main"
+        id="main-content"
+        tabIndex={-1}
         className="notebook-layout-main"
         sx={{
           position: 'relative',
+          '&:focus, & h1:focus': { outline: 'none' },
         }}
         lg
         md
@@ -153,6 +180,11 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
               p: getContentPadding(),
             }}
           >
+            {heading && (
+              <Typography level="h1" sx={visuallyHidden} data-testid="route-heading">
+                {heading}
+              </Typography>
+            )}
             {children}
           </Grid>
         </Grid>

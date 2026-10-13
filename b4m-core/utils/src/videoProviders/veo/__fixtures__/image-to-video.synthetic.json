@@ -1,0 +1,98 @@
+{
+  "scenario": "image-to-video.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built: the submit body uses the Veo predict image shape (image.bytesBase64Encoded + mimeType) after a live run showed image.inlineData rejected with 400; responses mirror text-to-video.synthetic. Replace with a recording.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning",
+        "body": {
+          "instances": [
+            {
+              "prompt": "The color slowly ripples like water, camera static.",
+              "image": {
+                "bytesBase64Encoded": "<redacted:base64 1132 chars>",
+                "mimeType": "image/png"
+              }
+            }
+          ],
+          "parameters": {
+            "durationSeconds": 4,
+            "aspectRatio": "16:9",
+            "resolution": "720p",
+            "personGeneration": "allow_adult"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "name": "models/veo-3.1-fast-generate-preview/operations/synthetici2v"
+        }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/synthetici2v"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "name": "models/veo-3.1-fast-generate-preview/operations/synthetici2v"
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/synthetici2v"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "name": "models/veo-3.1-fast-generate-preview/operations/synthetici2v",
+          "done": true,
+          "response": {
+            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.PredictLongRunningResponse",
+            "generateVideoResponse": {
+              "generatedSamples": [
+                {
+                  "video": {
+                    "uri": "https://generativelanguage.googleapis.com/v1beta/files/synthetici2v:download"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "download",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/files/synthetici2v:download"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "video/mp4"
+        }
+      }
+    }
+  ]
+}

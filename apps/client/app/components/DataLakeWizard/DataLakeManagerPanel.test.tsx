@@ -48,10 +48,12 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 }));
 // The GitHub chip reads the flag cache and its own query; it has its own suite (LakeGitHubStatusChip.test.tsx).
 vi.mock('@client/app/components/datalake/LakeGitHubStatusChip', () => ({ default: () => null }));
-vi.mock('./manager/FinishGitHubConnectBanner', () => ({ default: () => null }));
+vi.mock('./manager/FinishSourceConnectBanner', () => ({ default: () => null }));
 // The repository picker has its own suite (GitHubRepositoryPickerModal.test.tsx) and reaches
 // react-query hooks this suite does not mock; here it is only mounted-once wiring, not behavior.
 vi.mock('./manager/GitHubRepositoryPickerModal', () => ({ default: () => null }));
+// Its own suite (DriveLakeResyncResume.test.tsx); it reads the user store this suite mocks as a hook.
+vi.mock('./manager/DriveLakeResyncResume', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
@@ -776,6 +778,28 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     // lakes tab"), so the owner cue must live on the row, before anything is opened.
     expect(screen.getByTestId('datalake-manager-owner-icon-theirs')).toBeInTheDocument();
     expect(screen.queryByTestId('datalake-manager-owner-icon-mine')).toBeNull();
+  });
+
+  it('names the owner in the sidebar icon label with no native title', () => {
+    useGetDataLakes.mockReturnValue({
+      data: [mineLake, { ...theirsLake, ownerDisplayName: 'Dana' }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    const icon = screen.getByRole('img', { name: 'Owned by Dana' });
+    expect(icon.querySelector('title')).toBeNull();
+  });
+
+  it('falls back to a generic sidebar icon label when the owner name is missing', () => {
+    useGetDataLakes.mockReturnValue({
+      data: [mineLake, { ...theirsLake, ownerDisplayName: undefined }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    const icon = screen.getByRole('img', { name: 'Owned by another user' });
+    expect(icon.querySelector('title')).toBeNull();
   });
 
   it('keeps the owner chip AND the management buttons on an admin-managed lake owned by someone else', async () => {

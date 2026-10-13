@@ -81,6 +81,7 @@ describe('ProfileDetailTabContent subscription line', () => {
   beforeEach(() => {
     subscriptions = [];
     stripePortalMutate.mockReset();
+    sessionStorage.clear();
   });
 
   it('tells a delinquent user their payment failed instead of when the plan renews', () => {
@@ -117,6 +118,17 @@ describe('ProfileDetailTabContent subscription line', () => {
       { ownerType: 'User', ownerId: 'user_1' },
       expect.objectContaining({ onSuccess: expect.any(Function) })
     );
+  });
+
+  it('returns the user to the exact page they left, query string included', async () => {
+    subscriptions = [subRow({ status: 'active' })];
+    window.history.replaceState({}, '', '/notebooks?view=grid');
+
+    renderTab();
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-corner-btn'));
+    stripePortalMutate.mock.calls[0][1].onSuccess();
+
+    expect(sessionStorage.getItem('__stripe_return')).toBe('/notebooks?view=grid');
   });
 
   it('opens the upgrade modal instead of the portal when the user has no plan', async () => {

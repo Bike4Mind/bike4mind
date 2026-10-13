@@ -52,6 +52,7 @@ describe('every backend can be credentialed by discovery', () => {
       ollama: null,
       imageGen: null,
       elevenlabs: null,
+      bedrock: false,
       awsIam: false,
     });
     for (const [backend, predicate] of Object.entries(CREDENTIAL_OF_BACKEND)) {

@@ -169,6 +169,24 @@ describe('buildOpenApiDocument', () => {
     }
   });
 
+  it('sends a request body in code samples only when the operation declares one', () => {
+    const sessionPath = doc.paths['/api/sessions/{id}'];
+    const sources = (op: typeof completions) =>
+      op['x-codeSamples'].map((s: { source: string }) => s.source) as string[];
+    // DELETE and GET declare no requestBody, so no sample sends Content-Type or a `{}` body.
+    for (const op of [sessionPath.delete, sessionPath.get]) {
+      expect(op.requestBody).toBeUndefined();
+      for (const source of sources(op)) {
+        expect(source).not.toContain('Content-Type');
+        expect(source).not.toContain('B4M_REQUEST_BODY');
+        expect(source).not.toContain('JSON.stringify');
+        expect(source).not.toContain('json=');
+      }
+    }
+    // PUT on the same path declares one, so its samples still carry it.
+    for (const source of sources(sessionPath.put)) expect(source).toContain('knowledgeIds');
+  });
+
   it('sources the code-sample URL from the same env as servers() (B4M_OPENAPI_PROD_URL)', () => {
     const original = process.env.B4M_OPENAPI_PROD_URL;
     process.env.B4M_OPENAPI_PROD_URL = 'https://api.test.example';
@@ -221,6 +239,43 @@ describe('buildOpenApiDocument', () => {
     expect(new Set(publishedHeaders)).toEqual(new Set(expectedHeaders));
     const describedHeaders = [...doc.info.description.matchAll(/`(X-RateLimit-[A-Za-z-]+)`/g)].map(m => m[1]);
     expect(new Set(describedHeaders)).toEqual(new Set(expectedHeaders));
+    // 401/403 and the streaming completions endpoint carry no rate-limit headers.
+    const rateLimitsStart = doc.info.description.indexOf('## Rate limits');
+    const rateLimitsEnd = doc.info.description.indexOf('## Credits');
+    expect(rateLimitsStart).toBeGreaterThanOrEqual(0);
+    expect(rateLimitsEnd).toBeGreaterThan(rateLimitsStart);
+    expect(doc.info.description.slice(rateLimitsStart, rateLimitsEnd)).not.toMatch(/every response/i);
+  });
+
+  it('names the poll target of every operation that answers 202 in the Async jobs section', () => {
+    const description: string = doc.info.description;
+    const asyncStart = description.indexOf('## Async jobs');
+    const asyncEnd = description.indexOf('## Versioning');
+    // A renamed heading would make indexOf return -1 and slice() silently return a
+    // truncated tail; the assertions below would then check the wrong text.
+    expect(asyncStart).toBeGreaterThanOrEqual(0);
+    expect(asyncEnd).toBeGreaterThan(asyncStart);
+    const asyncJobs = description.slice(asyncStart, asyncEnd);
+    const queued = Object.entries(doc.paths as Record<string, Record<string, { responses?: object }>>)
+      .filter(([, item]) => Object.values(item).some(op => op.responses && '202' in op.responses))
+      .map(([path]) => path);
+    expect(queued.length).toBeGreaterThan(0);
+    for (const path of queued) {
+      expect(asyncJobs).toContain(`GET ${path}/{id}`);
+    }
+  });
+
+  it('states the shared 400-vs-422 split and the provider_rejected note in the Errors section', () => {
+    const description: string = doc.info.description;
+    const errorsStart = description.indexOf('## Errors');
+    const errorsEnd = description.indexOf('## Async jobs');
+    expect(errorsStart).toBeGreaterThanOrEqual(0);
+    expect(errorsEnd).toBeGreaterThan(errorsStart);
+    const errors = description.slice(errorsStart, errorsEnd);
+    expect(errors).toContain('malformed JSON body is `400`');
+    expect(errors).toContain('fails schema validation is `422`');
+    expect(errors).toContain('`errorCode: "provider_rejected"`');
+    expect(errors).toContain('your API key itself was accepted');
   });
 
   it('gives every tag used by an operation a top-level description', () => {
@@ -262,6 +317,13 @@ describe('buildOpenApiDocument', () => {
     expect(doc.components.schemas.synthesizeSpeechResponse413.properties.name).toBeUndefined();
   });
 
+  it('documents the oversized-audio 303 as a bodiless redirect with a Location header', () => {
+    const redirect = doc.paths['/api/ai/tts'].post.responses['303'];
+    expect(redirect).toBeDefined();
+    expect(redirect.content).toBeUndefined();
+    expect(redirect.headers.Location).toBeDefined();
+  });
+
   it('publishes the WINDOWED rate-limit header names the middleware actually sets', () => {
     // The unwindowed spelling is what the spec used to publish; nothing sets it,
     // so a client coding against it reads undefined.
@@ -289,6 +351,7 @@ describe('buildOpenApiDocument', () => {
       ['/api/sessions/{id}', 'put'],
       ['/api/v1/me', 'get'],
       ['/api/v1/credits', 'get'],
+      ['/api/v1/models', 'get'],
     ];
     for (const [path, method] of baseApiServed) {
       const headers = doc.paths[path][method].responses['200'].headers;

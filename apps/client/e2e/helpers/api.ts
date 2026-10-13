@@ -96,6 +96,8 @@ export async function apiCreateTestUser(
     password: string;
     isAdmin?: boolean;
     tags?: string[];
+    // Pass false to skip the server's PREDEFINED_USER_TAGS, so the user gets only `tags`.
+    includePredefinedTags?: boolean;
     emailVerified?: boolean;
     // Pass false to mint an UNCONSENTED user (for a spec that exercises the consent gate /
     // /accept-policies interstitial). Suppresses both the server-side stamp and the auto-accept
@@ -568,6 +570,28 @@ export async function apiUpdateDataLake(
     data: fields,
   });
   return response.status();
+}
+
+export interface ResearchConfigSummary {
+  id: string;
+  name: string;
+  model?: string;
+  maxResults: number;
+  maxProposals: number;
+  costCeilingMicroUsd: number;
+}
+
+export async function apiListResearchConfigs(
+  request: APIRequestContext,
+  token: string,
+  dataLakeId: string
+): Promise<ResearchConfigSummary[]> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/data-lakes/${dataLakeId}/research/configs`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok()) throw new Error(`List research configs failed: ${response.status()} ${await response.text()}`);
+  return ((await response.json()) as { data: ResearchConfigSummary[] }).data;
 }
 
 /**

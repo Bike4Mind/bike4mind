@@ -22,19 +22,23 @@ vi.mock('@server/auth/trustedDevice', () => ({ clearTrustedDeviceCookie: (...a: 
 
 const mockRevokeAllForUser = vi.fn();
 const mockFindById = vi.fn();
+const mockRemovePasskeys = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: any[]) => mockFindById(...a) },
   adminSettingsRepository: { findBySettingName: vi.fn(() => Promise.resolve(null)) },
   authSessionRepository: {},
   trustedDeviceRepository: { revokeAllForUser: (...a: any[]) => mockRevokeAllForUser(...a) },
+  passkeyCredentialRepository: { removeAllForUser: (...a: any[]) => mockRemovePasskeys(...a) },
 }));
 
 const mockDisableMFA = vi.fn();
 const mockForceResetMFA = vi.fn();
+const mockCanDisable = vi.fn(() => true);
 vi.mock('@bike4mind/services', () => ({
   mfaService: {
     disableMFA: (...a: any[]) => mockDisableMFA(...a),
     forceResetMFA: (...a: any[]) => mockForceResetMFA(...a),
+    userCanDisableMFA: () => mockCanDisable(),
   },
   userService: { revokeUserSessions: vi.fn(() => Promise.resolve()) },
 }));
@@ -54,16 +58,20 @@ const makeReqRes = (user: unknown, body?: unknown) => {
 
 const revokedEvents = () =>
   mockLogAuthAudit.mock.calls.filter(([, payload]: any[]) => payload.event === 'trusted_device_revoked');
+const passkeyRemovedEvents = () =>
+  mockLogAuthAudit.mock.calls.filter(([, payload]: any[]) => payload.event === 'passkey_removed');
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockRevokeAllForUser.mockResolvedValue(2);
+  mockRemovePasskeys.mockResolvedValue(1);
 });
 
 describe('/api/auth/mfa/disable', () => {
   beforeEach(() => {
-    mockFindById.mockResolvedValue({ id: 'user-1' });
+    mockFindById.mockResolvedValue({ id: 'user-1', mfa: { totpEnabled: true } });
     mockDisableMFA.mockResolvedValue({ success: true });
+    mockCanDisable.mockReturnValue(true);
   });
 
   it('revokes every trust and clears this browser cookie', async () => {
@@ -84,6 +92,37 @@ describe('/api/auth/mfa/disable', () => {
     await disableHandler(req as any, res as any);
 
     expect(revokedEvents()).toHaveLength(0);
+  });
+
+  it('removes every passkey, since they are an alternative to the second factor being turned off', async () => {
+    const { req, res } = makeReqRes({ id: 'user-1' });
+
+    await disableHandler(req as any, res as any);
+
+    expect(mockRemovePasskeys).toHaveBeenCalledWith('user-1');
+    expect(passkeyRemovedEvents()[0][1]).toMatchObject({ metadata: { removed: 1, reason: 'mfa_disabled' } });
+  });
+
+  it('removes passkeys before turning MFA off, so a failure cannot orphan them', async () => {
+    const order: string[] = [];
+    mockRemovePasskeys.mockImplementation(async () => (order.push('passkeys'), 1));
+    mockDisableMFA.mockImplementation(async () => (order.push('disable'), { success: true }));
+    const { req, res } = makeReqRes({ id: 'user-1' });
+
+    await disableHandler(req as any, res as any);
+
+    expect(order).toEqual(['passkeys', 'disable']);
+  });
+
+  it('keeps passkeys when the enforcement policy refuses the disable', async () => {
+    mockCanDisable.mockReturnValue(false);
+    mockDisableMFA.mockRejectedValue(new Error('MFA cannot be disabled due to enforcement policy.'));
+    const { req, res } = makeReqRes({ id: 'user-1' });
+
+    await disableHandler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockRemovePasskeys).not.toHaveBeenCalled();
   });
 });
 
@@ -114,5 +153,19 @@ describe('/api/auth/mfa/force-reset', () => {
 
     expect(res._getStatusCode()).toBe(403);
     expect(mockRevokeAllForUser).not.toHaveBeenCalled();
+    expect(mockRemovePasskeys).not.toHaveBeenCalled();
+  });
+
+  it("removes the target user's passkeys so none can satisfy MFA after the reset", async () => {
+    const { req, res } = makeReqRes({ id: 'admin-1', isAdmin: true }, { userId: 'target-1' });
+
+    await forceResetHandler(req as any, res as any);
+
+    expect(mockRemovePasskeys).toHaveBeenCalledWith('target-1');
+    expect(passkeyRemovedEvents()[0][1]).toMatchObject({
+      userId: 'target-1',
+      actorUserId: 'admin-1',
+      metadata: { reason: 'mfa_force_reset' },
+    });
   });
 });

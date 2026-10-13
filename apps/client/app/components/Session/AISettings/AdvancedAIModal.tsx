@@ -1,4 +1,4 @@
-import React, { ChangeEvent, startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { ChangeEvent, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import {
   Box,
@@ -97,6 +97,7 @@ import { MobileTopBar } from '@client/app/components/MobileTopBar';
 import { brand, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/colors';
 
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
+import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import {
   ASPECT_RATIO_INERT_NOTE,
@@ -105,7 +106,7 @@ import {
   withInertNote,
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
-import { defaultImageSize, getAvailableImageSizes } from './imageSizeOptions';
+import { defaultImageSize, getAvailableImageSizes, showsImageSizeRow } from './imageSizeOptions';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { TabIntro } from './TabIntro';
@@ -405,6 +406,7 @@ interface SelectedModelDetailsProps {
   ImageModels: typeof ImageModels;
   tools: B4MLLMTools[];
   onRollDice: () => void;
+  disabledTools?: readonly string[];
   isMobile: boolean;
   max_tokens: number;
   temperature: number;
@@ -434,6 +436,8 @@ interface AdvancedAIModalProps {
   setStream: (enabled: boolean) => void;
   voiceOver: boolean;
   onRollDice: () => void;
+  /** The current session's `disabledTools`, hidden from the Tools section. */
+  disabledTools?: readonly string[];
 }
 
 const ResetButton: React.FC<{
@@ -633,6 +637,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   ImageModels,
   tools,
   onRollDice,
+  disabledTools,
   isMobile,
   max_tokens,
   temperature,
@@ -657,9 +662,9 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   // Provider and capability notices, rendered as one stacked block below the description.
   const notices = [
     // Same test the picker groups by, so the notice can never disagree with the provider
-    // section a model is filed under. A name-only check missed Sora.
+    // section a model is filed under. A name-only check missed models whose id does not carry the provider name.
     ...(getModelBackend(modelInfo) === 'OpenAI'
-      ? ['This model shares session content with OpenAI for training purposes']
+      ? ['This model is provided by OpenAI. Your session content is processed by OpenAI under its API data policy.']
       : []),
     // The tools section is hidden outright for these models, so this line is the only
     // thing that explains the absence.
@@ -841,6 +846,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   priceTier={priceTierInfo}
                   modelSpeed={modelSpeed}
                   statsLoading={metricsLoading}
+                  model={modelInfo}
                   size={INDICATOR_SIZE}
                   filled
                 />
@@ -879,6 +885,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               onRollDice={onRollDice}
               columns={isMobile ? 1 : 2}
               readOnly={readOnly}
+              disabledTools={disabledTools}
             />
           </Box>
           <Divider
@@ -1532,6 +1539,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   setStream,
   voiceOver,
   onRollDice,
+  disabledTools,
 }) => {
   const theme = useTheme();
   const mode = theme.palette.mode;
@@ -1670,19 +1678,19 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
     : { tier: 'Low', variant: 'green' };
 
   const handleModelSelection = useCallback(
-    (newModel: ModelName) => {
-      if (newModel === model) return;
+    (newModel: ModelName): boolean => {
+      if (newModel === model) return false;
       const newModelInfo = modelInfoRepo?.find(m => m.id === newModel);
-      if (newModelInfo) {
-        startTransition(() => {
-          setLLM(buildModelSelectionPatch(newModelInfo));
-        });
-        if (currentSessionId) {
-          void updateSessionToServer({ id: currentSessionId, lastUsedModel: newModel }).catch(err =>
-            console.error('Failed to persist model selection:', err)
-          );
-        }
+      if (!newModelInfo) return false;
+      startTransition(() => {
+        setLLM(buildModelSelectionPatch(newModelInfo));
+      });
+      if (currentSessionId) {
+        void updateSessionToServer({ id: currentSessionId, lastUsedModel: newModel }).catch(err =>
+          console.error('Failed to persist model selection:', err)
+        );
       }
+      return true;
     },
     [modelInfoRepo, model, setLLM, currentSessionId]
   );
@@ -1709,9 +1717,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
 
   const imageSettings = useMemo(
     () => [
-      ...(isKontextModel
-        ? []
-        : [
+      ...(showsImageSizeRow(shownModel)
+        ? [
             {
               label: 'Image Size',
               type: 'select' as const,
@@ -1723,7 +1730,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               tooltip: FIELD_TOOLTIPS.imageSize,
               testId: 'model-details-size-select',
             },
-          ]),
+          ]
+        : []),
       {
         label: 'Quality',
         tooltip: FIELD_TOOLTIPS.imageQuality,
@@ -1837,6 +1845,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   );
 
   const handleViewDetails = (model: ModelInfo) => {
+    setSelectionAnnouncement(null);
     setDetailsModel(model);
     setModelDetailsOpen(true);
   };
@@ -1844,6 +1853,19 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   const handleDetailsClose = () => {
     setModelDetailsOpen(false);
     setDetailsModel(null);
+    setSelectionAnnouncement(null);
+  };
+
+  // "Use this model" unmounts itself (it becomes the "Current model" label), so focus moves to the
+  // back button rather than falling to <body>, and the persistent status region says what changed.
+  const detailsBackButtonRef = useRef<HTMLButtonElement>(null);
+  // The count keys the status node so an identical repeat message remounts and is re-announced.
+  const [selectionAnnouncement, setSelectionAnnouncement] = useState<{ text: string; count: number } | null>(null);
+  const handleUseShownModel = (shown: ModelInfo) => {
+    if (handleModelSelection(shown.id)) {
+      setSelectionAnnouncement(previous => ({ text: `Now using ${shown.name}`, count: (previous?.count ?? 0) + 1 }));
+    }
+    detailsBackButtonRef.current?.focus();
   };
 
   // When opened without a specific model (e.g. the composer Templates button),
@@ -2163,6 +2185,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                   variant="plain"
                   size="sm"
                   data-testid="model-details-back-btn"
+                  ref={detailsBackButtonRef}
                   onClick={handleDetailsClose}
                   startDecorator={<ArrowBackIcon sx={{ fontSize: '16px' }} />}
                   sx={{
@@ -2180,6 +2203,10 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 >
                   Back to models
                 </Button>
+
+                <Box role="status" data-testid="model-selection-status" sx={visuallyHidden}>
+                  {selectionAnnouncement && <span key={selectionAnnouncement.count}>{selectionAnnouncement.text}</span>}
+                </Box>
 
                 {/* Commit control. Opening this screen no longer selects the model (see
                     ModelSelection's onSettingsClick), so it is a preview until this is pressed -
@@ -2210,7 +2237,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                       size="sm"
                       data-testid="model-use-btn"
                       disabled={shown.disabled}
-                      onClick={() => handleModelSelection(shown.id)}
+                      onClick={() => handleUseShownModel(shown)}
                       sx={{ fontSize: '14px', fontWeight: 400, flexShrink: 0 }}
                     >
                       Use this model
@@ -2277,6 +2304,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 ImageModels={ImageModels}
                 tools={tools}
                 onRollDice={onRollDice}
+                disabledTools={disabledTools}
                 isMobile={isMobile}
                 max_tokens={safeMaxTokens}
                 temperature={safeTemperature}

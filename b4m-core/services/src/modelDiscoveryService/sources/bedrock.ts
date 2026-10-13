@@ -214,10 +214,9 @@ export function createBedrockSource(options: BedrockSourceOptions): DiscoverySou
     kind: 'provider',
     // First run probes availability per model, ~300 calls at concurrency 4.
     deadlineMs: PAGINATED_SOURCE_DEADLINE_MS,
-    // Bedrock is IAM-authenticated, so there is no key to check - but under
-    // B4M_SELF_HOST the AWS credentials are the local MinIO ones, and listing
-    // Bedrock models there offers choices that can only fail.
-    isConfigured: (creds: DiscoveryCredentials) => creds.awsIam,
+    // IAM-authenticated: hosted uses the role, self-host needs BEDROCK_AWS_*
+    // (its AWS_* pair is the local MinIO credential).
+    isConfigured: (creds: DiscoveryCredentials) => creds.bedrock,
     async fetch(ctx: DiscoveryFetchContext): Promise<SourceResult> {
       let client: BedrockControlPlane;
       try {

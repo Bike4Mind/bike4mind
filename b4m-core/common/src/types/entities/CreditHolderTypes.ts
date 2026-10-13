@@ -63,3 +63,19 @@ export function isCreditHolder(entity: any): entity is ICreditHolder {
       entity.lastCreditsPurchasedAt instanceof Date)
   );
 }
+
+/**
+ * Credits moved out of an owner's balance ahead of a paid provider call. Plain JSON-serializable
+ * data, so a job document can carry it and a different process can settle or release it.
+ * Produced by @bike4mind/services holdCredits (exported there as CreditHold).
+ */
+export type CreditHoldRecord = {
+  ownerId: string;
+  ownerType: CreditHolderType.User | CreditHolderType.Organization;
+  /** The actor: attribution and per-member usage tracking, even when the org pays. */
+  userId: string;
+  organizationId: string | null;
+  reservedCredits: number;
+  /** The owner's balance right after the hold; the ledger row's balance when no refund lands. */
+  balanceAfterHold: number;
+};

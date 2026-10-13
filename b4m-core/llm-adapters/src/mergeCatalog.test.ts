@@ -5,7 +5,7 @@ import { getAvailableModels, setModelCatalogProvider, setModelPriceRowsProvider 
 import { mergeCatalog, mergeCatalogWithDrops, resolveCatalogRecords } from './mergeCatalog';
 import type { BackendGateContext } from './backendGate';
 
-const NO_KEYS: BackendGateContext = { apiKeys: null, isSelfHost: false };
+const NO_KEYS: BackendGateContext = { apiKeys: null, isSelfHost: false, bedrockReachable: true };
 
 const seedModel = (overrides: Partial<ModelInfo> = {}): ModelInfo => ({
   id: ChatModels.GPT4_1,
@@ -318,6 +318,7 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     const { models, dropped, gated } = mergeCatalogWithDrops([], [catalogOnly(invocable)], {
       apiKeys: { xai: 'xai-key' },
       isSelfHost: false,
+      bedrockReachable: true,
     });
 
     expect(dropped).toEqual([]);
@@ -332,12 +333,14 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     const { models } = mergeCatalogWithDrops([], [catalogOnly(invocable)], {
       apiKeys: { xai: 'xai-key' },
       isSelfHost: false,
+      bedrockReachable: true,
     });
     expect(models[0]).toMatchObject({ max_tokens: 4096, maxOutputTokensDerived: true });
 
     const { models: declared } = mergeCatalogWithDrops([], [catalogOnly({ ...invocable, maxOutputTokens: 32_000 })], {
       apiKeys: { xai: 'xai-key' },
       isSelfHost: false,
+      bedrockReachable: true,
     });
     expect(declared[0].max_tokens).toBe(32_000);
     expect(declared[0].maxOutputTokensDerived).toBeUndefined();
@@ -348,6 +351,7 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     const { models, dropped } = mergeCatalogWithDrops([], [catalogOnly({ ...invocable, adapterFamily: 'voyageai' })], {
       apiKeys: { xai: 'xai-key' },
       isSelfHost: false,
+      bedrockReachable: true,
     });
     expect(models).toEqual([]);
     expect(dropped).toEqual([{ modelId: 'grok-9', reason: expect.stringContaining('voyageai') }]);
@@ -364,7 +368,7 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
           adapterFamily: 'bedrock-anthropic',
         }),
       ],
-      { apiKeys: {}, isSelfHost: false }
+      { apiKeys: {}, isSelfHost: false, bedrockReachable: true }
     );
     expect(dropped).toEqual([]);
     expect(models.map(m => m.id)).toEqual(['global.anthropic.claude-sonnet-9']);
@@ -375,6 +379,7 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     const { models, dropped } = mergeCatalogWithDrops([], [catalogOnly(noFamily)], {
       apiKeys: { xai: 'xai-key' },
       isSelfHost: false,
+      bedrockReachable: true,
     });
     expect(models).toEqual([]);
     expect(dropped).toEqual([{ modelId: 'grok-9', reason: 'no adapterFamily' }]);
@@ -385,6 +390,7 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     const { models, dropped } = mergeCatalogWithDrops([], [catalogOnly(noProfile)], {
       apiKeys: { xai: 'xai-key' },
       isSelfHost: false,
+      bedrockReachable: true,
     });
     expect(models).toEqual([]);
     expect(dropped).toEqual([{ modelId: 'grok-9', reason: 'no dispatchProfile' }]);
@@ -394,7 +400,7 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     const { models, dropped } = mergeCatalogWithDrops(
       [],
       [catalogOnly({ ...invocable, lifecycle: { status: 'discovered' } })],
-      { apiKeys: { xai: 'xai-key' }, isSelfHost: false }
+      { apiKeys: { xai: 'xai-key' }, isSelfHost: false, bedrockReachable: true }
     );
     expect(models).toEqual([]);
     expect(dropped).toEqual([{ modelId: 'grok-9', reason: expect.stringContaining('discovered') }]);
@@ -427,6 +433,7 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     const { models, dropped } = mergeCatalogWithDrops([], [catalogOnly({ ...invocable, type: 'embedding' })], {
       apiKeys: { xai: 'xai-key' },
       isSelfHost: false,
+      bedrockReachable: true,
     });
     expect(models).toEqual([]);
     expect(dropped).toEqual([{ modelId: 'grok-9', reason: 'unsupported model type "embedding"' }]);
@@ -437,6 +444,7 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     const { models, dropped } = mergeCatalogWithDrops([], [catalogOnly({ ...noVendor, contextWindow: 'lots' })], {
       apiKeys: { xai: 'xai-key' },
       isSelfHost: false,
+      bedrockReachable: true,
     });
     expect(models).toEqual([]);
     expect(dropped).toEqual([{ modelId: 'grok-9', reason: 'incomplete record: missing vendor, contextWindow' }]);
@@ -476,7 +484,11 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
 
     expect(mergeCatalogWithDrops([], [fluxRow], NO_KEYS).models).toEqual([]);
     expect(
-      mergeCatalogWithDrops([], [fluxRow], { apiKeys: { bfl: 'k' }, isSelfHost: false }).models.map(m => m.id)
+      mergeCatalogWithDrops([], [fluxRow], {
+        apiKeys: { bfl: 'k' },
+        isSelfHost: false,
+        bedrockReachable: true,
+      }).models.map(m => m.id)
     ).toEqual(['flux-99']);
   });
 
@@ -484,7 +496,7 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     const { models, gated } = mergeCatalogWithDrops(
       [],
       [catalogOnly({ ...invocable, backend: ModelBackend.VoyageAI, adapterFamily: 'xai' })],
-      { apiKeys: { voyageai: 'key' }, isSelfHost: false }
+      { apiKeys: { voyageai: 'key' }, isSelfHost: false, bedrockReachable: true }
     );
     expect(models).toEqual([]);
     expect(gated).toBe(1);

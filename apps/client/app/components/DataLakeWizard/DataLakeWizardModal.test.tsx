@@ -35,10 +35,15 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
 // ConfigStep reads the lake list for its duplicate-name hint; stub it so this test
 // needs no QueryClientProvider.
 const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fileTagPrefix: string } | undefined }));
+const prefixPreview = vi.hoisted(() => ({
+  current: undefined as { slug: string; tagPrefix: string | null } | undefined,
+}));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: [] }),
   useDuplicatePrefixLake: () => prefixClash.current,
+  activeOrgId: () => undefined,
+  useDataLakeSlugPreview: () => ({ data: prefixPreview.current }),
   usePromoteDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 // SourceSelectionStep renders LakeSourceConnectActions, which pulls in React Query (useConfig /
@@ -48,6 +53,22 @@ vi.mock('@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions', 
 }));
 vi.mock('@client/app/components/DataLakeWizard/steps/DrivePendingConnectAction', () => ({
   default: () => null,
+}));
+// The source cards and the GitHub panel read the account scope through react-query; this file is
+// about the wizard's step order and commit gating, and every seed below answers the source question
+// directly, so neither screen is what these tests render.
+vi.mock('@client/app/components/DataLakeWizard/steps/CreateSourceCards', () => ({
+  default: () => <div data-testid="create-source-cards" />,
+}));
+vi.mock('@client/app/components/DataLakeWizard/steps/GitHubCreatePanel', () => ({
+  default: () => <div data-testid="github-create-panel" />,
+}));
+vi.mock('@client/app/components/datalake/createLakeSources', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/components/datalake/createLakeSources')>()),
+  useCreateLakeScope: () => ({ organizationId: undefined, isOrgOwnerOrManager: false }),
+}));
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({ isAdminFeatureEnabled: () => true }),
 }));
 // ConfigStep's embedding-cost estimate reads admin settings via react-query; stub it so this
 // wizard test needs no QueryClientProvider. Empty values are enough - the estimate renders
@@ -65,6 +86,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
   beforeEach(() => {
     prefixClash.current = undefined;
+    prefixPreview.current = undefined;
     toastMock.error.mockClear();
     batchUploadMutate.mockClear();
     driveCommitMutate.mockClear();
@@ -72,6 +94,7 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
       isOpen: true,
       step: 'config',
       targetLake: null,
+      createSource: 'upload',
       // Configure is only reachable with a source in hand, and the button gates on that too - so
       // seed one file, or every prefix assertion below would be measuring the missing-source gate.
       allFiles: [{ relativePath: 'a.txt', size: 1, excluded: false }] as never,
@@ -278,6 +301,30 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
     expect(screen.getByTestId('wizard-start-upload-btn')).not.toBeDisabled();
   });
 
+  // The overlap lookup above only sees attachable lakes; an archived or deleted one still holds
+  // its prefix, and only the server preview knows.
+  it('disables Start Upload when the server reports the typed prefix held by a lake the form cannot see', () => {
+    prefixPreview.current = { slug: 'x', tagPrefix: 'docs-1:' };
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeDisabled();
+  });
+
+  it('leaves Start Upload enabled while the server preview has no answer', () => {
+    prefixPreview.current = { slug: 'x', tagPrefix: null };
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).not.toBeDisabled();
+  });
+
   it('leaves Start Upload enabled when the prefix is free', () => {
     render(
       <TestWrapper>
@@ -303,6 +350,8 @@ describe('DataLakeWizardModal - streamlined step order', () => {
       isOpen: true,
       step: 'source',
       targetLake: (over.targetLake ?? null) as never,
+      // The source question is answered before this step shows anything else (#3817).
+      createSource: 'upload',
       allFiles: [{ relativePath: 'a.txt', size: 1, excluded: false }] as never,
       optionalSteps: over.optionalSteps ?? { preview: false, taxonomy: false },
       config: { ...state.config, name: over.name ?? 'Legal Contracts', tagPrefix: '' },
@@ -317,6 +366,27 @@ describe('DataLakeWizardModal - streamlined step order', () => {
 
   afterEach(() => {
     useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  // The source question comes first in create mode (#3817), so Next cannot advance past a screen
+  // that has not been answered - and the GitHub card never advances through the wizard at all: its
+  // Continue creates the lake server-side and leaves the page.
+  it('blocks Next until a source card is picked', () => {
+    seedSource({});
+    useDataLakeWizardStore.setState({ createSource: null });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
+  });
+
+  it('keeps Next disabled on the GitHub card, which leaves the wizard instead of advancing', () => {
+    seedSource({});
+    useDataLakeWizardStore.setState({ createSource: 'github' });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
   });
 
   it('shows only source, configure and upload when neither optional step is enabled', () => {
@@ -430,6 +500,7 @@ describe('DataLakeWizardModal - Drive-only create', () => {
       isOpen: true,
       step: over.step ?? 'source',
       targetLake: null,
+      createSource: 'googleDrive',
       allFiles: [],
       pendingDriveFolder: driveFolder,
       config: { ...state.config, name: over.name ?? 'Drive Only Lake', tagPrefix: 'drive:' },
@@ -549,6 +620,7 @@ describe('DataLakeWizardModal - storage limit', () => {
       isOpen: true,
       step,
       targetLake: null,
+      createSource: 'upload',
       allFiles: [{ relativePath: 'a.txt', size: 10, type: 'text/plain', excluded: false, isDuplicate: false }] as never,
       config: {
         name: 'Test Lake',

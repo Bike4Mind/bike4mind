@@ -16,6 +16,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ModelBackend,
   buildPublicSSEEvent,
+  buildSSEEvent,
   type CompletionInfo,
   type IMessage,
   type ModelInfo,
@@ -112,6 +113,28 @@ describe('AnthropicBackend tags reasoning frames', () => {
     }
 
     expect(publicStreamText(frames)).toBe(PROSE);
+  });
+
+  it('tags the synthetic close when the stream ends inside a thinking block', async () => {
+    // No content_block_stop / message_stop: the adapter closes the block itself.
+    const backend = build(thinkingThenTextEvents().slice(0, 3));
+    const { frames, cb } = captureCb();
+
+    await expect(
+      backend.complete(
+        'claude-sonnet-4-5-20250929',
+        [{ role: 'user', content: 'weather in Paris?' }],
+        { stream: true, tools: [] },
+        cb
+      )
+    ).rejects.toThrow(/without message_stop/);
+
+    const closes = frames.filter(f => frameText(f).includes('</think>'));
+    expect(closes).toHaveLength(1);
+    expect(closes[0].info?.channel).toBe('reasoning');
+    // Nothing the reasoning produced may reach either stream builder.
+    expect(frames.map(f => buildSSEEvent(f.text, f.info).text).join('')).toBe('');
+    expect(publicStreamText(frames)).toBe('');
   });
 });
 

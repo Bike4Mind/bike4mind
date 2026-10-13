@@ -36,8 +36,9 @@ const PREMIUM_TOOL_MAP = 'premium-generated/premiumLlmTools.generated';
  * real break (a moved or misspelled handler) and fails the test.
  *
  * The rule itself - every tool-capable handler carries `toolRuntimeAssets()` - deliberately
- * does NOT exempt them: `overwatchAnalytics`, `optihashiRunCompletion` and `bobRunWorker` are
- * configured in this repo (infra/queues.ts) and so are this repo's to guard.
+ * does NOT exempt them: `overwatchAnalytics`, `optihashiRunCompletion`, `bobRunWorker` and
+ * `libreoncologyAudioRender` are configured in this repo (infra/queues.ts) and so are this
+ * repo's to guard.
  */
 const OVERLAY_HANDLER_PREFIX = 'apps/client/server/premium-generated/';
 
@@ -431,7 +432,7 @@ describe('Lambdas that can execute the premium tool set', () => {
     // edge - a generated stub is `export * from '@bike4mind/premium-<x>/...'`, so the walk
     // ends there and the handler is skipped as unreachable rather than as exempt. Overlay
     // bundles therefore still need their own guard in the overlay repo. Checked at the time
-    // of writing: none of the three overlay handlers reaches the tool map.
+    // of writing: none of the four overlay handlers reaches the tool map.
     const missing = handlerDeclarations
       .filter(declaration => {
         const entry = resolveSourceFile(path.join(REPO_ROOT, declaration.handler.split('.').slice(0, -1).join('.')));

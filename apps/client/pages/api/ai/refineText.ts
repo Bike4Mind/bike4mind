@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { cacheService } from '@bike4mind/services';
-import { refineText, refineTextLLMSchema } from '@bike4mind/services/llm';
+import { refineText, refineTextLLMSchema } from '@bike4mind/services/llm/refineText';
 import { IMessage, ApiKeyScope } from '@bike4mind/common';
 import { cacheRepository } from '@bike4mind/database';
 import { BadRequestError } from '@server/utils/errors';

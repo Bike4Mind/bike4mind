@@ -1,7 +1,7 @@
 // GET /api/organizations/:id/groups
 // List an organization's groups, each with its current members.
 
-import { organizationRepository } from '@bike4mind/database';
+import { organizationRepository } from '@bike4mind/database/infra';
 import { groupRepository } from '@bike4mind/database/social';
 import { userRepository } from '@bike4mind/database/auth';
 import { organizationService } from '@bike4mind/services';

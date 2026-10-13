@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
-    findById: vi.fn(),
     subtractCredits: vi.fn(),
     recordUsage: vi.fn(),
     computeTtsUsd: vi.fn(),
@@ -21,12 +20,12 @@ vi.mock('@bike4mind/services', () => ({
   creditService: { subtractCredits: (...a: unknown[]) => mocks.subtractCredits(...a) },
 }));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
+  userRepository: {},
   creditTransactionRepository: {},
   usageEventRepository: { record: (...a: unknown[]) => mocks.recordUsage(...a) },
 }));
 
-import { assertTtsCreditsAvailable, deductTtsCredits, InsufficientTtsCreditsError } from './deductTtsCredits';
+import { deductTtsCredits } from './deductTtsCredits';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 
@@ -34,28 +33,6 @@ beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.recordUsage.mockResolvedValue(undefined);
   mocks.subtractCredits.mockResolvedValue(undefined);
-});
-
-describe('assertTtsCreditsAvailable', () => {
-  it('throws InsufficientTtsCreditsError when the user is not found', async () => {
-    mocks.findById.mockResolvedValue(null);
-    await expect(assertTtsCreditsAvailable('u1')).rejects.toBeInstanceOf(InsufficientTtsCreditsError);
-  });
-
-  it('throws when the balance is zero or negative', async () => {
-    mocks.findById.mockResolvedValue({ currentCredits: 0 });
-    await expect(assertTtsCreditsAvailable('u1')).rejects.toThrow(/Insufficient credits/);
-  });
-
-  it('resolves when the user has a positive balance', async () => {
-    mocks.findById.mockResolvedValue({ currentCredits: 1 });
-    await expect(assertTtsCreditsAvailable('u1')).resolves.toBeUndefined();
-  });
-
-  it('treats a missing currentCredits field as zero balance', async () => {
-    mocks.findById.mockResolvedValue({});
-    await expect(assertTtsCreditsAvailable('u1')).rejects.toBeInstanceOf(InsufficientTtsCreditsError);
-  });
 });
 
 describe('deductTtsCredits', () => {

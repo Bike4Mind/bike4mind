@@ -1,4 +1,4 @@
-import { isPlaceholderApiKey, type IAdminSettings } from '@bike4mind/common';
+import { bedrockClientCredentials, isPlaceholderApiKey, type IAdminSettings } from '@bike4mind/common';
 import { getEffectiveLLMApiKeys, type GetEffectiveLLMApiKeysAdapters } from '@bike4mind/auth/apiKeyService';
 import type { DiscoveryCredentials, DiscoveryEnv } from './types';
 
@@ -91,6 +91,7 @@ export async function getDiscoveryCredentials(
     ollama: usable(keys.ollama),
     imageGen: usable(keys.imageGen),
     elevenlabs: usable(elevenLabsSetting?.settingValue),
+    bedrock: bedrockClientCredentials(env) !== null,
     awsIam: !isSelfHost,
     isSelfHost,
   };

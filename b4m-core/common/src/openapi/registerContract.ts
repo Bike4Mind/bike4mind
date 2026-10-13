@@ -11,7 +11,7 @@ import type { EndpointContract } from '../api-contract';
 type ContractSchema = z.ZodTypeAny | { type: 'string'; contentEncoding: 'binary' };
 type ContractResponse = {
   description: string;
-  content: Record<string, { schema: ContractSchema }>;
+  content?: Record<string, { schema: ContractSchema }>;
   headers?: Record<string, { description: string; schema: { type: 'string' } }>;
 };
 
@@ -107,16 +107,12 @@ function withAccurateCoercedParams<T extends z.ZodObject<z.ZodRawShape>>(objectS
  *
  * This is the ONLY place a contract's schemas meet `.openapi()` - safe here
  * because this module imports ./registry, which runs `extendZodWithOpenApi`.
- * Runs at generate time only. The request body uses `requestDoc` when present
- * (the OpenAPI-representable projection) and falls back to `request`.
+ * Runs at generate time only.
  */
 export function registerContract(contract: EndpointContract): void {
+  // A public operation gets an explicit empty list: omitting `security` fails redocly's security-defined rule.
   const security =
-    contract.auth === 'jwtOnly'
-      ? JWT_SECURITY_REQUIREMENT
-      : contract.auth === 'public'
-        ? undefined
-        : SECURITY_REQUIREMENT;
+    contract.auth === 'jwtOnly' ? JWT_SECURITY_REQUIREMENT : contract.auth === 'public' ? [] : SECURITY_REQUIREMENT;
 
   // Error bodies reuse the single shared ErrorResponse (or, for a declared scope 403,
   // ScopeForbiddenResponse) component ($ref) instead of
@@ -168,7 +164,7 @@ export function registerContract(contract: EndpointContract): void {
 
     responses[status] = {
       description: spec.description,
-      content,
+      ...(!spec.noBody && { content }),
       ...(spec.headers && {
         headers: Object.fromEntries(
           Object.entries(spec.headers).map(([name, description]) => [
@@ -181,16 +177,17 @@ export function registerContract(contract: EndpointContract): void {
   }
 
   // Any NON-streaming contract with a request body, path params, or query params
-  // returns 422 on validation failure. Body validation: both adapters guarantee it
-  // (Next: ZodError -> errorHandler -> UnprocessableEntity; Lambda: safeParse ->
-  // 422). Path/query-param validation currently only runs on the Next adapter (see
-  // the `pathParams`/`queryParams` doc comments in api-contract/types.ts) -
-  // documenting 422 here regardless is still correct for every contract actually
-  // served today. Auto-document it (unless the contract declares its own 422).
+  // documents its validation failure status. 422 is the default; legacy routes can
+  // preserve a published 400 with validationErrorStatus.
   // Streaming endpoints are excluded: they open the stream first, so a bad body
-  // arrives as an in-band SSE `error` event, not a 422 JSON body.
-  if ((contract.request || contract.pathParams || contract.queryParams) && !contract.streaming && !responses['422']) {
-    responses['422'] = {
+  // arrives as an in-band SSE `error` event, not a JSON error body.
+  const validationStatus = contract.validationErrorStatus ?? 422;
+  if (
+    (contract.request || contract.pathParams || contract.queryParams) &&
+    !contract.streaming &&
+    !responses[String(validationStatus)]
+  ) {
+    responses[String(validationStatus)] = {
       description: 'Request failed validation.',
       content: { 'application/json': { schema: ErrorResponse } },
     };
@@ -235,7 +232,7 @@ export function registerContract(contract: EndpointContract): void {
     };
   }
 
-  const requestSchema = contract.requestDoc ?? contract.request;
+  const requestSchema = contract.request;
   // No `.openapi(name)` here: zod-to-openapi always inlines `request.params`/
   // `request.query` into the operation's `parameters` array rather than a
   // referenceable component, so a name would never appear in the output - passing
@@ -259,7 +256,7 @@ export function registerContract(contract: EndpointContract): void {
             ...(query && { query }),
             ...(requestSchema && {
               body: {
-                required: true,
+                required: contract.requestBodyRequired ?? true,
                 content: {
                   'application/json': {
                     schema: requestSchema.openapi(`${contract.operationId}Request`, {

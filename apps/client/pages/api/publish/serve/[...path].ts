@@ -8,7 +8,6 @@ import type { Types } from 'mongoose';
 import { getPublishedArtifactsStorage } from '@server/utils/storage';
 import {
   PublishedArtifact,
-  User,
   liveShareTokens,
   shareTokenFilter,
   type PublishedArtifactShareToken,
@@ -18,6 +17,7 @@ import {
   checkShareGrant,
   checkVisibility,
   collectInlineAssets,
+  loadLiveOwner,
   prepareShareMeta,
   recordGatedView,
   renderBundleLoaderShell,
@@ -33,6 +33,7 @@ import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
 import { requestHasGateProof } from '@server/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
+import { displayReplyTitleFromLine, replyFirstLine } from '@server/services/publish/plainTitle';
 import {
   buildBundleScriptSrc,
   escapeHtml,
@@ -45,10 +46,16 @@ import {
 } from '@server/services/publish/viewerSecurity';
 import {
   buildShareFooterHtml,
+  pickSharedByName,
   buildSignupGateHtml,
+  hasShareFooterCardHtml,
+  hasSignupGateHtml,
+  replaceSignupGateHtml,
   shouldShowSignupGate,
+  stripShareFooterCtaBeforeGate,
   stripSignupGateHtml,
 } from '@client/app/utils/shareFooter';
+import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
 // Use require for all Prism imports so ESM/CJS interop can't split the singleton:
 // language component files call require('../prism-core') and must get the exact same
 // object reference that our highlight calls use.
@@ -199,6 +206,19 @@ function runShim(
 const APP_HOST_SRC = PUBLISH_HOST ? `https://${PUBLISH_HOST}` : '';
 // Brand-driven fallback for shared-artifact titles; neutral when APP_NAME is unset.
 const SHARED_FALLBACK_TITLE = process.env.APP_NAME ? `Shared from ${process.env.APP_NAME}` : 'Shared';
+// Reply rows saved before deriveTitle stripped markers still carry them, so strip those on read (see
+// displayReplyTitle). Explicit reply titles and fabfile/bundle names are left verbatim.
+// The first line is memoized per artifact object (one per request) so share meta, viewer and export
+// parse the reply body at most once between them.
+const firstLineCache = new WeakMap<object, string | undefined>();
+const cachedReplyFirstLine = (artifact: { renderedBody?: string }): string | undefined => {
+  if (!firstLineCache.has(artifact)) firstLineCache.set(artifact, replyFirstLine(artifact.renderedBody ?? ''));
+  return firstLineCache.get(artifact);
+};
+const plainTitle = (title: string, artifact: { source: { kind: string }; renderedBody?: string }): string =>
+  artifact.source.kind === 'reply'
+    ? displayReplyTitleFromLine(title, cachedReplyFirstLine(artifact)) || SHARED_FALLBACK_TITLE
+    : title;
 const withAppHost = (base: string) => (APP_HOST_SRC ? `${base} ${APP_HOST_SRC}` : base);
 const ASSET_CSP = [
   "default-src 'none'",
@@ -320,6 +340,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   if (!artifact) {
     // Unknown OR revoked token -> plain 404 (never 401/403), so a prober can't
     // distinguish a revoked/never-existed token from a private artifact.
+    return res.status(404).json({ error: 'Not found' });
+  }
+  // Nothing is served on behalf of a deleted, banned or suspended account - the same plain 404,
+  // so the cases stay indistinguishable. Backstop for account removal paths that skip
+  // purgeUserPublishedArtifacts; also supplies the "Shared by" name for the viewer page.
+  const owner = await loadLiveOwner(artifact.ownerId);
+  if (!owner) {
     return res.status(404).json({ error: 'Not found' });
   }
 
@@ -567,7 +594,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       const body =
         exportFormat === 'md'
           ? buildMarkdownExport(
-              artifact.title || SHARED_FALLBACK_TITLE,
+              plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact),
               artifact.description,
               replyBodyForExport(artifact)
             )
@@ -576,7 +603,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
         gateView: gateViewAudit,
         shareTokenEntryId,
       });
-      return sendExport(res, exportFormat, artifact.title, body, exportCacheControl);
+      return sendExport(
+        res,
+        exportFormat,
+        plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact),
+        body,
+        exportCacheControl
+      );
     }
     // Reply/fabfile artifact sub-document (`?a={index}`): serve one embedded HTML/SVG artifact as a
     // standalone SANDBOXED document for the viewer page's iframe. Author JS runs, but the
@@ -639,20 +672,16 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // we render the placeholder card instead of a frame that can never load.
     const canFrameArtifacts = isOpenPublic || isShare || passphraseVerified;
     const exportFormats = exportSelfAuthorizes ? exportFormatsFor(artifact.source.kind) : [];
-    // Best-effort lookup: a missing/failed name degrades to no attribution line, never blocks rendering.
-    const ownerName = await User.findById(artifact.ownerId)
-      .select('name')
-      .lean<{ name?: string } | null>()
-      .then(u => u?.name ?? null)
-      .catch(() => null);
     const page = renderViewerPage(artifact, {
       noindex: !searchIndexable,
       noReferrer: isShare,
       selfPath,
       canFrameArtifacts,
       exportFormats,
-      sharedBy: ownerName ?? undefined,
+      sharedBy: pickSharedByName(owner),
       signupGate: showSignupGate,
+      starterCredits: showSignupGate ? await getOpenSignupStarterCredits() : 0,
+      signupReturnTo: selfPath,
     });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
@@ -743,7 +772,20 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
     });
   }
-  if (!showSignupGate) indexHtml = stripSignupGateHtml(indexHtml);
+  // The gate is then the page's one sign-up CTA, so the brand cards that would compete with it
+  // (the footer card baked just above it, the wrapper bar's "Try" link) are dropped.
+  const signupGateShown = showSignupGate && hasSignupGateHtml(indexHtml);
+  indexHtml = signupGateShown
+    ? stripShareFooterCtaBeforeGate(
+        replaceSignupGateHtml(indexHtml, {
+          starterCredits: await getOpenSignupStarterCredits(),
+          // A bundle can be served from the isolated usercontent origin, so /register is anchored to
+          // the app explicitly; the gate is only shown at the canonical /p path.
+          appOrigin: process.env.APP_URL,
+          returnTo: buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug),
+        })
+      )
+    : stripSignupGateHtml(indexHtml);
 
   if (isFormatRaw) {
     if (!isOpenPublic) {
@@ -942,7 +984,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   const shareMeta =
     !isShare && isOpenPublic
       ? prepareShareMeta({
-          title: artifact.title || SHARED_FALLBACK_TITLE,
+          title: plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact),
           description: artifact.description,
           bodyForExcerpt: indexHtml,
           canonicalUrl: `${docOrigin}${canonicalPath}`,
@@ -977,7 +1019,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     pillHref,
     barHref,
     pillHref || barHref ? getBrandName() : '',
-    exportHtmlHref
+    exportHtmlHref,
+    // For a sign-up prospect the bar's "Try" link would repeat a CTA the framed page already
+    // carries: the gate, or the footer card baked into a gate-less page (full HTML documents).
+    !signupGateShown && !(showSignupGate && hasShareFooterCardHtml(indexHtml))
   );
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -1038,7 +1083,9 @@ function renderBundleWrapper(
   barHref = '',
   brandName = '',
   /** `?export=html` href for the "Save as HTML" affordance; '' hides it. */
-  exportHtmlHref = ''
+  exportHtmlHref = '',
+  /** False when the framed page carries its own CTA (the sign-up gate or the footer card). */
+  barCta = true
 ): string {
   const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);
   // HTML attribute escape: inside a double-quoted attribute value only `&` and `"` are
@@ -1110,10 +1157,14 @@ function renderBundleWrapper(
     ? `\n<div class="b4m-bar">
   <span class="b4m-bar-l">Built with ${liveryBarMark(brandName)}${LIVERY_REG}</span>
   <span class="b4m-bar-r">${barPrint}${barExport}
-    <a class="b4m-bar-report" href="${reportHref}" rel="nofollow" target="_top">Report</a>
+    <a class="b4m-bar-report" href="${reportHref}" rel="nofollow" target="_top">Report</a>${
+      barCta
+        ? `
     <a class="b4m-bar-cta" href="${escapeHtml(
       barHref
-    )}" target="_blank" rel="noopener noreferrer">Try ${escapeHtml(brandName)}${LIVERY_REG} &rarr;</a>
+    )}" target="_blank" rel="noopener noreferrer">Try ${escapeHtml(brandName)}${LIVERY_REG} &rarr;</a>`
+        : ''
+    }
   </span>
 </div>`
     : '';
@@ -1485,7 +1536,7 @@ function sendRawArtifact(
   viewer: { id?: string } | undefined,
   userAgent?: string
 ): void {
-  const title = artifact.title || SHARED_FALLBACK_TITLE;
+  const title = plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact);
   const description = artifact.description?.trim();
   const parts = [`# ${title}`];
   if (description) parts.push('', description);
@@ -1707,6 +1758,10 @@ function renderViewerPage(
      * shouldShowSignupGate; ignored for a standalone export, which never carries either.
      */
     signupGate?: boolean;
+    /** Starter-credit amount the sign-up card advertises; 0 renders no number. */
+    starterCredits?: number;
+    /** Path the sign-up gate's /register link returns to. */
+    signupReturnTo?: string;
   }
 ): string {
   const {
@@ -1718,6 +1773,8 @@ function renderViewerPage(
     standalone = false,
     sharedBy,
     signupGate = false,
+    starterCredits = 0,
+    signupReturnTo,
   } = opts;
   const body = replyBodyForExport(artifact);
   let contentHtml: string;
@@ -1747,7 +1804,9 @@ function renderViewerPage(
     } else {
       contentHtml = `${article}${artifacts.map((a, i) => block(a, i)).join('\n')}`;
     }
-    displayTitle = cleanViewerTitle(artifact.title, artifacts);
+    // A fallback to an embedded artifact's name is a name, not markdown, so only the stored title is plained.
+    const viewerTitle = cleanViewerTitle(artifact.title, artifacts);
+    displayTitle = viewerTitle === (artifact.title ?? '').trim() ? plainTitle(viewerTitle, artifact) : viewerTitle;
   } else {
     // Fabfile: a file is literal text, not markdown prose, so the non-artifact remainder stays an
     // escaped <pre> (no marked). Only EXPLICIT <artifact> blocks are extracted (parseArtifacts via
@@ -1790,12 +1849,14 @@ function renderViewerPage(
     : buildShareFooterHtml({
         source: artifact.source.kind === 'reply' ? 'reply' : 'fabfile',
         reportPublicId: artifact.publicId,
+        // The sign-up card below is the single CTA; don't stack the brand card on top of it.
+        hideCta: signupGate,
       }) + buildExportActionsHtml(selfPath, exportFormats);
 
   // Sign-up prompt: shown to anonymous, non-share-link viewers of an open-public page only
   // (not standalone exports, share-link holders, or signed-in viewers - all of whom already
   // have full access, so there is nothing to invite them past). See shouldShowSignupGate.
-  const gate = signupGate && !standalone ? buildSignupGateHtml() : null;
+  const gate = signupGate && !standalone ? buildSignupGateHtml({ starterCredits, returnTo: signupReturnTo }) : null;
   const gateStyles = gate?.styles ?? '';
   const gateHtml = gate?.html ?? '';
 
@@ -1861,15 +1922,12 @@ function renderViewerPage(
   .b4m-ph-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .b4m-live { font: 600 11px Manrope, sans-serif; letter-spacing: .06em; text-transform: uppercase;
               color: #0A7DC1; background: rgba(41,211,245,.14); padding: 6px 11px; border-radius: 999px; }
-  .b4m-ph-share { font: 600 12.5px Manrope, sans-serif; color: #0B1524; text-decoration: none;
-                  border: 1px solid rgba(11,21,36,.14); padding: 7px 14px; border-radius: 8px; }
   #b4m-content { margin-top: 22px; }
   @media (prefers-color-scheme: dark) {
     #b4m-ph { border-color: rgba(255,255,255,.1); }
     .b4m-ph-title { color: #e6e6f0; }
     .b4m-ph-sub { color: rgba(255,255,255,.5); }
     .b4m-live { background: rgba(41,211,245,.2); color: #29D3F5; }
-    .b4m-ph-share { color: #e6e6f0; border-color: rgba(255,255,255,.2); }
   }
   ${gateStyles}
 </style>
@@ -1888,7 +1946,6 @@ ${
   </div>
   <div class="b4m-ph-right">
     <span class="b4m-live">Live</span>
-    ${signupGate ? '<a href="/register" class="b4m-ph-share">Sign up</a>' : ''}
   </div>
 </header>`
 }

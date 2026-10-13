@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeResearchManage: vi.fn(),
+  toAccessContext: vi.fn(async () => ({ userId: 'user-1', isAdmin: false })),
   startResearchRun: vi.fn(),
   listByLake: vi.fn(),
   queueResearchRun: vi.fn(),
@@ -24,6 +28,15 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeResearchService: { startResearchRun: h.startResearchRun },
 }));
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeResearchConfigRepository: {},
   dataLakeResearchRunRepository: { listByLake: h.listByLake },
   lakeConfigChangeEventRepository: {},
@@ -32,6 +45,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({
   assertLakeResearchManage: h.assertLakeResearchManage,
 }));
+vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/dataLakes/queueResearchRun', () => ({ queueResearchRun: h.queueResearchRun }));
 vi.mock('sst', () => ({
   Resource: {
@@ -60,11 +74,16 @@ const GRANTS: unknown[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.tx.length = 0;
+  h.toAccessContext.mockImplementation(async () => ({ userId: 'user-1', isAdmin: false }));
   h.queueUrl = 'https://sqs.example/research';
-  h.assertLakeResearchManage.mockResolvedValue({ lake: LAKE, actor: ACTOR, grants: GRANTS });
+  h.assertLakeResearchManage.mockImplementation(
+    async () => (h.tx.push('gate'), { lake: LAKE, actor: ACTOR, grants: GRANTS })
+  );
+  h.touchIfStable.mockImplementation(async () => void h.tx.push('touch'));
   h.listByLake.mockResolvedValue([queuedRun]);
-  h.startResearchRun.mockResolvedValue(queuedRun);
-  h.queueResearchRun.mockResolvedValue(undefined);
+  h.startResearchRun.mockImplementation(async () => (h.tx.push('start'), queuedRun));
+  h.queueResearchRun.mockImplementation(async () => void h.tx.push('queue'));
 });
 
 describe('GET /api/data-lakes/[id]/research/runs', () => {
@@ -114,6 +133,44 @@ describe('POST /api/data-lakes/[id]/research/runs', () => {
 
     await expect(call(req('POST', { id: 'l' }, { configId: 'config-1' }), res)).rejects.toThrow(/not available/i);
     expect(h.startResearchRun).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+  });
+
+  it('gates and parses the body before it reveals a missing queue', async () => {
+    h.queueUrl = undefined;
+    h.assertLakeResearchManage.mockRejectedValue(new Error('forbidden'));
+    await expect(call(req('POST', { id: 'l' }, { configId: 'c' }), makeRes().res)).rejects.toThrow('forbidden');
+
+    h.assertLakeResearchManage.mockImplementation(async () => ({ lake: LAKE, actor: ACTOR, grants: GRANTS }));
+    await expect(call(req('POST', { id: 'l' }, {}), makeRes().res)).rejects.not.toThrow(/not available/i);
+  });
+
+  it('resolves the access context before the transaction and hands it to the gate', async () => {
+    h.toAccessContext.mockImplementation(async () => (h.tx.push('ctx'), { userId: 'user-1', isAdmin: false }));
+
+    await call(req('POST', { id: 'l' }, { configId: 'config-1' }), makeRes().res);
+
+    expect(h.tx.slice(0, 2)).toEqual(['ctx', 'enter']);
+    expect(h.assertLakeResearchManage).toHaveBeenCalledWith(expect.anything(), 'l', {
+      userId: 'user-1',
+      isAdmin: false,
+    });
+  });
+
+  it('gates and starts the run inside the transaction, touches the lake last, and enqueues after commit', async () => {
+    await call(req('POST', { id: 'l' }, { configId: 'config-1' }), makeRes().res);
+
+    expect(h.tx).toEqual(['enter', 'gate', 'start', 'touch', 'exit', 'queue']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake-oid-1');
+  });
+
+  it('writes no run, touches nothing and enqueues nothing when the in-transaction gate refuses', async () => {
+    h.assertLakeResearchManage.mockRejectedValue(new Error('forbidden'));
+
+    await expect(call(req('POST', { id: 'l' }, { configId: 'c' }), makeRes().res)).rejects.toThrow('forbidden');
+
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+    expect(h.queueResearchRun).not.toHaveBeenCalled();
   });
 
   it('propagates an enqueue failure rather than answering 202', async () => {

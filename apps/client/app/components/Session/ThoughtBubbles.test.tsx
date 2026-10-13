@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import ThoughtBubbles from './ThoughtBubbles';
-import { extractThinking } from '@client/app/utils/replyUtils';
+import { extractThinking } from '@client/shared/replyUtils';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const appTheme = extendTheme({ ...getThemeConfig() });

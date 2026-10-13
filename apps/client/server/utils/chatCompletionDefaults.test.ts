@@ -175,6 +175,38 @@ describe('resolveDefaultChatModel', () => {
     expect(result.model).toBe(ChatModels.GPT5);
   }, 20000);
 
+  it('self-host with BEDROCK_AWS_*: keeps an explicit admin Bedrock default', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.stubEnv('BEDROCK_AWS_ACCESS_KEY_ID', 'AKIAIOSFODNN7EXAMPLE');
+    vi.stubEnv('BEDROCK_AWS_SECRET_ACCESS_KEY', 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY');
+    getEffectiveLLMApiKeysMock.mockResolvedValue({ anthropic: 'sk-ant' });
+    getAvailableModelsMock.mockResolvedValue([
+      makeModel(ChatModels.CLAUDE_5_SONNET_BEDROCK, ModelBackend.Bedrock),
+      makeModel(ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic),
+    ]);
+    getLlmByModelMock.mockReturnValue({ backend: 'bedrock' });
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const explicit = await resolveDefaultChatModel({
+      configuredModel: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      userId: 'u1',
+    });
+    expect(explicit.model).toBe(ChatModels.CLAUDE_5_SONNET_BEDROCK);
+    const unset = await resolveDefaultChatModel({ configuredModel: undefined, userId: 'u1' });
+    expect(unset.model).toBe(ChatModels.CLAUDE_5_SONNET);
+  }, 20000);
+
+  it('self-host without BEDROCK_AWS_*: maps an explicit Bedrock default to its direct-API twin', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.stubEnv('BEDROCK_AWS_ACCESS_KEY_ID', '');
+    vi.stubEnv('BEDROCK_AWS_SECRET_ACCESS_KEY', '');
+    getEffectiveLLMApiKeysMock.mockResolvedValue({ anthropic: 'sk-ant' });
+    getAvailableModelsMock.mockResolvedValue([makeModel(ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic)]);
+    getLlmByModelMock.mockReturnValue({ backend: 'anthropic' });
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const result = await resolveDefaultChatModel({ configuredModel: ChatModels.CLAUDE_5_SONNET_BEDROCK, userId: 'u1' });
+    expect(result.model).toBe(ChatModels.CLAUDE_5_SONNET);
+  }, 20000);
+
   it('hosted: passes a non-default configured model through untouched with zero probing', async () => {
     vi.stubEnv('B4M_SELF_HOST', 'false');
     const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');

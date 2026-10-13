@@ -350,12 +350,6 @@ describe('useAgentExecutionSubscriptions -- recovering a run after the socket co
     expect(reconnectCalls()).toEqual([
       { action: 'agent_execute', command: 'reconnect', sessionId: 'sess-1', executionId: 'exec-1' },
     ]);
-    // The response does not echo the sessionId back, so it must be queued for
-    // `reconnect_result` to stamp on - keyed by executionId so a sweep over
-    // several runs cannot be mis-paired by arrival order.
-    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
-      { sessionId: 'sess-1', executionId: 'exec-1' },
-    ]);
   });
 
   it('stays silent while the socket is down', () => {
@@ -388,14 +382,14 @@ describe('useAgentExecutionSubscriptions -- recovering a run after the socket co
 });
 
 /**
- * A socket-open sweep asks about several runs at once, and each request is answered by an
- * independent server invocation whose cost scales with that run's child count - so the
- * responses routinely come back in a different order than they were sent. Correlating them
- * by arrival order would stamp a live run with another session's id, which is worse than the
- * spinner this recovery exists to clear: the run vanishes from the session the user is
- * looking at and reappears under one it does not belong to, and nothing corrects it.
+ * Reconnect requests are answered by independent server invocations whose cost scales with
+ * each run's child count, so responses routinely come back in a different order than they
+ * were sent - and a `found: false` answers nothing at all. The session a run belongs to must
+ * therefore come from the response itself, never from which request is "next": pairing by
+ * arrival order stamps a live run with another session's id (it vanishes from the session the
+ * user is looking at) or with none (it vanishes everywhere).
  */
-describe('useAgentExecutionSubscriptions -- reconnect responses pair with the run that asked', () => {
+describe('useAgentExecutionSubscriptions -- reconnect responses carry their own session', () => {
   beforeEach(() => {
     ws.sendJsonMessage.mockClear();
     ws.readyState = 3; // CLOSED
@@ -403,15 +397,19 @@ describe('useAgentExecutionSubscriptions -- reconnect responses pair with the ru
     useAgentExecutionStore.getState().clearAll();
   });
 
-  const reconnectResult = (executionId: string) =>
+  const found = (executionId: string, sessionId: string) =>
     handlers['reconnect_result']({
       action: 'reconnect_result',
       found: true,
       executionId,
+      sessionId,
       status: 'running',
     });
+  const notFound = () => handlers['reconnect_result']({ action: 'reconnect_result', found: false });
 
-  it('keeps each session on its own run when the responses arrive out of order', async () => {
+  const mountDispatch = () => renderHook(() => useAgentExecutionDispatch()).result.current;
+
+  it('keeps each session on its own run when sweep responses arrive out of order', async () => {
     const store = useAgentExecutionStore.getState();
     store.startExecution('exec-1', 'sess-A');
     store.startExecution('exec-2', 'sess-B');
@@ -419,25 +417,65 @@ describe('useAgentExecutionSubscriptions -- reconnect responses pair with the ru
 
     mountSubscriptions();
 
-    // exec-2 answers first - the case that arrival-order pairing gets wrong.
-    await reconnectResult('exec-2');
-    await reconnectResult('exec-1');
+    await found('exec-2', 'sess-B');
+    await found('exec-1', 'sess-A');
 
     const executions = useAgentExecutionStore.getState().executions;
     expect(executions['exec-2']?.sessionId).toBe('sess-B');
     expect(executions['exec-1']?.sessionId).toBe('sess-A');
-    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([]);
   });
 
-  it('still answers the mount-time probe, which has no execution id to key on', async () => {
-    // The probe asks "is anything running in this session?" before any id exists.
-    useAgentExecutionStore.getState().registerPendingReconnect('sess-C');
+  it.each([
+    ['the live run answers first', ['found', 'notFound']],
+    ['the idle probe answers first', ['notFound', 'found']],
+  ])('two concurrent mount probes: the live run lands on its own session when %s', async (_, order) => {
+    mountSubscriptions();
+    const { reconnect } = mountDispatch();
+    reconnect('sess-A'); // idle session
+    reconnect('sess-B'); // session with a live run
+
+    for (const response of order) {
+      await (response === 'found' ? found('exec-B', 'sess-B') : notFound());
+    }
+
+    expect(useAgentExecutionStore.getState().executions['exec-B']?.sessionId).toBe('sess-B');
+  });
+
+  it('a found:false for a gone swept run does not cost a concurrent probe its session', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-gone', 'sess-stale');
+    ws.readyState = 1; // OPEN
+    mountSubscriptions();
+    mountDispatch().reconnect('sess-probe');
+
+    await notFound(); // the sweep's answer: the server no longer has exec-gone
+    await found('exec-live', 'sess-probe');
+
+    expect(useAgentExecutionStore.getState().executions['exec-live']?.sessionId).toBe('sess-probe');
+  });
+
+  it('a found:false changes nothing in the store', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-A');
+    mountSubscriptions();
+    const before = useAgentExecutionStore.getState().executions;
+
+    await notFound();
+
+    expect(useAgentExecutionStore.getState().executions).toEqual(before);
+  });
+
+  it('a found:true without a sessionId keeps the session the store already holds', async () => {
+    // A server that predates the echo: the sweep's run already knows its session.
+    useAgentExecutionStore.getState().startExecution('exec-1', 'sess-A');
     mountSubscriptions();
 
-    await reconnectResult('exec-9');
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      executionId: 'exec-1',
+      status: 'running',
+    });
 
-    expect(useAgentExecutionStore.getState().executions['exec-9']?.sessionId).toBe('sess-C');
-    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([]);
+    expect(useAgentExecutionStore.getState().executions['exec-1']?.sessionId).toBe('sess-A');
   });
 });
 
@@ -489,18 +527,22 @@ describe('useAgentExecutionSubscriptions -- sweep hygiene', () => {
     useAgentExecutionStore.getState().clearAll();
   });
 
-  it('a swept run with no sessionId still gets a keyed queue entry (no send-without-enqueue)', () => {
-    // A stray event synthesises an active execution with no sessionId; the sweep
-    // must still enqueue for it, or its keyed response would drain a concurrent
-    // mount-time probe's un-keyed entry and stamp that session onto the wrong run.
+  it('a swept run with no sessionId takes its session from the server', async () => {
+    // A stray event synthesises an active execution with no sessionId; the server
+    // knows which session the run belongs to and echoes it.
     useAgentExecutionStore.getState().setStatus('exec-orphan', 'running');
     ws.readyState = 1; // OPEN
 
     mountSubscriptions();
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      executionId: 'exec-orphan',
+      sessionId: 'sess-real',
+      status: 'running',
+    });
 
-    expect(useAgentExecutionStore.getState().pendingReconnects).toEqual([
-      { sessionId: undefined, executionId: 'exec-orphan' },
-    ]);
+    expect(useAgentExecutionStore.getState().executions['exec-orphan']?.sessionId).toBe('sess-real');
   });
 
   it('a churning dispatcher identity does not re-fire the sweep (the ref guard)', () => {

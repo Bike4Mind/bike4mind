@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   assertLakeAccessWithGrants: vi.fn(),
+  assertLakeAccessWithGrantsById: vi.fn(),
   offerLakeOwnership: vi.fn(),
   cancelLakeOwnershipOffer: vi.fn(),
   findPendingLakeOwnershipOffer: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
     assertLakeAccessWithGrants: h.assertLakeAccessWithGrants,
+    assertLakeAccessWithGrantsById: h.assertLakeAccessWithGrantsById,
     offerLakeOwnership: h.offerLakeOwnership,
     cancelLakeOwnershipOffer: h.cancelLakeOwnershipOffer,
     findPendingLakeOwnershipOffer: h.findPendingLakeOwnershipOffer,
@@ -105,8 +107,19 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
     h.offerLakeOwnership.mockResolvedValue(OFFER);
   });
 
+  // By id only: a slug skips a deleted lake and would land the offer on the next lake sharing it.
+  it('resolves the offer through the id-only gate, never the slug-tolerant one', async () => {
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    const { res } = makeRes();
+
+    await call(req('POST', { id: 'lake1' }, { newOwnerUserId: 'newOwner' }), res);
+
+    expect(h.assertLakeAccessWithGrantsById).toHaveBeenCalledWith('lake1', expect.anything(), expect.anything());
+    expect(h.assertLakeAccessWithGrants).not.toHaveBeenCalled();
+  });
+
   it('creates a PENDING OFFER against the resolved lake and returns it', async () => {
-    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: LAKE, grants: GRANTS });
     const { res, json } = makeRes();
 
     await call(req('POST', { id: 'my-lake' }, { newOwnerUserId: 'newOwner' }), res);
@@ -122,7 +135,7 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
   });
 
   it('emails the recipient after the offer commits', async () => {
-    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: LAKE, grants: GRANTS });
     const { res } = makeRes();
 
     await call(req('POST', { id: 'my-lake' }, { newOwnerUserId: 'newOwner' }), res);
@@ -134,7 +147,7 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
 
   it('sends the email AFTER the transaction, never inside it', async () => {
     h.inTransaction.length = 0;
-    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: LAKE, grants: GRANTS });
     h.sendEmail.mockImplementation(async () => {
       h.inTransaction.push('email');
       return {};
@@ -146,7 +159,7 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
   });
 
   it('still returns the offer when the mailer throws (best-effort mail)', async () => {
-    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: LAKE, grants: GRANTS });
     h.sendEmail.mockRejectedValueOnce(new Error('smtp down'));
     const { res, json } = makeRes();
 
@@ -156,7 +169,7 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
   });
 
   it('does not offer when the access gate denies the lake', async () => {
-    h.assertLakeAccessWithGrants.mockRejectedValue(new Error('Data lake not found'));
+    h.assertLakeAccessWithGrantsById.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
 
     await expect(call(req('POST', { id: 'lake1' }, { newOwnerUserId: 'x' }), res)).rejects.toThrow(/not found/i);
@@ -165,7 +178,7 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
   });
 
   it('takes the acting principal from the access context, never from the request body', async () => {
-    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: { id: 'lake1' }, grants: [] });
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: { id: 'lake1' }, grants: [] });
     const { res } = makeRes();
 
     await call(req('POST', { id: 'lake1' }, { newOwnerUserId: 'newOwner', userId: 'attacker', isAdmin: true }), res);
@@ -180,7 +193,7 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
   });
 
   it('rejects a missing newOwnerUserId (schema validation)', async () => {
-    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: { id: 'lake1' }, grants: [] });
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: { id: 'lake1' }, grants: [] });
     const { res } = makeRes();
 
     await expect(call(req('POST', { id: 'lake1' }, {}), res)).rejects.toThrow();
@@ -189,7 +202,7 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
 
   it('reads the grants and writes the offer inside one transaction', async () => {
     h.inTransaction.length = 0;
-    h.assertLakeAccessWithGrants.mockImplementation(async () => {
+    h.assertLakeAccessWithGrantsById.mockImplementation(async () => {
       h.inTransaction.push('gate');
       return { lake: LAKE, grants: GRANTS };
     });
@@ -211,8 +224,19 @@ describe('DELETE /api/data-lakes/[id]/transfer-ownership', () => {
     h.cancelLakeOwnershipOffer.mockResolvedValue({ ...OFFER, status: 'cancelled' });
   });
 
+  // By id only: a slug skips a deleted lake and would land the cancel on the next lake sharing it.
+  it('resolves the cancel through the id-only gate, never the slug-tolerant one', async () => {
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    const { res } = makeRes();
+
+    await call(req('DELETE', { id: 'lake1' }), res);
+
+    expect(h.assertLakeAccessWithGrantsById).toHaveBeenCalledWith('lake1', expect.anything(), expect.anything());
+    expect(h.assertLakeAccessWithGrants).not.toHaveBeenCalled();
+  });
+
   it('cancels the pending offer behind the resolved lake gate and returns it', async () => {
-    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: LAKE, grants: GRANTS });
     const { res, json } = makeRes();
 
     await call(req('DELETE', { id: 'my-lake' }), res);
@@ -227,7 +251,7 @@ describe('DELETE /api/data-lakes/[id]/transfer-ownership', () => {
   });
 
   it('does not cancel when the access gate denies the lake', async () => {
-    h.assertLakeAccessWithGrants.mockRejectedValue(new Error('Data lake not found'));
+    h.assertLakeAccessWithGrantsById.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
 
     await expect(call(req('DELETE', { id: 'lake1' }), res)).rejects.toThrow(/not found/i);

@@ -3,6 +3,8 @@ import { Logger } from '@bike4mind/observability';
 import { IFabFileDocument, ModelBackend, ModelInfo } from '@bike4mind/common';
 import { processFabFilesServer } from './utils';
 
+type ServerDeps = Parameters<typeof processFabFilesServer>[6];
+
 /**
  * Regression lock for the hard constraint that generated audio is NEVER sent to
  * an LLM (no model accepts audio input). processFabFilesServer is the single
@@ -73,5 +75,43 @@ describe('processFabFilesServer — audio is never attached to an LLM', () => {
     // calls, or it passes vacuously the next time that reader is swapped.
     expect(db.fabfilechunks.findVectorsByFabFileIds).not.toHaveBeenCalled();
     expect(db.fabfilechunks.countByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('skips a video file the same way, with a video notice', async () => {
+    // Partial doubles: only the members the guard could reach are stubbed, so any other call fails loudly.
+    const storage = { download: vi.fn(), getSignedUrl: vi.fn() };
+    const db = {
+      fabfilechunks: { findVectorsByFabFileIds: vi.fn(), countByFabFileId: vi.fn() },
+      fabfiles: { update: vi.fn() },
+      caches: { get: vi.fn(), set: vi.fn() },
+    };
+    const videoFile = {
+      ...audioFile,
+      id: 'video-1',
+      fileName: 'clip-1234.mp4',
+      mimeType: 'video/mp4',
+      type: 'VIDEO',
+    } as unknown as IFabFileDocument;
+
+    const result = await processFabFilesServer(
+      embeddingFactory,
+      [videoFile],
+      'please summarize the attachment',
+      100_000,
+      visionModel,
+      async () => {},
+      {
+        logger: new Logger({ component: 'video-guard-test' }),
+        storage: storage as unknown as ServerDeps['storage'],
+        db: db as unknown as ServerDeps['db'],
+      }
+    );
+
+    expect(result.userMessages).toEqual([]);
+    expect(result.fileNotices[0]).toMatchObject({ fabFileId: 'video-1', band: 'video', delivered: false });
+    expect(result.fileNotices[0].message).toContain('video');
+    expect(result.deliveredFileIds).toEqual([]);
+    expect(storage.download).not.toHaveBeenCalled();
+    expect(db.fabfilechunks.findVectorsByFabFileIds).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -103,6 +103,65 @@ describe('ProfilePage tab strip', () => {
     expect(screen.queryByTestId('security-tab')).not.toBeInTheDocument();
     // No published artifacts: Published tab hidden
     expect(screen.queryByTestId('published-tab')).not.toBeInTheDocument();
+  });
+
+  // A phone hides each tab's text label and shows only the icon, so the tab needs its own name.
+  it('gives every tab and the close button an accessible name', () => {
+    renderPage();
+
+    for (const name of ['profile.title', 'community.title', 'settings.title', 'API Keys', 'Usage', 'Integrations']) {
+      expect(screen.getByRole('tab', { name })).toBeInTheDocument();
+    }
+    expect(screen.getByTestId('profile-close-btn')).toHaveAccessibleName('Close');
+  });
+
+  // jsdom matches no min-width query, so getComputedStyle cannot see either breakpoint. Read each
+  // label's per-breakpoint display from the CSSOM instead of from emotion's CSS text.
+  it('shows only the active tab label below sm, and every label from sm up', () => {
+    searchValue = { tab: 'settings' };
+    renderPage();
+
+    const { xs, sm } = appTheme.breakpoints.values;
+    const displayAt = (el: HTMLElement, minWidth: number) =>
+      Array.from(document.styleSheets)
+        .flatMap(sheet => Array.from(sheet.cssRules))
+        .filter((rule): rule is CSSMediaRule => rule instanceof CSSMediaRule)
+        .filter(rule => new RegExp(`min-width:\\s*${minWidth}px`).test(rule.conditionText))
+        .flatMap(rule => Array.from(rule.cssRules))
+        .filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule && el.matches(rule.selectorText))
+        .map(rule => rule.style.display)
+        .filter(Boolean)
+        .at(-1);
+    const labelOf = (tabTestId: string) => within(screen.getByTestId(tabTestId)).getByTestId('profile-tab-label');
+    const labels = screen.getAllByTestId('profile-tab-label');
+
+    expect(labelOf('settings-tab')).toHaveTextContent('settings.title');
+    expect(displayAt(labelOf('settings-tab'), xs)).toBe('block');
+    expect(displayAt(labelOf('usage-tab'), xs)).toBe('none');
+    expect(labels.filter(el => displayAt(el, xs) === 'block')).toHaveLength(1);
+    expect(labels.every(el => displayAt(el, sm) === 'block')).toBe(true);
+  });
+
+  it('scrolls a deep-linked tab into view in the overflowing phone strip', () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      searchValue = { tab: 'integrations' };
+      renderPage();
+
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(screen.getByTestId('integrations-tab'));
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+    }
+  });
+
+  it('treats the Profile tab as active when no tab is in the URL', () => {
+    renderPage();
+
+    expect(within(screen.getByTestId('profile-tab')).getByTestId('profile-tab-label')).toHaveAttribute(
+      'data-active',
+      'true'
+    );
   });
 
   it('shows the Security tab for admin users', () => {

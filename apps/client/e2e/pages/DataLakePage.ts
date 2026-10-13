@@ -103,6 +103,29 @@ export class DataLakePage extends BasePage {
   get wizardSourceStep(): Locator {
     return this.page.getByTestId('wizard-source-step');
   }
+  /** "Where's your content?" - the first screen of a create, before any source is chosen. */
+  get sourceCards(): Locator {
+    return this.page.getByTestId('create-source-cards');
+  }
+  sourceCard(kind: 'upload' | 'googleDrive' | 'github'): Locator {
+    return this.page.getByTestId(`create-source-card-${kind}`);
+  }
+  sourceCardReason(kind: 'upload' | 'googleDrive' | 'github'): Locator {
+    return this.page.getByTestId(`create-source-reason-${kind}`);
+  }
+  /** Back out of a chosen source to the cards. */
+  get sourceChangeBtn(): Locator {
+    return this.page.getByTestId('source-change-btn');
+  }
+  get gitHubCreatePanel(): Locator {
+    return this.page.getByTestId('github-create-panel');
+  }
+  get gitHubSyncedFilesToggle(): Locator {
+    return this.page.getByTestId('github-synced-files-toggle-btn');
+  }
+  get gitHubSyncedFilesDetails(): Locator {
+    return this.page.getByTestId('github-synced-files-details');
+  }
   get wizardNextBtn(): Locator {
     return this.page.getByTestId('wizard-next-btn');
   }
@@ -194,11 +217,25 @@ export class DataLakePage extends BasePage {
 
   // ── Wizard flows ──────────────────────────────────────────────────────────
 
-  /** Open the create wizard from the in-chat tree footer. */
-  async startCreate() {
+  /**
+   * Open the create wizard from the in-chat tree footer and answer its first question.
+   *
+   * The wizard now opens on "Where's your content?", so every flow that wants the name/upload screen
+   * has to pick a card first. Defaults to Upload, which is the path the pre-existing specs drive.
+   */
+  async startCreate(source: 'upload' | 'googleDrive' | 'github' = 'upload') {
     await this.createBtn.click();
     await expect(this.wizardModal).toBeVisible({ timeout: TIMEOUTS.MODAL });
     await expect(this.wizardSourceStep).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(this.sourceCards).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await this.sourceCard(source).click();
+  }
+
+  /** Open the create wizard and stop on the source cards, without answering. */
+  async startCreateAtSourceCards() {
+    await this.createBtn.click();
+    await expect(this.wizardModal).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await expect(this.sourceCards).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
   /** Open the append ("Add files") wizard for the lake selected in the manager. */

@@ -37,6 +37,7 @@ export interface CompletedTurn {
 }
 
 export interface BuildOptions {
+  /** Names the tokenizer every count is calibrated to (see TokenCounter.forModel). */
   model: string;
   contextWindow: number;
   /** Override the system-prompt + response reserve. Defaults to DEFAULT_RESERVED_TOKENS. */
@@ -115,7 +116,8 @@ export class ConversationContext {
    * rendering each turn's bounded tool trace - plus the system prompt, and
    * compares against `thresholdRatio` of the context window. Rich-content aware:
    * replaces the old string-only `content` sum so a session whose weight lives
-   * in tool traces still triggers compaction.
+   * in tool traces still triggers compaction. Counts are calibrated to
+   * `opts.model`, so `systemPromptTokens` must be too (the caller owns it).
    */
   needsCompaction(systemPromptTokens: number, opts: BuildOptions, thresholdRatio = 0.8): boolean {
     return this.estimateSessionTokens(systemPromptTokens, opts) >= opts.contextWindow * thresholdRatio;
@@ -129,7 +131,7 @@ export class ConversationContext {
   estimateSessionTokens(systemPromptTokens: number, opts: BuildOptions): number {
     const rendered = this.messages
       .filter(m => m.role === 'user' || m.role === 'assistant')
-      .reduce((sum, m) => sum + this.estimateTokens(this.renderHistoryMessage(m, opts)), 0);
+      .reduce((sum, m) => sum + this.estimateTokens(this.renderHistoryMessage(m, opts), opts), 0);
     return systemPromptTokens + rendered;
   }
 
@@ -153,7 +155,7 @@ export class ConversationContext {
    */
   private windowedHistory(newInput: UserInput, opts: BuildOptions): IMessage[] {
     const reserved = opts.reservedTokens ?? DEFAULT_RESERVED_TOKENS;
-    const currentTokens = this.estimateTokens(this.inputToIMessage(newInput));
+    const currentTokens = this.estimateTokens(this.inputToIMessage(newInput), opts);
 
     const history = this.messages
       .filter(m => m.role === 'user' || m.role === 'assistant')
@@ -162,7 +164,7 @@ export class ConversationContext {
     let remaining = opts.contextWindow - reserved - currentTokens;
     const kept: IMessage[] = [];
     for (let i = history.length - 1; i >= 0; i--) {
-      const cost = this.estimateTokens(history[i]);
+      const cost = this.estimateTokens(history[i], opts);
       if (cost > remaining) break;
       remaining -= cost;
       kept.unshift(history[i]);
@@ -238,7 +240,7 @@ export class ConversationContext {
       if (b.type !== 'tool_use') continue;
       const resultText = (b.id && results.get(b.id)) || '';
       const line = `[tool ${b.name}] ${this.brief(JSON.stringify(b.input ?? {}))} -> ${this.brief(resultText)}`;
-      const cost = this.counter.countTokens(line);
+      const cost = this.counter.forModel(opts.model).countTokens(line);
       if (used + cost > budget) {
         omitted++;
         continue;
@@ -263,8 +265,8 @@ export class ConversationContext {
     return { role: 'user', content: input };
   }
 
-  private estimateTokens(message: IMessage): number {
-    return this.counter.countMessageContent(message.content as MessageContent);
+  private estimateTokens(message: IMessage, opts: BuildOptions): number {
+    return this.counter.forModel(opts.model).countMessageContent(message.content as MessageContent);
   }
 }
 

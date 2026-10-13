@@ -27,6 +27,11 @@ B4M_DOMAIN=chat.example.com
 # (Old default was: APP_URL=http://localhost:3000)
 APP_URL=https://chat.example.com
 
+# -- Browser object download origin (required if configured) --
+# Replace a local S3_PRESIGN_ENDPOINT with the trusted HTTPS S3 API origin
+# serving the same buckets. Keep AWS_ENDPOINT_URL_S3 private for server callers.
+# S3_PRESIGN_ENDPOINT=https://objects.example.com
+
 # -- Realtime WebSocket over TLS (required change) --
 # The browser now reaches the ws gateway THROUGH Caddy at wss://<domain>/ws
 # (Caddy proxies the /ws path to the ws service). Change this from the default

@@ -1,9 +1,9 @@
 /**
  * B4M OAuth 2.0 / OIDC Authorization Server
  *
- * Provides Authorization Code + PKCE flow so external products
- * (VibesWire, VibesTrader, NapkinBizPlan, PotionQuest, EBDC) can use
+ * Provides Authorization Code + PKCE flow so external apps can use
  * "Sign in with B4M" without sharing credentials.
+ * Integration guide: docs-site/docs/developers/building-on-b4m.md
  */
 
 import crypto from 'crypto';

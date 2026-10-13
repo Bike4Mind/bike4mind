@@ -3,11 +3,13 @@ initializeSlackPackage();
 
 import { z } from 'zod';
 import { Quest, Session } from '@bike4mind/database';
-import { isImageServeable } from '@bike4mind/common';
+import { isImageServeable, MCP_ACTION_REPLACED_ERROR_CODE } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { isValidObjectId } from '@server/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { GitHubResource } from '@bike4mind/slack';
 import { JiraResource } from '@bike4mind/slack';
 import { ConfluenceResource } from '@bike4mind/slack';
@@ -21,6 +23,8 @@ const ConfirmRequestSchema = z.object({
   questId: z.string(),
   sessionId: z.string(),
   confirmed: z.boolean(),
+  // The action the card displayed. Optional only for cards rendered before this field existed.
+  pendingActionTs: z.number().optional(),
 });
 
 /**
@@ -38,7 +42,7 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: 'Invalid request body' });
   }
 
-  const { questId, sessionId, confirmed } = parsed.data;
+  const { questId, sessionId, confirmed, pendingActionTs } = parsed.data;
   const user = req.user;
 
   if (!user) {
@@ -86,23 +90,39 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: 'No pending action found' });
   }
 
+  // Checked before Cancel and expiry too, so a stale card can neither run nor clear a newer action.
+  if (pendingActionTs !== undefined && pendingActionTs !== pendingAction.ts) {
+    logger.warn('[Web MCP Confirm] Pending action replaced since it was displayed', { questId });
+    return res.status(409).json({
+      error: 'This action was replaced by a newer one. Please review it again.',
+      errorCode: MCP_ACTION_REPLACED_ERROR_CODE,
+    });
+  }
+
   if (pendingAction.ts && Date.now() - pendingAction.ts > TOKEN_EXPIRATION_MS) {
     logger.warn('[Web MCP Confirm] Pending action expired', {
       questId,
       age: Date.now() - pendingAction.ts,
       maxAge: TOKEN_EXPIRATION_MS,
     });
-    await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
+    await claimPendingAction(questId, pendingAction.ts);
     return res.status(400).json({ error: 'This action has expired. Please request it again.' });
   }
 
   if (!confirmed) {
+    if (!(await claimPendingAction(questId, pendingAction.ts))) {
+      logger.warn('[Web MCP Confirm] Pending action already claimed before cancel', { questId });
+      return res.status(409).json({ error: 'This action has already been processed.' });
+    }
     logger.info('[Web MCP Confirm] User cancelled action', { questId, tool: pendingAction.tool });
-    await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
     return res.status(200).json({ success: true, message: 'Action cancelled' });
   }
 
-  // Execute the MCP tool
+  // After the cancel branch: cancelling executes nothing, so it stays available with the flag off.
+  await assertMcpServerEnabled();
+
+  // Keep in sync with executePendingAction (server/utils/pendingActionExecutor.ts), the Slack
+  // executor: same server routing, repo checks, expiry and claim-before-invoke ordering.
   try {
     let resource: GitHubResource | JiraResource | ConfluenceResource;
     if (pendingAction.tool.startsWith('jira_')) {
@@ -229,6 +249,13 @@ const handler = baseApi().post(async (req, res) => {
       selectedRepoCount: selectedRepositories?.length ?? 0,
     });
 
+    // Claimed only once every pre-execution check has passed, so a fixable failure above (e.g. a
+    // repo not yet selected) leaves the action in place for another click.
+    if (!(await claimPendingAction(questId, pendingAction.ts))) {
+      logger.warn('[Web MCP Confirm] Pending action already claimed', { questId });
+      return res.status(409).json({ error: 'This action has already been processed.' });
+    }
+
     // Execute the tool with _executeFromButton flag for security
     const result = await invokeMcpHandler<any>({
       envVariables,
@@ -240,6 +267,7 @@ const handler = baseApi().post(async (req, res) => {
     });
 
     let resultData: any = result;
+    const mcpIsError = resultData?.isError === true;
     if (typeof result === 'string') {
       try {
         resultData = JSON.parse(result);
@@ -259,15 +287,17 @@ const handler = baseApi().post(async (req, res) => {
 
     // GitHub returns url/html_url, Jira returns link
     const url = resultData?.url || resultData?.html_url || resultData?.link;
-    const success = !resultData?.error && (url || resultData?.success !== false);
+    const hasError =
+      mcpIsError ||
+      resultData?.error ||
+      (typeof resultData?.message === 'string' && resultData.message.startsWith('Error:'));
+    const success = !hasError && (url || resultData?.success !== false);
 
     logger.info('[Web MCP Confirm] MCP execution result', {
       success,
       url,
-      hasError: !!resultData?.error,
+      hasError: !!hasError,
     });
-
-    await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
 
     if (success) {
       // Build success message based on tool type
@@ -289,6 +319,11 @@ const handler = baseApi().post(async (req, res) => {
       } else if (pendingAction.tool === 'confluence_create_page') {
         message = `Confluence page created`;
         if (title) message += `: "${title}"`;
+      } else if (pendingAction.tool === 'jira_bulk_create_issues') {
+        const created = Number(resultData?.created) || 0;
+        const failed = Number(resultData?.failed) || 0;
+        message = `Created ${created} of ${created + failed} Jira issues`;
+        if (failed > 0) message += `; ${failed} failed`;
       } else {
         message = `Action completed successfully`;
       }
@@ -299,9 +334,14 @@ const handler = baseApi().post(async (req, res) => {
         url,
       });
     } else {
+      const bulkFailed = Number(resultData?.failed) || 0;
+      const bulkMessage =
+        pendingAction.tool === 'jira_bulk_create_issues' && bulkFailed > 0
+          ? `No Jira issues were created; ${bulkFailed} failed`
+          : undefined;
       return res.status(200).json({
         success: false,
-        message: resultData?.error || resultData?.message || 'Action failed',
+        message: bulkMessage || resultData?.error || resultData?.message || 'Action failed',
       });
     }
   } catch (error: any) {

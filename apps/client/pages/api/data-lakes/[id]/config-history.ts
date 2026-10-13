@@ -7,6 +7,7 @@ import {
   dataLakeAccessGrantRepository,
   lakeConfigChangeEventRepository,
   userRepository,
+  userApiKeyRepository,
 } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
 import { Request } from 'express';
@@ -51,7 +52,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // Parsed permissively rather than validated: the service clamps into [1, MAX] and falls back to
     // the default for anything non-finite, so a garbage ?limit= serves a page instead of a 400.
     const view = await dataLakeService.assembleLakeConfigHistory(lake, {
-      db: { lakeConfigChangeEvents: lakeConfigChangeEventRepository, users: userRepository },
+      db: {
+        lakeConfigChangeEvents: lakeConfigChangeEventRepository,
+        users: userRepository,
+        userApiKeys: userApiKeyRepository,
+      },
       // `limit ?` not `limit == null ?`: a bare `?limit=` arrives as '' and `Number('')` is 0, which
       // the clamp floors to 1 - silently serving a one-row history instead of the default page.
       limit: limit ? Number(limit) : undefined,

@@ -1,4 +1,5 @@
 import z from 'zod';
+import { generatedAudioRequestFields } from './generatedAudio';
 
 /**
  * Supported sound-effects generation vendors. Currently only ElevenLabs.
@@ -27,6 +28,7 @@ export const soundEffectsRequestSchema = z.object({
   durationSeconds: z.number().min(0.5).max(30).optional(),
   promptInfluence: z.number().min(0).max(1).optional(),
   format: z.string().optional(),
+  ...generatedAudioRequestFields,
 });
 
 export type SoundEffectsRequest = z.infer<typeof soundEffectsRequestSchema>;

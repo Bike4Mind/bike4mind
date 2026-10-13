@@ -4,9 +4,12 @@ import {
   IOrgGitHubLakeConnectionRepository,
   IMongoDocument,
   GITHUB_DISCONNECT_STALL_MS,
+  type GitHubLakeTreeCounts,
+  type GitHubLakeReleaseStatus,
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { releaseLakeClaimBestEffort } from './LakeConnectorClaimModel';
 import { randomUUID } from 'crypto';
 import { redactLastError } from './OrgGoogleDriveConnectionModel';
 
@@ -56,20 +59,26 @@ const OrgGitHubLakeConnectionSchema = new Schema<IOrgGitHubLakeConnectionDocumen
     targetDataLakeId: { type: String, required: true },
     installationId: { type: Number, required: true },
     accountLogin: { type: String, required: true, trim: true },
+    accountId: { type: Number },
     repositoryId: { type: Number, required: true },
     repositoryFullName: { type: String, required: true, trim: true },
     connectedBy: { type: String, required: true },
     connectedAt: { type: Date, required: true },
     enabled: { type: Boolean, default: true },
-    status: { type: String, enum: ['connected', 'syncing', 'error'], default: 'connected' },
+    status: { type: String, enum: ['connected', 'syncing', 'error', 'access_lost'], default: 'connected' },
     lastError: { type: String },
     defaultBranch: { type: String },
     lastSyncedCommitSha: { type: String },
     lastSyncedAt: { type: Date },
+    treeCandidateCount: { type: Number },
+    treeSkippedCount: { type: Number },
     syncClaimedAt: { type: Date },
     activeIngestBatchId: { type: String },
     ingestClaimToken: { type: String },
     disconnectRequestedAt: { type: Date },
+    reconcileCheckedAt: { type: Date },
+    reconcileEnqueuedSha: { type: String },
+    reconcileEnqueuedAt: { type: Date },
   },
   {
     timestamps: true,
@@ -92,6 +101,12 @@ OrgGitHubLakeConnectionSchema.index({ installationId: 1 }, { name: 'org_gh_lake_
 
 OrgGitHubLakeConnectionSchema.index({ organizationId: 1 }, { name: 'org_gh_lake_conn_org_id' });
 
+// The scheduled reconcile's oldest-checked-first scan.
+OrgGitHubLakeConnectionSchema.index(
+  { reconcileCheckedAt: 1, _id: 1 },
+  { name: 'org_gh_lake_conn_reconcile_checked_id' }
+);
+
 export interface IOrgGitHubLakeConnectionModel extends Model<IOrgGitHubLakeConnectionDocument & IMongoDocument> {}
 
 export const OrgGitHubLakeConnection: IOrgGitHubLakeConnectionModel =
@@ -108,6 +123,13 @@ class OrgGitHubLakeConnectionRepository
     return this.findOne({ targetDataLakeId });
   }
 
+  /** Batch form of findByDataLakeIdAny: which of these lakes have a row, enabled or not. */
+  async findBoundDataLakeIds(targetDataLakeIds: readonly string[]): Promise<string[]> {
+    if (targetDataLakeIds.length === 0) return [];
+    const rows = await this.find({ targetDataLakeId: { $in: [...targetDataLakeIds] } });
+    return rows.map(row => row.targetDataLakeId);
+  }
+
   async findByInstallationId(installationId: number): Promise<(IOrgGitHubLakeConnectionDocument & IMongoDocument)[]> {
     return this.find({ installationId });
   }
@@ -122,7 +144,9 @@ class OrgGitHubLakeConnectionRepository
   /** Hard delete: a soft-deleted row would keep the unique repositoryId / targetDataLakeId claims. */
   async release(id: string, organizationId: string): Promise<boolean> {
     const res = await this.model.deleteMany({ _id: id, organizationId }, { hardDelete: true });
-    return (res?.deletedCount ?? 0) > 0;
+    const deleted = (res?.deletedCount ?? 0) > 0;
+    if (deleted) await releaseLakeClaimBestEffort(id);
+    return deleted;
   }
 
   async claimForSync(id: string): Promise<string | null> {
@@ -132,8 +156,9 @@ class OrgGitHubLakeConnectionRepository
         _id: id,
         ...NOT_DISABLED,
         $or: [
-          // null matches a binding written before status existed; 'error' lets a manual re-sync retry a reconnect.
-          { status: { $in: ['connected', 'error', null] } },
+          // null matches a binding written before status existed; 'error' and 'access_lost' let a manual
+          // re-sync retry once the user has restored access on GitHub.
+          { status: { $in: ['connected', 'error', 'access_lost', null] } },
           ...staleSyncClaimClauses().map(clause => ({ status: 'syncing', ...clause })),
         ],
       },
@@ -222,11 +247,23 @@ class OrgGitHubLakeConnectionRepository
     return renewed !== null ? rotatedToken : null;
   }
 
+  async recordTreeCounts(
+    id: string,
+    expectedToken: string,
+    { candidateCount, skippedCount }: GitHubLakeTreeCounts
+  ): Promise<boolean> {
+    const res = await this.model.updateOne(
+      { _id: id, status: 'syncing', ingestClaimToken: expectedToken },
+      { $set: { treeCandidateCount: candidateCount, treeSkippedCount: skippedCount } }
+    );
+    return res.matchedCount > 0;
+  }
+
   async releaseSyncClaim(
     id: string,
     expectedToken: string,
     lastError: string | null,
-    status: 'connected' | 'error' = 'connected'
+    status: GitHubLakeReleaseStatus = 'connected'
   ): Promise<(IOrgGitHubLakeConnectionDocument & IMongoDocument) | null> {
     return this.model.findOneAndUpdate(
       { _id: id, status: 'syncing', ingestClaimToken: expectedToken },
@@ -270,6 +307,40 @@ class OrgGitHubLakeConnectionRepository
   async recordLastError(id: string, lastError: string): Promise<boolean> {
     const res = await this.model.updateOne({ _id: id }, { $set: { lastError: redactLastError(lastError) } });
     return res.matchedCount > 0;
+  }
+
+  async findDueForReconcile(limit: number): Promise<(IOrgGitHubLakeConnectionDocument & IMongoDocument)[]> {
+    if (limit <= 0) return [];
+    // Oldest-checked, not oldest-synced: lastSyncedAt only moves on a successful sync, so idle or failing
+    // repos would head every batch and starve the rest past the cap. Missing reconcileCheckedAt sorts first.
+    return this.model
+      .find({
+        ...NOT_DISABLED,
+        disconnectRequestedAt: { $in: [null] },
+        $or: [
+          { status: { $in: ['connected', null] } },
+          ...staleSyncClaimClauses().map(clause => ({ status: 'syncing', ...clause })),
+        ],
+      })
+      .sort({ reconcileCheckedAt: 1, _id: 1 })
+      .limit(limit);
+  }
+
+  async markReconcileChecked(ids: readonly string[], at: Date): Promise<void> {
+    if (ids.length === 0) return;
+    await this.model.updateMany(
+      { _id: { $in: [...ids] } },
+      { $set: { reconcileCheckedAt: at } },
+      { timestamps: false }
+    );
+  }
+
+  async markReconcileEnqueued(id: string, sha: string | null, at: Date): Promise<void> {
+    await this.model.updateOne(
+      { _id: id },
+      { $set: { reconcileEnqueuedSha: sha, reconcileEnqueuedAt: at } },
+      { timestamps: false }
+    );
   }
 }
 

@@ -15,10 +15,11 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { ISessionDocument } from '@bike4mind/common';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import toast from 'react-hot-toast';
+import { toast } from 'sonner';
 import type { TranscriptItem } from './types';
 import { useVoiceKeepAlive } from './useVoiceKeepAlive';
 
@@ -43,6 +44,40 @@ let pendingVoiceConnect: PendingVoiceConnect | null = null;
 // handshake is a one-shot POST and ICE-restart renegotiation isn't supported.
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_BACKOFF_MS = [1000, 2000, 4000];
+
+const ZERO_VOICE_USAGE = {
+  audioInputTokens: 0,
+  audioCachedInputTokens: 0,
+  audioOutputTokens: 0,
+  textInputTokens: 0,
+  textCachedInputTokens: 0,
+  textOutputTokens: 0,
+};
+
+// Probe the microphone BEFORE bootstrapping: the bootstrap reserves credits, and a
+// browser with no (or a denied) mic would otherwise pay for a call that can never
+// connect. The tracks are released at once; setupRealtimeConnection reopens the mic.
+async function ensureMicrophone(): Promise<void> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw Object.assign(new Error('Microphone is not available in this browser.'), { name: 'NotFoundError' });
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  stream.getTracks().forEach(track => track.stop());
+}
+
+function microphoneErrorMessage(err: unknown): string {
+  const name = err instanceof Error ? err.name : undefined;
+  if (name === 'NotAllowedError') {
+    return 'Microphone access denied. Allow this site to use the microphone in your browser settings, then try again.';
+  }
+  if (name === 'NotReadableError') {
+    return 'Microphone is busy (in use by another app). Close other audio apps and retry.';
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return 'No microphone detected. Plug in / select an audio input device, then retry.';
+  }
+  return 'Could not start the microphone. Check your browser and device settings, then retry.';
+}
 
 export interface UseVoiceSessionEngineOptions {
   sessionId?: string;
@@ -135,6 +170,20 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
   // Holds the latest reconnect() so the pc state handlers can invoke it without
   // creating a connect()/reconnect() dependency cycle.
   const reconnectRef = useRef<(() => void) | null>(null);
+  // The credit hold the last bootstrap opened. Each response is billed against it by id and it
+  // stays open across responses and reconnects; a terminal teardown closes it, which refunds
+  // whatever the call did not use.
+  const unsettledHoldRef = useRef<{ sessionId: string; model: string; userId: string } | null>(null);
+  // Bumped by every terminal teardown. A connect compares it across its awaits (the mic
+  // permission prompt, the bootstrap) to notice that End or an unmount ran meanwhile and
+  // must not carry on to open a call on an instance the user already left.
+  const teardownEpochRef = useRef(0);
+  // Read through a ref so handleDisconnectFromRealtime stays referentially stable: the
+  // unmount cleanup effect depends on it and would otherwise tear down a live call.
+  const sendJsonMessageRef = useRef(sendJsonMessage);
+  useEffect(() => {
+    sendJsonMessageRef.current = sendJsonMessage;
+  }, [sendJsonMessage]);
   // Derived state
   const isActive = connectionStatus !== 'disconnected';
   const activeSessionId = sessionId || createdSessionId;
@@ -338,6 +387,18 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
     setAssistantStream(null);
   }, []);
 
+  const settleUnsettledHold = useCallback(() => {
+    const hold = unsettledHoldRef.current;
+    if (!hold) return;
+    unsettledHoldRef.current = null;
+    try {
+      sendJsonMessageRef.current({ action: 'voice_session_ended', ...hold, usage: ZERO_VOICE_USAGE });
+    } catch (err) {
+      // A closed socket must not abort teardown; the stale-hold sweep reclaims the hold.
+      addDebugLog(`[RT] Failed to settle credit hold: ${String(err)}`);
+    }
+  }, [addDebugLog]);
+
   // WebRTC disconnect (terminal)
   const handleDisconnectFromRealtime = useCallback(() => {
     // Cancel any in-flight reconnect - this is a real teardown, not a blip.
@@ -347,9 +408,11 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
     }
     reconnectAttemptsRef.current = 0;
 
+    teardownEpochRef.current += 1;
     releaseRealtimeResources();
+    settleUnsettledHold();
     setConnectionStatus('disconnected');
-  }, [releaseRealtimeResources, setConnectionStatus]);
+  }, [releaseRealtimeResources, settleUnsettledHold, setConnectionStatus]);
 
   // Session end completion
   const completeSessionEnd = useCallback(() => {
@@ -373,7 +436,7 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
   }, [reset, queryClient, sessionId, createdSessionId, onSessionEnded]);
 
   // Connect to Realtime API
-  const connect = useCallback(
+  const establishConnection = useCallback(
     async (opts?: { isReconnect?: boolean }) => {
       const isReconnect = opts?.isReconnect ?? false;
       // Allow re-entry when resuming after navigation (status stays 'connecting'
@@ -386,12 +449,18 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
       )
         return;
       if (!currentUser?.id) return;
+      const userId = currentUser.id;
+      const epoch = teardownEpochRef.current;
+      const isStale = () => teardownEpochRef.current !== epoch;
 
       setConnectionStatus(isReconnect ? 'reconnecting' : 'connecting');
 
       let ephemeralKey: string;
       let resolvedSessionId: string;
       let model: string;
+      const trackHold = () => {
+        unsettledHoldRef.current = { sessionId: resolvedSessionId, model, userId };
+      };
 
       // Check for pending connection data from a pre-navigation API call.
       // When connect() creates a new session on a route without a sessionId,
@@ -406,29 +475,61 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
         resolvedSessionId = pending.sessionId;
         model = pending.model;
         connectedSessionIdRef.current = resolvedSessionId;
+        trackHold();
         if (pending.voice && pending.voice !== selectedVoice) {
           setSelectedVoice(pending.voice);
         }
         addDebugLog('[RT] Resuming voice connect after navigation');
       } else {
-        const { data } = await api.post<{
-          session: ISessionDocument;
-          model: string;
-          voice: string;
-          ephemeralKey: string;
-        }>('/api/ai/voice-sessions', {
-          // On reconnect, force the already-resolved session so we re-attach to it
-          // (and don't create a second empty session) rather than the prop.
-          sessionId: isReconnect ? connectedSessionIdRef.current : sessionId,
-          // Tell the server to reuse the existing credit hold rather than reserving
-          // (and charging) a second time for the same call.
-          isReconnect,
-        });
+        if (!isReconnect) {
+          try {
+            await ensureMicrophone();
+          } catch (err) {
+            if (!isStale()) {
+              toast.error(microphoneErrorMessage(err), { id: 'voice-session-start-error' });
+              setConnectionStatus('disconnected');
+            }
+            return;
+          }
+          if (isStale()) return;
+        }
+        const response = await api
+          .post<{
+            session: ISessionDocument;
+            model: string;
+            voice: string;
+            ephemeralKey: string;
+          }>('/api/ai/voice-sessions', {
+            // On reconnect, force the already-resolved session so we re-attach to it
+            // (and don't create a second empty session) rather than the prop.
+            sessionId: isReconnect ? connectedSessionIdRef.current : sessionId,
+            // Tell the server to reuse the existing credit hold rather than reserving
+            // (and charging) a second time for the same call.
+            isReconnect,
+          })
+          .catch((error: unknown) => {
+            // A reconnect's caller owns the retry/backoff, so it must still see the rejection.
+            if (isReconnect) throw error;
+            const serverMessage = (error as { response?: { data?: { error?: unknown } } }).response?.data?.error;
+            toast.error(typeof serverMessage === 'string' ? serverMessage : 'Failed to start voice session.', {
+              id: 'voice-session-start-error',
+            });
+            setConnectionStatus('disconnected');
+            return null;
+          });
+        if (!response) return;
+        const { data } = response;
 
         resolvedSessionId = data.session.id;
         connectedSessionIdRef.current = resolvedSessionId;
         model = data.model;
         ephemeralKey = data.ephemeralKey;
+        trackHold();
+        if (isStale()) {
+          // End or unmount ran during the bootstrap, after its own settle found nothing to do.
+          settleUnsettledHold();
+          return;
+        }
 
         if (data.voice && data.voice !== selectedVoice) {
           setSelectedVoice(data.voice);
@@ -474,7 +575,7 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
       // across that await, so read the live store value - otherwise we'd park a
       // freshly-built pc/dc/audioContext in the refs *after* teardown already ran,
       // leaking a live peer connection (and the mic) the UI thinks is closed.
-      if (useVoiceSessionStore.getState().isEnding) {
+      if (isStale() || useVoiceSessionStore.getState().isEnding) {
         pc.close();
         audioContext.close();
         localStream.getTracks().forEach(track => track.stop());
@@ -594,7 +695,9 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
                 sessionId: resolvedSessionId,
                 model,
                 usage: usageData,
-                userId: currentUser.id,
+                userId,
+                // Bills this response once, against the open hold.
+                ...(serverEvent.response?.id ? { responseId: serverEvent.response.id } : {}),
               });
             }
 
@@ -709,10 +812,27 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
       updateTranscriptMessage,
       updateTranscriptItem,
       handleDisconnectFromRealtime,
+      settleUnsettledHold,
       completeSessionEnd,
       subscribeToAction,
       onSessionCreated,
     ]
+  );
+
+  // A first connect that fails after the bootstrap (mic, peer connection, SDP) is
+  // terminal: tear down and settle the hold. A reconnect rethrows so its ladder retries.
+  const connect = useCallback(
+    async (opts?: { isReconnect?: boolean }) => {
+      try {
+        await establishConnection(opts);
+      } catch (err) {
+        if (opts?.isReconnect) throw err;
+        addDebugLog(`[RT] Connect failed: ${String(err)}`);
+        handleDisconnectFromRealtime();
+        toast.error('Failed to open voice connection. Please try again.', { id: 'voice-session-start-error' });
+      }
+    },
+    [establishConnection, handleDisconnectFromRealtime, addDebugLog]
   );
 
   // Reconnect after an abnormal connection drop.
@@ -816,7 +936,7 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
   useEffect(() => {
     if (!isActive || !enforceCredits) return;
     if ((currentUser?.currentCredits ?? 0) <= 0) {
-      toast.error('Out of Credits! Voice session ended.');
+      toast.error('Out of Credits! Voice session ended.', { id: 'voice-session-start-error' });
       endSession();
     }
   }, [isActive, enforceCredits, currentUser?.currentCredits, endSession]);
@@ -862,6 +982,35 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
       connect().catch(err => console.error('Failed to resume voice session after navigation:', err));
     }
   }, [sessionId, connectionStatus, connect]);
+
+  // Closing or reloading the tab never runs React teardown, so settle the hold as the page goes
+  // away. A WebSocket frame sent during pagehide can be dropped, so the same hold is also ended
+  // through POST /api/voice/v2/sessions/{id}/end as a keepalive fetch, which the browser finishes
+  // after unload. Both settle through the one-shot hold claim, so whichever lands first wins and
+  // the other is a no-op. A crash sends neither; the stale-hold sweep reclaims that hold.
+  useEffect(() => {
+    const settleOnPageHide = () => {
+      const hold = unsettledHoldRef.current;
+      settleUnsettledHold();
+      if (!hold) return;
+      // A keepalive fetch cannot run the 401 refresh, so an expired token makes this /end a 401; if
+      // the WebSocket frame is dropped too, the stale-hold sweep reclaims the hold as for a crash.
+      const token = useAccessToken.getState().accessToken;
+      try {
+        void fetch(`/api/voice/v2/sessions/${encodeURIComponent(hold.sessionId)}/end`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: '{}',
+          credentials: 'same-origin',
+          keepalive: true,
+        }).catch(() => {});
+      } catch {
+        // A browser that rejects keepalive still has the WebSocket frame and the sweep.
+      }
+    };
+    window.addEventListener('pagehide', settleOnPageHide);
+    return () => window.removeEventListener('pagehide', settleOnPageHide);
+  }, [settleUnsettledHold]);
 
   // Cleanup on unmount
   useEffect(() => {

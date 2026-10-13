@@ -13,6 +13,7 @@ export const CREDENTIALS: DiscoveryCredentials = {
   ollama: 'http://localhost:11434',
   imageGen: null,
   elevenlabs: 'test-elevenlabs',
+  bedrock: true,
   awsIam: true,
   isSelfHost: false,
 };

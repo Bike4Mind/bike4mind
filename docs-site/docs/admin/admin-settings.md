@@ -81,6 +81,18 @@ Located in the AI category, the Operations Model setting allows administrators t
 - **Image Model** -- The model for image-related operations
 - **Speech Model** -- The model for speech-to-text operations
 
+### Video Generation Models
+
+Located in the AI category, this card shows one switch per video model in the catalog. Each switch shows whether the server will accept video jobs for that model:
+
+- A model that is on by default and has no admin override reads "Enabled by default"
+- Turning a model off makes new video jobs for it be refused
+- Models whose provider is not configured on the deployment (for example, the non-production test model on production) cannot generate regardless of the switch
+
+### Agent Video Clips Per Run
+
+Located in the AI category. Sets how many video clips one agent-mode run may start, counted across the run and the subagents it delegates to in the same process. The default is 2. Set it to 0 to remove video generation from agent mode. The tool is offered only when `video_generation` is in the Agent Orchestration Defaults allowed tools. A deployment that saved that list before this release keeps its stored list, so an admin must add `video_generation` to it. A platform admin can override it for a single organization from the setting's scoped overrides. When a run reaches its limit, the agent is told so and no further clip is started; each clip still holds and settles its own credits. Runs started with an API key never get the video tool.
+
 ### Logo Upload
 
 Located in the Branding category, the Logo Upload component provides:

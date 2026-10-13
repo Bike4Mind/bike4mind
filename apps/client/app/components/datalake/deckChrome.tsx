@@ -277,19 +277,15 @@ export const ActiveBriefCard = memo(function ActiveBriefCard({
   description,
   stats,
   objectiveLine,
-  isDark,
   actions,
-  fromChat = false,
 }: {
   name: string;
   description?: string;
   stats: string[];
   objectiveLine: string;
-  isDark: boolean;
+  // Unused; kept for existing callers that still pass it.
+  isDark?: boolean;
   actions?: ReactNode;
-  /** True when this brief is the one the AI chat last formulated (and hasn't been
-   *  hand-edited since); surfaces a persistent "synced from chat" provenance chip. */
-  fromChat?: boolean;
 }) {
   return (
     // No frame, ground or inset of its own: the brief is the first thing in the
@@ -313,11 +309,6 @@ export const ActiveBriefCard = memo(function ActiveBriefCard({
         >
           Active Brief — now solving
         </Typography>
-        {fromChat && (
-          <Chip data-testid="opti-brief-from-chat" size="sm" variant="outlined" sx={dataChipSx(isDark)}>
-            synced from chat
-          </Chip>
-        )}
       </Box>
       {/* Each line carries its own bottom margin: the card's own gap is off, so a
           line that does not render (no description) takes no space with it. */}
@@ -331,11 +322,11 @@ export const ActiveBriefCard = memo(function ActiveBriefCard({
       )}
       <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mb: '24px' }}>
         {stats.map(stat => (
-          <Chip key={stat} size="sm" variant="outlined" sx={dataChipSx(isDark)}>
+          <Chip key={stat} size="sm" variant="outlined" sx={dataChipSx}>
             {stat}
           </Chip>
         ))}
-        <Chip size="sm" variant="outlined" sx={dataChipSx(isDark)}>
+        <Chip size="sm" variant="outlined" sx={dataChipSx}>
           {objectiveLine}
         </Chip>
       </Box>

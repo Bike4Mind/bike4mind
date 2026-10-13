@@ -1,0 +1,273 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-mongo-data
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.storage.mongo }}
+  {{- if ne .Values.storage.className nil }}
+  storageClassName: {{ .Values.storage.className | quote }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-mongo
+spec:
+  replicas: 1
+  serviceName: {{ .Release.Name }}-mongo
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: mongo}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: mongo}
+    spec:
+      {{ include "b4m.pod" . | nindent 6 }}
+      terminationGracePeriodSeconds: 60
+      initContainers:
+        - name: wait-member-dns
+          image: {{ .Values.images.mongo | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: [/bin/sh, /scripts/mongo-dns-guard.sh]
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef: {fieldPath: status.podIP}
+            - {name: MEMBER_DNS, value: '{{ .Release.Name }}-mongo-0.{{ .Release.Name }}-mongo'}
+            - {name: DNS_GUARD_SECONDS, value: {{ .Values.mongoDnsGuardSeconds | quote }}}
+          resources: {{ .Values.resources.backing | toJson }}
+          volumeMounts:
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+      containers:
+        - name: mongo
+          image: {{ required "images.mongo is required" .Values.images.mongo | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources: {{ .Values.resources.backing | toJson }}
+          ports: [{name: service, containerPort: 27017}]
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              ulimit -n 64000
+              exec mongod --replSet rs0 --bind_ip_all
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef: {fieldPath: status.podIP}
+            - {name: MEMBER_DNS, value: '{{ .Release.Name }}-mongo-0.{{ .Release.Name }}-mongo'}
+            - {name: DNS_GUARD_SECONDS, value: {{ .Values.mongoDnsGuardSeconds | quote }}}
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  mongosh --quiet --eval '
+                    try { rs.status(); }
+                    catch (e) {
+                      if (e.code !== 94) throw e;
+                      const result = rs.initiate({_id:"rs0",members:[{_id:0,host:process.env.MEMBER_DNS+":27017"}]});
+                      if (!result.ok) quit(1);
+                    }
+                    const config = rs.conf();
+                    if (config.members.length !== 1 || config.members[0].host !== process.env.MEMBER_DNS+":27017") quit(1);
+                    if (!db.hello().isWritablePrimary) quit(1);'
+            timeoutSeconds: 10
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: [mongosh, --quiet, --eval, 'if (!db.hello().isWritablePrimary) quit(1)']
+            timeoutSeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - {name: data, mountPath: /data/db}
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-mongo-data
+        - name: scripts
+          configMap:
+            name: {{ .Release.Name }}-scripts
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-mongo
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: mongo}
+  ports: [{name: service, port: 27017, targetPort: service}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-minio-data
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.storage.minio }}
+  {{- if ne .Values.storage.className nil }}
+  storageClassName: {{ .Values.storage.className | quote }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-minio
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: minio}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: minio}
+    spec:
+      {{ include "b4m.pod" . | nindent 6 }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: minio
+          image: {{ required "images.minio is required" .Values.images.minio | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources: {{ .Values.resources.backing | toJson }}
+          ports: [{name: service, containerPort: 9000}]
+          command: [minio, server, /data, --console-address, ':9001']
+          {{ include "b4m.env" . | nindent 10 }}
+            - {name: MINIO_NOTIFY_WEBHOOK_ENABLE_primary, value: 'on'}
+            - {name: MINIO_NOTIFY_WEBHOOK_ENDPOINT_primary, value: 'http://{{ .Release.Name }}-app:3000/api/internal/s3/object-created'}
+            - name: MINIO_NOTIFY_WEBHOOK_AUTH_TOKEN_primary
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: INTERNAL_S3_WEBHOOK_SECRET
+          readinessProbe:
+            httpGet: {path: /minio/health/live, port: service}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-minio-data
+        - name: scripts
+          configMap:
+            name: {{ .Release.Name }}-scripts
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-minio
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: minio}
+  ports: [{name: service, port: 9000, targetPort: service}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-sqs-data
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.storage.sqs }}
+  {{- if ne .Values.storage.className nil }}
+  storageClassName: {{ .Values.storage.className | quote }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-sqs
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: sqs}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: sqs}
+    spec:
+      {{ include "b4m.pod" . | nindent 6 }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: sqs
+          image: {{ required "images.sqs is required" .Values.images.sqs | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources: {{ .Values.resources.backing | toJson }}
+          ports: [{name: service, containerPort: 9324}]
+          readinessProbe:
+            tcpSocket: {port: service}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: scripts, mountPath: /opt/elasticmq.conf, subPath: elasticmq.conf, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-sqs-data
+        - name: scripts
+          configMap:
+            name: {{ .Release.Name }}-scripts
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-sqs
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: sqs}
+  ports: [{name: service, port: 9324, targetPort: service}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-mail
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: mail}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: mail}
+    spec:
+      {{ include "b4m.pod" . | nindent 6 }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: mail
+          image: {{ required "images.mail is required" .Values.images.mail | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources: {{ .Values.resources.backing | toJson }}
+          ports: [{name: service, containerPort: 1025}]
+          readinessProbe:
+            tcpSocket: {port: service}
+          # Mail UI is reachable only through an explicit port-forward.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-mail
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: mail}
+  ports: [{name: service, port: 1025, targetPort: service}]

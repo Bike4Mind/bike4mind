@@ -7,9 +7,11 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import {
   DOMAIN_GRANTS,
+  IMPLIED_ENTITLEMENTS,
   PRICE_ENTITLEMENTS,
-  TAG_GRANTS,
   allKnownEntitlementKeys,
+  applyImpliedEntitlements,
+  entitlementsForTags,
   grantTagForEntitlement,
   isBypassExemptEntitlement,
   normalizeTag,
@@ -18,7 +20,7 @@ import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
 import { ApiKeyScope, hasDeveloperUserTag } from '@bike4mind/common';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 
-type EntitlementSourceType = 'tag' | 'domain' | 'subscription' | 'admin-bypass' | 'developer-bypass';
+type EntitlementSourceType = 'tag' | 'domain' | 'subscription' | 'implied' | 'admin-bypass' | 'developer-bypass';
 
 interface EntitlementSource {
   type: EntitlementSourceType;
@@ -39,7 +41,7 @@ interface EntitlementRow {
  * dependency; admin-roles-product-access-redesign M2+M4). Unlike
  * `getUserEntitlements` (which returns only the held key set for gating),
  * this walks EVERY known product key and records every contributing source
- * -tag / domain / subscription / admin bypass / developer-tag bypass - so an
+ * -tag / domain / subscription / implied / admin bypass / developer-tag bypass - so an
  * admin can see and revoke a phantom grant instead of guessing at it. The two
  * bypass sources are suppressed for bypass-exempt keys (see
  * `isBypassExemptEntitlement`), whose enforcement honors neither bypass, so the
@@ -87,12 +89,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     const knownKeys = allKnownEntitlementKeys();
     const reportedKeys = [...knownKeys, ...[...partnerKeys].filter(key => !knownKeys.includes(key))];
 
-    const rows: EntitlementRow[] = reportedKeys.map(key => {
+    const literalSources = new Map<EntitlementKey, EntitlementSource[]>();
+    for (const key of reportedKeys) {
       const sources: EntitlementSource[] = [];
 
+      // Same tag->key rule as the panel's live axis (`entitlementsForTags`): 1:1 by the
+      // tag's own name, or through a TAG_GRANTS remap.
       for (const tag of tags) {
-        const normalizedTag = normalizeTag(tag);
-        if (normalizedTag === key || TAG_GRANTS.get(normalizedTag)?.includes(key)) {
+        if (entitlementsForTags([tag]).has(key)) {
           sources.push({ type: 'tag', detail: tag });
         }
       }
@@ -108,6 +112,22 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
         if (PRICE_ENTITLEMENTS.get(subscription.priceId)?.includes(key)) {
           const planName = SUBSCRIPTION_PLANS_MAP[subscription.priceId]?.name ?? subscription.priceId;
           sources.push({ type: 'subscription', detail: planName });
+        }
+      }
+      literalSources.set(key, sources);
+    }
+
+    // Implications are expanded from LITERAL grants only (never a bypass), through the same
+    // `applyImpliedEntitlements` that `getUserEntitlements` runs, so this report and the
+    // enforced key set agree. The detail names the implying key.
+    const literallyHeld = reportedKeys.filter(key => (literalSources.get(key) ?? []).length > 0);
+    const heldWithImplied = new Set(applyImpliedEntitlements(literallyHeld));
+
+    const rows: EntitlementRow[] = reportedKeys.map(key => {
+      const sources = [...(literalSources.get(key) ?? [])];
+      for (const [ifHeld, alsoGrant] of IMPLIED_ENTITLEMENTS) {
+        if (alsoGrant.includes(key) && heldWithImplied.has(ifHeld)) {
+          sources.push({ type: 'implied', detail: ifHeld });
         }
       }
 

@@ -38,7 +38,7 @@ describe('loadAgentMcpTools', () => {
     expect(mcpToolsByServer.atlassian[0].name).toBe('atlassian__jira_list_projects');
   });
 
-  it('skips enabled servers when cached schemas and live fetch both return empty', async () => {
+  it('live-fetches a never-fetched empty server and records the confirmed-empty marker', async () => {
     const bare = { id: 'b1', name: 'github', userId: 'u1', enabled: true, toolSchemas: [] } as any;
     const emptyGetTools = vi.fn(async () => []);
     const emptyClient = vi.fn(async () => ({ getTools: emptyGetTools, callTool: vi.fn() }));
@@ -48,11 +48,71 @@ describe('loadAgentMcpTools', () => {
       { userId: 'u1', enableMCPServer: true }
     );
     expect(mcpToolsByServer).toEqual({});
-    // Should have attempted a live fetch
-    expect(emptyGetTools).toHaveBeenCalled();
+    expect(emptyGetTools).toHaveBeenCalledTimes(1);
+    // Empty is persisted as confirmed-empty, with the marker that makes it meaningful.
+    expect(mcpServers.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'b1', tools: [], toolSchemas: [], toolSchemasFetchedAt: expect.any(Date) })
+    );
   });
 
-  it('live-fetches and caches tool schemas when cached schemas are missing', async () => {
+  it('skips the live fetch for a confirmed-empty server whose marker is still fresh', async () => {
+    const bare = {
+      id: 'b1',
+      name: 'github',
+      userId: 'u1',
+      enabled: true,
+      toolSchemas: [],
+      toolSchemasFetchedAt: new Date(),
+    } as any;
+    const client = vi.fn(async () => ({ getTools: vi.fn(), callTool: vi.fn() }));
+    const mcpServers = { find: vi.fn(async () => [bare]), update: vi.fn() };
+    const { mcpToolsByServer } = await loadAgentMcpTools(
+      { mcpServers: mcpServers as any, getMcpClient: client, logger },
+      { userId: 'u1', enableMCPServer: true }
+    );
+    expect(mcpToolsByServer).toEqual({});
+    expect(client).not.toHaveBeenCalled();
+    expect(mcpServers.update).not.toHaveBeenCalled();
+  });
+
+  it('refetches a confirmed-empty server once its marker ages past the TTL', async () => {
+    const stale = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const bare = {
+      id: 'b1',
+      name: 'github',
+      userId: 'u1',
+      enabled: true,
+      toolSchemas: [],
+      toolSchemasFetchedAt: stale,
+    } as any;
+    const emptyGetTools = vi.fn(async () => []);
+    const client = vi.fn(async () => ({ getTools: emptyGetTools, callTool: vi.fn() }));
+    const mcpServers = { find: vi.fn(async () => [bare]), update: vi.fn() };
+    await loadAgentMcpTools(
+      { mcpServers: mcpServers as any, getMcpClient: client, logger },
+      { userId: 'u1', enableMCPServer: true }
+    );
+    expect(emptyGetTools).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not persist on a failed live fetch, so the next turn retries', async () => {
+    const bare = { id: 'b1', name: 'github', userId: 'u1', enabled: true, toolSchemas: [] } as any;
+    const failingGetTools = vi.fn(async () => {
+      throw new Error('lambda cold start');
+    });
+    const client = vi.fn(async () => ({ getTools: failingGetTools, callTool: vi.fn() }));
+    const mcpServers = { find: vi.fn(async () => [bare]), update: vi.fn() };
+    const deps = { mcpServers: mcpServers as any, getMcpClient: client, logger };
+
+    await loadAgentMcpTools(deps, { userId: 'u1', enableMCPServer: true });
+    await loadAgentMcpTools(deps, { userId: 'u1', enableMCPServer: true });
+
+    expect(mcpServers.update).not.toHaveBeenCalled();
+    // No marker was written, so the second turn still attempts a live fetch.
+    expect(failingGetTools).toHaveBeenCalledTimes(2);
+  });
+
+  it('live-fetches and caches non-empty tool schemas with the marker', async () => {
     const bare = { id: 'b1', name: 'notion', userId: 'u1', enabled: true, toolSchemas: [] } as any;
     const liveTools = [
       { name: 'notion_search', description: 'search', input_schema: {} },
@@ -74,6 +134,7 @@ describe('loadAgentMcpTools', () => {
         id: 'b1',
         tools: ['notion_search', 'notion_create_page'],
         toolSchemas: liveTools,
+        toolSchemasFetchedAt: expect.any(Date),
       })
     );
   });

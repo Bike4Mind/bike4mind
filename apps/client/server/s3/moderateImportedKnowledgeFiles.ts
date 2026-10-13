@@ -24,7 +24,7 @@ interface ClaimedFabFile {
 }
 
 export interface ModerateImportedKnowledgeFilesArgs {
-  /** S3 keys of the just-imported knowledge files, one per FabFile. */
+  /** S3 keys of the FabFiles to scan, one per row. */
   filePaths: string[];
   userId: string;
   enabled: boolean;
@@ -66,8 +66,9 @@ export interface ModerateImportedKnowledgeFilesArgs {
    * age floor, where a never-created object is a permanent orphan (an import whose bytes never
    * landed); releasing would re-select the same orphan every run - a poison batch that starves
    * genuinely-stranded rows. Soft-delete (a storage-cleanup outcome, not a content-policy `blocked`
-   * verdict) drains it without an un-appealable false block. The fresh-import path leaves it unset,
-   * so a young row's missing object is treated as transient and released for the sweep to retry later.
+   * verdict) drains it without an un-appealable false block. The fresh-import path leaves it unset
+   * and the self-host webhook passes false, so a young row's missing object is treated as transient
+   * and released for the sweep to retry later.
    */
   terminalOnMissingObject?: boolean;
   /**
@@ -99,15 +100,16 @@ function isMissingObjectError(err: unknown): boolean {
 }
 
 /**
- * Scan knowledge files an import just wrote, OUT OF BAND and post-commit. The import stamps every
- * file `pending` (the schema default) and returns here once its transaction has committed - the
+ * Scan knowledge files an import just wrote, OUT OF BAND and post-commit. The self-host object-created
+ * webhook also runs this for a single freshly landed upload. The import stamps every file `pending`
+ * (the schema default) and returns here once its transaction has committed - the
  * natural S3 ObjectCreated scan (see server/s3/objectCreated.ts) fires at upload time, before the
  * row exists inside the still-open import transaction, so it always bails; without this pass an
  * imported image would sit `pending` forever (unservable) which is why the import used to
  * mis-stamp it `clean` and bypass moderation entirely. The declared mimeType is attacker-supplied,
  * so `moderate` (moderateUploadedFile) byte-sniffs the real type: non-images resolve to `clean`
  * immediately, real image bytes take the Rekognition path. Shares moderateUploadedFile's verdict
- * logic and the fail-closed invariant with the upload-time path (objectCreated.ts) - a terminal
+ * logic and the fail-closed invariant with the hosted upload-time path (objectCreated.ts) - a terminal
  * verdict is never re-scanned and a held file stays unservable 'pending' - but serializes via its
  * own atomic pending|null -> scanning claim, which is a different mechanism from objectCreated's
  * (that path never writes the interim 'scanning' state). Never throws - a failed scan leaves the

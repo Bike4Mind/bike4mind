@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { IOrganizationDocument } from '@bike4mind/common';
 import {
+  getMemberCreditCap,
+  getMemberCreditPeriodEnd,
+  getMemberCreditPeriodStart,
   getMemberUsedCredits,
   isMemberAtOrOverCap,
   isMemberCreditCapExceeded,
@@ -12,11 +15,44 @@ const org = (overrides: Partial<IOrganizationDocument>): IOrganizationDocument =
   ({
     id: 'org1',
     maxCreditsPerMember: null,
-    userDetails: [{ id: 'user1', usedCredits: 40, lastCreditUsedAt: null }],
+    userDetails: [{ id: 'user1', usedCredits: 40, lastCreditUsedAt: null, periodStart: getMemberCreditPeriodStart() }],
     ...overrides,
   }) as unknown as IOrganizationDocument;
 
+const row = (extra: Record<string, unknown>) => ({ id: 'user1', usedCredits: 40, lastCreditUsedAt: null, ...extra });
+
+describe('member credit period', () => {
+  it('starts at the first instant of the UTC calendar month', () => {
+    expect(getMemberCreditPeriodStart(new Date('2026-10-15T12:00:00Z'))).toEqual(new Date('2026-10-01T00:00:00Z'));
+  });
+
+  it('uses the UTC month, not the server-local one, at a month boundary', () => {
+    expect(getMemberCreditPeriodStart(new Date('2026-10-31T23:59:59Z'))).toEqual(new Date('2026-10-01T00:00:00Z'));
+    expect(getMemberCreditPeriodStart(new Date('2026-11-01T00:00:00Z'))).toEqual(new Date('2026-11-01T00:00:00Z'));
+  });
+
+  it('ends at the start of the next month, rolling over the year', () => {
+    expect(getMemberCreditPeriodEnd(new Date('2026-12-20T00:00:00Z'))).toEqual(new Date('2027-01-01T00:00:00Z'));
+  });
+});
+
 describe('getMemberUsedCredits', () => {
+  const now = new Date('2026-10-15T12:00:00Z');
+
+  it('counts usage stamped with the current period', () => {
+    const organization = org({ userDetails: [row({ periodStart: new Date('2026-10-01T00:00:00Z') })] });
+    expect(getMemberUsedCredits(organization, 'user1', now)).toBe(40);
+  });
+
+  it('reads usage from an earlier month as 0 (the budget has reset)', () => {
+    const organization = org({ userDetails: [row({ periodStart: new Date('2026-09-01T00:00:00Z') })] });
+    expect(getMemberUsedCredits(organization, 'user1', now)).toBe(0);
+  });
+
+  it('reads a legacy row with no periodStart as 0 (a lifetime counter, not this month)', () => {
+    expect(getMemberUsedCredits(org({ userDetails: [row({})] }), 'user1', now)).toBe(0);
+  });
+
   it('returns the tracked usedCredits for a known member', () => {
     expect(getMemberUsedCredits(org({}), 'user1')).toBe(40);
   });
@@ -27,6 +63,31 @@ describe('getMemberUsedCredits', () => {
 
   it('returns 0 when userDetails is absent', () => {
     expect(getMemberUsedCredits(org({ userDetails: undefined }), 'user1')).toBe(0);
+  });
+});
+
+describe('getMemberCreditCap', () => {
+  it('is the org default when the member has no override', () => {
+    expect(getMemberCreditCap(org({ maxCreditsPerMember: 100 }), 'user1')).toBe(100);
+  });
+
+  it('prefers the per-member override over the org default, in either direction', () => {
+    const userDetails = [row({ maxCredits: 500 })];
+    expect(getMemberCreditCap(org({ maxCreditsPerMember: 100, userDetails }), 'user1')).toBe(500);
+    expect(getMemberCreditCap(org({ maxCreditsPerMember: 100, userDetails: [row({ maxCredits: 10 })] }), 'user1')).toBe(
+      10
+    );
+  });
+
+  it('caps a member with an override even when the org sets no default', () => {
+    expect(getMemberCreditCap(org({ userDetails: [row({ maxCredits: 25 })] }), 'user1')).toBe(25);
+  });
+
+  it('is null (uncapped) when neither is set, and inherits when the override is null', () => {
+    expect(getMemberCreditCap(org({}), 'user1')).toBeNull();
+    expect(
+      getMemberCreditCap(org({ maxCreditsPerMember: 100, userDetails: [row({ maxCredits: null })] }), 'user1')
+    ).toBe(100);
   });
 });
 
@@ -57,7 +118,10 @@ describe('isMemberCreditCapExceeded', () => {
   });
 
   it('is true once a member is already at/over the cap, even for a tiny charge (the #1536 compounding case)', () => {
-    const overCap = org({ maxCreditsPerMember: 10, userDetails: [{ id: 'user1', usedCredits: 19 } as never] });
+    const overCap = org({
+      maxCreditsPerMember: 10,
+      userDetails: [{ id: 'user1', usedCredits: 19, periodStart: getMemberCreditPeriodStart() } as never],
+    });
     expect(isMemberCreditCapExceeded(overCap, 'user1', 1)).toBe(true);
   });
 });
@@ -86,6 +150,27 @@ describe('isMemberAtOrOverCap', () => {
 
   it('treats an untracked member as 0 used, so a positive cap does not block them', () => {
     expect(isMemberAtOrOverCap(org({ maxCreditsPerMember: 10 }), 'stranger')).toBe(false);
+  });
+});
+
+describe('cap predicates with a per-member override and a rolled-over period', () => {
+  it('enforces the override instead of the org default', () => {
+    const organization = org({
+      maxCreditsPerMember: 1000,
+      userDetails: [row({ maxCredits: 40, periodStart: getMemberCreditPeriodStart() })],
+    });
+    expect(isMemberAtOrOverCap(organization, 'user1')).toBe(true);
+    expect(isMemberCreditCapExceeded(organization, 'user1', 1)).toBe(true);
+  });
+
+  it('unblocks a member whose spend belongs to last month', () => {
+    const lastMonth = new Date(getMemberCreditPeriodStart().getTime() - 1);
+    const organization = org({
+      maxCreditsPerMember: 40,
+      userDetails: [row({ periodStart: getMemberCreditPeriodStart(lastMonth) })],
+    });
+    expect(isMemberAtOrOverCap(organization, 'user1')).toBe(false);
+    expect(isMemberCreditCapExceeded(organization, 'user1', 40)).toBe(false);
   });
 });
 

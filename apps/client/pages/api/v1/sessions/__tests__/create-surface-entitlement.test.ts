@@ -17,6 +17,8 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'POST']?.(req, res), {
       use: () => chain,
+      // The same page also serves GET (listSessions); these tests only exercise POST.
+      get: () => chain,
       post: (fn: (req: { body: unknown; validated?: unknown }, res: unknown) => unknown) => (
         (routes.POST = (req, res) => {
           const r = req as { body: unknown; validated?: unknown };
@@ -29,6 +31,8 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
     return chain;
   },
 }));
+// dispatchByMethod (the page also serves GET) pulls the real baseApi, which needs a live DB module.
+vi.mock('@server/middlewares/baseApi', () => ({ methodNotAllowedHandler: () => () => undefined }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},

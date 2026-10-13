@@ -14,7 +14,7 @@
  * import constants from a product namespace into this file (wrong dependency
  * direction); keep the literals inline.
  */
-import type { DomainGrantRow, EntitlementKey, PriceEntitlementRow, TagGrantRow } from './types';
+import type { DomainGrantRow, EntitlementKey, ImpliedEntitlementRow, PriceEntitlementRow, TagGrantRow } from './types';
 import { isTestMode } from '@client/lib/subscriptions/constants';
 import { parseInternalStaffDomains, DATA_LAKE_SLUG_REGEX, MAX_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
 
@@ -172,6 +172,14 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // of by writing a tag straight into the user document, and so the partner-rules write
   // boundary stops rejecting it as unknown. Removed when the overlay is extracted.
   { tag: 'meetings', entitlements: ['meetings:pro'] },
+  // [DELETION-FOOTPRINT] Questmaster comp grant: the `questmaster-pro` tag bridges to
+  // `questmaster:pro`. No Stripe price; granted-only. Listing it here puts the key in
+  // KNOWN_ENTITLEMENT_KEYS (admin Product Access + the partner-rules write boundary).
+  // Holders of `optihashi:pro` also get it via IMPLIED_ENTITLEMENT_ROWS below.
+  // NOT the bare `questmaster` tag: that is an existing cohort tag (Invite Center colors
+  // `QuestMaster`, see InviteCenter/shared/tagColors.ts), and tags match case-insensitively,
+  // so mapping it would silently grant the product to every cohort member.
+  { tag: 'questmaster-pro', entitlements: ['questmaster:pro'] },
   // Embed white-label: the `embed-whitelabel` tag bridges to `embed:whitelabel`,
   // which gates hiding the "Powered by" branding on the public embed widget
   // (epic #41 Phase D). Checked against the KEY OWNER (org billing owner), not
@@ -208,11 +216,18 @@ const EXTERNAL_DOMAIN_GRANT_ROWS: DomainGrantRow[] = (() => {
   const raw = process.env.NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS;
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw) as Array<{ domain?: unknown; entitlements?: unknown }>;
-    return parsed
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return (parsed as unknown[])
+      .filter((row): row is { domain?: unknown; entitlements?: unknown } => typeof row === 'object' && row !== null)
       .map(row => ({
         domain: normalizeTag(String(row.domain ?? '')),
-        entitlements: (Array.isArray(row.entitlements) ? row.entitlements : []) as EntitlementKey[],
+        // Non-string entries are dropped (they would throw in normalizeTag on the hot path)
+        // and each key is normalized, so a mixed-case env key matches like every other source.
+        entitlements: (Array.isArray(row.entitlements) ? row.entitlements : [])
+          .filter((key): key is string => typeof key === 'string')
+          .map(normalizeTag)
+          .filter(Boolean),
       }))
       .filter(row => row.domain && row.entitlements.length > 0);
   } catch {
@@ -261,7 +276,8 @@ const DOMAIN_GRANT_ROWS: DomainGrantRow[] = [
 /**
  * Per-entitlement one-time signup credit grant. A domain-grant user (see
  * DOMAIN_GRANT_ROWS) receives the SUM of these amounts for every entitlement
- * key their verified email confers, granted ONCE at email verification
+ * key their verified email confers (an implied key never paying twice - see
+ * `signupCreditsForKeys`), granted ONCE at email verification
  * (apps/client/pages/api/email/verify.ts) - ADDITIVE on top of the flat
  * `defaultFreeCredits` open-registration grant, and with NO cap.
  *
@@ -270,11 +286,60 @@ const DOMAIN_GRANT_ROWS: DomainGrantRow[] = [
  * (250,000, ~$250 at the ~$0.001/credit package rate). Future product rows
  * inherit this automatically by adding a key here.
  *
- * [DELETION-FOOTPRINT] The entry leaves with its product on extraction.
+ * Summed over the keys the domain confers DIRECTLY - implied entitlements
+ * (IMPLIED_ENTITLEMENT_ROWS) are not expanded here, so an implication never
+ * adds signup credits on its own; and a directly conferred key that another
+ * held key implies counts zero, so {optihashi:pro, questmaster:pro} pays once.
+ *
+ * [DELETION-FOOTPRINT] Each entry leaves with its product on extraction.
  */
 const SIGNUP_CREDIT_ROWS: ReadonlyArray<{ key: EntitlementKey; credits: number }> = [
   { key: 'optihashi:pro', credits: 250_000 },
+  { key: 'questmaster:pro', credits: 250_000 },
 ];
+
+/**
+ * Implied entitlements: holding `ifHeld` also grants `alsoGrant`, whatever source
+ * granted `ifHeld` (subscription, tag, env domain, DB partner rule). Applied once in
+ * `getUserEntitlements` after every source has resolved, so `/api/entitlements`, the
+ * SPA gate and the server gates all agree; the admin Product Access resolver reports
+ * the result as an `implied` source.
+ *
+ * [DELETION-FOOTPRINT] Each row leaves with its product on extraction.
+ */
+const IMPLIED_ENTITLEMENT_ROWS: ImpliedEntitlementRow[] = [{ ifHeld: 'optihashi:pro', alsoGrant: ['questmaster:pro'] }];
+
+export const IMPLIED_ENTITLEMENTS: ReadonlyMap<EntitlementKey, readonly EntitlementKey[]> = new Map(
+  IMPLIED_ENTITLEMENT_ROWS.map(row => [normalizeTag(row.ifHeld), row.alsoGrant.map(normalizeTag)])
+);
+
+/**
+ * `keys` (normalized, de-duplicated, input order kept) followed by every key they
+ * imply via IMPLIED_ENTITLEMENTS, appended in first-discovered order. One linear walk
+ * over a growing list: an implied key is itself checked for implications, so a chain
+ * added later resolves fully, and a cycle terminates because each key is visited once.
+ * Deterministic for a given input order.
+ */
+export function applyImpliedEntitlements(
+  keys: Iterable<EntitlementKey>,
+  implications: ReadonlyMap<EntitlementKey, readonly EntitlementKey[]> = IMPLIED_ENTITLEMENTS
+): EntitlementKey[] {
+  const seen = new Set<EntitlementKey>();
+  const ordered: EntitlementKey[] = [];
+  const add = (key: unknown) => {
+    // Defensive: a malformed source (env JSON, a DB row) must not throw on this hot path.
+    if (typeof key !== 'string') return;
+    const normalized = normalizeTag(key);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    ordered.push(normalized);
+  };
+  for (const key of keys) add(key);
+  for (let i = 0; i < ordered.length; i++) {
+    for (const implied of implications.get(ordered[i]) ?? []) add(implied);
+  }
+  return ordered;
+}
 
 export const SIGNUP_CREDITS: ReadonlyMap<EntitlementKey, number> = new Map(
   SIGNUP_CREDIT_ROWS.map(row => [normalizeTag(row.key), row.credits])
@@ -294,11 +359,11 @@ export const DOMAIN_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new
 
 /**
  * Every entitlement key the registry recognizes as a grantable product, sorted - the union of
- * every grant source (price, comp-tag, email-domain) via `allKnownEntitlementKeys`, so there is
- * one source of truth for "what products exist" (e.g. `optihashi:pro`, `libreoncology:pro`). New
- * products surface here automatically as their rows are added above. Admin surfaces that let an
- * operator pick an entitlement to grant (LLM model gating, partner signup rules) source their
- * options from this so a typo can't persist a dead grant.
+ * every grant source (price, comp-tag, email-domain, implied) via `allKnownEntitlementKeys`, so
+ * there is one source of truth for "what products exist" (e.g. `optihashi:pro`,
+ * `libreoncology:pro`). New products surface here automatically as their rows are added above.
+ * Admin surfaces that let an operator pick an entitlement to grant (LLM model gating, partner
+ * signup rules) source their options from this so a typo can't persist a dead grant.
  */
 export const KNOWN_ENTITLEMENT_KEYS: readonly EntitlementKey[] = [...allKnownEntitlementKeys()].sort();
 
@@ -343,9 +408,14 @@ export function isDatalakeEntitlementKey(key: string): boolean {
  * Empty means every key is a known grantable product, or a `datalake:<slug>` grant (see
  * `isDatalakeEntitlementKey`). Used to reject typo'd keys at admin write boundaries before
  * they persist as a silent no-op grant.
+ *
+ * `known` defaults to the real catalog; it is injectable so the catalog test can prove an
+ * implied-only key counts as known without adding a fake product to the shipped registry.
  */
-export function unknownEntitlementKeys(keys: Iterable<string>): string[] {
-  const known = new Set(KNOWN_ENTITLEMENT_KEYS);
+export function unknownEntitlementKeys(
+  keys: Iterable<string>,
+  known: ReadonlySet<string> = new Set(KNOWN_ENTITLEMENT_KEYS)
+): string[] {
   const unknown = new Set<string>();
   for (const raw of keys) {
     const key = normalizeTag(raw);
@@ -424,14 +494,29 @@ export function signupCreditsForEmail(
 
 /**
  * Sum of the one-time signup credits for an already-resolved set of entitlement
- * keys (keys with no configured amount contribute 0). Lets a caller that already
- * holds the resolved keys (e.g. the email-verify handler, which also needs the
- * key set for cache invalidation) avoid re-resolving the email a second time.
+ * keys (normalized and de-duplicated; keys with no configured amount contribute 0).
+ * A key that ANOTHER key in the same set implies (IMPLIED_ENTITLEMENTS, through
+ * chains) counts zero, so a bundle never pays twice: {optihashi:pro,
+ * questmaster:pro} pays 250,000, the same as either alone. Unrelated products
+ * still sum. Lets a caller that already holds the resolved keys (e.g. the
+ * email-verify handler, which also needs the key set for cache invalidation)
+ * avoid re-resolving the email a second time.
  */
-export function signupCreditsForKeys(keys: Iterable<EntitlementKey>): number {
+export function signupCreditsForKeys(
+  keys: Iterable<EntitlementKey>,
+  credits: ReadonlyMap<EntitlementKey, number> = SIGNUP_CREDITS,
+  implications: ReadonlyMap<EntitlementKey, readonly EntitlementKey[]> = IMPLIED_ENTITLEMENTS
+): number {
+  // An empty implication map makes this a pure normalize + de-duplicate.
+  const held = applyImpliedEntitlements(keys, new Map());
+  const impliedByAnother = new Set<EntitlementKey>();
+  for (const key of held) {
+    // slice(1) drops `key` itself; the rest is everything it implies through chains.
+    for (const implied of applyImpliedEntitlements([key], implications).slice(1)) impliedByAnother.add(implied);
+  }
   let total = 0;
-  for (const key of keys) {
-    total += SIGNUP_CREDITS.get(key) ?? 0;
+  for (const key of held) {
+    if (!impliedByAnother.has(key)) total += credits.get(key) ?? 0;
   }
   return total;
 }
@@ -455,12 +540,20 @@ export function resolveEntitlements(input: {
 
 /**
  * Every entitlement key any grant source can confer - derived from the row
- * VALUES (tag remaps, domain grants, price grants), not a separately
- * maintained list. Admin Product Access panel uses this to enumerate every
- * product it should show, so a new product row here is picked up
- * automatically with no second list to update.
+ * VALUES (tag remaps, domain grants, price grants, implied `alsoGrant` keys),
+ * not a separately maintained list. Admin Product Access panel uses this to
+ * enumerate every product it should show, so a new product row here is picked up
+ * automatically with no second list to update. The implied keys are included so
+ * a key that is only ever implied (no tag/price/domain row of its own) is still
+ * shown in Product Access and accepted at the partner-rule write boundary.
+ *
+ * `implications` defaults to the real graph; it is injectable so the catalog
+ * test can prove the implied branch is load-bearing (today's only implied key
+ * also has a grant row, so a dropped implied loop would otherwise go unnoticed).
  */
-export function allKnownEntitlementKeys(): EntitlementKey[] {
+export function allKnownEntitlementKeys(
+  implications: ReadonlyMap<EntitlementKey, readonly EntitlementKey[]> = IMPLIED_ENTITLEMENTS
+): EntitlementKey[] {
   const keys = new Set<EntitlementKey>();
   for (const grantedKeys of TAG_GRANTS.values()) {
     for (const key of grantedKeys) keys.add(key);
@@ -469,6 +562,9 @@ export function allKnownEntitlementKeys(): EntitlementKey[] {
     for (const key of grantedKeys) keys.add(key);
   }
   for (const grantedKeys of PRICE_ENTITLEMENTS.values()) {
+    for (const key of grantedKeys) keys.add(key);
+  }
+  for (const grantedKeys of implications.values()) {
     for (const key of grantedKeys) keys.add(key);
   }
   return [...keys];
@@ -498,4 +594,5 @@ export const __registryRows = {
   tagGrantRows: TAG_GRANT_ROWS as readonly TagGrantRow[],
   domainGrantRows: DOMAIN_GRANT_ROWS as readonly DomainGrantRow[],
   signupCreditRows: SIGNUP_CREDIT_ROWS,
+  impliedRows: IMPLIED_ENTITLEMENT_ROWS as readonly ImpliedEntitlementRow[],
 };

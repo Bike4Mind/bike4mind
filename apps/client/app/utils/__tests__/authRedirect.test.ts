@@ -130,6 +130,22 @@ describe('applyRedirect', () => {
     expect(history.push).not.toHaveBeenCalled();
   });
 
+  it('loads a published-page path as a full document rather than an SPA route', () => {
+    const location = { assign: vi.fn(), replace: vi.fn() };
+    vi.stubGlobal('location', location);
+    try {
+      const history = { push: vi.fn(), replace: vi.fn() };
+      applyRedirect(history, '/p/r/abc123');
+      applyRedirect(history, '/a/token', '/new', true);
+      expect(location.assign).toHaveBeenCalledWith('/p/r/abc123');
+      expect(location.replace).toHaveBeenCalledWith('/a/token');
+      expect(history.push).not.toHaveBeenCalled();
+      expect(history.replace).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('replaces with the fallback when value is unsafe and replace is true', () => {
     const history = { push: vi.fn(), replace: vi.fn() };
     applyRedirect(history, '//evil.com', '/new', true);

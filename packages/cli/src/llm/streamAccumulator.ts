@@ -76,6 +76,11 @@ export class StreamAccumulator {
     return this.accumulatedText.trim().length === 0 && this.toolsUsed.length === 0;
   }
 
+  /** The stop reason the stream reported, if any: its presence means the stream ended normally. */
+  get finalStopReason(): string | undefined {
+    return this.stopReason;
+  }
+
   get accumulatedLength(): number {
     return this.accumulatedText.length;
   }

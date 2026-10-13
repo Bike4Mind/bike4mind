@@ -1,4 +1,13 @@
-import { InviteType, IOrganizationDocument, IUserDocument, Permission } from '@bike4mind/common';
+import {
+  canAdministerOrganization,
+  canManageMemberCreditBudgets,
+  InviteType,
+  IOrganizationDocument,
+  isOrgMember,
+  isOrgOwnerOrCurrentAdmin,
+  IUserDocument,
+  Permission,
+} from '@bike4mind/common';
 import GenericAddItemsModal from '@client/app/components/common/GenericAddItemsModal';
 import UserCard from '@client/app/components/common/UserCard';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -15,14 +24,15 @@ import { FC, Fragment, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import OrganizationUserCard from './UserCard';
+import MemberCreditBudgetCard from './MemberCreditBudgetCard';
+import { getMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
 import { useOrganizationSeats } from '@client/app/hooks/data/organizations';
 
 interface OrganizationMembersProps {
   organization: IOrganizationDocument;
-  userPermissions: Permission[];
 }
 
-const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userPermissions }) => {
+const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => {
   const { data: users } = useGetOrganizationUsers(organization.id);
   const [search, setSearch] = useState('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
@@ -37,7 +47,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
 
   // For the add members modal
   const [modalSearch, setModalSearch] = useState('');
-  const [selectedUserNames, setSelectedUserNames] = useState<string[]>([]);
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const params: IGetUsersParams = useMemo(
     () => ({ search: modalSearch, page: 1, limit: 10, publicView: true }),
     [modalSearch]
@@ -54,8 +64,8 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
       queryClient.invalidateQueries({ queryKey: ['users', 'organization', organization.id] });
 
       setModalSearch('');
-      setSelectedUserNames([]);
-      toast.success(t('organizations.modals.members.invited', 'Member invited to organization'));
+      setSelectedUserIds([]);
+      toast.success(t('organizations.modals.members.invited', 'Member invited to team'));
     },
     onError: err => {
       toast.error(err.message);
@@ -78,15 +88,19 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
 
   // Filter and sort users
   const filteredUsers = useMemo(() => {
-    let result: (IUserDocument & { status: 'accepted' | 'pending'; permissions: Permission[]; usedCredits: number })[] =
+    let result: (IUserDocument & {
+      status: 'accepted' | 'pending';
+      permissions: Permission[];
+      creditUsage: MemberCreditUsage | null;
+    })[] =
       users?.map(u => ({
         ...u,
         status: 'accepted' as const,
         permissions: organization.users.find(m => m.userId === u.id)?.permissions || [],
-        usedCredits: organization.userDetails?.find(m => m.id === u.id)?.usedCredits || 0,
+        creditUsage: getMemberCreditUsage(organization, u.id),
       })) || [];
     result.push(
-      ...(pendingUsers?.map(u => ({ ...u, status: 'pending' as const, permissions: [], usedCredits: 0 })) || [])
+      ...(pendingUsers?.map(u => ({ ...u, status: 'pending' as const, permissions: [], creditUsage: null })) || [])
     );
 
     if (search) {
@@ -97,11 +111,19 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
     }
 
     return result.sort((a, b) => (sortOrder === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
-  }, [users, search, sortOrder, pendingUsers, organization.users, organization.userDetails]);
+  }, [users, search, sortOrder, pendingUsers, organization]);
 
-  const canManageMembers = useMemo(() => {
-    return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
-  }, [userPermissions]);
+  // Each roster control mirrors the server predicate behind its own endpoint. The two sets differ:
+  // a manager may revoke but not invite, an appointed admin may invite but not revoke.
+  // Invites (create + cancel) gate on isOrgMember, then isOrgOwnerOrCurrentAdmin, in sharingService;
+  // an appointed admin whose users[] row lacks read/write fails the first check.
+  const canInviteMembers =
+    !!currentUser && isOrgMember(currentUser, organization) && isOrgOwnerOrCurrentAdmin(currentUser, organization);
+  // DELETE /members/:userId gates on canAdministerOrganization in organizationService.revokeAccess.
+  const canRevokeMembers = !!currentUser && canAdministerOrganization(currentUser, organization);
+
+  // Mirrors the server gate on the credit-budget routes.
+  const canManageCreditBudgets = !!currentUser && canManageMemberCreditBudgets(currentUser, organization);
 
   // Owner ID, falling back to the current user.
   const ownerId = useMemo(() => {
@@ -173,9 +195,14 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
         height: '100%',
       }}
     >
-      {/* Seats Management Section */}
-      {canManageMembers && (
-        <Card className="organization-members-seats-card" variant="outlined" sx={{ mx: { xs: 0, sm: '20px' } }}>
+      {/* Seats Management Section: read-only, shown to anyone who can change the roster */}
+      {(canInviteMembers || canRevokeMembers) && (
+        <Card
+          className="organization-members-seats-card"
+          data-testid="organization-members-seats-card"
+          variant="outlined"
+          sx={{ mx: { xs: 0, sm: '20px' } }}
+        >
           <Stack spacing={2} p={2}>
             <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
               <Typography className="organization-members-seats-title" level="title-sm">
@@ -248,6 +275,8 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
         </Card>
       )}
 
+      <MemberCreditBudgetCard organization={organization} canManage={canManageCreditBudgets} />
+
       {/* Search and Actions Section */}
       <Stack className="organization-members-search-container" spacing={1} mx={{ xs: 0, sm: '20px' }}>
         <Input
@@ -279,27 +308,27 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
             <SortByAlphaIcon sx={{ transform: sortOrder === 'desc' ? 'scaleY(-1)' : 'scaleY(1)' }} />
           </IconButton>
 
-          {canManageMembers &&
+          {canInviteMembers &&
             (hasAvailableSeats ? (
               <GenericAddItemsModal
-                title={t('organizations.modals.members.title', 'Add Members to Organization')}
+                title={t('organizations.modals.members.title', 'Add Members to Team')}
                 subtitle={t(
                   'organizations.modals.members.subtitle',
-                  `Search for users to add to this organization (${availableSeats} seats available)`
+                  `Search for users to add to this team (${availableSeats} seats available)`
                 )}
                 buttonLabel={t('organizations.modals.members.button_label', 'Add Member')}
                 buttonIcon={<AddIcon />}
                 items={modalUsers}
-                selectedIds={selectedUserNames}
+                selectedIds={selectedUserIds}
                 onSelectIds={ids => {
                   // Only allow selecting up to available seats
                   if (maxSeats > 0 && ids.length > availableSeats) {
                     toast.error(`You can only add up to ${availableSeats} more members with your current plan`);
                     return;
                   }
-                  setSelectedUserNames(ids);
+                  setSelectedUserIds(ids);
                 }}
-                getItemId={user => user.username}
+                getItemId={user => user.id}
                 onSearch={term => debouncedModalSearch(term)}
                 searchPlaceholder={t('common.search_users', 'Search users')}
                 searchMinLength={3}
@@ -312,6 +341,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
             ) : (
               <Button
                 className="organization-members-add-button"
+                data-testid="organization-members-add-no-seats-btn"
                 size="sm"
                 variant="outlined"
                 color="danger"
@@ -359,12 +389,18 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
             alignItems="center"
             sx={{ whiteSpace: 'nowrap' }}
           >
-            Credits
+            Credits this month
           </Box>
         </Box>
         {filteredUsers.map(user => (
           <Fragment key={user.id}>
-            <OrganizationUserCard organization={organization} user={user} userPermissions={userPermissions} />
+            <OrganizationUserCard
+              organization={organization}
+              user={user}
+              canInviteMembers={canInviteMembers}
+              canRevokeMembers={canRevokeMembers}
+              canManageCreditBudgets={canManageCreditBudgets}
+            />
           </Fragment>
         ))}
       </Stack>
