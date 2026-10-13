@@ -25,12 +25,18 @@ vi.mock('@server/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 
+const mockAssertAccountStateUsable = vi.fn();
+vi.mock('@server/cli/auth', () => ({
+  assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
+}));
+
 import { verifyWsAccessToken } from './verifyWsAccessToken';
 import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
 
 describe('verifyWsAccessToken', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockAssertAccountStateUsable.mockReset();
     mockFindByKeyName.mockResolvedValue(null);
     mockIsWithinGraceWindow.mockReturnValue(false);
     mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access' });
@@ -39,6 +45,15 @@ describe('verifyWsAccessToken', () => {
 
   it('returns the user for a current access token', async () => {
     await expect(verifyWsAccessToken('token-123')).resolves.toEqual({ id: 'user-1', tokenVersion: 3 });
+  });
+
+  it('applies the account-state check to the loaded user', async () => {
+    mockAssertAccountStateUsable.mockImplementation(() => {
+      throw new Error('User not found or banned');
+    });
+
+    await expect(verifyWsAccessToken('token-123')).rejects.toThrow('User not found or banned');
+    expect(mockAssertAccountStateUsable).toHaveBeenCalledWith({ id: 'user-1', tokenVersion: 3 });
   });
 
   it('rejects a token whose tokenVersion is stale relative to the user', async () => {
