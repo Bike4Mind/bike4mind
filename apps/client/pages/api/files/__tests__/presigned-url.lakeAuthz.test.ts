@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
+import type { ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 
 /**
@@ -11,12 +12,20 @@ import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 
 const h = vi.hoisted(() => ({ baseApiOptions: undefined as unknown }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (options: unknown) => {
-    h.baseApiOptions = options;
-    return { get: (fn: unknown) => fn };
-  },
-}));
+vi.mock('@server/middlewares/baseApi', async () => {
+  const { assertApiKeyScope } = await import('@server/middlewares/apiKeyScopeGate');
+  return {
+    baseApi: (options: { requiredScopes: ApiKeyScope[] }) => {
+      h.baseApiOptions = options;
+      return {
+        get: (fn: (req: unknown, res: unknown) => Promise<void>) => async (req: ScopedRequest, res: unknown) => {
+          assertApiKeyScope(req, options.requiredScopes, 'files:read is required');
+          return fn(req, res);
+        },
+      };
+    },
+  };
+});
 
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
 vi.mock('@server/utils/storage', () => ({
@@ -58,7 +67,11 @@ const LAKE_FILE = {
   tags: [{ name: 'datalake:lake-1' }],
 };
 
-describe('GET /api/files/presigned-url - data-lake read scope', () => {
+describe.each(['browser', 'server'])('GET /api/files/presigned-url - data-lake read scope: %s', audience => {
+  const request = (paths: string[], info?: { scopes: ApiKeyScope[] }) => ({
+    ...makeReq(paths, info),
+    query: { 'filePaths[]': paths, audience },
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     findOne.mockResolvedValue(LAKE_FILE);
@@ -67,9 +80,19 @@ describe('GET /api/files/presigned-url - data-lake read scope', () => {
     resolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }]);
   });
 
+  it.each([{ scopes: [] }, { scopes: [ApiKeyScope.WRITE_FILES] }])(
+    'rejects a key without read scope before lookup',
+    async ({ scopes }) => {
+      const { res } = makeRes();
+      await expect(handler(request(['lake-file.pdf'], { scopes }), res)).rejects.toThrow('files:read');
+      expect(findOne).not.toHaveBeenCalled();
+      expect(findAccessibleById).not.toHaveBeenCalled();
+    }
+  );
+
   it('withholds the URL for a files:read-only key and never resolves its lakes', async () => {
     const { res, json } = makeRes();
-    await handler(makeReq(['lake-file.pdf'], { scopes: [ApiKeyScope.READ_FILES] }), res);
+    await handler(request(['lake-file.pdf'], { scopes: [ApiKeyScope.READ_FILES] }), res);
 
     expect(resolveAccessibleLakes).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ urls: [null] });
@@ -77,14 +100,14 @@ describe('GET /api/files/presigned-url - data-lake read scope', () => {
 
   it('signs the URL for a key holding datalake:read', async () => {
     const { res, json } = makeRes();
-    await handler(makeReq(['lake-file.pdf'], { scopes: [ApiKeyScope.READ_FILES, ApiKeyScope.DATALAKE_READ] }), res);
+    await handler(request(['lake-file.pdf'], { scopes: [ApiKeyScope.READ_FILES, ApiKeyScope.DATALAKE_READ] }), res);
 
     expect(json).toHaveBeenCalledWith({ urls: ['https://s3.test/signed'] });
   });
 
   it('signs the URL for a JWT/browser caller (no apiKeyInfo)', async () => {
     const { res, json } = makeRes();
-    await handler(makeReq(['lake-file.pdf']), res);
+    await handler(request(['lake-file.pdf']), res);
 
     expect(json).toHaveBeenCalledWith({ urls: ['https://s3.test/signed'] });
   });

@@ -285,6 +285,7 @@ describe('buildDataLakeTools - every loopback call runs as the requesting princi
     expect(String(fetchSpy.mock.calls[0][0])).toContain('/api/data-lakes/articles');
     expect(sentHeaders(0).authorization).toBe('Bearer caller.jwt.token');
     expect(String(fetchSpy.mock.calls[1][0])).toContain('/api/files/presigned-url');
+    expect(new URL(String(fetchSpy.mock.calls[1][0])).searchParams.get('audience')).toBe('server');
     expect(sentHeaders(1).authorization).toBe('Bearer caller.jwt.token');
     // The S3 fetch is presigned - it must NOT carry the caller credential.
     expect(sentHeaders(2)).toBeUndefined();
