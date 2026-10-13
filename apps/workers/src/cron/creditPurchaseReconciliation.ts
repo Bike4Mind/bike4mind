@@ -62,6 +62,12 @@ const contextToLogs = (context: Context) => ({
 
 export type UngrantedReason = 'no_transaction' | 'balance_not_applied' | 'owner_missing';
 
+interface UngrantedFinding {
+  reason: UngrantedReason;
+  /** The ledger row's owner. The intent's metadata.userId can differ, so the alert prefers this. */
+  ownerId?: string;
+}
+
 export interface UngrantedPurchase {
   paymentIntentId: string;
   reason: UngrantedReason;
@@ -93,18 +99,20 @@ const REASON_LABELS: Record<UngrantedReason, string> = {
 };
 
 // The webhook only grants purchases to users, so other owner types are not balance-checked.
-// The balanceBackfilledAt and purchase-stamp witnesses mirror the audit script's classifyPurchase
-// (packages/scripts/src/auditPartialCreditPurchases.ts); keep the two verdicts in sync.
-async function findUngrantedReason(intentId: string): Promise<UngrantedReason | null> {
+// Shares the balanceBackfilledAt and purchase-stamp witnesses with the audit script's classifyPurchase
+// (packages/scripts/src/auditPartialCreditPurchases.ts). This cron leans toward applied (60s skew, a
+// later stamp counts); the audit leans toward not repairing (it needs a pack lot and has a stamp
+// cutoff), so keep the audit at least as strict before it grants.
+async function findUngrantedReason(intentId: string): Promise<UngrantedFinding | null> {
   const tx = await creditTransactionRepository.findByPaymentIntentId(intentId);
-  if (!tx) return 'no_transaction';
+  if (!tx) return { reason: 'no_transaction' };
   if (tx.ownerType !== CreditHolderType.User) return null;
   if (tx.metadata?.balanceBackfilledAt) return null;
   const owner = await userRepository.findById(tx.ownerId);
-  if (!owner) return 'owner_missing';
+  if (!owner) return { reason: 'owner_missing', ownerId: tx.ownerId };
   const appliedAt = owner.lastCreditsPurchasedAt;
   const applied = appliedAt && appliedAt.getTime() >= tx.createdAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
-  return applied ? null : 'balance_not_applied';
+  return applied ? null : { reason: 'balance_not_applied', ownerId: tx.ownerId };
 }
 
 function formatAlert(stage: string, result: CreditPurchaseReconciliationResult): string {
@@ -168,12 +176,13 @@ export async function runCreditPurchaseReconciliation(
     for (const intent of data) {
       if (!isStageCreditPurchase(intent, stage)) continue;
       result.checked++;
-      const reason = await findUngrantedReason(intent.id);
-      if (!reason) continue;
+      const finding = await findUngrantedReason(intent.id);
+      if (!finding) continue;
       result.ungranted.push({
         paymentIntentId: intent.id,
-        reason,
-        userId: intent.metadata?.userId,
+        reason: finding.reason,
+        // The webhook credits the Stripe customer's user; metadata.userId is only its fallback.
+        userId: finding.ownerId ?? intent.metadata?.userId,
         amount: intent.amount,
         currency: intent.currency,
         credits: Number(intent.metadata.credits),

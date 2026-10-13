@@ -208,6 +208,21 @@ describe('creditPurchaseReconciliation cron', () => {
       expect(mockPostMessageToSlack.mock.calls[0][0]).toContain('Owner missing');
     });
 
+    it('names the ledger owner rather than the intent metadata user, so credits reach the right account', async () => {
+      mockList.mockResolvedValue({ data: [intent('pi_1', {}, { userId: 'user_metadata' })], has_more: false });
+      mockFindByPaymentIntentId.mockResolvedValue(purchaseRow({ ownerId: 'user_owner' }));
+      mockFindUserById.mockResolvedValue({ lastCreditsPurchasedAt: new Date('2026-09-01T00:00:00Z') });
+
+      const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+      expect(result.ungranted).toEqual([
+        expect.objectContaining({ paymentIntentId: 'pi_1', reason: 'balance_not_applied', userId: 'user_owner' }),
+      ]);
+      const message = mockPostMessageToSlack.mock.calls[0][0] as string;
+      expect(message).toContain('user user_owner');
+      expect(message).not.toContain('user_metadata');
+    });
+
     it('treats a row repaired by the audit script (balanceBackfilledAt) as applied', async () => {
       mockFindByPaymentIntentId.mockResolvedValue(purchaseRow({ metadata: { balanceBackfilledAt: new Date() } }));
       mockFindUserById.mockResolvedValue({ lastCreditsPurchasedAt: null });
