@@ -18,6 +18,7 @@ import {
   IResearchTaskDeepResearch,
   IApiKeyRepository,
   IOrganizationRepository,
+  assertAuthOriginMatchesApiKey,
 } from '@bike4mind/common';
 import { NotFoundError, BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -545,6 +546,8 @@ const processDeepResearch = async (
     const toolContext: ToolContext = {
       userId: user.id,
       user: user,
+      // Runs off the research-task queue, after whatever request created the task.
+      authOrigin: 'internal',
       db: adapters.db,
       storage: {
         upload: adapters.storage.upload,
@@ -576,6 +579,8 @@ const processDeepResearch = async (
         logger?.info(`🔬 [DEEP_RESEARCH_FINISHED] Research completed with ${state.findings.length} findings`);
       },
     };
+    // Built by hand rather than through generateTools, so check the auth pair here too.
+    assertAuthOriginMatchesApiKey(toolContext.authOrigin, toolContext.apiKeyId);
 
     const result = await performDeepResearch(
       toolContext,

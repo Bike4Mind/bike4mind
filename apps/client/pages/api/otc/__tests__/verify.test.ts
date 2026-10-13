@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { CreditHolderType } from '@bike4mind/common';
+import { CreditHolderType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
 
 // Middleware is stripped so the handler body runs directly (same pattern as the
@@ -54,10 +54,13 @@ const mockPartnerGrant = vi.fn();
 vi.mock('@server/entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: (...a: any[]) => mockPartnerGrant(...a),
 }));
+vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
 
 const mockFindByEmail = vi.fn();
 const mockValidateNonce = vi.fn();
 const mockConsumeOtherCodes = vi.fn();
+const mockUserUpdate = vi.fn();
+const mockReleasePending = vi.fn();
 const mockTryIncrement = vi.fn(async (_key: string, _limit: number, _ttlMs: number) => ({
   success: true,
   count: 1,
@@ -79,7 +82,12 @@ vi.mock('@bike4mind/database', () => ({
   registrationInviteRepository: {},
   subscriberRepository: {},
   creditTransactionRepository: {},
-  userRepository: { findByEmail: (...a: any[]) => mockFindByEmail(...a), count: vi.fn(), update: vi.fn() },
+  creditLotRepository: {},
+  userRepository: {
+    findByEmail: (...a: unknown[]) => mockFindByEmail(...a),
+    count: vi.fn(),
+    update: (...a: unknown[]) => mockUserUpdate(...a),
+  },
   pendingOtcTokenRepository: {
     validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
     consumeOtherCodes: (...a: any[]) => mockConsumeOtherCodes(...a),
@@ -95,6 +103,7 @@ vi.mock('@bike4mind/services', () => ({
   userService: {
     verifyPendingOTC: (...a: any[]) => mockVerifyPendingOTC(...a),
     registerViaOTC: (...a: any[]) => mockRegisterViaOTC(...a),
+    releasePendingFreeCredits: (...a: unknown[]) => mockReleasePending(...a),
   },
   creditService: { addCredits: (...a: any[]) => mockAddCredits(...a) },
   mfaService: { userHasMFAConfigured: () => false },
@@ -656,5 +665,77 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
 
     expect(res._getStatusCode()).toBe(200);
     expect(domainGrantCall()).toBeFalsy();
+  });
+});
+
+describe('/api/otc/verify - existing user verification and pending free credits', () => {
+  const pendingUser = (overrides: Record<string, unknown> = {}) => ({
+    id: 'u-existing',
+    isSystem: false,
+    isBanned: false,
+    emailVerified: false,
+    tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+    pendingCreditGrant: null,
+    tokenVersion: 0,
+    toJSON: () => ({ id: 'u-existing', username: 'bob' }),
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
+    mockValidateNonce.mockResolvedValue(true);
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockUserUpdate.mockResolvedValue(undefined);
+    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
+  });
+
+  it('releases pending credits and strips the tag in the same write that stamps emailVerified', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser());
+    mockReleasePending.mockResolvedValue({
+      released: true,
+      creditsGranted: 100,
+      currentCredits: 100,
+      patch: { tags: ['Customer'], pendingCreditGrant: null },
+    });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserUpdate).toHaveBeenCalledTimes(1);
+    expect(mockUserUpdate).toHaveBeenCalledWith({
+      id: 'u-existing',
+      emailVerified: true,
+      emailVerifiedAt: expect.any(Date),
+      tags: ['Customer'],
+      pendingCreditGrant: null,
+    });
+  });
+
+  it('leaves an already-verified user untouched', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser({ emailVerified: true }));
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockReleasePending).not.toHaveBeenCalled();
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still stamps emailVerified and logs the user in when the grant fails', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser());
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserUpdate).toHaveBeenCalledWith({
+      id: 'u-existing',
+      emailVerified: true,
+      emailVerifiedAt: expect.any(Date),
+    });
   });
 });

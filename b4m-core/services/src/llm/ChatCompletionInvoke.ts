@@ -1,4 +1,6 @@
 import {
+  assertAuthOriginMatchesApiKey,
+  type AuthOrigin,
   canUpdateShareable,
   ChatCompletionInvokeParamsSchema,
   isPromptMetaModelType,
@@ -78,13 +80,18 @@ export class ChatCompletionInvoke {
   public async invoke({
     body,
     userId,
+    authOrigin,
     apiKeyId,
   }: {
     body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
     userId: string;
+    /** Decided by the door from how it authenticated the request (see ToolContext.authOrigin). */
+    authOrigin: AuthOrigin;
     /** Server-derived from `req.apiKeyInfo` - never from `body` (see QuestStartBodySchema.apiKeyId). */
     apiKeyId?: string;
   }) {
+    // Fail at the door, not later in the worker that builds the tools.
+    assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
     const now = new Date();
 
     const {
@@ -466,6 +473,7 @@ export class ChatCompletionInvoke {
         skipAutoOffers,
         skipReplyChoices,
         deniedTools,
+        authOrigin,
         apiKeyId,
         systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),

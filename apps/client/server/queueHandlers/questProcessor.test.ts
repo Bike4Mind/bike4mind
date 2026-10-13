@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
+const mockProcess = vi.hoisted(() => vi.fn());
+
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
 // slackQuestProcessor.failureNotice.test.ts, which already proves this import chain resolves
@@ -46,7 +48,7 @@ vi.mock('@bike4mind/services/llm', async () => {
   return {
     ...actual,
     ChatCompletionProcess: class {
-      process = vi.fn();
+      process = mockProcess;
     },
   };
 });
@@ -99,5 +101,26 @@ describe('questProcessor getStaticOptions', () => {
     expect(db.lakeMembershipRemovals).toBeDefined();
     expect(db.lakeConfigChangeEvents).toBeDefined();
     expect(db.lakeMembershipChangeEvents).toBeDefined();
+  }, 120_000);
+});
+
+describe('processQuest', () => {
+  it('forwards the queued authOrigin and apiKeyId to process() unchanged', async () => {
+    const { processQuest } = await import('./questProcessor');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+    const params = {
+      userId: 'user-1',
+      sessionId: 'session-1',
+      questId: 'quest-1',
+      params: {},
+      authOrigin: 'apiKey',
+      apiKeyId: 'k1',
+    };
+
+    await processQuest(params as never, logger as never);
+
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }) })
+    );
   }, 120_000);
 });

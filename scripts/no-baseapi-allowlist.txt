@@ -45,6 +45,7 @@ apps/client/pages/api/slack/__tests__/interactive.confirm.test.ts # Test file fo
 
 # SRE workflow callback — authenticated via encrypted bearer token
 apps/client/pages/api/sre/workflow-callback.ts          # crypto.timingSafeEqual() bearer token
+apps/client/pages/api/sre/__tests__/workflow-callback.test.ts # Test file for the handler above (script greps by path, not export)
 
 # GitHub webhooks — authenticated via HMAC-SHA256 (GitHub webhook secret)
 apps/client/pages/api/webhooks/github.ts                # GitHub HMAC signature validation
