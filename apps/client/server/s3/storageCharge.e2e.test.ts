@@ -6,8 +6,8 @@ import {
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { FabFile, Session, User, withTransaction } from '@bike4mind/database';
-import { notebookImportService } from '@bike4mind/services';
+import { FabFile, Session, User, fabFileRepository, userRepository, withTransaction } from '@bike4mind/database';
+import { fabFilesService, notebookImportService } from '@bike4mind/services';
 import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
 import { chargeStampedKnowledgeStorage, claimStorageCharge, stampImportedKnowledgeRows } from './storageCharge';
 
@@ -121,6 +121,81 @@ const importAndCharge = async (name: string) => {
   return result;
 };
 
+const rewriteDb = { fabFiles: fabFileRepository, users: userRepository };
+
+/**
+ * A content rewrite as every rewrite site runs it, with the S3 upload elided. Returns the upload's
+ * S3 eventTime, which falls between the upload starting and the commit.
+ */
+const rewrite = async (fabFileId: string, newSize: number, beforeCommit?: (eventTime: Date) => Promise<void>) => {
+  const uploadStartedAt = new Date();
+  await new Promise(resolve => setTimeout(resolve, 2));
+  const eventTime = new Date();
+  await new Promise(resolve => setTimeout(resolve, 2));
+  await beforeCommit?.(eventTime);
+  await fabFilesService.commitContentRewrite({ fabFileId, newSize, uploadStartedAt }, rewriteDb);
+  return eventTime;
+};
+
+/** The first upload as objectCreated charges it. */
+const firstUpload = async (fileSize: number) => {
+  const [row] = await FabFile.create([
+    { userId: USER, fileName: 'x', mimeType: 'text/plain', fileSize, filePath: 'files/x', type: 'FILE' },
+  ]);
+  if (await claimStorageCharge(row._id, new Date())) await userRepository.incrementCurrentStorage(USER, fileSize);
+  return String(row._id);
+};
+
+describe('content rewrite storage charge', () => {
+  const truth = async () => BASELINE_BYTES + (await fabFileRepository.sumFileSizeByUserId(USER));
+
+  it('keeps the counter equal to the stored sizes across growing and shrinking rewrites, and a delete', async () => {
+    await seedUser();
+    const id = await firstUpload(100);
+    expect(await storedSize()).toBe(await truth());
+
+    for (const size of [300, 50, 50, 900]) {
+      const eventTime = await rewrite(id, size);
+      // The rewrite's own S3 event, and any redelivery of it, claims nothing.
+      expect(await claimStorageCharge(id, eventTime)).toBe(false);
+      expect(await storedSize()).toBe(await truth());
+    }
+    expect(await storedSize()).toBe(BASELINE_BYTES + 900);
+
+    // Mirrors the delete path's refund of the stored size.
+    await FabFile.updateOne({ _id: id }, { $set: { deletedAt: new Date() } });
+    await userRepository.incrementCurrentStorage(USER, -900);
+    expect(await storedSize()).toBe(await truth());
+  });
+
+  it('ends at the truth when the S3 event is processed before the rewrite commits', async () => {
+    await seedUser();
+    const id = await firstUpload(100);
+
+    await rewrite(id, 400, async eventTime => {
+      // objectCreated sees the new object (still old fileSize on the row) and charges its full size.
+      expect(await claimStorageCharge(id, eventTime)).toBe(true);
+      await userRepository.incrementCurrentStorage(USER, 400);
+    });
+
+    expect(await storedSize()).toBe(BASELINE_BYTES + 400);
+    expect(await storedSize()).toBe(await truth());
+  });
+
+  it('changes nothing when an Office repoint loses its race', async () => {
+    await seedUser();
+    const id = await firstUpload(100);
+
+    const committed = await fabFilesService.commitContentRewrite(
+      { fabFileId: id, newSize: 400, uploadStartedAt: new Date(), filter: { filePath: 'files/stale' } },
+      rewriteDb
+    );
+
+    expect(committed).toBe(false);
+    expect(await storedSize()).toBe(BASELINE_BYTES + 100);
+  });
+});
+
 describe('notebook import storage charge', () => {
   it('does not admit a second import that only fit the headroom the first one spent', async () => {
     await seedUser();
@@ -144,12 +219,15 @@ describe('notebook import storage charge', () => {
     expect(await claimStorageCharge(row?._id, uploadedAt)).toBe(false);
   });
 
-  it('still charges a later rewrite of an imported file', async () => {
+  it('leaves the S3 event for a rewrite of an imported file nothing to charge', async () => {
     await seedUser();
     await importAndCharge('rewritten');
     const row = await FabFile.findOne({ userId: USER });
 
-    expect(await claimStorageCharge(row?._id, new Date(Date.now() + 1000))).toBe(true);
+    const eventTime = await rewrite(String(row?._id), 1234);
+
+    expect(await claimStorageCharge(row?._id, eventTime)).toBe(false);
+    expect(await storedSize()).toBe(BASELINE_BYTES + (await fabFileRepository.sumFileSizeByUserId(USER)));
   });
 
   it('charges a redelivered S3 event once', async () => {

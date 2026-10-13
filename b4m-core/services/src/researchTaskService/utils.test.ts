@@ -62,6 +62,8 @@ describe('findExistingResearchData utils', () => {
 
   const mockFabFile = {
     id: 'file-123',
+    userId: 'test-user-123',
+    storageChargedAt: new Date('2026-01-01T00:00:00Z'),
     filePath: 'test/path/file.md',
     fileName: 'test-file.md',
     fileSize: 1024,
@@ -78,7 +80,8 @@ describe('findExistingResearchData utils', () => {
   let mockResearchDataRepo: any;
   let mockFabFilesRepo: any;
   let mockStorage: any;
-  let mockLogger: { info: Mock; error: Mock };
+  let mockUsersRepo: { findById: Mock; incrementCurrentStorage: Mock };
+  let mockLogger: { info: Mock; error: Mock; warn: Mock };
   let adapters: any;
 
   beforeEach(() => {
@@ -105,7 +108,9 @@ describe('findExistingResearchData utils', () => {
     mockFabFilesRepo = {
       findById: vi.fn(),
       update: vi.fn(),
+      commitContentRewrite: vi.fn(),
     };
+    mockUsersRepo = { findById: vi.fn(), incrementCurrentStorage: vi.fn() };
 
     mockStorage = {
       upload: vi.fn(),
@@ -115,12 +120,14 @@ describe('findExistingResearchData utils', () => {
     mockLogger = {
       info: vi.fn(),
       error: vi.fn(),
+      warn: vi.fn(),
     };
 
     adapters = {
       db: {
         researchDatas: mockResearchDataRepo,
         fabFiles: mockFabFilesRepo,
+        users: mockUsersRepo,
       },
       storage: mockStorage,
     };
@@ -248,6 +255,56 @@ describe('findExistingResearchData utils', () => {
       expect(mockLogger.info).toHaveBeenCalledWith(
         '🗃️ [RESEARCH_DATA_EXISTS] Research data already exists for https://example.com'
       );
+    });
+
+    describe('storage accounting on re-crawl', () => {
+      it('records the new size and charges the owner the delta', async () => {
+        const file = { ...mockFabFile, fileSize: 10 };
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockFabFilesRepo.findById.mockResolvedValue(file);
+        mockFabFilesRepo.commitContentRewrite.mockResolvedValue({
+          userId: 'test-user-123',
+          fileSize: 10,
+          storageChargedAt: file.storageChargedAt,
+        });
+
+        const result = await findOrUpdateExistingResearchData(
+          'https://example.com',
+          'x'.repeat(25),
+          'text/markdown',
+          mockResearchTaskWithOrganization,
+          mockUser,
+          adapters,
+          mockLogger
+        );
+
+        expect(mockFabFilesRepo.commitContentRewrite).toHaveBeenCalledWith('file-123', { fileSize: 25 }, undefined);
+        expect(mockUsersRepo.incrementCurrentStorage).toHaveBeenCalledWith('test-user-123', 15);
+        expect(result!.file.fileSize).toBe(25);
+      });
+
+      it('keeps the previous crawl, with a warning, when the growth would exceed the quota', async () => {
+        const file = { ...mockFabFile, fileSize: 10 };
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockFabFilesRepo.findById.mockResolvedValue(file);
+        const fullUser = { ...mockUser, storageLimit: 1, currentStorageSize: 999_990 } as IUserDocument;
+
+        const result = await findOrUpdateExistingResearchData(
+          'https://example.com',
+          'x'.repeat(100),
+          'text/markdown',
+          mockResearchTaskWithOrganization,
+          fullUser,
+          adapters,
+          mockLogger
+        );
+
+        expect(result).toEqual({ file, researchData: mockResearchData });
+        expect(result!.file.fileSize).toBe(10);
+        expect(mockStorage.upload).not.toHaveBeenCalled();
+        expect(mockFabFilesRepo.commitContentRewrite).not.toHaveBeenCalled();
+        expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Storage limit'));
+      });
     });
 
     it('should handle Buffer content correctly', async () => {
