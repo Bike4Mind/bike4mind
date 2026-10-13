@@ -43,7 +43,10 @@ export class BedrockGuardrailsService implements ModerationService {
 
   private get client(): BedrockRuntimeClient {
     if (!this._client) {
-      this._client = new BedrockRuntimeClient({ region: 'us-east-2', ...bedrockClientConfig() });
+      this._client = new BedrockRuntimeClient({
+        region: process.env.AWS_REGION || 'us-east-2',
+        ...bedrockClientConfig(),
+      });
     }
     return this._client;
   }
