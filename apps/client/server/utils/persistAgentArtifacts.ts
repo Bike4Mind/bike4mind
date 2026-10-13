@@ -147,10 +147,8 @@ export interface PersistAgentArtifactsDeps {
   clearPartialArtifact: (artifactId: string) => Promise<void>;
 }
 
-type SourceRefsGuard = (userId: string, refs: artifactService.ArtifactSourceRefs) => Promise<void>;
-
 /** `sourceRefsGuard` defaults to a per-run lazy guard that loads the acting user on first use. */
-function defaultDeps(sourceRefsGuard?: SourceRefsGuard): PersistAgentArtifactsDeps {
+function defaultDeps(sourceRefsGuard?: artifactService.ArtifactSourceRefsGuard): PersistAgentArtifactsDeps {
   const guard =
     sourceRefsGuard ??
     createLazyArtifactSourceRefsGuard(async userId => {
@@ -243,7 +241,7 @@ export async function persistAgentArtifacts(args: {
   logger: Logger;
   deps?: PersistAgentArtifactsDeps;
   /** Injection point for the storage-layer integration script, whose fixture ids are not real documents. */
-  sourceRefsGuard?: SourceRefsGuard;
+  sourceRefsGuard?: artifactService.ArtifactSourceRefsGuard;
 }): Promise<void> {
   const { replyText, questId, questCreatedAtMs, sessionId, userId, executionId, enableArtifacts, logger } = args;
   const deps = args.deps ?? defaultDeps(args.sourceRefsGuard);
