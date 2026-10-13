@@ -4,6 +4,7 @@ import tseslint from 'typescript-eslint';
 import nextPlugin from '@next/eslint-plugin-next';
 import reactPlugin from 'eslint-plugin-react';
 import reactHooksPlugin from 'eslint-plugin-react-hooks';
+import noRawEntityResponse from './eslint-rules/no-raw-entity-response.mjs';
 
 /**
  * ESLint Flat Config for Bike4Mind Monorepo
@@ -733,6 +734,28 @@ export default defineConfig([
       // Catches the bare `open(url)` form the selectors above cannot safely match. Scope-aware,
       // so a local/parameter named `open` is untouched.
       'no-restricted-globals': ['error', { name: 'open', message: WINDOW_OPEN_MESSAGE }],
+    },
+  },
+
+  // RFC #483 Phase 2 - an API route must not send a raw entity document; see
+  // eslint-rules/no-raw-entity-response.mjs. The rule needs type information, so typed linting is
+  // switched on for this glob only (it is the one rule here that pays for a TS program). Call sites
+  // that predate the rule are baselined in eslint-suppressions.json; fixing one makes its
+  // suppression stale, which fails lint until `pnpm exec eslint --prune-suppressions` is run.
+  {
+    files: ['apps/client/pages/api/**/*.ts'],
+    ignores: ['**/*.test.ts', '**/__tests__/**'],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    plugins: {
+      b4m: { rules: { 'no-raw-entity-response': noRawEntityResponse } },
+    },
+    rules: {
+      'b4m/no-raw-entity-response': 'error',
     },
   },
 ]);
