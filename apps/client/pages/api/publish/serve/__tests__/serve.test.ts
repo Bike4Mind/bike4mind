@@ -3080,8 +3080,11 @@ describe('GET /api/publish/serve - sign-up gate is for anonymous viewers of open
     };
     const FOOTER_CTA = 'utm_medium=share-footer';
     const BAR_CTA = '<a class="b4m-bar-cta"';
+    const HIDDEN_BAR_CTA = /<a class="b4m-bar-cta"[^>]*\shidden>/;
+    const HELD_FOOTER = '<div id="b4m-footer-held" style="display:none"><div style="margin-top:3rem';
+    const GATE_BRIDGE = "b4m:'gate-ready'";
 
-    it('keeps only the gate in the bundle an anonymous viewer is served', async () => {
+    it('keeps only the gate visible in the bundle an anonymous viewer is served', async () => {
       mockArtifactFindOne.mockReturnValue(bundle());
       mockDownload.mockResolvedValue(await footerAndGateBytes());
       const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
@@ -3090,19 +3093,24 @@ describe('GET /api/publish/serve - sign-up gate is for anonymous viewers of open
       const data = res._getData() as string;
       expect(data).toContain(GATE);
       expect(data).toContain('baked body');
-      expect(data).not.toContain(FOOTER_CTA);
+      // The card is held hidden (not removed) so the gate bridge can restore it for a member.
+      expect(data.match(/utm_medium=share-footer/g)).toHaveLength(1);
+      expect(data).toContain(HELD_FOOTER);
+      expect(data).toContain(GATE_BRIDGE);
     });
 
-    it('drops the bar CTA from the wrapper around that bundle, keeping the bar', async () => {
+    it('hides the bar CTA on the wrapper around that bundle, keeping the bar', async () => {
       mockArtifactFindOne.mockReturnValue(bundle());
       mockDownload.mockResolvedValue(await footerAndGateBytes());
       const { res, promise } = run(['u', 'scope123', 'my-slug']);
       await promise;
       expect(res._getStatusCode()).toBe(200);
       const data = res._getData() as string;
-      expect(data).not.toContain(BAR_CTA);
+      expect(data).toMatch(HIDDEN_BAR_CTA);
       expect(data).toContain('<div class="b4m-bar">');
       expect(data).toContain('class="b4m-bar-report"');
+      // Marks the frame for the widget, which drops the gate for a signed-in viewer.
+      expect(data).toMatch(/<iframe [^>]* data-b4m-gate /);
     });
 
     it('leaves a signed-in viewer the footer card and the bar CTA, with no gate', async () => {
@@ -3113,10 +3121,15 @@ describe('GET /api/publish/serve - sign-up gate is for anonymous viewers of open
       const rawData = raw.res._getData() as string;
       expect(rawData).not.toContain(GATE);
       expect(rawData).toContain(FOOTER_CTA);
+      expect(rawData).not.toContain(HELD_FOOTER);
+      expect(rawData).not.toContain(GATE_BRIDGE);
 
       const page = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
       await page.promise;
-      expect(page.res._getData() as string).toContain(BAR_CTA);
+      const wrapper = page.res._getData() as string;
+      expect(wrapper).toContain(BAR_CTA);
+      expect(wrapper).not.toMatch(HIDDEN_BAR_CTA);
+      expect(wrapper).not.toContain('data-b4m-gate');
     });
 
     it('keeps only the footer card for an anonymous viewer of a gate-less page that carries one', async () => {
@@ -3125,8 +3138,10 @@ describe('GET /api/publish/serve - sign-up gate is for anonymous viewers of open
       const page = run(['u', 'scope123', 'my-slug']);
       await page.promise;
       const wrapper = page.res._getData() as string;
-      expect(wrapper).not.toContain(BAR_CTA);
+      expect(wrapper).toMatch(HIDDEN_BAR_CTA);
       expect(wrapper).toContain('class="b4m-bar-report"');
+      // No gate in the frame, so no bridge to talk to.
+      expect(wrapper).not.toContain('data-b4m-gate');
 
       const isolated = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
       await isolated.promise;
@@ -3140,7 +3155,9 @@ describe('GET /api/publish/serve - sign-up gate is for anonymous viewers of open
       mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
       const page = run(['u', 'scope123', 'my-slug']);
       await page.promise;
-      expect(page.res._getData() as string).toContain(BAR_CTA);
+      const wrapper = page.res._getData() as string;
+      expect(wrapper).toContain(BAR_CTA);
+      expect(wrapper).not.toMatch(HIDDEN_BAR_CTA);
     });
   });
 

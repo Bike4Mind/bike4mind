@@ -7,14 +7,17 @@ import type { NextApiRequest, NextApiResponse } from 'next';
  * there), which is why both features below live in this one file. The serve handler
  * emits it on every non-embed wrapper.
  *
- * Three independent parts, in order:
+ * Four independent parts, in order:
  *  1. The PRINT binder - shows the wrapper's "Save as PDF" button and asks the artifact
  *     frame to print ITSELF (printing the wrapper captures only the frame's visible first
  *     screen). The in-frame half is server/services/publish/printBridge.ts. It runs for
  *     every wrapper, including artifacts with comments turned off.
- *  2. The Published-gear view report - tells /api/publish/view about a signed-in viewer,
+ *  2. The signed-in-viewer gate drop - hides the sign-up gate in a frame marked
+ *     `data-b4m-gate` and reveals the bar's "Try" link. The in-frame half is
+ *     server/services/publish/signupGateBridge.ts.
+ *  3. The Published-gear view report - tells /api/publish/view about a signed-in viewer,
  *     only when the serve route marked this script tag with `data-b4m-count-view`.
- *  3. The comment overlay, which early-returns unless the #b4m-annotate-root mount node
+ *  4. The comment overlay, which early-returns unless the #b4m-annotate-root mount node
  *     is present - that node's absence is how an artifact opts out of comments.
  *
  * Self-contained vanilla JS (no framework), building its DOM with createElement/
@@ -69,6 +72,41 @@ const WIDGET_JS = String.raw`(function () {
     });
   })();
 
+  // The app's persisted, non-sensitive session flag - not a credential. Read once for the two
+  // signed-in-viewer parts below. MUST STAY IN SYNC with ACCESS_TOKEN_STORAGE_KEY and partialize
+  // in app/hooks/useAccessToken.ts. ITP can evict it while the cookie survives; both parts then
+  // fall back to the anonymous behavior.
+  var hasSession = false;
+  try {
+    var persisted = JSON.parse(window.localStorage.getItem('access-token-storage') || 'null');
+    hasSession = !!(persisted && persisted.state && persisted.state.hasSession === true);
+  } catch (e) {}
+
+  // ---- signed-in viewer: drop the sign-up CTAs ----
+  // The serve route cannot recognize a session on a plain navigation, so a signed-in viewer of
+  // an open-public artifact gets the anonymous render. Read the app's persisted session flag
+  // (not a credential, and no network call: an exchange on every public view would burn the
+  // per-IP refresh rate limit) and, when set, reveal the bar's "Try" link and ask the frame's
+  // gate bridge (server/services/publish/signupGateBridge.ts) to hide the gate. A stale flag
+  // only hides a marketing card; an evicted one (WebKit ITP) leaves the anonymous page as-is.
+  (function () {
+    if (!hasSession) return;
+    var ctas = document.querySelectorAll('.b4m-bar-cta[hidden]');
+    for (var i = 0; i < ctas.length; i++) ctas[i].hidden = false;
+    var frame = document.querySelector('iframe[data-b4m-gate]');
+    if (!frame) return;
+    var FO = (function () { try { return frame.src ? new URL(frame.src).origin : '*'; } catch (e) { return '*'; } })();
+    function tell() { try { frame.contentWindow.postMessage({ b4m: 'member' }, FO); } catch (e) {} }
+    // Either side may load first: tell now in case the bridge is already listening, and again
+    // when it announces itself in case this ran before it existed.
+    window.addEventListener('message', function (e) {
+      if (e.source !== frame.contentWindow) return;
+      if (FO !== '*' && e.origin !== FO) return;
+      if ((e.data || {}).b4m === 'gate-ready') tell();
+    });
+    tell();
+  })();
+
   // ---- credential ----
   // The viewer's session lives in an HttpOnly refresh cookie; the access token is memory-only
   // and nothing is readable from script storage (see app/hooks/useAccessToken.ts partialize).
@@ -115,18 +153,11 @@ const WIDGET_JS = String.raw`(function () {
   // reported to /api/publish/view, which decides whether they count (not the owner, allowed to
   // see the page). Credentials ride along for a passphrase gate's proof cookie.
   //
-  // Gated on the app's persisted, non-sensitive hasSession flag (app/hooks/useAccessToken.ts,
-  // key 'access-token-storage' - MUST STAY IN SYNC) so an anonymous reader still costs ZERO
-  // refresh-token exchanges. ITP can evict that flag while the cookie survives; that only skips
-  // the report, which is best-effort.
+  // Gated on hasSession so an anonymous reader still costs ZERO refresh-token exchanges; an
+  // evicted flag only skips the report, which is best-effort.
   (function () {
     if (!document.querySelector('script[data-b4m-count-view]')) return;
-    var believesSignedIn = false;
-    try {
-      var persisted = JSON.parse(window.localStorage.getItem('access-token-storage') || 'null');
-      believesSignedIn = !!(persisted && persisted.state && persisted.state.hasSession);
-    } catch (e) {}
-    if (!believesSignedIn) return;
+    if (!hasSession) return;
     ensureToken(false).then(function (t) {
       if (!t) return;
       fetch(origin + '/api/publish/view', {
