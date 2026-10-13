@@ -97,7 +97,7 @@ Bike4Mind offers several cutting-edge features that are opt-in. **You must enabl
 
 ### Data Management
 
-The **Application Settings** area of the Settings tab has a **Notebooks** card and a **Knowledge Files** card. There is no separate "Data Management" or "Danger Zone" section.
+The **Application Settings** area of the Settings tab has a **Notebooks** card and a **Knowledge Files** card. The old "Danger Zone" (Delete all sessions / Delete all files) is gone; those delete actions now live in each card's menu.
 
 **Notebooks card:**
 - **Import** - Import notebooks from a file
@@ -107,11 +107,11 @@ The **Application Settings** area of the Settings tab has a **Notebooks** card a
 **Knowledge Files card:**
 - **Export All** - Download all your knowledge files
 
-**Delete all:** Each card has a three-dot menu next to its buttons. It holds **Delete All Notebooks** and **Delete All Knowledge**. Both ask you to confirm and cannot be undone.
+**Delete all:** Each card has a three-dot menu next to its buttons. The Notebooks menu holds **Delete All Notebooks**, and the Knowledge Files menu holds **Delete All Knowledge**. Both ask you to confirm and cannot be undone.
 
 **Import LLM History:** The **Import LLM History** button at the top of the section imports chat history from OpenAI or Claude.
 
-**Export My Data:** Under Experimental Features, once your telemetry level is Basic or Enhanced, **Export My Data** downloads your telemetry data.
+**Export My Data:** Under Experimental Features, **Export My Data** downloads your telemetry data. It is available unless your telemetry level is set to None.
 
 You can also delete an individual notebook or file from its own menu. For account deletion, see the Privacy Policy.
 
