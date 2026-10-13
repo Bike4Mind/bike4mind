@@ -268,6 +268,18 @@ describe('browser tools', () => {
       await expect(browserScroll.run({ ref: '1', direction: 'down' }, context)).rejects.toThrow(/exactly one of/);
       await expect(browserScroll.run({ direction: 'sideways' }, context)).rejects.toThrow(/must be one of/);
       await expect(browserScroll.run({ direction: 'down', amount: -1 }, context)).rejects.toThrow(/positive/);
+      await expect(browserScroll.run({ ref: '12"]' }, context)).rejects.toThrow(
+        /^No element matched ref 12"; take a browser_snapshot/
+      );
+    });
+
+    it('takes a numeric ref and never turns a small pixel amount into a full page', async () => {
+      const page = fakePage('http://localhost:3080/app');
+      const { context } = contextFor(page);
+      await browserScroll.run({ ref: 12 }, context);
+      expect(page.scroll).toHaveBeenLastCalledWith({ ref: '12' });
+      await browserScroll.run({ direction: 'down', amount: 0.4, unit: 'pixels' }, context);
+      expect(page.scroll).toHaveBeenLastCalledWith({ direction: 'down', pixels: 1 });
     });
 
     it('is gated like a click', async () => {

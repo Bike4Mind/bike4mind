@@ -293,13 +293,18 @@ const SCROLL_DIRECTIONS = ['up', 'down', 'top', 'bottom'] as const;
 type ScrollDirection = (typeof SCROLL_DIRECTIONS)[number];
 
 function scrollTarget(input: Record<string, unknown>): ScrollTarget {
-  const ref = typeof input.ref === 'string' ? input.ref.trim().replace(/^\[|\]$/g, '') : '';
+  const rawRef = typeof input.ref === 'number' ? String(input.ref) : typeof input.ref === 'string' ? input.ref : '';
+  const ref = rawRef.trim().replace(/^\[|\]$/g, '');
   const text = typeof input.text === 'string' ? input.text.trim() : '';
   const direction = typeof input.direction === 'string' ? input.direction.trim().toLowerCase() : '';
   if ([ref, text, direction].filter(Boolean).length !== 1) {
     throw new Error('Pass exactly one of "ref", "text" or "direction".');
   }
-  if (ref) return { ref };
+  if (ref) {
+    // Snapshot refs are numbers; anything else would also break the attribute selector it goes into.
+    if (!/^\d+$/.test(ref)) throw new Error(`No element matched ref ${ref}; take a browser_snapshot for current refs.`);
+    return { ref };
+  }
   if (text) return { text };
   if (!SCROLL_DIRECTIONS.includes(direction as ScrollDirection)) {
     throw new Error(`"direction" must be one of ${SCROLL_DIRECTIONS.join(', ')}.`);
@@ -308,7 +313,9 @@ function scrollTarget(input: Record<string, unknown>): ScrollTarget {
   if (input.amount === undefined || input.amount === null) return target;
   const amount = Number(input.amount);
   if (!Number.isFinite(amount) || amount <= 0) throw new Error('"amount" must be a positive number.');
-  return input.unit === 'pixels' ? { ...target, pixels: Math.round(amount) } : { ...target, pages: amount };
+  return input.unit === 'pixels'
+    ? { ...target, pixels: Math.max(1, Math.round(amount)) }
+    : { ...target, pages: amount };
 }
 
 export const browserScroll: ToolDefinition = {
