@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SYNTHETIC_FRAME_SECONDS, syntheticMp3, syntheticMp3Seconds } from './__fixtures__/syntheticMp3';
+import { syntheticMp3, syntheticMp3Seconds, xingSeconds } from './__fixtures__/syntheticMp3';
 import { mp3DurationSeconds } from './mp3Duration';
 
 describe('mp3DurationSeconds', () => {
@@ -17,7 +17,22 @@ describe('mp3DurationSeconds', () => {
 
   it('uses the Xing frame count when present instead of the byte length', () => {
     const mp3 = syntheticMp3({ frames: 10, xingFrames: 5000 });
-    expect(mp3DurationSeconds(mp3)).toBeCloseTo(5000 * SYNTHETIC_FRAME_SECONDS, 6);
+    expect(mp3DurationSeconds(mp3)).toBeCloseTo(xingSeconds(5000), 6);
+  });
+
+  it('finds the Xing tag after mono MPEG-1 side information', () => {
+    const mp3 = syntheticMp3({ frames: 10, mono: true, xingFrames: 4000 });
+    expect(mp3DurationSeconds(mp3)).toBeCloseTo(xingSeconds(4000), 6);
+  });
+
+  it.each([false, true])('reads MPEG-2 frames (576 samples, half rate), mono=%s', mono => {
+    const mp3 = syntheticMp3({ frames: 10, version: 'mpeg2', bitrateKbps: 64, mono, xingFrames: 3000 });
+    expect(mp3DurationSeconds(mp3)).toBeCloseTo(xingSeconds(3000, 'mpeg2'), 6);
+  });
+
+  it('estimates an MPEG-2 constant-bitrate stream from its own bitrate table', () => {
+    const mp3 = syntheticMp3({ frames: 80, version: 'mpeg2', bitrateKbps: 64 });
+    expect(mp3DurationSeconds(mp3)).toBeCloseTo(syntheticMp3Seconds(80, 64, 'mpeg2'), 6);
   });
 
   it('ignores a stray sync word that is not followed by another frame', () => {

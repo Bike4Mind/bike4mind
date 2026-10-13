@@ -9,6 +9,7 @@ import {
 } from '../../videoProviders/gemini/geminiHttp';
 import { mp3DurationSeconds } from '../mp3Duration';
 import {
+  ProviderOutputTooLargeError,
   ProviderSubmitError,
   readBoundedResponse,
   type ProviderContext,
@@ -25,7 +26,7 @@ const INTERACTIONS_URL = `${GEMINI_BASE_URL}/v1beta/interactions`;
 const PREFIX = 'gemini_lyria';
 const SAFETY_REASON = 'gemini_lyria_safety';
 const NO_AUDIO_REASON = 'gemini_lyria_no_audio';
-const DEFAULT_AUDIO_TYPE = 'audio/mpeg';
+const MP3_CONTENT_TYPE = 'audio/mpeg';
 // Audio arrives as base64 inside the interaction JSON: about 4/3 of the audio, plus the lyrics.
 const MAX_INTERACTION_BYTES = Math.ceil((MAX_MUSIC_OUTPUT_BYTES * 4) / 3) + 1024 * 1024;
 
@@ -75,8 +76,9 @@ export const normalizeLyriaLyrics = (raw: string): string | undefined => {
   for (const line of raw.split('\n').map(text => text.trim())) {
     if (SECTION_MARKER.test(line)) {
       sections.push([]);
-    } else if (line.length > 0 && line !== '<instrumental>') {
-      sections[sections.length - 1].push(line.replace(LINE_MARKER, ''));
+    } else if (line !== '<instrumental>') {
+      const sung = line.replace(LINE_MARKER, '').trim();
+      if (sung.length > 0) sections[sections.length - 1].push(sung);
     }
   }
   const text = sections
@@ -98,12 +100,20 @@ const failed = (code: string, retryable: boolean, raw: unknown): ProviderTermina
   raw,
 });
 
-const toSucceeded = (audio: Content & { data: string }, outputs: Content[]): ProviderTerminalResult => {
-  const durationSeconds = mp3DurationSeconds(Buffer.from(audio.data, 'base64'));
+const toSucceeded = (
+  audio: Content & { data: string },
+  outputs: Content[],
+  ctx: ProviderContext
+): ProviderTerminalResult => {
+  const contentType = audio.mime_type ?? MP3_CONTENT_TYPE;
+  // The frame scan would false-sync on non-MP3 audio, so only MP3 is measured.
+  const durationSeconds =
+    contentType === MP3_CONTENT_TYPE ? mp3DurationSeconds(Buffer.from(audio.data, 'base64')) : undefined;
+  if (durationSeconds === undefined) ctx.logger.warn(`${PREFIX}_duration_unread`, { contentType });
   const lyrics = lyricsOf(outputs);
   return {
     status: 'succeeded',
-    output: { kind: 'inline', base64: audio.data, contentType: audio.mime_type ?? DEFAULT_AUDIO_TYPE },
+    output: { kind: 'inline', base64: audio.data, contentType },
     ...(durationSeconds !== undefined && { reportedDurationSeconds: durationSeconds }),
     ...(lyrics !== undefined && { lyrics }),
   };
@@ -115,7 +125,7 @@ const toTerminal = (interaction: Interaction, ctx: ProviderContext): ProviderTer
     const audio = outputs.findLast(
       (content): content is Content & { data: string } => content.type === 'audio' && !!content.data
     );
-    if (audio) return toSucceeded(audio, outputs);
+    if (audio) return toSucceeded(audio, outputs, ctx);
     // Not observed live; a refusal that completes with text only must not bill the user for a song.
     ctx.logger.warn(`${PREFIX}_completed_without_audio`, { interactionId: interaction.id });
     return { status: 'blocked', reason: NO_AUDIO_REASON, raw: { id: interaction.id, steps: interaction.steps } };
@@ -159,10 +169,18 @@ export class LyriaMusicProvider implements SyncGenerationProvider<
       const raw = await readJson(response);
       const failure = classifyGeminiSubmitFailure(response.status, raw, PREFIX);
       if (failure === 'blocked') return { status: 'blocked', reason: SAFETY_REASON, raw };
-      // retryable is set only for a 408/429, which generated nothing; any other 4xx repeats and a 5xx may have billed.
-      return { status: 'failed', retryable: failure.retryable, message: failure.message, raw };
+      // Only a 429 proves nothing was generated. Unlike an async submit, a 408 can land after a long render has
+      // run (and billed); any other 4xx repeats and a 5xx may have billed.
+      return { status: 'failed', retryable: response.status === 429, message: failure.message, raw };
     }
-    const body = await readBoundedResponse(response, MAX_INTERACTION_BYTES);
+    let body: Buffer;
+    try {
+      body = await readBoundedResponse(response, MAX_INTERACTION_BYTES);
+    } catch (error) {
+      if (error instanceof ProviderOutputTooLargeError) throw error;
+      // Cut off mid-body: the song was generated and billed, so the same unknown-outcome error as a failed request.
+      throw new ProviderSubmitError(`${PREFIX}_transport`, false, String(error));
+    }
     const parsed = InteractionSchema.safeParse(parseJson(body));
     // Answered and probably billed, but unreadable: a shape change to fix, not something a retry gets past.
     if (!parsed.success) return failed('unparseable', false, body.subarray(0, 2048).toString('utf8'));

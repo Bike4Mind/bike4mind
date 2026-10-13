@@ -2,11 +2,11 @@ import { readFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
-import type { ValidatedMusicRequest } from '@bike4mind/common';
+import { MAX_MUSIC_OUTPUT_BYTES, type ValidatedMusicRequest } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { describeSyncProviderConformance, type SyncConformanceScenario } from '../../generationProviders/conformance';
 import { syntheticMp3, syntheticMp3Seconds } from '../__fixtures__/syntheticMp3';
-import { ProviderSubmitError } from '../types';
+import { ProviderOutputTooLargeError, ProviderSubmitError } from '../types';
 import { buildLyriaInput, LyriaMusicProvider, normalizeLyriaLyrics } from './LyriaMusicProvider';
 
 type Exchange = {
@@ -119,6 +119,10 @@ describe('normalizeLyriaLyrics', () => {
     );
   });
 
+  it('drops an empty sung line instead of leaving a blank line inside a section', () => {
+    expect(normalizeLyriaLyrics('[[A0]]\n[:] One\n[:]\n[:] Two')).toBe('One\nTwo');
+  });
+
   it('returns undefined for an instrumental or a structure with no lines', () => {
     expect(normalizeLyriaLyrics('<instrumental>')).toBeUndefined();
     expect(normalizeLyriaLyrics('[[A0]]\n[[B1]]\n[[C2]]')).toBeUndefined();
@@ -173,6 +177,12 @@ describe('LyriaMusicProvider', () => {
     expect(await provider.generate(request(), {}, ctx())).toMatchObject({ status: 'failed', retryable: true });
   });
 
+  it('does not retry a 408: on a blocking call it can arrive after the song was rendered and billed', async () => {
+    respondWith({ error: { code: 408, message: 'Request timeout' } }, 408);
+
+    expect(await provider.generate(request(), {}, ctx())).toMatchObject({ status: 'failed', retryable: false });
+  });
+
   it('does not retry a 5xx, which may have generated and billed a song', async () => {
     respondWith({ error: { code: 500, message: 'Internal error' } }, 500);
 
@@ -220,6 +230,50 @@ describe('LyriaMusicProvider', () => {
       retryable: false,
       message: 'gemini_lyria_unparseable',
     });
+  });
+
+  it('does not measure audio that is not MP3', async () => {
+    respondWith({
+      id: 'x',
+      status: 'completed',
+      steps: [
+        { type: 'model_output', content: [{ type: 'audio', mime_type: 'audio/wav', data: AUDIO.toString('base64') }] },
+      ],
+    });
+
+    const result = await provider.generate(request(), {}, ctx());
+
+    expect(result).toMatchObject({ status: 'succeeded', output: { contentType: 'audio/wav' } });
+    expect(result).not.toHaveProperty('reportedDurationSeconds');
+  });
+
+  it('refuses a response larger than the output cap allows', async () => {
+    const declared = String(Math.ceil((MAX_MUSIC_OUTPUT_BYTES * 4) / 3) + 2 * 1024 * 1024);
+    server.use(http.post(INTERACTIONS, () => new HttpResponse('{}', { headers: { 'content-length': declared } })));
+
+    await expect(provider.generate(request(), {}, ctx())).rejects.toBeInstanceOf(ProviderOutputTooLargeError);
+  });
+
+  it('treats a body cut off mid-read as an unknown outcome, like a failed request', async () => {
+    server.use(
+      http.post(
+        INTERACTIONS,
+        () =>
+          new HttpResponse(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('{"id":"x","status":"comp'));
+                controller.error(new Error('connection reset'));
+              },
+            })
+          )
+      )
+    );
+
+    const error = await provider.generate(request(), {}, ctx()).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ProviderSubmitError);
+    expect(error).toMatchObject({ definitive: false, message: 'gemini_lyria_transport' });
   });
 
   it('throws on a transport error: the song may exist, so the job must not call again', async () => {
