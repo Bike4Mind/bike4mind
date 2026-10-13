@@ -2,6 +2,8 @@ import { getAtlassianOAuthConfig } from '@server/integrations/jira/atlassianConf
 import { decryptToken } from '@server/security/tokenEncryption';
 
 const ATLASSIAN_REVOKE_URL = 'https://auth.atlassian.com/oauth/token/revoke';
+// Well inside the 60s server Lambda timeout, so a stalled provider cannot take the caller down with it.
+const REVOKE_TIMEOUT_MS = 10_000;
 
 export type AtlassianRevokeOutcome = 'revoked' | 'no_credential' | 'not_configured' | 'failed';
 
@@ -37,6 +39,7 @@ export async function revokeAtlassianGrant(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, token }),
+      signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS),
     });
     if (!response.ok) {
       console.warn(`[atlassian] revoke failed (${context}): ${response.status} ${await response.text()}`);

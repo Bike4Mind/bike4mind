@@ -1,14 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { deleteEmbedMock, purgePublishedMock, hideAnnotationsMock, revokeDriveMock, revokeAtlassianMock } = vi.hoisted(
-  () => ({
-    deleteEmbedMock: vi.fn(),
-    purgePublishedMock: vi.fn(),
-    hideAnnotationsMock: vi.fn(),
-    revokeDriveMock: vi.fn(),
-    revokeAtlassianMock: vi.fn(),
-  })
-);
+const {
+  deleteEmbedMock,
+  purgePublishedMock,
+  hideAnnotationsMock,
+  revokeDriveMock,
+  revokeAtlassianMock,
+  flagConnectionsMock,
+} = vi.hoisted(() => ({
+  deleteEmbedMock: vi.fn(),
+  purgePublishedMock: vi.fn(),
+  hideAnnotationsMock: vi.fn(),
+  revokeDriveMock: vi.fn(),
+  revokeAtlassianMock: vi.fn(),
+  flagConnectionsMock: vi.fn(),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   User: {},
@@ -18,7 +24,13 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: purgePublishedMock,
 }));
-vi.mock('@server/integrations/google/drive/common', () => ({ revokeDriveGrant: revokeDriveMock }));
+vi.mock('@server/integrations/google/drive/common', () => ({
+  revokeDriveGrant: revokeDriveMock,
+  decryptStoredToken: (v: string | undefined) => (v ? `plain-${v}` : null),
+}));
+vi.mock('@server/integrations/google/drive/flagConnectionsStoppedByDisconnect', () => ({
+  flagConnectionsStoppedByDisconnect: flagConnectionsMock,
+}));
 vi.mock('@server/integrations/jira/revokeAtlassianGrant', () => ({ revokeAtlassianGrant: revokeAtlassianMock }));
 
 import { purgeDeletedUserData } from './purgeDeletedUserData';
@@ -31,6 +43,7 @@ beforeEach(() => {
   hideAnnotationsMock.mockReset().mockResolvedValue(0);
   revokeDriveMock.mockReset().mockResolvedValue('revoked');
   revokeAtlassianMock.mockReset().mockResolvedValue('revoked');
+  flagConnectionsMock.mockReset().mockResolvedValue({ affectedOrgConnections: 0, affectedPersonalConnections: 0 });
   logger.error.mockReset();
 });
 
@@ -95,6 +108,7 @@ describe('purgeDeletedUserData', () => {
       });
 
       expect(revokeDriveMock).toHaveBeenCalledWith('enc-drive-refresh', 'deleted user u1');
+      expect(flagConnectionsMock).toHaveBeenCalledWith('u1', 'plain-enc-drive-refresh');
       expect(revokeAtlassianMock).toHaveBeenCalledWith('enc-atl-access', 'deleted user u1');
     });
 
@@ -102,12 +116,39 @@ describe('purgeDeletedUserData', () => {
       await purge({ googleDrive: { accessToken: 'enc-drive-access', expiresAt }, atlassianConnect: null });
 
       expect(revokeDriveMock).toHaveBeenCalledWith('enc-drive-access', 'deleted user u1');
+      // No refresh token means no grant an org connection could share; personal ones still stop.
+      expect(flagConnectionsMock).toHaveBeenCalledWith('u1', null);
     });
 
     it('skips the Drive revoke when the user never connected Drive', async () => {
       await purge({ googleDrive: null, atlassianConnect: null });
 
       expect(revokeDriveMock).not.toHaveBeenCalled();
+      expect(flagConnectionsMock).not.toHaveBeenCalled();
+    });
+
+    it('revokes only after the local purge steps, so a stalled provider cannot skip them', async () => {
+      revokeDriveMock.mockImplementation(async () => {
+        expect(deleteEmbedMock).toHaveBeenCalled();
+        expect(purgePublishedMock).toHaveBeenCalled();
+        expect(hideAnnotationsMock).toHaveBeenCalled();
+        return 'revoked';
+      });
+
+      await purge({ googleDrive: { accessToken: 'a', refreshToken: 'r', expiresAt }, atlassianConnect: null });
+
+      expect(revokeDriveMock).toHaveBeenCalled();
+    });
+
+    it('logs instead of throwing when the Drive step throws, and still revokes Atlassian', async () => {
+      flagConnectionsMock.mockRejectedValue(new Error('mongo down'));
+
+      await expect(
+        purge({ googleDrive: { accessToken: 'a', refreshToken: 'r', expiresAt }, atlassianConnect: null })
+      ).resolves.toBeUndefined();
+
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Google Drive grant'));
+      expect(revokeAtlassianMock).toHaveBeenCalled();
     });
 
     it('still purges the rest when a revoke fails', async () => {

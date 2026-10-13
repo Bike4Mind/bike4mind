@@ -1,7 +1,8 @@
 import { User, embedConversationRepository, hideDeletedAuthorAnnotations } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
 import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
-import { revokeDriveGrant } from '@server/integrations/google/drive/common';
+import { decryptStoredToken, revokeDriveGrant } from '@server/integrations/google/drive/common';
+import { flagConnectionsStoppedByDisconnect } from '@server/integrations/google/drive/flagConnectionsStoppedByDisconnect';
 import { revokeAtlassianGrant } from '@server/integrations/jira/revokeAtlassianGrant';
 
 interface MinimalLogger {
@@ -39,17 +40,6 @@ export async function purgeDeletedUserData(
     integrationGrants,
   }: { deletedBy: string; logger: MinimalLogger; integrationGrants: UserIntegrationGrants | null }
 ): Promise<void> {
-  // Our copy of the credentials died with the row, but the grants stay live at the provider until
-  // revoked. Both helpers never throw. Prefer the Google refresh token: revoking it ends the whole grant.
-  if (integrationGrants) {
-    const context = `deleted user ${userId}`;
-    const { googleDrive, atlassianConnect } = integrationGrants;
-    if (googleDrive) {
-      await revokeDriveGrant(googleDrive.refreshToken || googleDrive.accessToken, context);
-    }
-    await revokeAtlassianGrant(atlassianConnect?.accessToken, context);
-  }
-
   try {
     await embedConversationRepository.deleteAllForUser(userId);
   } catch (err) {
@@ -68,5 +58,42 @@ export async function purgeDeletedUserData(
     logger.info(`Hid ${hidden} annotation(s) written by deleted user ${userId}`);
   } catch (err) {
     logger.error(`Failed to hide annotations for deleted user ${userId}: ${String(err)}`);
+  }
+
+  // Last: the revokes call out to the providers, and a slow provider must not cost the local steps above.
+  if (integrationGrants) {
+    await revokeIntegrationGrants(userId, integrationGrants, logger);
+  }
+}
+
+/**
+ * Our copy of the credentials died with the row, but the grants stay live at the provider until
+ * revoked. Same policy as the profile disconnects: revoke, then flag the Drive connections that were
+ * syncing on the grant (org ones copy the user's refresh token) so they stop visibly.
+ */
+async function revokeIntegrationGrants(
+  userId: string,
+  { googleDrive, atlassianConnect }: UserIntegrationGrants,
+  logger: MinimalLogger
+): Promise<void> {
+  const context = `deleted user ${userId}`;
+
+  if (googleDrive) {
+    try {
+      // The refresh token when there is one: revoking it ends the whole grant, not just one access token.
+      await revokeDriveGrant(googleDrive.refreshToken || googleDrive.accessToken, context);
+      const affected = await flagConnectionsStoppedByDisconnect(userId, decryptStoredToken(googleDrive.refreshToken));
+      logger.info(
+        `Flagged ${affected.affectedOrgConnections} org and ${affected.affectedPersonalConnections} personal Drive connection(s) for deleted user ${userId}`
+      );
+    } catch (err) {
+      logger.error(`Failed to revoke the Google Drive grant for deleted user ${userId}: ${String(err)}`);
+    }
+  }
+
+  try {
+    await revokeAtlassianGrant(atlassianConnect?.accessToken, context);
+  } catch (err) {
+    logger.error(`Failed to revoke the Atlassian grant for deleted user ${userId}: ${String(err)}`);
   }
 }
