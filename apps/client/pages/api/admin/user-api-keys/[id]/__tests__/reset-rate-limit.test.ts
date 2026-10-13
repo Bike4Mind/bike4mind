@@ -59,7 +59,18 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 
 const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
+// logEventSafe calls logEvent inside its own module, out of reach of this mock, so it is
+// re-modeled here on top of the mocked logEvent to keep both assertions meaningful.
+vi.mock('@server/utils/analyticsLog', () => ({
+  logEvent,
+  logEventSafe: async (event: unknown, options: unknown, logger?: { error: (...a: unknown[]) => void }) => {
+    try {
+      await logEvent(event, options);
+    } catch (error) {
+      logger?.error('Failed to log analytics event; continuing', error);
+    }
+  },
+}));
 
 import '@pages/api/admin/user-api-keys/[id]/reset-rate-limit';
 
@@ -74,7 +85,7 @@ function post(query: Record<string, unknown>, user?: Record<string, unknown>) {
   const { req, res } = createMocks({ method: 'POST', query });
   if (user) (req as any).user = user;
   (req as any).ability = {};
-  (req as any).logger = { info: vi.fn(), warn: vi.fn() };
+  (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
 
@@ -218,7 +229,7 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
       alsoResetManagement: true,
       logger: (req as any).logger,
     });
-    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('key-1'));
+    expect((req as any).logger.error).toHaveBeenCalledWith(expect.stringMatching(/analytics/i), expect.any(Error));
   });
 
   it('surfaces a total reset failure to asyncHandler instead of answering a hollow 200 success', async () => {

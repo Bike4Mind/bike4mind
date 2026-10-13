@@ -2,7 +2,7 @@ import { apiKeyRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import { BadRequestError } from '@server/utils/errors';
 import { ApiKeyEvents } from '@bike4mind/common';
 
@@ -22,7 +22,11 @@ const handler = baseApi().delete(
       }
     );
 
-    await logEvent({ userId, type: ApiKeyEvents.DELETE_API_KEY, metadata: { id } }, { ability: req.ability });
+    await logEventSafe(
+      { userId, type: ApiKeyEvents.DELETE_API_KEY, metadata: { id } },
+      { ability: req.ability },
+      req.logger
+    );
 
     // Never echo the stored key (ciphertext at rest) back to the browser; the client only
     // needs the record's id/metadata to drop it from its cache. Mirrors set-active.

@@ -79,6 +79,7 @@ vi.mock('@bike4mind/services', () => ({
 const mockLogEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({
   logEvent: (...a: unknown[]) => mockLogEvent(...a),
+  logEventSafe: (event: unknown, options: unknown) => mockLogEvent(event, options),
 }));
 
 import '../generate-api-key';
@@ -101,7 +102,7 @@ function post(body: unknown, opts: { isAdmin?: boolean; userId?: string } = {}) 
   (req as any).ability = {};
   (req as any).ip = '127.0.0.1';
   (req as any).headers = { 'user-agent': 'test' };
-  (req as any).logger = { info: vi.fn(), warn: vi.fn() };
+  (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
 

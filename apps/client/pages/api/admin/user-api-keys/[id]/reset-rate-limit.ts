@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import { evaluateCounterLockout, resetApiKeyRateLimit, resolveCounterLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 import { userApiKeyService } from '@bike4mind/services';
@@ -65,8 +65,8 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       // Attributed to the key owner; resetBy records the acting admin.
       // Best-effort: the reset already happened, and the counter write throws
       // for an orphaned key (owner doc deleted) - the exact case an admin
-      // reset exists for. Mirrors the RATE_LIMITED path in apiKeyRateLimitCheck.
-      await logEvent(
+      // reset exists for.
+      await logEventSafe(
         {
           userId: apiKey.userId,
           type: UserApiKeyEvents.RATE_LIMIT_RESET,
@@ -76,10 +76,9 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
             resetBy: req.user.id,
           },
         },
-        { ability: req.ability }
-      ).catch(error => {
-        req.logger.warn(`Failed to log rate-limit reset event for API key ${apiKey.id}: ${error}`);
-      });
+        { ability: req.ability },
+        req.logger
+      );
 
       req.logger.info(
         `Admin ${req.user.username} (${req.user.id}) reset rate-limit counters for API key ${apiKey.id} (owner ${apiKey.userId})`
