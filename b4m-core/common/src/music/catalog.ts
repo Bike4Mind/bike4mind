@@ -41,7 +41,8 @@ export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> =
     lyrics: { maxChars: MAX_MUSIC_LYRICS_CHARS },
     duration: { control: 'approximate', min: 30, max: 180, default: 120 },
     outputFormats: ['mp3'],
-    typicalRenderSeconds: 60,
+    // Measured 2026-10-13: a 2-minute song took 29 s. A WAV response_format still returned MP3.
+    typicalRenderSeconds: 30,
     pricing: { unit: 'per_song', usd: 0.08 },
     preview: false,
     defaultEnabled: true,
@@ -53,7 +54,8 @@ export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> =
     lyrics: { maxChars: MAX_MUSIC_LYRICS_CHARS },
     duration: { control: 'fixed', seconds: 30 },
     outputFormats: ['mp3'],
-    typicalRenderSeconds: 20,
+    // Measured 2026-10-13: 14 s.
+    typicalRenderSeconds: 15,
     pricing: { unit: 'per_song', usd: 0.04 },
     preview: true,
     defaultEnabled: true,
