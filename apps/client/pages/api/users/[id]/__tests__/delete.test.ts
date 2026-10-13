@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockAdminDeleteUser, mockRepoDelete, mockPurge } = vi.hoisted(() => ({
+const { mockAdminDeleteUser, mockRepoDelete, mockPurge, mockReadGrants } = vi.hoisted(() => ({
   mockAdminDeleteUser: vi.fn(),
   mockRepoDelete: vi.fn(),
   mockPurge: vi.fn(),
+  mockReadGrants: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -26,6 +27,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/services/purgeDeletedUserData', () => ({
   purgeDeletedUserData: (...a: unknown[]) => mockPurge(...a),
+  readUserIntegrationGrants: (...a: unknown[]) => mockReadGrants(...a),
 }));
 
 import handler from '../delete';
@@ -44,6 +46,7 @@ beforeEach(() => {
   mockAdminDeleteUser.mockReset();
   mockRepoDelete.mockReset().mockResolvedValue({ deletedCount: 1 });
   mockPurge.mockReset().mockResolvedValue(undefined);
+  mockReadGrants.mockReset().mockResolvedValue(null);
 });
 
 describe('DELETE /api/users/[id]/delete', () => {
@@ -79,6 +82,38 @@ describe('DELETE /api/users/[id]/delete', () => {
     const { call } = await run();
 
     await expect(call).rejects.toThrow('not authorized');
+    expect(mockRepoDelete).not.toHaveBeenCalled();
+    expect(mockPurge).not.toHaveBeenCalled();
+  });
+
+  it('reads the integration grants before the delete and hands them to the purge', async () => {
+    const grants = { googleDrive: { refreshToken: 'enc-refresh' }, atlassianConnect: { accessToken: 'enc-access' } };
+    mockReadGrants.mockImplementation(async () => {
+      expect(mockRepoDelete).not.toHaveBeenCalled();
+      return grants;
+    });
+    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+      await db.users.delete('u1');
+      return { id: 'u1' };
+    });
+
+    const { call } = await run();
+    await call;
+
+    expect(mockReadGrants).toHaveBeenCalledWith('u1');
+    expect(mockPurge).toHaveBeenCalledWith('u1', expect.objectContaining({ integrationGrants: grants }));
+  });
+
+  it('does not delete when the grants cannot be read, so the revoke is never lost', async () => {
+    mockReadGrants.mockRejectedValue(new Error('mongo down'));
+    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+      await db.users.delete('u1');
+      return { id: 'u1' };
+    });
+
+    const { call } = await run();
+
+    await expect(call).rejects.toThrow('mongo down');
     expect(mockRepoDelete).not.toHaveBeenCalled();
     expect(mockPurge).not.toHaveBeenCalled();
   });

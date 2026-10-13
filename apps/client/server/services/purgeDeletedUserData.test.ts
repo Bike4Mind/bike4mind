@@ -1,18 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { deleteEmbedMock, purgePublishedMock, hideAnnotationsMock } = vi.hoisted(() => ({
-  deleteEmbedMock: vi.fn(),
-  purgePublishedMock: vi.fn(),
-  hideAnnotationsMock: vi.fn(),
-}));
+const { deleteEmbedMock, purgePublishedMock, hideAnnotationsMock, revokeDriveMock, revokeAtlassianMock } = vi.hoisted(
+  () => ({
+    deleteEmbedMock: vi.fn(),
+    purgePublishedMock: vi.fn(),
+    hideAnnotationsMock: vi.fn(),
+    revokeDriveMock: vi.fn(),
+    revokeAtlassianMock: vi.fn(),
+  })
+);
 
 vi.mock('@bike4mind/database', () => ({
+  User: {},
   embedConversationRepository: { deleteAllForUser: deleteEmbedMock },
   hideDeletedAuthorAnnotations: hideAnnotationsMock,
 }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: purgePublishedMock,
 }));
+vi.mock('@server/integrations/google/drive/common', () => ({ revokeDriveGrant: revokeDriveMock }));
+vi.mock('@server/integrations/jira/revokeAtlassianGrant', () => ({ revokeAtlassianGrant: revokeAtlassianMock }));
 
 import { purgeDeletedUserData } from './purgeDeletedUserData';
 
@@ -22,12 +29,14 @@ beforeEach(() => {
   deleteEmbedMock.mockReset().mockResolvedValue(undefined);
   purgePublishedMock.mockReset().mockResolvedValue(undefined);
   hideAnnotationsMock.mockReset().mockResolvedValue(0);
+  revokeDriveMock.mockReset().mockResolvedValue('revoked');
+  revokeAtlassianMock.mockReset().mockResolvedValue('revoked');
   logger.error.mockReset();
 });
 
 describe('purgeDeletedUserData', () => {
   it('purges embed history and published artifacts for the user', async () => {
-    await purgeDeletedUserData('u1', { deletedBy: 'admin1', logger });
+    await purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null });
 
     expect(deleteEmbedMock).toHaveBeenCalledWith('u1');
     expect(purgePublishedMock).toHaveBeenCalledWith('u1', { deletedBy: 'admin1', logger });
@@ -38,7 +47,9 @@ describe('purgeDeletedUserData', () => {
   it('still purges published artifacts when the embed purge fails, and never throws', async () => {
     deleteEmbedMock.mockRejectedValue(new Error('embed down'));
 
-    await expect(purgeDeletedUserData('u1', { deletedBy: 'admin1', logger })).resolves.toBeUndefined();
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
 
     expect(purgePublishedMock).toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('embed conversations'));
@@ -47,7 +58,9 @@ describe('purgeDeletedUserData', () => {
   it('logs instead of throwing when the published-artifact purge fails', async () => {
     purgePublishedMock.mockRejectedValue(new Error('publish down'));
 
-    await expect(purgeDeletedUserData('u1', { deletedBy: 'admin1', logger })).resolves.toBeUndefined();
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
 
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('published artifacts'));
     expect(hideAnnotationsMock).toHaveBeenCalledWith('u1');
@@ -56,8 +69,56 @@ describe('purgeDeletedUserData', () => {
   it('logs instead of throwing when hiding annotations fails', async () => {
     hideAnnotationsMock.mockRejectedValue(new Error('annotations down'));
 
-    await expect(purgeDeletedUserData('u1', { deletedBy: 'admin1', logger })).resolves.toBeUndefined();
+    await expect(
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants: null })
+    ).resolves.toBeUndefined();
 
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('hide annotations'));
+  });
+
+  describe('integration grants', () => {
+    const expiresAt = new Date();
+    const purge = (integrationGrants: Parameters<typeof purgeDeletedUserData>[1]['integrationGrants']) =>
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants });
+
+    it('revokes the Drive grant by its refresh token and the Atlassian token', async () => {
+      await purge({
+        googleDrive: { accessToken: 'enc-drive-access', refreshToken: 'enc-drive-refresh', expiresAt },
+        atlassianConnect: {
+          accessToken: 'enc-atl-access',
+          refreshToken: 'enc-atl-refresh',
+          expiresAt,
+          siteName: 'site',
+          resources: [],
+          connectedAt: expiresAt,
+        },
+      });
+
+      expect(revokeDriveMock).toHaveBeenCalledWith('enc-drive-refresh', 'deleted user u1');
+      expect(revokeAtlassianMock).toHaveBeenCalledWith('enc-atl-access', 'deleted user u1');
+    });
+
+    it('falls back to the Drive access token when no refresh token was stored', async () => {
+      await purge({ googleDrive: { accessToken: 'enc-drive-access', expiresAt }, atlassianConnect: null });
+
+      expect(revokeDriveMock).toHaveBeenCalledWith('enc-drive-access', 'deleted user u1');
+    });
+
+    it('skips the Drive revoke when the user never connected Drive', async () => {
+      await purge({ googleDrive: null, atlassianConnect: null });
+
+      expect(revokeDriveMock).not.toHaveBeenCalled();
+    });
+
+    it('still purges the rest when a revoke fails', async () => {
+      revokeDriveMock.mockResolvedValue('failed');
+      revokeAtlassianMock.mockResolvedValue('failed');
+
+      await purge({ googleDrive: { accessToken: 'a', refreshToken: 'r', expiresAt }, atlassianConnect: null });
+
+      expect(deleteEmbedMock).toHaveBeenCalledWith('u1');
+      expect(purgePublishedMock).toHaveBeenCalled();
+      expect(hideAnnotationsMock).toHaveBeenCalledWith('u1');
+    });
   });
 });
