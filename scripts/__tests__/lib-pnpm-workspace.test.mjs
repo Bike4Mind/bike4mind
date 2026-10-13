@@ -28,6 +28,11 @@ describe('parseOverrides', () => {
   it('returns an empty map when there is no overrides block', () => {
     expect(parseOverrides('packages:\n  - apps/*\n')).toEqual({});
   });
+
+  it('throws on an indented line it cannot read instead of stopping early', () => {
+    expect(() => parseOverrides('overrides:\n  a: 1\n  b:\n    nested: x\n  c: 2\n')).toThrow(/Unparseable/);
+    expect(() => parseOverrides('overrides:\n    a: 1\n')).toThrow(/Unparseable/);
+  });
 });
 
 describe('renderOverrides', () => {

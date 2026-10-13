@@ -19,8 +19,10 @@ export function parseOverrides(text) {
     }
     if (!inBlock) continue;
     if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
+    if (!line.startsWith(' ')) break;
     const m = line.match(ENTRY);
-    if (!m) break;
+    // A silent stop here would let renderOverrides drop every pin after this line.
+    if (!m) throw new Error(`Unparseable line in the pnpm-workspace.yaml overrides block: ${line}`);
     overrides[unquote(m[1])] = unquote(m[2]);
   }
   return overrides;
