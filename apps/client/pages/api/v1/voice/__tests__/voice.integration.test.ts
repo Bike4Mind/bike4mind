@@ -144,6 +144,8 @@ import legacyVoicesHandler from '../../../voice/v2/voices';
 import legacySessionsHandler from '../../../voice/v2/sessions';
 import legacyEndHandler from '../../../voice/v2/sessions/[id]/end';
 import { MAX_SESSION_SECONDS } from '@server/voice/voiceSessionLimits';
+import { VOICE_HOLD_LOSER_REFUND_FAILED_LOG } from '@server/voice/settleVoiceHold';
+import { Logger } from '@bike4mind/observability';
 import legacyAgentsHandler from '../../../voice/v2/agents';
 import {
   ApiKeyScope,
@@ -522,6 +524,26 @@ describe('POST /api/v1/voice/sessions', () => {
       ['user-1', -RESERVED_CREDITS],
       ['user-1', RESERVED_CREDITS],
     ]);
+  });
+
+  it('still answers 409 and logs the owed refund when the loser refund throws', async () => {
+    mocks.openVoiceHold.mockResolvedValue(false);
+    mocks.incrementCredits.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('db down'));
+    const logError = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    try {
+      const { res, run } = fireSessions();
+      await run();
+      expect(res._getStatusCode()).toBe(409);
+      expect(res._getJSONData()).toMatchObject({ error: expect.any(String) });
+      expect(logError).toHaveBeenCalledWith(VOICE_HOLD_LOSER_REFUND_FAILED_LOG, {
+        userId: 'user-1',
+        sessionId: SESSION_ID,
+        refund: RESERVED_CREDITS,
+        err: { message: 'db down', name: 'Error' },
+      });
+    } finally {
+      logError.mockRestore();
+    }
   });
 
   it('leaves exactly one hold and one reserve charged when two fresh bootstraps race', async () => {

@@ -128,6 +128,21 @@ describe('sessionRepository voice holds', () => {
     expect(after?.voiceSessionStartedAt).toEqual(results[0] ? first : second);
   });
 
+  it('does not open over a reserved hold restored at the start the bootstrap read', async () => {
+    const prior = minutesAgo(5);
+    const id = await seed('call', 100, prior);
+
+    expect(
+      await sessionRepository.openVoiceHold(id, prior, {
+        voiceReservedCredits: 100,
+        voiceSessionStartedAt: minutesAgo(0),
+        realtime: false,
+      })
+    ).toBe(false);
+    const after = await Session.findById(id).lean();
+    expect(after).toMatchObject({ voiceReservedCredits: 100, voiceSessionStartedAt: prior });
+  });
+
   it('opens over an unclaimed no-reserve prior hold, and drops its realtime marker for an ElevenLabs hold', async () => {
     const prior = minutesAgo(5);
     const id = await seed('call', null, prior, 0);
@@ -223,7 +238,8 @@ describe('sessionRepository voice holds', () => {
     const newStart = minutesAgo(2);
     const id = await seed('call', 100, newStart);
 
-    await sessionRepository.recordVoiceActivity(id, minutesAgo(1), oldStart);
+    // A reconnect's token names the replaced hold, so the proxy sees no match and refuses the turn (402).
+    expect(await sessionRepository.recordVoiceActivity(id, minutesAgo(1), oldStart)).toBe(false);
     expect(await Session.findById(id).lean()).toMatchObject({ voiceConnectedAt: null, voiceLastActivityAt: null });
 
     const at = minutesAgo(1);

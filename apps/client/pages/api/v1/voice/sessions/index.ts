@@ -34,7 +34,7 @@ import {
   NotFoundError,
 } from '@server/utils/errors';
 import { isValidObjectId } from '@server/utils/objectId';
-import { settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+import { refundLostVoiceHoldReserve, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
 import { MAX_SESSION_SECONDS, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
@@ -245,7 +245,11 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
     if (!opened) {
       // A concurrent bootstrap of this session wrote its hold first; this one's reserve is not held.
       if (enforceCredits) {
-        await userRepository.incrementCredits(req.user.id, reservedCredits);
+        await refundLostVoiceHoldReserve(req.logger, {
+          userId: req.user.id,
+          sessionId: String(session.id),
+          refund: reservedCredits,
+        });
       }
       throw new ConflictError('Another voice call on this session started at the same time; retry');
     }

@@ -62,6 +62,7 @@ vi.mock('@server/managers/sessionOrigin', () => ({ resolveSessionOrigin: () => '
 import voiceSessionsHandler from '@pages/api/ai/voice-sessions';
 import errorHandler from '@server/middlewares/errorHandler';
 import { VOICE_SESSION_ERROR } from '@client/shared/voiceSessionErrors';
+import { VOICE_HOLD_LOSER_REFUND_FAILED_LOG } from '@server/voice/settleVoiceHold';
 
 /** baseApi is collapsed above, so route a thrown error through errorHandler the way its onError does. */
 async function callRoute(body: Record<string, unknown> = {}) {
@@ -230,6 +231,24 @@ describe('POST /api/ai/voice-sessions over an open hold', () => {
     expect(debit[1]).toBeLessThan(0);
     expect(refund).toEqual(['user-1', -debit[1]]);
     expect(mockIncrementCredits).toHaveBeenCalledTimes(2);
+  });
+
+  it('still answers 409 and logs the owed refund when the loser refund throws', async () => {
+    mockGetSession.mockResolvedValueOnce(openHoldSession);
+    mockClaimVoiceHold.mockResolvedValueOnce(null);
+    mockOpenVoiceHold.mockResolvedValueOnce(false);
+    mockIncrementCredits.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('db down'));
+
+    const { res, logger } = await callRoute({ sessionId: 'session-1' });
+
+    expect(res._getStatusCode()).toBe(409);
+    const [debit] = mockIncrementCredits.mock.calls;
+    expect(logger.error).toHaveBeenCalledWith(VOICE_HOLD_LOSER_REFUND_FAILED_LOG, {
+      userId: 'user-1',
+      sessionId: 'session-1',
+      refund: -debit[1],
+      err: { message: 'db down', name: 'Error' },
+    });
   });
 
   // The billed-credits marker is how the stale-hold sweep and settlePriorVoiceHold tell a realtime

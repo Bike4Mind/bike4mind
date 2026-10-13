@@ -27,7 +27,7 @@ import {
 } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+import { refundLostVoiceHoldReserve, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { REALTIME_VOICE_RESERVE_USD, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
@@ -424,7 +424,11 @@ When you get the tool result back, summarize it conversationally for voice.`;
     if (!opened) {
       // A concurrent bootstrap of this session wrote its hold first; this one's reserve is not held.
       if (enforceCredits) {
-        await userRepository.incrementCredits(req.user.id, reservedCredits);
+        await refundLostVoiceHoldReserve(req.logger, {
+          userId: req.user.id,
+          sessionId: String(session.id),
+          refund: reservedCredits,
+        });
       }
       throw new ConflictError('Another voice call on this session started at the same time; retry');
     }

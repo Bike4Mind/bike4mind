@@ -757,11 +757,16 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   ) {
     // Conditional on the hold the bootstrap read: once it is settled (null) or, if it held no reserve
     // and so was never claimed, still that start. A concurrent bootstrap that already wrote its own
-    // hold makes this match nothing, so only one of them keeps a reserve.
+    // hold makes this match nothing, so only one of them keeps a reserve. The prior start matches
+    // only without a reserve: a reserved hold a settler restored after its refund failed still owes
+    // that refund (settleVoiceHold), so it must not be overwritten.
     const { matchedCount } = await this.sessionModel.updateOne(
       {
         _id: sessionId,
-        voiceSessionStartedAt: priorStartedAt ? { $in: [null, priorStartedAt] } : null,
+        $or: [
+          { voiceSessionStartedAt: null },
+          ...(priorStartedAt ? [{ voiceSessionStartedAt: priorStartedAt, voiceReservedCredits: null }] : []),
+        ],
       },
       {
         $set: {

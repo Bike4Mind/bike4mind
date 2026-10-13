@@ -112,6 +112,30 @@ export async function settleVoiceHold(
   return { settled: true, connected, chargedCredits, refundedCredits };
 }
 
+/** Message of the log line a bootstrap writes when it lost the hold race and its refund failed. */
+export const VOICE_HOLD_LOSER_REFUND_FAILED_LOG = 'voice_hold_loser_refund_failed';
+
+/**
+ * Credit back the reserve of a bootstrap that lost the race to open the session's hold. A failed
+ * refund is logged for reconciliation by hand, not thrown: no hold records this reserve, and the
+ * caller must still answer 409.
+ */
+export async function refundLostVoiceHoldReserve(
+  log: Pick<Logger, 'error'>,
+  hold: { userId: string; sessionId: string; refund: number }
+): Promise<void> {
+  try {
+    await userRepository.incrementCredits(hold.userId, hold.refund);
+  } catch (error) {
+    log.error(VOICE_HOLD_LOSER_REFUND_FAILED_LOG, {
+      userId: hold.userId,
+      sessionId: hold.sessionId,
+      refund: hold.refund,
+      err: error instanceof Error ? { message: error.message, name: error.name } : { message: String(error) },
+    });
+  }
+}
+
 /** When a call nobody closed was last seen alive: its last activity, else its connect, else its start. */
 export function lastSeenAt(hold: VoiceHold): Date {
   return hold.voiceLastActivityAt ?? hold.voiceConnectedAt ?? hold.voiceSessionStartedAt;
