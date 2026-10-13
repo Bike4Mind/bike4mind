@@ -25,8 +25,9 @@ export type MusicJobDeps = {
   getSettings(): Promise<{ enforceCredits: boolean; musicGeneration: MusicGenerationSettings | undefined }>;
   resolveApiKey(providerId: MusicProviderId, userId: string): Promise<string | null>;
   /**
-   * saveGeneratedAsset bound to the user's files. Idempotent per `generation.jobId`. An abort of `signal`, the
-   * step's lease-bounded signal, must reject rather than report an ordinary save failure.
+   * saveGeneratedAsset bound to the user's files. Idempotent per `generation.jobId`. `signal` is the step's
+   * lease-bounded signal; its abort must reject rather than report an ordinary save failure. The handler then
+   * falls back to saveToGeneratedBucket with a fresh bounded signal, so the song is still kept.
    */
   saveToFiles(params: {
     userId: string;
@@ -49,7 +50,7 @@ export type MusicJobDeps = {
     job: MusicJob;
     creditsCharged: number;
     costUsd: number;
-    /** Billed seconds (billedMusicSeconds), the usage event's units. */
+    /** Seconds the provider delivered (uncapped), the usage event's units; costUsd is priced on it. */
     durationSeconds: number;
     /** `refusal` for a block the provider billed: spend with no song delivered. */
     status: Extract<UsageEventStatus, 'ok' | 'refusal'>;

@@ -114,11 +114,13 @@ export async function holdJobCredits(
   }
 }
 
-/** The job to create, without its kind (a separate argument) and timestamps. */
-export type NewGenerationJob<K extends GenerationJobKind> = Omit<
-  IGenerationJobOf<K>,
-  'kind' | 'createdAt' | 'updatedAt'
->;
+/**
+ * The job to create, without its kind (a separate argument) and timestamps. Distributive over K, so a union of
+ * kinds yields a union of per-kind jobs rather than one Omit that collapses their payloads.
+ */
+export type NewGenerationJob<K extends GenerationJobKind> = K extends GenerationJobKind
+  ? Omit<IGenerationJobOf<K>, 'kind' | 'createdAt' | 'updatedAt'>
+  : never;
 
 /**
  * Persists a pending job that already owns `job.creditHold` and enqueues its first step. A failure to persist or
@@ -132,7 +134,8 @@ export async function persistAndEnqueueJob<K extends GenerationJobKind>(
   const jobId = new Types.ObjectId().toHexString();
   let persisted: IGenerationJobDocumentOf<K>;
   try {
-    // A generic K cannot be related to the input's union of kinds; `job` is one member of it.
+    // The one unavoidable cast: TS cannot relate a generic K to the input's union. Callers cannot mismatch kind and
+    // payload, because NewGenerationJob<K> is the per-kind job for exactly this `kind`.
     const input = { ...job, kind, id: jobId } as GenerationJobCreateInput;
     persisted = expectKind(await deps.repository.createJob(input), kind);
   } catch (error) {

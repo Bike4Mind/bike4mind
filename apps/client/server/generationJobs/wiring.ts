@@ -144,7 +144,7 @@ export const toJobUpdate = (job: IGenerationJobDocument): IGenerationJobUpdatedA
 // (hasUsableKey in server/videoGenerations/listUsableVideoModels.ts).
 export const buildProviders = (): VideoProvider[] => {
   const providers: VideoProvider[] = [new GeminiOmniVideoProvider(), new XaiVideoProvider(), new VeoVideoProvider()];
-  // Set only on non-production stages by infra (TEST_VIDEO_PROVIDER_ENVIRONMENT); never registered in production.
+  // Set only on non-production stages by infra (TEST_GENERATION_PROVIDER_ENVIRONMENT); never registered in production.
   if (process.env.ENABLE_TEST_VIDEO_PROVIDER === 'true') providers.push(new TestVideoProvider());
   return providers;
 };
@@ -152,7 +152,7 @@ export const buildProviders = (): VideoProvider[] => {
 // Lyria is registered everywhere; a caller can use it only with a resolvable Gemini key.
 export const buildMusicProviders = (): MusicProvider[] => {
   const providers: MusicProvider[] = [new LyriaMusicProvider()];
-  // Set only on non-production stages by infra (TEST_VIDEO_PROVIDER_ENVIRONMENT); never registered in production.
+  // Set only on non-production stages by infra (TEST_GENERATION_PROVIDER_ENVIRONMENT); never registered in production.
   if (process.env.ENABLE_TEST_MUSIC_PROVIDER === 'true') providers.push(new TestMusicProvider());
   return providers;
 };
@@ -259,7 +259,7 @@ const getMusicSettings: MusicJobDeps['getSettings'] = async () => {
 // The same per-user quota createFabFile enforces on the save (saveGeneratedAsset passes no organization).
 export const hasStorageFor: CreateMusicJobDeps['hasStorageFor'] = async (userId, bytes) => {
   const user = await userRepository.findById(userId);
-  if (!user) return false;
+  if (!user) throw new Error(`user ${userId} not found`);
   try {
     await checkStorageLimit(user, bytes);
     return true;

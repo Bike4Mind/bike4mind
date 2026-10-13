@@ -314,6 +314,90 @@ describe('music job end to end with the test provider', () => {
     expect(t.jobOf(created).payload.output).toMatchObject({ location: 'generated' });
   });
 
+  it('saves to the generated bucket with a live signal when the step signal aborted the Files save', async () => {
+    const abortedStep = AbortSignal.abort();
+    const saveToFiles = vi.fn(async ({ signal }: { signal: AbortSignal }) => {
+      signal.throwIfAborted();
+      throw new Error('unreachable');
+    });
+    // The provider work finished before the step's signal fired, so it ignores the signal here.
+    const liveProvider: MusicProvider = {
+      ...stubProvider(async () => song(5)),
+      fetchOutput: async () => silentMp3(5),
+    };
+    const t = setup({ saveToFiles, providers: createMusicProviderRegistry([liveProvider]) });
+    const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    const result = await createMusicJobHandler(t.deps).submit(t.jobOf(created), { signal: abortedStep });
+    expect(result).toMatchObject({ next: 'succeeded', payload: { output: { location: 'generated' } } });
+    const [{ signal }] = vi.mocked(t.deps.saveToGeneratedBucket).mock.calls[0];
+    expect(signal.aborted).toBe(false);
+  });
+
+  it('normalizes the content type for the MP3 measurement and the saves', async () => {
+    const t = setup({
+      providers: createMusicProviderRegistry([
+        stubProvider(async () => ({
+          status: 'succeeded',
+          output: { kind: 'inline', base64: silentMp3(5).toString('base64'), contentType: 'Audio/MPEG; codecs=mp3' },
+        })),
+      ]),
+    });
+    const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    const job = t.jobOf(created);
+    expect(job.payload.output).toMatchObject({ contentType: 'audio/mpeg' });
+    expect(job.payload.reportedDurationSeconds).toBeCloseTo(5, 1);
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(expect.objectContaining({ contentType: 'audio/mpeg' }));
+  });
+
+  it('maps audio/mp3 to audio/mpeg', async () => {
+    const t = setup({
+      providers: createMusicProviderRegistry([
+        stubProvider(async () => ({
+          status: 'succeeded',
+          output: { kind: 'inline', base64: silentMp3(5).toString('base64'), contentType: 'audio/mp3' },
+        })),
+      ]),
+    });
+    const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.jobOf(created).payload.output).toMatchObject({ contentType: 'audio/mpeg' });
+  });
+
+  it('bounds a huge raw provider payload before committing it', async () => {
+    const raw = { echoed: Buffer.alloc(750_000, 1).toString('base64') };
+    const t = setup({
+      providers: createMusicProviderRegistry([
+        stubProvider(async () => ({ status: 'failed', retryable: false, message: 'boom', raw })),
+      ]),
+    });
+    const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    const stored = t.jobOf(created).rawProviderError;
+    expect(typeof stored).toBe('string');
+    expect(String(stored).length).toBeLessThan(17 * 1024 + 100);
+    expect(String(stored)).toContain('truncated');
+  });
+
+  it('keeps a small raw provider payload as is', async () => {
+    const raw = { reason: 'policy' };
+    const t = setup({
+      providers: createMusicProviderRegistry([stubProvider(async () => ({ status: 'blocked', billed: false, raw }))]),
+    });
+    const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.jobOf(created).rawProviderError).toEqual(raw);
+  });
+
+  it('fails, without retrying, a job whose model left the catalog', async () => {
+    const t = setup();
+    const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    const job = t.jobOf(created);
+    job.payload.request.model = 'removed-music-model' as MusicModelId;
+    const result = await createMusicJobHandler(t.deps).submit(job, { signal: new AbortController().signal });
+    expect(result).toMatchObject({ next: 'failed', error: { code: 'provider_error' } });
+  });
+
   it('fails as orphaned_submit when the song cannot be saved anywhere', async () => {
     const t = setup({
       saveToFiles: vi.fn(async () => Promise.reject(new Error('files down'))),
@@ -414,6 +498,25 @@ describe('music job settlement', () => {
     expect(t.jobOf(short).settledCredits).toBe(shortCharged);
     expect(t.deps.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ durationSeconds: 42, costUsd: estimateMusicCostUsd(caps, { durationSeconds: 42 }) })
+    );
+  });
+
+  it('records the delivered seconds uncapped while credits stay at the hold', async () => {
+    const caps = MUSIC_MODEL_CATALOG.music_v2_5;
+    const t = setup({
+      providers: createMusicProviderRegistry([
+        stubProvider(async () => song(60, { reportedDurationSeconds: 75 }), 'elevenlabs'),
+      ]),
+    });
+    const created = await createMusicJob(
+      { user, request: { model: 'music_v2_5', prompt: 'x', durationSeconds: 60 }, source: 'api' },
+      t.deps
+    );
+    await t.runToCompletion();
+    const [, charged] = vi.mocked(settleCreditHold).mock.calls[0];
+    expect(charged).toBe(t.jobOf(created).creditHold?.reservedCredits);
+    expect(t.deps.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ durationSeconds: 75, costUsd: estimateMusicCostUsd(caps, { durationSeconds: 75 }) })
     );
   });
 

@@ -8,6 +8,7 @@ import {
   type GenerationJobErrorCode,
   type MusicJobOutput,
   type MusicJobPayload,
+  type MusicModelCapabilities,
   type ValidatedMusicRequest,
 } from '@bike4mind/common';
 import {
@@ -25,6 +26,10 @@ import type { MusicJob, MusicJobDeps } from './types';
 
 const FEATURE_LABEL = 'music generation';
 const MP3_CONTENT_TYPE = 'audio/mpeg';
+const MAX_RAW_PROVIDER_BYTES = 16 * 1024;
+// Fresh budget for the bucket fallback when the step signal already fired; must fit inside the engine's commit
+// margin (STEP_COMMIT_MARGIN_MS), like its FAILURE_CANCEL_BUDGET_MS.
+const FALLBACK_SAVE_BUDGET_MS = 10_000;
 
 type MusicStepResult = StepResult<'music'>;
 // The only shape the music job drives today. An async music provider would add a running state (poll + store,
@@ -37,6 +42,24 @@ const fail = (code: GenerationJobErrorCode, message: string, rawProviderError?: 
   error: { code, message },
   rawProviderError,
 });
+
+// The raw payload rides on the job document, and a provider can echo the request or an audio body into it.
+const boundRawPayload = (raw: unknown): unknown => {
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(raw);
+  } catch {
+    return '[raw provider payload not serializable]';
+  }
+  if (json === undefined || json.length <= MAX_RAW_PROVIDER_BYTES) return raw;
+  return `${json.slice(0, MAX_RAW_PROVIDER_BYTES)}...[truncated, ${json.length} chars total]`;
+};
+
+// Providers label MP3 as audio/mp3 or with parameters; the duration scan and the saved type key off one form.
+const normalizeContentType = (contentType: string): string => {
+  const base = contentType.split(';')[0].trim().toLowerCase();
+  return base === 'audio/mp3' ? MP3_CONTENT_TYPE : base;
+};
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -59,8 +82,10 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
     if (provider.mode !== 'sync') return fail('provider_error', `music provider '${providerId}' is not synchronous`);
     const apiKey = await deps.resolveApiKey(providerId, job.requestedBy);
     if (!isUsableApiKey(apiKey)) return fail('provider_error', `No API key configured for ${providerId}`);
-    // Defensive: the catalog may have changed since the job was created.
-    const validation = validateMusicRequest(request, getMusicModelCapabilities(request.model));
+    // Defensive: the catalog may have changed since the job was created, and a removed model is not retryable.
+    const caps: MusicModelCapabilities | undefined = getMusicModelCapabilities(request.model);
+    if (!caps) return fail('provider_error', `music model '${request.model}' is no longer in the catalog`);
+    const validation = validateMusicRequest(request, caps);
     if (!validation.ok) return fail('provider_error', `stored request is no longer valid: ${validation.message}`);
     return {
       provider,
@@ -106,9 +131,11 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
     } catch (error) {
       deps.logger.warn('music save to Files threw; saving outside Files', { jobId: job.id, error });
     }
+    // An aborted step signal rejects the fallback too, losing a song the provider already billed.
+    const fallbackSignal = signal.aborted ? AbortSignal.timeout(FALLBACK_SAVE_BUDGET_MS) : signal;
     const key = `generated-audio/${job.ownerId}/${job.id}.${extensionFromMimeType(contentType) ?? 'bin'}`;
     try {
-      const { s3Key } = await deps.saveToGeneratedBucket({ key, bytes, contentType, signal });
+      const { s3Key } = await deps.saveToGeneratedBucket({ key, bytes, contentType, signal: fallbackSignal });
       return { location: 'generated', s3Key, ...common };
     } catch (error) {
       // The song was generated and billed but cannot be kept: the throw fails the job as orphaned_submit.
@@ -130,7 +157,7 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
       if (error instanceof ProviderOutputTooLargeError) return fail('output_too_large', error.message);
       throw error;
     }
-    const contentType = result.output.contentType ?? MP3_CONTENT_TYPE;
+    const contentType = normalizeContentType(result.output.contentType ?? MP3_CONTENT_TYPE);
     const measured = durationOf(result, bytes, contentType);
     const output = await saveOutput(
       job,
@@ -154,11 +181,15 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
       if (!caps) throw new Error(`Music model ${request.model} is no longer in the catalog`);
       // A billed block has no output to measure, so it is charged at the requested duration.
       const reported = job.state === 'succeeded' ? job.payload.reportedDurationSeconds : undefined;
+      // Credits are capped at the hold; the usage event records what the provider actually delivered.
+      const delivered = {
+        durationSeconds: reported !== undefined && reported > 0 ? reported : request.durationSeconds,
+      };
       const billed = { durationSeconds: billedMusicSeconds(request, reported) };
       return {
-        seconds: billed.durationSeconds,
+        seconds: delivered.durationSeconds,
         credits: estimateMusicCostCredits(caps, billed),
-        usd: estimateMusicCostUsd(caps, billed),
+        usd: estimateMusicCostUsd(caps, delivered),
       };
     } catch (error) {
       deps.logger.error('music_job_estimate_failed', { jobId: job.id, model: request.model, error });
@@ -220,14 +251,14 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
           return {
             next: 'blocked',
             error: { code: 'content_blocked', message: 'The provider declined this request under its content policy' },
-            rawProviderError: result.raw,
+            rawProviderError: boundRawPayload(result.raw),
             ...(result.billed && { payload: { ...job.payload, billedBlock: true } }),
           };
         case 'failed':
           // Retryable only when the provider definitively generated nothing (a 429).
           return result.retryable
             ? { next: 'retry', reason: result.message }
-            : fail('provider_error', result.message, result.raw);
+            : fail('provider_error', result.message, boundRawPayload(result.raw));
       }
     },
 

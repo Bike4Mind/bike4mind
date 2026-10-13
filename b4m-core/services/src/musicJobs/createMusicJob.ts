@@ -4,6 +4,7 @@ import {
   isMusicModelEnabled,
   MusicGenerationRequestSchema,
   validateMusicRequest,
+  type MusicModelCapabilities,
   type StoredMusicRequest,
 } from '@bike4mind/common';
 import { isUsableApiKey } from '../generationJobs/apiKey';
@@ -20,6 +21,14 @@ import {
   type CreateMusicJobInput,
   type CreateMusicJobResult,
 } from './types';
+
+// An approximate model only steers length by the prompt, so the song can run to the model's maximum.
+const storageSecondsFor = (caps: MusicModelCapabilities, request: StoredMusicRequest): number => {
+  const { duration } = caps;
+  if (duration.control === 'approximate') return duration.max;
+  if (duration.control === 'fixed') return duration.seconds;
+  return request.durationSeconds;
+};
 
 /**
  * Validates the request, holds the estimated credits and persists + enqueues a pending music job.
@@ -75,7 +84,7 @@ export async function createMusicJob(
   }
 
   // Before the hold, so a full quota is refused up front rather than the song landing outside Files.
-  if (!(await deps.hasStorageFor(input.user.id, request.durationSeconds * MAX_MUSIC_BYTES_PER_SECOND))) {
+  if (!(await deps.hasStorageFor(input.user.id, storageSecondsFor(caps, request) * MAX_MUSIC_BYTES_PER_SECOND))) {
     return {
       ok: false,
       status: 422,
