@@ -4,13 +4,14 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const project = vi.hoisted(() => ({ createProject: vi.fn() }));
+const project = vi.hoisted(() => ({ createProject: vi.fn(), navigate: vi.fn() }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => project.navigate }));
 // Succeeds synchronously, as the real hook's onSuccess does once the request resolves.
 vi.mock('@client/app/hooks/data/projects', () => ({
-  useCreateProject: ({ onSuccess }: { onSuccess: () => void }) => ({
+  useCreateProject: ({ onSuccess }: { onSuccess: (p: { id: string }) => void }) => ({
     mutate: (input: unknown) => {
       project.createProject(input);
-      onSuccess();
+      onSuccess({ id: 'proj-1' });
     },
     isPending: false,
   }),
@@ -72,11 +73,13 @@ describe('ProjectCreateModal focus and naming', () => {
     await expectClosedWithFocusOnOpener();
   });
 
-  it('returns focus to the opener after a successful submit', async () => {
+  it('opens the new project and leaves focus to the new page after a successful submit', async () => {
     openDialog();
     fireEvent.change(within(screen.getByTestId('name-input')).getByRole('textbox'), { target: { value: 'Atlas' } });
     fireEvent.click(screen.getByTestId('create-project-submit-btn'));
     await waitFor(() => expect(project.createProject).toHaveBeenCalled());
-    await expectClosedWithFocusOnOpener();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(project.navigate).toHaveBeenCalledWith({ to: '/projects/proj-1' });
+    expect(document.activeElement).not.toBe(screen.getByTestId('new-project-btn'));
   });
 });
