@@ -367,6 +367,17 @@ describe('POST /api/ai/v1/completions - stream', () => {
       );
     }
   );
+
+  it('classifies a safety-classifier refusal after the stream opened as content_blocked', async () => {
+    const refusal = new Error('Anthropic safety classifier refusal for claude-opus-4-7 - falling back');
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(refusal));
+
+    const res = await post();
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(errorFrame(text)).toMatchObject({ code: 'content_blocked', message: 'The model declined this request' });
+    expect(text).not.toContain('falling back');
+  });
 });
 
 describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real status', () => {

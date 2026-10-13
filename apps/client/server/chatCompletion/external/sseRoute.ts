@@ -25,7 +25,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { resolveQuestErrorCode } from '@bike4mind/services/llm';
-import { getHttpStatus } from '@bike4mind/utils';
+import { getHttpStatus, isSafetyRefusalError } from '@bike4mind/utils';
 import {
   connectDB,
   mongoose,
@@ -98,7 +98,11 @@ function toStreamErrorFrame(error: unknown, requestId: string): SSEErrorEvent {
   let code: CompletionSseErrorCode | undefined = questCode;
   if (!questCode) {
     const status = error instanceof Error ? getHttpStatus(error) : undefined;
-    if (status === 401 || status === 403) {
+    // A refusal is deterministic: retrying the same prompt gets the same answer, unlike provider_error.
+    if (error instanceof Error && isSafetyRefusalError(error)) {
+      frameError = new Error('The model declined this request');
+      code = 'content_blocked';
+    } else if (status === 401 || status === 403) {
       frameError = new Error('Model provider rejected our credentials');
       code = 'provider_rejected';
     } else {

@@ -185,6 +185,7 @@ export const COMPLETION_SSE_ERROR_CODES = [
   ...QUEST_ERROR_CODES,
   'provider_error',
   'provider_rejected',
+  'content_blocked',
 ] as const satisfies readonly ApiErrorCode[];
 export type CompletionSseErrorCode = (typeof COMPLETION_SSE_ERROR_CODES)[number];
 
@@ -194,8 +195,9 @@ export type CompletionSseErrorCode = (typeof COMPLETION_SSE_ERROR_CODES)[number]
  * real status instead; see completions.contract.ts.
  *
  * `code` is the machine-readable classifier: a billing code when settlement runs out mid-generation,
- * `provider_rejected` / `provider_error` when the model provider fails. Optional; callers must never
- * match on the prose `message`.
+ * `provider_rejected` / `provider_error` when the model provider fails, `content_blocked` when the
+ * model's safety classifier declined the request. Optional; callers must never match on the prose
+ * `message`.
  *
  * The field is `code` rather than the conventions' `errorCode` because this frame shipped that way
  * and is a published wire shape.

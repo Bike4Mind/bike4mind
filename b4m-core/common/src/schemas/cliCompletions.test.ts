@@ -398,7 +398,13 @@ describe('CompletionRequestSchema options.reasoningEffort', () => {
 
 describe('CompletionSseErrorEventSchema', () => {
   it('accepts the provider classifiers alongside the billing ones', () => {
-    for (const code of ['insufficient_credits', 'spend_cap_exceeded', 'provider_error', 'provider_rejected']) {
+    for (const code of [
+      'insufficient_credits',
+      'spend_cap_exceeded',
+      'provider_error',
+      'provider_rejected',
+      'content_blocked',
+    ]) {
       expect(CompletionSseErrorEventSchema.safeParse({ type: 'error', message: 'm', code }).success).toBe(true);
     }
   });
@@ -411,6 +417,11 @@ describe('CompletionSseErrorEventSchema', () => {
   // QUEST_ERROR_CODES is persisted on quests; the frame widens its own copy instead.
   it('leaves the persisted quest vocabulary unwidened', () => {
     expect([...QUEST_ERROR_CODES]).toEqual(['insufficient_credits', 'spend_cap_exceeded']);
-    expect([...COMPLETION_SSE_ERROR_CODES]).toEqual([...QUEST_ERROR_CODES, 'provider_error', 'provider_rejected']);
+    expect([...COMPLETION_SSE_ERROR_CODES]).toEqual([
+      ...QUEST_ERROR_CODES,
+      'provider_error',
+      'provider_rejected',
+      'content_blocked',
+    ]);
   });
 });

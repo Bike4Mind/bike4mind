@@ -290,6 +290,7 @@ Once the stream opens the status is 200 and stays 200. A failure after that poin
 
 - `code: "insufficient_credits"`: the user ran out of credits mid-generation. Prompt them to top up their B4M balance.
 - `code: "provider_rejected"`: the model provider refused B4M's credentials. Your key is fine; retry later or pick another model.
+- `code: "content_blocked"`: the model declined the request. Retrying the same prompt gets the same answer; rephrase it or pick another model.
 - `code: "provider_error"`: the model provider failed. Retry, or pick another model. The provider's own response body is never forwarded.
 - `code` absent, or any other `code`: show `message` and log `requestId`.
 
