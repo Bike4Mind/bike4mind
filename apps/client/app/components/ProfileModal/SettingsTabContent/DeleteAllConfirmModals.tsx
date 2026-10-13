@@ -18,7 +18,9 @@ const countLabel = (count: number | undefined, singular: string, plural: string)
 // Both handlers also take down the pages the caller published from the deleted items.
 
 // Case-sensitive on purpose: typing the exact word is the deliberate act this gate asks for.
+// Surrounding whitespace is ignored so a pasted word with a stray space or newline still counts.
 const CONFIRM_WORD = 'DELETE';
+const matchesConfirmWord = (typed: string) => typed.trim() === CONFIRM_WORD;
 
 function TypedConfirmField({
   value,
@@ -38,7 +40,15 @@ function TypedConfirmField({
         disabled={disabled}
         autoComplete="off"
         autoFocus
-        slotProps={{ input: { 'data-testid': 'delete-all-confirm-input', spellCheck: false } }}
+        // Capitals on phones: the keyboard would otherwise offer "Delete", which the exact match rejects.
+        slotProps={{
+          input: {
+            'data-testid': 'delete-all-confirm-input',
+            spellCheck: false,
+            autoCapitalize: 'characters',
+            autoCorrect: 'off',
+          },
+        }}
       />
     </FormControl>
   );
@@ -63,7 +73,7 @@ export function DeleteAllNotebooksConfirm({ onCancel, onConfirm, pending }: Dele
       // The request cannot be aborted, so Cancel is inert while it runs rather than implying it stops it.
       onGoBackward={() => !pending && onCancel()}
       onGoForward={onConfirm}
-      disabledConfirm={pending || typed !== CONFIRM_WORD}
+      disabledConfirm={pending || !matchesConfirmWord(typed)}
     >
       <TypedConfirmField value={typed} onChange={setTyped} disabled={pending} />
     </ConfirmActionModal>
@@ -86,12 +96,12 @@ export function DeleteAllKnowledgeFilesConfirm({ onCancel, onConfirm, pending }:
         `This deletes ${total === undefined ? what : `the ${what} in your list`}, plus notebook summaries ` +
         'and files in archived data lakes that you own. Files attached to projects or notebooks and files ' +
         'you have shared are deleted for everyone. Files others shared with you are only removed from your ' +
-        'list. Pages you published from these files are taken down too. This cannot be undone.'
+        'list. Pages you published from files you own are taken down too. This cannot be undone.'
       }
       forwardButtonText="Delete all knowledge files"
       onGoBackward={() => !pending && onCancel()}
       onGoForward={onConfirm}
-      disabledConfirm={pending || typed !== CONFIRM_WORD}
+      disabledConfirm={pending || !matchesConfirmWord(typed)}
     >
       <TypedConfirmField value={typed} onChange={setTyped} disabled={pending} />
     </ConfirmActionModal>
