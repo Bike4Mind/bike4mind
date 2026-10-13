@@ -48,7 +48,8 @@ export function isOAuthClientIdShape(value: unknown): value is string {
 // Attribution only, and self-assertable: any new account can name any active client at signup.
 // So the namespace never grants access: isOAuthSourceTag is refused in admin-configured gates
 // (lake requiredUserTag/requiredEntitlement, model allowedUserTags/allowedEntitlements) and
-// dropped before user tags pass through as entitlement keys (entitlementsForTags, briefcase).
+// dropped before user tags pass through as entitlement keys (entitlementsForTags, briefcase) or
+// into the lake access context (buildDataLakeAccessContext).
 export const OAUTH_SOURCE_TAG_PREFIX = 'source:';
 
 export function isOAuthSourceTag(tag: string): boolean {
