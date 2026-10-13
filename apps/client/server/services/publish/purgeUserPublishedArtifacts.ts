@@ -1,4 +1,10 @@
-import { purgeOwnerPublishedArtifacts, type PurgeOwnerPublishedArtifactsResult } from '@bike4mind/database';
+import {
+  purgeOwnerPublishedArtifacts,
+  purgeOwnerPublishedArtifactsBySource,
+  type PublishedArtifactSources,
+  type PurgedPublishedArtifact,
+  type PurgeOwnerPublishedArtifactsResult,
+} from '@bike4mind/database';
 import { invalidatePublishCdn, toCacheTarget } from './invalidatePublishCdn';
 
 interface MinimalLogger {
@@ -20,13 +26,36 @@ export async function purgeUserPublishedArtifacts(
   { deletedBy, logger }: { deletedBy: string; logger?: MinimalLogger }
 ): Promise<PurgeOwnerPublishedArtifactsResult> {
   const result = await purgeOwnerPublishedArtifacts(userId, { deletedBy });
-  for (const artifact of [...result.artifacts, ...result.transferred]) {
-    if (artifact.visibility === 'public') await invalidatePublishCdn(toCacheTarget(artifact), logger);
-  }
+  await invalidatePublicPages([...result.artifacts, ...result.transferred], logger);
   logger?.info(
     `[PUBLISH] purged published artifacts for user ${userId}: artifacts=${result.artifacts.length} ` +
       `transferred=${result.transferred.length} ` +
       `annotations=${result.annotations} reports=${result.reports} viewAudits=${result.viewAudits}`
   );
   return result;
+}
+
+/**
+ * Take down what `userId` published from notebooks or files they just deleted (see
+ * purgeOwnerPublishedArtifactsBySource) and purge the CDN for the public ones. Idempotent.
+ */
+export async function unpublishUserArtifactsBySource(
+  userId: string,
+  sources: PublishedArtifactSources,
+  { logger }: { logger?: MinimalLogger } = {}
+): Promise<Omit<PurgeOwnerPublishedArtifactsResult, 'transferred'>> {
+  const result = await purgeOwnerPublishedArtifactsBySource(userId, sources, { deletedBy: userId });
+  await invalidatePublicPages(result.artifacts, logger);
+  if (result.artifacts.length > 0) {
+    logger?.info(
+      `[PUBLISH] took down ${result.artifacts.length} ${sources.kind} artifact(s) for user ${userId} after their sources were deleted`
+    );
+  }
+  return result;
+}
+
+async function invalidatePublicPages(artifacts: PurgedPublishedArtifact[], logger?: MinimalLogger) {
+  for (const artifact of artifacts) {
+    if (artifact.visibility === 'public') await invalidatePublishCdn(toCacheTarget(artifact), logger);
+  }
 }
