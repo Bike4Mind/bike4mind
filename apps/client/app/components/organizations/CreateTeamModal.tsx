@@ -7,7 +7,6 @@ import {
   FormControl,
   FormLabel,
   Input,
-  Link,
   Modal,
   ModalClose,
   ModalDialog,
@@ -18,8 +17,8 @@ import { useState, useRef } from 'react';
 import { create } from 'zustand';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useMemo } from 'react';
-import { ExternalLinks } from '@client/app/utils/externalLinks';
 import SeatCountInput from './SeatCountInput';
+import ContactSalesNote from './ContactSalesNote';
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 
@@ -132,9 +131,11 @@ const CreateTeamModal = () => {
             testId="create-team-size-value"
             classNamePrefix="create-team-size"
           />
-          <Typography level="body-xs" sx={{ mt: 0.5 }} className="create-team-size-note">
-            Team size must be between {minSeats} and {maxSeats} members
-          </Typography>
+          {!isTeamSizeInvalid && (
+            <Typography level="body-xs" sx={{ mt: 0.5 }} className="create-team-size-note">
+              Team size must be between {minSeats} and {maxSeats} members
+            </Typography>
+          )}
           <Box sx={{ mt: 1 }} className="create-team-price-container">
             {isLoading ? (
               <Skeleton variant="text" width={140} level="body-sm" className="create-team-price-loading">
@@ -155,18 +156,7 @@ const CreateTeamModal = () => {
               </Typography>
             )}
           </Box>
-          <Typography level="body-xs" sx={{ mt: 0.5 }} className="create-team-contact-sales">
-            Need a PO, invoice, or other custom billing?{' '}
-            <Link
-              href={ExternalLinks.support}
-              target="_blank"
-              rel="noopener noreferrer"
-              data-testid="create-team-contact-sales-link"
-            >
-              Contact us
-            </Link>
-            .
-          </Typography>
+          <ContactSalesNote testIdPrefix="create-team" />
         </FormControl>
 
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }} className="create-team-actions">

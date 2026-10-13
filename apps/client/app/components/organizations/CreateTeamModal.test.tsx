@@ -216,6 +216,7 @@ describe('CreateTeamModal', () => {
       await typeSize(text);
 
       expect(screen.getByTestId('create-team-size-value-error').textContent).toBe('Must be between 3 and 7');
+      expect(screen.queryByText(/Team size must be between/)).toBeNull();
       expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
 
       await user.tab();

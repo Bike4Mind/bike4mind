@@ -26,7 +26,6 @@ import {
   CircularProgress,
   FormControl,
   FormLabel,
-  Link,
   Modal,
   ModalClose,
   ModalDialog,
@@ -38,8 +37,8 @@ import {
   LinearProgress,
 } from '@mui/joy';
 import dayjs from 'dayjs';
-import { ExternalLinks } from '@client/app/utils/externalLinks';
 import SeatCountInput from './SeatCountInput';
+import ContactSalesNote from './ContactSalesNote';
 import { useState, useEffect, useMemo } from 'react';
 
 type OrganizationBillingSectionProps = {
@@ -250,18 +249,7 @@ const SubscriptionModal = ({
             )}
           </Typography>
 
-          <Typography level="body-xs" mt={2} data-testid="organization-billing-contact-sales">
-            Need a PO, invoice, or other custom billing?{' '}
-            <Link
-              href={ExternalLinks.support}
-              target="_blank"
-              rel="noopener noreferrer"
-              data-testid="organization-billing-contact-sales-link"
-            >
-              Contact us
-            </Link>
-            .
-          </Typography>
+          <ContactSalesNote testIdPrefix="organization-billing" mt={2} />
 
           {updateSeats.error && (
             <Typography level="body-sm" color="danger" mt={2}>
