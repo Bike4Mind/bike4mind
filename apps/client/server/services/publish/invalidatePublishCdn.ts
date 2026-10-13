@@ -102,26 +102,31 @@ export async function invalidatePublishCdn(target: PublishCacheTarget, logger?: 
 const MAX_PATHS_PER_BATCH = 1000;
 
 /**
- * Invalidate many removed pages (a bulk takedown) without one CloudFront call per page. Replies and
- * files have one wildcard-free path each, so they share batches. Bundles keep one call each: their
- * paths carry wildcards, which CloudFront caps far lower, and a batch over that cap would fail
- * every page in it. Never throws.
+ * Invalidate many removed pages (a bulk takedown) without one CloudFront call per page. The exact
+ * reply/file paths share batches. Their query-variant wildcards (`/p/r/{id}*`, see
+ * publishCachePaths) are not batched per page: CloudFront caps wildcard paths far lower than plain
+ * ones, so a batch of per-page wildcards would fail every page in it. They collapse into one
+ * `/p/r/*` and/or `/p/f/*` request, sent on its own so a throttled wildcard cannot take the exact
+ * paths down with it. Bundles keep one call each (their wildcards are per bundle). Never throws.
  */
 export async function invalidatePublishCdnMany(targets: PublishCacheTarget[], logger?: MinimalLogger): Promise<void> {
   if (targets.length === 0) return;
   const distributionId = getRouterDistributionId(logger);
   if (!distributionId) return;
   const shortPaths: string[] = [];
+  const variantPaths = new Set<string>();
   for (const target of targets) {
     if (target.sourceKind === 'bundle') {
       await sendInvalidation(distributionId, target.publicId, publishCachePaths(target), logger);
     } else {
-      shortPaths.push(...publishCachePaths(target));
+      shortPaths.push(...publishCachePaths(target).filter(p => !p.includes('*')));
+      variantPaths.add(target.sourceKind === 'reply' ? '/p/r/*' : '/p/f/*');
     }
   }
   for (let i = 0; i < shortPaths.length; i += MAX_PATHS_PER_BATCH) {
     await sendInvalidation(distributionId, `batch-${i}`, shortPaths.slice(i, i + MAX_PATHS_PER_BATCH), logger);
   }
+  if (variantPaths.size > 0) await sendInvalidation(distributionId, 'variants', [...variantPaths], logger);
 }
 
 async function sendInvalidation(

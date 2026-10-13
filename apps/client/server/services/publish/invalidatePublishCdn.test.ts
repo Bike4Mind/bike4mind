@@ -119,28 +119,33 @@ describe('invalidatePublishCdnMany', () => {
         (cmd as { input: { InvalidationBatch: { Paths: { Items: string[] } } } }).input.InvalidationBatch.Paths.Items
     );
 
-  it('sends the paths of many replies and files in one request', async () => {
+  it('sends the exact paths of many replies and files in one request, and their query variants in one more', async () => {
     await invalidatePublishCdnMany([...short(3, 'reply'), ...short(2, 'fabfile')]);
 
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sentPaths()[0]).toEqual([
-      '/p/r/reply-0',
-      '/p/r/reply-1',
-      '/p/r/reply-2',
-      '/p/f/fabfile-0',
-      '/p/f/fabfile-1',
+    expect(sentPaths()).toEqual([
+      ['/p/r/reply-0', '/p/r/reply-1', '/p/r/reply-2', '/p/f/fabfile-0', '/p/f/fabfile-1'],
+      ['/p/r/*', '/p/f/*'],
     ]);
+  });
+
+  it('never sends a per-page wildcard for replies or files, however many there are', async () => {
+    await invalidatePublishCdnMany(short(40, 'reply'));
+
+    const wildcards = sentPaths()
+      .flat()
+      .filter(p => p.includes('*'));
+    expect(wildcards).toEqual(['/p/r/*']);
   });
 
   it('splits a large takedown into batches of at most 1000 paths', async () => {
     await invalidatePublishCdnMany(short(2500, 'reply'));
 
-    expect(sentPaths().map(p => p.length)).toEqual([1000, 1000, 500]);
+    expect(sentPaths().map(p => p.length)).toEqual([1000, 1000, 500, 1]);
     const refs = sendMock.mock.calls.map(
       ([cmd]) =>
         (cmd as { input: { InvalidationBatch: { CallerReference: string } } }).input.InvalidationBatch.CallerReference
     );
-    expect(new Set(refs).size).toBe(3);
+    expect(new Set(refs).size).toBe(4);
   });
 
   it('keeps each bundle in its own request', async () => {
@@ -150,7 +155,7 @@ describe('invalidatePublishCdnMany', () => {
       { publicId: 'b2', tier: 'user', scopeId: 'u1', slug: 'two', sourceKind: 'bundle' },
     ]);
 
-    expect(sentPaths().map(p => p[0])).toEqual(['/p/u/u1/one', '/p/u/u1/two', '/p/r/reply-0']);
+    expect(sentPaths().map(p => p[0])).toEqual(['/p/u/u1/one', '/p/u/u1/two', '/p/r/reply-0', '/p/r/*']);
   });
 
   it('sends nothing for an empty list or an unconfigured distribution', async () => {
@@ -167,6 +172,6 @@ describe('invalidatePublishCdnMany', () => {
     sendMock.mockRejectedValueOnce(new Error('Throttling'));
 
     await expect(invalidatePublishCdnMany(short(1500, 'fabfile'))).resolves.toBeUndefined();
-    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock).toHaveBeenCalledTimes(3);
   });
 });
