@@ -1,17 +1,17 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const project = vi.hoisted(() => ({ createProject: vi.fn(), navigate: vi.fn() }));
+const project = vi.hoisted(() => ({ createProject: vi.fn(), navigate: vi.fn(), fail: false }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => project.navigate }));
-// Succeeds synchronously, as the real hook's onSuccess does once the request resolves.
+// Settles synchronously; succeeds (calling onSuccess, as the real hook does once the request resolves) unless project.fail.
 vi.mock('@client/app/hooks/data/projects', () => ({
   useCreateProject: ({ onSuccess }: { onSuccess: (p: { id: string }) => void }) => ({
     mutate: (input: unknown) => {
       project.createProject(input);
-      onSuccess({ id: 'proj-1' });
+      if (!project.fail) onSuccess({ id: 'proj-1' });
     },
     isPending: false,
   }),
@@ -36,6 +36,11 @@ const openDialog = () => {
 };
 
 describe('ProjectCreateModal focus and naming', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    project.fail = false;
+  });
+
   it('is a dialog named by its heading', () => {
     openDialog();
     expect(screen.getByRole('dialog', { name: 'Create Project' })).toBeInTheDocument();
@@ -81,5 +86,15 @@ describe('ProjectCreateModal focus and naming', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(project.navigate).toHaveBeenCalledWith({ to: '/projects/proj-1' });
     expect(document.activeElement).not.toBe(screen.getByTestId('new-project-btn'));
+  });
+
+  it('stays open and does not navigate when create fails', async () => {
+    project.fail = true;
+    openDialog();
+    fireEvent.change(within(screen.getByTestId('name-input')).getByRole('textbox'), { target: { value: 'Atlas' } });
+    fireEvent.click(screen.getByTestId('create-project-submit-btn'));
+    await waitFor(() => expect(project.createProject).toHaveBeenCalled());
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(project.navigate).not.toHaveBeenCalled();
   });
 });
