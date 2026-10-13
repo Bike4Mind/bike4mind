@@ -22,7 +22,7 @@
  */
 
 import { buildAgentPersonaPrompt, pairDataLakeTools, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
-import { buildDefaultOrchestrationProfile } from '@client/app/utils/agentOrchestration';
+import { buildDefaultOrchestrationProfile } from '@client/lib/agentOrchestration';
 import { isHeadlessConnection } from '@server/utils/headlessConnection';
 
 /**
