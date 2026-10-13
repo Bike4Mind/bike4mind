@@ -82,7 +82,7 @@ These models are being retired by their providers. Move saved notebooks, agents,
 | Claude Sonnet 4.5 | 2026-11-30 |
 | o3 | 2026-12-11 |
 
-Claude Sonnet 4 and Gemini 2.5 Flash have already been retired and no longer appear in the model picker. The authoritative retirement date for any model is the `deprecation_date` field returned by `GET /api/v1/models`.
+Claude Sonnet 4 (direct Anthropic API) and Gemini 2.5 Flash have already been retired and no longer appear in the model picker. For developers: where a retirement is scheduled, `GET /api/v1/models` (API key with `ai:chat` or `ai:generate`) returns it in `deprecation_date`.
 
 ## Supported Image and Video Models
 
@@ -142,8 +142,7 @@ Controls response length:
 - **Gemini 3.5 Flash Lite**: Very fast responses for simple queries
 
 ### For Complex Tasks
-- **Claude Opus 5.5**, **GPT-6.1 Sol**, or **Claude Fable 5.1**: Deep analysis and reasoning
-- **Claude Fable 5.1** or **GPT-6.1 Sol**: Mathematical and logical problems
+- **Claude Opus 5.5**, **GPT-6.1 Sol**, or **Claude Fable 5.1**: Deep analysis, reasoning, and mathematical or logical problems
 
 ### For Creative Writing
 - **Claude Sonnet 5.5**: Nuanced creative output
