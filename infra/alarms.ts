@@ -1536,8 +1536,10 @@ if (isMonitoredStage) {
    * Alarm: Quest callback past the redispatch horizon
    *
    * A callback whose last claim aged past the 72h redispatch horizon was failed. Steady state is
-   * ~0, so non-zero after the one-time historical backlog drain means the sweep itself is not
-   * running. Fires on a single period: the failure is rare enough that any occurrence is a signal.
+   * ~0, so non-zero after the one-time historical backlog drain means a claim went unswept for
+   * 72h (the sweep was down or erroring and has since resumed). A sweep that is down right now
+   * emits nothing, which notBreaching reads as OK. Fires on a single period: any occurrence is a
+   * signal.
    * Expected to fire ONCE on the first sweep after deploy while that backlog is failed.
    *
    * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> failExhaustedCallbacks.
