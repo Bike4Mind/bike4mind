@@ -73,7 +73,7 @@ export const createCompletionContract = defineEndpoint({
     },
     400: {
       description:
-        'Malformed or otherwise invalid request (no `errorCode`), or a `model` this key cannot call (`errorCode: "unknown_model"`): ' +
+        'Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): ' +
         'not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`.',
       schema: UnknownModelErrorSchema,
     },

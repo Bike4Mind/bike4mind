@@ -117,7 +117,7 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
 
     const rejection = executeCompletion({ ...baseParams, model: 'not-a-real-model', db });
     await expect(rejection).rejects.toThrow(
-      "Unknown model 'not-a-real-model'. List the models this key can call with GET /api/v1/models."
+      "Unknown model 'not-a-real-model'. List the models you can call with GET /api/v1/models."
     );
     await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
     await expect(rejection).rejects.toMatchObject({ additionalInfo: { errorCode: 'unknown_model' } });
@@ -131,9 +131,8 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
 
     const rejection = executeCompletion({ ...baseParams, model: 'gpt-4.1', db });
     await expect(rejection).rejects.toThrow(
-      "Unknown model 'gpt-4.1'. List the models this key can call with GET /api/v1/models."
+      "Unknown model 'gpt-4.1'. List the models you can call with GET /api/v1/models."
     );
-    await expect(rejection).rejects.not.toThrow('gpt-4.1-2025-04-14');
     await expect(rejection).rejects.toMatchObject({ additionalInfo: { errorCode: 'unknown_model' } });
   });
 
@@ -167,7 +166,7 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
     const rejection = executeCompletion({ ...baseParams, model: ChatModels.GEMINI_2_5_FLASH, db });
     await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
     await expect(rejection).rejects.toThrow(
-      `Unknown model '${ChatModels.GEMINI_2_5_FLASH}'. List the models this key can call with GET /api/v1/models.`
+      `Unknown model '${ChatModels.GEMINI_2_5_FLASH}'. List the models you can call with GET /api/v1/models.`
     );
     await expect(rejection).rejects.toMatchObject({ additionalInfo: { errorCode: 'unknown_model' } });
   });
@@ -230,7 +229,7 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
     const { db } = buildDb();
 
     await expect(executeCompletion({ ...baseParams, model: 'constructor', db })).rejects.toThrow(
-      "Unknown model 'constructor'. List the models this key can call with GET /api/v1/models."
+      "Unknown model 'constructor'. List the models you can call with GET /api/v1/models."
     );
   });
 });

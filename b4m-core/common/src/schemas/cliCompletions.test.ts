@@ -169,9 +169,16 @@ describe('CompletionRequestSchema', () => {
 });
 
 describe('CompletionRequestSchema model length', () => {
-  it('rejects a model id over 256 characters', () => {
-    const result = CompletionRequestSchema.safeParse({ model: 'm'.repeat(257), messages: [] });
+  const messages = [{ role: 'user', content: 'hi' }];
+
+  it('accepts a model id of exactly 256 characters', () => {
+    expect(CompletionRequestSchema.safeParse({ model: 'm'.repeat(256), messages }).success).toBe(true);
+  });
+
+  it('rejects a model id over 256 characters on the model field', () => {
+    const result = CompletionRequestSchema.safeParse({ model: 'm'.repeat(257), messages });
     expect(result.success).toBe(false);
+    expect(result.error?.issues.map(i => i.path)).toEqual([['model']]);
   });
 });
 

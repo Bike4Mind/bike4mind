@@ -446,12 +446,12 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
 
   it('answers an unknown model with 400', async () => {
     mockExecuteCompletion.mockRejectedValueOnce(
-      new BadRequestError("Unknown model 'gpt-9000'. List the models this key can call with GET /api/v1/models.", {
+      new BadRequestError("Unknown model 'gpt-9000'. List the models you can call with GET /api/v1/models.", {
         errorCode: 'unknown_model',
       })
     );
     const body = await expectJsonError(await post(), 400);
-    expect(body.error).toBe("Unknown model 'gpt-9000'. List the models this key can call with GET /api/v1/models.");
+    expect(body.error).toBe("Unknown model 'gpt-9000'. List the models you can call with GET /api/v1/models.");
     expect(body.errorCode).toBe('unknown_model');
   });
 

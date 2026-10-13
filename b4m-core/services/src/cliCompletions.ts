@@ -22,7 +22,7 @@ import {
   BadRequestError,
   HTTPError,
   type CompletionSource,
-  type ApiErrorCode,
+  UNKNOWN_MODEL_ERROR_CODE,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -378,8 +378,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   if (!llm) {
     const unknownModel = new BadRequestError(
-      `Unknown model '${params.model}'. List the models this key can call with GET /api/v1/models.`,
-      { errorCode: 'unknown_model' satisfies ApiErrorCode }
+      `Unknown model '${params.model}'. List the models you can call with GET /api/v1/models.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
     );
     if (!catalogued) throw unknownModel;
     const providerConfigured = await isModelProviderConfigured(model, apiKeys).catch((cause: unknown) => {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ApiErrorCode } from '../apiErrorCodes';
+import { UNKNOWN_MODEL_ERROR_CODE, type ApiErrorCode } from '../apiErrorCodes';
 // Specific file, not the `../types` barrel: this module is imported by the
 // contracts, which the CI openapi job runs against an install-only tree (see the
 // note in tools.contract.ts).
@@ -332,7 +332,7 @@ export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
 
 /** 400 for a `model` the caller cannot use; `errorCode` is absent on the other 400s (e.g. malformed JSON). */
 export const UnknownModelErrorSchema = ApiErrorSchema.extend({
-  errorCode: z.literal('unknown_model' satisfies ApiErrorCode).optional(),
+  errorCode: z.literal(UNKNOWN_MODEL_ERROR_CODE).optional(),
 });
 
 /**

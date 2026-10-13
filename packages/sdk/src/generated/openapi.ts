@@ -5693,7 +5693,7 @@ export interface operations {
           'text/event-stream': components['schemas']['createCompletionResponse200'];
         };
       };
-      /** @description Malformed or otherwise invalid request (no `errorCode`), or a `model` this key cannot call (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. */
+      /** @description Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

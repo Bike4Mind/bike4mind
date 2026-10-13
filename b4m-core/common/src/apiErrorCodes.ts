@@ -1,5 +1,6 @@
 export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
+export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -31,7 +32,7 @@ export const API_ERROR_CODES = [
   /** The provider REFUSED the key we sent. */
   'provider_rejected',
   /** The `model` is not one this caller can use; remediation is choosing an id from GET /api/v1/models. */
-  'unknown_model',
+  UNKNOWN_MODEL_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',
