@@ -138,13 +138,65 @@ describe('POST /api/files/[id]/moderate', () => {
     expect(res.body).toEqual({ moderationStatus: status });
   });
 
-  it('reports pending without scanning when another invocation owns the claim', async () => {
+  it('waits for the owner verdict when another invocation holds the claim, without scanning', async () => {
     h.claim.mockResolvedValue(null);
+    h.findById
+      .mockResolvedValueOnce(file())
+      .mockResolvedValueOnce(file({ moderationStatus: 'scanning' }))
+      .mockResolvedValueOnce(file({ moderationStatus: 'clean' }));
+    const res = makeRes();
+    const req = makeReq();
+    await handler(req, res);
+
+    expect(h.scan).not.toHaveBeenCalled();
+    expect(h.sleep).toHaveBeenCalledTimes(2);
+    expect(res.body).toEqual({ moderationStatus: 'clean' });
+    expect(req.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('relays a blocked owner verdict', async () => {
+    h.claim.mockResolvedValue(null);
+    h.findById.mockResolvedValueOnce(file()).mockResolvedValueOnce(file({ moderationStatus: 'blocked' }));
     const res = makeRes();
     await handler(makeReq(), res);
 
+    expect(res.body).toEqual({ moderationStatus: 'blocked' });
+  });
+
+  it('reports pending and logs it when the owner verdict never lands within the wait', async () => {
+    h.claim.mockResolvedValue(null);
+    const res = makeRes();
+    const req = makeReq();
+    await handler(req, res);
+
     expect(h.scan).not.toHaveBeenCalled();
+    expect(h.sleep).toHaveBeenCalledTimes(10);
+    expect(req.logger.warn).toHaveBeenCalledWith('On-demand moderation left the file pending', {
+      fabFileId: 'ff1',
+      reason: 'claim lost',
+    });
     expect(res.body).toEqual({ moderationStatus: 'pending' });
+  });
+
+  it('waits for the successor verdict when its own verdict write was superseded', async () => {
+    h.writeVerdict.mockResolvedValue(false);
+    h.findById.mockResolvedValueOnce(file()).mockResolvedValueOnce(file({ moderationStatus: 'clean' }));
+    const res = makeRes();
+    await handler(makeReq(), res);
+
+    expect(h.sendToClient).not.toHaveBeenCalled();
+    expect(res.body).toEqual({ moderationStatus: 'clean' });
+  });
+
+  it('waits for the owner verdict when the S3 event takes the claim during the retry backoff', async () => {
+    h.scan.mockRejectedValueOnce(new Error('Rekognition throttled'));
+    h.claim.mockResolvedValueOnce({ id: 'ff1' }).mockResolvedValueOnce(null);
+    h.findById.mockResolvedValueOnce(file()).mockResolvedValueOnce(file({ moderationStatus: 'clean' }));
+    const res = makeRes();
+    await handler(makeReq(), res);
+
+    expect(h.scan).toHaveBeenCalledTimes(1);
+    expect(res.body).toEqual({ moderationStatus: 'clean' });
   });
 
   it('releases the claim across the backoff and lands the retry under a fresh claim', async () => {
