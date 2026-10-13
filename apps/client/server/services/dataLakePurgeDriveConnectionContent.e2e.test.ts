@@ -78,6 +78,7 @@ const seedFile = async (opts: {
     type: KnowledgeType.FILE,
     status: 'complete',
     fileSize: opts.fileSize ?? 100,
+    storageChargedAt: new Date(),
     filePath: `files/${new mongoose.Types.ObjectId().toHexString()}`,
     tags: [{ name: opts.datalakeTag, strength: 1 }],
     ...(opts.driveConnectionId ? { driveConnectionId: opts.driveConnectionId } : {}),
