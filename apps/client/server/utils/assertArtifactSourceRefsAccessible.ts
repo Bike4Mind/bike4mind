@@ -33,11 +33,10 @@ export interface ArtifactRefAccessDeps {
 
 /**
  * Reject caller-supplied provenance refs the caller is not entitled to reference. `artifactService.create`
- * (for every caller: route, agent persistence, notebook import) writes `sessionId` / `sourceQuestId` / `parentArtifactId` straight onto the new
- * artifact with the caller's own id as owner, so without this an authenticated user could stamp
- * their artifact as sourced-from / session-of / child-of a session, quest, or artifact they have
- * no write access to (an object-level authorization / IDOR gap). Fails loud (403). Each ref is
- * optional and only checked when provided.
+ * (for every caller: route, agent persistence, notebook import) writes `sessionId` / `sourceQuestId` /
+ * `parentArtifactId` onto the new artifact with the caller as owner, so each ref must point at a
+ * session, quest, or artifact the caller can write to. Fails loud (403). Each ref is optional and
+ * only checked when provided.
  */
 export async function assertArtifactSourceRefsAccessible(
   userId: string,
