@@ -36,7 +36,7 @@ import mongoose from 'mongoose';
 const RUN = `itest-${Date.now().toString(36)}`;
 const USER_ID = `${RUN}-user`;
 const SESSION_ID = `${RUN}-session`;
-// Fixture ids are not real documents, so the per-user reference guard is bypassed; everything
+// Fixture ids are not real documents, so the per-user reference guard is skipped; everything
 // below it (real artifactService.create, real Mongo indexes) still runs.
 const deps = defaultDeps({ sourceRefsGuard: async () => {} });
 const QUEST_CREATED_AT_MS = 1_700_000_000_000;
