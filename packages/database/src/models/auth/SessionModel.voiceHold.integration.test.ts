@@ -157,3 +157,43 @@ describe('sessionRepository voice holds', () => {
     expect(await Session.findById(id).lean()).toMatchObject({ voiceConnectedAt: null, voiceLastActivityAt: null });
   });
 });
+
+describe('stale voice hold sweep index', () => {
+  it('serves the real findStaleVoiceHolds query from the partial open-hold index', async () => {
+    await Session.init();
+    for (let i = 0; i < 40; i++) {
+      await seed(`idle-${i}`, null, null);
+      await seed(`hold-${i}`, 100, minutesAgo(60 + i), i % 2 === 0 ? 0 : undefined);
+    }
+
+    // Capture the filter the repository actually sends (soft-delete plugin included), so the
+    // assertion cannot drift from the query it is meant to pin.
+    let filter: Record<string, unknown> | undefined;
+    mongoose.set('debug', (_collection: string, method: string, query: Record<string, unknown>) => {
+      if (method === 'find') filter = query;
+    });
+    try {
+      await sessionRepository.findStaleVoiceHolds(minutesAgo(30), minutesAgo(30), 200);
+    } finally {
+      mongoose.set('debug', false);
+    }
+    expect(filter).toBeDefined();
+
+    const explain = await Session.collection
+      .find(filter as Record<string, unknown>)
+      .sort({ voiceSessionStartedAt: 1 })
+      .limit(200)
+      .explain('queryPlanner');
+    const indexNames: string[] = [];
+    const walk = (stage: { indexName?: string; inputStage?: unknown; inputStages?: unknown[] } | undefined) => {
+      if (!stage) return;
+      if (stage.indexName) indexNames.push(stage.indexName);
+      walk(stage.inputStage as typeof stage);
+      stage.inputStages?.forEach(child => walk(child as typeof stage));
+    };
+    walk(explain.queryPlanner.winningPlan);
+
+    expect(indexNames.length).toBeGreaterThan(0);
+    expect(new Set(indexNames)).toEqual(new Set(['voiceSessionStartedAt_1_openVoiceHold']));
+  });
+});

@@ -159,6 +159,8 @@ import EnsureGenerationJobIndexes from './20260921235991_ensure-generation-job-i
 // Id backdated for the same reason as EnsureGenerationJobIndexes above.
 import EnsureGenerationJobRequesterIndex from './20260921235992_ensure-generation-job-requester-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureStaleVoiceHoldIndex from './20260921235993_ensure-stale-voice-hold-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureApiKeyUsageLogSourceOwnerIndex from './20260921235995_ensure-apikeyusagelog-source-owner-index';
 import DetachForeignQuestNodeArtifacts from './20260921235996_detach-foreign-quest-node-artifacts';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
@@ -306,6 +308,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureQuestCallbackDispatchedIndex,
   EnsureGenerationJobIndexes,
   EnsureGenerationJobRequesterIndex,
+  EnsureStaleVoiceHoldIndex,
   EnsureApiKeyUsageLogSourceOwnerIndex,
   DetachForeignQuestNodeArtifacts,
   EnsureSessionUserIdIdIndex,
