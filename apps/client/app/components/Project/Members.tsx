@@ -1,4 +1,4 @@
-import { IInviteDocument, InviteType, IProjectDocument } from '@bike4mind/common';
+import { InviteType, IProjectDocument } from '@bike4mind/common';
 import { useDeleteInvite, useGetProjectInvites } from '@client/app/hooks/data/invites';
 import { useLeaveProject } from '@client/app/hooks/data/projects';
 import { useGetUsers, useUserRevokeSharing } from '@client/app/hooks/data/user';
@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { updateAllQueryData, useSubscribeCollection } from '@client/app/utils/react-query';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { useCoalescedInvalidate } from '@client/app/hooks/useCoalescedInvalidate';
+import { useInviteEvents } from '@client/app/contexts/InboxContext';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import LogoutIcon from '@mui/icons-material/Logout';
 
@@ -87,17 +88,16 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
 
   const coalescedInvalidateInvites = useCoalescedInvalidate(['invites', 'projects', project.id]);
 
-  // Any invite event (including a subscribe's replay burst) schedules one coalesced refetch.
-  useSubscribeCollection(
-    'invites',
-    useMemo(() => (project?.id ? { documentId: project.id, type: InviteType.Project } : null), [project.id]),
-    useCallback<SubscriptionCallbackFunction<IInviteDocument>>(() => {
-      // Refetch rather than write the event's document: the subscription withholds `recipients`
-      // (server/websocket/dataSubscribeFieldLimits.ts), and the REST list redacts them per viewer.
-      coalescedInvalidateInvites();
-      debouncedInvalidateUsers();
-    }, [coalescedInvalidateInvites, debouncedInvalidateUsers])
-  );
+  // InboxProvider owns the single `invites` subscription; listen to its fan-out rather than opening
+  // a second, project-filtered subscribe. Any matching event (including a replay burst) schedules
+  // one coalesced refetch. Refetch rather than write the event's document: the subscription
+  // withholds `recipients` (server/websocket/dataSubscribeFieldLimits.ts), and the REST list
+  // redacts them per viewer.
+  useInviteEvents((_type, data) => {
+    if (data?.documentId !== project.id || data?.type !== InviteType.Project) return;
+    coalescedInvalidateInvites();
+    debouncedInvalidateUsers();
+  });
 
   // Update the users list whenever the project changes
   useSubscribeCollection(

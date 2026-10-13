@@ -2,7 +2,7 @@
 import React from 'react';
 import { act, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { InboxProvider } from './InboxContext';
+import { InboxProvider, useInviteEvents } from './InboxContext';
 
 type Callback = (type: string, data: unknown) => void;
 
@@ -13,8 +13,18 @@ const mocks = vi.hoisted(() => {
     // Stable across renders like the real QueryClient; a fresh object per call would rebuild the debounce.
     queryClient: { invalidateQueries },
     callbacks: {} as Record<string, Callback>,
+    subscribeCalls: [] as string[],
   };
 });
+
+// Records what the provider's one invites subscription fans out to a registered consumer.
+const received: Array<{ type: string; id: unknown }> = [];
+const RecordingConsumer = () => {
+  useInviteEvents((type, data) => {
+    received.push({ type, id: (data as { id?: string })?.id });
+  });
+  return null;
+};
 
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => mocks.queryClient,
@@ -26,6 +36,7 @@ vi.mock('./UserContext', () => ({
 vi.mock('../utils/react-query', () => ({
   updateAllQueryData: vi.fn(),
   useSubscribeCollection: (collection: string, _query: unknown, callback: Callback) => {
+    mocks.subscribeCalls.push(collection);
     mocks.callbacks[collection] = callback;
   },
 }));
@@ -43,6 +54,8 @@ describe('InboxProvider invites subscription', () => {
     vi.useFakeTimers();
     mocks.invalidateQueries.mockReset();
     mocks.callbacks = {};
+    mocks.subscribeCalls = [];
+    received.length = 0;
   });
 
   afterEach(() => {
@@ -112,5 +125,38 @@ describe('InboxProvider invites subscription', () => {
     });
 
     expect(mocks.invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it('opens exactly one invites subscription for the provider', () => {
+    render(<InboxProvider>{null}</InboxProvider>);
+
+    expect(mocks.subscribeCalls.filter(collection => collection === 'invites')).toHaveLength(1);
+  });
+
+  it('fans every invite event out to a registered listener', () => {
+    render(
+      <InboxProvider>
+        <RecordingConsumer />
+      </InboxProvider>
+    );
+
+    fireInviteBurst(5);
+
+    expect(received.map(event => event.id)).toEqual(['invite-0', 'invite-1', 'invite-2', 'invite-3', 'invite-4']);
+  });
+
+  it('stops delivering to a listener once it unmounts', () => {
+    const { rerender } = render(
+      <InboxProvider>
+        <RecordingConsumer />
+      </InboxProvider>
+    );
+    fireInviteBurst(2);
+    expect(received).toHaveLength(2);
+
+    rerender(<InboxProvider>{null}</InboxProvider>);
+    fireInviteBurst(2);
+
+    expect(received).toHaveLength(2);
   });
 });

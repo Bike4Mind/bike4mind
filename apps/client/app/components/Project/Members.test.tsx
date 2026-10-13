@@ -3,13 +3,20 @@ import { act, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { IProjectDocument } from '@bike4mind/common';
+import { InviteType, type IProjectDocument } from '@bike4mind/common';
 
 type Callback = (type: string, data: unknown) => void;
+type Listener = (type: string, data: { documentId?: string; type?: InviteType }) => void;
 
 const mocks = vi.hoisted(() => {
   const invalidateQueries = vi.fn();
-  return { invalidateQueries, queryClient: { invalidateQueries }, callbacks: {} as Record<string, Callback> };
+  return {
+    invalidateQueries,
+    queryClient: { invalidateQueries },
+    callbacks: {} as Record<string, Callback>,
+    subscribeCalls: [] as string[],
+    inviteListener: undefined as Listener | undefined,
+  };
 });
 
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => mocks.queryClient }));
@@ -27,7 +34,14 @@ vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => vi.
 vi.mock('@client/app/utils/react-query', () => ({
   updateAllQueryData: vi.fn(),
   useSubscribeCollection: (collection: string, _query: unknown, callback: Callback) => {
+    mocks.subscribeCalls.push(collection);
     mocks.callbacks[collection] = callback;
+  },
+}));
+// The provider owns the invites subscription; Members registers a listener instead of subscribing.
+vi.mock('@client/app/contexts/InboxContext', () => ({
+  useInviteEvents: (listener: Listener) => {
+    mocks.inviteListener = listener;
   },
 }));
 vi.mock('./AddMembersModal', () => ({ default: () => null }));
@@ -51,11 +65,15 @@ const projectInviteInvalidations = () =>
     ([arg]) => JSON.stringify(arg.queryKey) === JSON.stringify(['invites', 'projects', 'project-1'])
   ).length;
 
+const usersInvalidations = () =>
+  mocks.invalidateQueries.mock.calls.filter(([arg]) => (arg.queryKey as unknown[])?.[0] === 'users').length;
+
+const fireProjectInvite = (type: string) =>
+  mocks.inviteListener?.(type, { documentId: 'project-1', type: InviteType.Project });
+
 const fireBurst = () => {
   act(() => {
-    ['insert', 'update', 'delete', 'replace', 'insert', 'update', 'delete'].forEach((type, i) =>
-      mocks.callbacks.invites(type, { id: `invite-${i}` })
-    );
+    ['insert', 'update', 'delete', 'replace', 'insert', 'update', 'delete'].forEach(fireProjectInvite);
     mocks.callbacks.projects('update', { id: 'project-1' });
   });
 };
@@ -65,6 +83,8 @@ describe('ProjectMembersSection invite refetch', () => {
     vi.useFakeTimers();
     mocks.invalidateQueries.mockReset();
     mocks.callbacks = {};
+    mocks.subscribeCalls = [];
+    mocks.inviteListener = undefined;
   });
 
   afterEach(() => {
@@ -85,10 +105,34 @@ describe('ProjectMembersSection invite refetch', () => {
   it('refetches project invites for a lone replace event', () => {
     renderMembers();
     act(() => {
-      mocks.callbacks.invites('replace', { id: 'invite-0' });
+      fireProjectInvite('replace');
       vi.advanceTimersByTime(COALESCED_INVALIDATE_DEBOUNCE_MS);
     });
     expect(projectInviteInvalidations()).toBe(1);
+  });
+
+  it('ignores events for another project or another invite type', () => {
+    renderMembers();
+    act(() => {
+      mocks.inviteListener?.('insert', { documentId: 'other-project', type: InviteType.Project });
+      mocks.inviteListener?.('insert', { documentId: 'project-1', type: InviteType.Organization });
+      vi.runAllTimers();
+    });
+    expect(mocks.invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it('invalidates the users key once, 500 ms after the last event, unchanged', () => {
+    renderMembers();
+    fireBurst();
+    act(() => {
+      vi.advanceTimersByTime(COALESCED_INVALIDATE_DEBOUNCE_MS);
+    });
+    expect(usersInvalidations()).toBe(0);
+
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
+    expect(usersInvalidations()).toBe(1);
   });
 
   it('drops a pending refetch when unmounted mid-burst', () => {
@@ -99,5 +143,11 @@ describe('ProjectMembersSection invite refetch', () => {
       vi.runAllTimers();
     });
     expect(mocks.invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it('opens no invites subscription of its own', () => {
+    renderMembers();
+    expect(mocks.subscribeCalls).not.toContain('invites');
+    expect(mocks.subscribeCalls).toContain('projects');
   });
 });
