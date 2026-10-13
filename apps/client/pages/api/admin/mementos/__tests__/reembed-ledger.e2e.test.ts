@@ -164,8 +164,10 @@ describe('POST /api/admin/mementos/reembed-ledger against a real ledger', () => 
   });
 
   it('dry run counts match execute per arm on a mixed chain', async () => {
-    for (const subject of ['current', 'stamped', 'unstamped', 'vectorless']) await seed(user, 'user-1', subject);
-    const [current, stamped, unstamped] = await memoryLedgerRepository.listChain('user', 'user-1', 'user-1');
+    for (const subject of ['current', 'stamped', 'unstamped', 'vectorless', 'partial']) {
+      await seed(user, 'user-1', subject);
+    }
+    const [current, stamped, unstamped, , partial] = await memoryLedgerRepository.listChain('user', 'user-1', 'user-1');
     const dek = (await keys().getDek(user))!;
     const give = async (hash: string, model: string, dims: number) => {
       const sealed = encryptVector(
@@ -179,13 +181,16 @@ describe('POST /api/admin/mementos/reembed-ledger against a real ledger', () => 
     await give(unstamped.hash, MEMENTO_EMBEDDING_MODEL, 1536);
     // A legacy vector written before the space stamp existed.
     await mongoose.model('MemoryLedgerEvent').updateOne({ hash: unstamped.hash }, { $unset: { embeddingModel: 1 } });
+    // An empty tag is not a vector: presence needs all three cipher fields non-empty.
+    await give(partial.hash, MEMENTO_EMBEDDING_MODEL, 1536);
+    await mongoose.model('MemoryLedgerEvent').updateOne({ hash: partial.hash }, { $set: { embeddingTag: '' } });
 
-    const arms = { alreadyCurrent: 1, truncated: 1, reembedded: 1, backfilled: 1, failed: 0 };
+    const arms = { alreadyCurrent: 1, truncated: 1, reembedded: 1, backfilled: 2, failed: 0 };
     const [dry] = await runLoop(false);
     expect(dry).toMatchObject({ dryRun: true, processedPrincipals: 1, ...arms });
     const [run] = await runLoop(true);
     expect(run).toMatchObject({ dryRun: false, processedPrincipals: 1, ...arms });
-    expect(generateEmbedding).toHaveBeenCalledTimes(2);
+    expect(generateEmbedding).toHaveBeenCalledTimes(3);
   });
 
   it('resumes a principal cut short by the per-request provider cap', async () => {
