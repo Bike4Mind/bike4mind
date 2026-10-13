@@ -80,14 +80,13 @@ export function defineLambdaRoute<C extends EndpointContract>(
   const checkMethod = createMethodGuard([contract.method]);
 
   return async (event: APIGatewayProxyEventV2, opts?: { requestId?: string }): Promise<APIGatewayProxyResultV2> => {
-    // Reuse the wrapper's id so both layers agree. An options bag, not a positional id:
+    // Reuse the wrapper's id (sanitized like a header) so both layers agree. An options bag, not a positional id:
     // Lambda passes its context as the 2nd arg, which has no requestId field.
-    const requestId =
-      opts?.requestId ??
-      resolveRequestId(
-        event.headers?.[REQUEST_ID_HEADER.toLowerCase()],
-        event.headers?.[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
-      );
+    const requestId = resolveRequestId(
+      opts?.requestId,
+      event.headers?.[REQUEST_ID_HEADER.toLowerCase()],
+      event.headers?.[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
+    );
 
     const json = (
       statusCode: number,

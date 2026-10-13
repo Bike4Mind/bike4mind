@@ -5,6 +5,7 @@ import {
   executeToolContract,
   ForbiddenError,
   HTTPError,
+  MAX_REQUEST_ID_LENGTH,
   NotFoundError,
   UnauthorizedError,
 } from '@bike4mind/common';
@@ -110,14 +111,30 @@ describe('defineLambdaRoute + executeToolContract auth status', () => {
     expect(JSON.parse(res.body as string)).toMatchObject({ error: 'Account suspended' });
   });
 
+  const headerIdEvent = {
+    headers: { authorization: 'Bearer x', 'x-request-id': 'req-from-header' },
+    body: JSON.stringify({ toolName: 'web_search', input: {} }),
+  } as unknown as APIGatewayProxyEventV2;
+
   it('ignores a Lambda context passed as the second arg and uses the x-request-id header', async () => {
     mockResolveAuth.mockRejectedValueOnce(new UnauthorizedError('nope'));
     const lambdaContext = { awsRequestId: 'aws-req-1', functionName: 'tools-fn' } as unknown as { requestId?: string };
-    const event = {
-      headers: { authorization: 'Bearer x', 'x-request-id': 'req-from-header' },
-      body: JSON.stringify({ toolName: 'web_search', input: {} }),
-    } as unknown as APIGatewayProxyEventV2;
-    const res = asResult(await route(event, lambdaContext));
+    const res = asResult(await route(headerIdEvent, lambdaContext));
+    expect(res.headers?.['X-Request-ID']).toBe('req-from-header');
+    expect(JSON.parse(res.body as string)).toMatchObject({ request_id: 'req-from-header' });
+  });
+
+  it('sanitizes a request id passed in opts like a header-supplied one', async () => {
+    mockResolveAuth.mockRejectedValueOnce(new UnauthorizedError('nope'));
+    const res = asResult(await route(headerIdEvent, { requestId: 'opts\r\nid' + 'x'.repeat(200) }));
+    const expected = ('optsid' + 'x'.repeat(200)).slice(0, MAX_REQUEST_ID_LENGTH);
+    expect(res.headers?.['X-Request-ID']).toBe(expected);
+    expect(JSON.parse(res.body as string)).toMatchObject({ request_id: expected });
+  });
+
+  it('falls back to the header when the opts request id sanitizes to nothing', async () => {
+    mockResolveAuth.mockRejectedValueOnce(new UnauthorizedError('nope'));
+    const res = asResult(await route(headerIdEvent, { requestId: '\r\n' }));
     expect(res.headers?.['X-Request-ID']).toBe('req-from-header');
     expect(JSON.parse(res.body as string)).toMatchObject({ request_id: 'req-from-header' });
   });
