@@ -152,6 +152,8 @@ import EnsureOAuthGrantUserRevokedUpdatedAtIndex from './20260921235961_ensure-o
 import EnsureGitHubLakeAuthGrantIndexes from './20260921235962_ensure-github-lake-auth-grant-indexes';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
 import EnsureSessionOriginChannelIndex from './20260921235980_ensure-session-origin-channel-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureStaleVoiceHoldIndex from './20260921235986_ensure-stale-voice-hold-index';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
 import EnsureQuestCallbackDispatchedIndex from './20260921235990_ensure-quest-callback-dispatched-index';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
@@ -307,6 +309,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureOAuthGrantUserRevokedUpdatedAtIndex,
   EnsureGitHubLakeAuthGrantIndexes,
   EnsureSessionOriginChannelIndex,
+  EnsureStaleVoiceHoldIndex,
   EnsureQuestCallbackDispatchedIndex,
   EnsureGenerationJobIndexes,
   EnsureGenerationJobRequesterIndex,

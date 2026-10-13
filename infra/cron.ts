@@ -277,6 +277,29 @@ const creditLotSweepCron = new sst.aws.Cron('creditLotSweep', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Voice Hold Sweep - settles voice credit holds no client ever ended (closed tab, crashed browser,
+// failed connect) on connected time. Self-host twin: apps/workers/src/selfhost/voiceHoldSweep.ts;
+// keep the schedules in step. Settlement is DB-only and capped at VOICE_HOLD_SWEEP_LIMIT holds per
+// run. Overlapping runs (at-least-once delivery, async retry after a timeout) are safe because
+// settleVoiceHold claims each hold atomically, so a losing settler moves no credit.
+const voiceHoldSweepCron = new sst.aws.Cron('voiceHoldSweep', {
+  schedule: 'rate(5 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/voiceHoldSweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '4 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 // Integration Health Check - runs every 5 minutes to probe external APIs
 // Probes: Slack, GitHub, Jira, Confluence
 const integrationHealthCheckCron = new sst.aws.Cron('integrationHealthCheck', {
@@ -950,6 +973,7 @@ export {
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   creditLotSweepCron,
+  voiceHoldSweepCron,
   sreStaleDispatchCron,
   attackSimulationFunction,
   attackSimulationCron,
