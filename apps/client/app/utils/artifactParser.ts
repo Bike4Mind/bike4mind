@@ -117,7 +117,7 @@ export function parseArtifactsWithFallback(
   content: string,
   options?: { rechartsDisplayMode?: 'inline' | 'artifact' }
 ): ArtifactParseResult {
-  return parseArtifacts(convertCodeBlocksToArtifacts(content), options);
+  return parseArtifacts(convertCodeBlocksToArtifacts(content, { rewriteNestedMarkdown: true }), options);
 }
 
 /**

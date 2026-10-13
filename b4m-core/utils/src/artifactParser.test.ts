@@ -10,6 +10,7 @@ import {
   TOOL_OUTPUT_MARKER,
   stripToolOutputMarker,
   markToolEchoes,
+  promoteBareHtmlDocument,
   isMermaidSyntax,
   validateMermaidSyntax,
 } from './artifactParser';
@@ -778,6 +779,22 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     const out = convertCodeBlocksToArtifacts('```\n' + BARE + '\n```\n\n' + BARE);
     expect(wrappers(out)).toBe(1);
     expect(out).toContain('```\n' + BARE + '\n```');
+  });
+
+  // Called directly: inside convertCodeBlocksToArtifacts every complete artifact span is already
+  // masked, so only the guard's own pairing (matchArtifactBlocks' first-closer rule) decides these.
+  it('treats a tag opened inside an unclosed one as closed by the first closer', () => {
+    const input = '<artifact identifier="a" type="text/plain" title="A">see <artifact docs</artifact>\n' + BARE;
+    const out = promoteBareHtmlDocument(input, () => false);
+    expect(out).toContain('<artifact identifier="bare" type="text/html" title="Bare">');
+    expect(out.startsWith('<artifact identifier="a" type="text/plain" title="A">see <artifact docs</artifact>\n')).toBe(
+      true
+    );
+  });
+
+  it('does not let a stray closer cancel the open artifact a document sits in', () => {
+    const input = 'stray </artifact> <artifact identifier="a" type="text/html" title="A">\n' + BARE + '\n</artifact>';
+    expect(promoteBareHtmlDocument(input, () => false)).toBe(input);
   });
 
   it('clears the artifact guard for the document after the wrapper closes', () => {
@@ -1783,9 +1800,18 @@ describe('convertCodeBlocksToArtifacts - detectors shared with the client render
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 
-  it('rewrites the inner fences of a markdown fence to ~~~', () => {
+  it('rewrites the inner fences of a markdown fence to ~~~ only when asked (the render path)', () => {
     const input = `${F}markdown\nOuter\n${F}js\nlet a = 1;\n${F}\nMore\n${F}`;
-    expect(convertCodeBlocksToArtifacts(input)).toBe(`${F}markdown\nOuter\n~~~js\nlet a = 1;\n~~~\nMore\n${F}`);
+    expect(convertCodeBlocksToArtifacts(input, { rewriteNestedMarkdown: true })).toBe(
+      `${F}markdown\nOuter\n~~~js\nlet a = 1;\n~~~\nMore\n${F}`
+    );
+  });
+
+  it('leaves a closed markdown block and a later fence byte-identical by default (the persisted server path)', () => {
+    // The rewrite is greedy to the LAST fence in the reply, so on the server it would persist ~~~
+    // into fences after the markdown block closed.
+    const input = `${F}markdown\n# Readme\n${F}\n\nThen run:\n\n${F}bash\nnpm i\n${F}\n\nDone.`;
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 
   describe('tool-output JSON', () => {

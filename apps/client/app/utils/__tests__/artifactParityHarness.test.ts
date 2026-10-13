@@ -164,7 +164,12 @@ function buildInputs(): string[] {
     const parts: string[] = [];
     for (let j = 0; j < count; j++) parts.push(pick(FIXTURES));
     let out = parts[0];
-    for (let j = 1; j < parts.length; j++) out += pick(SEPARATORS) + parts[j];
+    for (let j = 1; j < parts.length; j++) {
+      // A space before a fence would glue its marker mid-line, which isMalformed exempts; a
+      // newline keeps the composition well-formed so the zero-mismatch bar covers it.
+      const separator = pick(SEPARATORS);
+      out += (separator === ' ' && parts[j].startsWith(F) ? '\n' : separator) + parts[j];
+    }
     inputs.push(out);
   }
   return inputs;

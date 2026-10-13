@@ -1105,13 +1105,9 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
 });
 
 /**
- * apps/client depends on @bike4mind/utils, so this is the one suite that can reach
- * both parser copies and catch silent drift between the two MUST-STAY-IN-SYNC files.
- * Only behaviors both parsers genuinely implement are covered here: core has no
- * python-artifact promotion at all (that predicate is a client-only surface, unlike
- * the react fences, which are also excluded - the per-language react predicates
- * differ from core's hasReactComponentLine by design), so the python case below
- * only pins the one shape both agree on (a small fence neither promotes).
+ * The client's convertCodeBlocksToArtifacts is a re-export of core's, so this suite no longer
+ * guards two detector copies. It pins that the client parseArtifacts (render-specific stripping)
+ * and core's agree over the shared convert, and it catches a stale core dist (below).
  *
  * The core side of this comparison (coreConvertCodeBlocksToArtifacts / coreParseArtifacts)
  * resolves through @bike4mind/utils' package exports to b4m-core/utils/dist, not source.
@@ -1202,8 +1198,7 @@ describe('parity with the core parser', () => {
       promoted: true,
       type: 'html',
     },
-    // Only shape where core and client agree on python: core never promotes any
-    // python fence, so this pins the negative case rather than the (client-only) positive one.
+    // A one-line fence is below the python pass's "substantial code" bar.
     { name: 'a trivial python fence', input: '```python\nprint("hi")\n```', promoted: false },
     {
       name: 'an html document sitting inside a generic (unlabeled) code fence',

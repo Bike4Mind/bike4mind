@@ -497,6 +497,13 @@ function toolOutputFence(lang: string, body: string, before: string, after: stri
 export interface ConvertCodeBlocksOptions {
   /** True when a candidate body is a verbatim quote of this turn's tool output. */
   isToolEcho?: (body: string) => boolean;
+  /**
+   * Rewrite the inner fences of a ```markdown block to ~~~ so they cannot close it early. A
+   * render fix, not a promotion: only the client render path (parseArtifactsWithFallback) sets it.
+   * Off for the server, which persists its output, because the greedy match also rewrites fences
+   * after the block closes.
+   */
+  rewriteNestedMarkdown?: boolean;
 }
 
 /**
@@ -973,9 +980,9 @@ ${trimmedCode}
     return match;
   });
 
-  // Not a promotion: rewrites the inner fences of a ```markdown block to ~~~ so they cannot close
-  // it early. Skipped under echoOnly, which must leave every other byte alone.
-  if (!echoOnly) {
+  // See ConvertCodeBlocksOptions.rewriteNestedMarkdown. Never under echoOnly, which must leave
+  // every other byte alone.
+  if (options.rewriteNestedMarkdown && !echoOnly) {
     const markdownBlockRegex = /```markdown([\s\S]*)```/gi;
     content = content.replace(markdownBlockRegex, (_match, codeContent: string) => {
       const updatedContent = codeContent.replace(/```/g, '~~~');
