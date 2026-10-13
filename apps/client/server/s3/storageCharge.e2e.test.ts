@@ -9,7 +9,12 @@ import {
 import { FabFile, Session, User, withTransaction } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
 import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
-import { chargeStampedKnowledgeStorage, claimStorageCharge, stampImportedKnowledgeRows } from './storageCharge';
+import {
+  chargeStampedKnowledgeStorage,
+  chargeUploadedObject,
+  claimStorageCharge,
+  stampImportedKnowledgeRows,
+} from './storageCharge';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -185,5 +190,54 @@ describe('notebook import storage charge', () => {
     ]);
 
     expect(await chargeStampedKnowledgeStorage(USER, ['knowledge/x'], new Date())).toBe(0);
+  });
+});
+
+describe('chargeUploadedObject', () => {
+  const createRow = async () =>
+    (
+      await FabFile.create([
+        { userId: USER, fileName: 'u', mimeType: 'text/plain', fileSize: 1, filePath: 'uploads/u', type: 'FILE' },
+      ])
+    )[0];
+
+  /** One webhook delivery as the self-host route runs it: load, charge, save in one transaction. */
+  const deliver = (fabFileId: unknown, size: number, uploadedAt: Date) =>
+    withTransaction(async session => {
+      const user = await User.findById(USER_ID).session(session);
+      if (user && (await chargeUploadedObject(fabFileId as string, user, size, uploadedAt, session))) {
+        await user.save({ session, validateBeforeSave: false });
+      }
+    });
+
+  it('charges the object size once, even when the event is redelivered', async () => {
+    await seedUser();
+    const row = await createRow();
+    const uploadedAt = new Date();
+
+    await deliver(row._id, 5_000, uploadedAt);
+    await deliver(row._id, 5_000, uploadedAt);
+
+    expect(await storedSize()).toBe(BASELINE_BYTES + 5_000);
+  });
+
+  it('charges again for a later write to the same object', async () => {
+    await seedUser();
+    const row = await createRow();
+    const uploadedAt = new Date();
+
+    await deliver(row._id, 5_000, uploadedAt);
+    await deliver(row._id, 5_000, new Date(uploadedAt.getTime() + 1000));
+
+    expect(await storedSize()).toBe(BASELINE_BYTES + 10_000);
+  });
+
+  it('never takes the counter below zero', async () => {
+    await seedUser();
+    const row = await createRow();
+
+    await deliver(row._id, -BASELINE_BYTES * 2, new Date());
+
+    expect(await storedSize()).toBe(0);
   });
 });
