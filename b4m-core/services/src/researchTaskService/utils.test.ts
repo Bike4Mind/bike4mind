@@ -304,6 +304,8 @@ describe('findExistingResearchData utils', () => {
         expect(mockStorage.upload).not.toHaveBeenCalled();
         expect(mockFabFilesRepo.commitContentRewrite).not.toHaveBeenCalled();
         expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Storage limit'));
+        expect(mockStorage.generateSignedUrl).toHaveBeenCalledWith('test/path/file.md', expect.any(Number), 'get');
+        expect(mockFabFilesRepo.update).toHaveBeenCalledWith(expect.objectContaining({ id: file.id }));
       });
     });
 

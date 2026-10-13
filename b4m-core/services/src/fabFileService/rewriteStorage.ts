@@ -6,8 +6,8 @@ import { checkStorageLimit } from '@bike4mind/utils';
  * `assertRewriteFits` before its upload and `commitContentRewrite` after it, so the owner's
  * `currentStorageSize` moves by exactly `newSize - chargedBytes(row)`. The commit stamps
  * `storageChargedAt`, which makes the rewrite's S3 event claim nothing
- * (apps/client/server/s3/storageCharge.ts). A guard test enumerates the call sites
- * (b4m-core/infra/src/__tests__/fabFileExtractedCountInvalidation.test.ts).
+ * (apps/client/server/s3/storageCharge.ts). A guard test pins the known call sites, but only finds
+ * new ones under its search roots (b4m-core/infra/src/__tests__/fabFileExtractedCountInvalidation.test.ts).
  */
 
 export type RewriteStorageDb = {

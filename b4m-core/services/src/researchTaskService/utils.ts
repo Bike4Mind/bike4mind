@@ -87,25 +87,29 @@ export async function findOrUpdateExistingResearchData(
     const existingFile = await adapters.db.fabFiles.findById(existingResearchData.fabFileId);
     if (existingFile && existingFile.filePath) {
       const newSize = typeof content === 'string' ? Buffer.byteLength(content, 'utf8') : content.length;
+      let fits = true;
       try {
         await assertRewriteFits(existingFile, newSize, adapters.db, user);
       } catch (error) {
         if (!(error instanceof BadRequestError)) throw error;
-        // Background path: keep the previous crawl rather than fail (and retry) the whole task.
+        // Background path: keep the previous crawl rather than fail (and retry) the whole task, but
+        // still refresh its url below.
+        fits = false;
         logger?.warn?.(`[RESEARCH_DATA_EXISTS] Storage limit reached; keeping previous content of ${existingFile.id}`);
-        return { file: existingFile, researchData: existingResearchData };
       }
 
-      logger?.info(`🗃️ [RESEARCH_DATA_EXISTS] Uploading content to existing file ${existingFile.filePath}`);
+      if (fits) {
+        logger?.info(`🗃️ [RESEARCH_DATA_EXISTS] Uploading content to existing file ${existingFile.filePath}`);
 
-      // Upload new content to existing file
-      const uploadStartedAt = new Date();
-      await adapters.storage.upload(existingFile.filePath, content, {
-        ContentType: contentType,
-        ContentLength: newSize,
-      });
-      await commitContentRewrite({ fabFileId: existingFile.id, newSize, uploadStartedAt }, adapters.db);
-      existingFile.fileSize = newSize;
+        // Upload new content to existing file
+        const uploadStartedAt = new Date();
+        await adapters.storage.upload(existingFile.filePath, content, {
+          ContentType: contentType,
+          ContentLength: newSize,
+        });
+        await commitContentRewrite({ fabFileId: existingFile.id, newSize, uploadStartedAt }, adapters.db);
+        existingFile.fileSize = newSize;
+      }
 
       // A re-crawl must not re-mint (or leave stale) a working GET url for a file that isn't
       // 'clean' - pending its scan, or quarantined (blocked). isImageServeable fail-closes on
