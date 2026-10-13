@@ -120,9 +120,11 @@ function formatSessionsError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function formatConnectError(err: unknown): string {
-  const name = (err as { name?: string })?.name;
-  if (name === 'NotAllowedError') {
+// getUserMedia error name -> user-facing message, shared by the connect path and
+// the mic preflight so the two mappings cannot drift. Null for names we have no
+// specific message for.
+function micErrorMessage(name: string | undefined): string | null {
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
     return 'Microphone access denied. Allow this site to use the microphone in your browser settings (lock icon next to the URL), then try again.';
   }
   if (name === 'NotFoundError' || name === 'OverconstrainedError') {
@@ -131,7 +133,14 @@ function formatConnectError(err: unknown): string {
   if (name === 'NotReadableError') {
     return 'Microphone is busy (in use by another app). Close other audio apps and retry.';
   }
-  return `Failed to open voice connection: ${err instanceof Error ? err.message : String(err)}`;
+  return null;
+}
+
+function formatConnectError(err: unknown): string {
+  const name = (err as { name?: string })?.name;
+  return (
+    micErrorMessage(name) ?? `Failed to open voice connection: ${err instanceof Error ? err.message : String(err)}`
+  );
 }
 
 // Check the mic BEFORE /sessions, which reserves credits server-side. Returns a
@@ -144,11 +153,8 @@ async function checkMicrophone(): Promise<string | null> {
     stream.getTracks().forEach(track => track.stop());
     return null;
   } catch (err) {
-    const name = (err as { name?: string })?.name;
-    if (name === 'NotAllowedError' || name === 'SecurityError') {
-      return 'Microphone access was blocked. Allow it in your browser settings and try again. No credits were used.';
-    }
-    return 'No microphone available. No credits were used.';
+    const message = micErrorMessage((err as { name?: string })?.name) ?? 'No microphone available.';
+    return `${message} No credits were used.`;
   }
 }
 
@@ -311,8 +317,10 @@ async function establishConnection(
       scheduleReconnect(set, myGen, ctx);
       return;
     }
-    // The server already holds credits for this session; hand them back since
-    // the call never started. Not reached when end() superseded us (it reconciles).
+    // Settle the hold down to the actual duration - the transport is gone. This
+    // also covers a live call whose reconnect budget ran out, where the elapsed
+    // time is billed and only the rest is refunded. Not reached when end()
+    // superseded us (it reconciles).
     const sid = activeSessionId;
     activeSessionId = null;
     set({ phase: 'error', errorMessage: formatConnectError(err) });

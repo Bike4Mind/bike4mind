@@ -149,21 +149,33 @@ describe('useConversationalVoice — auto-reconnect', () => {
     expect(endCalls()).toHaveLength(0);
   });
 
-  it('does not create a session when the microphone is blocked', async () => {
-    getUserMediaMock.mockRejectedValue(Object.assign(new Error('denied'), { name: 'NotAllowedError' }));
-    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
-    const state = useConversationalVoiceStore.getState();
-    expect(state.phase).toBe('error');
-    expect(state.errorMessage).toContain('Microphone access was blocked');
-    expect(state.errorMessage).toContain('No credits were used.');
-    expect(apiPost).not.toHaveBeenCalled();
-    expect(startSessionMock).not.toHaveBeenCalled();
-  });
+  it.each(['NotAllowedError', 'SecurityError'])(
+    'does not create a session when the microphone is blocked (%s)',
+    async name => {
+      getUserMediaMock.mockRejectedValue(Object.assign(new Error('denied'), { name }));
+      await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+      const state = useConversationalVoiceStore.getState();
+      expect(state.phase).toBe('error');
+      expect(state.errorMessage).toContain('Microphone access denied');
+      expect(state.errorMessage).toContain('No credits were used.');
+      expect(apiPost).not.toHaveBeenCalled();
+      expect(startSessionMock).not.toHaveBeenCalled();
+    }
+  );
 
   it('does not create a session when no microphone is found', async () => {
     getUserMediaMock.mockRejectedValue(Object.assign(new Error('none'), { name: 'NotFoundError' }));
     await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
-    expect(useConversationalVoiceStore.getState().errorMessage).toContain('No microphone available');
+    expect(useConversationalVoiceStore.getState().errorMessage).toContain('No microphone detected');
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('keeps the "microphone is busy" message when the device is in use', async () => {
+    getUserMediaMock.mockRejectedValue(Object.assign(new Error('busy'), { name: 'NotReadableError' }));
+    await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    const state = useConversationalVoiceStore.getState();
+    expect(state.errorMessage).toContain('Microphone is busy');
+    expect(state.errorMessage).toContain('No credits were used.');
     expect(apiPost).not.toHaveBeenCalled();
   });
 
@@ -176,8 +188,35 @@ describe('useConversationalVoice — auto-reconnect', () => {
     expect(apiPost).not.toHaveBeenCalled();
   });
 
+  it('does not create a session when a start is superseded while the probe is pending', async () => {
+    let resolveProbe!: (stream: unknown) => void;
+    getUserMediaMock.mockImplementation(() => new Promise(resolve => (resolveProbe = resolve)));
+    const pending = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await flush();
+    await useConversationalVoiceStore.getState().end();
+    resolveProbe({ getTracks: () => [{ stop: stopTrack }] });
+    await pending;
+    expect(useConversationalVoiceStore.getState().phase).toBe('ended');
+    expect(sessionPosts()).toHaveLength(0);
+    expect(startSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('ignores a probe failure when the start was superseded while the probe was pending', async () => {
+    let rejectProbe!: (err: unknown) => void;
+    getUserMediaMock.mockImplementation(() => new Promise((_resolve, reject) => (rejectProbe = reject)));
+    const pending = useConversationalVoiceStore.getState().start({ sessionId: 's1' });
+    await flush();
+    await useConversationalVoiceStore.getState().end();
+    rejectProbe(Object.assign(new Error('denied'), { name: 'NotAllowedError' }));
+    await pending;
+    const state = useConversationalVoiceStore.getState();
+    expect(state.phase).toBe('ended');
+    expect(state.errorMessage).toBeNull();
+    expect(sessionPosts()).toHaveLength(0);
+  });
+
   it('refunds the hold when startSession throws after the session was created', async () => {
-    startSessionMock.mockRejectedValueOnce(Object.assign(new Error('boom'), { name: 'NotReadableError' }));
+    startSessionMock.mockRejectedValueOnce(new Error('boom'));
     await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
     expect(useConversationalVoiceStore.getState().phase).toBe('error');
     expect(endCalls()).toEqual([['/api/voice/v2/sessions/s1/end', {}]]);
@@ -224,5 +263,7 @@ describe('useConversationalVoice — auto-reconnect', () => {
     await useConversationalVoiceStore.getState().start({ sessionId: 's1' });
     expect(useConversationalVoiceStore.getState().phase).toBe('error');
     expect(useConversationalVoiceStore.getState().errorMessage).toContain('boom');
+    // The refund must still be attempted even though it rejects.
+    expect(endCalls()).toHaveLength(1);
   });
 });
