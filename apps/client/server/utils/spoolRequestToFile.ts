@@ -34,7 +34,7 @@ interface SpoolOptions {
  *
  * Spooled rather than buffered because this backs the LLM history import, where a real export
  * is routinely 100MB+ and the sibling proxy routes' buffer-into-an-array approach would hold all
- * of it in the app pod at once. S3Storage.upload already accepts a path and turns it into a read
+ * of it in the app pod at once. S3Storage.uploadFile turns a path into a read
  * stream, so the bytes never need to be resident.
  *
  * The cap is enforced mid-stream, so an oversized upload stops on the chunk that crosses the
