@@ -22,8 +22,11 @@ import {
  * lake's members are still reached; a future connector - the GitHub connector this helper
  * is deliberately shaped for - supplies its own equivalent finder), so this stays uncoupled from
  * any one connector's lookup predicate. A tombstone (`deletedAt` set) is still hard-deleted but
- * not refunded: its soft delete (`deleteFabFile` / `softDeleteByDataLakeTag`) already refunded
- * it. An archived row is live and is refunded.
+ * not refunded: it already sits outside the counted set (`sumFileSizeByUserId` matches
+ * `deletedAt: null`), and its refund belongs to the soft-delete path that stamped it - a refund
+ * that path missed (a throw before `onDeleteComplete`, say) is ordinary `recalculateUserStorage`
+ * drift, the same posture `cleanupDeletedDataLake`'s phase-2 sweep takes. An archived row is live
+ * (only `archivedAt` is set) and is refunded.
  */
 export type PurgeableConnectionFile = Pick<
   IFabFileDocument,
@@ -208,7 +211,8 @@ export const purgeDataLakeConnectionFiles = async (
       // Per chunk, not once per call: a run killed mid-sweep (a Lambda timeout) never reaches a
       // final refund, so each chunk refunds the rows it hard-deleted as soon as it settles.
       // `deletedFiles` only holds rows this call actually removed (hardDeleteOneById's return),
-      // and a tombstone records 0 bytes: its soft delete already refunded it.
+      // and a tombstone records 0 bytes: it is outside the counted set (sumFileSizeByUserId matches
+      // deletedAt: null), so its refund belongs to its soft-delete path, not this sweep.
       filesPurged += deletedFiles.length;
       await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(deletedFiles, -1), logger);
     }
