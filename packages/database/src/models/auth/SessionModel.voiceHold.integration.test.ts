@@ -85,6 +85,26 @@ describe('sessionRepository voice holds', () => {
     expect(after).toMatchObject({ voiceReservedCredits: null, voiceSessionStartedAt: null });
   });
 
+  it('with realtimeOnly, claims a realtime hold but leaves an ElevenLabs hold untouched', async () => {
+    const startedAt = minutesAgo(5);
+    const elevenLabs = await seed('elevenlabs', 100, startedAt);
+    const realtime = await seed('realtime', 100, startedAt, 30);
+
+    expect(await sessionRepository.claimVoiceHold(elevenLabs, startedAt, { realtimeOnly: true })).toBeNull();
+    expect(await Session.findById(elevenLabs).lean()).toMatchObject({
+      voiceReservedCredits: 100,
+      voiceSessionStartedAt: startedAt,
+    });
+
+    expect(await sessionRepository.claimVoiceHold(realtime, startedAt, { realtimeOnly: true })).toEqual({
+      billedCredits: 30,
+    });
+    expect(await Session.findById(realtime).lean()).toMatchObject({
+      voiceReservedCredits: null,
+      voiceSessionStartedAt: null,
+    });
+  });
+
   it("never claims a newer call's hold with a stale start time", async () => {
     const id = await seed('call', 100, minutesAgo(1));
 
