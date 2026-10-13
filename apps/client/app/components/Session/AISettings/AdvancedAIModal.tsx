@@ -664,7 +664,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
     // Same test the picker groups by, so the notice can never disagree with the provider
     // section a model is filed under. A name-only check missed models whose id does not carry the provider name.
     ...(getModelBackend(modelInfo) === 'OpenAI'
-      ? ['This model shares session content with OpenAI for training purposes']
+      ? ['This model is provided by OpenAI. Your session content is processed by OpenAI under its API data policy.']
       : []),
     // The tools section is hidden outright for these models, so this line is the only
     // thing that explains the absence.
