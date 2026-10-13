@@ -330,6 +330,8 @@ export const SettingKeySchema = z.enum([
   'EnableInertArtifactRender',
   'pricePerCredit',
   'ModerationEnabled',
+  'BedrockGuardrailId',
+  'BedrockGuardrailVersion',
   'ImageModerationEnabled',
   'tagLineMain',
   'tagLineSub',
@@ -2683,6 +2685,21 @@ export const settingsMap = {
     name: 'Moderation Enabled',
     defaultValue: false,
     description: 'Whether to enable moderation for LLM prompts.',
+    category: 'AI Moderation',
+  }),
+  BedrockGuardrailId: makeStringSetting({
+    key: 'BedrockGuardrailId',
+    name: 'Bedrock Guardrail ID',
+    defaultValue: '',
+    description:
+      'Bedrock Guardrail identifier used for prompt moderation when no OpenAI key is available. Leave empty to skip Bedrock moderation.',
+    category: 'AI Moderation',
+  }),
+  BedrockGuardrailVersion: makeStringSetting({
+    key: 'BedrockGuardrailVersion',
+    name: 'Bedrock Guardrail Version',
+    defaultValue: 'DRAFT',
+    description: 'Version of the Bedrock Guardrail to apply. Defaults to DRAFT.',
     category: 'AI Moderation',
   }),
   ImageModerationEnabled: makeBooleanSetting({

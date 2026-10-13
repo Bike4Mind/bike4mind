@@ -448,7 +448,7 @@ const sreStaleDispatchCron = new sst.aws.Cron('SreStaleDispatchCron', {
  * with no brand fallback (#9310/#9306).
  */
 const attackSimulationFunction = new sst.aws.Function('attackSimulationFunction', {
-  handler: 'apps/client/server/security/attackSimulation/runner.handler',
+  handler: 'apps/workers/src/security/attackSimulation/runner.handler',
   vpc: lambdaVpc,
   link: [...allSecrets],
   timeout: '14 minutes',

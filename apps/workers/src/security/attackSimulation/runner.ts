@@ -25,7 +25,7 @@ import { adminAuthzProbe } from './probes/adminAuthz';
 import { openRedirectProbe } from './probes/openRedirect';
 import { ingestTokenSecurityProbe } from './probes/ingestTokenSecurity';
 import { assertTargetUrlIsSafe } from './probes/probeUtils';
-import type { AttackSimulationFinding, AttackSimulationIngestPayload } from './types';
+import type { AttackSimulationFinding, AttackSimulationIngestPayload } from '@server/security/attackSimulation/types';
 
 const logger = new Logger({ metadata: { service: 'attack-simulation-runner' } });
 

@@ -42,9 +42,9 @@ function signature(url: URL, secret = 'fixture-secret') {
   return createHmac('sha256', signingKey).update(toSign).digest('hex');
 }
 
-async function urls(filePaths: string[], expiresIn = '600') {
+async function urls(filePaths: string[], expiresIn = '600', audience?: string) {
   const json = vi.fn();
-  await handler({ query: { 'filePaths[]': filePaths, expiresIn }, user: { id: 'owner' } }, { json });
+  await handler({ query: { 'filePaths[]': filePaths, expiresIn, audience }, user: { id: 'owner' } }, { json });
   return json.mock.calls[0][0].urls as (string | null)[];
 }
 
@@ -78,9 +78,28 @@ describe('generic file browser download signing', () => {
     expect(privateUrl.origin).toBe('http://minio.internal:9000');
   });
 
-  it('retains configured private signing when the browser override is unset', async () => {
-    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
-    expect(new URL((await urls(['owned/report.txt']))[0]!).origin).toBe('http://minio.internal:9000');
+  it('signs an authorized server request for the private origin with a valid signature', async () => {
+    const url = new URL((await urls(['owned/report.txt'], '600', 'server'))[0]!);
+    expect(url.origin).toBe('http://minio.internal:9000');
+    expect(url.searchParams.get('X-Amz-Signature')).toBe(signature(url));
+    expect(h.findAccessibleById).toHaveBeenCalled();
+  });
+
+  it.each(['unsupported', ''])('rejects an invalid audience (%s) with a validation error', async audience => {
+    const sign = vi.spyOn(S3Storage.prototype, 'getSignedUrl');
+    await expect(urls(['owned/report.txt'], '600', audience)).rejects.toMatchObject({ name: 'ZodError' });
+    expect(h.findOne).not.toHaveBeenCalled();
+    expect(sign).not.toHaveBeenCalled();
+    sign.mockRestore();
+  });
+
+  it.each(
+    [undefined, '', '   '].flatMap(endpoint =>
+      [undefined, 'browser', 'server'].map(audience => ({ endpoint, audience }))
+    )
+  )('retains private signing without a distinct browser endpoint: %s', async ({ endpoint, audience }) => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
+    expect(new URL((await urls(['owned/report.txt'], '600', audience))[0]!).origin).toBe('http://minio.internal:9000');
   });
 
   it('retains AWS addressing when neither custom endpoint is configured', async () => {
@@ -91,14 +110,17 @@ describe('generic file browser download signing', () => {
     expect(new URL((await urls(['owned/report.txt']))[0]!).hostname).toBe('files-bucket.s3.us-east-2.amazonaws.com');
   });
 
-  it('withholds inaccessible, held and unknown keys before signing while preserving positions', async () => {
-    h.findOne.mockImplementation(async ({ filePath }: { filePath: string }) =>
-      filePath === 'unknown' ? null : { _id: filePath, moderationStatus: filePath === 'held' ? 'pending' : 'clean' }
-    );
-    h.findAccessibleById.mockImplementation(async (_user: unknown, id: string) => id === 'owned');
-    const result = await urls(['owned', 'foreign', 'held', 'unknown']);
-    expect(result[0]).toEqual(expect.any(String));
-    expect(result.slice(1)).toEqual([null, null, null]);
-    expect(h.options).toEqual({ requiredScopes: ['files:read'] });
-  });
+  it.each(['browser', 'server'])(
+    'withholds inaccessible, held and unknown keys before signing for %s',
+    async audience => {
+      h.findOne.mockImplementation(async ({ filePath }: { filePath: string }) =>
+        filePath === 'unknown' ? null : { _id: filePath, moderationStatus: filePath === 'held' ? 'pending' : 'clean' }
+      );
+      h.findAccessibleById.mockImplementation(async (_user: unknown, id: string) => id === 'owned');
+      const result = await urls(['owned', 'foreign', 'held', 'unknown'], '600', audience);
+      expect(result[0]).toEqual(expect.any(String));
+      expect(result.slice(1)).toEqual([null, null, null]);
+      expect(h.options).toEqual({ requiredScopes: ['files:read'] });
+    }
+  );
 });
