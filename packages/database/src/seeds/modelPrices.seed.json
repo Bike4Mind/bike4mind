@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-12T04:20:46.790Z",
+  "generatedAt": "2026-10-13T04:09:42.581Z",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -404,7 +404,8 @@
       "pricing": {
         "1000000": {
           "input": 0.00001,
-          "output": 0.00005
+          "output": 0.00005,
+          "cache_read": 2.5e-7
         }
       }
     },
@@ -508,8 +509,9 @@
       "unit": "per_token",
       "pricing": {
         "1000000": {
-          "input": 0.000003,
-          "output": 0.000015
+          "input": 0.000002,
+          "output": 0.00001,
+          "cache_read": 1.0000000000000001e-7
         }
       }
     },
@@ -981,7 +983,8 @@
       "pricing": {
         "200000": {
           "input": 0.000015,
-          "output": 0.00006
+          "output": 0.00006,
+          "cache_read": 0.0000075
         }
       }
     },
@@ -1022,7 +1025,8 @@
       "pricing": {
         "200000": {
           "input": 0.0000011,
-          "output": 0.0000044
+          "output": 0.0000044,
+          "cache_read": 5.5e-7
         }
       }
     },
