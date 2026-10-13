@@ -309,21 +309,22 @@ function generateRouteIndexing(packages) {
 // routes/nav), so the premium package specifier must live ONLY here - the present form
 // names it, the fork emits the empty array and never references the absent package.
 //
-// Unlike the old single slot, this is a LIST: the consumer picks the entry whose `path`
-// matches the current route, so two overlays can each own their own surface. The route
-// is the overlay's knowledge, not core's - that is why it rides in the manifest instead
-// of being matched against a hardcoded pathname in the Sidenav component.
+// The route is the overlay's knowledge, not core's, so it rides in the manifest rather than
+// a pathname core names: that is what lets more than one overlay own a surface.
 //
 // LEGACY STRING FORM (deprecated): a bare specifier with no `path`. It predates the
-// per-route list, when core hardcoded `/opti`, so it keeps that path and warns. Delete
-// this branch - and `LEGACY_SIDENAV_PATH` - once every overlay declares its own path.
+// per-route list, so it keeps `LEGACY_SIDENAV_PATH` and warns. Delete this branch - and
+// the constant - once every overlay declares its own path.
+//
+// `LEGACY_SIDENAV_PATH` MUST stay in sync with the `routePrefix` of the workspace registered
+// in WORKSPACE_SURFACES (b4m-core/common/src/surfaces.ts): a legacy overlay keeps its nav on
+// hosting routes only while the two are equal.
 const LEGACY_SIDENAV_PATH = '/opti';
 
 // An appShell route path, interpolated raw into a generated string literal and compared
 // against `location.pathname`. Narrow on purpose: nothing that could terminate the literal
 // or inject code, and each segment must be NON-EMPTY. That last part rejects three shapes
-// no real pathname can equal - `/` (which would also let an overlay take core's home-route
-// sidenav), a trailing-slash `/x/`, and a protocol-relative-looking `//x`.
+// no real pathname can equal - `/`, a trailing-slash `/x/`, and a protocol-relative-looking `//x`.
 //
 // LOWER CASE ONLY, deliberately: the consumer compares `path` to `pathname` with `===`, so a
 // mis-cased `/Surface` would validate, emit, and then silently never match - the overlay would
