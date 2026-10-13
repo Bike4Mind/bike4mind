@@ -43,7 +43,7 @@ const CreateTeamModal = () => {
   const [isTeamSizeInvalid, setIsTeamSizeInvalid] = useState(false);
   const teamPlanAvailable = useTeamPlanAvailable();
   // The dev endpoint never touches Stripe (and throws outside development), so the flag only gates the Stripe path.
-  const teamPlanClosed = !isDevelopment && !teamPlanAvailable;
+  const teamPlanClosed = !teamPlanAvailable;
   const subscribeTeamPlan = useSubscribeTeamPlan();
   const createTeamDev = useCreateTeamDev();
   const plans = useGetSubscriptionPlans();

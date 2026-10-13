@@ -172,38 +172,6 @@ describe('CreateTeamModal', () => {
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
-  it('exempts the development create path from the Team plan gate', async () => {
-    vi.stubEnv('NODE_ENV', 'development');
-    vi.resetModules();
-    const devCreate = vi.fn().mockResolvedValue({});
-    vi.doMock('@client/app/hooks/data/subscriptions', () => ({
-      useSubscribeTeamPlan: () => ({ mutateAsync: (...args: unknown[]) => mutateAsync(...args), isPending: false }),
-      useCreateTeamDev: () => ({ mutateAsync: devCreate, isPending: false }),
-    }));
-    try {
-      teamPlan.available = false;
-      const { default: DevModal, useCreateTeamModal: useDevModal } = await import('./CreateTeamModal');
-      useDevModal.setState({ isOpen: true });
-      render(
-        <TestWrapper>
-          <DevModal />
-        </TestWrapper>
-      );
-
-      expect(screen.queryByTestId('create-team-unavailable')).toBeNull();
-      expect(screen.getByTestId('create-team-size-value').hasAttribute('disabled')).toBe(false);
-      const user = userEvent.setup({ delay: null });
-      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
-      await user.click(screen.getByTestId('create-team-submit-btn'));
-
-      await waitFor(() => expect(devCreate).toHaveBeenCalledTimes(1));
-      expect(mutateAsync).not.toHaveBeenCalled();
-    } finally {
-      vi.doUnmock('@client/app/hooks/data/subscriptions');
-      vi.unstubAllEnvs();
-    }
-  });
-
   it('keeps the missing-price error alongside the unavailable message', () => {
     teamPlan.available = false;
     plansState = { data: [{ id: 'price_some_other_plan', unit_amount: 3000 }], isLoading: false, isError: false };
