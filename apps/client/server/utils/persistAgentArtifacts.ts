@@ -145,7 +145,32 @@ export interface PersistAgentArtifactsDeps {
   clearPartialArtifact: (artifactId: string) => Promise<void>;
 }
 
-function defaultDeps(): PersistAgentArtifactsDeps {
+type SourceRefsGuard = (
+  userId: string,
+  refs: { sessionId?: string; sourceQuestId?: string; parentArtifactId?: string }
+) => Promise<void>;
+
+/**
+ * `sourceRefsGuard` replaces the per-user access guard; only the storage-layer integration script
+ * passes it, since its fixture ids are not real user/session/quest documents.
+ */
+export function defaultDeps(options: { sourceRefsGuard?: SourceRefsGuard } = {}): PersistAgentArtifactsDeps {
+  // One user load and guard per run, shared by every artifact the run writes.
+  let guardPromise: Promise<SourceRefsGuard> | undefined;
+  const getGuard = (userId: string): Promise<SourceRefsGuard> => {
+    if (options.sourceRefsGuard) return Promise.resolve(options.sourceRefsGuard);
+    guardPromise ??= (async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      const { createArtifactSourceRefsGuard } = await import('@server/utils/artifactSourceRefsGuards');
+      const user = await userRepository.findById(userId);
+      if (!user) throw new Error('Cannot persist artifact: user not found');
+      return createArtifactSourceRefsGuard(user);
+    })();
+    guardPromise.catch(() => {
+      guardPromise = undefined;
+    });
+    return guardPromise;
+  };
   // Dynamic imports (same reason as the eventBus import in persistRunAsQuest):
   // keep the barrels off this module's import graph so it stays cheap to load.
   return {
@@ -165,12 +190,9 @@ function defaultDeps(): PersistAgentArtifactsDeps {
       const { artifactService } = await import('@bike4mind/services');
       const { artifactRepository, artifactContentRepository, artifactVersionRepository } =
         await import('@bike4mind/database');
-      const { userRepository } = await import('@bike4mind/database');
-      const { createArtifactSourceRefsGuard } = await import('@server/utils/artifactSourceRefsGuards');
-      const user = await userRepository.findById(userId);
-      if (!user) throw new Error('Cannot persist artifact: user not found');
+      const guard = await getGuard(userId);
       await artifactService.create(userId, payload, {
-        assertSourceRefsAccessible: createArtifactSourceRefsGuard(user),
+        assertSourceRefsAccessible: guard,
         db: {
           // any: mirrors pages/api/artifacts/index.ts - the concrete Mongoose
           // repositories are structurally compatible with the service's

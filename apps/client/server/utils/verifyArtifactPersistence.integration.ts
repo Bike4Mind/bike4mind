@@ -29,13 +29,16 @@
  */
 
 import { connectDB, Artifact, ArtifactContent, ArtifactVersion } from '@bike4mind/database';
-import { persistAgentArtifacts, buildAgentArtifactPayloads } from './persistAgentArtifacts';
+import { persistAgentArtifacts, buildAgentArtifactPayloads, defaultDeps } from './persistAgentArtifacts';
 import { Config } from '@server/utils/config';
 import mongoose from 'mongoose';
 
 const RUN = `itest-${Date.now().toString(36)}`;
 const USER_ID = `${RUN}-user`;
 const SESSION_ID = `${RUN}-session`;
+// Fixture ids are not real documents, so the per-user reference guard is bypassed; everything
+// below it (real artifactService.create, real Mongo indexes) still runs.
+const deps = defaultDeps({ sourceRefsGuard: async () => {} });
 const QUEST_CREATED_AT_MS = 1_700_000_000_000;
 
 // Quiet logger: this script asserts on database state, not on log output.
@@ -79,6 +82,7 @@ async function run() {
     sessionId: SESSION_ID,
     userId: USER_ID,
     executionId: `${RUN}-exec-1`,
+    deps,
     logger,
   });
   check('one artifacts row', (await rowsForQuest(q1)) === 1, `got ${await rowsForQuest(q1)}`);
@@ -117,6 +121,7 @@ async function run() {
     sessionId: SESSION_ID,
     userId: USER_ID,
     executionId: `${RUN}-exec-2`,
+    deps,
     logger,
   });
   const after2 = await rowsForQuest(q2);
@@ -139,6 +144,7 @@ async function run() {
     sessionId: SESSION_ID,
     userId: USER_ID,
     executionId: `${RUN}-exec-3`,
+    deps,
     logger,
   };
   await persistAgentArtifacts({ ...common, replyText: `Done.\n\n${artifact('probe-natural')}` });
@@ -163,6 +169,7 @@ async function run() {
     sessionId: SESSION_ID,
     userId: USER_ID,
     executionId: `${RUN}-exec-4`,
+    deps,
     logger,
   };
   await persistAgentArtifacts(common4);
@@ -190,6 +197,7 @@ async function run() {
     sessionId: SESSION_ID,
     userId: USER_ID,
     executionId: `${RUN}-exec-5`,
+    deps,
     logger,
   };
   await persistAgentArtifacts({ ...common5, replyText: artifact('probe-trade-a', 'A') });

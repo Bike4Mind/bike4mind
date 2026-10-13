@@ -176,4 +176,22 @@ describe('artifactService - create', () => {
     expect(mockVersionRepo.create).not.toHaveBeenCalled();
     expect(mockArtifactRepo.create).not.toHaveBeenCalled();
   });
+
+  it('requires the reference adapter when a source reference is supplied', async () => {
+    delete adapters.assertSourceRefsAccessible;
+
+    await expect(
+      create(userId, { type: 'react', title: 'T', content: 'x', sessionId: 's1' } as any, adapters)
+    ).rejects.toThrow('assertSourceRefsAccessible adapter required');
+    expect(mockArtifactRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('creates without the reference adapter when no source reference is supplied', async () => {
+    delete adapters.assertSourceRefsAccessible;
+    (mockContentRepo.create as any).mockResolvedValueOnce({ _id: 'c1' });
+    (mockVersionRepo.create as any).mockResolvedValueOnce({ _id: 'v1' });
+    (mockArtifactRepo.create as any).mockResolvedValueOnce({ id: 'a1' });
+
+    await expect(create(userId, { type: 'react', title: 'T', content: 'x' } as any, adapters)).resolves.toBeDefined();
+  });
 });

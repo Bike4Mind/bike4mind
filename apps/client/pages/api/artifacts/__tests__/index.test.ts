@@ -51,6 +51,15 @@ vi.mock('@server/utils/resolveActiveOrg', () => ({
   },
 }));
 
+vi.mock('@server/utils/artifactSourceRefsGuards', () => {
+  const sharedGuard = vi.fn();
+  return {
+    sharedGuard,
+    createArtifactSourceRefsGuard: vi.fn(() => sharedGuard),
+    createOwnedArtifactSourceRefsGuard: vi.fn(),
+  };
+});
+
 vi.mock('@bike4mind/services', () => ({
   artifactService: {
     list: (...args: unknown[]) => {
@@ -204,5 +213,20 @@ describe('POST /api/artifacts organization scope', () => {
 
     expect(res._getStatusCode()).toBe(201);
     expect(mockRefs.createArgs?.[1]).toMatchObject({ organizationId: 'member-org' });
+  });
+});
+
+describe('POST /api/artifacts reference guard', () => {
+  it('hands the service the shared-access guard, not the owner-only one', async () => {
+    mockRefs.settings = { EnableArtifacts: true, EnableArtifactsDefault: true };
+    const guards = await import('@server/utils/artifactSourceRefsGuards');
+    const { req, res } = invokePost({ type: 'html', title: 'Page', content: '<html></html>' });
+
+    await mockRefs.postHandler!(req, res);
+
+    const adapters = mockRefs.createArgs?.[2] as { assertSourceRefsAccessible: unknown };
+    expect(guards.createArtifactSourceRefsGuard).toHaveBeenCalledWith((req as any).user);
+    expect(adapters.assertSourceRefsAccessible).toBe((guards as any).sharedGuard);
+    expect(guards.createOwnedArtifactSourceRefsGuard).not.toHaveBeenCalled();
   });
 });
