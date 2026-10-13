@@ -226,6 +226,9 @@ describe('delete before the ObjectCreated event', () => {
     await deleteAndRefund(pending._id.toString());
     expect(await storedSize()).toBe(5);
     expect(await fabFileRepository.sumFileSizeByUserId(USER)).toBe(5);
+    // The event arriving after the delete must not charge the tombstone, since nothing refunded it.
+    expect(await claimStorageCharge(pending._id, new Date())).toBe(false);
+    expect(await storedSize()).toBe(5);
 
     await deleteAndRefund(stamped._id.toString());
     expect(await storedSize()).toBe(0);
