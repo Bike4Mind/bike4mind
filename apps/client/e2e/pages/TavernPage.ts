@@ -177,10 +177,10 @@ export class TavernPage extends BasePage {
       const t = (window as any).__e2e_tavern ?? null;
       if (!t) return null;
       t.collisionMap.ensureCollisionMap();
-      const { grid, minCol, minRow, width, height } = t.collisionMap.getCollisionGrid();
+      const { minCol, minRow, width, height } = t.collisionMap.getCollisionGrid();
       if (!width || !height) return null;
       const walkable = (c: number, r: number) =>
-        c >= 0 && c < width && r >= 0 && r < height && grid[r * width + c] === 0;
+        c >= 0 && c < width && r >= 0 && r < height && !t.collisionMap.isBlocked(c + minCol, r + minRow);
 
       // Try starts in rings around the grid center so the walk stays in the main area.
       const cx = Math.floor(width / 2);
