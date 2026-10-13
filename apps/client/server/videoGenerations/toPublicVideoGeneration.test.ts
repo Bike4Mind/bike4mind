@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CreditHolderType, VideoGenerationSchema, type IGenerationJobDocument } from '@bike4mind/common';
-import { OUTPUT_URL_TTL_SECONDS, toPublicVideoGeneration } from './toPublicVideoGeneration';
+import { OUTPUT_URL_TTL_SECONDS } from '@server/generations/signedOutput';
+import { toPublicVideoGeneration } from './toPublicVideoGeneration';
 
 const job = (overrides: Partial<IGenerationJobDocument> = {}): IGenerationJobDocument =>
   ({

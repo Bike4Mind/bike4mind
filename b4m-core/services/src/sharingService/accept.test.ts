@@ -397,6 +397,21 @@ describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
     expect(adapters.db.fabFiles.update).not.toHaveBeenCalled();
   });
 
+  it('admits a recipient whose stored email differs only in case from the pending address', async () => {
+    // A Project invite to an address with no account stores it lowercased; an SSO signup keeps the
+    // provider's casing.
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('New.Person@Example.com'));
+    adapters.db.invites.findById.mockResolvedValue(makeInvite(['new.person@example.com', 'b@x.com'], 2));
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    expect(adapters.db.invites.update.mock.calls[0][0]).toMatchObject({
+      recipients: { pending: ['b@x.com'], refused: [], accepted: ['New.Person@Example.com'] },
+      remaining: 1,
+    });
+  });
+
   it('allows an accepter who is one of the named pending recipients', async () => {
     const adapters = makeAdapters();
     adapters.db.users.findById.mockResolvedValue(makeUser('a@x.com'));

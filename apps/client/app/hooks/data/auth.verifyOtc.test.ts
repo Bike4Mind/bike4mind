@@ -52,3 +52,30 @@ describe('useVerifyOTC — preserves re-issued pendingToken on failure', () => {
     ).rejects.toMatchObject({ message: 'Invalid code.', code: 'CLIENT_ERROR_422' });
   });
 });
+
+describe('useVerifyOTC - Retry-After parsing on 429', () => {
+  it.each([
+    ['30', 30],
+    ['0', 0],
+    ['   ', undefined],
+    [undefined, undefined],
+  ])('maps Retry-After %j to retryAfterSeconds %j', async (header, expected) => {
+    const error = new AxiosError('Request failed with status code 429', 'ERR_BAD_REQUEST');
+    error.response = {
+      status: 429,
+      statusText: 'Too Many Requests',
+      headers: header === undefined ? {} : { 'retry-after': header },
+      config: {},
+      data: { error: 'Too many attempts.' },
+    } as AxiosResponse;
+    postMock.mockRejectedValueOnce(error);
+    const { result } = renderHook(() => useVerifyOTC(), { wrapper });
+
+    const rejection = await result.current
+      .mutateAsync({ email: 'x@test.com', code: '000000', pendingToken: 'T' })
+      .catch(e => e);
+
+    expect(rejection).toMatchObject({ code: 'CLIENT_ERROR_429' });
+    expect(rejection.retryAfterSeconds).toBe(expected);
+  });
+});

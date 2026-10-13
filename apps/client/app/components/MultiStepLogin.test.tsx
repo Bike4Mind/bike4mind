@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, within, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, within, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -288,6 +288,18 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     }
   });
 
+  it('puts the numeric keypad and one-time-code hints on the code <input> itself', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+
+    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+
+    const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
+    expect(otcInput).toHaveAttribute('inputmode', 'numeric');
+    expect(otcInput).toHaveAttribute('autocomplete', 'one-time-code');
+  });
+
   it('does not advance to the username step when open registration is disabled', async () => {
     const user = userEvent.setup();
     mocks.verifyOTC.mockResolvedValueOnce({
@@ -400,5 +412,90 @@ describe('MultiStepLogin - Cookie settings link', () => {
 
     expect(screen.getByText(/By continuing, you agree to our/)).toBeInTheDocument();
     expect(screen.getByTestId('login-cookie-settings-link')).toBeInTheDocument();
+  });
+});
+
+describe('MultiStepLogin - email step guidance and code-request errors', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ requiresRedirect: false }),
+    }) as unknown as typeof fetch;
+  });
+
+  it('tells returning users sign-in is passwordless and a code is emailed', () => {
+    renderLogin();
+
+    expect(screen.getByTestId('login-passwordless-hint')).toHaveTextContent('auth.passwordlessHint');
+    expect(screen.getByTestId('login-no-password-hint')).toHaveTextContent('auth.noPasswordNeeded');
+  });
+
+  it('ties an invalid-email error to the input and announces it', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+
+    const input = textboxIn('login-email-input');
+    await user.type(input, 'not-an-email');
+    fireEvent.submit(input.closest('form')!);
+
+    const alert = await screen.findByTestId('login-email-error');
+    expect(alert).toHaveAttribute('role', 'alert');
+    expect(alert).toHaveTextContent('auth.fieldErrors.invalidEmail');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(input.getAttribute('aria-describedby')).toContain(alert.id);
+  });
+
+  it('shows an alert and a Continue countdown when the code request is rate limited', async () => {
+    const user = userEvent.setup();
+    mocks.sendOTC.mockRejectedValueOnce({
+      message: 'Rate limit exceeded. Try again in 529 seconds',
+      code: 'CLIENT_ERROR_429',
+      retryAfterSeconds: 529,
+    });
+    renderLogin();
+
+    await user.type(textboxIn('login-email-input'), 'someone@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+
+    const alert = await screen.findByTestId('login-rate-limit-alert');
+    expect(alert).toHaveAttribute('role', 'alert');
+    expect(alert).toHaveTextContent('auth.rateLimitedMinutes');
+    expect(screen.getByTestId('login-continue-btn')).toBeDisabled();
+    expect(screen.getByTestId('login-continue-btn')).toHaveTextContent('auth.retryIn');
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  it('shows the same notice, not a toast, when resending a code is rate limited', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocks.sendOTC.mockResolvedValueOnce({ pendingToken: 'ptok-1' }).mockRejectedValueOnce({
+        message: 'Rate limit exceeded',
+        code: 'CLIENT_ERROR_429',
+        retryAfterSeconds: 120,
+      });
+      renderLogin();
+
+      await user.type(textboxIn('login-email-input'), 'someone@test.com');
+      await user.click(screen.getByTestId('login-continue-btn'));
+      await screen.findByTestId('login-resend-btn');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31000);
+      });
+      await user.click(screen.getByTestId('login-resend-btn'));
+
+      const alert = await screen.findByTestId('login-otc-rate-limit-alert');
+      expect(alert).toHaveAttribute('role', 'alert');
+      expect(screen.getByTestId('login-resend-btn')).toHaveTextContent('2:00');
+      expect(mocks.toast.error).not.toHaveBeenCalled();
+
+      await user.click(screen.getByTestId('login-resend-btn'));
+      expect(mocks.sendOTC).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

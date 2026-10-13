@@ -25,9 +25,6 @@ export const mcpHandler = new sst.aws.Function('mcpHandler', {
   // function carried no `reserved`, so its orphans never blocked a deploy - they accumulated
   // silently (18 of them) and billed for idle capacity nothing could route to.
   link: [secrets.RATE_LIMIT_INGEST_TOKEN],
-  logging: {
-    retention: '3 days',
-  },
   nodejs: {
     // This list must cover the RUNTIME dependency closure of the MCP server
     // children spawned by this handler (they import @bike4mind/common + the

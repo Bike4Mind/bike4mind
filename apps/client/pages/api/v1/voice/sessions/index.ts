@@ -27,6 +27,7 @@ import { createElevenLabsConversationalTransport, type ElevenLabsClientBootstrap
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { BadGatewayError, BadRequestError, ForbiddenError, HTTPError, NotFoundError } from '@server/utils/errors';
 import { isValidObjectId } from '@server/utils/objectId';
+import { settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
 import { MAX_SESSION_SECONDS, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
@@ -174,6 +175,11 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   // would burn another full reserve that's never refunded. Guarded by an explicit
   // live hold so a stray flag can't skip a real charge.
   const reuseHold = shouldReuseVoiceHold(isReconnect, session);
+
+  // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
+  if (!reuseHold) {
+    await settlePriorVoiceHold(session);
+  }
 
   if (enforceCredits && !reuseHold) {
     if ((req.user?.currentCredits ?? 0) < reservedCredits) {

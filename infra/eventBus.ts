@@ -198,9 +198,6 @@ const sessionTaggingSubscription = eventBus.subscribe(
     link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
     vpc: lambdaVpc,
     timeout: '2 minutes',
-    logging: {
-      retention: '1 day',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },

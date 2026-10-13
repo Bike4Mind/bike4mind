@@ -144,6 +144,8 @@ export interface ProductEventOptions {
    * retried webhook). The receiver de-duplicates on eventId. Random when omitted.
    */
   eventId?: string;
+  /** Log failed delivery for events that need an observable best-effort attempt. */
+  reportFailure?: boolean;
 }
 
 /**
@@ -163,7 +165,8 @@ export async function emitProductEvent(opts: ProductEventOptions): Promise<void>
       ...(Object.keys(metadata).length > 0 && { metadata }),
     },
     opts.productId,
-    opts.eventId
+    opts.eventId,
+    opts.reportFailure
   );
 }
 
@@ -179,7 +182,8 @@ interface EventFields {
 async function postEvent(
   fields: EventFields,
   productId: string = HOST_PRODUCT_ID,
-  eventId: string = crypto.randomUUID()
+  eventId: string = crypto.randomUUID(),
+  reportFailure = false
 ): Promise<void> {
   if (!isAnalyticsConfigured(productId)) return;
 
@@ -228,14 +232,19 @@ async function postEvent(
     } else if (res.status >= 400 && res.status < 500) {
       // Permanent client error - log status only, never the key or body
       console.warn('[b4m-analytics] permanent ingest error', { status: res.status, productId });
+    } else if (reportFailure && res.status >= 500) {
+      console.warn('[b4m-analytics] ingest server error', { status: res.status, productId });
     }
-    // 503 / 5xx -> silent drop. Note: OverwatchUserDay's (productId, date, userId) upsert is
+    // 503 / 5xx -> drop, with a warning only when the caller requested one. Note:
+    // OverwatchUserDay's (productId, date, userId) upsert is
     // CROSS-INSTANCE dedup, not a retry - it suppresses duplicates once some emit has succeeded,
     // but it does not recover a user-day where every attempt failed. A user who touches only one
     // Lambda instance that day and whose single emit fails is simply absent from DAU for that day.
     // Acceptable for best-effort telemetry; high-traffic users self-heal across instances.
   } catch {
-    // Network error or AbortController timeout -> silent drop
+    if (reportFailure) {
+      console.warn('[b4m-analytics] ingest request failed', { productId });
+    }
   } finally {
     clearTimeout(timer);
   }

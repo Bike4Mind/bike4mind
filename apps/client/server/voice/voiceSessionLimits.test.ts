@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldReuseVoiceHold } from './voiceSessionLimits';
+import { REALTIME_VOICE_HOLD_SECONDS, realtimeCreditsFloor, shouldReuseVoiceHold } from './voiceSessionLimits';
 
 // Guards the money path: a reconnect must REUSE an existing credit hold rather
 // than letting the bootstrap endpoint reserve (and charge) a second time. This
@@ -34,5 +34,16 @@ describe('shouldReuseVoiceHold', () => {
     // The live-hold test is `!= null`, so the boundary is null vs. any number.
     // (In practice the field is a positive reserve when enforced, or null when not.)
     expect(shouldReuseVoiceHold(true, { voiceReservedCredits: 0, voiceSessionStartedAt: new Date(0) })).toBe(true);
+  });
+});
+
+describe('realtimeCreditsFloor', () => {
+  it('is the hold pro rata over the hold duration, rounded up', () => {
+    expect(realtimeCreditsFloor(77, 0)).toBe(0);
+    expect(realtimeCreditsFloor(77, REALTIME_VOICE_HOLD_SECONDS / 2)).toBe(39);
+  });
+
+  it('never exceeds the hold', () => {
+    expect(realtimeCreditsFloor(77, REALTIME_VOICE_HOLD_SECONDS * 3)).toBe(77);
   });
 });

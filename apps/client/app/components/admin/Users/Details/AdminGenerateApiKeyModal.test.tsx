@@ -22,6 +22,10 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
+vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
+  useOverwatchAccess: () => true,
+  useHearthEnabled: () => true,
+}));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetPreauthorizableDataLakes: (userId: string) => {
@@ -198,7 +202,11 @@ describe('AdminGenerateApiKeyModal - premium scopes', () => {
     for (const scope of PREMIUM) expect(scopeRow(scope)).toBeNull();
 
     fireEvent.click(screen.getByText('Select All'));
-    const offered = genericApiKeyScopesFor(false).length;
+    const offered = genericApiKeyScopesFor({
+      hasOptiAccess: false,
+      hasOverwatchAccess: true,
+      hearthEnabled: true,
+    }).length;
     expect(screen.getByTestId('admin-generate-key-scopes-count').textContent).toContain(
       `(${offered}/${offered} selected)`
     );

@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import {
   ApiKeyScope,
+  CREDITS_PER_USD_COST,
   ImageModels,
   ListModelsResponseSchema,
   ModelBackend,
@@ -59,7 +60,7 @@ function textModel(id: string): ModelInfo {
     max_tokens: 64_000,
     supportsTools: true,
     supportsImageVariation: false,
-    pricing: { 0: { input: 3, output: 15 } },
+    pricing: { 200_000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
     rank: 1,
     adapterFamily: 'anthropic' as ModelInfo['adapterFamily'],
   };
@@ -130,6 +131,33 @@ describe('GET /api/v1/models', () => {
     const [image, text] = res._getJSONData().data;
     expect(image.image.supports).toMatchObject({ transparent_background: true, max_reference_images: 15 });
     expect(text.image).toBeNull();
+  });
+
+  it('publishes each text model at the credits-per-1M rate billing charges', async () => {
+    const { req, res } = get();
+
+    await run(req, res);
+
+    const [, priced] = res._getJSONData().data;
+    expect(priced.credits_per_1m_tokens).toEqual({
+      input: 3 * CREDITS_PER_USD_COST,
+      output: 15 * CREDITS_PER_USD_COST,
+      cached_input: 0.3 * CREDITS_PER_USD_COST,
+    });
+  });
+
+  it('publishes null, not 0, for an unpriced text model and for image models', async () => {
+    getCallerModelList.mockResolvedValue({
+      models: [{ ...textModel('model-unpriced'), pricing: {} }, imageModel],
+      supersededModels: [],
+    });
+    const { req, res } = get();
+
+    await run(req, res);
+
+    const body = res._getJSONData();
+    expect(ListModelsResponseSchema.safeParse(body).success).toBe(true);
+    for (const model of body.data) expect(model.credits_per_1m_tokens).toBeNull();
   });
 
   it('pages with an opaque cursor until next_cursor is null', async () => {

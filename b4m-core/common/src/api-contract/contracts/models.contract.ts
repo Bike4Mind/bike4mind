@@ -22,7 +22,8 @@ export const listModelsContract = defineEndpoint({
     "the caller has a key for, their own or the platform's. Use it to choose a `model` by capability " +
     'before calling a generation endpoint: `context_window` and `max_output_tokens` for text models, and ' +
     'for image models the `image` block, which lists the accepted `size` values (or the rule they must ' +
-    'meet) and whether `background`, `seed`, `quality`, `n` and reference images are honoured. The list ' +
+    'meet) and whether `background`, `seed`, `quality`, `n` and reference images are honoured. To pick the ' +
+    'cheapest text model, compare `credits_per_1m_tokens` - the rate a call is billed at. The list ' +
     'is cached for up to a minute per caller. Cursor-paginated (see the pagination convention): pass ' +
     '`next_cursor` back as `cursor` until it is `null`. Authenticate with an API key (`b4m_live_`) ' +
     'carrying `ai:chat` or `ai:generate`, or a JWT.',
@@ -51,6 +52,7 @@ export const listModelsContract = defineEndpoint({
             supports_vision: false,
             deprecation_date: null,
             replaced_by: null,
+            credits_per_1m_tokens: null,
             image: {
               sizing: {
                 kind: 'presets',

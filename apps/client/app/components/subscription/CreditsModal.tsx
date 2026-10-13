@@ -1,8 +1,10 @@
-import { Box, Typography, Modal, ModalDialog, ModalClose, Divider, useTheme } from '@mui/joy';
+import { Box, Typography, Modal, ModalDialog, ModalClose, Divider, Link, useTheme } from '@mui/joy';
+import { useNavigate } from '@tanstack/react-router';
 import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
 import dayjs from 'dayjs';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import PaymentButton from '../Credits/PaymentButton';
+import { formatCreditAmount, purchaseCreditsAriaLabel } from '@client/app/utils/formatCredits';
 import { TransactionType } from '@client/lib/credits/types';
 import { FC, useCallback } from 'react';
 import { toast } from 'sonner';
@@ -53,14 +55,18 @@ const CreditsModal = ({ open, onClose }: CreditsModalProps) => {
         }}
       >
         <ModalClose className="credits-modal-close" />
-        {open && <CreditsModalContent transactions={getTransactions.data || []} />}
+        {open && <CreditsModalContent transactions={getTransactions.data || []} onClose={onClose} />}
       </ModalDialog>
     </Modal>
   );
 };
 
-const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ transactions }) => {
+const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () => void }> = ({
+  transactions,
+  onClose,
+}) => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const handlePaymentComplete = useCallback(
     (credits: number) => {
       toast.success(t('credits_modal.purchase_success', { credits }));
@@ -190,7 +196,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
             }}
           >
             <Bike4MindIcon size={'24'} fill={style[safeMode].color} />
-            {currentCredits.toLocaleString()}
+            {formatCreditAmount(currentCredits)}
           </Typography>
         </Box>
       </Box>
@@ -258,7 +264,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
                 sx={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '24px' }}
               >
                 <Bike4MindIcon size={'32'} fill={theme.palette.subscription?.creditsModal.iconFill} />
-                {pkg.credits.toLocaleString()}
+                {formatCreditAmount(pkg.credits)}
               </Box>
               <Typography
                 className="credits-modal-package-description"
@@ -276,6 +282,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
               <PaymentButton
                 transactionType={TransactionType.Package}
                 packageId={pkg.id}
+                ariaLabel={purchaseCreditsAriaLabel(pkg.credits, pkg.price)}
                 onPayment={() => handlePaymentComplete(pkg.credits)}
               />
             </Box>
@@ -343,6 +350,20 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
           })}
         >
           {t('credits_modal.history_title')}
+          <Typography level="body-sm" sx={{ fontWeight: 400, mt: 0.5 }}>
+            {t('credits_modal.history_usage_hint', 'This lists purchases only.')}{' '}
+            <Link
+              component="button"
+              type="button"
+              data-testid="credits-modal-see-usage-link"
+              onClick={() => {
+                onClose();
+                void navigate({ to: '/profile', search: { tab: 'usage' } });
+              }}
+            >
+              {t('credits_modal.see_usage', 'See usage')}
+            </Link>
+          </Typography>
         </Box>
         <Box
           className="credits-modal-transactions-list"
@@ -376,7 +397,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
                   sx={{ width: '25%', display: 'flex', alignItems: 'center', gap: '8px' }}
                 >
                   <Bike4MindIcon size={'18'} />
-                  {transaction.credits.toLocaleString()}
+                  {formatCreditAmount(transaction.credits)}
                 </Box>
                 <Box className="credits-modal-transaction-date" sx={{ width: '25%' }}>
                   {dayjs(new Date(transaction.createdAt).toLocaleDateString()).format('MMMM DD, YYYY')}

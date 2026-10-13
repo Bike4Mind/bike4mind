@@ -395,9 +395,10 @@ const SessionSidenavItem: FC<{
           name={formatSessionTitle(session.name)}
           type={InviteType.Session}
           users={session.users}
+          ownerId={session.userId}
         />
       ) : null,
-    [openShareModal, session.id, session.name, session.users]
+    [openShareModal, session.id, session.name, session.users, session.userId]
   );
 
   const boxStyles = useMemo(
@@ -431,6 +432,12 @@ const SessionSidenavItem: FC<{
         visibility: isSelected ? 'visible' : 'hidden',
         opacity: isSelected ? 1 : 0,
       },
+      // A touch screen has no hover to reveal the row menu, and a keyboard user tabbing onto it
+      // would otherwise land on an invisible button.
+      '@media (hover: none)': {
+        '& .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
+      },
+      '&:focus-within .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
       // Header style
       ...(location === 'header' && {
         backgroundColor: 'transparent',
@@ -851,6 +858,7 @@ const SessionSidenavItem: FC<{
             <Dropdown>
               <MenuButton
                 data-testid="sidenav-item-menu-btn"
+                aria-label="Chat options"
                 size={'sm'}
                 slots={{ root: IconButton }}
                 className={clsx('item-actions', { isProcessing })}
