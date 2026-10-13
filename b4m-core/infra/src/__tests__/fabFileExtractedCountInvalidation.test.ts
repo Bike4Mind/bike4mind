@@ -76,6 +76,19 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
     ).toEqual([]);
   });
 
+  // A rewrite that skips the accounting helper charges the full new size on its S3 event and never
+  // refunds the old one (fabFileService/rewriteStorage.ts). The research re-crawl rewrites bytes too,
+  // outside the search roots above. fabFileService/edit.ts is exempt: it has no production caller.
+  it.each([
+    ...REWRITE_SITES.filter(rel => rel !== 'b4m-core/services/src/fabFileService/edit.ts'),
+    'b4m-core/services/src/researchTaskService/utils.ts',
+  ])('%s charges its rewrite through the storage accounting helper', rel => {
+    const source = read(rel);
+    expect(source).toContain('assertRewriteFits(');
+    expect(source).toContain('commitContentRewrite(');
+    expect(source).not.toMatch(/FabFile\.(updateOne|findOneAndUpdate)\(/);
+  });
+
   // undefined is stripped from a Mongoose $set, so that form of the fix silently changes nothing.
   it('clears with null rather than undefined', () => {
     const source = read('b4m-core/common/src/types/entities/FabFileTypes.ts');

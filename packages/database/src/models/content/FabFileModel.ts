@@ -1205,6 +1205,22 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return row?.total ?? 0;
   }
 
+  async commitContentRewrite(
+    id: string,
+    set: Record<string, unknown>,
+    filter: Record<string, unknown> = {}
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date } | null> {
+    // new: false is load-bearing - the caller's storage delta is computed from the pre-image.
+    const pre = await this.fabFileModel
+      .findOneAndUpdate(
+        { ...filter, _id: id, deletedAt: null },
+        { $set: { ...set, storageChargedAt: new Date() } },
+        { new: false, projection: { userId: 1, fileSize: 1, storageChargedAt: 1 } }
+      )
+      .lean();
+    return pre ? { userId: String(pre.userId), fileSize: pre.fileSize, storageChargedAt: pre.storageChargedAt } : null;
+  }
+
   async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ batchId, deletedAt: null });
     return result.map(d => d.toJSON());

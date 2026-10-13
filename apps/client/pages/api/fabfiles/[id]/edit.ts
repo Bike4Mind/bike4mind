@@ -5,7 +5,14 @@ import {
   isImageServeable,
   FAB_FILE_CONTENT_REWRITE_PATCH,
 } from '@bike4mind/common';
-import { FabFile, withTransaction, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import {
+  FabFile,
+  withTransaction,
+  apiKeyRepository,
+  adminSettingsRepository,
+  fabFileRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { diffLines } from 'diff';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -22,8 +29,10 @@ import {
 } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService, fabFilesService } from '@bike4mind/services';
 import { OperationsModelService } from '@client/services/operationsModelService';
+
+const rewriteStorageDb = { fabFiles: fabFileRepository, users: userRepository };
 
 const handler = baseApi()
   .use((req, res, next) => {
@@ -355,41 +364,43 @@ Return only the edited content without any markdown code blocks or explanations.
               now,
               nonce: uuidv4(),
             });
+            await fabFilesService.assertRewriteFits(file, newBuffer.length, rewriteStorageDb, user);
             // The nonce-keyed upload can never collide with a concurrent edit's bytes.
+            const uploadStartedAt = new Date();
             await getFilesStorage().upload(newBuffer, newFilePath, {
               ContentType: file.mimeType || 'application/octet-stream',
             });
             // Atomic version claim: only repoint if filePath still matches what we edited, so a
-            // concurrent edit can't silently clobber this one (its bytes are just orphaned).
-            const claimed = await FabFile.findOneAndUpdate(
-              { _id: file._id, filePath: s3Key },
+            // concurrent edit can't silently clobber this one (its bytes are just orphaned, uncharged).
+            const claimed = await fabFilesService.commitContentRewrite(
               {
-                $set: {
-                  filePath: newFilePath,
-                  fileSize: newBuffer.length,
-                  versions,
-                  updatedAt: now,
-                  ...FAB_FILE_CONTENT_REWRITE_PATCH,
-                },
-              }
+                fabFileId: String(file._id),
+                newSize: newBuffer.length,
+                uploadStartedAt,
+                filter: { filePath: s3Key },
+                set: { filePath: newFilePath, versions, updatedAt: now, ...FAB_FILE_CONTENT_REWRITE_PATCH },
+              },
+              rewriteStorageDb
             );
             if (!claimed) {
               throw new BadRequestError('File was modified by another edit. Please reload and try again.');
             }
           } else {
+            const newSize = Buffer.byteLength(editedContent, 'utf8');
+            await fabFilesService.assertRewriteFits(file, newSize, rewriteStorageDb, user);
+            const uploadStartedAt = new Date();
             await getFilesStorage().upload(editedContent, s3Key, {
               ContentType: file.mimeType || 'text/plain',
             });
 
-            await FabFile.updateOne(
-              { _id: file._id },
+            await fabFilesService.commitContentRewrite(
               {
-                $set: {
-                  updatedAt: new Date(),
-                  fileSize: Buffer.byteLength(editedContent, 'utf8'),
-                  ...FAB_FILE_CONTENT_REWRITE_PATCH,
-                },
-              }
+                fabFileId: String(file._id),
+                newSize,
+                uploadStartedAt,
+                set: { updatedAt: new Date(), ...FAB_FILE_CONTENT_REWRITE_PATCH },
+              },
+              rewriteStorageDb
             );
           }
 

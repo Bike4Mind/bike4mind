@@ -4,6 +4,7 @@ import {
   dataLakeAccessGrantRepository,
   fabFileRepository,
   scopedSettingsRepository,
+  userRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
@@ -43,6 +44,7 @@ export async function updateFileForUser(
         {
           db: {
             fabFiles: fabFileRepository,
+            users: userRepository,
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             // `lakeConfigAuditDb` carries `adminSettings`, which is also what the admission

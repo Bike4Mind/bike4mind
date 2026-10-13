@@ -5,8 +5,10 @@ import type { ClientSession, Types } from 'mongoose';
  * Claims the right to charge the bytes of an object written at `uploadedAt` to its FabFile's owner,
  * by advancing `storageChargedAt` with a compare-and-set. Only an upload newer than the last charge
  * wins, so a redelivered S3 event, or the event for a notebook import's object that the import
- * already stamped in its own transaction (stampImportedKnowledgeRows), charges nothing - while a
- * later content rewrite to the same path still does.
+ * already stamped in its own transaction (stampImportedKnowledgeRows), charges nothing. A content
+ * rewrite of an existing file is stamped and debited by its own path (commitContentRewrite in
+ * b4m-core/services/src/fabFileService/rewriteStorage.ts), so its event claims nothing either: the
+ * event charges only a first upload that nothing stamped.
  */
 export const claimStorageCharge = async (
   fabFileId: Types.ObjectId | string,

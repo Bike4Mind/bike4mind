@@ -1,4 +1,5 @@
 import {
+  BadRequestError,
   IFabFileDocument,
   IFabFileRepository,
   IFileTag,
@@ -8,11 +9,13 @@ import {
   IResearchTaskScrape,
   IResearchTask,
   IUserDocument,
+  IUserRepository,
   isImageServeable,
 } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import { FunctionQueueRunner } from '@bike4mind/utils';
 import type { CreateFabFileAdapters } from '../fabFileService/create';
+import { assertRewriteFits, commitContentRewrite } from '../fabFileService/rewriteStorage';
 import * as tagService from '../tagService';
 
 /**
@@ -64,10 +67,14 @@ export async function findOrUpdateExistingResearchData(
   researchTask: IResearchTaskScrape,
   user: IUserDocument,
   adapters: {
-    db: { researchDatas: IResearchDataRepository; fabFiles: Pick<IFabFileRepository, 'findById' | 'update'> };
+    db: {
+      researchDatas: IResearchDataRepository;
+      fabFiles: Pick<IFabFileRepository, 'findById' | 'update' | 'commitContentRewrite'>;
+      users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
+    };
     storage: CreateFabFileAdapters['storage'];
   },
-  logger?: Pick<ILogger, 'info'>
+  logger?: Pick<ILogger, 'info'> & Partial<Pick<ILogger, 'warn'>>
 ): Promise<{ file: IFabFileDocument; researchData: IResearchData } | null> {
   const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 
@@ -79,13 +86,26 @@ export async function findOrUpdateExistingResearchData(
 
     const existingFile = await adapters.db.fabFiles.findById(existingResearchData.fabFileId);
     if (existingFile && existingFile.filePath) {
+      const newSize = typeof content === 'string' ? Buffer.byteLength(content, 'utf8') : content.length;
+      try {
+        await assertRewriteFits(existingFile, newSize, adapters.db, user);
+      } catch (error) {
+        if (!(error instanceof BadRequestError)) throw error;
+        // Background path: keep the previous crawl rather than fail (and retry) the whole task.
+        logger?.warn?.(`[RESEARCH_DATA_EXISTS] Storage limit reached; keeping previous content of ${existingFile.id}`);
+        return { file: existingFile, researchData: existingResearchData };
+      }
+
       logger?.info(`🗃️ [RESEARCH_DATA_EXISTS] Uploading content to existing file ${existingFile.filePath}`);
 
       // Upload new content to existing file
+      const uploadStartedAt = new Date();
       await adapters.storage.upload(existingFile.filePath, content, {
         ContentType: contentType,
-        ContentLength: typeof content === 'string' ? Buffer.byteLength(content, 'utf8') : content.length,
+        ContentLength: newSize,
       });
+      await commitContentRewrite({ fabFileId: existingFile.id, newSize, uploadStartedAt }, adapters.db);
+      existingFile.fileSize = newSize;
 
       // A re-crawl must not re-mint (or leave stale) a working GET url for a file that isn't
       // 'clean' - pending its scan, or quarantined (blocked). isImageServeable fail-closes on
