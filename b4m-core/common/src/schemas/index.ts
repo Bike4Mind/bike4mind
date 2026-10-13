@@ -45,3 +45,4 @@ export * from './videoGenerations';
 export * from './decisions';
 export * from './voiceApi';
 export * from './generationCallback';
+export * from './authOrigin';
