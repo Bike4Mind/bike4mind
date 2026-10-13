@@ -17,6 +17,40 @@ import {
 } from './artifactParser';
 import { createToolEchoMatcher } from './toolEchoMatcher';
 
+// Records every logging channel the parser could use, so a leak cannot hide on a channel the
+// test forgot to spy on.
+function spyOnLogChannels() {
+  const logger = Logger.globalInstance;
+  const spies = [
+    vi.spyOn(logger, 'warn').mockImplementation(() => {}),
+    vi.spyOn(logger, 'error').mockImplementation(() => {}),
+    vi.spyOn(logger, 'info').mockImplementation(() => {}),
+    vi.spyOn(logger, 'debug').mockImplementation(() => {}),
+    vi.spyOn(console, 'log').mockImplementation(() => {}),
+    vi.spyOn(console, 'warn').mockImplementation(() => {}),
+    vi.spyOn(console, 'error').mockImplementation(() => {}),
+    vi.spyOn(console, 'info').mockImplementation(() => {}),
+    vi.spyOn(console, 'debug').mockImplementation(() => {}),
+  ];
+  const serialize = (arg: unknown): string => {
+    if (arg instanceof Error) return `${String(arg)}\n${arg.message}\n${arg.stack ?? ''}`;
+    try {
+      return JSON.stringify(arg) ?? String(arg);
+    } catch {
+      return String(arg);
+    }
+  };
+  return {
+    warn: spies[0],
+    logged: () =>
+      spies
+        .flatMap(spy => spy.mock.calls.flat())
+        .map(serialize)
+        .join('\n'),
+    restore: () => spies.forEach(spy => spy.mockRestore()),
+  };
+}
+
 // Scaling is judged by a ratio of two timings taken back to back in the same process, never by an
 // absolute wall-clock budget: a budget measures the host, so a loaded runner fails it with no
 // regression. Quadratic input stays small enough to finish well inside the test timeout, so a
@@ -1416,6 +1450,23 @@ describe('markToolEchoes', () => {
     const once = markToolEchoes(`\`\`\`html\n${DOC}\n\`\`\``, isToolEcho);
     expect(markToolEchoes(once, isToolEcho)).toBe(once);
   });
+
+  it('does not mark an already-marked python fence again, from either entry point', () => {
+    const body = 'import os\nprint(os.getcwd())';
+    const reply = `Output:\n\n~~~python ${TOOL_OUTPUT_MARKER}\n${body}\n~~~\n`;
+    const echoes = (text: string) => text.includes('os.getcwd()');
+    expect(markToolEchoes(reply, echoes)).toBe(reply);
+    expect(convertCodeBlocksToArtifacts(reply, { isToolEcho: echoes })).toBe(reply);
+  });
+
+  it('does not mark an already-marked jsx fence again, from either entry point', () => {
+    // An unlabeled fence is never a React candidate (the fence regex needs a language), so jsx stands in.
+    const body = 'export default function App() {\n  return <div>hi</div>;\n}';
+    const reply = `Output:\n\n~~~jsx ${TOOL_OUTPUT_MARKER}\n${body}\n~~~\n`;
+    const echoes = (text: string) => text.includes('function App()');
+    expect(markToolEchoes(reply, echoes)).toBe(reply);
+    expect(convertCodeBlocksToArtifacts(reply, { isToolEcho: echoes })).toBe(reply);
+  });
 });
 
 describe('convertCodeBlocksToArtifacts - existing artifacts', () => {
@@ -1856,28 +1907,52 @@ describe('convertCodeBlocksToArtifacts - detectors shared with the client render
     });
 
     it('logs no reply text when a tool-output object fails to parse (this runs on the server chat path)', () => {
-      const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+      const spy = spyOnLogChannels();
       try {
         // The unescape turns the \\n into a raw newline, so JSON.parse fails on it.
-        const input = `${F}json\n{"type":"mermaid","content":"graph TD\\nA-->B"}\n${F}`;
+        const input = `${F}json\n{"type":"mermaid","content":"graph TD\\nA-->leak-parse-7f3"}\n${F}`;
         expect(convertCodeBlocksToArtifacts(input)).toBe(input);
-        expect(warn).toHaveBeenCalled();
-        const logged = JSON.stringify(warn.mock.calls);
-        expect(logged).not.toContain('graph TD');
-        expect(logged).not.toContain('mermaid');
+        expect(spy.warn).toHaveBeenCalled();
+        expect(spy.logged()).not.toContain('leak-parse-7f3');
+        expect(spy.logged()).not.toContain('graph TD');
       } finally {
-        warn.mockRestore();
+        spy.restore();
       }
     });
 
     it('logs no diagram lines when a mermaid fence fails validation', () => {
-      const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+      const spy = spyOnLogChannels();
       try {
         convertCodeBlocksToArtifacts(`${F}mermaid\ngraph TD\n    A[Start] --> B(secret-line\n${F}`);
-        expect(warn).toHaveBeenCalled();
-        expect(JSON.stringify(warn.mock.calls)).not.toContain('secret-line');
+        expect(spy.warn).toHaveBeenCalled();
+        expect(spy.logged()).not.toContain('secret-line');
       } finally {
-        warn.mockRestore();
+        spy.restore();
+      }
+    });
+
+    it('logs no reply text when a recharts tool output has no chartType or data', () => {
+      const spy = spyOnLogChannels();
+      try {
+        // An array, not an object: the direct-object scanner only matches objects with no nested braces.
+        const input = `${F}json\n${JSON.stringify({ type: 'recharts', content: ['leak-config-4b1'] })}\n${F}`;
+        expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+        expect(spy.warn).toHaveBeenCalledWith('Invalid recharts config: missing chartType or data');
+        expect(spy.logged()).not.toContain('leak-config-4b1');
+      } finally {
+        spy.restore();
+      }
+    });
+
+    it('logs no reply text when recharts content fails to validate', () => {
+      const spy = spyOnLogChannels();
+      try {
+        const input = `${F}json\n${JSON.stringify({ type: 'recharts', content: 'leak-validate-9c2' })}\n${F}`;
+        expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+        expect(spy.warn).toHaveBeenCalledWith('Failed to validate recharts content:', expect.any(String));
+        expect(spy.logged()).not.toContain('leak-validate-9c2');
+      } finally {
+        spy.restore();
       }
     });
 

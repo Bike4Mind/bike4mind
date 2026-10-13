@@ -178,6 +178,19 @@ describe('buildAgentArtifactPayloads', () => {
       `artifact_react_foo_${QUEST_CREATED_AT_MS}_1`,
     ]);
   });
+
+  it('numbers a promoted html fence and a later explicit svg tag in one parse order', () => {
+    const html = '```html\n<!DOCTYPE html>\n<html><body><h1>Page</h1></body></html>\n```';
+    const svg =
+      '<artifact identifier="logo" type="image/svg+xml" title="Logo">\n<svg xmlns="http://www.w3.org/2000/svg"><circle r="5"/></svg>\n</artifact>';
+    const payloads = build([html, svg].join('\n\n'));
+
+    // Last-to-first through the reply: parseArtifacts sorts by descending startIndex.
+    expect(payloads.map(p => p.id)).toEqual([
+      `artifact_svg_logo_${QUEST_CREATED_AT_MS}_0`,
+      `artifact_html_html-page_${QUEST_CREATED_AT_MS}_1`,
+    ]);
+  });
 });
 
 describe('persistAgentArtifacts', () => {

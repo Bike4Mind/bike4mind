@@ -1,11 +1,10 @@
 /**
- * Linear `import ... from '...'` scanning shared by the in-app artifact parser
- * (`apps/client/app/utils/artifactParser`), the publish-time transpiler
- * (`apps/client/server/services/publish/transpileReactArtifact.ts`) and the sandbox preview
- * (`apps/client/pages/api/react-artifact-sandbox.ts`). All three used to run backtracking regexes
- * over artifact source of unbounded size; the helpers here keep the same match sets without the
- * quadratic rescans and without a clause-length cap. A fourth consumer, codeImportDependencies
- * (the editor's dependency list in ReactArtifactViewer), deliberately matches more: it replaced a
+ * Linear `import ... from '...'` scanning shared by the artifact parser (`artifactParser`), the
+ * publish-time transpiler (`transpileReactArtifact`) and the sandbox preview
+ * (`react-artifact-sandbox`). All three used to run backtracking regexes over artifact source
+ * of unbounded size; the helpers here keep the same match sets without the quadratic rescans
+ * and without a clause-length cap. A fourth consumer, `codeImportDependencies` (the editor's
+ * dependency list in the React artifact viewer), deliberately matches more: it replaced a
  * single-line regex, so multi-line clauses now count too.
  */
 
