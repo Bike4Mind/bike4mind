@@ -128,6 +128,21 @@ describe('sessionRepository voice holds', () => {
     expect(after?.voiceSessionStartedAt).toEqual(results[0] ? first : second);
   });
 
+  it('does not open over a reserved hold restored at the start the bootstrap read', async () => {
+    const prior = minutesAgo(5);
+    const id = await seed('call', 100, prior);
+
+    expect(
+      await sessionRepository.openVoiceHold(id, prior, {
+        voiceReservedCredits: 100,
+        voiceSessionStartedAt: minutesAgo(0),
+        realtime: false,
+      })
+    ).toBe(false);
+    const after = await Session.findById(id).lean();
+    expect(after).toMatchObject({ voiceReservedCredits: 100, voiceSessionStartedAt: prior });
+  });
+
   it('opens over an unclaimed no-reserve prior hold, and drops its realtime marker for an ElevenLabs hold', async () => {
     const prior = minutesAgo(5);
     const id = await seed('call', null, prior, 0);
