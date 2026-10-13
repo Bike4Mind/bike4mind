@@ -277,7 +277,7 @@ describe('OpenAI cached-input rates', () => {
   // Rates read from OpenAI's published pricing table on 2026-08-19
   // (https://developers.openai.com/api/docs/pricing). The CACHE_READ_MULTIPLIER
   // fallback is 0.1x, which matches the GPT-5 family but NOT the older ones - OpenAI
-  // bills their cached input at 0.25x (4.1 family, o3, o4-mini) or 0.5x (4o family).
+  // bills their cached input at 0.25x (4.1 family, o3, o4-mini) or 0.5x (4o family, o1, o3-mini).
   // Publishing the real rate is what keeps the new discount from settling those models
   // BELOW what OpenAI charges us.
   it.each([
@@ -286,7 +286,9 @@ describe('OpenAI cached-input rates', () => {
     [ChatModels.GPT4_1_NANO, 0.025],
     [ChatModels.GPT4o, 1.25],
     [ChatModels.GPT4o_MINI, 0.075],
+    [ChatModels.O1, 7.5],
     [ChatModels.O3, 0.5],
+    [ChatModels.O3_MINI, 0.55],
     [ChatModels.O4_MINI, 0.275],
   ])('publishes an explicit cache_read rate for %s', async (id, perMTok) => {
     const model = await modelById(id);
