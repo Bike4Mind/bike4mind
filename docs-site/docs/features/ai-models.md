@@ -13,44 +13,57 @@ Bike4Mind supports a wide range of state-of-the-art AI models for text generatio
 
 ## Supported Text Models
 
-Bike4Mind offers 60+ AI models. The lists below name the current lineup; your model picker shows exactly what is enabled for your organization.
+Bike4Mind offers 60+ AI models. The lists below cover everything currently offered; your model picker shows exactly what is enabled for your organization.
 
 ### OpenAI Models
-- **GPT-6.1 Sol** and the **GPT-6** family (**Astra**, **Luna**, **Sol**)
-- **GPT-5.6** and **GPT-5.5**
-- **o3** — Advanced reasoning with structured thinking
+
+- **GPT-6.1 Sol**
+- **GPT-6 Astra**, **GPT-6 Luna**, **GPT-6 Sol**
+- **GPT-5.6 Sol**, **GPT-5.6 Luna**, **GPT-5.6 Terra**
+- **GPT-5.5**, **GPT-5.4** (plus **Mini** and **Nano**), **GPT-5.2**, **GPT-5.1**
+- **GPT-5**, **GPT-5 Mini**, **GPT-5 Nano**
+- **GPT-4.1** and **GPT-4.1 Mini**
+- **GPT-4o** and **GPT-4o Mini**
+- **o3** - Advanced reasoning with structured thinking
 
 ### Anthropic Models (Claude)
 
 Anthropic models are available via both the Anthropic API and AWS Bedrock. Your administrator determines which backend is active for your organization.
 
-- **Claude Fable 5.1** — Anthropic's most capable model, built for complex long-running agentic tasks. Its safety classifiers may decline some requests (targeting cybersecurity and research-biology content); when that happens the request transparently continues on another Claude model rather than failing.
-- **Claude Opus 5.5** and **Claude Opus 5** — Top-tier reasoning and analysis
-- **Claude Sonnet 5.5** and **Claude Sonnet 5** — Balanced performance and cost, strong for coding
-- **Claude Haiku 5.5** — Fast and lightweight
-- **Claude Opus 4.8** — Previous-generation Opus, still available
+- **Claude Fable 5.1** and **Claude Fable 5** - Anthropic's most capable models, built for complex long-running agentic tasks. Their safety classifiers may decline some requests (targeting cybersecurity and research-biology content); when that happens the request transparently continues on another Claude model rather than failing.
+- **Claude Opus 5.5**, **Claude Opus 5**, **Claude Opus 4.8**, **Claude Opus 4.7**, **Claude Opus 4.6** - Top-tier reasoning and analysis
+- **Claude Sonnet 5.5**, **Claude Sonnet 5**, **Claude Sonnet 4.6** - Balanced performance and cost, strong for coding
+- **Claude Haiku 5.5** - Fast and lightweight
 
 ### Google Gemini Models
-- **Gemini 3.1 Pro** — Advanced reasoning with thinking support
-- **Gemini 3.8 Flash** — Fast and efficient
-- **Gemini 3.5 Flash Lite** — Ultra-lightweight variant
+- **Gemini 3.8 Flash**, **Gemini 3.7 Flash**, **Gemini 3.6 Flash**, **Gemini 3.5 Flash**, **Gemini 3 Flash Preview**
+- **Gemini 3.5 Flash Lite**, **Gemini 3.1 Flash Lite**
+- **Gemini 3.1 Pro Preview** (including a Custom Tools variant)
+- **Gemini 2.5 Computer Use Preview**
+- **Deep Research Preview** and **Deep Research Max Preview** - Long-running research agents
+- **Gemini Flash Latest** and **Gemini Flash-Lite Latest** - Aliases that follow the newest Flash releases
 
 ### xAI Models (Grok)
-- **Grok 4.7**
-- **Grok 4.20**
+- **Grok 4.7**, **Grok 4.6**, **Grok 4.5**, **Grok 4.3**
+- **Grok 4.20** (reasoning, non-reasoning, and multi-agent variants)
+- **Grok Build 0.1**
 
 ### DeepSeek Models
-- **DeepSeek V4 Pro** — Reasoning-focused flagship
-- **DeepSeek Flash** — Fast general-purpose model
-- **DeepSeek R1** and **DeepSeek V3.2** — Available via AWS Bedrock
+- **DeepSeek V4 Pro** and **DeepSeek Flash** (direct API)
+- **DeepSeek R1**, **DeepSeek V3.2**, and **DeepSeek V3.1** (via AWS Bedrock)
 
 ### Moonshot Models (Kimi)
-- **Kimi K3** — Moonshot's flagship model with vision, tool use, and reasoning support
-- **Kimi K2.7 Code** — Coding-focused variant
+- **Kimi K3** - Moonshot's flagship model (direct API and AWS Bedrock)
+- **Kimi K2.7 Code** and **Kimi K2.7 Code (High Speed)** - Coding-focused variants
+- **Kimi K2.6** - Previous-generation general-purpose model
+- **Kimi K2.5** and **Kimi K2 Thinking** (via AWS Bedrock)
 
 ### Meta Llama Models (AWS Bedrock)
-- **Llama 4 Maverick**
-- **Llama 4 Scout**
+- **Llama 4 Maverick 17B Instruct**
+- **Llama 4 Scout 17B Instruct**
+- **Llama 3.3 70B Instruct**
+- **Llama 3.1 70B Instruct** and **Llama 3.1 8B Instruct**
+- **Llama 3 Instruct 70B** and **Llama 3 Instruct 8B** (retiring 2027-03-30)
 
 ### Local Models (Ollama)
 
@@ -64,7 +77,7 @@ These models are being retired by their providers. Move saved notebooks, agents,
 |-------|-----------------|
 | Claude Sonnet 4 | 2026-10-14 |
 | Claude Haiku 4.5 (direct Anthropic API) | 2026-10-15 |
-| Gemini 2.5 models | 2026-10-20 |
+| Gemini 2.5 Pro, Flash, and Flash-Lite | 2026-10-20 |
 | GPT-4, GPT-4 Turbo, GPT-4.1 Nano, o4-mini | 2026-10-23 |
 | Claude Opus 4.5 | 2026-11-24 |
 | Claude Sonnet 4.5 | 2026-11-30 |
@@ -72,10 +85,12 @@ These models are being retired by their providers. Move saved notebooks, agents,
 ## Supported Image and Video Models
 
 ### Image
-- **GPT-Image-2** (OpenAI)
-- **Nano Banana Pro** and **Nano Banana 2** (Google)
-- **FLUX 1.1 Pro Ultra** — Highest quality, photorealistic output (Black Forest Labs)
-- **FLUX Kontext** — Image-to-image transformations and editing (Black Forest Labs)
+- **GPT-Image-2** and **GPT-Image-2.5** variants (OpenAI), plus **GPT-Image-1.5** and **GPT-Image-1 Mini**
+- **Nano Banana Pro**, **Nano Banana 2**, and **Nano Banana** (Google)
+- **FLUX Pro Ultra** and **FLUX Pro 1.1** - Photorealistic, professional quality (Black Forest Labs)
+- **FLUX Kontext Pro** and **FLUX Kontext Max** - Image-to-image transformations and editing (Black Forest Labs)
+
+GPT-Image-1 and Grok Imagine (Quality) are retiring on 2026-10-23 and 2026-11-02.
 
 ### Video
 - **Veo 3.1 Fast** (Google)

@@ -79,17 +79,16 @@ The following models are available for system prompt generation:
 
 | Model | Label |
 |-------|-------|
-| claude-opus-4-20250514 | Claude 4 Opus (Recommended) |
-| claude-sonnet-4-20250514 | Claude 4 Sonnet |
-| claude-3-7-sonnet-20250219 | Claude 3.7 Sonnet (Fast) |
-| o3-2025-04-16 | OpenAI O3 (Reasoning) |
-| gpt-4.1-2025-04-14 | GPT-4.1 (Latest) |
-| grok-3 | Grok 3 (xAI Latest) |
-| claude-3-5-sonnet-20241022 | Claude 3.5 Sonnet (Reliable) |
-| gpt-4o | GPT-4o |
-| gpt-4o-mini | GPT-4o Mini (Fast) |
-| claude-3-opus-20240229 | Claude 3 Opus (Legacy) |
-| claude-3-haiku-20240307 | Claude 3 Haiku (Fastest) |
+| claude-opus-5-5 | Claude Opus 5.5 |
+| claude-sonnet-5-5 | Claude Sonnet 5.5 |
+| claude-haiku-5-5 | Claude Haiku 5.5 (Fast) |
+| gpt-5.5 | GPT-5.5 |
+| gpt-6-sol | GPT-6 Sol |
+| o3 | o3 (Reasoning) |
+| gemini-3.8-flash | Gemini 3.8 Flash (Fast) |
+| grok-4.7 | Grok 4.7 |
+
+The dropdown follows the models enabled for your organization, so the exact list can differ.
 
 ## Database Repair
 
