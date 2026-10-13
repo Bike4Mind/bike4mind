@@ -34,6 +34,8 @@ beforeAll(async () => {
     'mapLanguageToArtifactType',
     'promoteToolCallJsonArtifact',
     'promoteBareHtmlDocument',
+    'convertCodeBlocksToArtifacts',
+    'hasSelfClosingTag',
   ]) {
     expect(typeof core[name], `${STALE} (missing export: ${name})`).toBe('function');
   }
@@ -221,6 +223,22 @@ describe('parseArtifactsWithFallback', () => {
     expect(result.artifacts).toHaveLength(1);
   });
 
+  it('keeps one mermaid artifact when a fence repeats the body of an explicit mermaid artifact', () => {
+    // Converting only the text left after parsing would drop the explicit artifact from core's
+    // dedupe set and promote the duplicate fence a second time.
+    const flow = 'flowchart TD\n    A[Start] --> B[End]';
+    const input = [
+      `<artifact identifier="flow" type="application/vnd.ant.mermaid" title="Flow">${flow}</artifact>`,
+      '',
+      '```mermaid',
+      flow,
+      '```',
+    ].join('\n');
+
+    const { artifacts } = parseArtifactsWithFallback(input);
+    expect(artifacts.filter(a => a.type === 'mermaid')).toHaveLength(1);
+  });
+
   it('parses an artifact with single-quoted attribute values', () => {
     const input = "<artifact identifier='widget' type='application/vnd.ant.react' title='My Widget'>code</artifact>";
 
@@ -303,8 +321,8 @@ describe('hasCompleteOpeningTag', () => {
  * Small local models hallucinate a builder tool (e.g. build_html) and return the
  * artifact as tool-call JSON rather than an <artifact> tag or ```html fence. The
  * HTML in its arguments must be promoted, while ordinary JSON stays untouched.
- * The promoter is core's promoteToolCallJsonArtifact, called here without echo marking;
- * these cases pin it through the client's convert pass. Core's own cases live in
+ * The promoter is core's promoteToolCallJsonArtifact; these cases pin it through the client's
+ * parseArtifactsWithFallback, which converts with core's detectors. Core's own cases live in
  * b4m-core/utils/src/artifactParser.test.ts.
  */
 describe('parseArtifactsWithFallback - tool-call JSON promotion', () => {
@@ -1015,9 +1033,9 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
 });
 
 /**
- * promoteBareHtmlDocument is core's, called last inside this convertCodeBlocksToArtifacts
- * without echo marking. These cases pin that call through the client's own passes; core's
- * suite (b4m-core/utils/src/artifactParser.test.ts) runs the same inputs through its passes.
+ * promoteBareHtmlDocument is core's, called inside the convertCodeBlocksToArtifacts this module
+ * re-exports. These cases pin it through the client entry point; core's suite
+ * (b4m-core/utils/src/artifactParser.test.ts) runs the same inputs directly.
  */
 describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
   const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;

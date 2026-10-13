@@ -155,6 +155,17 @@ describe('buildAgentArtifactPayloads', () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0].type).toBe('react');
   });
+
+  it('promotes a mermaid fence and a loose-rule ts component, like a chat reply does', () => {
+    const payloads = build(
+      [
+        '```mermaid\nflowchart TD\n  A[Start] --> B[End]\n```',
+        '```ts\nexport default function App(){ return <div/> }\n```',
+      ].join('\n\n')
+    );
+
+    expect(payloads.map(p => p.type).sort()).toEqual(['mermaid', 'react']);
+  });
 });
 
 describe('persistAgentArtifacts', () => {

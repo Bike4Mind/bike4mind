@@ -162,8 +162,8 @@ describe('convertCodeBlocksToArtifacts - HTML promotion', () => {
  * Small local models hallucinate a builder tool (e.g. build_html) and return the
  * artifact as tool-call JSON rather than an <artifact> tag or ```html fence. The
  * HTML in its arguments must be promoted, while ordinary JSON stays untouched.
- * promoteToolCallJsonArtifact is shared: the client's convert pass calls it too, and
- * apps/client/app/utils/artifactParser.test.ts pins that call.
+ * The client render path converts through this same function;
+ * apps/client/app/utils/artifactParser.test.ts pins it through parseArtifactsWithFallback.
  */
 describe('convertCodeBlocksToArtifacts - tool-call JSON promotion', () => {
   const promote = (input: string) => {
@@ -505,9 +505,8 @@ describe('parseArtifacts — multi-line and special-character opening tags', () 
 /**
  * The fenced detectors match a fence on its own and check the promotion anchors in the
  * callback, so these cases pin the promotion decisions and the behaviour that changed
- * when the anchors moved out of the patterns. Mirrors the client suite in apps/client/app/utils/artifactParser.test.ts,
- * except for the react-fence cases: the client's convertCodeBlocksToArtifacts keeps its own
- * react detector with different promotion rules.
+ * when the anchors moved out of the patterns. Mirrors the client suite in
+ * apps/client/app/utils/artifactParser.test.ts, which now runs the same detectors.
  */
 describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
@@ -628,8 +627,8 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   it('leaves a single-line react fence untouched', () => {
     // Not a growth-ratio case: one line, no closing fence, and the react regex fails
     // its only anchor attempt regardless of body size - measured linear on both the
-    // pre-fix and current parser.
-    const input = '```tsx\n' + 'const '.repeat(8000) + '\n```';
+    // pre-fix and current parser. A ts label, because a tsx one is always promoted.
+    const input = '```ts\n' + 'const '.repeat(8000) + '\n```';
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 
@@ -728,7 +727,7 @@ describe('convertCodeBlocksToArtifacts - component declaration line gate', () =>
     expect(artifacts[0].type).toBe('react');
   });
 
-  it('does not promote a tsx fence whose declaration keyword and marker are on different lines', () => {
+  it('does not promote a ts fence whose declaration keyword and marker are on different lines', () => {
     const codeContent = [
       'function helper() {',
       '  return doSomething();',
@@ -736,15 +735,20 @@ describe('convertCodeBlocksToArtifacts - component declaration line gate', () =>
       '// App component below',
       'export default helper;',
     ].join('\n');
-    const input = '```tsx\n' + codeContent + '\n```';
+    const input = '```ts\n' + codeContent + '\n```';
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  it('always promotes a tsx fence, even without a component line', () => {
+    const input = '```tsx\nfunction helper() {\n  return doSomething();\n}\n```';
+    expect(parseArtifacts(convertCodeBlocksToArtifacts(input)).artifacts.map(a => a.type)).toEqual(['react']);
   });
 });
 
 /**
  * promoteBareHtmlDocument runs last inside convertCodeBlocksToArtifacts, so these cases
- * drive it through that entry point. The client's convert pass calls the same function
- * without echo marking; apps/client/app/utils/artifactParser.test.ts runs the same inputs there.
+ * drive it through that entry point; apps/client/app/utils/artifactParser.test.ts runs the same
+ * inputs through the client re-export.
  */
 describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
   const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
@@ -848,9 +852,9 @@ describe('convertCodeBlocksToArtifacts - linear rewrite of the fenced-code detec
     const promoted = convertCodeBlocksToArtifacts(`${F}tsx\nexport default function App() { return <i/>; }\n${F}`);
     expect(promoted).toContain('type="application/vnd.ant.react"');
 
-    // `const Widget` has a declaration but no component token after it on the line, so
-    // it is not promoted even though it uses hooks - preserving prior behavior.
-    const plain = `${F}jsx\nconst Widget = () => {\n  const [x] = useState(0);\n  return <p>{x}</p>;\n};\n${F}`;
+    // `const Widget` has a declaration but no component token after it on the line, and only
+    // one indicator (the hook), so a ts fence is not promoted. A jsx/tsx label always is.
+    const plain = `${F}ts\nconst Widget = () => {\n  const [x] = useState(0);\n  return <p>{x}</p>;\n};\n${F}`;
     expect(convertCodeBlocksToArtifacts(plain)).toBe(plain);
   });
 });
@@ -1746,5 +1750,78 @@ describe('sequence diagram syntax', () => {
     const { artifacts } = parseArtifacts(convertCodeBlocksToArtifacts(`Intro\n\n\`\`\`mermaid\n${SEQ}\n\`\`\`\n`));
     expect(artifacts).toHaveLength(1);
     for (const line of SEQ_LINES) expect(artifacts[0].content).toContain(line.trim());
+  });
+});
+
+describe('convertCodeBlocksToArtifacts - detectors shared with the client render path', () => {
+  const F = '```';
+  const types = (converted: string) => parseArtifacts(converted).artifacts.map(a => a.type);
+
+  it('promotes a multi-line python fence, titled by its function, and leaves a one-line print alone', () => {
+    const script = `${F}python\nimport os\n\ndef list_files():\n    print(os.listdir('.'))\n${F}`;
+    const { artifacts } = parseArtifacts(convertCodeBlocksToArtifacts(script));
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].type).toBe('python');
+    expect(artifacts[0].title).toBe('list_files');
+
+    const oneLiner = `${F}python\nprint("hi")\n${F}`;
+    expect(convertCodeBlocksToArtifacts(oneLiner)).toBe(oneLiner);
+  });
+
+  it('promotes a typescript fence that carries two React indicators', () => {
+    const code = `import React, { useState } from 'react';\nfunction Counter() { const [n] = useState(0); return <b>{n}</b>; }`;
+    expect(types(convertCodeBlocksToArtifacts(`${F}typescript\n${code}\n${F}`))).toEqual(['react']);
+  });
+
+  it('promotes a ts fence through the loose component rule', () => {
+    const input = `${F}ts\nexport default function App(){ return <div/> }\n${F}`;
+    expect(types(convertCodeBlocksToArtifacts(input))).toEqual(['react']);
+  });
+
+  it('leaves a typescript fence with a single React indicator alone', () => {
+    const input = `${F}typescript\nconst [n, setN] = useState(0);\n${F}`;
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  it('rewrites the inner fences of a markdown fence to ~~~', () => {
+    const input = `${F}markdown\nOuter\n${F}js\nlet a = 1;\n${F}\nMore\n${F}`;
+    expect(convertCodeBlocksToArtifacts(input)).toBe(`${F}markdown\nOuter\n~~~js\nlet a = 1;\n~~~\nMore\n${F}`);
+  });
+
+  describe('tool-output JSON', () => {
+    const recharts = JSON.stringify({
+      type: 'recharts',
+      content: { chartType: 'BarChart', data: [{ a: 1 }] },
+      metadata: { title: 'T' },
+    });
+    const mermaid = JSON.stringify({ type: 'mermaid', content: 'graph TD; A-->B' });
+
+    it('promotes a recharts result blob with a content-derived id', () => {
+      const out = convertCodeBlocksToArtifacts(JSON.stringify({ result: recharts }));
+      expect(out).toMatch(/<artifact identifier="recharts-tool-[0-9a-z]+" type="application\/vnd\.ant\.recharts"/);
+      expect(types(out)).toEqual(['recharts']);
+    });
+
+    it('promotes a bare mermaid object with a content-derived id', () => {
+      const out = convertCodeBlocksToArtifacts(`See ${mermaid}`);
+      expect(out).toMatch(/<artifact identifier="mermaid-tool-[0-9a-z]+" type="application\/vnd\.ant\.mermaid"/);
+    });
+
+    it('mints the same id for the same body on every call, and a different one for another body', () => {
+      const id = (text: string) => /identifier="([^"]+)"/.exec(convertCodeBlocksToArtifacts(text))?.[1];
+      expect(id(`See ${mermaid}`)).toBe(id(`See ${mermaid}`));
+      expect(id(`See ${mermaid}`)).not.toBe(id(`See ${mermaid.replace('A-->B', 'C-->D')}`));
+    });
+  });
+
+  it('markToolEchoes leaves python, nested markdown, mermaid, tool-output JSON and ts fences untouched', () => {
+    const reply = [
+      `${F}python\nimport os\n\ndef main():\n    print(1)\n${F}`,
+      `${F}markdown\nOuter\n${F}js\nlet a = 1;\n${F}\nMore\n${F}`,
+      `${F}mermaid\nflowchart TD\n    A[Start] --> B[End]\n${F}`,
+      JSON.stringify({ result: JSON.stringify({ type: 'mermaid', content: 'graph TD\nA-->B' }) }),
+      `${F}ts\nexport default function App(){ return <div/> }\n${F}`,
+    ].join('\n\n');
+    expect(markToolEchoes(reply, () => false)).toBe(reply);
   });
 });

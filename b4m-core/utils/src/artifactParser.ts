@@ -6,6 +6,14 @@ import {
   mapMimeTypeToArtifactType,
   matchArtifactBlocks,
 } from '@bike4mind/common';
+import { hasSingleLineImportFrom } from './importStatements';
+import {
+  type ResultReplacer,
+  replaceDirectTypeObjects,
+  replaceEscapedResultObjects,
+  replaceLazyResultObjects,
+  replaceLogFormatResultObjects,
+} from './toolOutputResultScan';
 
 // Value is anchored to its own quote kind so a double-quoted value can contain
 // apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
@@ -86,7 +94,7 @@ export interface ExtractArtifactBlocksOptions {
  * Every `<artifact ...>...</artifact>` block in `content`, in source order, with its
  * attributes resolved and its position kept so callers can strip or replace the tag.
  * Shared by this module's parseArtifacts and the client's (apps/client/app/utils/artifactParser.ts),
- * which differ only in `typeFallback` and in what they do with the tags afterwards.
+ * which differ only in what they do with the tags afterwards.
  */
 export function extractArtifactBlocks(content: string, options: ExtractArtifactBlocksOptions = {}): ParsedArtifact[] {
   const fallback = options.typeFallback ?? 'none';
@@ -263,9 +271,8 @@ function hasReactComponentLine(code: string): boolean {
   return false;
 }
 
-// The next two are exported for apps/client/app/utils/artifactParser.ts to import
-// (hasReactComponentLine above is not shared: the client splits that decision across
-// per-language predicates).
+// The next two are exported for tests and other callers (hasReactComponentLine above is the
+// loose half of the React decision; hasReactIndicators below is the strict half).
 
 // A full HTML document: a <!DOCTYPE ...> followed later by a closing </html>.
 export function hasFullHtmlDocument(code: string): boolean {
@@ -360,9 +367,9 @@ function replaceMermaidFences(source: string, replace: (fullMatch: string, body:
 
 /**
  * Info-string token marking a fence that holds a verbatim quote of tool output. Such a
- * region is never promoted to an artifact, by this parser or by the client mirror in
- * apps/client/app/utils/artifactParser.ts. History replay must strip it before the model
- * sees the reply again.
+ * region is never promoted to an artifact, by any detector in this module (the client render
+ * path converts through the same code). History replay must strip it before the model sees the
+ * reply again.
  */
 export const TOOL_OUTPUT_MARKER = 'b4m-tool-output';
 
@@ -548,6 +555,272 @@ function protectArtifactSpans(content: string, mask: ToolOutputMask): { masked: 
   return { masked: masked + content.slice(copiedTo), mermaidBodies };
 }
 
+// Fixed-width, clock-free id suffix: 32-bit FNV-1a in base36. Core also runs in the browser, so
+// no node:crypto. Collisions only matter between two different tool outputs in one reply.
+function hashBody(body: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < body.length; i++) {
+    hash ^= body.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+/**
+ * A self-closing tag, e.g. `<path d="..."/>`, as `/<[a-z]+[^>]*\/>/` matched it. That
+ * pattern re-scans to the first `>` after every `<` - to the end of input when none
+ * follows - so this scans each character of `code` once instead: `[^>]*` cannot cross a
+ * `>`, so a candidate can only end at the first `>` after its own opening, and a cached
+ * `close` at or past `at + 2` is still that first `>` (a nearer one would have been found
+ * when the cursor was set).
+ */
+export function hasSelfClosingTag(code: string): boolean {
+  let close = -1;
+  for (let at = code.indexOf('<'); at >= 0; at = code.indexOf('<', at + 1)) {
+    const nameChar = code.charCodeAt(at + 1);
+    if (nameChar < 97 || nameChar > 122) continue;
+    if (close < at + 2) {
+      close = code.indexOf('>', at + 2);
+      // No `>` after this opening means none after any later one either.
+      if (close < 0) return false;
+    }
+    if (close >= at + 3 && code[close - 1] === '/') return true;
+  }
+  return false;
+}
+
+/**
+ * Sanitizes model-controlled text bound for a title="..." attribute in a tag this file
+ * rebuilds. The artifact attribute parser (ATTRIBUTE_REGEX) has no escape mechanism, so a
+ * " would truncate the attribute and leave the rest to be read as further attributes.
+ * parseArtifacts here is quote-aware, but the repo's other artifact matchers
+ * (sharedToolBuilder, notebookCurationService, openaiBackend) match attributes as [^>],
+ * so a < or > reaching them closes the tag early; newlines break the single-line ones.
+ * extractHTMLTitle applies the quote half of this rule to a <title> element.
+ * The server-side twin is sanitizeArtifactTitle in b4m-core services
+ * (llm/tools/utils/artifactEmission). It converts quotes to typographic ones rather than
+ * stripping them, because there the pristine title also survives in the artifact JSON body.
+ * Takes unknown because the callers read it out of parsed tool-output JSON, where a
+ * title need not be a string; each caller's own default covers a value that coerces
+ * to empty.
+ */
+function sanitizeToolOutputTitle(title: unknown): string {
+  return String(title ?? '')
+    .replace(/[<>"]/g, '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim();
+}
+
+/**
+ * Escapes the literal "</artifact>" sequence in a JSON artifact body so it cannot truncate
+ * parseArtifacts' non-greedy body match and leave a following "<artifact ...>" to be read
+ * as a second, model-chosen artifact. JSON.parse reads "\/" as "/", so the consumer
+ * restores the original losslessly. Twin of escapeArtifactBodyJson in b4m-core services
+ * (llm/tools/utils/artifactEmission), which this package cannot import; keep in sync.
+ */
+function escapeArtifactBodyJson(body: string): string {
+  return body.replace(/<\/artifact>/gi, '<\\/artifact>');
+}
+
+/**
+ * Same protection for a RAW (non-JSON) body, where the JSON backslash escape would render
+ * as garbage. Matches the bare "<artifact"/"</artifact>" the parsers match and no more.
+ * Twin of stripArtifactTagsFromRawBody in b4m-core services; keep in sync.
+ */
+function stripArtifactTagsFromRawBody(body: string): string {
+  return body.replace(/<(\/?)artifact\b/gi, '&lt;$1artifact');
+}
+
+/**
+ * Detects tool outputs (JSON responses from tools) and converts them to artifact syntax.
+ * Ids are derived from the body (hashBody), not a clock: this now runs server-side too, and the
+ * same reply must mint the same identifier on every pass for persistence to stay idempotent.
+ */
+function convertToolOutputsToArtifacts(content: string, holds: (value: string) => boolean): string {
+  // Look for any JSON-like structure that contains type field with our target types
+  // This approach is more forgiving of escaping variations
+  const typePattern = /(?:rechart|recharts|mermaid)/g;
+  const hasTargetType = typePattern.test(content);
+
+  if (!hasTargetType) {
+    return content;
+  }
+
+  // Try to find and extract JSON objects that contain our artifact types
+  // We'll look for various patterns of escaping around the "result" field
+  // Patterns 1, 3, 4 and 5 are linear scanners (./toolOutputResultScan) with the same results
+  // as the regexes they replaced, which were quadratic on repeated unclosed prefixes or braces.
+  const steps: Array<(text: string, replacer: ResultReplacer) => string> = [
+    // Pattern 1: Standard result field with escaped JSON (most common from logs)
+    replaceEscapedResultObjects,
+    // Pattern 2: Result field with simpler escaping
+    (text, replacer) => text.replace(/"result":\s*"(\{[^"]*(?:\\"[^"]*)*\})"/g, replacer),
+    // Pattern 3: More permissive result field matching
+    replaceLazyResultObjects,
+    // Pattern 4: Direct JSON object (less common but possible)
+    replaceDirectTypeObjects,
+    // Pattern 5: Very specific pattern for the exact log format
+    replaceLogFormatResultObjects,
+  ];
+
+  let processedContent = content;
+
+  for (const step of steps) {
+    processedContent = step(processedContent, (match, captured) => {
+      if (holds(match)) return match;
+      try {
+        let jsonString = captured || match;
+
+        // Handle multiple levels of escaping - improved with error recovery
+        let previousString = '';
+        let iterations = 0;
+        const maxIterations = 10; // Reduced for performance
+
+        try {
+          while (jsonString !== previousString && iterations < maxIterations && jsonString.includes('\\')) {
+            previousString = jsonString;
+            // More controlled unescaping - handle common patterns
+            jsonString = jsonString
+              .replace(/\\\\\\\\\"/g, '"') // 4 backslashes + quote -> quote
+              .replace(/\\\\\"/g, '"') // 2 backslashes + quote -> quote
+              .replace(/\\\"/g, '"') // 1 backslash + quote -> quote
+              .replace(/\\\\\\\\\\/g, '\\') // 4 backslashes -> 1 backslash
+              .replace(/\\\\\\/g, '\\') // 2 backslashes -> 1 backslash
+              .replace(/\\\\/g, '\\') // Regular backslash escape
+              .replace(/\\n/g, '\n') // Handle newlines
+              .replace(/\\t/g, '\t') // Handle tabs
+              .replace(/\\r/g, '\r'); // Handle carriage returns
+            iterations++;
+          }
+        } catch (unescapeError) {
+          Logger.globalInstance.warn('Error during string unescaping, using original:', unescapeError);
+          jsonString = captured || match; // Fallback to original
+        }
+
+        const toolOutput = JSON.parse(jsonString);
+
+        if ((toolOutput.type === 'rechart' || toolOutput.type === 'recharts') && toolOutput.content) {
+          const title =
+            sanitizeToolOutputTitle(toolOutput.metadata?.title || 'Interactive Chart') || 'Interactive Chart';
+
+          // Validate recharts content structure
+          let rechartsContent;
+          try {
+            if (typeof toolOutput.content === 'string') {
+              rechartsContent = JSON.parse(toolOutput.content);
+            } else {
+              rechartsContent = toolOutput.content;
+            }
+
+            // Validate required fields for recharts
+            if (!rechartsContent.chartType || !rechartsContent.data) {
+              Logger.globalInstance.warn('Invalid recharts config: missing chartType or data');
+              return match; // Return original if validation fails
+            }
+
+            const rechartsBody =
+              typeof toolOutput.content === 'string' ? toolOutput.content : JSON.stringify(toolOutput.content);
+
+            const identifier = `recharts-tool-${hashBody(rechartsBody)}`;
+            return `<artifact identifier="${identifier}" type="application/vnd.ant.recharts" title="${title}">
+${escapeArtifactBodyJson(rechartsBody)}
+</artifact>`;
+          } catch (validationError) {
+            Logger.globalInstance.warn('Failed to validate recharts content:', validationError);
+            return match; // Return original if validation fails
+          }
+        }
+
+        if (toolOutput.type === 'mermaid' && toolOutput.content) {
+          const title = sanitizeToolOutputTitle(toolOutput.metadata?.title || 'Mermaid Diagram') || 'Mermaid Diagram';
+          const mermaidBody = stripArtifactTagsFromRawBody(String(toolOutput.content));
+          const identifier = `mermaid-tool-${hashBody(mermaidBody)}`;
+
+          const artifactSyntax = `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">
+${mermaidBody}
+</artifact>`;
+
+          return artifactSyntax;
+        }
+      } catch (error) {
+        Logger.globalInstance.warn('Failed to parse tool output JSON:', error instanceof Error ? error.message : error);
+        Logger.globalInstance.warn('Problematic string:', (captured || match)?.substring(0, 100));
+      }
+
+      return match;
+    });
+  }
+
+  // Deliberately no tail fallback below this loop. The one that used to sit here could
+  // not capture an escaped quote, so it never promoted anything, and its scan was
+  // quadratic on a payload that carried no closing brace.
+  return processedContent;
+}
+
+// Search-window bound for the five React indicator predicates below. Each is linear on
+// its own, as are the other regex predicates here (the html-fragment tag check, the
+// python gates, and core's looksLikeHtml and promoteBareHtmlDocument scans), which stay
+// uncapped; this only keeps five passes over the same fence body from adding up. It is
+// not a body-length cap: an indicator inside the window still promotes the full,
+// untruncated body, and an indicator past the window leaves the fence a plain code block.
+const MAX_FENCE_SCAN_CHARS = 256000;
+
+/**
+ * Extracts a title from Python code
+ * Looks for docstrings, main function names, or class definitions
+ */
+function extractPythonTitle(code: string): string | null {
+  // Try to find a module-level docstring (triple quotes at start)
+  const docstringMatch = code.match(/^(?:'''|""")([^'"]+)(?:'''|""")/m);
+  if (docstringMatch) {
+    // Take first line of docstring as title
+    const firstLine = docstringMatch[1].trim().split('\n')[0];
+    if (firstLine && firstLine.length <= 50) return firstLine;
+  }
+
+  // Try to find main class name
+  const classMatch = code.match(/^class\s+([A-Z][a-zA-Z0-9_]*)/m);
+  if (classMatch) return classMatch[1];
+
+  // Try to find main function name (prefer main or descriptive names)
+  const mainMatch = code.match(/^def\s+(main|run|execute|process)\s*\(/m);
+  if (mainMatch) return `${mainMatch[1]}()`;
+
+  // Try any function definition
+  const funcMatch = code.match(/^def\s+([a-z_][a-z0-9_]*)\s*\(/m);
+  if (funcMatch) return funcMatch[1];
+
+  return null;
+}
+
+// Core's original React rule: a declaration + component token on one line, plus a hook,
+// default export or function/return.
+function looksLikeReactLoose(code: string): boolean {
+  if (!hasReactComponentLine(code)) return false;
+  return (
+    code.includes('useState') ||
+    code.includes('useEffect') ||
+    code.includes('export default') ||
+    (code.includes('function') && code.includes('return'))
+  );
+}
+
+// The stricter rule: at least 2 of 5 React indicators, counted over a capped prefix so five
+// predicates cannot each rescan a large fence body. A closed fence whose only indicators sit past
+// the window stays a plain code block.
+function hasReactIndicators(code: string): boolean {
+  const scanContent = code.slice(0, MAX_FENCE_SCAN_CHARS);
+  const hasReactHooks =
+    /\buse(State|Effect|Context|Reducer|Callback|Memo|Ref|ImperativeHandle|LayoutEffect|DebugValue)\b/.test(
+      scanContent
+    );
+  const hasJSXSyntax = /<[A-Z][a-zA-Z0-9]*[\s\/>]/.test(scanContent) || hasSelfClosingTag(scanContent);
+  const hasReactImport = hasSingleLineImportFrom(scanContent, 'react');
+  const hasReactComponent = /extends\s+(?:React\.)?Component\b/.test(scanContent);
+  const hasJSXReturn = /return\s*\(\s*</.test(scanContent);
+  return [hasReactHooks, hasJSXSyntax, hasReactImport, hasReactComponent, hasJSXReturn].filter(Boolean).length >= 2;
+}
+
 function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions, echoOnly: boolean): string {
   const mask = maskToolOutputRegions(content);
   const spans = protectArtifactSpans(mask.masked, mask);
@@ -569,31 +842,23 @@ function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions,
   // whitespace run and no closer backtracks quadratically. Every callback trims. Mermaid
   // fences are not in this set: their match set depends on that \s* skip between label and
   // body, so scanMermaidFences walks them by index instead.
-  // Detect React component code blocks (body captured linearly; see hasReactComponentLine)
-  const reactCodeBlockRegex = /```(?:tsx?|javascript|jsx)([\s\S]*?)```/gi;
-
-  content = content.replace(reactCodeBlockRegex, (match, codeContent) => {
-    if (echoOnly || holds(codeContent)) return match;
-    // Anchor requirement the old regex encoded inline: a declaration + component token
-    // on one line. Without it, this fence is not a React component - leave it alone.
-    if (!hasReactComponentLine(codeContent)) return match;
-    // Check if this looks like a React component
-    if (
-      codeContent.includes('useState') ||
-      codeContent.includes('useEffect') ||
-      codeContent.includes('export default') ||
-      (codeContent.includes('function') && codeContent.includes('return'))
-    ) {
-      // Generate a simple identifier from the content
+  // React fences promote in two phases, because the order decides which fence wins when an
+  // unclosed one swallows a later opener. The loose rule runs first, alongside html and svg;
+  // the tsx/jsx label and the indicator count run after mermaid, so a fence they would
+  // stretch across an svg or mermaid fence cannot eat its opener.
+  const reactCodeBlockRegex = /```(tsx?|jsx|javascript|typescript)([\s\S]*?)```/gi;
+  const promoteReactFences = (accepts: (language: string, code: string) => boolean) => {
+    content = content.replace(reactCodeBlockRegex, (match, language: string, codeContent: string) => {
+      if (echoOnly || holds(codeContent) || !accepts(language, codeContent)) return match;
       const componentName = extractComponentName(codeContent) || 'component';
       const identifier = componentName.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
       return `<artifact identifier="${identifier}" type="application/vnd.ant.react" title="${componentName}">
 ${codeContent.trim()}
 </artifact>`;
-    }
-    return match;
-  });
+    });
+  };
+  promoteReactFences((_language, code) => looksLikeReactLoose(code));
 
   // Detect full HTML-document code blocks (body captured linearly; see hasFullHtmlDocument).
   // A fence that is not a full document is left unchanged here so the fragment handler
@@ -670,6 +935,54 @@ ${codeContent.trim()}
 
   content = promoteBareHtmlDocument(content, holds, { fence: echoFence, only: echoOnly });
 
+  // Everything promoted so far is an artifact span now; protect those too, so the passes below
+  // cannot wrap one in a second artifact when an unclosed fence spans it.
+  content = protectArtifactSpans(content, mask).masked;
+
+  // Bare tool-output JSON a model pasted into the reply. Never under echoOnly: it promotes.
+  if (!echoOnly) content = convertToolOutputsToArtifacts(content, holds);
+
+  promoteReactFences((language, code) => language === 'tsx' || language === 'jsx' || hasReactIndicators(code));
+
+  // Detect Python code blocks - convert substantial Python code to Python artifacts
+  const pythonCodeBlockRegex = /```(?:python|py)([\s\S]*?)```/gi;
+
+  content = content.replace(pythonCodeBlockRegex, (match, codeContent: string) => {
+    if (echoOnly || holds(codeContent)) return match;
+    const trimmedCode = codeContent.trim();
+
+    // Only convert if it's substantial code (more than a simple one-liner)
+    // This helps avoid converting simple inline examples
+    const lineCount = trimmedCode.split('\n').length;
+    const hasImports = /^(?:import|from)\s+\w+/m.test(trimmedCode);
+    const hasDefinitions = /^(?:def|class)\s+\w+/m.test(trimmedCode);
+    const hasPrint = /print\s*\(/.test(trimmedCode);
+    const hasSubstantialCode = lineCount >= 3 || hasImports || hasDefinitions;
+
+    // Convert to Python artifact if it looks like runnable code
+    if (hasSubstantialCode || (hasPrint && lineCount >= 2)) {
+      const title = extractPythonTitle(trimmedCode) || 'Python Script';
+      const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
+
+      return `<artifact identifier="${identifier}" type="application/vnd.ant.python" title="${title}">
+${trimmedCode}
+</artifact>`;
+    }
+
+    // Keep simple examples as regular code blocks
+    return match;
+  });
+
+  // Not a promotion: rewrites the inner fences of a ```markdown block to ~~~ so they cannot close
+  // it early. Skipped under echoOnly, which must leave every other byte alone.
+  if (!echoOnly) {
+    const markdownBlockRegex = /```markdown([\s\S]*)```/gi;
+    content = content.replace(markdownBlockRegex, (_match, codeContent: string) => {
+      const updatedContent = codeContent.replace(/```/g, '~~~');
+      return `\`\`\`markdown${updatedContent}\`\`\``;
+    });
+  }
+
   return mask.restore(content);
 }
 
@@ -677,9 +990,9 @@ ${codeContent.trim()}
 export type EchoFence = (lang: string, body: string, whole: string, start: number, end: number) => string | null;
 
 /**
- * Tool-echo handling for the promoters below. Only this module's convert pass passes one;
- * the client calls them without it, since it never sees tool output and relies on the
- * fences marked here.
+ * Tool-echo handling for the promoters below. Only transformCodeBlocks passes one, and only
+ * server-side: the client render path calls the same convert without an isToolEcho matcher,
+ * since it never sees tool output, and relies on the fences the server marked.
  */
 export interface EchoMarking {
   fence: EchoFence;
@@ -703,9 +1016,6 @@ const NO_ECHO: EchoMarking = { fence: () => null, only: false };
  * invented builder-tool name AND an HTML-string argument - is what keeps a cloud
  * model that merely SHOWS such tool-call JSON as an example from having it
  * swallowed and re-rendered as an artifact.
- *
- * Also called by the client's convertCodeBlocksToArtifacts (apps/client/app/utils/artifactParser.ts),
- * without `echo`.
  */
 export function promoteToolCallJsonArtifact(
   content: string,
@@ -801,8 +1111,7 @@ function looksLikeHtml(value: string): boolean {
  * raw markup with no code fence and no <artifact> wrapper. Neither parseArtifacts
  * (needs <artifact> tags) nor the fenced detectors catch this shape, so it would
  * otherwise render as raw HTML in the chat (parser gap B). Runs last so the
- * fence/artifact guards see all earlier conversions. Also called by the client's
- * convertCodeBlocksToArtifacts, without `echo`.
+ * fence/artifact guards see all earlier conversions.
  */
 export function promoteBareHtmlDocument(
   content: string,
@@ -821,8 +1130,7 @@ export function promoteBareHtmlDocument(
   let promoted = false;
   let scannedTo = 0;
   let fences = 0;
-  let artifactOpens = 0;
-  let artifactCloses = 0;
+  let insideArtifact = false;
   let open: RegExpExecArray | null;
   while ((open = openRegex.exec(content)) !== null) {
     closeRegex.lastIndex = open.index + open[0].length;
@@ -835,13 +1143,14 @@ export function promoteBareHtmlDocument(
 
     const gap = content.slice(scannedTo, start);
     fences += (gap.match(/```/g) || []).length;
-    artifactOpens += (gap.match(/<artifact\b/gi) || []).length;
-    artifactCloses += (gap.match(/<\/artifact>/gi) || []).length;
+    // Same pairing as matchArtifactBlocks: an open tag stays open until the FIRST closer, so a
+    // tag opened inside an unclosed one does not add depth.
+    for (const tag of gap.matchAll(/<artifact\b|<\/artifact>/gi)) insideArtifact = tag[0][1] !== '/';
     scannedTo = start;
 
     // Skip a document sitting inside a code fence (odd number of ``` before it) or
     // inside an already-open <artifact> tag.
-    if (fences % 2 === 1 || artifactOpens > artifactCloses) continue;
+    if (fences % 2 === 1 || insideArtifact) continue;
 
     const doc = content.slice(start, end);
     if (holds(doc)) continue;

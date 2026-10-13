@@ -19,9 +19,9 @@ import { parseArtifacts, convertCodeBlocksToArtifacts, createToolEchoMatcher } f
  * Dedup is by artifact identifier (falling back to trimmed content when a block
  * has no identifier), against BOTH the parent's own artifacts and earlier child
  * blocks - so a block the parent reproduced, or two children emitting the same
- * id, renders exactly once. Extraction mirrors chat's pipeline
- * (`convertCodeBlocksToArtifacts` then `parseArtifacts`) so fenced chart/code
- * output counts the same as explicit `<artifact>` tags. `childSteps[i]` is child i's persisted
+ * id, renders exactly once. Extraction is the same pipeline the client render path runs
+ * (`convertCodeBlocksToArtifacts` then `parseArtifacts`, one shared detector set in core) so
+ * fenced chart/code output counts the same as explicit `<artifact>` tags. `childSteps[i]` is child i's persisted
  * steps: web tool output that child quoted back is not promoted, same as chat's echo matcher.
  */
 export function collectDagChildArtifactBlocks(args: {
