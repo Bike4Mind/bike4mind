@@ -82,6 +82,15 @@ describe('ProjectMembersSection invite refetch', () => {
     expect(projectInviteInvalidations()).toBe(1);
   });
 
+  it('refetches project invites for a lone replace event', () => {
+    renderMembers();
+    act(() => {
+      mocks.callbacks.invites('replace', { id: 'invite-0' });
+      vi.advanceTimersByTime(COALESCED_INVALIDATE_DEBOUNCE_MS);
+    });
+    expect(projectInviteInvalidations()).toBe(1);
+  });
+
   it('drops a pending refetch when unmounted mid-burst', () => {
     const { unmount } = renderMembers();
     fireBurst();
