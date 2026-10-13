@@ -5,6 +5,7 @@ import { hasUsableKey, listUsableVideoModels } from './listUsableVideoModels';
 
 // The real Gemini adapter is registered by a later task; the listing only needs a provider that serves its catalog model.
 const fakeGemini = (): VideoProvider => ({
+  mode: 'async',
   id: 'gemini-omni',
   models: ['gemini-omni-1.1-flash'],
   submit: vi.fn(),

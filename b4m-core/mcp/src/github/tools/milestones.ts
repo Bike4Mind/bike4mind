@@ -83,7 +83,7 @@ export function registerMilestoneTools(server: McpServer) {
         .describe('Milestone title'),
       description: z.string().optional().describe('Milestone description'),
       due_on: z.string().optional().describe('Due date in ISO 8601 format (e.g., 2024-03-01T00:00:00Z)'),
-      state: z.enum(['open', 'closed']).optional().prefault('open').describe('Milestone state (default: open)'),
+      state: z.enum(['open', 'closed']).prefault('open').describe('Milestone state (default: open)'),
       ...confirmationParams,
     },
     async ({ owner, repo, title, description, due_on, state, confirmed, _executeFromButton }) => {

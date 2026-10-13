@@ -156,6 +156,7 @@ re-deciding per endpoint:
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
 | Referenced resource does not exist | `404` | - |
 | Malformed path/query resource id | `404` | - |
+| Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
 
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `303`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,
@@ -224,9 +225,7 @@ of credits" across the whole surface.
 
 `402` stays out of the allowed set so an endpoint choosing it fails the build.
 `/api/ai/tts` was the last holdout and has been moved onto `422` +
-`errorCode: "insufficient_credits"`; the uncontracted legacy routes
-`/api/ai/text-to-speech` and `/api/elabs/text-to-speech` still answer `402` and are
-frozen pending their own deprecation (section 7).
+`errorCode: "insufficient_credits"`.
 
 ### One error-code vocabulary
 
@@ -396,14 +395,20 @@ names gets `undefined`.
 
 ## 7. Deprecation
 
-Nothing published is ever silently removed. Deprecating anything - a field, an alias, a
-whole endpoint - means: mark it deprecated in the contract, state a sunset date in the
-description, keep serving it until that date, and announce it before the date rather
-than after.
+Nothing published is ever silently removed while anyone is left to warn. Deprecating
+anything - a field, an alias, a whole endpoint - means: mark it deprecated in the
+contract, state a sunset date in the description, keep serving it until that date, and
+announce it before the date rather than after.
 
-Undocumented legacy routes still count as published if they are reachable.
-`/api/ai/text-to-speech` and `/api/elabs/text-to-speech` both serve TTS today with no
-contract and no stated deprecation; they need one before they can go.
+Undocumented legacy routes still count as published if they are reachable, so they go
+through the same window unless nobody is left to warn. Check who calls one first: the
+admin **API Key Scope Preflight** tab lists every API key that hit a path prefix over the
+90-day usage log, and session traffic is not recorded per route, so also confirm no
+first-party code calls it. Only a route with no first-party callers and no recent
+API-key traffic may be removed without a sunset window. The legacy TTS aliases
+`/api/ai/text-to-speech` and `/api/elabs/text-to-speech` were removed on that basis in
+favour of `/api/ai/tts`: no first-party callers, and no API-key traffic in the five
+weeks before removal.
 
 ---
 

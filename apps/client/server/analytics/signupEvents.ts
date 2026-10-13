@@ -6,11 +6,11 @@ import { pseudonymizeUserId } from './pseudonymize';
 
 // Kept apart from acquisition.ts, which is pure: this is the one piece that sends, so importing
 // the touch helpers (checkout, the subscription write path) does not pull in the emitter and its
-// config. It sends the one conversion another product can be credited with today: `signup`, when
-// an account is created. A cross-product `subscribe` is deferred pending a decision on whether a
-// self-reported `utm.source` may select another product's record at all;
-// invoicePaymentSucceeded.test.ts asserts the invoice webhook emits nothing, which holds that
-// deferral in place.
+// config. It sends the conversions another product can be credited with: `signup`, when an account
+// is created, and `purchase`, when that account later pays (an individual subscription invoice or
+// a credit pack). Both pick the credited product from a self-reported `utm.source` and say so on
+// the event (see ATTRIBUTION). docs-site/docs/security/telemetry-data-classification.md describes
+// both streams and must stay in sync with what this module sends.
 
 /**
  * A UUID that is the same every time for the same parts, so a retried request sends the same
@@ -101,4 +101,92 @@ export async function emitSignupForSourceProducts(opts: {
     )
   );
   return [...byProduct.keys()];
+}
+
+/**
+ * The event name for a paid purchase. Not `subscribe`: Overwatch counts `subscribe` as a signup
+ * (its signup stage matches `signup` and `subscribe`), so every renewal would show up as a new
+ * signup. `purchase` is GA4's name for collected money and what the client-side pixel sends.
+ */
+export const PURCHASE_EVENT = 'purchase';
+
+export type PurchaseKind = 'subscription' | 'credits';
+
+/** The payer as stored: the touches recorded at signup and the synthetic flag. */
+export type PurchaseCreditUser = {
+  id: string;
+  isSynthetic?: boolean | null;
+  acquisition?: AcquisitionTouches | null;
+};
+
+/**
+ * Tell each product a paying user came through that they paid. Same crediting rule and the same
+ * `attribution: 'self-reported'` marker as the signup emit above, so a product's purchases line up
+ * with its signups. Overwatch's funnel has no purchase stage yet (its stages are visits, signups
+ * and snapshot-based new subscribers), so these land as raw events only.
+ *
+ * The touches come from the user record (`user.acquisition`, written with consent at signup), not
+ * from cookies or from checkout metadata: a purchase is confirmed by a Stripe webhook that has no
+ * browser, a credit-pack payment intent carries no attribution metadata at all, and reading the
+ * signup touches keeps the purchase on the same product its signup was credited to. Organization
+ * invoices are excluded by the caller: their checkout user's signup is not the organization's
+ * acquisition. A user with no stored acquisition (they declined consent, or signed up before
+ * touches were stored) credits nothing. A later consent withdrawal does not stop it: the webhook
+ * has no browser to ask, and the server keeps no per-user consent state, so stored touches keep
+ * crediting purchases.
+ *
+ * Only money actually collected counts: a zero amount (a trial, a fully discounted or
+ * balance-paid invoice) sends nothing, and refunds are never sent. Synthetic users are skipped.
+ * The eventId is keyed on the Stripe id of the payment (invoice or payment intent) and the product,
+ * so a redelivered webhook sends the same id and the receiver keeps one event.
+ *
+ * `value` is in the currency's major unit (29.99, not 2999), the GA4 convention the client pixel
+ * also follows; checkout bills two-decimal currencies only (USD), so dividing by 100 is exact.
+ *
+ * Awaited by its callers but never throws and never rejects: a webhook must not fail, or be
+ * retried, over analytics. Resolves to the products it ATTEMPTED, like the signup emit.
+ */
+export async function emitPurchaseForSourceProducts(opts: {
+  user: PurchaseCreditUser | null | undefined;
+  /** The Stripe invoice id or payment intent id the money was collected on. */
+  paymentId: string;
+  kind: PurchaseKind;
+  /** The amount collected, in minor units (cents). */
+  amountMinor: number | null | undefined;
+  currency: string | null | undefined;
+  /** Stripe's billing_reason for an invoice: `subscription_create`, `subscription_cycle`, ... */
+  billingReason?: string | null;
+}): Promise<string[]> {
+  try {
+    const { user, paymentId, kind, amountMinor, currency, billingReason } = opts;
+    if (!user?.id || user.isSynthetic || !paymentId || !currency) return [];
+    if (typeof amountMinor !== 'number' || !Number.isFinite(amountMinor) || amountMinor <= 0) return [];
+    const byProduct = sourceProducts(user.acquisition ?? undefined);
+    await Promise.all(
+      [...byProduct.entries()].map(([productId, { touch, utm }]) =>
+        emitProductEvent({
+          productId,
+          event: PURCHASE_EVENT,
+          eventId: stableEventId(PURCHASE_EVENT, productId, paymentId),
+          reportFailure: true,
+          userId: user.id,
+          utm,
+          metadata: {
+            touch,
+            attribution: ATTRIBUTION,
+            kind,
+            value: amountMinor / 100,
+            currency: currency.toUpperCase(),
+            ...(billingReason && { billingReason }),
+          },
+        }).catch(() => {
+          console.warn('[b4m-analytics] purchase emit failed', { productId });
+        })
+      )
+    );
+    return [...byProduct.keys()];
+  } catch {
+    console.warn('[b4m-analytics] purchase attribution failed');
+    return [];
+  }
 }

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-11T15:17:06.753Z",
+  "generatedAt": "2026-10-12T04:20:46.790Z",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -78,6 +78,20 @@
         "200000": {
           "input": 0.000001,
           "output": 0.000005
+        }
+      }
+    },
+    {
+      "modelId": "claude-haiku-5-5",
+      "unit": "per_token",
+      "pricing": {
+        "100000": {
+          "input": 1.0000000000000001e-7,
+          "output": 5e-7
+        },
+        "1000000": {
+          "input": 5e-7,
+          "output": 0.0000025
         }
       }
     },
@@ -391,6 +405,20 @@
         "1000000": {
           "input": 0.00001,
           "output": 0.00005
+        }
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-haiku-5-5",
+      "unit": "per_token",
+      "pricing": {
+        "100000": {
+          "input": 1.0000000000000001e-7,
+          "output": 5e-7
+        },
+        "1000000": {
+          "input": 5e-7,
+          "output": 0.0000025
         }
       }
     },

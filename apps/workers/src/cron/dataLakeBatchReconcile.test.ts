@@ -95,7 +95,7 @@ vi.mock('@server/utils/cloudwatch', () => ({
   recordReconcileRun: (...a: unknown[]) => h.recordRun(...a),
   recordChunkRescueSweep: (...a: unknown[]) => h.recordRescue(...a),
 }));
-vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
+vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   enqueueTaxonomyAnalysisIfWanted: (...a: unknown[]) => h.enqueueTaxonomyAnalysisIfWanted(...a),
 }));
 // Keep the real getSettingsValue (spread), stub only getSettingsMap - so a test can fault the

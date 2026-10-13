@@ -3,6 +3,7 @@ import {
   IOrgGoogleDriveConnectionDocument,
   IOrgGoogleDriveConnectionRepository,
   IGoogleDriveConnectionHealthUpdate,
+  GoogleDriveReleaseStatus,
   IMongoDocument,
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
@@ -569,7 +570,8 @@ class OrgGoogleDriveConnectionRepository
   async releaseSyncClaim(
     id: string,
     expectedToken: string,
-    lastError: string | null
+    lastError: string | null,
+    status: GoogleDriveReleaseStatus = 'connected'
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     // The chain (if any) is over once the claim goes; leaving the id/token would let an in-flight
     // continuation message adopt a claim nobody holds.
@@ -577,7 +579,7 @@ class OrgGoogleDriveConnectionRepository
       { _id: id, status: 'syncing', ingestClaimToken: expectedToken },
       {
         $set: {
-          status: 'connected',
+          status,
           lastPolledAt: new Date(),
           // Empty-string-to-null matches updateHealth: a caller whose err.message is blank has nothing
           // to report, and storing '' would read as a present error on the client.

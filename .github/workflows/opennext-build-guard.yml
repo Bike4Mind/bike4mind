@@ -1,0 +1,75 @@
+name: OpenNext Build Guard
+
+# Runs the OpenNext build that sst.aws.Nextjs runs for apps/client, and checks
+# the server bundle against Lambda's 250 MiB unzipped limit.
+#
+# On a deploy this build runs inside `sst deploy`, after the infra the Nextjs
+# component depends on exists, so an infra PR otherwise needs a full preview to
+# learn whether the app still builds. `next build` reads no Resource.* value, so
+# this needs no stage, no SST_RESOURCE_* env and no AWS credentials.
+#
+# Runs without premium overlays, as the self-host image build does: the overlay
+# glue codegen emits empty registries when packages/premium/ is empty.
+#
+# Path-filtered, so it is NOT eligible to be a required check (see
+# lambda-bundle-guard.yml). It also skips merge_group: path filters do not
+# apply there, and this is a multi-minute build.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'infra/**'
+      - 'b4m-core/infra/**'
+      - sst.config.ts
+      - 'apps/client/next.config.*'
+      - apps/client/open-next.config.ts
+      - apps/client/package.json
+      - package.json
+      - pnpm-lock.yaml
+      - scripts/check-opennext-build.mjs
+      - scripts/__tests__/check-opennext-build.test.mjs
+      - .github/workflows/opennext-build-guard.yml
+
+env:
+  NODE_VERSION: '24'
+
+concurrency:
+  group: opennext-build-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: OpenNext build
+    runs-on: ${{ vars.RUNNER_LABEL_HEAVY || 'ubuntu-latest-m' }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build core packages
+        run: pnpm turbo:core:build
+
+      - name: Run guard tests
+        run: pnpm exec vitest run --dir scripts/__tests__ --reporter=verbose check-opennext-build
+
+      - name: OpenNext build and bundle size
+        run: node scripts/check-opennext-build.mjs

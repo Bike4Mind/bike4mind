@@ -54,8 +54,12 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
 }));
 
+const mockRecordVoiceActivity = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
+  sessionRepository: {
+    recordVoiceActivity: (...args: unknown[]) => mockRecordVoiceActivity(...args),
+  },
   questRepository: {
     findAllBySessionIdAndGreaterThanOrEqualToTimestamp: (...args: unknown[]) => mockFindDuplicateQuests(...args),
     markStopped: vi.fn().mockResolvedValue(undefined),
@@ -134,6 +138,7 @@ function primeSuccessfulTurn() {
     authOrigin: 'session',
   });
   mockFindDuplicateQuests.mockResolvedValue([]);
+  mockRecordVoiceActivity.mockResolvedValue(true);
   mockUserFindById.mockResolvedValue({ id: 'user-1' });
   mockGetSettingsMap.mockResolvedValue({});
   mockInvoke.mockResolvedValue({ id: 'quest-1', replies: [], reply: '' });
@@ -202,5 +207,79 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
     expect((mockInvoke.mock.calls[0][0] as InvokeArg).apiKeyId).toBeUndefined();
     expect((mockProcess.mock.calls[0][0] as ProcessArg).body.authOrigin).toBe('session');
     expect((mockProcess.mock.calls[0][0] as ProcessArg).body.apiKeyId).toBeUndefined();
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  it("marks the token's session connected and alive on every verified turn", async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockRecordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date), null);
+  });
+
+  it('marks only the hold its token names', async () => {
+    const holdStartedAt = '2026-10-12T12:00:00.000Z';
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      voiceHoldStartedAt: holdStartedAt,
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockRecordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date), new Date(holdStartedAt));
+  });
+
+  it('records nothing for a turn whose token does not verify', async () => {
+    mockVerifyVoiceSessionToken.mockImplementation(() => {
+      throw new Error('bad token');
+    });
+    const res = { ...makeRes(), status: () => ({ json: () => undefined }) };
+
+    await handler(makeReq() as never, res as never);
+
+    expect(mockRecordVoiceActivity).not.toHaveBeenCalled();
+  });
+
+  it('refuses a turn with 402 and no LLM call once the hold its token names is settled', async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      voiceHoldStartedAt: '2026-10-12T12:00:00.000Z',
+    });
+    // POST /end claimed the hold, so the activity write matches nothing.
+    mockRecordVoiceActivity.mockResolvedValue(false);
+    const json = vi.fn();
+    const status = vi.fn(() => ({ json }));
+    const res = { ...makeRes(), status };
+
+    await handler(makeReq() as never, res as never);
+
+    expect(status).toHaveBeenCalledWith(402);
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.any(String) }));
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('serves a legacy token without a hold claim even when no hold matched', async () => {
+    mockRecordVoiceActivity.mockResolvedValue(false);
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke).toHaveBeenCalled();
+  });
+
+  it('still answers the turn when recording the activity fails', async () => {
+    mockRecordVoiceActivity.mockRejectedValue(new Error('db blip'));
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke).toHaveBeenCalled();
   });
 });

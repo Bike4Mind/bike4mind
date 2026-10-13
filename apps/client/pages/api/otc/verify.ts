@@ -26,7 +26,13 @@ import {
 } from '@server/organizations/notifySeatCeilingRaised';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import {
+  OTC_LIMITS,
+  OTC_VERIFY_EMAIL_BUDGETS,
+  ipSubject,
+  otcCounterLimit,
+  reserveOtcEmailBudget,
+} from '@server/utils/otcLimits';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
 import { setRefreshCookie } from '@server/auth/refreshCookie';
@@ -54,12 +60,7 @@ const MAX_PENDING_OTC_ATTEMPTS = 5;
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
-  .use(
-    rateLimit({
-      limit: 10,
-      windowMs: 15 * 60 * 1000,
-    })
-  )
+  .use(otcCounterLimit({ bucket: 'verify-ip', ...OTC_LIMITS.verify.perIp, subject: ipSubject }))
   .post(async (req, res) => {
     const { email, code, username, pendingToken, acceptedPolicyVersion, ageAttestation } = req.body;
 
@@ -100,6 +101,18 @@ const handler = baseApi({ auth: false })
       throw new UnprocessableEntityError('Too many failed attempts. Please request a new code.');
     }
 
+    // Brute-force bound per (address, source) across every token; the per-token attempt cap alone
+    // resets with each new code. The unit is reserved atomically before the compare so concurrent
+    // guesses cannot overshoot the limit, then refunded unless the guess was wrong against a live
+    // token: another source's guesses never spend it (see OTC_VERIFY_EMAIL_BUDGETS) and tokenless
+    // junk is bounded per IP.
+    const ipBucket = ipSubject(req);
+    const budget = await reserveOtcEmailBudget(normalizedEmail, ipBucket, OTC_VERIFY_EMAIL_BUDGETS);
+    if ('retryAfter' in budget) {
+      res.setHeader('Retry-After', String(budget.retryAfter));
+      return res.status(429).json({ error: 'Too many attempts. Please try again later.' });
+    }
+
     // Server-side nonce: single-use + JWT-replay protection. Rotating to a fresh
     // nonce invalidates the presented token (the client must use the re-issued token
     // below to retry). A stale/replayed token fails this check -> generic invalid.
@@ -110,6 +123,7 @@ const handler = baseApi({ auth: false })
       newNonce
     );
     if (!nonceValid) {
+      await budget.refund();
       throw new UnprocessableEntityError('Invalid code.');
     }
 
@@ -132,6 +146,16 @@ const handler = baseApi({ auth: false })
     }
 
     // --- CODE PROVEN - only the email owner can reach here. Branch on existence now. ---
+    // A correct code costs nothing against the guess budget.
+    await budget.refund();
+    // Up to MAX_LIVE_OTC_CODES codes stay live per address; a proven one retires the rest.
+    // Best-effort like the writes below: the nonce is already rotated, so a failure here must not
+    // 500 a proven login. Leftover codes still expire and are capped per address.
+    try {
+      await pendingOtcTokenRepository.consumeOtherCodes(normalizedEmail, newNonce);
+    } catch (err) {
+      req.logger.error('OTC login consumeOtherCodes failed', err);
+    }
     const existingUser = await userRepository.findByEmail(normalizedEmail);
 
     if (existingUser) {

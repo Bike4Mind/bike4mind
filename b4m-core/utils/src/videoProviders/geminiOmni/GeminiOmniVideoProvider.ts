@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ValidatedVideoRequest } from '@bike4mind/common';
-import { readJson } from '../http';
+import { readJson } from '../../generationProviders/http';
 import {
   classifyGeminiSubmitFailure,
   fetchGeminiOutput,
@@ -144,6 +144,7 @@ const toPollResult = (interaction: Interaction, ctx: VideoProviderContext): Prov
 
 /** Gemini Omni Flash over the Interactions REST API. Every method is one bounded call; the engine owns waiting. */
 export class GeminiOmniVideoProvider implements VideoProvider {
+  readonly mode = 'async' as const;
   readonly id = 'gemini-omni' as const;
   readonly models = ['gemini-omni-1.1-flash'] as const;
 

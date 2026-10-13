@@ -1,6 +1,7 @@
 import dynamic from 'next/dynamic';
 import { Box, Stack, CircularProgress, Typography } from '@mui/joy';
 import { useLocation } from '@tanstack/react-router';
+import { useTranslation } from 'react-i18next';
 import { gray } from '@client/app/utils/themes/colors';
 import SidenavFooter from './Footer';
 import SideNavHeader from './Header';
@@ -43,6 +44,7 @@ const CombinedNotebooks = dynamic(() => import('./CombinedNotebooks'), {
 import { premiumNotebookSidenav as WorkspaceSidenav } from '@client/app/premium-generated/premiumNotebookSidenav.generated';
 
 const NotebookSideNav = () => {
+  const { t } = useTranslation();
   // Tablet + mobile: slide off-screen when closed and show a dismiss backdrop
   // when open (overlay behavior). Desktop pins the sidebar in flow.
   const isTablet = useIsTablet();
@@ -53,6 +55,8 @@ const NotebookSideNav = () => {
 
   return (
     <Stack
+      component="nav"
+      aria-label={t('sidenav.sidebar', 'Sidebar')}
       data-testid="sidenav-container"
       sx={theme => ({
         height: '100dvh',

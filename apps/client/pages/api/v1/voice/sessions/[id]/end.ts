@@ -1,16 +1,16 @@
 /**
  * POST /api/v1/voice/sessions/{id}/end - reconcile the up-front voice credit reservation down to
- * the call's actual duration and refund the difference. Called when the call ends (user hangs up
+ * the call's connected time and refund the difference. Called when the call ends (user hangs up
  * or ElevenLabs disconnects). Idempotent: a duplicate call after the hold is cleared is a no-op.
  * Also served at the legacy `/api/voice/v2/sessions/{id}/end` (re-exported there), which the SPA
  * calls. Auth mode, the `ai:generate` scope and the path param come from `endVoiceSessionContract`.
  */
-import { sessionRepository, userRepository } from '@bike4mind/database';
+import { sessionRepository } from '@bike4mind/database';
 import { endVoiceSessionContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { NotFoundError } from '@server/utils/errors';
 import { isValidObjectId } from '@server/utils/objectId';
-import { creditsForElapsed } from '@server/voice/voiceSessionLimits';
+import { settleVoiceHold } from '@server/voice/settleVoiceHold';
 
 const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, res) => {
   const sessionId = req.validatedParams.id;
@@ -25,31 +25,40 @@ const handler = nextRouteForContract(endVoiceSessionContract).post(async (req, r
   }
 
   const reserved = session.voiceReservedCredits ?? 0;
-  const startedAt = session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt).getTime() : null;
+  const startedAt = session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
 
   // Already reconciled (no hold left) or nothing was reserved (enforceCredits off):
-  // clear any stale marker so the session stops counting as an active voice call.
+  // clear any stale marker so the session stops counting as an active voice call. The realtime
+  // billed-credits marker goes too, or the sweep would price a later ElevenLabs hold as realtime.
   if (reserved <= 0 || !startedAt) {
-    await sessionRepository.update({ id: session.id, voiceReservedCredits: null, voiceSessionStartedAt: null });
+    await sessionRepository.update(
+      { id: session.id, voiceReservedCredits: null, voiceSessionStartedAt: null },
+      { unset: ['voiceBilledCredits'] }
+    );
     return res.status(200).json({ refunded: 0, alreadyReconciled: true });
   }
 
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-  const owed = creditsForElapsed(reserved, elapsedSeconds);
-  const refund = Math.max(0, reserved - owed);
-
-  // Clear the hold BEFORE crediting back so a duplicate end can't double-refund.
-  // A refund lost to a transient failure here is preferable to issuing free credits.
-  await sessionRepository.update({ id: session.id, voiceReservedCredits: null, voiceSessionStartedAt: null });
-  if (refund > 0) {
-    await userRepository.incrementCredits(req.user.id, refund);
+  const settlement = await settleVoiceHold(
+    {
+      id: session.id,
+      userId: req.user.id,
+      voiceReservedCredits: reserved,
+      voiceSessionStartedAt: startedAt,
+      voiceConnectedAt: session.voiceConnectedAt ?? null,
+      // Carried for the restore if the refund fails; settleVoiceHold advances it to the end time.
+      voiceLastActivityAt: session.voiceLastActivityAt ?? null,
+    },
+    // Ending the call is itself the call's last activity.
+    new Date(),
+    'end'
+  );
+  // A concurrent end or the stale-hold sweep settled it first.
+  if (!settlement.settled) {
+    return res.status(200).json({ refunded: 0, alreadyReconciled: true });
   }
 
-  req.logger.info(
-    { sessionId: session.id, elapsedSeconds, reserved, owed, refund },
-    '[voice-v2/sessions/end] reconciled voice credits'
-  );
-  return res.status(200).json({ refunded: refund, elapsedSeconds });
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000));
+  return res.status(200).json({ refunded: settlement.refundedCredits, elapsedSeconds });
 });
 
 export default handler;

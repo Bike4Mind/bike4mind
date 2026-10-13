@@ -98,7 +98,7 @@ import {
 } from '@bike4mind/services/llm';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd, sessionService } from '@bike4mind/services';
 import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services/llm';
-import { createAttachmentLakeAccess } from './agentExecutor.attachmentLakeAccess';
+import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
@@ -131,7 +131,7 @@ import {
   makeDagDispatcher,
   onDagNodeTerminal,
 } from './agentExecutorDag';
-import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
+import { collectDagChildArtifactBlocks } from '@server/utils/agentDagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services/llm';
 import type { ModelInfo } from '@bike4mind/common';
 // `buildFirstIterationQuery` lives in its own module so it can be
@@ -154,7 +154,7 @@ import {
   DELEGATION_TOOLS,
   runHasAttachments,
 } from './agentExecutor.sessionToolPolicy';
-import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
+import { toUserFacingFailureMessage } from '@server/utils/agentFailureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
 // spend fold, #630) lives in its own side-effect-free module so the guard and the
@@ -171,6 +171,11 @@ import {
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
+import {
+  attachVideoJobsToRunQuest,
+  buildAgentVideoToolConfig,
+  getAgentVideoToolConfigDeps,
+} from './agentExecutor.videoToolConfig';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
@@ -1744,6 +1749,11 @@ async function processExecution(
     let pendingSideEffects: { type: string; payload: unknown }[] = [];
     const allSideEffects: { type: string; payload: unknown }[] = [];
 
+    const runQuestId = resolveExecutionQuestId({
+      startPayloadQuestId: startPayload?.questId,
+      executionLinkedQuestId: execution.linkedQuestId,
+    });
+
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async (changes, status) => {
         if (changes?.images?.length) {
@@ -1751,6 +1761,8 @@ async function processExecution(
             if (!generatedImages.includes(img)) generatedImages.push(img);
           }
         }
+        // In-process subagents share these callbacks, so their clips land here too.
+        await attachVideoJobsToRunQuest(changes?.videoJobIds, runQuestId, questRepository, logger);
         if (changes?.promptMeta?.retrieval) {
           retrievalSummary = mergeRetrievalSummary(retrievalSummary, changes.promptMeta.retrieval);
         }
@@ -1807,10 +1819,7 @@ async function processExecution(
         allSideEffects.push(sideEffect);
       },
       sessionId: execution.sessionId,
-      questId: resolveExecutionQuestId({
-        startPayloadQuestId: startPayload?.questId,
-        executionLinkedQuestId: execution.linkedQuestId,
-      }),
+      questId: runQuestId,
       onSubagentCredits: credits => {
         logger.info(`[Credits] Subagent used ${credits} credits`);
       },
@@ -1863,6 +1872,16 @@ async function processExecution(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
+      videoConfig: await buildAgentVideoToolConfig(
+        {
+          userId: execution.userId,
+          organizationId: execution.organizationId,
+          apiKeyId: execution.apiKeyId,
+          questId: runQuestId,
+          toolEnabled: profileEnabledTools.includes('video_generation'),
+        },
+        getAgentVideoToolConfigDeps(logger)
+      ),
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 
@@ -3595,6 +3614,8 @@ async function processSubagentDispatch(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
+      // No videoConfig: this path offers no native tools (see the buildSharedTools call below), and
+      // the per-run cap lives in agentExecutor.videoToolConfig.ts for when it does.
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 

@@ -26,6 +26,7 @@ import { selectTaxonomyBatchByLakeId } from './manager/taxonomySlot';
 import ManagerNav from './manager/ManagerNav';
 import { LakeInfoPanel, ManagerOverview } from './manager/LakeInfoPanel';
 import GitHubRepositoryPickerModal from './manager/GitHubRepositoryPickerModal';
+import DriveLakeResyncResume from './manager/DriveLakeResyncResume';
 
 /**
  * Data Lakes management surface: one persistent two-pane layout. The left sidebar navigates
@@ -274,6 +275,7 @@ export default function DataLakeManagerPanel() {
 
       {/* Mounted once here, store-driven: GitHubConnectAction can render in several places at once. */}
       <GitHubRepositoryPickerModal />
+      <DriveLakeResyncResume />
 
       {/* Review/apply the background AI tag suggestions for a batch */}
       {reviewingBatch && (
