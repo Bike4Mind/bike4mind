@@ -252,12 +252,12 @@ describe('PendingOtcToken live codes', () => {
 
   it("keeps the owner's code live after someone else requests a newer one", async () => {
     await send('owner');
-    await send('attacker');
+    await send('second-requester');
 
     expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-2')).toBe('hash-owner');
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'attacker', 'attacker-2')).toBe(
-      'hash-attacker'
-    );
+    expect(
+      await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'second-requester', 'second-requester-2')
+    ).toBe('hash-second-requester');
   });
 
   it('rotation retires the presented nonce for replay', async () => {
@@ -287,12 +287,14 @@ describe('PendingOtcToken live codes', () => {
 
   it('consumeOtherCodes leaves only the kept nonce live', async () => {
     await send('owner');
-    await send('attacker');
+    await send('second-requester');
     expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-2')).toBe('hash-owner');
 
     await pendingOtcTokenRepository.consumeOtherCodes(EMAIL, 'owner-2');
 
-    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'attacker', 'attacker-2')).toBeNull();
+    expect(
+      await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'second-requester', 'second-requester-2')
+    ).toBeNull();
     expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner-2', 'owner-3')).toBe('hash-owner');
   });
 
