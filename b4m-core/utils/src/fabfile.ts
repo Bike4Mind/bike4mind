@@ -207,10 +207,31 @@ export const versionedFileKey = (params: {
 };
 
 /**
+ * Cap a version history at the original (v1, always kept) plus the last `maxEditedVersions`
+ * edited entries. `droppedVersions` are the trimmed entries whose storage key no retained entry
+ * still holds, so the caller can delete those objects once the trimmed history is persisted.
+ */
+export const trimVersionHistory = (
+  history: IFabFileVersion[],
+  maxEditedVersions: number
+): { versions: IFabFileVersion[]; droppedVersions: IFabFileVersion[] } => {
+  const keep = Math.max(1, Math.floor(maxEditedVersions));
+  if (history.length <= keep + 1) return { versions: history, droppedVersions: [] };
+  const versions = [history[0], ...history.slice(-keep)];
+  const retainedKeys = new Set(versions.map(v => v.filePath));
+  const droppedVersions = history
+    .slice(1, history.length - keep)
+    .filter(v => typeof v.filePath === 'string' && v.filePath.length > 0 && !retainedKeys.has(v.filePath));
+  return { versions, droppedVersions };
+};
+
+/**
  * Build the version history for a non-destructive AI edit. On the first edit the current
  * (pre-edit) bytes are seeded as v1 so history is complete, then the edited version is
- * appended. Returns the S3 key the edited bytes should be written to and the full versions
- * array to persist; the caller uploads the bytes and repoints `filePath` at `newFilePath`.
+ * appended and the history is capped via `trimVersionHistory`. Returns the S3 key the edited
+ * bytes should be written to, the versions array to persist, and the dropped entries; the caller
+ * uploads the bytes, repoints `filePath` at `newFilePath`, and only after that write succeeds
+ * deletes the dropped entries' objects.
  */
 export const appendEditedVersion = (params: {
   userId: string;
@@ -223,7 +244,8 @@ export const appendEditedVersion = (params: {
   newFileSize: number;
   now: Date;
   nonce: string;
-}): { newFilePath: string; versions: IFabFileVersion[] } => {
+  maxEditedVersions: number;
+}): { newFilePath: string; versions: IFabFileVersion[]; droppedVersions: IFabFileVersion[] } => {
   const history: IFabFileVersion[] = params.existingVersions?.length
     ? [...params.existingVersions]
     : [
@@ -250,5 +272,5 @@ export const appendEditedVersion = (params: {
     mimeType: params.mimeType,
     createdAt: params.now,
   });
-  return { newFilePath, versions: history };
+  return { newFilePath, ...trimVersionHistory(history, params.maxEditedVersions) };
 };
