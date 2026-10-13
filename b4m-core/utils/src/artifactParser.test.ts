@@ -369,9 +369,9 @@ describe('parseArtifacts - attribute values containing quotes', () => {
 });
 
 /**
- * The client renders an untyped or unknown-type block (typeFallback 'language-then-code');
- * this module's parseArtifacts, which feeds promptMeta.artifacts, drops it ('none').
- * Pinned so a later change to either default is deliberate.
+ * Both parseArtifacts (this module's, which feeds promptMeta.artifacts and DAG bubble-up, and
+ * the client's render path) keep an untyped or unknown-type block ('language-then-code');
+ * extractArtifactBlocks alone still defaults to 'none'. Pinned so a later change is deliberate.
  */
 describe('extractArtifactBlocks - typeFallback', () => {
   const untyped = '<artifact identifier="x" title="T">body</artifact>';
@@ -406,10 +406,15 @@ describe('extractArtifactBlocks - typeFallback', () => {
     ]);
   });
 
-  it('parseArtifacts still drops an untyped block (the persistence contract)', () => {
+  it('parseArtifacts keeps an untyped block as code, like the client render path', () => {
     const { artifacts, cleanedContent } = parseArtifacts(`Intro ${untyped}`);
-    expect(artifacts).toHaveLength(0);
-    expect(cleanedContent).toBe(`Intro ${untyped}`);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({ type: 'code', language: 'text', identifier: 'x', content: 'body' });
+    expect(cleanedContent).toBe('Intro');
+  });
+
+  it('parseArtifacts resolves an untyped block through its language attribute', () => {
+    expect(parseArtifacts(pythonByLanguage).artifacts[0]).toMatchObject({ type: 'python', language: 'python' });
   });
 });
 

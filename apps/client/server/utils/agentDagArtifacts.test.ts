@@ -55,6 +55,16 @@ describe('collectDagChildArtifactBlocks', () => {
     expect(blocks[0]).toContain('</artifact>');
   });
 
+  it('bubbles up an untyped child artifact, still deduped by identifier against the parent', () => {
+    const untyped = '<artifact identifier="notes" title="Notes">plain body</artifact>';
+    expect(collectDagChildArtifactBlocks({ parentAnswer: 'Summary.', childAnswers: [`Done.\n${untyped}`] })).toEqual([
+      untyped,
+    ]);
+    expect(
+      collectDagChildArtifactBlocks({ parentAnswer: `Mine:\n${untyped}`, childAnswers: [`Done.\n${untyped}`] })
+    ).toEqual([]);
+  });
+
   it('returns nothing when there are no child artifacts', () => {
     const blocks = collectDagChildArtifactBlocks({
       parentAnswer: `Full answer with its own art:\n${artifact('parent-only')}`,

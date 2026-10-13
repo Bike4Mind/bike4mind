@@ -70,10 +70,11 @@ export function isSvgGraphicallyEmpty(svg: string): boolean {
 
 /**
  * How extractArtifactBlocks resolves a block whose `type` attribute is missing or unknown.
- *  - 'none': drop the block. The server persistence path (parseArtifacts below) uses this,
- *    so only typed blocks reach promptMeta.artifacts.
+ *  - 'none': drop the block. Only extractArtifactBlocks' own default; no parser uses it.
  *  - 'language-then-code': try the `language` attribute, then fall back to 'code', and
- *    default `language` to 'text'. The client render path uses this so no block is lost.
+ *    default `language` to 'text'. Both parseArtifacts (this module's, which feeds
+ *    promptMeta.artifacts and DAG bubble-up, and the client's render path) use this, so
+ *    an untyped block counts the same everywhere.
  */
 export type ArtifactTypeFallback = 'none' | 'language-then-code';
 
@@ -145,7 +146,7 @@ export function extractArtifactBlocks(content: string, options: ExtractArtifactB
  * </artifact>
  */
 export function parseArtifacts(content: string): ArtifactParseResult {
-  const artifacts = extractArtifactBlocks(content);
+  const artifacts = extractArtifactBlocks(content, { typeFallback: 'language-then-code' });
   let cleanedContent = content;
 
   // Remove artifact tags from content (in reverse order to maintain indices)
