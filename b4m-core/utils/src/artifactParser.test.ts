@@ -1976,6 +1976,24 @@ describe('convertCodeBlocksToArtifacts - tool-output JSON and code fences', () =
     expect(convertCodeBlocksToArtifacts(once)).toBe(once);
   });
 
+  it('reads a bash fence indented 4+ spaces under a list item as code', () => {
+    const bash = `- Call it:\n    ${F}bash\n    curl -d '${mermaid}' http://x\n    ${F}\n- Done`;
+    expect(convertCodeBlocksToArtifacts(bash)).toBe(bash);
+  });
+
+  it('reads a python fence indented 4+ spaces under a list item as code', () => {
+    const python = `1. Build the payload:\n\n    ${F}python\n    import json\n    data = ${mermaid}\n    print(json.dumps(data))\n    ${F}`;
+    const out = convertCodeBlocksToArtifacts(python);
+    expect(out).not.toContain('mermaid-tool-');
+    expect(promoted(out)).toEqual([
+      {
+        type: 'python',
+        identifier: expect.any(String),
+        content: `import json\n    data = ${mermaid}\n    print(json.dumps(data))`,
+      },
+    ]);
+  });
+
   it('scans fences in linear time when no closer is long enough, or with many short fences', () => {
     assertLinearGrowth(n => `mermaid\n~~~~~\n${'~~~ x\n`a `b\n'.repeat(n)}`, 20000);
     assertLinearGrowth(n => `mermaid\n${'```\n`a`\n```\n`b\n'.repeat(n)}`, 20000);

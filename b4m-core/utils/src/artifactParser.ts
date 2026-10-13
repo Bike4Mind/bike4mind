@@ -858,10 +858,17 @@ interface FenceOpener {
   info: string;
 }
 
-/** CommonMark fence opener: 0-3 spaces, then 3+ backticks or tildes; a backtick info string has no backtick. */
-function parseFenceOpener(line: string): FenceOpener | null {
+// Any indent, not CommonMark's 0-3 spaces: a fence nested under a list item sits 4+ deep and still
+// renders as a fence, and the lazy ``` regexes of the other detectors ignore indent too.
+function fenceIndent(line: string): number {
   let at = 0;
-  while (at < 3 && line[at] === ' ') at++;
+  while (line[at] === ' ' || line[at] === '\t') at++;
+  return at;
+}
+
+/** Fence opener: indent, then 3+ backticks or tildes; a backtick info string has no backtick. */
+function parseFenceOpener(line: string): FenceOpener | null {
+  const at = fenceIndent(line);
   const char = line[at];
   if (char !== '`' && char !== '~') return null;
   let end = at;
@@ -877,8 +884,7 @@ function parseFenceOpener(line: string): FenceOpener | null {
  * second convert from re-pairing what the first one promoted (the parity harness's H3).
  */
 function fenceCloserLength(line: string, opener: FenceOpener): number {
-  let at = 0;
-  while (at < 3 && line[at] === ' ') at++;
+  const at = fenceIndent(line);
   let end = at;
   while (line[end] === opener.char) end++;
   return end - at >= opener.run ? end : -1;
@@ -895,9 +901,9 @@ interface FencedBlock {
 }
 
 /**
- * Every fenced code block, by CommonMark line rules except fenceCloserLength's, in one pass over
- * the lines. An opener with no closer runs to the end of the content, as CommonMark (and so the
- * rendered reply) treats it.
+ * Every fenced code block, by CommonMark line rules except fenceIndent's and fenceCloserLength's,
+ * in one pass over the lines. An opener with no closer runs to the end of the content, as
+ * CommonMark (and so the rendered reply) treats it.
  */
 function scanFencedBlocks(content: string): FencedBlock[] {
   const blocks: FencedBlock[] = [];

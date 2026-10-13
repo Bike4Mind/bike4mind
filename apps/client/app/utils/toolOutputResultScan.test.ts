@@ -118,10 +118,10 @@ describe('tool-output result scanners', () => {
     for (let i = 0; i < 5000; i++) {
       const text = randomText(rand);
       const expected = run(replacer => text.replace(oldRegex, replacer));
-      expect(
-        run(replacer => scan(text, replacer)),
-        JSON.stringify(text)
-      ).toEqual(expected);
+      const actual = run(replacer => scan(text, replacer));
+      expect(actual, JSON.stringify(text)).toEqual(expected);
+      // The regex callback's offset argument; echo marking reads its neighbors from it.
+      expect(actual.offsets, JSON.stringify(text)).toEqual(expected.offsets);
       matched += expected.calls.length;
     }
     expect(matched).toBeGreaterThan(50);
