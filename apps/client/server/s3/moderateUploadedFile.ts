@@ -102,9 +102,10 @@ export interface ModerateUploadedFileResult {
  * Any OTHER error (detector unavailable, transient Rekognition 5xx/throttle, download
  * failure) is rethrown rather than mapped to 'blocked' - turning a transient failure into a
  * permanent false-block would strand a benign image behind scary policy copy with no
- * recovery path. The caller (objectCreated's S3 event handler) lets the throw propagate so
- * S3 retries the whole handler; the file stays `moderationStatus: 'pending'` (held,
- * fail-closed, recoverable) until either a retry succeeds or retries exhaust.
+ * recovery path. objectCreated's S3 event handler lets the throw propagate so S3 retries
+ * the whole handler; the file stays `moderationStatus: 'pending'` (held, fail-closed,
+ * recoverable) until either a retry succeeds or retries exhaust. The on-demand route
+ * (pages/api/files/[id]/moderate.ts) instead catches it, releases its claim and reports 'pending'.
  *
  * The one deliberate exception is an unsupported format (`UnsupportedImageFormatError`):
  * a format neither Rekognition nor jimp can process is a deterministic, not transient,
