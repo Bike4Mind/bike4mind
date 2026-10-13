@@ -4,7 +4,7 @@ import { purgeDataLakeConnectionFiles, type PurgeableConnectionFile } from './pu
 const SCOPE = { datalakeTag: 'datalake:sales', fileTagPrefix: 'sales', createdByUserId: 'owner-1' } as never;
 
 const file = (id: string, userId: string, fileSize: number, extra: Record<string, unknown> = {}) =>
-  ({ id, userId, fileSize, tags: [], ...extra }) as PurgeableConnectionFile;
+  ({ id, userId, fileSize, tags: [], storageChargedAt: new Date(), ...extra }) as PurgeableConnectionFile;
 
 const makeDb = (files: PurgeableConnectionFile[]) => {
   const rows = new Set(files.map(f => f.id));
