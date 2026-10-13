@@ -1214,7 +1214,14 @@ const MessageContent: React.FC<ContentProps> = memo(
               )}
             </Stack>
           ) : (
-            <Stack className="action-buttons-mobile" direction={'row'} gap="8px" alignItems="center">
+            <Stack
+              className="action-buttons-mobile"
+              direction={'row'}
+              gap="4px"
+              alignItems="center"
+              // Six 44px targets plus gaps are ~284px: wrap rather than overflow at 320px.
+              flexWrap="wrap"
+            >
               {!isProcessingPrompt && (
                 <>
                   {/* Advanced actions in menu */}
