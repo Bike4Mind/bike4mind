@@ -40,6 +40,7 @@ import { useBrandingSettings, usePublicConfig } from '../hooks/data/settings';
 import { gray, brand } from '@client/app/utils/themes/colors';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
+import { isSubmittableOtcCode, OTC_CODE_PLACEHOLDER, sanitizeOtcInput } from '@client/app/utils/otcCode';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
@@ -326,7 +327,7 @@ const Register: React.FC = () => {
 
   const handleOTCVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!submittedData || otcCode.length !== 6) return;
+    if (!submittedData || !isSubmittableOtcCode(otcCode)) return;
 
     try {
       const clientData = {
@@ -855,10 +856,10 @@ const Register: React.FC = () => {
                   // Joy's Input forwards autoComplete to the <input> but not inputMode (that lands on the
                   // root div), so the numeric keypad hint has to go through the input slot.
                   slotProps={{ input: { inputMode: 'numeric', pattern: '[0-9]*' } }}
-                  placeholder="000000"
+                  placeholder={OTC_CODE_PLACEHOLDER}
                   value={otcCode}
                   onChange={e => {
-                    const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                    const val = sanitizeOtcInput(e.target.value);
                     setOtcCode(val);
                   }}
                   autoComplete="one-time-code"
@@ -882,7 +883,7 @@ const Register: React.FC = () => {
                 type="submit"
                 fullWidth
                 color="primary"
-                disabled={otcCode.length !== 6 || isVerifying}
+                disabled={!isSubmittableOtcCode(otcCode) || isVerifying}
                 sx={[
                   { borderRadius: '8px', display: 'flex', gap: 1, alignItems: 'center', minHeight: '40px' },
                   isDarkMode ? darkInactive : lightInactive,

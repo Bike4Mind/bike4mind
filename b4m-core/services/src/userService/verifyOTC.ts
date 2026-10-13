@@ -7,8 +7,9 @@ import bcrypt from 'bcryptjs';
  */
 
 /**
- * Verifies a 6-digit OTC against the hash carried in the signed pending token.
- * Pure function - no DB lookup.
+ * Verifies an OTC against the hash carried in the signed pending token.
+ * Pure function - no DB lookup. Deliberately no length check: a 6-digit code from a token issued
+ * before codes grew to 8 digits must still verify until that token expires.
  */
 export const verifyPendingOTC = async (code: string, otcHash: string): Promise<boolean> => {
   // Guard null/undefined/non-string input: bcrypt.compare throws on non-string

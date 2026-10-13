@@ -10,10 +10,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
 vi.mock('@server/analytics/signupEvents', () => ({ emitSignupForSourceProducts: vi.fn().mockResolvedValue([]) }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
+vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, isE2EEnabled: () => false }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { signAccessToken: () => 'full-access' },
 }));
@@ -52,13 +51,21 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 
 const mockFindByEmail = vi.fn();
 const mockValidateNonce = vi.fn();
+const mockConsumeOtherCodes = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: {
+    tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),
+    tryAddWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 0, expiresAt: new Date() })),
+  },
   adminSettingsRepository: { findBySettingName: vi.fn() },
   registrationInviteRepository: {},
   subscriberRepository: {},
   creditTransactionRepository: {},
   userRepository: { findByEmail: (...a: any[]) => mockFindByEmail(...a), count: vi.fn(), update: vi.fn() },
-  pendingOtcTokenRepository: { validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a) },
+  pendingOtcTokenRepository: {
+    validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
+    consumeOtherCodes: (...a: any[]) => mockConsumeOtherCodes(...a),
+  },
   authSessionRepository: {},
   passkeyCredentialRepository: { countByUser: vi.fn(() => Promise.resolve(0)) },
 }));
