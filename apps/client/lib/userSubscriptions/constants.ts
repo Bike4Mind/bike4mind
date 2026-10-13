@@ -11,6 +11,18 @@ export const PROFESSIONAL_PRICE_ID = isTestMode
   ? (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_TEST ?? '')
   : (process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO_PROD ?? '');
 
+export const PROFESSIONAL_PLAN_FEATURES: string[] = [
+  'Access to 25+ AI models including GPT-4, Claude 3, Gemini',
+  'Automatic model cost optimization',
+  'Credits roll over for 3 months',
+  'Advanced prompt engineering tools',
+  'Single API for all models',
+  'Priority support response',
+];
+
+export const PROFESSIONAL_PLAN_DESCRIPTION =
+  'Access every major AI model through one unified interface, with smart cost optimization.';
+
 export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
   {
     // [DELETION-FOOTPRINT] LibreOncology - the paid individual plan the
@@ -60,16 +72,8 @@ export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
     // one-time packages, so subscribers get exactly the advertised markup.
     credits: 50000,
     tier: UserSubscriptionTier.Basic,
-    features: [
-      'Access to 25+ AI models including GPT-4, Claude 3, Gemini',
-      'Self-hosted Deepseek R1 & Phi-4 for private inference',
-      'Automatic model cost optimization',
-      'Credits roll over for 3 months',
-      'Advanced prompt engineering tools',
-      'Single API for all models',
-      'Priority support response',
-    ],
-    description: 'Access every major AI model through one unified interface, with smart cost optimization.',
+    features: PROFESSIONAL_PLAN_FEATURES,
+    description: PROFESSIONAL_PLAN_DESCRIPTION,
   },
 ];
 

@@ -10,6 +10,7 @@ import {
   SubscriptionSource,
 } from '@client/lib/subscriptions/types';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { PROFESSIONAL_PLAN_DESCRIPTION, PROFESSIONAL_PLAN_FEATURES } from '@client/lib/userSubscriptions/constants';
 import {
   SubscriptionPlanInterval,
   UserSubscriptionTier,
@@ -123,16 +124,8 @@ const SubscriptionModalContent = () => {
         name: 'Professional',
         credits: 50000,
         tier: UserSubscriptionTier.Basic,
-        features: [
-          'Access to 25+ AI models including GPT-4, Claude 3, Gemini',
-          'Self-hosted Deepseek R1 & Phi-4 for private inference',
-          'Automatic model cost optimization',
-          'Credits roll over for 3 months',
-          'Advanced prompt engineering tools',
-          'Single API for all models',
-          'Priority support response',
-        ],
-        description: 'Access every major AI model through one unified interface, with smart cost optimization.',
+        features: PROFESSIONAL_PLAN_FEATURES,
+        description: PROFESSIONAL_PLAN_DESCRIPTION,
       },
     ],
     [isTestMode]
