@@ -15,9 +15,11 @@ const {
   mockRefresh,
   mockPrint,
   mockUpdateTags,
+  mockUpdateVisibility,
 } = vi.hoisted(() => ({
   mockList: vi.fn(),
   mockUpdateTags: vi.fn(),
+  mockUpdateVisibility: vi.fn(),
   mockExport: vi.fn(),
   mockDownloadData: vi.fn(),
   mockToastError: vi.fn(),
@@ -31,7 +33,7 @@ vi.mock('sonner', () => ({ toast: { error: mockToastError, success: mockToastSuc
 vi.mock('@client/app/utils/publishApi', () => ({
   listMyPublishedArtifacts: (...a: unknown[]) => mockList(...a),
   deletePublishedArtifact: vi.fn(),
-  updatePublishedVisibility: vi.fn(),
+  updatePublishedVisibility: (...a: unknown[]) => mockUpdateVisibility(...a),
   updatePublishedCommentPolicy: vi.fn().mockResolvedValue(undefined),
   updatePublishedTags: (...a: unknown[]) => mockUpdateTags(...a),
   fetchMyTagVocabulary: () => {
@@ -831,5 +833,49 @@ describe('PublishedArtifactsTabContent - tag review fixes', () => {
 
     await waitFor(() => expect(lastQuery().tag).toBe('constructor'));
     expect(screen.getByTestId('published-artifacts-facet-tag-constructor')).not.toBeNull();
+  });
+});
+
+describe('PublishedArtifactsTabContent - visibility choices follow the scope tier', () => {
+  const teamRow = { ...replyRow, publicId: 'pub-t', tier: 'organization', scopeId: 'org1', visibility: 'organization' };
+  const visibilitySelect = (publicId: string) =>
+    screen.getByTestId(`published-artifact-visibility-${publicId}`).querySelector('button') as HTMLButtonElement;
+
+  beforeEach(() => {
+    mockUpdateVisibility.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('shows a Team page as Team and lets the owner take it to Private', async () => {
+    mockList.mockResolvedValue(page([teamRow]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-t');
+    expandRow('pub-t');
+
+    expect(visibilitySelect('pub-t').textContent).toBe('Team');
+    fireEvent.click(visibilitySelect('pub-t'));
+    expect(await screen.findByTestId('published-artifact-visibility-option-public')).not.toBeNull();
+    expect(screen.getByTestId('published-artifact-visibility-option-organization')).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId('published-artifact-visibility-option-private'));
+    await waitFor(() => expect(mockUpdateVisibility).toHaveBeenCalledWith('pub-t', 'private'));
+  });
+
+  it('shows a Private Team page as Private rather than an empty choice', async () => {
+    mockList.mockResolvedValue(page([{ ...teamRow, visibility: 'private' }]));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-t');
+    expandRow('pub-t');
+
+    expect(visibilitySelect('pub-t').textContent).toBe('Private');
+  });
+
+  it('offers a personal page only Public and Private', async () => {
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+    expandRow('pub-1');
+
+    fireEvent.click(visibilitySelect('pub-1'));
+    expect(await screen.findByTestId('published-artifact-visibility-option-private')).not.toBeNull();
+    expect(screen.queryByTestId('published-artifact-visibility-option-organization')).toBeNull();
   });
 });

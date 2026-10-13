@@ -255,9 +255,9 @@ describe('PublishShareModal — Team (organization) visibility option', () => {
     expect(radio('organization')).toBeNull();
   });
 
-  it('offers Team but not Private in the shared phase after an org-tier publish', async () => {
-    // org-tier record: 'private' is not a valid override (SCOPE_POLICY), so it must not be a
-    // dead-end option; Team/Public are the valid live changes.
+  it('offers Public, Team and Private in the shared phase after an org-tier publish', async () => {
+    // org-tier record: Private is valid at every tier (SCOPE_POLICY), so the owner can take a
+    // Team page back to owner-only from here.
     const publish = vi.fn().mockResolvedValue(publishResult);
     render(
       <Wrapper>
@@ -278,7 +278,7 @@ describe('PublishShareModal — Team (organization) visibility option', () => {
     await screen.findByTestId('publish-share-url');
     expect(radio('public')).not.toBeNull();
     expect(radio('organization')).not.toBeNull();
-    expect(radio('private')).toBeNull();
+    expect(radio('private')).not.toBeNull();
   });
 });
 
@@ -775,7 +775,31 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     await screen.findByTestId('publish-share-url');
     await waitFor(() => expect(radio('organization')?.checked).toBe(true));
     expect(radio('public')?.checked).toBe(false);
-    expect(radio('private')).toBeNull();
+    expect(radio('private')?.checked).toBe(false);
+  });
+
+  it('a reopened Team page can be taken to Private on the same record', async () => {
+    const publish = renderReopened(() =>
+      Promise.resolve({ ...live, tier: 'organization', scopeId: 'org1', visibility: 'organization' })
+    );
+    apiGet.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/share-token')
+          ? { data: { shareToken: null } }
+          : {
+              data: {
+                artifact: { visibility: 'organization', accessGate: null, commentPolicy: 'none', discoverable: false },
+              },
+            }
+      )
+    );
+    await screen.findByTestId('publish-share-url');
+    await waitFor(() => expect(radio('organization')?.checked).toBe(true));
+    fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/live-1', { visibility: 'private' })
+    );
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it('closing mid-lookup does not hold the create button on the next open without a lookup', async () => {

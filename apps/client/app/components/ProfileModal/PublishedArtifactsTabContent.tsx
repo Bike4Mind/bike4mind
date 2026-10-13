@@ -106,6 +106,25 @@ function apiError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+const VISIBILITY_LABEL: Record<PublishVisibility, string> = {
+  public: 'Public',
+  organization: 'Team',
+  project: 'Project',
+  private: 'Private',
+};
+
+/**
+ * Visibility choices for a row, valid for its scope tier (a live PATCH cannot move a page to
+ * another scope): Public and Private everywhere, plus the tier's own audience for Team/project
+ * pages. The row's current value is always listed, so the select never shows an empty choice.
+ */
+function visibilityChoicesFor(a: Pick<ManagedArtifact, 'tier' | 'visibility'>): PublishVisibility[] {
+  const audience: PublishVisibility[] =
+    a.tier === 'organization' ? ['organization'] : a.tier === 'project' ? ['project'] : [];
+  const choices: PublishVisibility[] = ['public', ...audience, 'private'];
+  return choices.includes(a.visibility) ? choices : [...choices, a.visibility];
+}
+
 /** Public path for an artifact: bundles use the scope path, snapshots the short id. */
 function sharePath(a: ManagedArtifact): string {
   if (a.source.kind === 'reply') return `/p/r/${a.publicId}`;
@@ -755,8 +774,11 @@ export default function PublishedArtifactsTabContent() {
                         data-testid={`published-artifact-visibility-${a.publicId}`}
                         sx={{ minWidth: 110 }}
                       >
-                        <Option value="public">Public</Option>
-                        <Option value="private">Private</Option>
+                        {visibilityChoicesFor(a).map(v => (
+                          <Option key={v} value={v} data-testid={`published-artifact-visibility-option-${v}`}>
+                            {VISIBILITY_LABEL[v]}
+                          </Option>
+                        ))}
                       </Select>
                     </Box>
 

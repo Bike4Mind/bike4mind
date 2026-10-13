@@ -364,8 +364,8 @@ export function PublishShareModal({
   //   - user-tier page  -> Public/Private only. Offering Team here would PATCH visibility to
   //     'organization' on a user-scoped record, whose scopeId is the user id, so the serve gate
   //     would 403 every org member (moving to org scope requires re-publishing, not a PATCH).
-  //   - org-tier page   -> Public/Team only. 'private' isn't a valid override for org tier
-  //     (SCOPE_POLICY), so the server would reject it - don't offer a dead-end.
+  //   - org-tier page   -> Public/Team/Private. Private is valid at every tier (SCOPE_POLICY), so
+  //     the owner can take a Team page back to owner-only without re-publishing it.
   // In the CHOOSE phase the publish callback maps a Team pick to a real org-tier page, so the
   // full set is safe.
   const visibilityOptions = useMemo<VisibilityOption[]>(() => {
@@ -376,7 +376,7 @@ export function PublishShareModal({
       // A reopened Team page keeps its Team choice even when the dialog was opened outside a team
       // context (no `orgOption`), so its current visibility is shown rather than leaving only Public.
       return result.tier === 'organization'
-        ? [PUBLIC_OPTION, orgEntry ?? TEAM_FALLBACK_OPTION]
+        ? [PUBLIC_OPTION, orgEntry ?? TEAM_FALLBACK_OPTION, PRIVATE_OPTION]
         : [PUBLIC_OPTION, PRIVATE_OPTION];
     }
     return orgEntry ? [PUBLIC_OPTION, orgEntry, PRIVATE_OPTION] : [PUBLIC_OPTION, PRIVATE_OPTION];
