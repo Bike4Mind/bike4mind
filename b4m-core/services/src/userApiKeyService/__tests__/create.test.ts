@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHash } from 'crypto';
 import {
   createUserApiKey,
+  createExchangeUserApiKey,
+  MAX_EXCHANGE_KEY_TTL_MS,
   EMBED_SPEND_CAP_MAX_CREDITS,
   API_KEY_USER_CAP_ERROR_CODE,
   MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
@@ -445,7 +447,7 @@ describe('createUserApiKey - per-user cap pools', () => {
     name: 'AI (federated: VibesWire)',
     scopes: [ApiKeyScope.AI_GENERATE],
     expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-    metadata: { createdFrom: 'oauth-exchange' as const, oauthClientId: 'client-a' },
+    metadata: { oauthClientId: 'client-a' },
   };
   const dashboardParams = {
     name: 'my key',
@@ -457,8 +459,12 @@ describe('createUserApiKey - per-user cap pools', () => {
   const adapters = (repo: ReturnType<typeof makeRepo>) =>
     ({ db: { userApiKeys: repo }, systemUserId: 'sys-1' }) as unknown as Parameters<typeof createUserApiKey>[2];
 
-  async function mintError(params: Parameters<typeof createUserApiKey>[1], repo: ReturnType<typeof makeRepo>) {
-    return createUserApiKey('user-1', params, adapters(repo)).then(
+  async function mintError(
+    params: Parameters<typeof createUserApiKey>[1] | Parameters<typeof createExchangeUserApiKey>[1],
+    repo: ReturnType<typeof makeRepo>,
+    mint: (...a: any[]) => Promise<unknown> = createExchangeUserApiKey // any: both entry points share this call shape
+  ) {
+    return mint('user-1', params, adapters(repo)).then(
       () => null,
       (err: unknown) => err as BadRequestError
     );
@@ -466,7 +472,7 @@ describe('createUserApiKey - per-user cap pools', () => {
 
   it('routes an exchange mint through the oauth-exchange pool', async () => {
     const repo = makeRepo();
-    await createUserApiKey('user-1', exchangeParams, adapters(repo));
+    await createExchangeUserApiKey('user-1', exchangeParams, adapters(repo));
     expect(repo.createIfUnderCap).toHaveBeenCalledTimes(1);
     expect(repo.createIfUnderCap).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-1' }),
@@ -488,7 +494,7 @@ describe('createUserApiKey - per-user cap pools', () => {
 
   it('lets an exchange mint through regardless of the standard pool state', async () => {
     const repo = makeRepo();
-    await expect(createUserApiKey('user-1', exchangeParams, adapters(repo))).resolves.toBeDefined();
+    await expect(createExchangeUserApiKey('user-1', exchangeParams, adapters(repo))).resolves.toBeDefined();
     expect(repo.createIfUnderCap).toHaveBeenCalledWith(
       expect.anything(),
       MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
@@ -514,7 +520,7 @@ describe('createUserApiKey - per-user cap pools', () => {
 
   it('refuses a standard mint when createIfUnderCap signals at_cap, tagged with the shared cap code', async () => {
     const repo = makeRepo({ createIfUnderCap: vi.fn().mockResolvedValue('at_cap') });
-    const error = await mintError(dashboardParams, repo);
+    const error = await mintError(dashboardParams, repo, createUserApiKey);
     expect(error).toBeInstanceOf(BadRequestError);
     expect(error?.message).toBe(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`);
     expect(error?.additionalInfo).toEqual({ errorCode: API_KEY_USER_CAP_ERROR_CODE });
@@ -522,18 +528,84 @@ describe('createUserApiKey - per-user cap pools', () => {
 
   it('succeeds when createIfUnderCap returns a document (cap not hit)', async () => {
     const repo = makeRepo();
-    await expect(createUserApiKey('user-1', exchangeParams, adapters(repo))).resolves.toBeDefined();
+    await expect(createExchangeUserApiKey('user-1', exchangeParams, adapters(repo))).resolves.toBeDefined();
   });
 
   it.each([
     ['no expiresAt', { ...exchangeParams, expiresAt: undefined }],
-    ['no oauthClientId', { ...exchangeParams, metadata: { createdFrom: 'oauth-exchange' as const } }],
+    ['no oauthClientId', { ...exchangeParams, metadata: {} }],
   ])('refuses an exchange key with %s, so the separate pool stays short-lived and per-client', async (_l, params) => {
     const repo = makeRepo();
-    const error = await mintError(params, repo);
+    const error = await mintError(params as never, repo);
     expect(error).toBeInstanceOf(BadRequestError);
     expect(error?.message).toBe('An oauth-exchange key requires expiresAt and metadata.oauthClientId');
     expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('does not let the shared mint path create an oauth-exchange key', async () => {
+    const repo = makeRepo();
+    const error = await mintError(
+      {
+        ...dashboardParams,
+        expiresAt: exchangeParams.expiresAt,
+        metadata: exchangeParams.metadata && { createdFrom: 'oauth-exchange', oauthClientId: 'client-a' },
+      } as never,
+      repo,
+      createUserApiKey
+    );
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect(repo.createIfUnderCap).not.toHaveBeenCalled();
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps the shared mint path out of the exchange pool for the system user too', async () => {
+    const repo = makeRepo();
+    const error = await mintError(
+      { ...dashboardParams, metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'client-a' } } as never,
+      repo,
+      (_u: string, p: never, a: never) => createUserApiKey('sys-1', p, a)
+    );
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts an exchange key expiring exactly at MAX_EXCHANGE_KEY_TTL_MS', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const repo = makeRepo();
+      const expiresAt = new Date(Date.now() + MAX_EXCHANGE_KEY_TTL_MS);
+      await expect(
+        createExchangeUserApiKey('user-1', { ...exchangeParams, expiresAt }, adapters(repo))
+      ).resolves.toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses an exchange key expiring beyond MAX_EXCHANGE_KEY_TTL_MS', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const repo = makeRepo();
+      const expiresAt = new Date(Date.now() + MAX_EXCHANGE_KEY_TTL_MS + 1);
+      const error = await mintError({ ...exchangeParams, expiresAt }, repo);
+      expect(error).toBeInstanceOf(BadRequestError);
+      expect(error?.message).toBe('An oauth-exchange key may not expire more than 15 minutes from now');
+      expect(repo.createIfUnderCap).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bypasses the cap for the system user on the exchange entry point and enforces the TTL max', async () => {
+    const repo = makeRepo();
+    await createExchangeUserApiKey('sys-1', exchangeParams, adapters(repo));
+    expect(repo.create).toHaveBeenCalledTimes(1);
+    expect(repo.createIfUnderCap).not.toHaveBeenCalled();
+
+    const tooLong = { ...exchangeParams, expiresAt: new Date(Date.now() + MAX_EXCHANGE_KEY_TTL_MS + 60_000) };
+    await expect(createExchangeUserApiKey('sys-1', tooLong, adapters(repo))).rejects.toBeInstanceOf(BadRequestError);
   });
 });
 

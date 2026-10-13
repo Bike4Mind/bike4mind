@@ -226,9 +226,9 @@ const handler = baseApi({ auth: false })
       );
     }
 
-    let minted: Awaited<ReturnType<typeof userApiKeyService.createUserApiKey>>;
+    let minted: Awaited<ReturnType<typeof userApiKeyService.createExchangeUserApiKey>>;
     try {
-      minted = await userApiKeyService.createUserApiKey(
+      minted = await userApiKeyService.createExchangeUserApiKey(
         b4mUserId,
         {
           name: `AI (federated: ${client.name})`,
@@ -237,7 +237,6 @@ const handler = baseApi({ auth: false })
           metadata: {
             clientIP: clientIp,
             userAgent,
-            createdFrom: 'oauth-exchange',
             oauthClientId: client_id,
           },
         },

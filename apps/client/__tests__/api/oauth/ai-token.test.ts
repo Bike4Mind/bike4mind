@@ -60,7 +60,7 @@ const mockRevokeUserApiKey = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   API_KEY_USER_CAP_ERROR_CODE: 'api_key_user_cap',
   userApiKeyService: {
-    createUserApiKey: (...a: any[]) => mockCreateUserApiKey(...a),
+    createExchangeUserApiKey: (...a: any[]) => mockCreateUserApiKey(...a),
     revokeUserApiKey: (...a: any[]) => mockRevokeUserApiKey(...a),
   },
 }));
@@ -265,12 +265,12 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       scope: 'ai:generate',
     });
 
-    // minted with exactly ai:generate, oauth-exchange metadata, and an expiry ~15m out
+    // minted through the exchange entry point with exactly ai:generate, the client tag, and an expiry ~15m out
     expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
     const [userId, params] = mockCreateUserApiKey.mock.calls[0];
     expect(userId).toBe('b4m-user-1');
     expect(params.scopes).toEqual(['ai:generate']);
-    expect(params.metadata).toMatchObject({ createdFrom: 'oauth-exchange', oauthClientId: 'client-1' });
+    expect(params.metadata).toMatchObject({ oauthClientId: 'client-1' });
     expect(params.expiresAt).toBeInstanceOf(Date);
     const ttlMs = params.expiresAt.getTime() - Date.now();
     expect(ttlMs).toBeGreaterThan(890_000);
