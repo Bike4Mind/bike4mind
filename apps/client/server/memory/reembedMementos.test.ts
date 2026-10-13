@@ -241,12 +241,25 @@ describe('migrateLedgerVectorsForPrincipal', () => {
   });
 
   it('makes no provider call and no write on a dry run, but still counts', async () => {
-    missingKey = 'openai';
     chain = [ev('full', vec('text-embedding-3-small')), ev('h1')];
 
     const stats = await migrateLedgerVectorsForPrincipal(lake, { dryRun: true });
 
     expect(stats).toMatchObject({ truncated: 1, backfilled: 1, failed: 0, providerCalls: 1, errors: [] });
+    expect(generateEmbedding).not.toHaveBeenCalled();
+    expect(rewriteEmbedding).not.toHaveBeenCalled();
+  });
+
+  it('reports noProviderKey in a dry run when the owner has no embedding credential', async () => {
+    missingKey = 'openai';
+    chain = [ev('full', vec('text-embedding-3-small')), ev('h1')];
+
+    const stats = await migrateLedgerVectorsForPrincipal(lake, { dryRun: true });
+
+    expect(stats).toMatchObject({ truncated: 1, noProviderKey: 1, failed: 0, providerCalls: 0 });
+    expect(stats.errors).toHaveLength(1);
+    expect(stats.errors[0]).toContain('owner owner1');
+    expect(stats.embedderError).toContain('OpenAI API key required');
     expect(generateEmbedding).not.toHaveBeenCalled();
     expect(rewriteEmbedding).not.toHaveBeenCalled();
   });
