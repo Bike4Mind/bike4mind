@@ -81,7 +81,11 @@ vi.mock('@server/utils/analyticsLog', () => ({
   logEvent: (...a: unknown[]) => mockLogEvent(...a),
   // Matches logEventSafe's contract: a failed write is swallowed, never rethrown.
   logEventSafe: async (event: unknown, options: unknown) => {
-    await Promise.resolve(mockLogEvent(event, options)).catch(() => undefined);
+    try {
+      await mockLogEvent(event, options);
+    } catch {
+      // swallowed, including a synchronous throw from a mockImplementation
+    }
   },
 }));
 
