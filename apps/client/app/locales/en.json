@@ -234,7 +234,7 @@
     "showPassword": "Show password",
     "enterEmailOrUsername": "Enter email or username",
     "enterPassword": "Enter password",
-    "signInOrCreate": "Sign in or create an account to continue",
+    "signInOrCreate": "Enter your email and we'll send a one-time code to sign in or create an account.",
     "justAMoment": "Just a moment...",
     "fieldErrors": {
       "invalidUsername": "Invalid username",
