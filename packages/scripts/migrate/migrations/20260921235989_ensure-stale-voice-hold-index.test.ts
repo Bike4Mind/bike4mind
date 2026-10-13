@@ -9,7 +9,7 @@ vi.mock('@bike4mind/database', () => ({
   Session: { db: { db: { listCollections } }, collection, createIndexes },
 }));
 
-import migration, { OPEN_VOICE_HOLD_INDEX_NAME } from './20260921235993_ensure-stale-voice-hold-index';
+import migration, { OPEN_VOICE_HOLD_INDEX_NAME } from './20260921235989_ensure-stale-voice-hold-index';
 
 beforeEach(() => {
   vi.clearAllMocks();
