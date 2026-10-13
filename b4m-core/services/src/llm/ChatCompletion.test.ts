@@ -8069,7 +8069,35 @@ describe('prompt moderation', () => {
   const baseOptions = {
     session: { userId: 'user1', sessionId: 'sess1', organizationId: null },
     questId: 'q1',
-    user: { id: 'user1' },
+    user: { id: 'user1', currentCredits: 10000 },
+    questProcessUrl: '',
+    wsHttpsUrl: '',
+    slackWebhookUrl: '',
+    abilityGetter: vi.fn().mockResolvedValue({}),
+    autoNameSession: vi.fn(),
+    summarizeSession: vi.fn(),
+    getMcpClient: vi.fn(),
+    logEvent: vi.fn(),
+    getScopeFilter: vi.fn().mockReturnValue([]),
+    tokenizer: {
+      countTokens: vi.fn().mockResolvedValue(100),
+      encodeTokens: vi.fn().mockResolvedValue([1, 2, 3]),
+      clearCache: vi.fn(),
+      getCacheStats: vi.fn().mockReturnValue({ size: 0, keys: [] }),
+      warmUpCache: vi.fn().mockResolvedValue(undefined),
+    },
+    storage: {},
+    queue: {},
+    db: {} as any,
+    logger: {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      updateMetadata: vi.fn(),
+    } as any,
+    sessionId: 'sess1',
   };
 
   function wireModMocks({ openaiKey, guardrailId }: { openaiKey: string | null; guardrailId: string | null }) {
@@ -8110,26 +8138,70 @@ describe('prompt moderation', () => {
   }
 
   beforeEach(() => {
-    vi.mocked(applyModerationHit).mockResolvedValue({ hitsInWindow: 1, status: 'active' } as any);
-    vi.mocked(BedrockGuardrailsService).mockImplementation(function (this: any) {
-      this.checkPrompt = vi.fn();
-    } as any);
-    vi.mocked(OpenaiModerationsService).mockImplementation(function (this: any) {
-      this.checkPrompt = vi.fn();
-    } as any);
+    vi.mocked(applyModerationHit)
+      .mockClear()
+      .mockResolvedValue({ hitsInWindow: 1, status: 'active' } as any);
+    vi.mocked(BedrockGuardrailsService)
+      .mockClear()
+      .mockImplementation(function (this: any) {
+        this.checkPrompt = vi.fn();
+      } as any);
+    vi.mocked(OpenaiModerationsService)
+      .mockClear()
+      .mockImplementation(function (this: any) {
+        this.checkPrompt = vi.fn();
+      } as any);
 
+    const mockQuest = {
+      id: 'q1',
+      status: 'running',
+      sessionId: 'sess1',
+      callback: undefined,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      promptMeta: { context: {}, performance: {} },
+      replies: [],
+      type: 'message',
+    };
     const db = {
       quests: {
-        findById: vi.fn().mockResolvedValue({ id: 'q1', status: 'running', sessionId: 'sess1', callback: undefined }),
-        settleIfUnfinished: vi.fn(),
-        updateOne: vi.fn(),
+        findById: vi.fn().mockResolvedValue(mockQuest),
+        findByIdWithStatus: vi.fn().mockResolvedValue(mockQuest),
+        update: vi.fn().mockResolvedValue(undefined),
+        create: vi.fn(),
       },
-      sessions: { findById: vi.fn().mockResolvedValue({ userId: 'user1', sessionId: 'sess1', organizationId: null }) },
-      users: { findById: vi.fn().mockResolvedValue({ id: 'user1' }), updateOne: vi.fn() },
-      adminSettings: { getSettingsMap: vi.fn().mockResolvedValue({}), getSettingsValue: vi.fn() },
+      sessions: {
+        findById: vi
+          .fn()
+          .mockResolvedValue({ id: 'sess1', userId: 'user1', sessionId: 'sess1', organizationId: null, agentIds: [] }),
+        update: vi.fn(),
+        attachAgent: vi.fn(),
+      },
+      organizations: {
+        findById: vi.fn(),
+        update: vi.fn(),
+        findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+        findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+      },
+      users: { update: vi.fn() },
+      mcpServers: { find: vi.fn().mockResolvedValue([]) },
+      fabfiles: {},
+      fabfilechunks: {},
+      adminSettings: {},
+      questMasterPlans: {},
+      connections: {},
+      creditTransactions: {},
+      agents: {},
       projects: { findById: vi.fn() },
     };
-    mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    mockLogger = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      updateMetadata: vi.fn(),
+    };
     service = new ChatCompletionProcess(baseOptions as any);
     service.db = db as any;
     (service as any).statusManager = { sendStatusUpdate: vi.fn() };
