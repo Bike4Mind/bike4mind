@@ -4,6 +4,8 @@ import tseslint from 'typescript-eslint';
 import nextPlugin from '@next/eslint-plugin-next';
 import reactPlugin from 'eslint-plugin-react';
 import reactHooksPlugin from 'eslint-plugin-react-hooks';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import noRawEntityResponse from './eslint-rules/no-raw-entity-response.mjs';
 
 /**
@@ -337,6 +339,20 @@ const noUiImportsInWorkers = {
       message: WORKERS_NO_UI_MESSAGE,
     },
   ],
+};
+
+// Local rules, served as one plugin. `--cache` keys results on the plugin's name@version, not on
+// the rule source, so the version is a hash of that source - editing a rule invalidates the cache.
+const localRuleSources = ['./eslint-rules/no-raw-entity-response.mjs'];
+const localRulesPlugin = {
+  meta: {
+    name: 'b4m-local-rules',
+    version: createHash('sha256')
+      .update(localRuleSources.map(source => readFileSync(new URL(source, import.meta.url))).join('\n'))
+      .digest('hex')
+      .slice(0, 12),
+  },
+  rules: { 'no-raw-entity-response': noRawEntityResponse },
 };
 
 export default defineConfig([
@@ -740,11 +756,12 @@ export default defineConfig([
   // RFC #483 Phase 2 - an API route must not send a raw entity document; see
   // eslint-rules/no-raw-entity-response.mjs. The rule needs type information, so typed linting is
   // switched on for this glob only (it is the one rule here that pays for a TS program). Call sites
-  // that predate the rule are baselined in eslint-suppressions.json; fixing one makes its
-  // suppression stale, which fails lint until `pnpm exec eslint --prune-suppressions` is run.
+  // that predate the rule are baselined in eslint-suppressions.json as a per-file count; fixing one
+  // makes the count stale, which fails lint until `pnpm exec eslint --prune-suppressions` is run.
+  // Prune after deleting or renaming a baselined route too - an entry for a missing file never errors.
   {
-    files: ['apps/client/pages/api/**/*.ts'],
-    ignores: ['**/*.test.ts', '**/__tests__/**'],
+    files: ['apps/client/pages/api/**/*.{ts,tsx}'],
+    ignores: ['**/*.test.{ts,tsx}', '**/__tests__/**'],
     languageOptions: {
       parserOptions: {
         projectService: true,
@@ -752,7 +769,7 @@ export default defineConfig([
       },
     },
     plugins: {
-      b4m: { rules: { 'no-raw-entity-response': noRawEntityResponse } },
+      b4m: localRulesPlugin,
     },
     rules: {
       'b4m/no-raw-entity-response': 'error',

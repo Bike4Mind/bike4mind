@@ -1,15 +1,17 @@
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
-import { afterAll, describe, it } from 'vitest';
-import rule from '../../eslint-rules/no-raw-entity-response.mjs';
+import { afterAll, describe, expect, it } from 'vitest';
+import rule, { ENTITY_BASE } from '../../eslint-rules/no-raw-entity-response.mjs';
 
 RuleTester.describe = describe;
 RuleTester.it = it;
 RuleTester.afterAll = afterAll;
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/no-raw-entity-response');
+const testDir = path.dirname(fileURLToPath(import.meta.url));
+const fixtureDir = path.join(testDir, 'fixtures/no-raw-entity-response');
 
 const ruleTester = new RuleTester({
   languageOptions: {
@@ -29,6 +31,11 @@ declare const res: Res;
 declare const user: IUserDocument;
 declare const users: IUserDocument[];
 declare const maybeUser: IUserDocument | null;
+declare const maybeUsers: IUserDocument[] | null;
+declare const pair: [IUserDocument, number];
+declare const partial: Partial<IUserDocument>;
+type FlattenMaps<T> = { [K in keyof T]: T[K] };
+declare const leanRow: FlattenMaps<{ email: string }>;
 declare const admin: IAdminDocument;
 declare const safeUser: { id: string; email: string };
 declare const projected: Pick<IUserDocument, 'id' | 'email'>;
@@ -61,5 +68,19 @@ ruleTester.run('no-raw-entity-response', rule, {
     invalid('res.json(admin);'),
     invalid('res.json({ success: true, user });'),
     invalid('res.json({ ...user, extra: 1 });'),
+    invalid('res.json(maybeUsers);'),
+    invalid('res.json(pair);'),
+    invalid('res.json(partial);'),
+    invalid('res.json({ data: { owner: user } });'),
+    invalid('res.json([user]);'),
+    invalid('res.json(leanRow);'),
   ],
+});
+
+// The fixture declares its own IMongoDocument, so pin the rule's name to the real declaration.
+describe('ENTITY_BASE', () => {
+  it('matches the entity base interface in @bike4mind/common', () => {
+    const source = readFileSync(path.join(testDir, '../../b4m-core/common/src/types/entities/common.ts'), 'utf8');
+    expect(source).toMatch(new RegExp(`export interface ${ENTITY_BASE}\\b`));
+  });
 });
