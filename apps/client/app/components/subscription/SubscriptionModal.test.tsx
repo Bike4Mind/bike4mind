@@ -128,12 +128,12 @@ describe('SubscriptionModal - Team tab', () => {
     // The tab itself carries the reason; there is no extra tab stop around it.
     const reasonId = tab.getAttribute('aria-describedby');
     expect(reasonId).toBeTruthy();
-    expect(document.getElementById(reasonId as string)).toHaveTextContent('Team plans are coming back soon');
+    expect(document.getElementById(reasonId as string)).toHaveTextContent('Team plans are not available right now.');
 
     const wrapper = screen.getByTestId('subscription-modal-business-tab-wrapper');
     expect(wrapper).not.toHaveAttribute('tabindex');
     await userEvent.setup({ delay: null }).hover(wrapper);
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('Team plans are coming back soon');
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Team plans are not available right now.');
 
     // The Team card is not reachable.
     expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
@@ -162,7 +162,7 @@ describe('SubscriptionModal - Team tab', () => {
       'true'
     );
     expect(screen.getByTestId('subscription-modal-business-tab')).not.toHaveAttribute('aria-describedby');
-    expect(screen.queryByText('Team plans are coming back soon')).not.toBeInTheDocument();
+    expect(screen.queryByText('Team plans are not available right now.')).not.toBeInTheDocument();
   });
 
   it('says why Team cannot be bought when its Stripe price is not live, instead of hiding the tab', async () => {

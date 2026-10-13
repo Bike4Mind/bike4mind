@@ -41,7 +41,9 @@ const CreateTeamModal = () => {
   // later; clamp on read so the stepper, the total and the checkout quantity match what the API accepts.
   const [requestedTeamSize, setTeamSize] = useState(minSeats);
   const teamSize = Math.min(Math.max(requestedTeamSize, minSeats), maxSeats);
-  const teamPlanClosed = !useTeamPlanAvailable();
+  const teamPlanAvailable = useTeamPlanAvailable();
+  // The dev endpoint never touches Stripe (and throws outside development), so the flag only gates the Stripe path.
+  const teamPlanClosed = !isDevelopment && !teamPlanAvailable;
   const subscribeTeamPlan = useSubscribeTeamPlan();
   const createTeamDev = useCreateTeamDev();
   const plans = useGetSubscriptionPlans();
@@ -72,7 +74,7 @@ const CreateTeamModal = () => {
   };
 
   const handleSubmit = async () => {
-    if (submittingRef.current || teamPlanClosed) return;
+    if (submittingRef.current) return;
     submittingRef.current = true;
     try {
       if (isDevelopment) {

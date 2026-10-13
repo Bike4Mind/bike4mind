@@ -155,17 +155,48 @@ describe('CreateTeamModal', () => {
     expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(false);
   });
 
-  it('says Team plans are coming back soon and disables Create Team when enableTeamPlan is off', async () => {
+  it('says Team plans are not available and disables Create Team when enableTeamPlan is off', async () => {
     teamPlan.available = false;
     renderModal();
 
-    expect(screen.getByTestId('create-team-unavailable').textContent).toBe('Team plans are coming back soon');
+    expect(screen.getByTestId('create-team-unavailable').textContent).toBe('Team plans are not available right now.');
     // Even with a valid name and live price, the button stays disabled and nothing is submitted.
     await userEvent.setup({ delay: null }).type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
     const submit = screen.getByTestId('create-team-submit-btn');
     expect(submit.hasAttribute('disabled')).toBe(true);
     submit.click();
     expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('exempts the development create path from the Team plan gate', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.resetModules();
+    const devCreate = vi.fn().mockResolvedValue({});
+    vi.doMock('@client/app/hooks/data/subscriptions', () => ({
+      useSubscribeTeamPlan: () => ({ mutateAsync: (...args: unknown[]) => mutateAsync(...args), isPending: false }),
+      useCreateTeamDev: () => ({ mutateAsync: devCreate, isPending: false }),
+    }));
+    try {
+      teamPlan.available = false;
+      const { default: DevModal, useCreateTeamModal: useDevModal } = await import('./CreateTeamModal');
+      useDevModal.setState({ isOpen: true });
+      render(
+        <TestWrapper>
+          <DevModal />
+        </TestWrapper>
+      );
+
+      expect(screen.queryByTestId('create-team-unavailable')).toBeNull();
+      const user = userEvent.setup({ delay: null });
+      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      await user.click(screen.getByTestId('create-team-submit-btn'));
+
+      await waitFor(() => expect(devCreate).toHaveBeenCalledTimes(1));
+      expect(mutateAsync).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('@client/app/hooks/data/subscriptions');
+      vi.unstubAllEnvs();
+    }
   });
 
   it('keeps the missing-price error alongside the unavailable message', () => {

@@ -16,4 +16,4 @@ export {
 } from '@bike4mind/common';
 
 /** Shown wherever a Team purchase entry point is disabled because the enableTeamPlan setting is off. */
-export const TEAM_PLAN_UNAVAILABLE_MESSAGE = 'Team plans are coming back soon';
+export const TEAM_PLAN_UNAVAILABLE_MESSAGE = 'Team plans are not available right now.';
