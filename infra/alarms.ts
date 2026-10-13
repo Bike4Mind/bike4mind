@@ -1505,10 +1505,11 @@ if (isMonitoredStage) {
   /**
    * Alarm: Quest callback delivery exhausted its retries
    *
-   * A generation callback that exhausted its redispatch allowance was moved to `failed`. Steady
-   * state is 0: the sweep only reaches this after every retry window elapsed without a successful
-   * delivery, so sustained non-zero means a caller's webhook is not receiving quest callbacks.
-   * Three periods (15 min) so a single transient redispatch does not page.
+   * A generation callback whose claim was lost or crashed on every redispatch was moved to
+   * `failed`. Steady state is 0. Webhook delivery failures never reach this metric (the delivery
+   * handler marks them failed itself; the generation-callback DLQ alarm covers them).
+   * Single period: each reclaim resets dispatchedAt for the whole cohort, so exhaustions land in
+   * one sweep run and a multi-period window would rarely see consecutive datapoints.
    *
    * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> failExhaustedCallbacks.
    * Namespace: QUESTS_NAMESPACE, dimensioned by Stage only (the sweep emits { Stage }).
@@ -1517,7 +1518,7 @@ if (isMonitoredStage) {
     name: `${$app.name}-${$app.stage}-quest-callback-limit-reached`,
     alarmDescription: 'Quest generation callbacks are failing: redispatch retries exhausted',
     comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 3,
+    evaluationPeriods: 1,
     metricName: QUEST_METRICS.TimeoutSweepCallbacksFailedLimitReached,
     namespace: QUESTS_NAMESPACE,
     period: 300, // 5 minutes
