@@ -25,7 +25,8 @@ export function useTeamSeatLimits(): Pick<TeamPlanSettings, 'minSeats' | 'maxSea
  * Whether NEW Team purchases are open (`enableTeamPlan`). The single client-side gate for every Team
  * checkout entry point; the server enforces the same flag in pages/api/organizations/subscriptions/subscribe.ts.
  * Parsed through the setting's own schema (which coerces the string 'true') so client and server agree;
- * an unloaded or malformed value fails closed.
+ * an unloaded or malformed value fails closed. On a malformed value the server falls back to the
+ * setting's `defaultValue`, so the two agree only while that default stays `false`.
  */
 export function useTeamPlanAvailable(): boolean {
   const raw = useGetSettingsValue('enableTeamPlan');
