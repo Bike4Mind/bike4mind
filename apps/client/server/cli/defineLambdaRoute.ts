@@ -39,9 +39,9 @@ export type LambdaRateLimit = (ctx: {
 
 export type LambdaRouteOptions = { rateLimit?: LambdaRateLimit };
 
-export function internalErrorResult(requestId: string): APIGatewayProxyResultV2 {
+export function internalErrorResult(requestId: string, statusCode = 500): APIGatewayProxyResultV2 {
   return {
-    statusCode: 500,
+    statusCode,
     headers: { 'Content-Type': 'application/json', [REQUEST_ID_HEADER]: requestId },
     body: JSON.stringify({ error: 'Internal server error', request_id: requestId }),
   };
@@ -56,7 +56,7 @@ function authFailureStatus(error: unknown): 401 | 403 {
 /**
  * AWS Lambda Function URL adapter for an {@link EndpointContract} - the transport
  * used for public endpoints the Next.js API can't serve (SST dev + Function URLs +
- * CloudFront had socket hang-ups; see cli/tools.ts).
+ * CloudFront had socket hang-ups; see pages/api/ai/v1/tools.ts).
  *
  * Owns the boilerplate every Function-URL handler repeats: request-id resolution,
  * the contract's method (405), body parsing (400), DB connect, contract-driven auth (401/403, via resolveContractAuth
@@ -172,6 +172,8 @@ export function defineLambdaRoute<C extends EndpointContract>(
         const message = `[${contract.operationId}] ${error.statusCode}: ${error.message}`;
         if (error.statusCode >= 500 && !error.expected) log.error(message, error);
         else log.warn(message);
+        // Stricter than errorHandler (server/middlewares/errorHandler.ts), which still echoes 5xx messages.
+        if (error.statusCode >= 500) return internalErrorResult(requestId, error.statusCode);
         return json(error.statusCode, { error: error.message, request_id: requestId });
       }
       log.error(`[${contract.operationId}] Unhandled handler error`, error);

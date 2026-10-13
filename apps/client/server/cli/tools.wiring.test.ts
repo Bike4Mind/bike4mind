@@ -10,7 +10,9 @@ const repoRoot = resolve(__dirname, '../../../..');
 describe('CLI tools Lambda wiring', () => {
   it('infra points at an exported handler function in tools.handler', async () => {
     const infra = readFileSync(resolve(repoRoot, 'infra/cliToolHandler.ts'), 'utf8');
-    const spec = infra.match(/handler:\s*'([^']+)'/)?.[1] ?? '';
+    const match = infra.match(/handler:\s*(['"`])([^'"`]+)\1/);
+    expect(match, 'infra/cliToolHandler.ts has no handler: "<file>.<export>" entry').not.toBeNull();
+    const spec = match?.[2] ?? '';
     const dot = spec.lastIndexOf('.');
     const filePath = spec.slice(0, dot);
     const exportName = spec.slice(dot + 1);

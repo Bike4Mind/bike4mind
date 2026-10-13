@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { chatContract, executeToolContract, ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/common';
+import {
+  chatContract,
+  executeToolContract,
+  ForbiddenError,
+  HTTPError,
+  NotFoundError,
+  UnauthorizedError,
+} from '@bike4mind/common';
 
 // The adapter connects to the DB and authenticates before validating; mock those
 // so this stays a pure unit test of the adapter's parse/auth/validate/shape logic.
@@ -166,6 +173,16 @@ describe('defineLambdaRoute handler errors', () => {
     const res = asResult(await route(makeEvent({ message: 'hi' })));
     expect(res.statusCode).toBe(404);
     expect(JSON.parse(res.body as string)).toEqual({ error: 'nope', request_id: expect.any(String) });
+  });
+
+  it('keeps the status of a 5xx HTTPError but hides its message', async () => {
+    const route = defineLambdaRoute(chatContract, async () => {
+      throw new HTTPError(503, 'internal upstream detail');
+    });
+    const res = asResult(await route(makeEvent({ message: 'hi' })));
+    expect(res.statusCode).toBe(503);
+    expect(JSON.parse(res.body as string)).toEqual({ error: 'Internal server error', request_id: expect.any(String) });
+    expect(res.body).not.toContain('internal upstream detail');
   });
 
   it('still shapes a plain Error into a 500', async () => {
