@@ -843,19 +843,29 @@ describe('CookieConsentBanner', () => {
 
   describe('tracking cookies and MailerLite', () => {
     const mailerLiteScript = () => document.querySelector('script[src="/scripts/ml.js"]');
+    const ALL_NAMES = ['_fbp', '_fbc', '_rdt_uuid', '_rdt_em', '_rdt_cid', '_ga', '_gcl_au', '_ga_ABC123'];
     const trackingCookies = () =>
       document.cookie
         .split('; ')
         .map(c => c.split('=')[0])
-        .filter(n => ['_fbp', '_rdt_uuid', '_rdt_em', '_ga'].includes(n) || n.startsWith('_ga_'));
+        .filter(n => ALL_NAMES.includes(n));
+    const seedTrackingCookies = () => {
+      for (const name of ALL_NAMES) document.cookie = `${name}=x; path=/`;
+    };
+    const renderBanner = () =>
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
 
     beforeEach(() => {
       document.getElementById('mailerlite')?.remove();
     });
 
     it('expires the ad and analytics cookies on decline', () => {
-      for (const name of ['_fbp', '_rdt_uuid', '_rdt_em', '_ga', '_ga_ABC123']) document.cookie = `${name}=x; path=/`;
-      expect(trackingCookies()).toHaveLength(5);
+      seedTrackingCookies();
+      expect(trackingCookies()).toHaveLength(8);
       render(
         <TestWrapper>
           <CookieConsentBanner />
@@ -864,6 +874,20 @@ describe('CookieConsentBanner', () => {
 
       fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
 
+      expect(trackingCookies()).toEqual([]);
+    });
+
+    it('expires the cookies on load for a visitor who declined earlier', () => {
+      seedTrackingCookies();
+      localStorageMock.setItem('cookie_consent', 'denied');
+      renderBanner();
+      expect(trackingCookies()).toEqual([]);
+    });
+
+    it('expires the cookies on load for a visitor who declined on the marketing site', () => {
+      seedTrackingCookies();
+      setSharedDecision('denied');
+      renderBanner();
       expect(trackingCookies()).toEqual([]);
     });
 

@@ -35,6 +35,12 @@ export type ConsentState = 'granted' | 'denied' | 'unset';
 /** 90 days: outlives b4m_app_first_touch, the longest-lived thing this gate guards. */
 const APP_DECISION_TTL_SECONDS = 90 * 24 * 60 * 60;
 
+/** Secure only on https: a Secure write from a plain-http origin is dropped, which would also
+ * leave an earlier non-Secure copy of the cookie impossible to overwrite. */
+function secureAttr(): string {
+  return window.location.protocol === 'https:' ? '; Secure' : '';
+}
+
 /**
  * Publish the resolved decision where the server can read it, or withdraw it when the visitor
  * has no decision to publish.
@@ -55,12 +61,6 @@ const APP_DECISION_TTL_SECONDS = 90 * 24 * 60 * 60;
  * returns through a top-level cross-site GET from the IdP, and Strict is withheld on precisely
  * that navigation. Under Strict this cookie would be missing on the one request it exists for.
  */
-/** Secure only on https: a Secure write from a plain-http origin is dropped, which would also
- * leave an earlier non-Secure copy of the cookie impossible to overwrite. */
-function secureAttr(): string {
-  return window.location.protocol === 'https:' ? '; Secure' : '';
-}
-
 export function publishResolvedConsent(value: ConsentState): void {
   if (typeof document === 'undefined') return;
   if (value === 'unset') {
