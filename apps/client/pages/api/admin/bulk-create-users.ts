@@ -33,7 +33,8 @@ const bulkCreateResponseSchema = z.object({
   results: z.array(
     z.discriminatedUnion('success', [
       z.object({ success: z.literal(true), email: z.string(), user: selfUserResponseSchema }),
-      z.object({ success: z.literal(false), email: z.string(), error: z.string() }),
+      // Echoes the row as submitted: it failed validation, so its email may be missing or not a string.
+      z.object({ success: z.literal(false), email: z.unknown().optional(), error: z.string() }),
     ])
   ),
 });

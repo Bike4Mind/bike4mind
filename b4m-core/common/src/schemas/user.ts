@@ -135,8 +135,10 @@ export type PublicUserProfile = z.infer<typeof publicUserProfileResponseSchema>;
  * update). Unlike the schemas above this is a broad profile, so it is assembled from
  * a key list that the compiler holds to `IUserDocument`: adding a field to IUser
  * fails the build here until it is classified, either as a passthrough below or as a
- * secret in USER_SECRET_FIELDS. A new field can therefore never leak by default, nor
- * be silently stripped from the settings UI.
+ * secret in USER_SECRET_FIELDS. A new field can therefore never leak by default. The
+ * guard sees IUser only: a path added to the Mongoose UserSchema
+ * (packages/database/src/models/auth/UserModel.ts) without an IUser entry is
+ * stripped from every self-view, so declare it on IUser too.
  *
  * Passthrough values are `z.unknown()`: what this boundary enforces is WHICH keys
  * leave the server, not their types. These are long-lived Mongo documents, and a

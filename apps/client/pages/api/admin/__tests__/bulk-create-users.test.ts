@@ -57,4 +57,16 @@ describe('POST /api/admin/bulk-create-users', () => {
     expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'new-1', storageLimit: 1000, tags: undefined });
   });
+
+  it('reports an invalid row as a per-row failure without failing the batch', async () => {
+    const json = vi.fn();
+    const res = { status: vi.fn().mockReturnThis(), json };
+
+    await h.handler!(makeReq([{ email: 'a@b.test' }, { first: 'no-email' }]), res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    const { results } = json.mock.calls[0][0];
+    expect(results[0]).toMatchObject({ success: true, email: 'a@b.test' });
+    expect(results[1]).toMatchObject({ success: false, error: expect.any(String) });
+  });
 });

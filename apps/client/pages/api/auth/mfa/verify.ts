@@ -17,8 +17,6 @@ const tokenBodySchema = z.object({
 
 const verifyResponseSchema = z.object({
   verified: z.literal(true),
-  // The backup code that was just consumed, when one was used instead of a TOTP token.
-  usedBackupCode: z.string().optional(),
   deviceRemembered: z.boolean(),
   accessToken: z.string(),
   user: selfUserResponseSchema,
@@ -66,7 +64,6 @@ const handler = baseApi() // Now requires authentication
 
         loginBody = {
           verified: true,
-          usedBackupCode: result.usedBackupCode,
           deviceRemembered,
           accessToken,
           user: redactUserSecretsForSelf(result.user),
