@@ -17,8 +17,11 @@ export interface FallbackAttempt {
  * their HTTP status lives on `$metadata.httpStatusCode`, not `response.status`. Read both
  * shapes so a Bedrock 503 ServiceUnavailableException (whose message matches no substring
  * trigger) still falls back instead of hard-failing.
+ *
+ * Also classifies provider failures for the completions SSE route
+ * (apps/client/server/chatCompletion/external/sseRoute.ts).
  */
-function getHttpStatus(error: Error): number | undefined {
+export function getHttpStatus(error: Error): number | undefined {
   if (isAxiosError(error)) {
     return error.response?.status;
   }

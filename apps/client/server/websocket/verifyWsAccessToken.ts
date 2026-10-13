@@ -11,8 +11,16 @@ import jwt from 'jsonwebtoken';
 /**
  * Rotation-aware access-token verification for the data subscribe/unsubscribe WS actions.
  *
- * Applies the same session-admission gates as the REST strategy and CLI verifier. MUST stay in
- * sync with those paths so a credential refused there cannot ride the socket instead.
+ * Applies six gates: signature (with the rotation grace window), the `typ` claim, the OAuth `kind`
+ * refusal, the `mfaPending` refusal, the tokenVersion kill switch, and assertAccountStateUsable.
+ * Signature, `typ`, tokenVersion and account state match the REST strategy (auth/verifyJwtPayload.ts),
+ * the CLI verifier (cli/auth.ts verifyJwtToken) and connect.ts. The `kind` and `mfaPending` refusals
+ * match the CLI verifier and connect.ts; REST instead surfaces both on the user for oauthRouteGate
+ * and the mfaPending block in auth.ts. MUST stay in sync with those paths so a credential refused
+ * there cannot ride the socket instead.
+ *
+ * Unsubscribe shares this verifier, so a blocked account cannot unsubscribe either; disconnect.ts
+ * removes its subscribers when the socket closes.
  */
 export async function verifyWsAccessToken(accessToken: string | undefined) {
   const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');

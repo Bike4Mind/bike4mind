@@ -218,6 +218,7 @@ const PROVIDER_LABELS: Record<ApiKeyType, string | null> = {
   [ApiKeyType.deepseek]: 'DeepSeek',
   [ApiKeyType.bfl]: 'Black Forest Labs',
   [ApiKeyType.voyageai]: 'Voyage AI',
+  [ApiKeyType.typesafe]: 'TypeSafe',
   [ApiKeyType.elevenlabs]: 'ElevenLabs',
   [ApiKeyType.serpapi]: null,
   [ApiKeyType.ollama]: null,

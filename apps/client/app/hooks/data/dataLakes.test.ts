@@ -71,6 +71,7 @@ import {
   IDLE_BATCHES_POLL_MS,
   useBrowsePublicDataLakes,
   useCleanupDataLake,
+  useDataLakeSkippedFiles,
   useDataLakeResearchRuns,
   useDataLakeSpend,
   useDuplicatePrefixLake,
@@ -253,6 +254,55 @@ it('sends selected lake ids with a leaf article request', async () => {
   expect(apiGet).toHaveBeenCalledWith(
     '/api/data-lakes/articles?tags=docs%3Aalpha&lakeId=lake-a&lakeId=lake-b&limit=50'
   );
+});
+
+describe('useDataLakeSkippedFiles', () => {
+  const skippedPage = (count: number, total: number, offset = 0) => ({
+    data: {
+      data: Array.from({ length: count }, (_, i) => ({
+        id: `s${offset + i}`,
+        name: `f${offset + i}`,
+        reason: 'error',
+      })),
+      total,
+      hasMore: offset + count < total,
+    },
+  });
+  const mountSkipped = (enabled: boolean) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useDataLakeSkippedFiles('lake_1', enabled), { wrapper });
+  };
+
+  beforeEach(() => {
+    apiGet.mockReset();
+  });
+
+  it('sends no request while disabled (non-managers)', async () => {
+    const { result } = mountSkipped(false);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(apiGet).not.toHaveBeenCalled();
+    expect(result.current.total).toBe(0);
+  });
+
+  it('pages by row offset and keeps the first page total', async () => {
+    apiGet.mockResolvedValueOnce(skippedPage(25, 60)).mockResolvedValueOnce(skippedPage(25, 60, 25));
+    const { result } = mountSkipped(true);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/lake_1/skipped-files', { params: { limit: 25, offset: 0 } });
+
+    await act(async () => {
+      await result.current.loadMore();
+    });
+
+    expect(apiGet).toHaveBeenLastCalledWith('/api/data-lakes/lake_1/skipped-files', {
+      params: { limit: 25, offset: 25 },
+    });
+    await waitFor(() => expect(result.current.files).toHaveLength(50));
+    expect(result.current.total).toBe(60);
+    expect(result.current.hasMore).toBe(true);
+  });
 });
 
 describe('useBrowsePublicDataLakes', () => {

@@ -15,9 +15,9 @@ import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { isValidObjectId } from '@server/utils/objectId';
 import { ForbiddenError, NotFoundError, UnprocessableEntityError } from '@server/utils/errors';
-import { assertArtifactSourceRefsAccessible } from '@server/utils/assertArtifactSourceRefsAccessible';
+import { createArtifactSourceRefsGuard } from '@server/utils/artifactSourceRefsGuards';
 import { toPublicArtifact } from '@server/artifacts/toPublicArtifact';
-import { ARTIFACT_DB, artifactSourceRefDeps } from '@server/artifacts/artifactAccess';
+import { ARTIFACT_DB } from '@server/artifacts/artifactAccess';
 
 const CURSOR_SCOPE = 'v1.artifacts';
 
@@ -61,12 +61,15 @@ const createRoute = nextRouteForContract(createArtifactContract, {
 
   // Same guard and session predicate as POST /api/artifacts. Its 403 becomes a 404 here: 403 is
   // reserved for scope (CONVENTIONS.md), and a session you cannot edit reads as one that does not exist.
-  try {
-    await assertArtifactSourceRefsAccessible(userId, { sessionId: session_id }, artifactSourceRefDeps(req.user));
-  } catch (err) {
-    if (err instanceof ForbiddenError) throw new NotFoundError('Session not found');
-    throw err;
-  }
+  const guard = createArtifactSourceRefsGuard(req.user);
+  const assertSourceRefsAccessible: artifactService.ArtifactSourceRefsGuard = async (actorId, refs) => {
+    try {
+      await guard(actorId, refs);
+    } catch (err) {
+      if (err instanceof ForbiddenError) throw new NotFoundError('Session not found');
+      throw err;
+    }
+  };
 
   const { artifact } = await artifactService.create(
     userId,
@@ -81,7 +84,7 @@ const createRoute = nextRouteForContract(createArtifactContract, {
       visibility: 'private',
       metadata: {},
     },
-    { db: ARTIFACT_DB }
+    { assertSourceRefsAccessible, db: ARTIFACT_DB }
   );
 
   return res.status(201).json(toPublicArtifact(artifact, content));

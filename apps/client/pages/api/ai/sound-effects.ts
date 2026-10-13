@@ -9,7 +9,7 @@ import { apiKeyService, estimateSoundCredits } from '@bike4mind/services';
 import { aiSoundService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
@@ -126,21 +126,24 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
 
   recordUsage('ok', creditsCharged, usdCost);
 
-  // Best-effort browsable copy (on by default; opt out via the saveGeneratedAudio
-  // preference or `preview`): a save failure never blocks returning audio the
-  // caller was already charged for.
+  // Best-effort browsable copy, skipped only for a throwaway `preview` call: a
+  // save failure never blocks returning audio the caller was already charged for.
   const save =
-    userId &&
-    shouldPersistGeneratedAudio({ userId, saveGeneratedAudio: req.user?.preferences?.saveGeneratedAudio, preview })
-      ? await persistGeneratedAudio({
-          userId,
-          audio,
-          contentType,
-          format,
-          source: 'sound-effect',
-          text,
-          logger: req.logger,
-        })
+    userId && shouldPersistGeneratedAudio({ userId, preview })
+      ? await saveGeneratedAssetToFiles(
+          {
+            userId,
+            bytes: audio,
+            contentType,
+            generation: {
+              generator: 'sound_effect',
+              provider,
+              prompt: text,
+              ...(durationSeconds !== undefined && { durationSeconds }),
+            },
+          },
+          req.logger
+        )
       : undefined;
 
   return deliverGeneratedAudio(res, { audio, contentType, encoding: encoding ?? 'binary', save, logger: req.logger });

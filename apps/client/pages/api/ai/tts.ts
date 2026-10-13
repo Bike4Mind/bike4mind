@@ -14,7 +14,7 @@ import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider'
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
 import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
-import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 
 /**
@@ -124,21 +124,19 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
       });
     }
 
-    // Persist a browsable copy of the audio unless the user opted out or the
-    // call is a throwaway preview (the Settings voice audition). Best-effort: a
-    // save failure (e.g. over quota) never blocks returning the audio already paid for.
+    // Best-effort browsable copy, skipped only for a throwaway `preview` call: a
+    // save failure never blocks returning audio the caller was already charged for.
     const save =
-      userId &&
-      shouldPersistGeneratedAudio({ userId, saveGeneratedAudio: req.user?.preferences?.saveGeneratedAudio, preview })
-        ? await persistGeneratedAudio({
-            userId,
-            audio: result.audio,
-            contentType: result.contentType,
-            format: result.format,
-            source: 'tts',
-            text,
-            logger: req.logger,
-          })
+      userId && shouldPersistGeneratedAudio({ userId, preview })
+        ? await saveGeneratedAssetToFiles(
+            {
+              userId,
+              bytes: result.audio,
+              contentType: result.contentType,
+              generation: { generator: 'speech', provider: usedVendor, modelId: result.model, prompt: text },
+            },
+            req.logger
+          )
         : undefined;
 
     return await deliverGeneratedAudio(res, {

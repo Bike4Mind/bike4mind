@@ -82,7 +82,7 @@ describe('AnthropicBedrockBackend current inference profiles', () => {
   const profiles = [
     [ChatModels.CLAUDE_5_OPUS_BEDROCK, 5, 25],
     [ChatModels.CLAUDE_5_5_OPUS_BEDROCK, 4, 20],
-    [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 3, 15],
+    [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 2, 10],
     [ChatModels.CLAUDE_FABLE_5_BEDROCK, 10, 50],
     [ChatModels.CLAUDE_FABLE_5_1_BEDROCK, 10, 50],
   ] as const;
@@ -104,6 +104,28 @@ describe('AnthropicBedrockBackend current inference profiles', () => {
     const model = (await backend.getModelInfo()).find(candidate => candidate.id === ChatModels.CLAUDE_5_5_OPUS_BEDROCK);
 
     expect(model?.pricing[1_000_000]?.cache_read).toBe(0.2 / 1_000_000);
+  });
+
+  it('prices Sonnet 5.5 cache hits at 0.05x input ($0.10 / 1M), not the default 0.1x', async () => {
+    const model = (await backend.getModelInfo()).find(
+      candidate => candidate.id === ChatModels.CLAUDE_5_5_SONNET_BEDROCK
+    );
+
+    expect(model?.pricing[1_000_000]?.cache_read).toBe(0.1 / 1_000_000);
+  });
+
+  it('prices Fable 5.1 cache hits at 0.025x input ($0.25 / 1M), not the default 0.1x', async () => {
+    const model = (await backend.getModelInfo()).find(
+      candidate => candidate.id === ChatModels.CLAUDE_FABLE_5_1_BEDROCK
+    );
+
+    expect(model?.pricing[1_000_000]?.cache_read).toBe(0.25 / 1_000_000);
+  });
+
+  it('leaves Fable 5 on the 0.1x default, matching the published $1.00 / 1M cache read', async () => {
+    const model = (await backend.getModelInfo()).find(candidate => candidate.id === ChatModels.CLAUDE_FABLE_5_BEDROCK);
+
+    expect(model?.pricing[1_000_000]?.cache_read).toBeUndefined();
   });
 
   it('lists Haiku 5.5 as an adaptive Bedrock model priced by prompt length ($0.10/$0.50, then $0.50/$2.50 over 100K)', async () => {
