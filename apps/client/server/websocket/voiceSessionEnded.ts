@@ -112,8 +112,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       logger.warn(`voiceSessionEnded: response ${responseId} on session ${sessionId} already billed - ignoring`);
       return { statusCode: 200 };
     }
-    // The sweep settles an abandoned hold up to the last response the server saw.
-    await sessionRepository.recordVoiceActivity(session.id, new Date());
     const startedAt = session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
     let billedBefore: number | null = null;
     try {
@@ -154,6 +152,11 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     if (billedBefore !== null) {
       holdLeft = Math.max(0, (session.voiceReservedCredits ?? 0) - billedBefore - actualCredits);
     }
+    // The sweep settles an abandoned hold up to the last response the server saw. Best-effort and
+    // after the debit, so a failed marker write can never leave a ledger row the balance never paid.
+    await sessionRepository.recordVoiceActivity(session.id, new Date(), startedAt).catch(err => {
+      logger.warn('voiceSessionEnded: failed to record voice activity', { sessionId, err });
+    });
   } else {
     // The call is over: bill this frame's usage and refund what the hold did not cover. Older
     // clients send exactly one of these per call, so this is also their whole settlement.
