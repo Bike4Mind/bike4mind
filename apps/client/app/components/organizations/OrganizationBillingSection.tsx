@@ -106,10 +106,10 @@ const SubscriptionModal = ({
   };
 
   // Calculate if we're decreasing seats from current allocation
-  const isDecreasingSeats = subscription && seats < organization.seats;
+  const isDecreasingSeats = !isSeatsInvalid && subscription && seats < organization.seats;
 
   // Add warning message for max seats
-  const isAtMaxSeats = seats >= planMaxSeats;
+  const isAtMaxSeats = !isSeatsInvalid && seats >= planMaxSeats;
 
   const renderPrice = (price: number) => {
     return `$${price}`;
@@ -258,7 +258,7 @@ const SubscriptionModal = ({
               rel="noopener noreferrer"
               data-testid="organization-billing-contact-sales-link"
             >
-              Contact sales
+              Contact us
             </Link>
             .
           </Typography>

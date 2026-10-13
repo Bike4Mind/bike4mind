@@ -163,7 +163,7 @@ const CreateTeamModal = () => {
               rel="noopener noreferrer"
               data-testid="create-team-contact-sales-link"
             >
-              Contact sales
+              Contact us
             </Link>
             .
           </Typography>
