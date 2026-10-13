@@ -23,7 +23,7 @@ const OTC_CODE_TTL_MS = 10 * 60 * 1000;
 interface IPendingOtcCode {
   nonce: string;
   expiresAt: Date;
-  /** bcrypt hash of the emailed code; never leaves the server (the pending token carries only the nonce). */
+  /** bcrypt hash of the emailed code, read by validateAndRotateNonce. */
   otcHash?: string;
 }
 

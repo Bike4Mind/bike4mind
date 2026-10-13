@@ -98,7 +98,7 @@ describe('sendOTC', () => {
     expect(payload.jti).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/i);
   });
 
-  it('pending token carries no code material', async () => {
+  it('pending token payload is email, attempts, exp and jti', async () => {
     const { adapters, mocks } = makeAdapters();
     const result = await sendOTC({ email: 'test@example.com' }, adapters);
     const payload = mocks.signPendingToken.mock.calls[0][0];

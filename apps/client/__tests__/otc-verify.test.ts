@@ -257,9 +257,9 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(mockFindByEmail).not.toHaveBeenCalled();
   });
 
-  describe('re-issued pending tokens carry no code material', () => {
+  describe('re-issued pending tokens keep the same payload shape', () => {
     const signedPayloads = () => mockJwtSign.mock.calls.map(([payload]) => payload as Record<string, unknown>);
-    const expectNoCodeMaterial = () => {
+    const expectPayloadShape = () => {
       expect(signedPayloads().length).toBeGreaterThan(0);
       for (const payload of signedPayloads()) {
         expect(Object.keys(payload).sort()).toEqual(['attempts', 'email', 'jti']);
@@ -274,14 +274,14 @@ describe('/api/otc/verify — enumeration resistance', () => {
     it('on a wrong code', async () => {
       mockVerifyPendingOTC.mockResolvedValue(false);
       await handler(makeReq({ email: 'user@example.com', code: '00000000', pendingToken: 'tok' }), mockRes);
-      expectNoCodeMaterial();
+      expectPayloadShape();
     });
 
     it('when registration is required', async () => {
       mockVerifyPendingOTC.mockResolvedValue(true);
       await handler(makeReq({ email: 'user@example.com', code: '12345678', pendingToken: 'tok' }), mockRes);
       expect(mockRes.json.mock.calls[0][0].registrationRequired).toBe(true);
-      expectNoCodeMaterial();
+      expectPayloadShape();
     });
 
     it('when registration fails', async () => {
@@ -293,7 +293,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
           mockRes
         )
       ).rejects.toThrow();
-      expectNoCodeMaterial();
+      expectPayloadShape();
     });
   });
 

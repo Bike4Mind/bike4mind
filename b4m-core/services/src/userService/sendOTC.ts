@@ -23,9 +23,8 @@ interface SendOTCAdapters {
     sendOTCEmail: (email: string, code: string) => Promise<void>;
   };
   /**
-   * Signs a short-lived JWT carrying only email, attempts, expiry and the nonce (jti). It holds
-   * no code material. Used for all users so the response shape never reveals whether an account
-   * exists (prevents user enumeration).
+   * Signs a short-lived JWT carrying email, attempts, expiry and the nonce (jti). Used for all
+   * users so the response shape never reveals whether an account exists (prevents user enumeration).
    */
   signPendingToken: (payload: { email: string; attempts: number; exp: number; jti: string }) => string;
 }
@@ -40,7 +39,7 @@ export interface SendOTCResult {
   nonce: string;
   /**
    * bcrypt hash of the code. The caller stores it on the server-side record for `nonce`
-   * (PendingOtcTokenRepository); it must never be returned to the client.
+   * (PendingOtcTokenRepository).
    */
   otcHash: string;
   /**
