@@ -88,7 +88,7 @@ For example, the dropdown may include:
 | gemini-3.8-flash | Gemini 3.8 Flash |
 | grok-4.7 | Grok 4.7 |
 
-The dropdown lists the text models in the platform model catalog (the same list `/api/models` returns), best-ranked first, so the exact list can differ from the table. It is not filtered by your organization's enabled models. A model that is currently unavailable is shown as "(unavailable)" and cannot be newly selected; a saved model that has left the catalog is shown as "(no longer available)".
+The dropdown lists the text models in the platform model catalog (the same list `/api/models` returns), best-ranked first, so the exact list can differ from the table. It is not filtered by your organization's enabled models. A model that is currently unavailable is shown as "(unavailable)" and cannot be newly selected; a saved model that has left the catalog is shown as "(no longer available)". Where the same model name is offered by more than one provider, the label carries the provider so the options can be told apart.
 
 ## Database Repair
 
