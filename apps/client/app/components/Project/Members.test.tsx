@@ -120,15 +120,17 @@ describe('ProjectMembersSection invite refetch', () => {
 
   it('ignores events for another project or another invite type', () => {
     renderMembers();
+    const listener = mocks.inviteListener;
+    if (!listener) throw new Error('Members did not register an invite listener');
     act(() => {
-      mocks.inviteListener?.('insert', { documentId: 'other-project', type: InviteType.Project });
-      mocks.inviteListener?.('insert', { documentId: 'project-1', type: InviteType.Organization });
+      listener('insert', { documentId: 'other-project', type: InviteType.Project });
+      listener('insert', { documentId: 'project-1', type: InviteType.Organization });
       vi.runAllTimers();
     });
     expect(mocks.invalidateQueries).not.toHaveBeenCalled();
   });
 
-  it('invalidates the users key once, 500 ms after the last event, unchanged', () => {
+  it('invalidates the users key once, 500 ms after the last event', () => {
     renderMembers();
     fireInviteBurst();
     act(() => {

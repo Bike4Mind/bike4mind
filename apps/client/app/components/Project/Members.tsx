@@ -88,11 +88,9 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
 
   const coalescedInvalidateInvites = useCoalescedInvalidate(['invites', 'projects', project.id]);
 
-  // InboxProvider owns the single `invites` subscription; listen to its fan-out rather than opening
-  // a second, project-filtered subscribe. Any matching event (including a replay burst) schedules
-  // one coalesced refetch. Refetch rather than write the event's document: the subscription
-  // withholds `recipients` (server/websocket/dataSubscribeFieldLimits.ts), and the REST list
-  // redacts them per viewer.
+  // Listens to InboxProvider's single `invites` subscription instead of opening a second one.
+  // Refetch rather than write the event's document: the subscription withholds `recipients`
+  // (server/websocket/dataSubscribeFieldLimits.ts), and the REST list redacts them per viewer.
   useInviteEvents((_type, data) => {
     if (data?.documentId !== project.id || data?.type !== InviteType.Project) return;
     coalescedInvalidateInvites();
