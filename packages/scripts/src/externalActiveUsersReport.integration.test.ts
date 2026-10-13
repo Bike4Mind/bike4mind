@@ -43,8 +43,17 @@ const insertUser = async (email: string, extra: Record<string, unknown> = {}) =>
 const usage = (userId: string, iso: string, extra: Record<string, unknown> = {}) =>
   UsageEvent.collection.insertOne({ userId, createdAt: at(iso), status: 'ok', ...extra });
 
+/** A fresh unique ObjectId whose creation time is `date`, as for a quest created when it was sent. */
+const idAt = (date: Date) =>
+  new mongoose.Types.ObjectId(
+    Math.floor(date.getTime() / 1000)
+      .toString(16)
+      .padStart(8, '0') + new mongoose.Types.ObjectId().toHexString().slice(8)
+  );
+
 const quest = (userId: string, iso: string, extra: Record<string, unknown> = {}) =>
   Quest.collection.insertOne({
+    _id: idAt(at(iso)),
     sessionId: 's1',
     type: 'message',
     timestamp: at(iso),
@@ -71,7 +80,7 @@ const seed = async () => {
   await usage(alice, '2026-10-10', { source: 'chat' });
   await usage(alice, '2026-10-10', { source: 'chat' });
   await quest(alice, '2026-10-11');
-  // Before the 120 day window (starts 2026-06-16): not read.
+  // Before the 90 day window (starts 2026-07-16): not read.
   await usage(alice, '2026-01-01', { source: 'chat' });
 
   // bob: AgentExecution on day one, a UsageEvent with no source the next, a failed call after that.
@@ -94,7 +103,7 @@ const seed = async () => {
 
 const run = (overrides: Partial<Parameters<typeof runExternalActivityReport>[0]> = {}) =>
   runExternalActivityReport({
-    days: 120,
+    days: 90,
     testPattern: TEST_PATTERN,
     staffDomainsEnv: STAFF_DOMAINS,
     now: NOW,
@@ -176,6 +185,22 @@ describe('runExternalActivityReport', () => {
     expect(report.staffExclusionConfigured).toBe(false);
     expect(report.externalUsers).toBe(4); // the staff account now counts as external
     expect(lines.join('\n')).toContain('WARNING: NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS is empty');
+  });
+
+  it('does not credit the copier of a cloned quest on the source timestamp day', async () => {
+    const dave = await insertUser('dave@customer.example');
+    const erin = await insertUser('erin@customer.example');
+    await quest(dave, '2026-10-10');
+    // A session clone keeps the source timestamp (30 days back) but gets an _id created now.
+    await quest(dave, '2026-09-13', { _id: idAt(NOW) });
+    await quest(erin, '2026-09-13', { _id: idAt(NOW) });
+
+    const report = await run();
+
+    expect(report.externalUsers).toBe(1); // erin only has the copy
+    expect(report.cohorts.rows).toEqual([expect.objectContaining({ weekStart: '2026-10-04', users: 1 })]);
+    expect(report.cohorts.skippedAtWindowStart).toBe(0);
+    expect(report.dau.reduce((sum, row) => sum + row.users, 0)).toBe(1);
   });
 
   it('prints one plain-text report to the log', async () => {

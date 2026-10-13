@@ -10,7 +10,7 @@ import { internalStaffEmailRegex, parseInternalStaffDomains } from '@bike4mind/c
  * offsets are plain subtraction.
  */
 
-export const DEFAULT_DAYS = 120;
+export const DEFAULT_DAYS = 90;
 /** Source of the default --test-pattern regex (compiled case-insensitive). */
 export const DEFAULT_TEST_PATTERN = String.raw`\+(e2e|test)`;
 export const DAU_DAYS = 30;
@@ -19,6 +19,9 @@ export type RetentionOffset = (typeof RETENTION_OFFSETS)[number];
 
 /** AgentExecution rows carry a 90-day TTL index, so agent-only activity older than this is gone. */
 export const AGENT_EXECUTION_TTL_DAYS = 90;
+
+/** Max gap between a Quest's ObjectId creation time and its `timestamp` for it to count as an original. */
+export const QUEST_COPY_SKEW_MS = 3_600_000;
 
 const MS_PER_DAY = 86_400_000;
 const UNSET_SOURCE = 'unset';
@@ -41,7 +44,9 @@ export const HELP_TEXT = `Report external DAU and weekly cohort retention (read-
 
 Usage: report:external-active-users [--days <n>] [--test-pattern <regex>] [--help]
 
-  --days <n>             Window in UTC days, ending today (default ${DEFAULT_DAYS}).
+  --days <n>             Window in UTC days, ending today (default ${DEFAULT_DAYS}). Larger values are
+                         accepted, but agent activity older than ${AGENT_EXECUTION_TTL_DAYS} days is missing
+                         (AgentExecution TTL), so cohorts before that point are unreliable.
   --test-pattern <regex> Exclude users whose email matches (case-insensitive).
                          Default: ${DEFAULT_TEST_PATTERN}
   --help                 Show this text.
@@ -116,6 +121,16 @@ export function recordUsageSource(counts: UserSourceCounts, userId: string, sour
     counts.set(userId, bySource);
   }
   bySource.set(key, (bySource.get(key) ?? 0) + 1);
+}
+
+/**
+ * Session clone, fork and snip copy quests with the source `timestamp` but a fresh _id, and rebind
+ * the session to the copier. An original's _id and timestamp are created together, so a wide gap
+ * marks a copy that must not credit the copier on a past day. `createdAt` is not used: the copy
+ * may spread it from the source.
+ */
+export function isOriginalQuest(id: { getTimestamp(): Date }, timestamp: Date): boolean {
+  return Math.abs(id.getTimestamp().getTime() - timestamp.getTime()) <= QUEST_COPY_SKEW_MS;
 }
 
 // --- Exclusions ---
@@ -313,8 +328,8 @@ export function formatReport(report: ExternalActivityReport): string {
   }
   if (report.days > AGENT_EXECUTION_TTL_DAYS) {
     lines.push(
-      `Note: AgentExecution rows expire after ${AGENT_EXECUTION_TTL_DAYS} days, so agent-only activity ` +
-        `before ${AGENT_EXECUTION_TTL_DAYS} days ago is not counted.`
+      `Note: AgentExecution rows expire after ${AGENT_EXECUTION_TTL_DAYS} days, so agent activity older ` +
+        `than ${AGENT_EXECUTION_TTL_DAYS} days is missing and cohorts before that point are unreliable.`
     );
   }
 

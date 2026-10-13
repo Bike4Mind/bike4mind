@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_DAYS,
+  QUEST_COPY_SKEW_MS,
   buildCohorts,
   buildExclusionRules,
   buildReport,
@@ -8,6 +9,7 @@ import {
   dauSeries,
   exclusionReason,
   formatReport,
+  isOriginalQuest,
   parseReportArgs,
   recordActivity,
   recordUsageSource,
@@ -24,7 +26,7 @@ const daysOf = (...isos: string[]) => new Set(isos.map(day));
 // 2026-10-13 is a Tuesday; the Sundays used below are 08-30, 09-06, 09-13, 09-27, 10-04 and 10-11.
 const NOW = at('2026-10-13');
 const TODAY = day('2026-10-13');
-const WINDOW_START = TODAY - DEFAULT_DAYS + 1; // 2026-06-16
+const WINDOW_START = TODAY - DEFAULT_DAYS + 1; // 2026-07-16
 
 describe('recordActivity', () => {
   it('collapses many actions by one user on one UTC day into a single user-day', () => {
@@ -198,12 +200,34 @@ describe('buildCohorts', () => {
   });
 });
 
+describe('isOriginalQuest', () => {
+  const timestamp = new Date('2026-10-10T10:00:00Z');
+  const createdAt = (offsetMs: number) => ({ getTimestamp: () => new Date(timestamp.getTime() + offsetMs) });
+
+  it('counts a quest whose _id was created with its timestamp', () => {
+    expect(isOriginalQuest(createdAt(0), timestamp)).toBe(true);
+    expect(isOriginalQuest(createdAt(5_000), timestamp)).toBe(true);
+    expect(isOriginalQuest(createdAt(-5_000), timestamp)).toBe(true);
+  });
+
+  it('keeps the boundary at exactly one hour and drops anything wider in either direction', () => {
+    expect(isOriginalQuest(createdAt(QUEST_COPY_SKEW_MS), timestamp)).toBe(true);
+    expect(isOriginalQuest(createdAt(QUEST_COPY_SKEW_MS + 1_000), timestamp)).toBe(false);
+    expect(isOriginalQuest(createdAt(-QUEST_COPY_SKEW_MS - 1_000), timestamp)).toBe(false);
+  });
+
+  it('drops a copy made 30 days after the source timestamp', () => {
+    expect(isOriginalQuest(createdAt(30 * 86_400_000), timestamp)).toBe(false);
+  });
+});
+
 describe('parseReportArgs', () => {
-  it('defaults to a 120 day window and the e2e/test email pattern', () => {
+  it('defaults to a 90 day window and the e2e/test email pattern', () => {
     const args = parseReportArgs([]);
 
     expect(args.help).toBe(false);
     expect(args.days).toBe(DEFAULT_DAYS);
+    expect(args.days).toBe(90);
     expect(args.testPattern.test('qa+E2E@customer.example')).toBe(true);
     expect(args.testPattern.test('qa+test@customer.example')).toBe(true);
     expect(args.testPattern.test('qa@customer.example')).toBe(false);
@@ -263,7 +287,11 @@ describe('formatReport', () => {
 
   it('warns when no staff domains are configured and when the window outlives the AgentExecution TTL', () => {
     expect(build(undefined)).toContain('WARNING: NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS is empty');
-    expect(build('staff.example.com')).toContain('AgentExecution rows expire after 90 days');
+    expect(build('staff.example.com', 120)).toContain(
+      'AgentExecution rows expire after 90 days, so agent activity older than 90 days is missing ' +
+        'and cohorts before that point are unreliable.'
+    );
+    expect(build('staff.example.com')).not.toContain('AgentExecution rows expire');
     expect(build('staff.example.com', 60)).not.toContain('AgentExecution rows expire');
   });
 });

@@ -21,8 +21,9 @@ async function main() {
   }
 
   // Loaded after arg parsing: the SST resources and config throw outside an SST shell, and --help
-  // and bad flags should not need one.
-  const { connectDB } = await import('@bike4mind/database');
+  // and bad flags should not need one. The db-core connectDB, not the @bike4mind/database one: that
+  // wrapper seeds the model catalog and price rows on connect, which a read-only report must not do.
+  const { connectDB } = await import('@bike4mind/db-core');
   const { Resource } = await import('sst');
   const { Config } = await import('../utils/config');
   const { runExternalActivityReport } = await import('./externalActiveUsersReport');
