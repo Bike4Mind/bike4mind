@@ -45,7 +45,7 @@ Steps:
      "https://app.pr<N>.preview.bike4mind.com/api/test/otc-code?email=qa-admin-e2e@test.com"
    # -> {"code":"12345678"}
    ```
-3. Type the 6-digit code → **Verify Code** → you're in.
+3. Type the 8-digit code → **Verify Code** → you're in.
 
 `$E2E_CLEANUP_SECRET` is one shared value, the same on every preview and stable across redeploys — see
 [Environment Variables](#environment-variables) for what it is and how to get it.
