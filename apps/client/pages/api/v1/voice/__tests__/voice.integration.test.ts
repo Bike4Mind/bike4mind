@@ -629,7 +629,7 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     expect(refunded).toBeLessThan(RESERVED_CREDITS * 0.55);
   });
 
-  it('restores the hold with its last activity when the refund fails, so a retry still bills the call', async () => {
+  it('restores the hold with its last activity at the end when the refund fails, so a retry bills to the end', async () => {
     const startedAt = new Date(Date.now() - 300_000);
     const connectedAt = new Date(Date.now() - 240_000);
     const lastActivityAt = new Date(Date.now() - 10_000);
@@ -643,13 +643,22 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     mocks.incrementCredits.mockRejectedValue(new Error('db blip'));
     mocks.restoreVoiceHold.mockResolvedValue(true);
     const { res, run } = fireEnd();
+    const beforeEnd = Date.now();
     await run();
     expect(res._getStatusCode()).toBe(500);
     expect(mocks.restoreVoiceHold).toHaveBeenCalledWith(SESSION_ID, RESERVED_CREDITS, startedAt, {
       voiceConnectedAt: connectedAt,
-      voiceLastActivityAt: lastActivityAt,
+      voiceLastActivityAt: expect.any(Date),
       voiceBilledCredits: null,
     });
+    const [, , , markers] = mocks.restoreVoiceHold.mock.calls[0] as [
+      unknown,
+      unknown,
+      unknown,
+      { voiceLastActivityAt: Date },
+    ];
+    expect(markers.voiceLastActivityAt.getTime()).toBeGreaterThanOrEqual(beforeEnd);
+    expect(markers.voiceLastActivityAt.getTime()).toBeGreaterThan(lastActivityAt.getTime());
   });
 
   it('refunds nothing when a concurrent end or the stale hold sweep settled the hold first', async () => {
