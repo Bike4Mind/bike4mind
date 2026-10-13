@@ -8,10 +8,12 @@ const ModelName = 'TavernWorld';
 // Types
 // ---------------------------------------------------------------------------
 
+export type TavernEditSource = 'user' | 'agent' | 'system';
+
 export interface ITavernWorldEditHistoryEntry {
   batchId: string;
   timestamp: Date;
-  source: 'user' | 'agent' | 'system';
+  source: TavernEditSource;
   sourceId?: string;
   forward: Array<{ key: string; gid: number }>;
   reverse: Array<{ key: string; gid: number | null }>; // null = remove override
@@ -130,7 +132,7 @@ function validateGid(gid: number): boolean {
 export function foldHistoryEntry<T>(
   history: readonly T[],
   undoPointer: number,
-  source: 'user' | 'agent' | 'system',
+  source: TavernEditSource,
   entry: T,
   cap = MAX_HISTORY_ENTRIES
 ): { history: T[]; undoPointer: number } {
@@ -181,7 +183,7 @@ export const tavernWorldRepository = {
     floorId: string,
     expectedVersion: number,
     batch: Array<{ key: string; gid: number }>,
-    source: 'user' | 'agent' | 'system',
+    source: TavernEditSource,
     sourceId?: string
   ): Promise<ITavernWorldDoc | null> {
     // Validate batch size

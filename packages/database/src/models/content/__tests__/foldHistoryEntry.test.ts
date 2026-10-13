@@ -30,6 +30,16 @@ describe('foldHistoryEntry', () => {
     });
   });
 
+  it.each(['agent', 'system'] as const)(
+    '%s insert with the pointer at the end of a full history evicts the oldest',
+    source => {
+      expect(foldHistoryEntry(['a', 'b', 'c'], 3, source, 'x', CAP)).toEqual({
+        history: ['b', 'c', 'x'],
+        undoPointer: 3,
+      });
+    }
+  );
+
   // Known quirk, kept as-is: the new entry is inserted at index 0 and evicted at once, so it is never undoable.
   it('agent insert at pointer 0 with a full history evicts the new entry itself', () => {
     expect(foldHistoryEntry(['a', 'b', 'c'], 0, 'agent', 'x', CAP)).toEqual({
