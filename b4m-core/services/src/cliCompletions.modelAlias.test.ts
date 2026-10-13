@@ -149,6 +149,17 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
     });
   });
 
+  it("names the caller's bare alias, not the dated id, in the provider_not_configured 503", async () => {
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([]);
+    const { db } = buildDb();
+
+    await expect(executeCompletion({ ...baseParams, model: 'gpt-4.1', db })).rejects.toMatchObject({
+      statusCode: 503,
+      message: 'Failed to create LLM backend for model: gpt-4.1',
+      additionalInfo: { errorCode: 'provider_not_configured' },
+    });
+  });
+
   it('raises a 400 unknown_model when the provider key is present but the model is not available to the caller', async () => {
     vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ gemini: 'gemini-key' } as never);
     const { db } = buildDb();

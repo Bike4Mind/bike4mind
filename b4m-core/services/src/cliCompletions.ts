@@ -387,7 +387,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       return false;
     });
     if (!providerConfigured)
-      throw new HTTPError(503, `Failed to create LLM backend for model: ${model}`, {
+      throw new HTTPError(503, `Failed to create LLM backend for model: ${params.model}`, {
         errorCode: 'provider_not_configured',
       });
     // A retired or unlisted model on a configured provider must be changed by the caller; a retryable status
