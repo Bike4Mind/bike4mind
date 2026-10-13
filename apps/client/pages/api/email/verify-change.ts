@@ -2,6 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userService } from '@bike4mind/services';
+import { endAllUserSessions } from '@server/auth/endUserSessions';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -39,8 +40,9 @@ const handler = baseApi({ auth: false })
       const oldEmail = user.email;
       const newEmail = user.pendingEmail;
 
+      // Only the change itself is in the try: a failure after it (e.g. ending sessions) must not
+      // be audited as a failed email change, because the email did change.
       try {
-        // Verify the token and complete email change
         await userService.verifyEmailChange(
           { token },
           {
@@ -52,49 +54,6 @@ const handler = baseApi({ auth: false })
             },
           }
         );
-
-        // Log successful email change
-        await logAuditEvent(
-          {
-            userId: user.id,
-            action: EmailAuditEvents.EMAIL_CHANGE_SUCCESS,
-            ip: req.ip,
-            userAgent: req.headers['user-agent'] || 'unknown',
-            oldEmail: oldEmail || undefined,
-            newEmail: newEmail || undefined,
-            tokenAge: user.pendingEmailSentAt ? calculateTokenAge(user.pendingEmailSentAt) : undefined,
-          },
-          req.logger
-        );
-
-        // Log to existing analytics system
-        try {
-          await logEvent({
-            userId: user.id,
-            type: AuthEvents.EMAIL_VERIFIED,
-            metadata: {},
-          });
-        } catch (error) {
-          req.logger.warn('Failed to log email change event:', error);
-        }
-
-        // Wake the client entitlement gate when the change crosses a domain
-        // grant boundary (derive-on-read DOMAIN_GRANTS) - checking EITHER the old
-        // or new address covers both gaining (moved TO a partner-domain address) and
-        // losing it (moved AWAY). After verifyEmailChange, `newEmail` is now
-        // `user.email`. The verifyEmailChange success path always sets a non-null
-        // pendingEmail, and entitlementsForEmail tolerates null regardless.
-        //
-        // Access (derive-on-read) updates here, but the one-time signup credits
-        // (see verify.ts Phase 2b) are DELIBERATELY not granted on email change -
-        // they are strictly a signup-time perk, and gating them here would open an
-        // email-swap credit-farming vector. The idempotent `domain-grant-credits:`
-        // key means adding it here later (if product wants it) stays safe.
-        if (entitlementsForEmail(oldEmail, true).size > 0 || entitlementsForEmail(newEmail, true).size > 0) {
-          await pushEntitlementInvalidation(user.id, req.logger);
-        }
-
-        return res.json({ message: 'Email changed successfully. Please log in with your new email address.' });
       } catch (error) {
         // Log failed email change attempt with specific event types
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -122,6 +81,53 @@ const handler = baseApi({ auth: false })
         );
         throw error;
       }
+
+      // Log successful email change
+      await logAuditEvent(
+        {
+          userId: user.id,
+          action: EmailAuditEvents.EMAIL_CHANGE_SUCCESS,
+          ip: req.ip,
+          userAgent: req.headers['user-agent'] || 'unknown',
+          oldEmail: oldEmail || undefined,
+          newEmail: newEmail || undefined,
+          tokenAge: user.pendingEmailSentAt ? calculateTokenAge(user.pendingEmailSentAt) : undefined,
+        },
+        req.logger
+      );
+
+      // The sign-in identity moved, so every session minted under the old one ends. The response
+      // already tells the user to sign in again with the new address.
+      await endAllUserSessions(req, user.id, { reason: 'email_changed' });
+
+      // Log to existing analytics system
+      try {
+        await logEvent({
+          userId: user.id,
+          type: AuthEvents.EMAIL_VERIFIED,
+          metadata: {},
+        });
+      } catch (error) {
+        req.logger.warn('Failed to log email change event:', error);
+      }
+
+      // Wake the client entitlement gate when the change crosses a domain
+      // grant boundary (derive-on-read DOMAIN_GRANTS) - checking EITHER the old
+      // or new address covers both gaining (moved TO a partner-domain address) and
+      // losing it (moved AWAY). After verifyEmailChange, `newEmail` is now
+      // `user.email`. The verifyEmailChange success path always sets a non-null
+      // pendingEmail, and entitlementsForEmail tolerates null regardless.
+      //
+      // Access (derive-on-read) updates here, but the one-time signup credits
+      // (see verify.ts Phase 2b) are DELIBERATELY not granted on email change -
+      // they are strictly a signup-time perk, and gating them here would open an
+      // email-swap credit-farming vector. The idempotent `domain-grant-credits:`
+      // key means adding it here later (if product wants it) stays safe.
+      if (entitlementsForEmail(oldEmail, true).size > 0 || entitlementsForEmail(newEmail, true).size > 0) {
+        await pushEntitlementInvalidation(user.id, req.logger);
+      }
+
+      return res.json({ message: 'Email changed successfully. Please log in with your new email address.' });
     })
   );
 

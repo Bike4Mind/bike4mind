@@ -3,11 +3,16 @@ import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
 import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
 
-const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount } = vi.hoisted(() => ({
+const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount, mockEndAllUserSessions } = vi.hoisted(() => ({
   mockUserFindById: vi.fn(),
   mockAdminUpdateUser: vi.fn(),
   mockUpdateUser: vi.fn(),
   mockCount: vi.fn(),
+  mockEndAllUserSessions: vi.fn(),
+}));
+
+vi.mock('@server/auth/endUserSessions', () => ({
+  endAllUserSessions: (...a: unknown[]) => mockEndAllUserSessions(...a),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -50,8 +55,18 @@ vi.mock('@bike4mind/services', () => ({
       tags: z.array(z.string()).nullable().optional(),
       currentCredits: z.number().optional(),
       creditReason: z.string().optional(),
+      password: z.string().nullable().optional(),
+      email: z.string().optional(),
+      isBanned: z.boolean().optional(),
     }),
-    updateUserSchema: z.object({ name: z.string().optional(), role: z.string().optional() }),
+    updateUserSchema: z.object({
+      name: z.string().optional(),
+      role: z.string().optional(),
+      password: z.string().nullable().optional(),
+    }),
+    // Stand-in for accountState.entersBlockedState, reduced to the ban flag these tests drive.
+    entersBlockedState: (before: { isBanned?: boolean }, next: { isBanned?: boolean }) =>
+      !before.isBanned && !!next.isBanned,
   },
 }));
 
@@ -111,6 +126,7 @@ beforeEach(() => {
   mockAdminUpdateUser.mockReset().mockResolvedValue(undefined);
   mockUpdateUser.mockReset().mockResolvedValue(undefined);
   mockCount.mockReset().mockResolvedValue(2);
+  mockEndAllUserSessions.mockReset().mockResolvedValue(1);
 });
 
 describe('PUT /api/users/:id/update - lockout guard', () => {
@@ -148,8 +164,9 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { tags: ['opti'] } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    // Called once for the post-update refetch, NOT again from inside the lockout guard.
-    expect(mockUserFindById).toHaveBeenCalledTimes(1);
+    // The pre-update snapshot and the post-update refetch; the guard itself never counts admins.
+    expect(mockUserFindById).toHaveBeenCalledTimes(2);
+    expect(mockCount).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });
 
@@ -157,7 +174,8 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { isAdmin: true } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    expect(mockUserFindById).toHaveBeenCalledTimes(1);
+    expect(mockUserFindById).toHaveBeenCalledTimes(2);
+    expect(mockCount).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });
 
@@ -356,5 +374,93 @@ describe('PUT /api/users/:id/update - real allowlist binds the ignoredFields gua
 
     const parsed = userService.adminUpdateUserSchema.parse({ id: 'u1', currentCredits: 500, adminNote: 'comped' });
     expect(parsed).not.toHaveProperty('adminNote');
+  });
+});
+
+describe('PUT /api/users/:id/update - ends sessions on credential and account-state changes', () => {
+  const SELF = { id: 'u1', isAdmin: false };
+  const BEFORE = { id: 'target', email: 'old@example.com', isBanned: false };
+
+  /** First findById is the pre-update snapshot, the second the post-update refetch. */
+  function snapshots(before: object, after: object) {
+    mockUserFindById.mockReturnValueOnce(before).mockReturnValueOnce(after);
+  }
+
+  it('signs the user out everywhere after a self-service password change', async () => {
+    const { promise } = run({ user: SELF, userId: 'u1', body: { password: 'n3w-Passw0rd!' } });
+    await promise;
+
+    expect(mockEndAllUserSessions).toHaveBeenCalledTimes(1);
+    expect(mockEndAllUserSessions).toHaveBeenCalledWith(expect.anything(), 'u1', {
+      reason: 'password_changed',
+      actorUserId: undefined,
+    });
+  });
+
+  it('leaves sessions alone for a self-service update that sets no password', async () => {
+    const { promise } = run({ user: SELF, userId: 'u1', body: { name: 'New Name', password: null } });
+    await promise;
+
+    expect(mockEndAllUserSessions).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['sets their password', { password: 'n3w-Passw0rd!' }, BEFORE, 'password_changed'],
+    ['changes their email', { email: 'new@example.com' }, { ...BEFORE, email: 'new@example.com' }, 'email_changed'],
+    ['bans them', { isBanned: true }, { ...BEFORE, isBanned: true }, 'account_blocked'],
+  ])('signs the target out everywhere when an admin %s', async (_label, body, after, reason) => {
+    snapshots(BEFORE, after);
+    const { promise } = run({ user: ADMIN, userId: 'target', body });
+    await promise;
+
+    expect(mockEndAllUserSessions).toHaveBeenCalledTimes(1);
+    expect(mockEndAllUserSessions).toHaveBeenCalledWith(expect.anything(), 'target', {
+      reason,
+      actorUserId: ADMIN.id,
+    });
+  });
+
+  it('ends sessions once, under the account-block reason, when one admin edit does several', async () => {
+    snapshots(BEFORE, { ...BEFORE, email: 'new@example.com', isBanned: true });
+    const { promise } = run({
+      user: ADMIN,
+      userId: 'target',
+      body: { password: 'n3w-Passw0rd!', email: 'new@example.com', isBanned: true },
+    });
+    await promise;
+
+    expect(mockEndAllUserSessions).toHaveBeenCalledTimes(1);
+    expect(mockEndAllUserSessions.mock.calls[0][2].reason).toBe('account_blocked');
+  });
+
+  it('records no separate actor when an admin changes their own password', async () => {
+    snapshots({ ...BEFORE, id: ADMIN.id }, { ...BEFORE, id: ADMIN.id });
+    const { promise } = run({ user: ADMIN, userId: ADMIN.id, body: { password: 'n3w-Passw0rd!' } });
+    await promise;
+
+    expect(mockEndAllUserSessions).toHaveBeenCalledWith(expect.anything(), ADMIN.id, {
+      reason: 'password_changed',
+      actorUserId: undefined,
+    });
+  });
+
+  it.each([
+    ['a name-only edit', { name: 'New Name' }, BEFORE],
+    ['re-saving the same email', { email: 'old@example.com' }, BEFORE],
+    ['re-saving a ban on an already banned user', { isBanned: true }, { ...BEFORE, isBanned: true }],
+  ])('leaves sessions alone for %s', async (_label, body, after) => {
+    const before = body.isBanned ? { ...BEFORE, isBanned: true } : BEFORE;
+    snapshots(before, after);
+    const { promise } = run({ user: ADMIN, userId: 'target', body });
+    await promise;
+
+    expect(mockEndAllUserSessions).not.toHaveBeenCalled();
+  });
+
+  it('fails the request when the session revoke fails', async () => {
+    mockEndAllUserSessions.mockRejectedValue(new Error('db down'));
+    const { promise } = run({ user: SELF, userId: 'u1', body: { password: 'n3w-Passw0rd!' } });
+
+    await expect(promise).rejects.toThrow('db down');
   });
 });

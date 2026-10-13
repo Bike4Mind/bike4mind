@@ -11,6 +11,7 @@ import {
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
+import { endAllUserSessions, type SessionEndReason } from '@server/auth/endUserSessions';
 import { ApiKeyScope, ForbiddenError, redactUserSecretsForSelf } from '@bike4mind/common';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@server/utils/ip';
@@ -93,6 +94,27 @@ async function handleTelemetryConsentChange(
   }
 }
 
+type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0] & {
+  isAdmin?: boolean;
+  email?: string | null;
+};
+
+/**
+ * Why an admin edit must sign the target out everywhere, if it must. Entering a blocked state wins
+ * so the audit names the strongest cause when one edit does several things.
+ */
+function adminEditSessionEndReason(
+  passwordSet: boolean,
+  before: AccountStateSnapshot | null,
+  after: AccountStateSnapshot | null
+): SessionEndReason | undefined {
+  if (!before || !after) return undefined;
+  if (userService.entersBlockedState(before, after)) return 'account_blocked';
+  if (passwordSet) return 'password_changed';
+  if (after.email !== before.email) return 'email_changed';
+  return undefined;
+}
+
 const handler = baseApi().put(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const { id: userId } = idParamSchema.parse(req.query);
@@ -133,9 +155,12 @@ const handler = baseApi().put(
       // Admin role (self-demote). The old checkbox UI allowed both - a pre-existing
       // footgun the Roles radio (admin-roles-product-access-redesign M1) closes here,
       // at the actual write path, not just in the UI.
+      // One pre-update snapshot serves this guard and the session-end check after the write.
+      const before = (await User.findById(userId)
+        .select('isAdmin email isBanned disputePending moderation')
+        .lean()) as AccountStateSnapshot | null;
       if (body.isAdmin === false) {
-        const targetUser = (await User.findById(userId).select('isAdmin').lean()) as Record<string, unknown> | null;
-        if (targetUser?.isAdmin) {
+        if (before?.isAdmin) {
           if (currentUser.id === userId) {
             return res.status(400).json({ error: 'You cannot remove your own Super Admin role.' });
           }
@@ -172,6 +197,14 @@ const handler = baseApi().put(
 
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
+
+      const sessionEndReason = adminEditSessionEndReason(!!body.password, before, finalUser);
+      if (sessionEndReason) {
+        await endAllUserSessions(req, userId, {
+          reason: sessionEndReason,
+          actorUserId: currentUser.id !== userId ? currentUser.id : undefined,
+        });
+      }
       // Admin branch: symmetric with the admin view of GET /users/[id].
       const safeUser = redactUserSecretsForSelf(finalUser, {
         keep: ['securityQuestions'],
@@ -202,6 +235,10 @@ const handler = baseApi().put(
           users: userRepository,
         },
       });
+
+      if (body.password) {
+        await endAllUserSessions(req, userId, { reason: 'password_changed' });
+      }
 
       // Log consent change only after successful update
       if (incomingTelemetryLevel) {
