@@ -80,6 +80,25 @@ describe('saveGeneratedAssetFromTool', () => {
     });
   });
 
+  it('adapts the tool storage argument order and forwards scopedSettings', async () => {
+    const scopedSettings = { findOverrides: vi.fn() };
+    const context = makeContext({
+      db: { fabfiles: {}, users: {}, adminSettings: {}, dataLakes: {}, scopedSettings } as unknown as ToolContext['db'],
+    });
+
+    await saveGeneratedAssetFromTool(context, asset);
+
+    const { db, storage } = mockCreateFabFile.mock.calls[0][2];
+    expect(db.scopedSettings).toBe(scopedSettings);
+    const content = Buffer.from('bytes');
+    await storage.upload('generated-audio/a.mp3', content, { ContentType: 'audio/mpeg' });
+    expect(context.storage.upload).toHaveBeenCalledWith(content, 'generated-audio/a.mp3', {
+      ContentType: 'audio/mpeg',
+    });
+    await storage.generateSignedUrl('generated-audio/a.mp3', 60);
+    expect(context.storage.getSignedUrl).toHaveBeenCalledWith('generated-audio/a.mp3', 'get', { expiresIn: 60 });
+  });
+
   it('skips the save when the harness supplies no file adapters', async () => {
     const context = makeContext({ db: {} as ToolContext['db'] });
 

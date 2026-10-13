@@ -109,6 +109,32 @@ describe('saveGeneratedAsset', () => {
     expect(createFabFile).not.toHaveBeenCalled();
   });
 
+  it('rejects when the job dedup lookup fails, so the store step retries instead of falling back', async () => {
+    const lookupError = new Error('mongo unavailable');
+    findOne.mockRejectedValue(lookupError);
+    const generation: GeneratedAssetMetadata = { generator: 'video', provider: 'veo', jobId: 'j1', prompt: 'waves' };
+
+    await expect(saveGeneratedAsset(params({ contentType: 'video/mp4', generation }), deps)).rejects.toBe(lookupError);
+    expect(createFabFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['speech', 'speech'],
+    ['sound_effect', 'sound-effect'],
+  ] as const)('tags and names %s output with the %s label', async (generator, label) => {
+    const generation: GeneratedAssetMetadata = { generator, provider: 'elevenlabs', prompt: 'hello there' };
+
+    await saveGeneratedAsset(params({ generation }), deps);
+
+    const fileParams = createFabFile.mock.calls[0][1];
+    expect(fileParams).toMatchObject({ type: KnowledgeType.AUDIO, prefix: 'generated-audio' });
+    expect(fileParams.tags).toEqual([
+      { name: 'generated', strength: 1 },
+      { name: label, strength: 1 },
+    ]);
+    expect(fileParams.fileName).toMatch(new RegExp(`^${label}-hello-there-\\d+\\.mp3$`));
+  });
+
   it('refuses a content type with no known extension before writing', async () => {
     const generation: GeneratedAssetMetadata = { generator: 'video', provider: 'veo', prompt: 'waves' };
 

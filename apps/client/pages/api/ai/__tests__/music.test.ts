@@ -231,41 +231,41 @@ describe('POST /api/ai/music', () => {
   it('forwards caller-supplied forceInstrumental and format to the provider and the saved copy metadata', async () => {
     getSettingsValue.mockReturnValue(false);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 30 });
-    generate.mockResolvedValue({ audio: Buffer.from('pcm'), contentType: 'audio/L16' });
+    generate.mockResolvedValue({ audio: Buffer.from('mp3'), contentType: 'audio/mpeg' });
     saveGeneratedAssetToFiles.mockResolvedValue({
       saved: true,
       fileId: 'fab1',
       s3Key: 'k/audio.mp3',
-      fileName: 'music-x.pcm_44100',
+      fileName: 'music-x.mp3',
     });
 
     const { res, promise } = run({
       prompt: 'instrumental study loop',
       lengthMs: 30000,
       forceInstrumental: true,
-      format: 'pcm_44100',
+      format: 'mp3_44100_192',
     });
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
     // Real values, not `undefined`: toHaveBeenCalledWith uses toEqual semantics, so
     // asserting `undefined` can't tell "forwarded" from "silently dropped". Dropping
-    // either field here means a caller asking for an instrumental PCM track quietly
-    // gets vocals in mp3.
+    // either field here means a caller asking for an instrumental track in a given
+    // format quietly gets vocals in the default one.
     expect(generate).toHaveBeenCalledWith('instrumental study loop', {
       lengthMs: 30000,
       forceInstrumental: true,
       modelId: 'music_v1',
-      format: 'pcm_44100',
+      format: 'mp3_44100_192',
     });
     expect(saveGeneratedAssetToFiles).toHaveBeenCalledWith(
       expect.objectContaining({
-        contentType: 'audio/L16',
+        contentType: 'audio/mpeg',
         generation: expect.objectContaining({ generator: 'music' }),
       }),
       expect.anything()
     );
-    expect(res.getHeader('Content-Type')).toBe('audio/L16');
+    expect(res.getHeader('Content-Type')).toBe('audio/mpeg');
     expect(res.getHeader('Content-Length')).toBe(3);
   });
 

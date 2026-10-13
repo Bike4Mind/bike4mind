@@ -248,6 +248,30 @@ describe('video job end to end with the test provider', () => {
     expect(settleCreditHold).toHaveBeenCalledTimes(1);
   });
 
+  it('rethrows a rejecting Files save so the store step retries rather than falling back', async () => {
+    const saveError = new Error('dedup lookup failed');
+    const t = setup({ saveToFiles: vi.fn(async () => Promise.reject(saveError)) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    const pending = t.jobOf(created);
+    const storing = {
+      ...pending,
+      state: 'storing' as const,
+      payload: {
+        ...pending.payload,
+        providerOutput: {
+          kind: 'inline' as const,
+          base64: Buffer.from('clip').toString('base64'),
+          contentType: 'video/mp4',
+        },
+      },
+    };
+
+    await expect(createVideoJobHandler(t.deps).store(storing, { signal: new AbortController().signal })).rejects.toBe(
+      saveError
+    );
+    expect(t.deps.saveToGeneratedBucket).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['video/webm', 'webm'],
     ['application/octet-stream', 'bin'],
