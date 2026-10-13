@@ -30,6 +30,26 @@
         "default": "./dist/artifactParser.cjs"
       }
     },
+    "./toolOutputResultScan": {
+      "import": {
+        "types": "./dist/toolOutputResultScan.d.mts",
+        "default": "./dist/toolOutputResultScan.mjs"
+      },
+      "require": {
+        "types": "./dist/toolOutputResultScan.d.cts",
+        "default": "./dist/toolOutputResultScan.cjs"
+      }
+    },
+    "./importStatements": {
+      "import": {
+        "types": "./dist/importStatements.d.mts",
+        "default": "./dist/importStatements.mjs"
+      },
+      "require": {
+        "types": "./dist/importStatements.d.cts",
+        "default": "./dist/importStatements.cjs"
+      }
+    },
     "./artifactElision": {
       "import": {
         "types": "./dist/artifactElision.d.mts",
