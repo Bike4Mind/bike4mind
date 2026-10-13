@@ -144,5 +144,15 @@ describe('ImageModerationIncidentRepository', () => {
       expect(updated?.reviewStatus).toBe('reported');
       expect(updated?.ncmecReportId).toBe('rpt-flow');
     });
+
+    it('allows pending_review to be set from confirmed_csam (NCMEC failure rollback path)', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      await imageModerationIncidentRepository.claimForNcmecSubmission(String(inc._id));
+      const rolled = await imageModerationIncidentRepository.updateReviewStatus(String(inc._id), 'pending_review');
+      expect(rolled?.reviewStatus).toBe('pending_review');
+      // After rollback the incident is claimable again.
+      const reclaimed = await imageModerationIncidentRepository.claimForNcmecSubmission(String(inc._id));
+      expect(reclaimed?.reviewStatus).toBe('confirmed_csam');
+    });
   });
 });

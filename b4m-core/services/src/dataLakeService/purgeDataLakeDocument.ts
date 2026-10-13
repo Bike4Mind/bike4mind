@@ -305,7 +305,8 @@ export const purgeDataLakeDocument = async (
     // below and silently cost the owner their quota refund with no symptom to chase. Log and fall
     // through to the read-back instead, same as the storage-delete failure above - chunksRemaining
     // and verified report the gap truthfully, and onPurged still runs off `deletedByThisCall`.
-    try {
+    // Guard: if the legal-hold catch fired, the row was NOT deleted; skip chunk sweep entirely.
+    if (deletedByThisCall) try {
       await db.fabFileChunks.deleteManyByFabFileId(file.id);
     } catch (error) {
       logger?.error('[dataLake] permanent deletion removed the row but could not delete its chunks', {

@@ -127,4 +127,16 @@ describe('submitNcmecReport', () => {
     const xml = await blob.text();
     expect(xml).toContain('file-789');
   });
+
+  it('formats confidence as a 0-100 value (not 0-1) in the report XML', async () => {
+    fetchSpy.mockResolvedValue(okResponse('RPT-CONF'));
+    await submitNcmecReport(BASE_INPUT); // BASE_INPUT has confidence: 98.0
+
+    const [, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const formData = opts.body as FormData;
+    const blob = formData.get('report') as Blob;
+    const xml = await blob.text();
+    expect(xml).toContain('98.0%');
+    expect(xml).not.toContain('9800.0%');
+  });
 });
