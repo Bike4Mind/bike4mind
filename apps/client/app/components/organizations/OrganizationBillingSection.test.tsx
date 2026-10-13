@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -147,17 +147,43 @@ describe('OrganizationBillingSection - seat editor', () => {
     expect(updateSeatsMutate).toHaveBeenCalledWith({ organizationId: 'org1', seats: 12 });
   });
 
-  it('clamps a value above the maximum and below the minimum on blur', async () => {
+  it.each([
+    ['above the maximum', '500'],
+    ['below the minimum', '2'],
+  ])('flags a value %s and keeps submit disabled, even after blur', async (_name, text) => {
+    const { user, input } = await openSeatEditor();
+    await user.clear(input);
+    await user.type(input, text);
+    const submit = screen.getByRole('button', { name: 'Update Seats' });
+
+    expect(screen.getByTestId('organization-billing-seats-input-error').textContent).toBe('Must be between 4 and 100');
+    expect(submit.hasAttribute('disabled')).toBe(true);
+
+    await user.tab();
+    expect(input.value).toBe(text);
+    expect(submit.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('does not submit an out-of-range count while the field is still focused', async () => {
     const { user, input } = await openSeatEditor();
     await user.clear(input);
     await user.type(input, '500');
-    await user.tab();
-    expect(input.value).toBe('100');
+    fireEvent.click(screen.getByRole('button', { name: 'Update Seats' }));
 
+    expect(updateSeatsMutate).not.toHaveBeenCalled();
+  });
+
+  it('shows no decrease or maximum warning for a partial or invalid draft', async () => {
+    const { user, input } = await openSeatEditor();
     await user.clear(input);
     await user.type(input, '1');
-    await user.tab();
-    expect(input.value).toBe('4');
+
+    expect(screen.queryByText(/Decreasing seats will not affect/)).toBeNull();
+    expect(screen.queryByText(/Maximum number of seats/)).toBeNull();
+
+    await user.clear(input);
+    await user.type(input, '500');
+    expect(screen.queryByText(/Maximum number of seats/)).toBeNull();
   });
 
   it('disables the submit button while the field is empty', async () => {
@@ -169,7 +195,7 @@ describe('OrganizationBillingSection - seat editor', () => {
     expect(submit.hasAttribute('disabled')).toBe(true);
 
     await user.tab();
-    expect(submit.hasAttribute('disabled')).toBe(false);
+    expect(submit.hasAttribute('disabled')).toBe(true);
   });
 
   it('links custom billing to the sales contact in a new tab', async () => {

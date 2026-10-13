@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -174,7 +174,7 @@ describe('CreateTeamModal', () => {
     renderModal();
     const link = screen.getByTestId('create-team-contact-sales-link') as HTMLAnchorElement;
 
-    expect(link.textContent).toBe('Contact sales');
+    expect(link.textContent).toBe('Contact us');
     expect(link.getAttribute('href')).toBe(ExternalLinks.support);
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
@@ -206,21 +206,37 @@ describe('CreateTeamModal', () => {
       await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ quantity: 25 })));
     });
 
-    it('clamps a value above the maximum on blur', async () => {
+    it.each([
+      ['above the maximum', '99'],
+      ['below the minimum', '1'],
+    ])('flags a value %s and keeps Create Team disabled, even after blur', async (_name, text) => {
       renderModal();
-      const { user } = await typeSize('99');
-      await user.tab();
+      const user = userEvent.setup({ delay: null });
+      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      await typeSize(text);
 
-      expect(sizeValue()).toBe('7');
-      expect(screen.getByTestId('create-team-price-value').textContent).toBe('Total Price: $70/month');
+      expect(screen.getByTestId('create-team-size-value-error').textContent).toBe('Must be between 3 and 7');
+      expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
+
+      await user.tab();
+      expect(sizeValue()).toBe(text);
+      expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
     });
 
-    it('clamps a value below the minimum on blur', async () => {
+    it('does not submit an out-of-range size while the field is still focused', async () => {
       renderModal();
-      const { user } = await typeSize('1');
-      await user.tab();
+      const user = userEvent.setup({ delay: null });
+      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      await typeSize('99');
+      fireEvent.click(screen.getByTestId('create-team-submit-btn'));
 
-      expect(sizeValue()).toBe('3');
+      expect(mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it('keeps the total on the last valid size while the draft is invalid', async () => {
+      renderModal();
+      await typeSize('99');
+
       expect(screen.getByTestId('create-team-price-value').textContent).toBe('Total Price: $30/month');
     });
 
