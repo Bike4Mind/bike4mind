@@ -453,3 +453,98 @@ it('returns a browser URL after an authorized edit without updating the private 
 });
 
 afterEach(() => vi.unstubAllEnvs());
+
+describe('PUT response file-read scope', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv('API_KEY_SCOPE_STAGING', '');
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://public.test');
+    h.findUpdateAccessById.mockResolvedValue(
+      fabFile({
+        filePath: 'owned/notes.txt',
+        fileUrl: 'http://private.test/notes',
+        fileUrlExpireAt: new Date(Date.now() + 3600000),
+      })
+    );
+    h.find.mockResolvedValue([]);
+    h.findByDatalakeTag.mockResolvedValue(null);
+    h.update.mockResolvedValue(undefined);
+    h.signUrl.mockImplementation(async (_path, _mode, options) =>
+      options.audience === 'browser' ? 'https://public.test/notes' : 'http://private.test/notes'
+    );
+  });
+
+  it.each([{ fileName: 'renamed.txt' }, { fileContent: 'updated text' }])(
+    'returns metadata without a readable URL for a write-only key: %s',
+    async body => {
+      const { res, json } = makeRes();
+      await (handler as (req: unknown, res: unknown) => Promise<void>)(
+        req(body, FILE_ID, 'u1', { keyId: 'writer', scopes: ['files:write'] }),
+        res
+      );
+      expect(h.update).toHaveBeenCalled();
+      expect(logEventSafe).toHaveBeenCalled();
+      expect(json.mock.calls[0][0]).toMatchObject({ id: FILE_ID });
+      expect(json.mock.calls[0][0].fileUrl).toBeUndefined();
+      expect(json.mock.calls[0][0].fileUrlExpireAt).toBeUndefined();
+      expect(h.signUrl.mock.calls.some(call => call[2].audience === 'browser')).toBe(false);
+    }
+  );
+
+  it.each([{ info: undefined }, { info: { keyId: 'reader-writer', scopes: ['files:read', 'files:write'] } }])(
+    'signs the successful edit response for an authorized reader: %s',
+    async ({ info }) => {
+      const { res, json } = makeRes();
+      await (handler as (req: unknown, res: unknown) => Promise<void>)(
+        req({ fileName: 'renamed.txt' }, FILE_ID, 'u1', info),
+        res
+      );
+      expect(h.update).toHaveBeenCalled();
+      expect(logEventSafe).toHaveBeenCalled();
+      expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/notes');
+      expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', { expiresIn: 3600, audience: 'browser' });
+    }
+  );
+
+  it.each([{ scopes: [] }, { scopes: undefined }, { scopes: ['files:read'] }])(
+    'rejects a key without write scope before any write or response signing: %s',
+    async ({ scopes }) => {
+      const { res } = makeRes();
+      await expect(
+        (handler as (req: unknown, res: unknown) => Promise<void>)(
+          req({ fileName: 'renamed.txt' }, FILE_ID, 'u1', { keyId: 'no-write', scopes }),
+          res
+        )
+      ).rejects.toThrow('files:write');
+      expect(h.update).not.toHaveBeenCalled();
+      expect(h.findUpdateAccessById).not.toHaveBeenCalled();
+      expect(h.signUrl).not.toHaveBeenCalled();
+    }
+  );
+
+  it('honors the existing read-staging grace for a held write scope', async () => {
+    vi.stubEnv('API_KEY_SCOPE_STAGING', 'files:read');
+    const { res, json } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(
+      req({ fileName: 'renamed.txt' }, FILE_ID, 'u1', { keyId: 'staged-reader', scopes: ['files:write'] }),
+      res
+    );
+    expect(h.update).toHaveBeenCalled();
+    expect(logEventSafe).toHaveBeenCalled();
+    expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/notes');
+    expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', { expiresIn: 3600, audience: 'browser' });
+  });
+
+  it('keeps the update-access gate ahead of signing for a read/write key', async () => {
+    h.findUpdateAccessById.mockResolvedValue(null);
+    const { res } = makeRes();
+    await expect(
+      (handler as (req: unknown, res: unknown) => Promise<void>)(
+        req({ fileName: 'renamed.txt' }, FILE_ID, 'u1', { keyId: 'no-access', scopes: ['files:read', 'files:write'] }),
+        res
+      )
+    ).rejects.toThrow();
+    expect(h.update).not.toHaveBeenCalled();
+    expect(h.signUrl).not.toHaveBeenCalled();
+  });
+});
