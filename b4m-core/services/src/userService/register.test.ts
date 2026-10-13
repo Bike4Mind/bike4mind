@@ -72,6 +72,7 @@ describe('registerUser', () => {
         },
         creditTransactions: {
           createTransaction: vi.fn().mockResolvedValue({ id: 'transactionId', type: 'generic_add' }),
+          findOne: vi.fn().mockResolvedValue(null),
         },
       },
       logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
@@ -390,6 +391,7 @@ describe('registerViaOTC', () => {
         registrationInvites: { findByCode: vi.fn().mockResolvedValue(null), update: vi.fn() },
         creditTransactions: {
           createTransaction: vi.fn().mockResolvedValue({ id: 'transactionId', type: 'generic_add' }),
+          findOne: vi.fn().mockResolvedValue(null),
         },
       },
       logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
@@ -416,7 +418,7 @@ describe('registerViaOTC', () => {
       expect.objectContaining({
         ownerId: 'newUserId',
         credits: 100,
-        transactionId: 'otc-register-grant:newUserId',
+        transactionId: 'verify-grant:newUserId',
       }),
       expect.anything()
     );
@@ -479,7 +481,7 @@ describe('registerViaOTC', () => {
       expect.objectContaining({
         ownerId: 'newUserId',
         credits: 500,
-        transactionId: 'otc-register-grant:newUserId',
+        transactionId: 'verify-grant:newUserId',
       }),
       expect.anything()
     );
