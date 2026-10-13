@@ -129,7 +129,7 @@ const toProviderError = (response: Response, body: unknown): DecisionProviderErr
   if (kind !== 'client_error') return new DecisionProviderError(kind, `TypeSafe returned ${status}`, details);
   const message = readSystemOneErrorMessage(body);
   // Jev reports an unknown model as a plain 400. Validation only admits catalog ids, so that is catalog drift on our
-  // side, not something the caller can fix. The nightly contract probe pins this wording.
+  // side, not something the caller can fix. `record.ts --check` pins this wording.
   if (message?.startsWith(UNKNOWN_MODEL_PREFIX)) {
     return new DecisionProviderError('upstream', 'TypeSafe does not recognize the model', details);
   }
