@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
@@ -90,5 +91,42 @@ describe('Register', () => {
       expect(link).toHaveAttribute('target', '_blank');
       expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     }
+  });
+
+  // The inline error under each field must be announced and tied to its input. Before the fix the
+  // message was a plain Typography with no role, and the input carried no aria-describedby, so a
+  // screen reader heard "invalid" on the field but never the reason. Resolve through the input's
+  // own aria-describedby (the actual contract) rather than getByRole('alert'), which matches both
+  // the email and username messages since both slots stay mounted.
+  it('announces the invalid-email message and ties it to the email input', async () => {
+    const user = userEvent.setup();
+    renderRegister();
+
+    const emailInput = screen.getByRole('textbox', { name: 'auth.email' });
+    await user.type(emailInput, 'not-an-email');
+    await user.tab(); // blur so the field surfaces its error
+
+    expect(emailInput).toHaveAttribute('aria-invalid', 'true');
+    const messageId = emailInput.getAttribute('aria-describedby');
+    expect(messageId).toBeTruthy();
+    const message = document.getElementById(messageId as string);
+    expect(message).toHaveAttribute('role', 'alert');
+    expect(message).toHaveTextContent('auth.fieldErrors.invalidEmail');
+  });
+
+  it('announces the invalid-username message and ties it to the username input', async () => {
+    const user = userEvent.setup();
+    renderRegister();
+
+    const usernameInput = screen.getByRole('textbox', { name: 'auth.username' });
+    await user.type(usernameInput, 'bad name!');
+    await user.tab();
+
+    expect(usernameInput).toHaveAttribute('aria-invalid', 'true');
+    const messageId = usernameInput.getAttribute('aria-describedby');
+    expect(messageId).toBeTruthy();
+    const message = document.getElementById(messageId as string);
+    expect(message).toHaveAttribute('role', 'alert');
+    expect(message).toHaveTextContent('auth.fieldErrors.invalidUsername');
   });
 });

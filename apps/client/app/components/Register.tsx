@@ -596,10 +596,18 @@ const Register: React.FC = () => {
                             setUsernameBlurred(true);
                           }}
                           error={usernameShowError || !!serverUsernameError}
+                          slotProps={{
+                            input: {
+                              'aria-describedby':
+                                usernameShowError || serverUsernameError ? 'username-error' : undefined,
+                            },
+                          }}
                           sx={inputStyles}
                         />
                         <Typography
                           className="register-username-error"
+                          id="username-error"
+                          role="alert"
                           level="body-xs"
                           color="danger"
                           sx={{ minHeight: '18px', mt: '4px', fontSize: '12px' }}
@@ -630,10 +638,17 @@ const Register: React.FC = () => {
                             setEmailBlurred(true);
                           }}
                           error={emailShowError || !!serverEmailError}
+                          slotProps={{
+                            input: {
+                              'aria-describedby': emailShowError || serverEmailError ? 'email-error' : undefined,
+                            },
+                          }}
                           sx={inputStyles}
                         />
                         <Typography
                           className="register-email-error"
+                          id="email-error"
+                          role="alert"
                           level="body-xs"
                           color="danger"
                           sx={{ minHeight: '18px', mt: '4px', fontSize: '12px' }}
