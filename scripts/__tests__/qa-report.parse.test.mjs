@@ -230,6 +230,7 @@ describe('latency gate', () => {
     const breached = empty();
     applyLatencyGate(breached, [over, under], true);
     expect(breached.tests.map(t => t.status)).toEqual(['failed']);
+    expect(breached.tests.map(t => t.testKey)).toEqual([over.testKey]);
     expect(breached.counts).toMatchObject({ failed: 1, ran: 1 });
   });
 });
