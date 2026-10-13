@@ -7022,6 +7022,7 @@
               "string",
               "null"
             ],
+            "minLength": 1,
             "description": "The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none."
           }
         },

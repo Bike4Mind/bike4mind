@@ -210,6 +210,13 @@ describe('POST /api/v1/video-generations', () => {
       expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
     });
 
+    it.each(['', '   '])('rejects a blank organization_id %j (422) instead of billing personal', async orgId => {
+      const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', organization_id: orgId });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(h.createVideoJob).not.toHaveBeenCalled();
+    });
+
     it('rejects a non-string organization_id (422) before the domain', async () => {
       const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', organization_id: 42 });
       await handler(req, res);

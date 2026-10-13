@@ -80,6 +80,8 @@ export const CreateVideoGenerationBodySchema = z.strictObject({
   audio: z.boolean().optional(),
   organization_id: z
     .string()
+    .trim()
+    .min(1)
     .nullable()
     .optional()
     .describe(
