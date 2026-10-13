@@ -155,23 +155,23 @@ describe('JiraNotificationsForm secret controls', () => {
     expect(screen.queryByTestId('jira-notifications-off-alert')).toBeNull();
   });
 
-  it('disables the inputs for a non-manager on a disabled config only', () => {
+  it('disables the controls for a non-manager on a disabled config only', () => {
+    // Joy renders a clickable Chip's disabled state on its inner action button, not the chip root.
+    const isDisabled = (id: string) => {
+      const root = screen.getByTestId(id);
+      const control = root.querySelector<HTMLInputElement | HTMLButtonElement>('input, button');
+      return (control ?? (root as unknown as HTMLInputElement)).disabled;
+    };
+    const testIds = ['jira-slack-channel-id', 'jira-project-filter', 'jira-priority-Highest'];
+
     h.enabled = false;
     h.currentUser = { id: 'user-2', isAdmin: false };
     const other = renderForm();
-    for (const id of ['jira-slack-channel-id', 'jira-project-filter']) {
-      expect(
-        screen.getByTestId(id).querySelector('input')?.disabled ?? (screen.getByTestId(id) as HTMLInputElement).disabled
-      ).toBe(true);
-    }
+    for (const id of testIds) expect(isDisabled(id)).toBe(true);
     other.unmount();
 
     h.currentUser = { id: 'user-1', isAdmin: false };
     renderForm();
-    for (const id of ['jira-slack-channel-id', 'jira-project-filter']) {
-      expect(
-        screen.getByTestId(id).querySelector('input')?.disabled ?? (screen.getByTestId(id) as HTMLInputElement).disabled
-      ).toBe(false);
-    }
+    for (const id of testIds) expect(isDisabled(id)).toBe(false);
   });
 });
