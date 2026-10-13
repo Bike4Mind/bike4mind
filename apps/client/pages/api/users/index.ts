@@ -20,7 +20,7 @@ import {
   PUBLIC_USER_LIST_PROJECTION,
   PUBLIC_USER_SORT_FIELDS,
 } from '@client/app/utils/adminUserProjection';
-import { toSafeOrganizationSubdocument } from '@server/utils/toSafeOrganizationSubdocument';
+import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
 import { findSharedWorkspaceUserIds } from '@server/users/sharedWorkspaceUserIds';
 import { findPendingProjectInviteeIds } from '@server/users/pendingProjectInviteeIds';
 import * as z from 'zod';
@@ -67,10 +67,6 @@ const querySchema = z.object({
     .optional()
     .transform(val => val === 'true'),
 });
-
-function withSafeOrganization(user: Record<string, unknown>, viewer: { userId: string; isAdmin: boolean }) {
-  return { ...user, organizationId: toSafeOrganizationSubdocument(user.organizationId, viewer) };
-}
 
 const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
   try {

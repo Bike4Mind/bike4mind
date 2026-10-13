@@ -3,9 +3,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { adminSettingsRepository, userRepository } from '@bike4mind/database';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { userService } from '@bike4mind/services';
-import type { IUserDocument, IUserRepository } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
-import { toSafeUser } from '@bike4mind/common';
+import { toSafeUser, type IUserDocument, type IUserRepository } from '@bike4mind/common';
 import { purgeDeletedUserData } from '@server/services/purgeDeletedUserData';
 
 const handler = baseApi().delete(

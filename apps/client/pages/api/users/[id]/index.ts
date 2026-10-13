@@ -7,7 +7,7 @@ import {
   type PublicUserProfile,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { toSafeOrganizationSubdocument } from '@server/utils/toSafeOrganizationSubdocument';
+import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
 import { Request } from 'express';
 
 function toPublicProfile(user: IUserDocument): PublicUserProfile {
@@ -51,14 +51,7 @@ const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(asy
     // populated sub-document. So the org's stripeCustomerId and billingContact rode out to any
     // plain member fetching their own profile. Route the sub-document through the organization
     // response-boundary serializer, the same one every other org-returning handler uses.
-    if (safeSelf) {
-      safeSelf.organizationId = toSafeOrganizationSubdocument(safeSelf.organizationId, {
-        userId: req.user.id,
-        isAdmin,
-      });
-    }
-
-    return res.json(safeSelf);
+    return res.json(safeSelf && withSafeOrganization(safeSelf, { userId: req.user.id, isAdmin }));
   }
 
   return respond(res, publicUserProfileResponseSchema, toPublicProfile(user));

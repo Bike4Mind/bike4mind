@@ -93,6 +93,7 @@ describe('DELETE /api/users/[id]/delete', () => {
 
     const body = res._getJSONData();
     expect(body).toMatchObject({ id: 'u1', name: 'N' });
+    expect(body).not.toHaveProperty('email');
     for (const f of USER_SECRET_FIELDS) expect(body).not.toHaveProperty(f);
   });
 });
