@@ -549,7 +549,7 @@ describe('createUserApiKey - per-user cap pools', () => {
       {
         ...dashboardParams,
         expiresAt: exchangeParams.expiresAt,
-        metadata: exchangeParams.metadata && { createdFrom: 'oauth-exchange', oauthClientId: 'client-a' },
+        metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'client-a' },
       } as never,
       repo,
       createUserApiKey
@@ -613,6 +613,36 @@ describe('createUserApiKey - per-user cap pools', () => {
 
     const tooLong = { ...exchangeParams, expiresAt: new Date(Date.now() + MAX_EXCHANGE_KEY_TTL_MS + 60_000) };
     await expect(createExchangeUserApiKey('sys-1', tooLong, adapters(repo))).rejects.toBeInstanceOf(BadRequestError);
+  });
+
+  it('stamps the exchange tag itself, overriding a caller-supplied createdFrom', async () => {
+    const repo = makeRepo();
+    const params = { ...exchangeParams, metadata: { ...exchangeParams.metadata, createdFrom: 'dashboard' as const } };
+    await createExchangeUserApiKey('user-1', params as never, adapters(repo));
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ createdFrom: 'oauth-exchange' }) }),
+      MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
+      'oauth-exchange'
+    );
+  });
+
+  it('keeps the TTL cap exchange-only: a standard key may still expire far in the future', async () => {
+    const repo = makeRepo();
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    await createUserApiKey('user-1', { ...dashboardParams, expiresAt }, adapters(repo));
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(expect.anything(), MAX_ACTIVE_KEYS_PER_USER, 'standard');
+  });
+
+  it('accepts an exchange key whose expiresAt is already in the past (the cap bounds the maximum only)', async () => {
+    const repo = makeRepo();
+    await expect(
+      createExchangeUserApiKey('user-1', { ...exchangeParams, expiresAt: new Date(Date.now() - 1000) }, adapters(repo))
+    ).resolves.toBeDefined();
+    expect(repo.createIfUnderCap).toHaveBeenCalledWith(
+      expect.anything(),
+      MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
+      'oauth-exchange'
+    );
   });
 });
 
