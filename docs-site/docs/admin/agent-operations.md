@@ -75,17 +75,17 @@ The settings modal allows configuration of:
 
 ### Available LLM Models
 
-The following models are available for system prompt generation:
+For example, the dropdown may include:
 
 | Model | Label |
 |-------|-------|
 | global.anthropic.claude-opus-5-5 | Claude Opus 5.5 |
 | global.anthropic.claude-sonnet-5-5 | Claude Sonnet 5.5 |
-| global.anthropic.claude-haiku-5-5 | Claude Haiku 5.5 (Fast) |
+| global.anthropic.claude-haiku-5-5 | Claude Haiku 5.5 |
 | gpt-5.5 | GPT-5.5 |
 | gpt-6-sol | GPT-6 Sol |
-| o3-2025-04-16 | o3 (Reasoning) |
-| gemini-3.8-flash | Gemini 3.8 Flash (Fast) |
+| o3-2025-04-16 | O3 |
+| gemini-3.8-flash | Gemini 3.8 Flash |
 | grok-4.7 | Grok 4.7 |
 
 The dropdown lists the text models in the platform model catalog (the same list `/api/models` returns), best-ranked first, so the exact list can differ from the table. It is not filtered by your organization's enabled models. A model that is currently unavailable is shown as "(unavailable)" and cannot be newly selected; a saved model that has left the catalog is shown as "(no longer available)".
@@ -105,7 +105,7 @@ After repair, the page automatically reloads to display the corrected data. The 
 - **Version Before Changing** -- Always create a new meta-prompt version rather than editing the active one, so you can revert if needed
 - **Use the Default Template as a Starting Point** -- The built-in PromptCrafter template is well-tested; customize it incrementally
 - **Set Appropriate Rate Limits** -- A rate limit of 60 seconds prevents excessive API calls while still allowing prompt regeneration when agent metadata changes
-- **Choose the Right Model** -- Higher-capability models (Claude Opus 5.5, O3) produce richer system prompts but cost more; balance quality with budget
+- **Choose the Right Model** -- Higher-capability models (Claude Opus 5.5, Claude Fable 5.1) produce richer system prompts but cost more; balance quality with budget
 - **Monitor Generation Count** -- The total generations counter helps track usage and costs over time
 - **Repair When Issues Arise** -- If agents appear to have missing or incorrect system prompts, run a database repair before investigating further
 
