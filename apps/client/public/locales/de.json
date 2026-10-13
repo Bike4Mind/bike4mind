@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "Abonnement",
-    "description": "Zugriff auf jedes wichtige KI-Modell über eine einheitliche Schnittstelle. Führen Sie fortschrittliche Modelle wie Deepseek R1 privat aus.",
+    "description": "Zugriff auf jedes wichtige KI-Modell über eine einheitliche Schnittstelle.",
     "no_free_tier": "KEIN MÖGLICHES KOSTENLOSES ABONNEMENT - FOKUSSIERT AUF PROFIS.",
     "credits_rollover": "Nicht verwendete Credits rollen für 3 Monate weiter.",
     "monthly_billing": "Monatliche Abrechnung",
