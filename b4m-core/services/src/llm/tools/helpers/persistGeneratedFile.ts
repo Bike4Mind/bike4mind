@@ -44,8 +44,8 @@ export async function persistGeneratedFileAsFabFile(
 ): Promise<void> {
   const { sessionId, questId, userId, logger } = context;
 
-  // Unlike saveGeneratedAssetFromTool, no session means no save: these tools already render the output inline
-  // through quest.images, so the FabFile only exists to link it to its notebook.
+  // Unlike saveGeneratedAssetFromTool, these files are notebook attachments (linked via
+  // provenance.sourceMetadata.sessionId): no session, nothing to attach to.
   if (!sessionId) return;
   const adapters = toolFileAdapters(context);
   if (!adapters) {
@@ -100,7 +100,7 @@ export async function saveGeneratedAssetFromTool(
 /**
  * The FabFile adapters a ToolContext supplies, or undefined when the harness lacks any of them. Mirrors the server
  * door (apps/client/server/utils/saveGeneratedAssetToFiles.ts): scopedSettings must ride along, or a per-org/owner/lake
- * enforcement override silently would not apply to tool output.
+ * enforcement override would silently not apply to tool output.
  */
 function toolFileAdapters(context: ToolContext): Pick<SaveGeneratedAssetDeps, 'db' | 'storage'> | undefined {
   const { db, storage } = context;
