@@ -11,6 +11,7 @@ import ShoppingCartOutlinedIcon from '@mui/icons-material/ShoppingCartOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import dynamic from 'next/dynamic';
 import prettyBytes from 'pretty-bytes';
+import { storageLimitToBytes } from '@bike4mind/common';
 import { useMemo, useState, useEffect } from 'react';
 
 const ProfileCollectionSection = dynamic(() => import('@client/app/components/profile/ProfileCollectionSection'));
@@ -157,7 +158,7 @@ const AboutTabContent = () => {
                   sx={{ fontWeight: '500', fontSize: '20px', lineHeight: '20px', mb: '20px' }}
                 >
                   {prettyBytes(currentUser?.currentStorageSize ?? 0)} /{' '}
-                  {prettyBytes((currentUser?.storageLimit ?? 0) * 1000000)}
+                  {prettyBytes(storageLimitToBytes(currentUser?.storageLimit ?? 0))}
                 </Typography>
               </Box>
             </Box>
