@@ -1,6 +1,6 @@
 import { Box, Typography, Modal, ModalDialog, ModalClose, Divider, Link, useTheme } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
-import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
+import CreditIcon from '../svgs/icons/CreditIcon';
 import dayjs from 'dayjs';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import PaymentButton from '../Credits/PaymentButton';
@@ -195,7 +195,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () 
               gap: '8px',
             }}
           >
-            <Bike4MindIcon size={'24'} fill={style[safeMode].color} />
+            <CreditIcon sx={{ fontSize: 24, color: style[safeMode].color }} />
             {formatCreditAmount(currentCredits)}
           </Typography>
         </Box>
@@ -263,7 +263,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () 
                 className="credits-modal-package-credits"
                 sx={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '24px' }}
               >
-                <Bike4MindIcon size={'32'} fill={theme.palette.subscription?.creditsModal.iconFill} />
+                <CreditIcon sx={{ fontSize: 32, color: theme.palette.subscription?.creditsModal.iconFill }} />
                 {formatCreditAmount(pkg.credits)}
               </Box>
               <Typography
@@ -396,7 +396,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () 
                   className="credits-modal-transaction-credits"
                   sx={{ width: '25%', display: 'flex', alignItems: 'center', gap: '8px' }}
                 >
-                  <Bike4MindIcon size={'18'} />
+                  <CreditIcon sx={{ fontSize: 18, color: 'var(--Icon-color)' }} />
                   {formatCreditAmount(transaction.credits)}
                 </Box>
                 <Box className="credits-modal-transaction-date" sx={{ width: '25%' }}>
