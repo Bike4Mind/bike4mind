@@ -507,7 +507,11 @@ describe('updateSessionsQueryData', () => {
 // Clone, fork and snip write their copy through updateSessionsQueryData, so a copy failing a cached list's Content/Origin filter must not be
 // spliced into it - the same "Hide API" regression the gate exists for.
 describe('copy-path cache writes', () => {
-  beforeEach(() => vi.restoreAllMocks());
+  // restoreAllMocks only undoes the `api.post` spies; the module-level `vi.fn()`s (toast, cloneSession) need clearing too.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
 
   const unfilteredKey = ['sessions', 'own', '', ''];
   const hideApiKey = ['sessions', 'own', '', '', { excludeOrigin: 'api' }];
@@ -565,6 +569,22 @@ describe('copy-path cache writes', () => {
     result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expectGatedCopy(queryClient);
+  });
+
+  it('a rejected snip toasts the failure and leaves every cached list untouched', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    seedLists(queryClient);
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    vi.spyOn(api, 'post').mockRejectedValueOnce(axiosRefusal(500, 'Internal error'));
+    const { result } = renderHook(() => useSnipSession(), { wrapper: wrapperFor(queryClient) });
+    result.current.mutate({ sessionId: SESSION_ID, messageId: 'm1' });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(toast.error).toHaveBeenCalledWith('Failed to snip session');
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(dataOf(queryClient, unfilteredKey)).toHaveLength(0);
+    expect(dataOf(queryClient, hideApiKey)).toHaveLength(0);
   });
 
   // Clone, fork and snip share the gate, so one hook covers the surface guard for all three.
