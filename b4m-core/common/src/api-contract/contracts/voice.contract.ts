@@ -126,6 +126,12 @@ export const createVoiceSessionContract = defineEndpoint({
       description: 'The `sessionId` does not exist or is not owned by the caller (a malformed id is also a 404).',
       schema: ApiErrorSchema,
     },
+    409: {
+      description:
+        'Another call on the same session was provisioned concurrently and holds its reservation; this ' +
+        "request's reservation is refunded. Retry.",
+      schema: ApiErrorSchema,
+    },
     422: {
       description:
         'Request body failed validation, or the caller cannot afford the up-front reservation - the latter ' +
