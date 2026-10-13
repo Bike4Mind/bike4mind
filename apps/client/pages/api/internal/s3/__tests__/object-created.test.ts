@@ -302,6 +302,20 @@ describe('POST /api/internal/s3/object-created', () => {
       expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), {});
     });
 
+    it('falls back to the stored object size when the payload size is invalid', async () => {
+      await handler(makeReq('secret-token', 'uploads/a.pdf', { size: -1 }), makeRes());
+
+      expect(getMetadataMock).toHaveBeenCalledWith('uploads/a.pdf');
+      expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 42, expect.any(Date), {});
+    });
+
+    it('stamps the current time when the event time does not parse', async () => {
+      await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 10, eventTime: 'not-a-date' }), makeRes());
+
+      const uploadedAt = chargeMock.mock.calls[0][3] as Date;
+      expect(Number.isNaN(uploadedAt.getTime())).toBe(false);
+    });
+
     it('charges nothing and warns when neither source has a size', async () => {
       getMetadataMock.mockResolvedValue({});
       const req = makeReq('secret-token', 'uploads/a.pdf');
