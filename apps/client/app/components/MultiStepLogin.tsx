@@ -45,6 +45,12 @@ import { getWebsiteUrl, WEBSITE_URL } from '@client/config/general';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
+import {
+  isSubmittableOtcCode,
+  OTC_CODE_LENGTH,
+  OTC_CODE_PLACEHOLDER,
+  sanitizeOtcInput,
+} from '@client/app/utils/otcCode';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 
 /**
@@ -98,8 +104,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // the checkboxes gate the Create account button.
   const [acceptPolicies, setAcceptPolicies] = useState(false);
   const [confirmAdult, setConfirmAdult] = useState(false);
-  // Signed pending token from /api/otc/send - carries the hashed code + nonce and is
-  // required by /api/otc/verify. Re-issued (attempt-tracked) on each wrong code.
+  // Signed pending token from /api/otc/send - references the pending code by nonce (jti) and
+  // is required by /api/otc/verify. Re-issued (attempt-tracked) on each wrong code.
   const [pendingToken, setPendingToken] = useState<string | null>(null);
   const [isCheckingStrategy, setIsCheckingStrategy] = useState(false);
 
@@ -354,8 +360,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
 
   const handleOTCSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!otcCode.trim() || otcCode.length !== 6) {
-      toast.error('Please enter the 6-digit code');
+    if (!isSubmittableOtcCode(otcCode)) {
+      toast.error(`Please enter the ${OTC_CODE_LENGTH}-digit code`);
       return;
     }
 
@@ -901,10 +907,10 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     // Joy's Input forwards autoComplete to the <input> but not inputMode (that lands on the
                     // root div), so the numeric keypad hint has to go through the input slot.
                     slotProps={{ input: { inputMode: 'numeric', pattern: '[0-9]*' } }}
-                    placeholder="000000"
+                    placeholder={OTC_CODE_PLACEHOLDER}
                     value={otcCode}
                     onChange={e => {
-                      const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      const val = sanitizeOtcInput(e.target.value);
                       setOtcCode(val);
                     }}
                     autoComplete="one-time-code"
@@ -930,7 +936,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     { marginTop: '0.5vh', minHeight: '40px', display: 'flex', gap: '.5rem', borderRadius: '8px' },
                     isDarkMode ? darkInactive : lightInactive,
                   ]}
-                  disabled={otcCode.length !== 6 || isVerifying}
+                  disabled={!isSubmittableOtcCode(otcCode) || isVerifying}
                 >
                   {isVerifying && <CircularProgress className="verify-spinner" />}
                   <Typography sx={{ color: 'common.white', fontWeight: '500', fontSize: '14px' }}>

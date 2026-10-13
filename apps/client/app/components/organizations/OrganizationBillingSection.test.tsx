@@ -7,7 +7,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument } from '@bike4mind/common';
 import { isDelinquentSubscriptionStatus, SubscriptionSource } from '@client/lib/subscriptions/types';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import OrganizationBillingSection from './OrganizationBillingSection';
 
@@ -21,6 +21,8 @@ import OrganizationBillingSection from './OrganizationBillingSection';
 const subscriptionsData = vi.hoisted(() => ({ current: [] as unknown[] }));
 const updateSeatsMutate = vi.hoisted(() => vi.fn());
 const subscribeMutate = vi.hoisted(() => vi.fn());
+const teamPlanFlag = vi.hoisted(() => ({ current: true }));
+const plansData = vi.hoisted(() => ({ current: [] as unknown[] }));
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptionsByOwner: () => ({ data: subscriptionsData.current, isPending: false }),
@@ -30,11 +32,12 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({
   useTeamSeatLimits: () => ({ minSeats: 4, maxSeats: 100 }),
+  useTeamPlanAvailable: () => teamPlanFlag.current,
 }));
 vi.mock('@client/app/hooks/data/stripe', () => ({
   useStripePortal: () => ({ mutate: vi.fn(), isPending: false }),
   useGetSubscriptionPlans: () => ({
-    data: [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, unit_amount: 1000 }],
+    data: plansData.current,
     isPending: false,
   }),
 }));
@@ -69,6 +72,8 @@ const renderSection = () => {
 describe('OrganizationBillingSection - delinquent organization', () => {
   beforeEach(() => {
     subscriptionsData.current = [];
+    teamPlanFlag.current = true;
+    plansData.current = [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, unit_amount: 1000 }];
   });
 
   it('keeps the Billing Portal and hides self-serve subscribe and seat changes', () => {
@@ -265,5 +270,31 @@ describe('OrganizationBillingSection - subscribe mode', () => {
     expect(submit.hasAttribute('disabled')).toBe(true);
     fireEvent.click(submit);
     expect(subscribeMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe('OrganizationBillingSection - Team plan gate', () => {
+  beforeEach(() => {
+    subscriptionsData.current = [];
+    teamPlanFlag.current = true;
+    plansData.current = [{ id: ORGANIZATION_SUBSCRIPTION_PRICE_ID, unit_amount: 1000 }];
+  });
+
+  it('disables Subscribe Now and states why when Team plans are off', () => {
+    teamPlanFlag.current = false;
+
+    renderSection();
+
+    const btn = screen.getByTestId('organization-billing-subscribe-btn') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(screen.getByLabelText(TEAM_PLAN_UNAVAILABLE_MESSAGE)).toBeTruthy();
+  });
+
+  it('enables Subscribe Now when Team plans are on and a price is present', () => {
+    renderSection();
+
+    const btn = screen.getByTestId('organization-billing-subscribe-btn') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    expect(screen.queryByLabelText(TEAM_PLAN_UNAVAILABLE_MESSAGE)).toBeNull();
   });
 });

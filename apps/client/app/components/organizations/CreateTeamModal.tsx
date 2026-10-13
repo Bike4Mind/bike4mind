@@ -1,6 +1,6 @@
 import { useSubscribeTeamPlan, useCreateTeamDev } from '@client/app/hooks/data/subscriptions';
-import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { useTeamPlanAvailable, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
 import {
   Box,
   Button,
@@ -41,6 +41,9 @@ const CreateTeamModal = () => {
   const [requestedTeamSize, setTeamSize] = useState(minSeats);
   const teamSize = Math.min(Math.max(Math.round(requestedTeamSize), minSeats), maxSeats);
   const [isTeamSizeInvalid, setIsTeamSizeInvalid] = useState(false);
+  const teamPlanAvailable = useTeamPlanAvailable();
+  // The dev endpoint never touches Stripe (and throws outside development), so the flag only gates the Stripe path.
+  const teamPlanClosed = !isDevelopment && !teamPlanAvailable;
   const subscribeTeamPlan = useSubscribeTeamPlan();
   const createTeamDev = useCreateTeamDev();
   const plans = useGetSubscriptionPlans();
@@ -126,7 +129,7 @@ const CreateTeamModal = () => {
             max={maxSeats}
             onChange={setTeamSize}
             onInvalidChange={setIsTeamSizeInvalid}
-            disabled={isLoading || hasError}
+            disabled={isLoading || hasError || teamPlanClosed}
             ariaLabel="Team size"
             testId="create-team-size-value"
             classNamePrefix="create-team-size"
@@ -159,12 +162,20 @@ const CreateTeamModal = () => {
           <ContactSalesNote testIdPrefix="create-team" />
         </FormControl>
 
+        {teamPlanClosed && (
+          <Typography level="body-sm" color="warning" data-testid="create-team-unavailable">
+            {TEAM_PLAN_UNAVAILABLE_MESSAGE}
+          </Typography>
+        )}
+
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }} className="create-team-actions">
           <Button variant="outlined" color="neutral" onClick={handleClose} className="create-team-cancel-button">
             Cancel
           </Button>
           <Button
-            disabled={!teamName.trim() || isTeamSizeInvalid || teamSize < minSeats || isLoading || hasError}
+            disabled={
+              !teamName.trim() || isTeamSizeInvalid || teamSize < minSeats || isLoading || hasError || teamPlanClosed
+            }
             onClick={handleSubmit}
             loading={isSubmitting}
             className="create-team-submit-button"
