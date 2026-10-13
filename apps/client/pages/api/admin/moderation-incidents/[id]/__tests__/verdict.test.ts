@@ -89,7 +89,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
 
   // ------------------------------------------------------------------ confirmed_csam -- success
   describe('verdict: confirmed_csam', () => {
-    it('outcome 1 — success: submits to NCMEC and marks incident reported', async () => {
+    it('outcome 1 - success: submits to NCMEC and marks incident reported', async () => {
       mockClaimForNcmecSubmission.mockResolvedValue(CLAIMED_INCIDENT);
       mockSubmitNcmecReport.mockResolvedValue({ reportId: 'RPT-001' });
       mockUpdateReviewStatus.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'reported', ncmecReportId: 'RPT-001' });
@@ -106,7 +106,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
     });
 
     // ---------------------------------------------------------------- confirmed_csam -- rejected
-    it('outcome 2 — rejected (NcmecRejectedError): rolls back to pending_review and returns 502', async () => {
+    it('outcome 2 - rejected (NcmecRejectedError): rolls back to pending_review and returns 502', async () => {
       mockClaimForNcmecSubmission.mockResolvedValue(CLAIMED_INCIDENT);
       mockSubmitNcmecReport.mockRejectedValue(new NcmecRejectedError('NCMEC /submit error 401: Unauthorized'));
       mockUpdateReviewStatus.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'pending_review' });
@@ -125,7 +125,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
     });
 
     // ---------------------------------------------------------------- confirmed_csam -- unknown
-    it('outcome 3 — unknown outcome (plain Error): does NOT roll back; leaves in confirmed_csam', async () => {
+    it('outcome 3 - unknown outcome (plain Error): does NOT roll back; leaves in confirmed_csam', async () => {
       mockClaimForNcmecSubmission.mockResolvedValue(CLAIMED_INCIDENT);
       mockSubmitNcmecReport.mockRejectedValue(new Error('NCMEC /submit response missing reportId: <response/>'));
 

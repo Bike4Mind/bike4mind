@@ -56,7 +56,7 @@ function buildDb(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe('cleanupDeletedDataLake — legal-hold skip (F3)', () => {
+describe('cleanupDeletedDataLake - legal-hold skip (F3)', () => {
   it('completes the sweep and skips a blocked file when deleteFileAndChunks throws the legal-hold error', async () => {
     const db = buildDb();
     const legalHoldError = new Error(
