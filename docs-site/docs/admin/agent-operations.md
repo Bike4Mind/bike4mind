@@ -79,16 +79,16 @@ The following models are available for system prompt generation:
 
 | Model | Label |
 |-------|-------|
-| claude-opus-5-5 | Claude Opus 5.5 |
-| claude-sonnet-5-5 | Claude Sonnet 5.5 |
-| claude-haiku-5-5 | Claude Haiku 5.5 (Fast) |
+| global.anthropic.claude-opus-5-5 | Claude Opus 5.5 |
+| global.anthropic.claude-sonnet-5-5 | Claude Sonnet 5.5 |
+| global.anthropic.claude-haiku-5-5 | Claude Haiku 5.5 (Fast) |
 | gpt-5.5 | GPT-5.5 |
 | gpt-6-sol | GPT-6 Sol |
-| o3 | o3 (Reasoning) |
+| o3-2025-04-16 | o3 (Reasoning) |
 | gemini-3.8-flash | Gemini 3.8 Flash (Fast) |
 | grok-4.7 | Grok 4.7 |
 
-The dropdown follows the models enabled for your organization, so the exact list can differ.
+The dropdown lists the text models in the platform model catalog (the same list `/api/models` returns), best-ranked first, so the exact list can differ from the table. It is not filtered by your organization's enabled models. A model that is currently unavailable is shown as "(unavailable)" and cannot be newly selected; a saved model that has left the catalog is shown as "(no longer available)".
 
 ## Database Repair
 
