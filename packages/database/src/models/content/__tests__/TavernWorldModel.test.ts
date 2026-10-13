@@ -235,21 +235,10 @@ describe('TavernWorldModel', () => {
   // ---------------------------------------------------------------------------
 
   describe('applyEdits — history cap', () => {
-    /**
-     * Seed `count` history entries directly, with the version/undoPointer a run of that many user
-     * edits would have left behind.
-     *
-     * Driving this through 500 sequential applyEdits calls is what these two tests used to do, and it
-     * made them the slowest in the repo (~140s for the file) and reliably timeout-prone on a loaded
-     * CI runner even at an 8x-default 120s budget - see #1803. The cap and eviction are pure array
-     * arithmetic (MAX_HISTORY_ENTRIES, splice, undoPointer adjust), so the boundary is what needs
-     * exercising, not the 500 round-trips it takes to reach it. Seeding keeps both assertions exactly
-     * as they were and lets the final applyEdits do the real work.
-     */
-    // Seeds editHistory only, leaving `edits` empty - so every `reverse` here is gid:null, which
-    // applyEdits would only produce on a first write. That is fine for the cap tests (pure array
-    // arithmetic, indifferent to entry contents); reverse-against-existing-tiles is covered by
-    // 'should record previous gid in reverse entries'.
+    // Seeds history directly instead of 500 applyEdits round-trips; the fold arithmetic itself is
+    // covered in foldHistoryEntry.test.ts, so this only proves applyEdits wires it with the real cap.
+    // `edits` stays empty, so every seeded `reverse` is gid:null; reverse-against-existing-tiles is
+    // covered by 'should record previous gid in reverse entries'.
     async function seedHistory(count: number, worldId = 'user-1') {
       const entries = Array.from({ length: count }, (_, i) => ({
         batchId: `seed-${i}`,
@@ -264,37 +253,14 @@ describe('TavernWorldModel', () => {
       );
     }
 
-    it('should cap editHistory at 500 entries', async () => {
+    it('applyEdits wires the history fold with the real cap', async () => {
       await createWorld();
       await seedHistory(500);
 
-      // Apply one more - should evict oldest
       const result = await applyEdits('user-1', 500, [{ key: 'ground:0,1', gid: 999 }]);
       expect(result!.editHistory).toHaveLength(500);
-      expect(result!.version).toBe(501);
-    });
-
-    it('should adjust undoPointer when entries are evicted', async () => {
-      await createWorld();
-      await seedHistory(500);
-
-      // Pointer should be at 500
-      const before = await tavernWorldRepository.getOrCreateWorld('user-1', 'user-1');
-      expect(before.undoPointer).toBe(500);
-
-      // Add one more - evicts 1 from front
-      const result = await applyEdits('user-1', 500, [{ key: 'ground:0,1', gid: 999 }]);
-      expect(result!.editHistory).toHaveLength(500);
-      // Pointer should still be at end (500), not 501
       expect(result!.undoPointer).toBe(500);
-    });
-
-    it('evicts exactly the OLDEST entry, not an arbitrary one', async () => {
-      await createWorld();
-      await seedHistory(500);
-
-      const result = await applyEdits('user-1', 500, [{ key: 'ground:0,1', gid: 999 }]);
-      // seed-0 is gone, seed-1 is now the front, and the new edit is the last entry.
+      expect(result!.version).toBe(501);
       expect(result!.editHistory[0].batchId).toBe('seed-1');
       expect(result!.editHistory[499].forward[0]).toMatchObject({ key: 'ground:0,1', gid: 999 });
     });

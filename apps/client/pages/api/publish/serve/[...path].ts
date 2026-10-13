@@ -1115,7 +1115,11 @@ function renderBundleWrapper(
   // The one script on the wrapper, and the only one the Approach-B wrapper CSP admits.
   // Emitted for every non-embed render, not just commented ones: it also binds "Save as
   // PDF" (the mount node above stays conditional, and the widget no-ops without it).
-  const widgetScript = embed ? '' : `\n<script src="/api/publish/widget" defer></script>`;
+  // `data-b4m-count-view` asks the widget to report a signed-in viewer to /api/publish/view,
+  // which this navigation cannot identify. Only until one external view lands: the Published
+  // gear needs just one, and each report costs the viewer a refresh-token exchange.
+  const countView = (artifact.externalViewCount ?? 0) === 0 ? ' data-b4m-count-view' : '';
+  const widgetScript = embed ? '' : `\n<script src="/api/publish/widget"${countView} defer></script>`;
   // Abuse-report affordance: a plain anchor floats over the iframe. It is a
   // top-level navigation (not blocked by the wrapper's script-src/form-action CSP) to
   // the app-origin report flow. The bundle in the opaque-origin iframe can't reach it.
@@ -1416,6 +1420,7 @@ interface PublishedArtifactLean {
   shareTokens?: PublishedArtifactShareToken[];
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;
+  externalViewCount?: number;
 }
 
 // -- Helpers -----------------------------------------------------------------
@@ -1467,6 +1472,10 @@ const CRAWLER_UA_RE =
  * views satisfy this (the loader shell re-fetches with the viewer's Bearer);
  * purely-anonymous public views no longer count, and stronger proof-of-human
  * is tracked as strategy P1 (b4m-strategy#93).
+ *
+ * A browser navigation never carries that credential on an open-public page or an open share
+ * link, so for bundles the wrapper widget reports a signed-in viewer separately through
+ * /api/publish/view (see `data-b4m-count-view` in renderBundleWrapper).
  */
 function bumpViewCount(
   artifact: { publicId: string; ownerId: string },
