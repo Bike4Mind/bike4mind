@@ -508,8 +508,10 @@ test.describe('Data Lake - research presets', () => {
     await expect(summary).toContainText('$1.00 ceiling');
 
     await dataLakePage.fillMuiInput(modal.getByTestId('datalake-research-max-results-input'), '30');
+    // Joy drops aria-pressed entirely (not "false") while the group value is null, so assert
+    // only that no preset reads as pressed.
     for (const id of ['quick', 'standard', 'deep']) {
-      await expect(preset(id)).toHaveAttribute('aria-pressed', 'false');
+      await expect(preset(id)).not.toHaveAttribute('aria-pressed', 'true');
     }
     await expect(summary).toContainText('Custom settings');
   });
