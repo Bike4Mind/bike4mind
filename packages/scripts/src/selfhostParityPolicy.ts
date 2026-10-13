@@ -263,7 +263,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:dataLakeResearchQueue',
-      fingerprint: '4376bb409bc84671a8859fb535ba4e0ff5e06307f09b1bb7516d43a5904b7f55',
+      fingerprint: '225aa2778c867b9aa68041171e8409feee8a093a39aa6e6e1d35a1bd400cd6ec',
     }
   ),
   broker(
@@ -276,7 +276,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:dataLakeTaxonomyQueue',
-      fingerprint: '97c79068fbcd10a7455cae9b4493966a1464475bec60bb52446076d097974f68',
+      fingerprint: 'ba7f3fdae149d828a8f0d381e1d09d2e701f05047e9f8d9f8f4f2323b8c5a58e',
     }
   ),
   broker(
@@ -297,7 +297,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:driveDisconnectPurgeQueue',
-      fingerprint: 'db6b239b890058c866cdaba781edf78a9f09a842e7c3ce3fb24e0a57259c0359',
+      fingerprint: 'a323258de8960f22595d15fb2dfa7f01b13e8af9495f3479e2fd01446d09de34',
     }
   ),
   broker(
@@ -310,7 +310,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:driveLakeIngestQueue',
-      fingerprint: '14c18a277556834e077c9b2beb7f85e8bb0d627b47603582e7de01a15cb73335',
+      fingerprint: '26e215ea2cc2b9bd2505e855908261ea19710e04e9b992984b8d3049730ea661',
     }
   ),
   broker(
@@ -323,7 +323,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:fabFileChunkQueue',
-      fingerprint: 'd66e7cc6ba94f32a1a5022b92e494e7fd030984725147229b6992ac21ea2c6a3',
+      fingerprint: '41cbebdd6ad9c9d3ce4631a0df4a732bb9432b5e1b630609ef877af5fb00152d',
     },
     ['cloudwatch:PutMetricData']
   ),
@@ -341,7 +341,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:fabFileVectorizeQueue',
-      fingerprint: '060a0206287547e0927bdab868414fbdfbb5a4a4f0b9da624daba4bcbff1dbc2',
+      fingerprint: '54eb71eda40aa24e2f287e3fb04a750ba840343b70e740a1bb180a14431116b4',
     },
     ['bedrock:InvokeModel', 'cloudwatch:PutMetricData']
   ),
@@ -355,7 +355,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationCallbackQueue',
-      fingerprint: '20924963ef1df350e1b504e07471de24e3a4b42d596e15d3b76e0acb7a741af2',
+      fingerprint: '5fff34214a02d01b21f0e9006ca6f0628ce09cd22e0bc6586a53276b5d9e387e',
     },
     ['cloudwatch:PutMetricData']
   ),
@@ -366,11 +366,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker('queue:infra/queues.ts:generationJobDLQ', '0eb29387a6952921e713298ba6acf3cd1aef5f60d84e67cffe177843b714f38f'),
   wired(
     'queue:infra/queues.ts:generationJobQueue',
-    '228b7da01297f596cddf4126832ba23994cba41244fe8b469e03124937940598',
+    '37081f36e3d78c66a67d8f045c151c74abbfe86998248fa4c351616babdd2984',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationJobQueue',
-      fingerprint: '33f9638615f2387b51e0514a17c7338042ae99c4b07aab676495eebba4c6b850',
+      fingerprint: '9c2f6f428613979b2dff0295f2c13933fc6996cc6c6692f8c9733496586361bd',
     }
   ),
   wired(
@@ -379,7 +379,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:githubLakeIngestQueue',
-      fingerprint: 'bc8c6f22dde627eafa90104cf5267a7a81f757c2db78d350cc40f390b14ceaab',
+      fingerprint: '593225ee3cd7345bfaff7e23592beb7220cfab2dbbc769cd93e6092c1af93753',
     }
   ),
   broker(
@@ -392,7 +392,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:githubLakeRevokeQueue',
-      fingerprint: 'eef73429076977eae10c9724a9f5e40e1e0da07b99ca2bb235022dab8f1df6ad',
+      fingerprint: '206034aee23dbaa73196573e303063ee9e916ea7d02718166e9b340cd4d9ac40',
     }
   ),
   broker(
@@ -413,7 +413,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:imageEditQueue',
-      fingerprint: '87527a5045bd77568fe230c2f6d62901587f3e114e9d645b56606354a23a4069',
+      fingerprint: '6d6288b402a005cecf9e60de84dffef03116ff8aac083edbd80accdd9c518f64',
     },
     ['bedrock:*']
   ),
@@ -427,7 +427,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:imageGenerationQueue',
-      fingerprint: 'abce70c5ecbd26987f5113f978d46aec9432555b5570b181fa56c23f0a133689',
+      fingerprint: '952e9699977c2df4c61169a5ccd0f799df34178faf6afdae5854c7f6c2e60284',
     },
     ['bedrock:*']
   ),
@@ -516,7 +516,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:researchEngineQueue',
-      fingerprint: '5fcf8edac9392127024a58aa8d3aabfbfa43bbfb516b3ae5a577d8f3a2586be5',
+      fingerprint: '06e00c14bca66ee60ea38d3b1531d6857df60cc842a542bd1011b7482f5bd452',
     },
     ['bedrock:*']
   ),
@@ -642,7 +642,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:dataLakeBatchReconcile',
-      fingerprint: '58c8ec14ef62f2bb84bdb53a3372a5cb068fc8bcb90aad50e5b09751358e8dcc',
+      fingerprint: '3e8e2c7a24f13b21940ed7f8fab09ca5f5a269c2e4ad34abca8f16831b765ca2',
     },
     ['cloudwatch:PutMetricData']
   ),
@@ -652,7 +652,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:dataLakeResearchSchedule',
-      fingerprint: 'da2e780f1b5fdd9b436d4d0dd0c51fbc4ebf1746f907bb8bccdc845578604f3a',
+      fingerprint: 'b8df73b38031006176c458e5b126b8c4ea906c89048a5bbc16b31df6cb3b748f',
     }
   ),
   gap('schedule:infra/cron.ts:deepAgentWakeCron', '79c4635bdc17373ed2ac1aa375aceadba26c3e04acca8de182b625c13d51ba60'),
@@ -718,7 +718,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:modelDiscovery',
-      fingerprint: 'd7b09c10dc8b8ed8eb2684d80ddd434ecfeae42b7ff2d454c707f1a28a66be1a',
+      fingerprint: '5b7f4ed2cf7ed8df3a0daa98bdfa70c4585883e4308751dc7a9132c394cc8a9b',
     },
     ['bedrock:GetFoundationModelAvailability', 'bedrock:ListFoundationModels', 'cloudwatch:PutMetricData']
   ),

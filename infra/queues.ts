@@ -1022,7 +1022,7 @@ const generationJobQueue = new sst.aws.Queue('generationJobQueue', {
 });
 const generationJobQueueSubscription = generationJobQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/generationJob.dispatch',
+    handler: 'apps/workers/src/queueHandlers/generationJob.dispatch',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '2048 MB',
