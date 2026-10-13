@@ -13,20 +13,27 @@ const state = vi.hoisted(() => ({
   emptyTarget: false,
   failFirstDeleteOn: undefined as string | undefined,
   ops: [] as string[],
+  emptySource: false,
+  failRollbackBulkWrite: false,
+  markerWrites: [] as unknown[][],
+  findFilters: [] as { name: string; filter: unknown }[],
 }));
 
 vi.mock('mongodb', () => {
   const collection = (name: string, isTarget: boolean) => {
-    const docs = isTarget && state.emptyTarget ? [] : [{ _id: `${name}-doc` }];
+    const docs = (isTarget && state.emptyTarget) || (!isTarget && state.emptySource) ? [] : [{ _id: `${name}-doc` }];
     return {
       findOne: vi.fn(async () => state.marker),
       countDocuments: vi.fn(async () => docs.length),
-      find: vi.fn(() => ({
-        async *[Symbol.asyncIterator]() {
-          yield* docs;
-        },
-        toArray: async () => docs,
-      })),
+      find: vi.fn((filter?: unknown) => {
+        if (!isTarget) state.findFilters.push({ name, filter });
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield* docs;
+          },
+          toArray: async () => docs,
+        };
+      }),
       insertMany: vi.fn(async (docs: unknown[]) => {
         if (name === state.failInsertInto) throw new Error(`insert into ${name} failed`);
         inserted.set(name, (inserted.get(name) ?? 0) + docs.length);
@@ -42,10 +49,14 @@ vi.mock('mongodb', () => {
       }),
       bulkWrite: vi.fn(async () => {
         state.ops.push(`${name}.bulkWrite`);
+        if (state.failRollbackBulkWrite) throw new Error(`rollback of ${name} failed`);
         return {};
       }),
       drop: vi.fn(async () => true),
-      updateOne: vi.fn(async () => ({})),
+      updateOne: vi.fn(async (...args: unknown[]) => {
+        state.markerWrites.push(args);
+        return {};
+      }),
     };
   };
   class MongoClient {
@@ -72,6 +83,10 @@ describe('dataSyncerHandler', () => {
     state.emptyTarget = false;
     state.failFirstDeleteOn = undefined;
     state.ops = [];
+    state.emptySource = false;
+    state.failRollbackBulkWrite = false;
+    state.markerWrites = [];
+    state.findFilters = [];
     fetchSpy.mockReset();
     vi.stubGlobal('fetch', fetchSpy);
     process.env.STAGING_MONGODB_URI = 'mongodb://staging/db';
@@ -162,5 +177,56 @@ describe('dataSyncerHandler', () => {
       'rapidreplymappings.deleteMany',
       'rapidreplymappings.bulkWrite',
     ]);
+  });
+
+  it('writes the sync marker after a full copy', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+
+    await invoke();
+
+    expect(state.markerWrites).toHaveLength(1);
+    expect(state.markerWrites[0][0]).toEqual({ key: 'staging-config-sync' });
+  });
+
+  it('does not write the sync marker when a source collection was skipped', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.emptySource = true;
+
+    await invoke();
+
+    expect(state.markerWrites).toHaveLength(0);
+  });
+
+  it('surfaces both the copy failure and the rollback failure', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.failInsertInto = 'rapidreplymappings';
+    state.failRollbackBulkWrite = true;
+
+    const result = await invoke();
+
+    expect(result?.message).toContain('insert into rapidreplymappings failed');
+    expect(result?.message).toContain('rollback of rapidreplymappings failed');
+    expect(state.markerWrites).toHaveLength(0);
+  });
+
+  it('passes the sensitive-setting $nin filter to the adminsettings source query', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+
+    await invoke();
+
+    const adminFilter = state.findFilters.find(f => f.name === 'adminsettings')?.filter as {
+      settingName: { $nin: string[] };
+    };
+    expect(adminFilter.settingName.$nin.length).toBeGreaterThan(0);
+    expect(state.findFilters.find(f => f.name === 'rapidreplymappings')?.filter).toEqual({});
+  });
+
+  it('treats only pr<number> stage names as previews in the sync gate and the environment check', async () => {
+    process.env.SEED_STAGE_NAME = 'prod';
+
+    const result = await invoke();
+
+    expect(inserted.size).toBe(0);
+    expect(result?.message).toContain('is not a preview');
   });
 });

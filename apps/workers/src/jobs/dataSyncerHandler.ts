@@ -54,6 +54,8 @@ function syncSourceFilter(collectionName: string): Record<string, unknown> {
 // Batch size for memory-efficient streaming
 const BATCH_SIZE = 1000;
 
+const PREVIEW_STAGE_PATTERN = /^pr\d+$/;
+
 const SYNC_MARKER_COLLECTION = 'syncmarkers';
 const SYNC_MARKER_KEY = 'staging-config-sync';
 
@@ -68,7 +70,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
   const stage = process.env.SEED_STAGE_NAME || 'unknown';
 
   // Strict validation: only allow preview stages (pr<number>), never staging/production
-  if (!/^pr\d+$/.test(stage)) {
+  if (!PREVIEW_STAGE_PATTERN.test(stage)) {
     console.error(
       `✗ Error: Target stage "${stage}" is not a valid preview environment (must match pr<number>). Sync aborted for safety.`
     );
@@ -96,6 +98,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
   const targetClient = new MongoClient(previewUri);
 
   let totalSynced = 0;
+  const skippedCollections: string[] = [];
 
   try {
     // Connect to target first to check sync marker
@@ -137,6 +140,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
 
       if (totalDocs === 0) {
         console.log(`  - No documents found in ${collectionName}. Skipping.`);
+        skippedCollections.push(collectionName);
         continue;
       }
 
@@ -234,9 +238,12 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
               }
             });
           } catch (rollbackError) {
-            console.error(
-              `  ✗ Rollback failed:`,
-              rollbackError instanceof Error ? rollbackError.message : rollbackError
+            const originalMessage = error instanceof Error ? error.message : String(error);
+            const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+            console.error(`  ✗ Rollback failed:`, rollbackMessage);
+            throw new Error(
+              `Sync of ${collectionName} failed: ${originalMessage}; rollback also failed: ${rollbackMessage}`,
+              { cause: error }
             );
           }
         } else {
@@ -247,11 +254,19 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
       }
     }
 
-    // Mark sync as complete so subsequent deploys skip this step
-    await targetDb
-      .collection(SYNC_MARKER_COLLECTION)
-      .updateOne({ key: SYNC_MARKER_KEY }, { $set: { key: SYNC_MARKER_KEY, syncedAt: new Date() } }, { upsert: true });
-    console.log('  ✓ Sync marker set');
+    // Only a complete copy is marked, so a partial one is retried on the next deploy
+    if (skippedCollections.length > 0) {
+      console.log(`  - Sync marker not set: skipped ${skippedCollections.join(', ')}`);
+    } else {
+      await targetDb
+        .collection(SYNC_MARKER_COLLECTION)
+        .updateOne(
+          { key: SYNC_MARKER_KEY },
+          { $set: { key: SYNC_MARKER_KEY, syncedAt: new Date() } },
+          { upsert: true }
+        );
+      console.log('  ✓ Sync marker set');
+    }
 
     console.log(`\n✓ Preview settings sync complete: ${totalSynced} total documents synced`);
   } finally {
@@ -266,7 +281,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
 export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event => {
   console.log('DataSyncer invoked with event:', event);
 
-  const isPreviewEnvironment = process.env.SEED_STAGE_NAME?.startsWith('pr') || false;
+  const isPreviewEnvironment = PREVIEW_STAGE_PATTERN.test(process.env.SEED_STAGE_NAME ?? '');
   // syncPreviewSettings is passed from the invoke script, true only on initial PR deploy
   const shouldSyncPreviewSettings = event.syncPreviewSettings === true;
 
