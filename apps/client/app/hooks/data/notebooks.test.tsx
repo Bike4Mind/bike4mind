@@ -46,5 +46,6 @@ describe('useSendNotebooksEmail', () => {
     const result = renderSend();
     await result.current.mutateAsync(request(MAX_EMAIL_RECIPIENTS));
     expect(post).toHaveBeenCalledWith('/api/email/send', expect.objectContaining({ type: 'notebooks' }));
+    expect(post.mock.calls[0][1].recipients).toHaveLength(MAX_EMAIL_RECIPIENTS);
   });
 });
