@@ -1214,6 +1214,17 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   ) => Promise<{ billedCredits: number | null } | null>;
 
   /**
+   * Write a fresh call's hold, only while the session still holds `priorStartedAt` (the hold read
+   * before the reserve was taken) or no hold at all. A realtime hold gets the billed-credits marker;
+   * any other has it removed. Resolves false (and writes nothing) when a concurrent bootstrap won.
+   */
+  openVoiceHold: (
+    sessionId: string,
+    priorStartedAt: Date | null,
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean }
+  ) => Promise<boolean>;
+
+  /**
    * Put back a hold claimed by `claimVoiceHold` whose refund then failed, with its per-call
    * `markers`, so it can be settled again. Resolves false (and writes nothing) when the session
    * already holds a newer call.

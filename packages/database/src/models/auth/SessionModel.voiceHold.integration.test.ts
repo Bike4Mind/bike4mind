@@ -105,6 +105,71 @@ describe('sessionRepository voice holds', () => {
     });
   });
 
+  it('lets exactly one of two concurrent bootstraps open its hold over the same prior state', async () => {
+    const id = await seed('call', null, null);
+    const first = minutesAgo(0);
+    const second = new Date(first.getTime() + 1);
+
+    const results = await Promise.all([
+      sessionRepository.openVoiceHold(id, null, {
+        voiceReservedCredits: 100,
+        voiceSessionStartedAt: first,
+        realtime: false,
+      }),
+      sessionRepository.openVoiceHold(id, null, {
+        voiceReservedCredits: 100,
+        voiceSessionStartedAt: second,
+        realtime: false,
+      }),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const after = await Session.findById(id).lean();
+    expect(after?.voiceSessionStartedAt).toEqual(results[0] ? first : second);
+  });
+
+  it('opens over an unclaimed no-reserve prior hold, and drops its realtime marker for an ElevenLabs hold', async () => {
+    const prior = minutesAgo(5);
+    const id = await seed('call', null, prior, 0);
+    const startedAt = minutesAgo(0);
+
+    expect(
+      await sessionRepository.openVoiceHold(id, prior, {
+        voiceReservedCredits: 100,
+        voiceSessionStartedAt: startedAt,
+        realtime: false,
+      })
+    ).toBe(true);
+    const after = await Session.findById(id).lean();
+    expect(after).toMatchObject({
+      voiceReservedCredits: 100,
+      voiceSessionStartedAt: startedAt,
+      voiceConnectedAt: null,
+    });
+    expect(after).not.toHaveProperty('voiceBilledCredits');
+  });
+
+  it('gives a realtime hold the billed-credits marker, and never opens over a newer hold', async () => {
+    const id = await seed('call', 100, minutesAgo(1));
+
+    expect(
+      await sessionRepository.openVoiceHold(id, null, {
+        voiceReservedCredits: 100,
+        voiceSessionStartedAt: new Date(),
+        realtime: true,
+      })
+    ).toBe(false);
+    await Session.updateOne({ _id: id }, { $set: { voiceSessionStartedAt: null } });
+    expect(
+      await sessionRepository.openVoiceHold(id, null, {
+        voiceReservedCredits: 50,
+        voiceSessionStartedAt: new Date(),
+        realtime: true,
+      })
+    ).toBe(true);
+    expect(await Session.findById(id).lean()).toMatchObject({ voiceReservedCredits: 50, voiceBilledCredits: 0 });
+  });
+
   it("never claims a newer call's hold with a stale start time", async () => {
     const id = await seed('call', 100, minutesAgo(1));
 

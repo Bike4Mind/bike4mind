@@ -8,7 +8,14 @@ import {
   userRepository,
   questRepository,
 } from '@bike4mind/database';
-import { AiEvents, ApiKeyType, BadGatewayError, ISessionDocument, redactSessionForClient } from '@bike4mind/common';
+import {
+  AiEvents,
+  ApiKeyType,
+  BadGatewayError,
+  ConflictError,
+  ISessionDocument,
+  redactSessionForClient,
+} from '@bike4mind/common';
 import { apiKeyService, sessionService } from '@bike4mind/services';
 import {
   buildVoiceInstructions,
@@ -358,6 +365,8 @@ When you get the tool result back, summarize it conversationally for voice.`;
     },
   };
 
+  // The hold read before any credit moves; the new hold is written only over it (or over none).
+  const priorHoldStartedAt = session?.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
   // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
   if (!reuseHold && session) {
     await settlePriorVoiceHold(session);
@@ -406,16 +415,19 @@ When you get the tool result back, summarize it conversationally for voice.`;
   // A reconnect leaves the original reservation record untouched so end-reconciliation
   // measures the full call duration, not just the post-reconnect segment.
   if (!reuseHold) {
-    const voiceSessionStartedAt = new Date();
-    await sessionRepository.update({
-      id: session.id,
+    const opened = await sessionRepository.openVoiceHold(session.id, priorHoldStartedAt, {
       voiceReservedCredits: enforceCredits ? reservedCredits : null,
-      voiceSessionStartedAt,
-      voiceConnectedAt: null,
-      voiceLastActivityAt: null,
+      voiceSessionStartedAt: new Date(),
       // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).
-      voiceBilledCredits: 0,
+      realtime: true,
     });
+    if (!opened) {
+      // A concurrent bootstrap of this session wrote its hold first; this one's reserve is not held.
+      if (enforceCredits) {
+        await userRepository.incrementCredits(req.user.id, reservedCredits);
+      }
+      throw new ConflictError('Another voice call on this session started at the same time; retry');
+    }
   }
 
   await logEvent(

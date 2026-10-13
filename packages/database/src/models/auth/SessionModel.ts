@@ -748,6 +748,34 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     return before ? { billedCredits: before.voiceBilledCredits ?? null } : null;
   }
 
+  async openVoiceHold(
+    sessionId: string,
+    priorStartedAt: Date | null,
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean }
+  ) {
+    // Conditional on the hold the bootstrap read: once it is settled (null) or, if it held no reserve
+    // and so was never claimed, still that start. A concurrent bootstrap that already wrote its own
+    // hold makes this match nothing, so only one of them keeps a reserve.
+    const { matchedCount } = await this.sessionModel.updateOne(
+      {
+        _id: sessionId,
+        voiceSessionStartedAt: priorStartedAt ? { $in: [null, priorStartedAt] } : null,
+      },
+      {
+        $set: {
+          voiceReservedCredits: hold.voiceReservedCredits,
+          voiceSessionStartedAt: hold.voiceSessionStartedAt,
+          voiceConnectedAt: null,
+          voiceLastActivityAt: null,
+          // Realtime holds are billed per response against this marker (server/websocket/voiceSessionEnded.ts).
+          ...(hold.realtime ? { voiceBilledCredits: 0 } : {}),
+        },
+        ...(hold.realtime ? {} : { $unset: { voiceBilledCredits: '' } }),
+      }
+    );
+    return matchedCount === 1;
+  }
+
   async restoreVoiceHold(
     sessionId: string,
     voiceReservedCredits: number,
