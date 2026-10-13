@@ -19,7 +19,9 @@ export function cookieDomains(hostname: string): string[] {
 }
 
 /** Expires the ad and analytics cookies the pixels set (Meta, Reddit, GA incl. `_ga_*`),
- * on the current host and its parent domains. */
+ * on the current host and its parent domains. Intentionally includes the apex copies the
+ * marketing site shares: a decline here withdraws consent for the browser, not one subdomain.
+ * It does not write the marketing site's decision cookie, so that site may set them again. */
 export function clearTrackingCookies(): void {
   if (typeof document === 'undefined') return;
   const names = new Set(FIXED_NAMES);
