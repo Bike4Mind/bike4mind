@@ -100,7 +100,7 @@ describe('SubscriptionModal - Team tab', () => {
   beforeEach(() => {
     subscriptions = [];
     teamPriceActive = true;
-    settingValues = {};
+    settingValues = { enableTeamPlan: true };
   });
 
   it('opens the Business tab, so Team is on offer here as well as from Teams > Create Team', async () => {
@@ -118,6 +118,70 @@ describe('SubscriptionModal - Team tab', () => {
     expect(screen.queryByTestId('subscription-modal-team-unavailable')).not.toBeInTheDocument();
   });
 
+  it('disables the Business tab with a visible, accessible reason when enableTeamPlan is off', async () => {
+    settingValues = { enableTeamPlan: false };
+    renderModal();
+
+    // The reason is described by, not part of, the tab, so the name stays 'Business'.
+    const tab = screen.getByRole('tab', { name: 'subscription_modal.business' });
+    expect(tab).toHaveAttribute('aria-disabled', 'true');
+
+    // The tab itself carries the reason; there is no extra tab stop around it.
+    const reasonId = tab.getAttribute('aria-describedby');
+    expect(reasonId).toBeTruthy();
+    expect(document.getElementById(reasonId as string)).toHaveTextContent('Team plans are not available right now.');
+
+    const wrapper = screen.getByTestId('subscription-modal-business-tab-wrapper');
+    expect(wrapper).not.toHaveAttribute('tabindex');
+    await userEvent.setup({ delay: null }).hover(wrapper);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Team plans are not available right now.');
+
+    // The Team card is not reachable.
+    expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
+  });
+
+  it('drops the Team card when the flag flips off while the Business tab is open, and stays on Personal when it returns', async () => {
+    const view = renderModal();
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
+
+    settingValues = { enableTeamPlan: false };
+    view.rerender(
+      <TestWrapper>
+        <SubscriptionModal open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
+
+    // The stored selection fell back with the gate; turning the flag back on must not pull the view to
+    // Business without a click.
+    settingValues = { enableTeamPlan: true };
+    view.rerender(
+      <TestWrapper>
+        <SubscriptionModal open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Subscribe to Professional' })).toBeInTheDocument();
+
+    // ...and the user can still pick Business once the gate is back on.
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
+  });
+
+  it('leaves the Business tab enabled and unexplained when enableTeamPlan is on', () => {
+    renderModal();
+
+    expect(screen.getByRole('tab', { name: 'subscription_modal.business' })).not.toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    expect(screen.getByTestId('subscription-modal-business-tab')).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByText('Team plans are not available right now.')).not.toBeInTheDocument();
+  });
+
   it('says why Team cannot be bought when its Stripe price is not live, instead of hiding the tab', async () => {
     teamPriceActive = false;
     renderModal();
@@ -130,7 +194,7 @@ describe('SubscriptionModal - Team tab', () => {
   });
 
   it('quotes seats, price and pool size from the admin team plan settings', async () => {
-    settingValues = { teamPlanMinSeats: 2, teamPlanCreditsPerSeat: 1000 };
+    settingValues = { enableTeamPlan: true, teamPlanMinSeats: 2, teamPlanCreditsPerSeat: 1000 };
     renderModal();
 
     await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
@@ -148,7 +212,7 @@ describe('SubscriptionModal', () => {
   beforeEach(() => {
     subscriptions = [];
     teamPriceActive = true;
-    settingValues = {};
+    settingValues = { enableTeamPlan: true };
     cancelMutate.mockReset();
     subscribeMutate.mockReset();
     changeMutate.mockReset();

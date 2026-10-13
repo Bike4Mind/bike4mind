@@ -5,8 +5,8 @@ import {
   useSubscribeTeamPlan,
   useUpdateSubscriptionSeats,
 } from '@client/app/hooks/data/subscriptions';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
-import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
+import { useTeamPlanAvailable, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import {
   SubscriptionOwnerType,
   ISubscription,
@@ -32,6 +32,7 @@ import {
   ModalClose,
   ModalDialog,
   Stack,
+  Tooltip,
   Typography,
   Divider,
   Card,
@@ -310,6 +311,7 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
   const subscriptions = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
   const stripePortal = useStripePortal();
   const subscribeTeamPlan = useSubscribeTeamPlan();
+  const teamPlanAvailable = useTeamPlanAvailable();
   const subscription = pickDisplayedSubscription(subscriptions.data ?? []);
   // A delinquent plan is still a plan: the row exists so the Billing Portal stays reachable,
   // but it must not read as healthy - Stripe is dunning it and entitlements deny access.
@@ -462,16 +464,22 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
                     )}
                   </Box>
                 ) : (
-                  <Button
-                    variant="solid"
-                    color="primary"
-                    onClick={handleOpenSubscriptionModal}
-                    loading={subscribeTeamPlan.isPending}
-                    disabled={pricePerSeat === null}
-                    className="organization-billing-subscribe-button"
-                  >
-                    Subscribe Now
-                  </Button>
+                  <Tooltip title={teamPlanAvailable ? undefined : TEAM_PLAN_UNAVAILABLE_MESSAGE} placement="bottom">
+                    {/* Span so the tooltip still fires on hover/focus while the button is disabled. */}
+                    <span tabIndex={teamPlanAvailable ? undefined : 0}>
+                      <Button
+                        variant="solid"
+                        color="primary"
+                        onClick={handleOpenSubscriptionModal}
+                        loading={subscribeTeamPlan.isPending}
+                        disabled={pricePerSeat === null || !teamPlanAvailable}
+                        className="organization-billing-subscribe-button"
+                        data-testid="organization-billing-subscribe-btn"
+                      >
+                        Subscribe Now
+                      </Button>
+                    </span>
+                  </Tooltip>
                 )}
               </Box>
 

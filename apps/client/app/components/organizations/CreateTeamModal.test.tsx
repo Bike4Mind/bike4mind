@@ -31,8 +31,10 @@ vi.mock('@client/app/hooks/data/stripe', () => ({
 }));
 
 const seatLimits = vi.hoisted(() => ({ current: { minSeats: 3, maxSeats: 7 } }));
+const teamPlan = vi.hoisted(() => ({ available: true }));
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({
   useTeamSeatLimits: () => seatLimits.current,
+  useTeamPlanAvailable: () => teamPlan.available,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -43,6 +45,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 describe('CreateTeamModal', () => {
   beforeEach(() => {
     mutateAsync.mockReset();
+    teamPlan.available = true;
     plansState = defaultPlans();
     useCreateTeamModal.setState({ isOpen: true });
   });
@@ -142,6 +145,67 @@ describe('CreateTeamModal', () => {
     expect(screen.getByTestId('create-team-price-error')).toBeTruthy();
     expect(screen.queryByTestId('create-team-price-value')).toBeNull();
     expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
+  });
+
+  it('shows no unavailable message and allows checkout when enableTeamPlan is on', async () => {
+    renderModal();
+
+    expect(screen.queryByTestId('create-team-unavailable')).toBeNull();
+    await userEvent.setup({ delay: null }).type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+    expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(false);
+  });
+
+  it('says Team plans are not available and disables Create Team when enableTeamPlan is off', async () => {
+    teamPlan.available = false;
+    renderModal();
+
+    expect(screen.getByTestId('create-team-unavailable').textContent).toBe('Team plans are not available right now.');
+    // Even with a valid name and live price, the button stays disabled and nothing is submitted.
+    await userEvent.setup({ delay: null }).type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+    const submit = screen.getByTestId('create-team-submit-btn');
+    expect(submit.hasAttribute('disabled')).toBe(true);
+    submit.click();
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('exempts the development create path from the Team plan gate', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.resetModules();
+    const devCreate = vi.fn().mockResolvedValue({});
+    vi.doMock('@client/app/hooks/data/subscriptions', () => ({
+      useSubscribeTeamPlan: () => ({ mutateAsync: (...args: unknown[]) => mutateAsync(...args), isPending: false }),
+      useCreateTeamDev: () => ({ mutateAsync: devCreate, isPending: false }),
+    }));
+    try {
+      teamPlan.available = false;
+      const { default: DevModal, useCreateTeamModal: useDevModal } = await import('./CreateTeamModal');
+      useDevModal.setState({ isOpen: true });
+      render(
+        <TestWrapper>
+          <DevModal />
+        </TestWrapper>
+      );
+
+      expect(screen.queryByTestId('create-team-unavailable')).toBeNull();
+      const user = userEvent.setup({ delay: null });
+      await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      await user.click(screen.getByTestId('create-team-submit-btn'));
+
+      await waitFor(() => expect(devCreate).toHaveBeenCalledTimes(1));
+      expect(mutateAsync).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('@client/app/hooks/data/subscriptions');
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('keeps the missing-price error alongside the unavailable message', () => {
+    teamPlan.available = false;
+    plansState = { data: [{ id: 'price_some_other_plan', unit_amount: 3000 }], isLoading: false, isError: false };
+    renderModal();
+
+    expect(screen.getByTestId('create-team-unavailable')).toBeTruthy();
+    expect(screen.getByTestId('create-team-price-error')).toBeTruthy();
   });
 
   it('does not sit on a loading skeleton forever when the plans query is disabled', () => {
