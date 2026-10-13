@@ -268,6 +268,7 @@ export const SettingKeySchema = z.enum([
   'voyageApiKey',
   'FirecrawlApiKey',
   'FirecrawlApiUrl',
+  'PerplexityApiKey',
   'EnableDeepResearch',
   'EnableDeepResearchDefault',
   'EnableKnowledgeBaseSearch',
@@ -477,6 +478,8 @@ export const SettingKeySchema = z.enum([
   'voiceSessionVadType',
   'voiceSessionVadEagerness',
 
+  'OrgFeedbackSummaryModel',
+
   // EMAIL ANALYSIS SETTINGS
   'EnableEmailAnalysis',
   'EmailAnalysisModel',
@@ -556,6 +559,10 @@ export const SettingKeySchema = z.enum([
 
   // VIDEO GENERATION
   'videoGeneration',
+  'agentVideoClipsPerRun',
+
+  // MUSIC GENERATION
+  'musicGeneration',
 
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
@@ -626,6 +633,8 @@ export const OrchestrationDefaultsSchema = z.object({
     'music_generation',
     'audio_generation',
     'excel_generation',
+    // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
+    'video_generation',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
     // they are strictly safer than the storage-backed tools above. Without
@@ -1081,9 +1090,9 @@ export enum ServerStatusEnum {
 
 // Logo Settings Schema
 export const LogoSettingsSchema = z.object({
-  customLogoUrl: z.string().optional().prefault(''),
-  customDarkLogoUrl: z.string().optional().prefault(''),
-  useBothLogos: z.boolean().optional().prefault(false),
+  customLogoUrl: z.string().prefault(''),
+  customDarkLogoUrl: z.string().prefault(''),
+  useBothLogos: z.boolean().prefault(false),
 });
 
 export type LogoSettings = z.infer<typeof LogoSettingsSchema>;
@@ -1123,6 +1132,13 @@ export const VideoGenerationSettingsSchema = z.object({
 });
 
 export type VideoGenerationSettings = z.infer<typeof VideoGenerationSettingsSchema>;
+
+export const MusicGenerationSettingsSchema = z.object({
+  // Per-model override of MUSIC_MODEL_CATALOG[id].defaultEnabled; see isMusicModelEnabled in ../music/enablement.
+  enabledModels: z.record(z.string(), z.boolean()).prefault({}),
+});
+
+export type MusicGenerationSettings = z.infer<typeof MusicGenerationSettingsSchema>;
 
 /**
  * Canonical repository and branch the What's New generator reads from.
@@ -4225,6 +4241,14 @@ export const settingsMap = {
     defaultValue: '',
     category: 'AI',
   }),
+  PerplexityApiKey: makeStringSetting({
+    key: 'PerplexityApiKey',
+    name: 'Perplexity API Key',
+    description: 'The API key for Perplexity AI search service',
+    defaultValue: '',
+    isSensitive: true,
+    category: 'AI',
+  }),
   EnableDeepResearch: makeBooleanSetting({
     key: 'EnableDeepResearch',
     name: 'Enable Deep Research',
@@ -4376,6 +4400,15 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 10,
     schema: RapidReplySettingsSchema,
+  }),
+  OrgFeedbackSummaryModel: makeStringSetting({
+    key: 'OrgFeedbackSummaryModel',
+    name: 'Organization Feedback Summary Model',
+    defaultValue: ChatModels.CLAUDE_4_5_HAIKU_BEDROCK,
+    description: 'The AI model used for organization feedback summaries. The selected provider must be configured.',
+    options: CHAT_MODELS,
+    category: 'AI',
+    order: 199,
   }),
   EnableEmailAnalysis: makeBooleanSetting({
     key: 'EnableEmailAnalysis',
@@ -4714,7 +4747,9 @@ export const settingsMap = {
     name: 'Hardware Compute: Max USD per run',
     defaultValue: 300,
     min: 1,
-    max: 10_000,
+    // Kept in USD so it survives a HardwareComputeCreditsPerUsd change. The ceiling matches
+    // HardwareComputeMaxUsdPerUserPerDay so one large run can be admitted by raising both.
+    max: 100_000,
     description:
       'Defense-in-depth spend ceiling for a single eligible hybrid compute job run on real external ' +
       'compute hardware (see EnableHardwareCompute): any target whose advertised minimum cost exceeds ' +
@@ -4723,8 +4758,9 @@ export const settingsMap = {
       '2026-07-21) as a conservative default that admits the High-fidelity quality tier (which applies a 16x ' +
       'error-mitigation/debias multiplier, ~10x the Standard tier reservation after margins) for SMALL/sparse ' +
       'briefs only; larger 16-qubit High-fidelity runs reserve well past $300 and are rejected here by design. ' +
-      'Raise further without a deploy (up to $10k) to admit pricier briefs; bounded per-run exposure is the ' +
-      'deliberate tradeoff over universal High-fidelity.',
+      'Raise further without a deploy (up to $100k) to admit pricier briefs; bounded per-run exposure is the ' +
+      'deliberate tradeoff over universal High-fidelity. A run above the per-user daily cap is still ' +
+      'rejected, so raise HardwareComputeMaxUsdPerUserPerDay alongside this.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
@@ -4922,6 +4958,30 @@ export const settingsMap = {
     category: 'AI',
     order: 145,
     schema: VideoGenerationSettingsSchema,
+  }),
+  agentVideoClipsPerRun: makeNumberSetting({
+    key: 'agentVideoClipsPerRun',
+    name: 'Agent Video Clips Per Run',
+    defaultValue: 2,
+    min: 0,
+    int: true,
+    description:
+      'Most video_generation clips one agent-mode run may start, counted across the run and all of its subagents. 0 removes the tool from agent mode. Each clip still holds and settles its own credits.',
+    category: 'AI',
+    order: 146,
+    // Consumed by apps/client/server/queueHandlers/agentExecutor.videoToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
+  musicGeneration: makeObjectSetting({
+    key: 'musicGeneration',
+    userReadable: true,
+    name: 'Music Generation',
+    defaultValue: MusicGenerationSettingsSchema.parse({}),
+    description:
+      'Enable or disable individual music generation models. Models without an override use their built-in default.',
+    category: 'AI',
+    order: 147,
+    schema: MusicGenerationSettingsSchema,
   }),
   enableModelDiscovery: makeBooleanSetting({
     key: 'enableModelDiscovery',

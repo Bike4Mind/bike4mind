@@ -116,14 +116,25 @@ function makePublicArtifactRow() {
   };
 }
 
-async function getArtifact(user: unknown, row = makePublicArtifactRow()) {
-  findOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(row) }) });
+async function getArtifact(user: unknown, row = makePublicArtifactRow(), select = vi.fn()) {
+  findOne.mockReturnValue({
+    select: (fields: string) => (select(fields), { lean: () => Promise.resolve(row) }),
+  });
   const { req, res } = createMocks({ method: 'GET' });
   (req as unknown as { query: unknown }).query = { id: 'pub-1' };
   (req as unknown as { user?: unknown }).user = user;
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return res;
 }
+
+describe('GET public artifact - share-token capability', () => {
+  it('projects the share token out of the query, since .lean() bypasses the toJSON strip', async () => {
+    const select = vi.fn();
+    await getArtifact({ id: 'someone-else', isAdmin: false }, makePublicArtifactRow(), select);
+    expect(select).toHaveBeenCalledOnce();
+    expect(select).toHaveBeenCalledWith('-shareTokens.token');
+  });
+});
 
 describe('GET public artifact - response scoping', () => {
   it('returns only public display fields to a non-owner viewer', async () => {

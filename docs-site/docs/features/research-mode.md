@@ -17,7 +17,7 @@ Research Mode lets you compare responses from multiple AI models side-by-side. A
 
 ### Why Use Research Mode?
 
-- **Compare models**: See how Claude, GPT-4, Gemini, and others respond differently
+- **Compare models**: See how Claude, GPT, Gemini, and others respond differently
 - **Test parameters**: Try the same model with different temperature settings
 - **Make informed choices**: Find which model works best for specific tasks
 - **Save time**: No need to ask the same question multiple times
@@ -67,10 +67,10 @@ For each of the 4 slots, you can set:
 ### Example Configurations
 
 **Compare Model Families:**
-- Slot 1: Claude 3.5 Sonnet
-- Slot 2: GPT-4o
-- Slot 3: Gemini 2.5 Pro
-- Slot 4: Llama 3
+- Slot 1: Claude Sonnet 5.5
+- Slot 2: GPT-5.6
+- Slot 3: Gemini 3.1 Pro
+- Slot 4: Llama 4 Maverick
 
 **Test Temperature Settings:**
 - Slot 1: Claude (temperature 0.0 - focused)

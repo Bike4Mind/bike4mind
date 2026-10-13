@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import type { ValidatedVideoRequest } from '@bike4mind/common';
-import { readJson } from '../http';
+import { MAX_VIDEO_OUTPUT_BYTES, type ValidatedVideoRequest } from '@bike4mind/common';
+import { readJson } from '../../generationProviders/http';
 import {
   ProviderOutputUnavailableError,
   ProviderSubmitError,
@@ -156,6 +156,7 @@ const assertHttps = (url: URL): void => {
 
 /** xAI Grok Imagine over the REST videos API. Every method is one bounded call; the engine owns waiting. */
 export class XaiVideoProvider implements VideoProvider {
+  readonly mode = 'async' as const;
   readonly id = 'xai' as const;
   readonly models = ['grok-imagine-video-1.5'] as const;
 
@@ -247,7 +248,7 @@ export class XaiVideoProvider implements VideoProvider {
     // An expired pre-signed link answers 403; a purged object 404 or 410.
     if ([403, 404, 410].includes(response.status)) throw new ProviderOutputUnavailableError(response.status);
     if (!response.ok) throw new Error(`xai_download_http_${response.status}`);
-    return readBoundedResponse(response);
+    return readBoundedResponse(response, MAX_VIDEO_OUTPUT_BYTES);
   }
 
   // No cancel: xAI documents none, and the engine skips a provider without one.

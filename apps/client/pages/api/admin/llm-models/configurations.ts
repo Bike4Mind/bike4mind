@@ -115,7 +115,10 @@ const putHandler = asyncHandler<unknown, unknown, { configurations: LLMModelConf
     invalidateSettingsCache('llmModelConfigurations');
     req.logger?.info(`🗑️ Invalidated cache for LLM model configurations`);
 
-    return res.json(updatedSetting);
+    // Return success only -- the client ignores the body and refetches via GET.
+    // Returning the hydrated doc would serialise through AdminSettingsSchema's toJSON
+    // transform, masking llmModelConfigurations (absent from settingsMap) to ''.
+    return res.json({ success: true });
   } catch (error: any) {
     req.logger?.error('Failed to save LLM model configurations:', error);
     throw new NotFoundError(`Failed to save LLM model configurations: ${error.message}`);

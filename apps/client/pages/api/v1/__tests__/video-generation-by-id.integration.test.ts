@@ -38,7 +38,7 @@ vi.mock('@bike4mind/database', async orig =>
 vi.mock('@server/generationJobs/wiring', async () =>
   (await import('@server/videoGenerations/__test__/routeHarness')).wiringMock()
 );
-vi.mock('@server/videoGenerations/signOutputUrl', async () =>
+vi.mock('@server/generations/signOutputUrl', async () =>
   (await import('@server/videoGenerations/__test__/routeHarness')).signOutputUrlMock()
 );
 vi.mock('@server/auth/auth', async orig =>

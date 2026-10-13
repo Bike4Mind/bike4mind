@@ -63,8 +63,27 @@ through the shared consent-gated attribution reader.
 Account creation emits a `signup` event to each Overwatch product named by the
 consenting visitor's campaign touches, for products this deployment holds an
 ingest key for. The host product is excluded, because its own funnel already
-counts its signups. The subscription webhook emits nothing; that path stays
-deferred.
+counts its signups.
+
+A later payment by that account emits a `purchase` event to the same products:
+each paid individual subscription invoice (first charge, renewal, or seat change,
+from the invoice webhook) and each credit pack (from the payment-intent webhook). The
+credited product comes from the touches stored on the user at signup, not from
+the purchase, because a webhook has no browser and a credit-pack payment carries
+no attribution. Organization invoices are excluded because the checkout user's
+signup source is not the organization's acquisition source. Zero-amount invoices,
+refunds, disputes, and synthetic users send nothing. Each event carries the amount
+collected in major units, the currency, whether it was a subscription or credits,
+and the invoice billing reason. It is
+keyed on the Stripe invoice or payment intent, so a redelivered webhook does not
+count twice. Overwatch has no purchase stage in its funnel yet, so these events
+are stored as raw events only.
+
+Because the touches were recorded with consent at signup, a purchase is credited
+from them even if the visitor later withdraws cookie consent: the webhook has no
+browser to ask, and the server keeps no per-user consent state. Withdrawal stops
+new touches from being recorded; it does not stop purchases being credited from
+the touches already stored.
 
 **These counts are self-reported, not verified.** The credited product comes from
 `utm.source` in a first-party cookie, which is a claim the visitor's browser
@@ -128,6 +147,9 @@ already see the denial.
   invoice's processing and the MongoDB subscription record.
 - The admin subscription API includes acquisition, but the subscription table
   has no dedicated acquisition column.
+- For a missing cross-product purchase, check the user's stored signup acquisition,
+  the source product's ingest key, and the purchase failure warning in analytics logs.
+  Organization invoices do not emit cross-product purchases.
 
 ## API-key usage log
 

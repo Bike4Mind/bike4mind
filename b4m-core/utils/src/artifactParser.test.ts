@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   convertCodeBlocksToArtifacts,
+  extractArtifactBlocks,
   parseArtifacts,
   isSvgGraphicallyEmpty,
   scanMermaidFences,
@@ -161,7 +162,8 @@ describe('convertCodeBlocksToArtifacts - HTML promotion', () => {
  * Small local models hallucinate a builder tool (e.g. build_html) and return the
  * artifact as tool-call JSON rather than an <artifact> tag or ```html fence. The
  * HTML in its arguments must be promoted, while ordinary JSON stays untouched.
- * Mirrors the twin suite in apps/client/app/utils/artifactParser.test.ts.
+ * promoteToolCallJsonArtifact is shared: the client's convert pass calls it too, and
+ * apps/client/app/utils/artifactParser.test.ts pins that call.
  */
 describe('convertCodeBlocksToArtifacts - tool-call JSON promotion', () => {
   const promote = (input: string) => {
@@ -248,7 +250,8 @@ describe('convertCodeBlocksToArtifacts - tool-call JSON promotion', () => {
  * Small local models sometimes stub out an image as an empty <svg> placeholder
  * (only a "goes here" comment) alongside a real generated image. parseArtifacts
  * faithfully extracts it, and it renders as a blank canvas. It must be suppressed.
- * Mirrors the twin suite in apps/client/app/utils/artifactParser.test.ts.
+ * The client's parseArtifacts applies the same predicate; apps/client/app/utils/artifactParser.test.ts
+ * pins that filter.
  */
 describe('parseArtifacts - graphically-empty SVG suppression', () => {
   // The exact stub observed from qwen2.5-coder:7b on "generate fish image please".
@@ -365,6 +368,51 @@ describe('parseArtifacts - attribute values containing quotes', () => {
   });
 });
 
+/**
+ * The client renders an untyped or unknown-type block (typeFallback 'language-then-code');
+ * this module's parseArtifacts, which feeds promptMeta.artifacts, drops it ('none').
+ * Pinned so a later change to either default is deliberate.
+ */
+describe('extractArtifactBlocks - typeFallback', () => {
+  const untyped = '<artifact identifier="x" title="T">body</artifact>';
+  const unknownType = '<artifact identifier="x" type="text/x-unknown" title="T">body</artifact>';
+  const pythonByLanguage = '<artifact identifier="x" language="python" title="T">print(1)</artifact>';
+
+  it("drops untyped and unknown-type blocks under 'none' (the default)", () => {
+    expect(extractArtifactBlocks(untyped)).toHaveLength(0);
+    expect(extractArtifactBlocks(unknownType, { typeFallback: 'none' })).toHaveLength(0);
+    expect(extractArtifactBlocks(pythonByLanguage)).toHaveLength(0);
+  });
+
+  it("resolves through language, then code, under 'language-then-code'", () => {
+    const opts = { typeFallback: 'language-then-code' } as const;
+    expect(extractArtifactBlocks(pythonByLanguage, opts)[0]).toMatchObject({ type: 'python', language: 'python' });
+    expect(extractArtifactBlocks(untyped, opts)[0]).toMatchObject({ type: 'code', language: 'text' });
+    expect(extractArtifactBlocks(unknownType, opts)[0]).toMatchObject({ type: 'code', language: 'text' });
+  });
+
+  it("keeps a typed block's language raw under 'none' and defaults it under 'language-then-code'", () => {
+    const typed = '<artifact identifier="x" type="text/html" title="T"><p>hi</p></artifact>';
+    expect(extractArtifactBlocks(typed)[0].language).toBeUndefined();
+    expect(extractArtifactBlocks(typed, { typeFallback: 'language-then-code' })[0].language).toBe('text');
+  });
+
+  it('marks a repeated identifier as an update only when the earlier block was kept', () => {
+    const repeated = `${untyped}<artifact identifier="x" type="text/html" title="T2"><p>hi</p></artifact>`;
+    expect(extractArtifactBlocks(repeated).map(a => a.operation)).toEqual(['create']);
+    expect(extractArtifactBlocks(repeated, { typeFallback: 'language-then-code' }).map(a => a.operation)).toEqual([
+      'create',
+      'update',
+    ]);
+  });
+
+  it('parseArtifacts still drops an untyped block (the persistence contract)', () => {
+    const { artifacts, cleanedContent } = parseArtifacts(`Intro ${untyped}`);
+    expect(artifacts).toHaveLength(0);
+    expect(cleanedContent).toBe(`Intro ${untyped}`);
+  });
+});
+
 describe('parseArtifacts — multi-line and special-character opening tags', () => {
   it('parses an artifact whose opening tag spans multiple lines', () => {
     const input = [
@@ -452,9 +500,9 @@ describe('parseArtifacts — multi-line and special-character opening tags', () 
 /**
  * The fenced detectors match a fence on its own and check the promotion anchors in the
  * callback, so these cases pin the promotion decisions and the behaviour that changed
- * when the anchors moved out of the patterns. Mirrors the twin suite in apps/client/app/utils/artifactParser.test.ts,
- * except for the react-fence cases: that detector's promotion rules are not shared
- * between the two copies.
+ * when the anchors moved out of the patterns. Mirrors the client suite in apps/client/app/utils/artifactParser.test.ts,
+ * except for the react-fence cases: the client's convertCodeBlocksToArtifacts keeps its own
+ * react detector with different promotion rules.
  */
 describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
@@ -563,11 +611,11 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   });
 
   it('leaves an svg fence with no closing tag untouched', () => {
-    // Output equality only, not a regression guard: this copy's hasCompleteSvg was
-    // already a plain indexOf scan before the change (0.1ms at n=800, 0.9ms at n=25600),
-    // so there is no old-vs-new gap to pin. The growth-ratio version of this case lives
-    // in the twin client suite, whose pre-fix doubly-anchored <svg>...</svg> pattern
-    // takes ~0.6s at n=400.
+    // Output equality only, not a regression guard: core's hasCompleteSvg was already a
+    // plain indexOf scan before the change (0.1ms at n=800, 0.9ms at n=25600), so there is
+    // no old-vs-new gap to pin. The growth-ratio version of this case lives in the client
+    // suite, whose pre-fix svg fence pattern was doubly anchored on <svg>...</svg> and took
+    // ~0.6s at n=400.
     const input = '```svg\n' + '<svg '.repeat(800) + '\n```';
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
@@ -689,9 +737,9 @@ describe('convertCodeBlocksToArtifacts - component declaration line gate', () =>
 });
 
 /**
- * promoteBareHtmlDocument is module-private and runs last inside
- * convertCodeBlocksToArtifacts, so these cases drive it through the public entry point.
- * MUST STAY IN SYNC with the twin suite in apps/client/app/utils/artifactParser.test.ts.
+ * promoteBareHtmlDocument runs last inside convertCodeBlocksToArtifacts, so these cases
+ * drive it through that entry point. The client's convert pass calls the same function
+ * without echo marking; apps/client/app/utils/artifactParser.test.ts runs the same inputs there.
  */
 describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
   const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;

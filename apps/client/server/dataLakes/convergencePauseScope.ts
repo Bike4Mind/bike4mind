@@ -35,6 +35,7 @@
  * `resolvePlatformOnlyMembership`.
  */
 import {
+  CONVERGENCE_ORIGIN,
   DATA_LAKES,
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
@@ -43,12 +44,12 @@ import {
   IScopedSetting,
   IScopedSettingsRepository,
   SettingScopeLevel,
+  WorkOrigin,
 } from '@bike4mind/common';
 import { buildDataLakeMembershipFilter } from '@bike4mind/database';
 import { dataLakeService, scopedSettingsService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
-import { CONVERGENCE_PAUSE_SETTING_KEY } from '@server/queueHandlers/convergenceKillSwitch';
-import { CONVERGENCE_ORIGIN, WorkOrigin } from '@server/queueHandlers/convergenceProvenance';
+import { CONVERGENCE_PAUSE_SETTING_KEY } from '@server/dataLakes/convergenceKillSwitch';
 // Type-only, so this does NOT pull the sweep's filter module into anyone's runtime graph. Imported
 // rather than restated so the compiler holds the produced shape and the consumed shape together.
 import type { ChunkScanConvergencePause } from '@server/s3/chunkScan';

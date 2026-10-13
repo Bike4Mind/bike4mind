@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, MAX_INLINE_PROVIDER_OUTPUT_BYTES } from '@bike4mind/common';
+import { CreditHolderType, MAX_INLINE_PROVIDER_OUTPUT_BYTES, MAX_VIDEO_OUTPUT_BYTES } from '@bike4mind/common';
 import {
   createVideoProviderRegistry,
   ProviderSubmitError,
   TestVideoProvider,
   ProviderOutputUnavailableError,
-  VideoOutputTooLargeError,
+  ProviderOutputTooLargeError,
   type VideoProvider,
 } from '@bike4mind/utils/videoProviders';
 import { Logger } from '@bike4mind/observability';
@@ -99,6 +99,7 @@ const user = { id: 'u1', organizationId: null };
 const stubProvider = (overrides: Partial<VideoProvider>): VideoProvider => {
   const base = new TestVideoProvider();
   return {
+    mode: 'async',
     id: base.id,
     models: base.models,
     submit: overrides.submit ?? base.submit.bind(base),
@@ -538,7 +539,7 @@ describe('video job end to end with the test provider', () => {
       providers: createVideoProviderRegistry([
         stubProvider({
           fetchOutput: async () => {
-            throw new VideoOutputTooLargeError(300 * 1024 * 1024);
+            throw new ProviderOutputTooLargeError(MAX_VIDEO_OUTPUT_BYTES, 300 * 1024 * 1024);
           },
         }),
       ]),

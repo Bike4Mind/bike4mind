@@ -294,6 +294,7 @@ const SubscriptionModalContent = () => {
                 'Usage analytics across all models',
                 'Advanced security controls',
                 'Dedicated support channel',
+                'Priority support',
               ]}
               actionButton={
                 // Same checkout as Teams > Create Team: the modal picks the seats and opens Stripe.
