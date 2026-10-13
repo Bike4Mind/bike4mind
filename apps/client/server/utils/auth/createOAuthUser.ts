@@ -1,3 +1,4 @@
+import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { User } from '@bike4mind/database';
 import { randomUUID } from 'crypto';
 
@@ -61,8 +62,14 @@ export async function createUniqueOAuthUser(params: {
   baseUsername: string;
   email: string | null;
   oauthCredentials: Record<string, unknown>;
+  /**
+   * Create the account carrying PENDING_FREE_CREDITS_TAG so the caller can release the flat
+   * grant via userService.releasePendingFreeCredits; if that fails, the tag is the breadcrumb the
+   * backfillPendingFreeCredits script rescues.
+   */
+  pendingFreeCredits?: boolean;
 }) {
-  const { name, baseUsername, email, oauthCredentials } = params;
+  const { name, baseUsername, email, oauthCredentials, pendingFreeCredits = false } = params;
   // `name` is a required field. Providers that send neither a displayName/name
   // nor a username (a minimal OIDC/SAML assertion carrying only an email) would
   // otherwise create with name='' -> a non-E11000 validation error that is not
@@ -77,7 +84,9 @@ export async function createUniqueOAuthUser(params: {
     isAdmin: false,
     oauthCredentials,
     authProviders: [oauthCredentials],
-    ...(email ? { email } : {}),
+    // Both callers pass a non-null email only when the provider asserted it verified.
+    ...(email ? { email, emailVerified: true, emailVerifiedAt: new Date() } : {}),
+    ...(pendingFreeCredits ? { tags: [PENDING_FREE_CREDITS_TAG] } : {}),
   });
 
   let candidate = baseUsername;

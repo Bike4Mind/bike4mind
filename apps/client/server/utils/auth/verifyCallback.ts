@@ -9,6 +9,11 @@ import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAcco
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
 import { OAuthFailureReason } from './oauthFailureReason';
 import { isOpenRegistrationAllowed } from './openRegistration';
+import {
+  applyOAuthSignupDomainGrant,
+  isEligibleForOAuthFreeCredits,
+  releaseOAuthPendingFreeCredits,
+} from './oauthSignupGrants';
 
 /**
  * Strategies where anyone on the internet can present an identity, so a first login
@@ -141,6 +146,14 @@ const authenticateUser = async (
         currentTokenVersion: user.tokenVersion,
       });
       await User.updateOne({ _id: user._id }, update);
+      // Promotion is this account's email verification, so a deferred grant is released here: once
+      // emailVerified is set, OTC login no longer releases it and Resend is refused.
+      if (promoteEmailVerified) {
+        await releaseOAuthPendingFreeCredits(
+          { id: String(user._id), tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
+          'OAuth account link (email verified)'
+        );
+      }
 
       // Invariant: a tokenVersion bump must also revoke AuthSessions, or an opaque refresh token
       // (which carries no tokenVersion and is never checked against it) would rotate straight into a
@@ -187,7 +200,29 @@ const authenticateUser = async (
       // their email; sibling OAuth create paths must apply the same gate.
       const emailForNewAccount = isProviderEmailVerified(profile) ? email : null;
       const baseUsername = deriveOAuthUsername(username, name, emailForNewAccount);
-      user = await createUniqueOAuthUser({ name, baseUsername, email: emailForNewAccount, oauthCredentials });
+      // The provider-verified email is the proof of ownership registerViaOTC gets from the code,
+      // so a self-serve account is created tagged and the flat grant released right away; a
+      // failed release leaves the tag for the backfill script. Okta/SAML get no flat grant.
+      const pendingFreeCredits =
+        SELF_SERVE_STRATEGIES.has(strategy) &&
+        !!emailForNewAccount &&
+        (await isEligibleForOAuthFreeCredits(emailForNewAccount));
+      user = await createUniqueOAuthUser({
+        name,
+        baseUsername,
+        email: emailForNewAccount,
+        oauthCredentials,
+        pendingFreeCredits,
+      });
+      const newUserId = String(user._id);
+      if (pendingFreeCredits) {
+        await releaseOAuthPendingFreeCredits(
+          { id: newUserId, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
+          'OAuth signup (provider-verified email)'
+        );
+      }
+      // These accounts never reach /api/email/verify, so the domain grant runs here for every strategy.
+      if (emailForNewAccount) await applyOAuthSignupDomainGrant(newUserId, emailForNewAccount);
       // Transient flag (not persisted), mirroring isNewOAuthLink above: lets
       // the callback endpoint log the registration and forward a one-shot
       // signup signal to the client for ad-conversion tracking.
