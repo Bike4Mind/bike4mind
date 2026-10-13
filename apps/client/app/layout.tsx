@@ -94,14 +94,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             </Script>
           </>
         )}
-        <Script id="mailerlite" strategy="afterInteractive">
-          {`
-            // Load mailerlite script
-            (function(m,l,s,c){m[l]=m[l]||function(){(m[l].q=m[l].q||[]).push(arguments)};
-            m[l].s=Date.now();c=s.createElement('script');c.async=1;c.src='/scripts/ml.js';
-            s.getElementsByTagName('head')[0].appendChild(c);})(window,'ml',document);
-          `}
-        </Script>
         <AppRouterCacheProvider options={{ key: 'joy' }}>
           <SerwistProvider swUrl="/serwist/sw.js">
             <ClientProviders>{children}</ClientProviders>
