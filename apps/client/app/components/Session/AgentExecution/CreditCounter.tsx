@@ -7,7 +7,7 @@
  *
  * The store accumulates `totalCreditsUsed` from two sources:
  *   - per-iteration `progress.creditsUsed` deltas during the run
- *     (apps/client/server/queueHandlers/agentExecutor.ts emits these)
+ *     (apps/workers/src/queueHandlers/agentExecutor.ts emits these)
  *   - the authoritative `completed.totalCreditsUsed` on terminal success
  *
  * So this component is a thin reactive view over a single store field -
