@@ -244,7 +244,8 @@ export function buildThinkingParams(
  * How each adaptive model turns thinking off, for the ids that can. Omitting `thinking`
  * does not do it: Sonnet 5 and Opus 5 then think adaptively at the default effort.
  * Opus 5.5 and the Fable line 400 on any off switch, so they are absent and a `none`
- * request runs them at the lowest effort instead.
+ * request runs them at the lowest effort instead. A new adaptive model must be classified
+ * here (listed with its off switch, or deliberately left out).
  */
 const ADAPTIVE_THINKING_OFF_SWITCH: ReadonlyMap<string, 'disabled' | 'between_tools'> = new Map([
   [ChatModels.CLAUDE_4_7_OPUS, 'disabled'],
@@ -255,6 +256,8 @@ const ADAPTIVE_THINKING_OFF_SWITCH: ReadonlyMap<string, 'disabled' | 'between_to
   [ChatModels.CLAUDE_5_SONNET_BEDROCK, 'disabled'],
   [ChatModels.CLAUDE_5_OPUS, 'disabled'],
   [ChatModels.CLAUDE_5_OPUS_BEDROCK, 'disabled'],
+  [ChatModels.CLAUDE_5_5_HAIKU, 'disabled'],
+  [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, 'disabled'],
   // Sonnet 5.5 rejects `disabled`; `between_tools` is its off switch.
   [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'between_tools'],
 ]);

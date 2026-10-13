@@ -408,14 +408,15 @@ describe('planReasoningEffort', () => {
   const legacy: ModelInfo = { ...baseModelInfo, id: ChatModels.CLAUDE_4_5_SONNET };
 
   describe('adaptive models', () => {
-    it('turns thinking off with `disabled` where the model accepts it', () => {
-      expect(
-        planReasoningEffort(ChatModels.CLAUDE_5_SONNET, adaptive(ChatModels.CLAUDE_5_SONNET), 'none', 800)
-      ).toEqual({
-        kind: 'off',
-        thinking: { type: 'disabled' },
-      });
-    });
+    it.each([ChatModels.CLAUDE_5_SONNET, ChatModels.CLAUDE_5_5_HAIKU, ChatModels.CLAUDE_5_5_HAIKU_BEDROCK])(
+      'turns thinking off with `disabled` where the model accepts it (%s)',
+      id => {
+        expect(planReasoningEffort(id, adaptive(id), 'none', 800)).toEqual({
+          kind: 'off',
+          thinking: { type: 'disabled' },
+        });
+      }
+    );
 
     it('uses `between_tools` for Sonnet 5.5, which rejects `disabled`', () => {
       const id = ChatModels.CLAUDE_5_5_SONNET_BEDROCK;
