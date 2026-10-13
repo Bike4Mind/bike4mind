@@ -42,10 +42,24 @@ export function creditsForElapsed(reservedCredits: number, elapsedSeconds: numbe
  * endpoint, and without this guard each would burn another full reservation that
  * the single end-reconciliation never refunds. The explicit-flag-plus-live-hold
  * test means a stray flag can never skip a legitimate first-connect charge.
+ *
+ * Reuse also requires the hold to be the caller's call type: a realtime hold carries
+ * `voiceBilledCredits` and settles on its own rate, so an ElevenLabs reconnect reusing it would
+ * bill ElevenLabs minutes at the realtime floor (and the reverse). A mismatched hold is settled
+ * and a fresh one reserved instead.
  */
 export function shouldReuseVoiceHold(
   isReconnect: boolean | undefined,
-  session: { voiceReservedCredits?: number | null; voiceSessionStartedAt?: Date | null } | null | undefined
+  session:
+    | { voiceReservedCredits?: number | null; voiceSessionStartedAt?: Date | null; voiceBilledCredits?: number | null }
+    | null
+    | undefined,
+  realtime: boolean
 ): boolean {
-  return !!isReconnect && session?.voiceReservedCredits != null && session?.voiceSessionStartedAt != null;
+  return (
+    !!isReconnect &&
+    session?.voiceReservedCredits != null &&
+    session?.voiceSessionStartedAt != null &&
+    (session.voiceBilledCredits != null) === realtime
+  );
 }

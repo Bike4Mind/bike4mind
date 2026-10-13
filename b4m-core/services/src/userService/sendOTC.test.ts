@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { sendOTC, OTC_EXPIRY_MS } from './sendOTC';
+import { randomInt } from 'crypto';
+import { sendOTC, OTC_CODE_LENGTH, OTC_EXPIRY_MS } from './sendOTC';
+
+vi.mock('crypto', async importOriginal => {
+  const actual = await importOriginal<typeof import('crypto')>();
+  return { ...actual, randomInt: vi.fn(actual.randomInt) };
+});
 
 const makeAdapters = () => {
   const sendOTCEmail = vi.fn().mockResolvedValue(undefined);
@@ -30,14 +36,23 @@ describe('sendOTC', () => {
     expect(result).not.toHaveProperty('userExists');
   });
 
-  it('sends an email with a 6-digit code and returns that same code (for non-prod debug storage)', async () => {
+  it('sends an email with an 8-digit code and returns that same code (for non-prod debug storage)', async () => {
     const { adapters, mocks } = makeAdapters();
     const result = await sendOTC({ email: 'test@example.com' }, adapters);
+    expect(OTC_CODE_LENGTH).toBe(8);
     expect(mocks.sendOTCEmail).toHaveBeenCalledOnce();
     const [, code] = mocks.sendOTCEmail.mock.calls[0];
-    expect(code).toMatch(/^\d{6}$/);
+    expect(code).toMatch(/^\d{8}$/);
     // result.code must equal the emailed code so the route can persist it for otc-code
     expect(result.code).toBe(code);
+  });
+
+  it('draws the code from the full 8-digit space and zero-pads it', async () => {
+    vi.mocked(randomInt).mockImplementationOnce((() => 42) as unknown as typeof randomInt);
+    const { adapters, mocks } = makeAdapters();
+    await sendOTC({ email: 'test@example.com' }, adapters);
+    expect(randomInt).toHaveBeenCalledWith(0, 100_000_000);
+    expect(mocks.sendOTCEmail).toHaveBeenCalledWith('test@example.com', '00000042');
   });
 
   it('normalizes email to lowercase', async () => {
@@ -49,6 +64,19 @@ describe('sendOTC', () => {
   it('rejects invalid email format', async () => {
     const { adapters } = makeAdapters();
     await expect(sendOTC({ email: 'not-an-email' }, adapters)).rejects.toThrow();
+  });
+
+  // The per-address verify budget relies on this: findByEmail's collation folds these variants onto
+  // the plain address, so issuing a token for one would give it a separate guess budget.
+  it.each([
+    ['zero-width space', 'vic\u200btim@example.com'],
+    ['zero-width joiner', 'victim\u200d@example.com'],
+    ['fullwidth letter', 'vic\uff54im@example.com'],
+  ])('issues no code for an address with a %s', async (_label, email) => {
+    const { adapters, mocks } = makeAdapters();
+    await expect(sendOTC({ email }, adapters)).rejects.toThrow();
+    expect(mocks.sendOTCEmail).not.toHaveBeenCalled();
+    expect(mocks.signPendingToken).not.toHaveBeenCalled();
   });
 
   it('signs pending token with correct payload shape including jti', async () => {

@@ -5,6 +5,13 @@ import { z } from 'zod';
 /** OTC codes expire after 10 minutes */
 export const OTC_EXPIRY_MS = 10 * 60 * 1000;
 
+/**
+ * Digits in a newly issued code. Codes issued before this grew from 6 still verify while their
+ * token is live (verifyPendingOTC compares any length). The client input mirrors it in
+ * apps/client/app/utils/otcCode.ts; keep the two in sync.
+ */
+export const OTC_CODE_LENGTH = 8;
+
 const sendOTCSchema = z.object({
   email: z.string().email(),
 });
@@ -40,7 +47,7 @@ export interface SendOTCResult {
 }
 
 /**
- * Generates a 6-digit OTC and emails the code. The hashed code is carried in
+ * Generates an OTC_CODE_LENGTH-digit OTC and emails the code. The hashed code is carried in
  * the signed pending token rather than stored in the DB, so this never touches
  * the database - issuance is uniform regardless of whether an account exists
  * (OWASP user enumeration prevention).
@@ -52,8 +59,7 @@ export const sendOTC = async (
   const { email } = sendOTCSchema.parse(params);
   const normalizedEmail = email.toLowerCase().trim();
 
-  // Generate a 6-digit numeric code
-  const code = String(randomInt(0, 1000000)).padStart(6, '0');
+  const code = String(randomInt(0, 10 ** OTC_CODE_LENGTH)).padStart(OTC_CODE_LENGTH, '0');
   const hashedCode = await bcrypt.hash(code, 10);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + OTC_EXPIRY_MS);

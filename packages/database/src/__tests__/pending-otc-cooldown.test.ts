@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { PendingOtcTokenModel, pendingOtcTokenRepository } from '../models/auth/PendingOtcTokenModel';
+import {
+  MAX_LIVE_OTC_CODES,
+  PendingOtcTokenModel,
+  pendingOtcTokenRepository,
+} from '../models/auth/PendingOtcTokenModel';
 import { setupMongoTest } from '../__test__/utils';
 
 /**
@@ -206,6 +210,107 @@ describe('PendingOtcToken.tryReserveSlot — atomic cooldown enforcement', () =>
       // that was told (incorrectly) that it succeeded.
       const doc = await PendingOtcTokenModel.findOne({ email: EMAIL });
       expect(doc?.nonce).toBe('nonce-b');
+    });
+  });
+});
+
+describe('PendingOtcToken live codes', () => {
+  setupMongoTest();
+
+  const EMAIL = 'live-codes@example.com';
+
+  beforeEach(async () => {
+    await PendingOtcTokenModel.ensureIndexes();
+    await PendingOtcTokenModel.deleteMany({});
+  });
+
+  // Each send in production is 30s apart; the cooldown is irrelevant to what is kept live.
+  const send = async (nonce: string) => {
+    await PendingOtcTokenModel.updateOne({ email: EMAIL }, { $set: { createdAt: new Date(0) } });
+    const reservation = await pendingOtcTokenRepository.tryReserveSlot(EMAIL, 0);
+    if (!reservation.allowed) throw new Error('reservation refused');
+    expect(await pendingOtcTokenRepository.confirmReservation(EMAIL, reservation.reservedAt, nonce)).toBe(true);
+  };
+
+  it("keeps the owner's code live after someone else requests a newer one", async () => {
+    await send('owner');
+    await send('attacker');
+
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-2')).toBe(true);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'attacker', 'attacker-2')).toBe(true);
+  });
+
+  it('rotation retires the presented nonce for replay', async () => {
+    await send('owner');
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-2')).toBe(true);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-3')).toBe(false);
+  });
+
+  it('caps the live codes, evicting the oldest', async () => {
+    await send('a');
+    await send('b');
+    await send('c');
+    await send('d');
+
+    const doc = await PendingOtcTokenModel.findOne({ email: EMAIL });
+    expect(doc?.codes.map(c => c.nonce)).toEqual(['d', 'c', 'b']);
+    expect(doc?.codes).toHaveLength(MAX_LIVE_OTC_CODES);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'a', 'a-2')).toBe(false);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'b', 'b-2')).toBe(true);
+  });
+
+  it('does not accept an expired code', async () => {
+    await send('old');
+    await PendingOtcTokenModel.updateOne({ email: EMAIL }, { $set: { 'codes.0.expiresAt': new Date(Date.now() - 1) } });
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'old', 'old-2')).toBe(false);
+  });
+
+  it('consumeOtherCodes leaves only the kept nonce live', async () => {
+    await send('owner');
+    await send('attacker');
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner', 'owner-2')).toBe(true);
+
+    await pendingOtcTokenRepository.consumeOtherCodes(EMAIL, 'owner-2');
+
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'attacker', 'attacker-2')).toBe(false);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'owner-2', 'owner-3')).toBe(true);
+  });
+
+  it('still verifies a record written before live codes existed', async () => {
+    await PendingOtcTokenModel.collection.insertOne({ email: EMAIL, nonce: 'legacy', createdAt: new Date() });
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'legacy', 'legacy-2')).toBe(true);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'legacy', 'legacy-3')).toBe(false);
+  });
+
+  it('storeNonce adds a live code without voiding earlier ones', async () => {
+    await pendingOtcTokenRepository.storeNonce(EMAIL, 'first');
+    await pendingOtcTokenRepository.storeNonce(EMAIL, 'second');
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'first', 'first-2')).toBe(true);
+    expect(await pendingOtcTokenRepository.validateAndRotateNonce(EMAIL, 'second', 'second-2')).toBe(true);
+  });
+
+  describe('releaseReservation', () => {
+    it('restores the previous cooldown start so a refused send does not start a new cooldown', async () => {
+      const previous = new Date(Date.now() - 60_000);
+      await PendingOtcTokenModel.create({ email: EMAIL, nonce: 'n', createdAt: previous });
+      const reservation = await pendingOtcTokenRepository.tryReserveSlot(EMAIL, 30_000);
+      if (!reservation.allowed) throw new Error('unreachable');
+      expect(reservation.previousCreatedAt).toEqual(previous);
+
+      await pendingOtcTokenRepository.releaseReservation(EMAIL, reservation.reservedAt, reservation.previousCreatedAt);
+
+      expect((await PendingOtcTokenModel.findOne({ email: EMAIL }))?.createdAt).toEqual(previous);
+      expect((await pendingOtcTokenRepository.tryReserveSlot(EMAIL, 30_000)).allowed).toBe(true);
+    });
+
+    it('removes a record the reservation created', async () => {
+      const reservation = await pendingOtcTokenRepository.tryReserveSlot(EMAIL, 30_000);
+      if (!reservation.allowed) throw new Error('unreachable');
+      expect(reservation.previousCreatedAt).toBeNull();
+
+      await pendingOtcTokenRepository.releaseReservation(EMAIL, reservation.reservedAt, null);
+
+      expect(await PendingOtcTokenModel.countDocuments({ email: EMAIL })).toBe(0);
     });
   });
 });

@@ -8,7 +8,14 @@ import {
   userRepository,
   questRepository,
 } from '@bike4mind/database';
-import { AiEvents, ApiKeyType, BadGatewayError, ISessionDocument, redactSessionForClient } from '@bike4mind/common';
+import {
+  AiEvents,
+  ApiKeyType,
+  BadGatewayError,
+  ConflictError,
+  ISessionDocument,
+  redactSessionForClient,
+} from '@bike4mind/common';
 import { apiKeyService, sessionService } from '@bike4mind/services';
 import {
   buildVoiceInstructions,
@@ -20,7 +27,7 @@ import {
 } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+import { refundLostVoiceHoldReserve, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { REALTIME_VOICE_RESERVE_USD, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
@@ -163,7 +170,8 @@ const handler = baseApi().post(async (req, res) => {
   // whole call (including reconnect gaps, against MAX_SESSION_SECONDS). Without
   // this, every mobile reconnect would burn another full reserve that's never
   // refunded. Guarded by an explicit live hold so a stray flag can't skip a real charge.
-  const reuseHold = shouldReuseVoiceHold(isReconnect, session);
+  // Realtime: only a hold carrying the realtime marker.
+  const reuseHold = shouldReuseVoiceHold(isReconnect, session, true);
 
   // Build voice instructions with conversation history context
   const brand = process.env.APP_NAME || '';
@@ -357,6 +365,8 @@ When you get the tool result back, summarize it conversationally for voice.`;
     },
   };
 
+  // The hold read before any credit moves; the new hold is written only over it (or over none).
+  const priorHoldStartedAt = session?.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
   // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
   if (!reuseHold && session) {
     await settlePriorVoiceHold(session);
@@ -405,14 +415,23 @@ When you get the tool result back, summarize it conversationally for voice.`;
   // A reconnect leaves the original reservation record untouched so end-reconciliation
   // measures the full call duration, not just the post-reconnect segment.
   if (!reuseHold) {
-    const voiceSessionStartedAt = new Date();
-    await sessionRepository.update({
-      id: session.id,
+    const opened = await sessionRepository.openVoiceHold(session.id, priorHoldStartedAt, {
       voiceReservedCredits: enforceCredits ? reservedCredits : null,
-      voiceSessionStartedAt,
+      voiceSessionStartedAt: new Date(),
       // Billed per response against this hold (server/websocket/voiceSessionEnded.ts).
-      voiceBilledCredits: 0,
+      realtime: true,
     });
+    if (!opened) {
+      // A concurrent bootstrap of this session wrote its hold first; this one's reserve is not held.
+      if (enforceCredits) {
+        await refundLostVoiceHoldReserve(req.logger, {
+          userId: req.user.id,
+          sessionId: String(session.id),
+          refund: reservedCredits,
+        });
+      }
+      throw new ConflictError('Another voice call on this session started at the same time; retry');
+    }
   }
 
   await logEvent(

@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { FabFile, Session, User, withTransaction } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
@@ -31,7 +32,11 @@ let replSet: Awaited<ReturnType<typeof createMongoReplSet>> | undefined;
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
-  await mongoose.connect(replSet.getUri());
+  // No assertion here depends on a schema index (the claims are compare-and-set updates), so skip the
+  // builds and settle the collection creates before the first transaction. See settleAutoIndexBuilds
+  // in createMongoServer.ts for the pool deadlock this avoids.
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();

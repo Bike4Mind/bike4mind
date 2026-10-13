@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "Magsuskribi",
-    "description": "Ma-access ang tanan nga dagkong AI nga modelo pinaagi sa usa ka nagkahiusa nga interface. Dagani ang mga advanced nga modelo sama sa Deepseek R1 nga pribado.",
+    "description": "Ma-access ang tanan nga dagkong AI nga modelo pinaagi sa usa ka nagkahiusa nga interface.",
     "no_free_tier": "WALA’Y LIBRE NGA ANTAS - NAKATUTOK SA MGA PROPESYONAL.",
     "credits_rollover": "Ang wala magamit nga mga kredito magpadayon sulod sa 3 ka bulan.",
     "monthly_billing": "Buwanang Pagbayad",

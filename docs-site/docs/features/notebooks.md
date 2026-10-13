@@ -115,11 +115,11 @@ Customize how AI responds in each notebook.
 
 Choose from multiple AI models across providers:
 
-- **OpenAI** - GPT-5 family, GPT-4.1, O-series reasoning models
-- **Anthropic** - Claude Opus 4.6, Claude Sonnet 4.5/Haiku 4.5, and more
-- **Google** - Gemini 3, Gemini 2.5 Pro/Flash
-- **xAI** - Grok 4, Grok 3 family
-- **Open models** - Llama 4, DeepSeek, and more via AWS Bedrock
+- **OpenAI** - GPT-6 family, GPT-5.6, GPT-5.5, o3
+- **Anthropic** - Claude Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5, and more
+- **Google** - Gemini 3.1 Pro, Gemini 3.8 Flash
+- **xAI** - Grok 4.7, Grok 4.20
+- **Open models** - Kimi, DeepSeek, Llama 4, and more
 
 See [AI Models](./ai-models.md) for the full model guide. Filter models by type (Text, Image, Video), speed, or price tier.
 
