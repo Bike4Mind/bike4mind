@@ -4,6 +4,7 @@ import { TIMEOUTS } from './constants';
 test.describe('Tavern - Scene, Collision & Pathfinding', () => {
   test('scene loads and initializes correctly', async ({ tavernPage }) => {
     await test.step('navigate to tavern', async () => {
+      await tavernPage.enableDevTools();
       await tavernPage.gotoTavern();
     });
 
@@ -26,7 +27,9 @@ test.describe('Tavern - Scene, Collision & Pathfinding', () => {
     });
 
     await test.step('verify FPS counter visible', async () => {
-      await expect(tavernPage.page.getByTestId('tavern-actionbar-fps')).toBeVisible({
+      // The FPS readout lives in the dev drawer, not the action bar.
+      await tavernPage.openDevDrawer();
+      await expect(tavernPage.page.getByTestId('tavern-dev-fps')).toBeVisible({
         timeout: TIMEOUTS.ELEMENT_STATE,
       });
     });
@@ -62,21 +65,19 @@ test.describe('Tavern - Scene, Collision & Pathfinding', () => {
 
     await tavernPage.gotoTavern();
     await tavernPage.waitForSceneReady();
-    await tavernPage.spawnTestEntity();
-    await tavernPage.waitForEntities(1);
 
-    await test.step('get entity and find walkable target', async () => {
-      const ids = await tavernPage.getEntityIds();
-      const entityId = ids[0];
-      const pos = await tavernPage.getEntityPosition(entityId);
-      expect(pos).not.toBeNull();
+    await test.step('spawn entity on a walkable tile with a reachable target', async () => {
+      const pair = await tavernPage.findWalkPair();
+      expect(pair, 'no walkable start with a reachable target 5-8 tiles away').not.toBeNull();
+      const { start, target } = pair!;
 
-      // Find a walkable target ~5-8 tiles away
-      const target = await tavernPage.findWalkableTileNear(Math.round(pos!.x) + 5, Math.round(pos!.y) + 5);
-      expect(target).not.toBeNull();
+      const entityId = 'e2e-test-entity';
+      await tavernPage.spawnTestEntity(entityId, 'host', { x: start.col, y: start.row });
+      await tavernPage.waitForEntities(1);
 
       await test.step('walk entity to target', async () => {
-        await tavernPage.walkEntityTo(entityId, target!.col, target!.row, 3);
+        const started = await tavernPage.walkEntityTo(entityId, target.col, target.row, 3);
+        expect(started, `walkTo did not start from (${start.col},${start.row})`).toBe(true);
       });
 
       await test.step('wait for entity to arrive', async () => {
@@ -87,35 +88,41 @@ test.describe('Tavern - Scene, Collision & Pathfinding', () => {
         const finalPos = await tavernPage.getEntityPosition(entityId);
         expect(finalPos).not.toBeNull();
         // Allow 2-tile tolerance (closestReachable may be used if exact target blocked)
-        const dx = Math.abs(finalPos!.x - target!.col);
-        const dy = Math.abs(finalPos!.y - target!.row);
+        const dx = Math.abs(finalPos!.x - target.col);
+        const dy = Math.abs(finalPos!.y - target.row);
         expect(Math.max(dx, dy)).toBeLessThanOrEqual(2);
       });
     });
   });
 
-  test('debug overlays toggle via config panel', async ({ tavernPage }) => {
+  test('debug overlays toggle via dev drawer', async ({ tavernPage }) => {
+    await tavernPage.enableDevTools();
     await tavernPage.gotoTavern();
     await tavernPage.waitForSceneReady();
 
-    await test.step('open config panel', async () => {
-      await tavernPage.openConfigPanel();
+    await test.step('open dev drawer', async () => {
+      await tavernPage.openDevDrawer();
     });
 
     await test.step('toggle collision overlay on', async () => {
-      const toggle = tavernPage.page.getByTestId('tavern-config-showCollisionOverlay-toggle');
-      await expect(toggle).toBeVisible({ timeout: TIMEOUTS.ELEMENT_STATE });
-      await tavernPage.toggleCollisionOverlay(true);
+      await tavernPage.setDebugOverlay('showCollisionOverlay', true);
+      expect(await tavernPage.getDebugOverlay('showCollisionOverlay')).toBe(true);
     });
 
     await test.step('toggle path overlay on', async () => {
-      const toggle = tavernPage.page.getByTestId('tavern-config-showPathOverlay-toggle');
-      await expect(toggle).toBeVisible({ timeout: TIMEOUTS.ELEMENT_STATE });
-      await tavernPage.togglePathOverlay(true);
+      await tavernPage.setDebugOverlay('showPathOverlay', true);
+      expect(await tavernPage.getDebugOverlay('showPathOverlay')).toBe(true);
     });
 
-    await test.step('close config panel', async () => {
-      await tavernPage.closeConfigPanel();
+    await test.step('toggle overlays back off', async () => {
+      await tavernPage.setDebugOverlay('showCollisionOverlay', false);
+      await tavernPage.setDebugOverlay('showPathOverlay', false);
+      expect(await tavernPage.getDebugOverlay('showCollisionOverlay')).toBe(false);
+      expect(await tavernPage.getDebugOverlay('showPathOverlay')).toBe(false);
+    });
+
+    await test.step('close dev drawer', async () => {
+      await tavernPage.closeDevDrawer();
     });
   });
 
