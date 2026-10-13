@@ -1,4 +1,4 @@
-import { CliCompletionRequestAction, buildSSEEvent, IMessage } from '@bike4mind/common';
+import { CliCompletionRequestAction, buildSSEEvent, IMessage, type CompletionSource } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import {
@@ -30,6 +30,9 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const startTime = Date.now();
   const { connectionId, domainName, stage } = event.requestContext;
   const endpoint = `https://${domainName}/${stage}`;
+  // WS frames carry no HTTP headers, so the source is fixed here rather than sniffed. This
+  // handler only serves the CLI's streaming path. Mirrors wsRoute.ts.
+  const source: CompletionSource = 'cli';
 
   // Parse request body - must catch here to send error with requestId
   let body: ReturnType<typeof CliCompletionRequestAction.parse>;
@@ -123,8 +126,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       // Org-billed API keys settle to the org's shared pool.
       billingOrganizationId: apiKeyInfo?.organizationId,
       requestId,
-      // Defaults to 'api' otherwise; this handler only serves the CLI.
-      source: 'cli',
+      source,
       logger: logger as unknown as Logger,
       onChunk: async (text, info) => {
         // Track token counts and tool usage
@@ -157,9 +159,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       // CompletionRequestSchema. Cast - analytics only reads model/messages.
       body: { model, messages, options } as Parameters<typeof logCompletionAnalytics>[0]['body'],
       apiKeyInfo: apiKeyInfoForCompletion,
-      // WebSocket frames don't carry HTTP headers; this handler is the CLI's
-      // streaming path (action `cli_completion_request`), not a public API.
-      source: 'cli',
+      source,
       startTime,
       endpoint: 'ws/cli_completion_request',
       method: 'WS',
@@ -187,7 +187,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       // CompletionRequestSchema. Cast - analytics only reads model/messages.
       body: { model, messages, options } as Parameters<typeof logCompletionAnalytics>[0]['body'],
       apiKeyInfo: apiKeyInfoForCompletion,
-      source: 'cli',
+      source,
       startTime,
       endpoint: 'ws/cli_completion_request',
       method: 'WS',
