@@ -1,6 +1,10 @@
 import { IChatHistoryItemDocument, KnowledgeType, extensionFromMimeType } from '@bike4mind/common';
 import { CreateFabFileRequestInputType } from '@bike4mind/common';
-import { createFabFileOnServerWithUpload, copyGeneratedImageToFabFile } from '@client/app/utils/filesAPICalls';
+import {
+  createFabFileOnServerWithUpload,
+  copyGeneratedImageToFabFile,
+  moderateFabFileNow,
+} from '@client/app/utils/filesAPICalls';
 import {
   ContentCopy as ContentCopyIcon,
   Download as DownloadIcon,
@@ -208,6 +212,9 @@ const ImageContainer: FC<ImageContainerProps> = ({
 
       // Save as FabFile
       const maskFabFile = await createFabFileOnServerWithUpload(formData, file);
+      // The edit is dispatched right away and the mask must be 'clean' by then; scan it now instead
+      // of racing the S3 event.
+      await moderateFabFileNow(maskFabFile.id);
       await onSendMessage({ fabFileIds: [maskFabFile.id], prompt }, { isImageEdit: true, image: sourceImageUrl });
       setEditing(false);
     } catch (error) {
