@@ -23,7 +23,8 @@ import type { Request, Response } from 'express';
  * Shares the S3 handler's compare-and-swap claim, so the two never both scan or overwrite each
  * other's verdict. Fail-closed throughout: a transient scanner failure hands the claim back and
  * reports 'pending', never 'blocked'. If the S3 event has already fired it lost the claim to this
- * call and will not be retried, so only the rescue sweep recovers the file after that.
+ * call and will not be retried, so only the rescue sweep recovers the file after that: it runs
+ * daily, only picks up rows idle 30+ minutes, and backs off 60 minutes between attempts.
  */
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
   asyncHandler(async (req: Request, res: Response) => {
