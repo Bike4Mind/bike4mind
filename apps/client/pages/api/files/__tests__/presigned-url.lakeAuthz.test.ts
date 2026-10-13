@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
-import type { ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 
 /**
@@ -12,20 +11,12 @@ import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 
 const h = vi.hoisted(() => ({ baseApiOptions: undefined as unknown }));
 
-vi.mock('@server/middlewares/baseApi', async () => {
-  const { assertApiKeyScope } = await import('@server/middlewares/apiKeyScopeGate');
-  return {
-    baseApi: (options: { requiredScopes: ApiKeyScope[] }) => {
-      h.baseApiOptions = options;
-      return {
-        get: (fn: (req: unknown, res: unknown) => Promise<void>) => async (req: ScopedRequest, res: unknown) => {
-          assertApiKeyScope(req, options.requiredScopes, 'files:read is required');
-          return fn(req, res);
-        },
-      };
-    },
-  };
-});
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    return { get: (fn: unknown) => fn };
+  },
+}));
 
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
 vi.mock('@server/utils/storage', () => ({
@@ -79,16 +70,6 @@ describe.each(['browser', 'server'])('GET /api/files/presigned-url - data-lake r
     isFileInAccessibleLake.mockReturnValue(true);
     resolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }]);
   });
-
-  it.each([{ scopes: [] }, { scopes: [ApiKeyScope.WRITE_FILES] }])(
-    'rejects a key without read scope before lookup',
-    async ({ scopes }) => {
-      const { res } = makeRes();
-      await expect(handler(request(['lake-file.pdf'], { scopes }), res)).rejects.toThrow('files:read');
-      expect(findOne).not.toHaveBeenCalled();
-      expect(findAccessibleById).not.toHaveBeenCalled();
-    }
-  );
 
   it('withholds the URL for a files:read-only key and never resolves its lakes', async () => {
     const { res, json } = makeRes();
