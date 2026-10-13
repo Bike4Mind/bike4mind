@@ -109,11 +109,13 @@ describe('apply-edit version retention', () => {
 // edit.ts runs the same claim-then-delete sequence behind an LLM call too heavy to mock here, so
 // pin the order in its source: a delete hoisted above the claim check would destroy history on a lost claim.
 describe('edit.ts claim-then-delete order', () => {
-  it('deletes trimmed versions only after the claim check', () => {
+  it('deletes trimmed versions only after the lost-claim throw', () => {
     const source = readFileSync(new URL('../edit.ts', import.meta.url), 'utf8');
     const claimCheck = source.indexOf('if (!claimed)');
+    const lostClaimThrow = source.indexOf("throw new BadRequestError('File was modified", claimCheck);
     const deleteCall = source.indexOf('await deleteDroppedVersions(');
     expect(claimCheck).toBeGreaterThan(-1);
-    expect(deleteCall).toBeGreaterThan(claimCheck);
+    expect(lostClaimThrow).toBeGreaterThan(claimCheck);
+    expect(deleteCall).toBeGreaterThan(lostClaimThrow);
   });
 });
