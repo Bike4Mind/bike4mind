@@ -50,6 +50,30 @@ describe('persistGeneratedFileAsFabFile', () => {
     expect(mockCreateFabFile).not.toHaveBeenCalled();
   });
 
+  it('forwards the tool adapters with scopedSettings and the remapped storage to createFabFile', async () => {
+    const scopedSettings = { findOverrides: vi.fn() };
+    const context = makeContext({
+      db: { fabfiles: {}, users: {}, adminSettings: {}, dataLakes: {}, scopedSettings } as unknown as ToolContext['db'],
+    });
+
+    await persistGeneratedFileAsFabFile(context, audio);
+
+    const { db, storage } = mockCreateFabFile.mock.calls[0][2];
+    expect(db.scopedSettings).toBe(scopedSettings);
+    const content = Buffer.from('bytes');
+    await storage.upload('generated/a.mp3', content, { ContentType: 'audio/mpeg' });
+    expect(context.storage.upload).toHaveBeenCalledWith(content, 'generated/a.mp3', { ContentType: 'audio/mpeg' });
+  });
+
+  it('skips and warns instead of persisting when the harness supplies no file adapters', async () => {
+    const context = makeContext({ db: {} as ToolContext['db'] });
+
+    await persistGeneratedFileAsFabFile(context, audio);
+
+    expect(mockCreateFabFile).not.toHaveBeenCalled();
+    expect(context.logger.warn).toHaveBeenCalled();
+  });
+
   it('swallows a create failure so the tool itself still succeeds', async () => {
     mockCreateFabFile.mockRejectedValueOnce(new Error('quota'));
     const context = makeContext();
