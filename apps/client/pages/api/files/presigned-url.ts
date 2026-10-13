@@ -12,6 +12,9 @@ import { getFilesStorage } from '@server/utils/storage';
 const GetPresignedUrlRequestInput = z.object({
   filePaths: z.array(z.string()),
   expiresIn: z.number().prefault(3600), // Default to 1 hour
+  // `server` exists for the in-process RLM `getArticle` loopback (see server/tavern/rlm/tools.ts),
+  // whose container may not reach the browser origin. It only picks the signing client: the
+  // moderation/ACL/lake gates all run before signing, and the SigV4 signature is host-bound.
   audience: z.enum(['browser', 'server']).prefault('browser'),
 });
 
