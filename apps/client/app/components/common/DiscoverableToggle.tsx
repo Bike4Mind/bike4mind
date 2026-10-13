@@ -78,6 +78,7 @@ export function DiscoverableToggle({
         checked={discoverable}
         disabled={busy}
         sx={{ flexShrink: 0 }}
+        data-testid={`${testIdPrefix}-switch`}
         onChange={e => void onToggle(e.target.checked)}
         // On the INPUT slot, not the root: Joy spreads bare props to the root span,
         // where a test can't read `.checked`.
