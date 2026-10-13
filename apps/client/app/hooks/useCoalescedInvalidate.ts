@@ -2,8 +2,8 @@ import { type QueryKey, useQueryClient } from '@tanstack/react-query';
 import debounce from 'lodash/debounce';
 import { useEffect, useMemo } from 'react';
 
-export const INVITE_REFETCH_DEBOUNCE_MS = 250;
-export const INVITE_REFETCH_MAX_WAIT_MS = 1000;
+export const COALESCED_INVALIDATE_DEBOUNCE_MS = 250;
+export const COALESCED_INVALIDATE_MAX_WAIT_MS = 1000;
 
 /**
  * Returns a debounced invalidate of `queryKey`, so a burst of subscription events (each (re)subscribe
@@ -19,8 +19,8 @@ export const useCoalescedInvalidate = (queryKey: QueryKey) => {
     () =>
       debounce(
         () => queryClient.invalidateQueries({ queryKey: JSON.parse(serializedKey) as QueryKey }),
-        INVITE_REFETCH_DEBOUNCE_MS,
-        { maxWait: INVITE_REFETCH_MAX_WAIT_MS }
+        COALESCED_INVALIDATE_DEBOUNCE_MS,
+        { maxWait: COALESCED_INVALIDATE_MAX_WAIT_MS }
       ),
     [queryClient, serializedKey]
   );

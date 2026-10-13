@@ -35,7 +35,7 @@ vi.mock('./UserCard', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/SearchBar', () => ({ default: () => null }));
 
 import ProjectMembersSection from './Members';
-import { INVITE_REFETCH_DEBOUNCE_MS } from '@client/app/hooks/useCoalescedInvalidate';
+import { COALESCED_INVALIDATE_DEBOUNCE_MS } from '@client/app/hooks/useCoalescedInvalidate';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const project = { id: 'project-1', userId: 'owner-1' } as IProjectDocument;
@@ -53,7 +53,7 @@ const projectInviteInvalidations = () =>
 
 const fireBurst = () => {
   act(() => {
-    ['insert', 'update', 'delete', 'insert', 'update', 'delete'].forEach((type, i) =>
+    ['insert', 'update', 'delete', 'replace', 'insert', 'update', 'delete'].forEach((type, i) =>
       mocks.callbacks.invites(type, { id: `invite-${i}` })
     );
     mocks.callbacks.projects('update', { id: 'project-1' });
@@ -77,7 +77,7 @@ describe('ProjectMembersSection invite refetch', () => {
     expect(projectInviteInvalidations()).toBe(0);
 
     act(() => {
-      vi.advanceTimersByTime(INVITE_REFETCH_DEBOUNCE_MS);
+      vi.advanceTimersByTime(COALESCED_INVALIDATE_DEBOUNCE_MS);
     });
     expect(projectInviteInvalidations()).toBe(1);
   });

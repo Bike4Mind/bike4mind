@@ -71,6 +71,8 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
     []
   );
 
+  useEffect(() => () => debouncedSearch.cancel(), [debouncedSearch]);
+
   const filteredPendingInvites = useMemo(() => {
     if (!search) return pendingInvites;
 
@@ -85,25 +87,16 @@ const ProjectMembersSection: FC<{ project: IProjectDocument; ownerId: string }> 
 
   const coalescedInvalidateInvites = useCoalescedInvalidate(['invites', 'projects', project.id]);
 
-  // Subscribe to the invites collection to invalidate the query whenever a new invite is received.
+  // Any invite event (including a subscribe's replay burst) schedules one coalesced refetch.
   useSubscribeCollection(
     'invites',
     useMemo(() => (project?.id ? { documentId: project.id, type: InviteType.Project } : null), [project.id]),
-    useCallback<SubscriptionCallbackFunction<IInviteDocument>>(
-      type => {
-        // Refetch rather than write the event's document: the subscription withholds `recipients`
-        // (server/websocket/dataSubscribeFieldLimits.ts), and the REST list redacts them per viewer.
-        switch (type) {
-          case 'insert':
-          case 'update':
-          case 'delete':
-            coalescedInvalidateInvites();
-            debouncedInvalidateUsers();
-            break;
-        }
-      },
-      [coalescedInvalidateInvites, debouncedInvalidateUsers]
-    )
+    useCallback<SubscriptionCallbackFunction<IInviteDocument>>(() => {
+      // Refetch rather than write the event's document: the subscription withholds `recipients`
+      // (server/websocket/dataSubscribeFieldLimits.ts), and the REST list redacts them per viewer.
+      coalescedInvalidateInvites();
+      debouncedInvalidateUsers();
+    }, [coalescedInvalidateInvites, debouncedInvalidateUsers])
   );
 
   // Update the users list whenever the project changes

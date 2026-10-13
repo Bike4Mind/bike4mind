@@ -1,8 +1,8 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  INVITE_REFETCH_DEBOUNCE_MS,
-  INVITE_REFETCH_MAX_WAIT_MS,
+  COALESCED_INVALIDATE_DEBOUNCE_MS,
+  COALESCED_INVALIDATE_MAX_WAIT_MS,
   useCoalescedInvalidate,
 } from './useCoalescedInvalidate';
 
@@ -27,7 +27,7 @@ describe('useCoalescedInvalidate', () => {
     const { result } = renderHook(() => useCoalescedInvalidate(['invites', 'inbox']));
     act(() => {
       for (let i = 0; i < 20; i++) result.current();
-      vi.advanceTimersByTime(INVITE_REFETCH_DEBOUNCE_MS);
+      vi.advanceTimersByTime(COALESCED_INVALIDATE_DEBOUNCE_MS);
     });
     expect(mocks.invalidateQueries).toHaveBeenCalledTimes(1);
     expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['invites', 'inbox'] });
@@ -37,11 +37,16 @@ describe('useCoalescedInvalidate', () => {
     const { result, rerender } = renderHook(({ id }) => useCoalescedInvalidate(['invites', 'projects', id]), {
       initialProps: { id: 'p1' },
     });
-    act(() => result.current());
-    rerender({ id: 'p1' });
     act(() => {
       result.current();
-      vi.advanceTimersByTime(INVITE_REFETCH_DEBOUNCE_MS);
+      vi.advanceTimersByTime(COALESCED_INVALIDATE_DEBOUNCE_MS - 50);
+    });
+    const first = result.current;
+    rerender({ id: 'p1' });
+    expect(result.current).toBe(first);
+    // A per-render debounce would have cancelled the pending call on rerender.
+    act(() => {
+      vi.advanceTimersByTime(50);
     });
     expect(mocks.invalidateQueries).toHaveBeenCalledTimes(1);
   });
@@ -49,7 +54,7 @@ describe('useCoalescedInvalidate', () => {
   it('fires within maxWait during a steady stream of calls', () => {
     const { result } = renderHook(() => useCoalescedInvalidate(['invites', 'inbox']));
     act(() => {
-      for (let t = 0; t < INVITE_REFETCH_MAX_WAIT_MS; t += 100) {
+      for (let t = 0; t < COALESCED_INVALIDATE_MAX_WAIT_MS; t += 100) {
         result.current();
         vi.advanceTimersByTime(100);
       }
