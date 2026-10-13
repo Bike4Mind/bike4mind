@@ -305,9 +305,11 @@ describe('OpenAI cached-input rates', () => {
 
   // Standard-tier rates from OpenAI's pricing page, checked 2026-10-13. Both context
   // bands are pinned; the cached rate is exactly 0.1x input in each, so no override.
+  // Sol is pinned at its regular list price, not the $4 / $20 promotion OpenAI runs
+  // through at least 2026-11-21.
   it.each([
-    [ChatModels.GPT5_6_SOL, 272_000, 4, 20],
-    [ChatModels.GPT5_6_SOL, 1_050_000, 8, 30],
+    [ChatModels.GPT5_6_SOL, 272_000, 5, 30],
+    [ChatModels.GPT5_6_SOL, 1_050_000, 10, 45],
     [ChatModels.GPT5_6_TERRA, 272_000, 2, 12],
     [ChatModels.GPT5_6_TERRA, 1_050_000, 4, 18],
     [ChatModels.GPT5_6_LUNA, 272_000, 0.2, 1.2],
