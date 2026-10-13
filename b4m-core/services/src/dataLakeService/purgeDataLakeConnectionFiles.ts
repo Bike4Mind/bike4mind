@@ -21,11 +21,13 @@ import {
  * archivedAt/deletedAt-blind, unlike its sync-reconcile default - so a disconnected archived
  * lake's members are still reached; a future connector - the GitHub connector this helper
  * is deliberately shaped for - supplies its own equivalent finder), so this stays uncoupled from
- * any one connector's lookup predicate.
+ * any one connector's lookup predicate. A tombstone (`deletedAt` set) is still hard-deleted but
+ * not refunded: its soft delete (`deleteFabFile` / `softDeleteByDataLakeTag`) already refunded
+ * it. An archived row is live and is refunded.
  */
 export type PurgeableConnectionFile = Pick<
   IFabFileDocument,
-  'id' | 'userId' | 'fileSize' | 'filePath' | 'versions' | 'tags'
+  'id' | 'userId' | 'fileSize' | 'filePath' | 'versions' | 'tags' | 'deletedAt'
 >;
 
 export interface PurgeDataLakeConnectionFilesAdapters {
@@ -180,7 +182,7 @@ export const purgeDataLakeConnectionFiles = async (
             // Recorded (and shredded/unlinked) BEFORE the chunk delete: the row has no retry door
             // once hard-deleted, so a chunk-delete throw below must not cost this file its refund,
             // shred or session unlink too.
-            deletedFiles.push({ id: file.id, userId: file.userId, fileSize: file.fileSize });
+            deletedFiles.push({ id: file.id, userId: file.userId, fileSize: file.deletedAt ? 0 : file.fileSize });
             const tagNames = (file.tags ?? [])
               .map(tag => tag?.name)
               .filter((name): name is string => typeof name === 'string');
@@ -205,7 +207,8 @@ export const purgeDataLakeConnectionFiles = async (
     } finally {
       // Per chunk, not once per call: a run killed mid-sweep (a Lambda timeout) never reaches a
       // final refund, so each chunk refunds the rows it hard-deleted as soon as it settles.
-      // `deletedFiles` only holds rows this call actually removed (hardDeleteOneById's return).
+      // `deletedFiles` only holds rows this call actually removed (hardDeleteOneById's return),
+      // and a tombstone records 0 bytes: its soft delete already refunded it.
       filesPurged += deletedFiles.length;
       await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(deletedFiles, -1), logger);
     }
