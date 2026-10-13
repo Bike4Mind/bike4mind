@@ -212,7 +212,8 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
       <Chip
         size="sm"
         variant="plain"
-        startDecorator={<CreditIcon sx={{ fontSize: 12, color: 'var(--Icon-color)' }} />}
+        // margin: 0 cancels Joy's decorator nudge so the icon lines up under the account name (px: 0).
+        startDecorator={<CreditIcon sx={{ fontSize: 12, color: 'var(--Icon-color)', margin: 0 }} />}
         sx={theme => ({
           alignSelf: 'flex-start',
           backgroundColor: 'transparent',
