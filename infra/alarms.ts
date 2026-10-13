@@ -1540,8 +1540,8 @@ if (isMonitoredStage) {
    * ~0, so non-zero after the one-time historical backlog drain means a claim went unswept for
    * 72h (the sweep was down or erroring and has since resumed). A sweep that is down right now
    * emits nothing, which notBreaching reads as OK. Fires on a single period: any occurrence is a
-   * signal.
-   * Expected to fire ONCE on the first sweep after deploy while that backlog is failed.
+   * signal. The historical backlog was already drained when the sweep shipped, so deploying this
+   * alarm does not page.
    *
    * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> failExhaustedCallbacks.
    */
