@@ -93,6 +93,8 @@ const REASON_LABELS: Record<UngrantedReason, string> = {
 };
 
 // The webhook only grants purchases to users, so other owner types are not balance-checked.
+// The balanceBackfilledAt and purchase-stamp witnesses mirror the audit script's classifyPurchase
+// (packages/scripts/src/auditPartialCreditPurchases.ts); keep the two verdicts in sync.
 async function findUngrantedReason(intentId: string): Promise<UngrantedReason | null> {
   const tx = await creditTransactionRepository.findByPaymentIntentId(intentId);
   if (!tx) return 'no_transaction';
