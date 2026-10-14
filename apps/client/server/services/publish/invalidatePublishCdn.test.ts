@@ -75,22 +75,34 @@ describe('publishCachePaths', () => {
 });
 
 describe('invalidatePublishCdn', () => {
-  it('sends a CloudFront invalidation for the artifact paths', async () => {
+  it('sends the exact paths and the wildcard paths as two separate invalidations', async () => {
     await invalidatePublishCdn({ publicId: 'p1', tier: 'user', scopeId: 'u1', slug: 'my-page', sourceKind: 'bundle' });
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    const cmd = sendMock.mock.calls[0][0] as {
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    type Cmd = {
       input: { DistributionId: string; InvalidationBatch: { Paths: { Items: string[]; Quantity: number } } };
     };
-    expect(cmd.input.DistributionId).toBe(DIST_ID);
-    expect(cmd.input.InvalidationBatch.Paths.Items).toEqual([
-      '/p/u/u1/my-page',
+    const first = sendMock.mock.calls[0][0] as Cmd;
+    const second = sendMock.mock.calls[1][0] as Cmd;
+    expect(first.input.DistributionId).toBe(DIST_ID);
+    expect(first.input.InvalidationBatch.Paths.Items).toEqual(['/p/u/u1/my-page', '/uc/u/u1/my-page']);
+    expect(first.input.InvalidationBatch.Paths.Quantity).toBe(2);
+    expect(second.input.InvalidationBatch.Paths.Items).toEqual([
       '/p/u/u1/my-page*',
       '/p/u/u1/my-page/*',
-      '/uc/u/u1/my-page',
       '/uc/u/u1/my-page*',
       '/uc/u/u1/my-page/*',
     ]);
-    expect(cmd.input.InvalidationBatch.Paths.Quantity).toBe(6);
+    expect(second.input.InvalidationBatch.Paths.Quantity).toBe(4);
+  });
+
+  it('still sends the exact reply path when the wildcard request is rejected', async () => {
+    sendMock.mockReset().mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('TooManyInvalidations'));
+    await expect(
+      invalidatePublishCdn({ publicId: 'p1', tier: 'user', scopeId: 'u1', slug: 'r-p1', sourceKind: 'reply' })
+    ).resolves.toBeUndefined();
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    const first = sendMock.mock.calls[0][0] as { input: { InvalidationBatch: { Paths: { Items: string[] } } } };
+    expect(first.input.InvalidationBatch.Paths.Items).toEqual(['/p/r/p1']);
   });
 
   it('skips (no send) when the Router distribution id is not configured', async () => {

@@ -91,7 +91,13 @@ function getRouterDistributionId(logger?: MinimalLogger): string | undefined {
 export async function invalidatePublishCdn(target: PublishCacheTarget, logger?: MinimalLogger): Promise<void> {
   const distributionId = getRouterDistributionId(logger);
   if (!distributionId) return; // getRouterDistributionId already logged why
-  await sendInvalidation(distributionId, target.publicId, publishCachePaths(target), logger);
+  // Wildcards go in their own request: CloudFront throttles them separately, and a rejected
+  // wildcard must not take the exact-path purge down with it.
+  const paths = publishCachePaths(target);
+  const exact = paths.filter(p => !p.includes('*'));
+  const wild = paths.filter(p => p.includes('*'));
+  await sendInvalidation(distributionId, target.publicId, exact, logger);
+  if (wild.length) await sendInvalidation(distributionId, `${target.publicId}-variants`, wild, logger);
 }
 
 // Well under CloudFront's cap on paths in flight per distribution.

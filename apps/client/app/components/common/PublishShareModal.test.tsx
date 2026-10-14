@@ -851,13 +851,20 @@ describe('PublishShareModal - reopening an already-published reply', () => {
   });
 
   it('reopening still shows the link and lookup visibility when the record read fails', async () => {
-    renderReopened(() => Promise.resolve({ ...live, visibility: 'public' }));
+    renderReopened(() => Promise.resolve({ ...live, visibility: 'private' }));
     apiGet.mockImplementation((url: string) =>
       url.endsWith('/share-token') ? Promise.resolve({ data: { shareToken: null } }) : Promise.reject(new Error('boom'))
     );
     const url = (await screen.findByTestId('publish-share-url')) as HTMLInputElement;
     expect(url.value).toContain('/p/r/live-1');
-    await waitFor(() => expect(radio('public')?.checked).toBe(true));
+    await waitFor(() => expect(radio('private')?.checked).toBe(true));
+  });
+
+  it('reopening falls back to the publish form when the lookup rejects', async () => {
+    renderReopened(() => Promise.reject(new Error('x')));
+    await waitFor(() => expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByTestId('publish-share-url')).toBeNull();
+    expect(screen.queryByText(/Checking/)).toBeNull();
   });
 
   it('a reopened Team page shows Team as selected even outside a team context', async () => {

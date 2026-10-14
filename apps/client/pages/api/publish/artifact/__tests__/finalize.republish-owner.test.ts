@@ -4,7 +4,8 @@ import { createMocks } from 'node-mocks-http';
 // Republishing an existing slug is limited to the artifact owner (or an admin); other callers get 403
 // before any storage or database write - at upload-url, and again at finalize.
 
-const { mockFindOne, mockFindOneAndUpdate, mockDownload, mockUpload, mockInvalidate } = vi.hoisted(() => ({
+const { mockFindOne, mockFindOneAndUpdate, mockDownload, mockUpload, mockInvalidate, mockSelect } = vi.hoisted(() => ({
+  mockSelect: vi.fn(),
   mockInvalidate: vi.fn(),
   mockFindOne: vi.fn(),
   mockFindOneAndUpdate: vi.fn(),
@@ -36,7 +37,12 @@ vi.mock('@server/utils/storage', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: {
-    findOne: () => ({ select: () => ({ lean: () => Promise.resolve(mockFindOne()) }) }),
+    findOne: () => ({
+      select: (proj: string) => {
+        mockSelect(proj);
+        return { lean: () => Promise.resolve(mockFindOne()) };
+      },
+    }),
     findOneAndUpdate: (...a: unknown[]) => Promise.resolve(mockFindOneAndUpdate(...a)),
   },
 }));
@@ -198,6 +204,7 @@ describe('finalize - CDN purge on re-publish', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockInvalidate).toHaveBeenCalledWith({ publicId: 'pub1' }, expect.anything());
+    expect(mockSelect).toHaveBeenCalledWith(expect.stringContaining('visibility'));
   });
 
   it('does not purge when the page was and stays private', async () => {
