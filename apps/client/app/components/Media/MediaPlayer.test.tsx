@@ -238,7 +238,8 @@ describe('MediaPlayer', () => {
       await act(async () => {
         fireEvent.click(screen.getByTestId('media-player-download-btn'));
       });
-      expect(fetchMock).toHaveBeenCalledWith(OLD_URL);
+      // Bypasses the cache: the element's own no-Origin reply for this URL has no CORS headers.
+      expect(fetchMock).toHaveBeenCalledWith(OLD_URL, { cache: 'no-store' });
       expect(downloadData).toHaveBeenCalledWith(blob, 'song.mp3');
     });
 
@@ -254,7 +255,7 @@ describe('MediaPlayer', () => {
       await act(async () => {
         fireEvent.click(screen.getByTestId('media-player-download-btn'));
       });
-      expect(fetchMock).toHaveBeenLastCalledWith(NEW_URL);
+      expect(fetchMock).toHaveBeenLastCalledWith(NEW_URL, { cache: 'no-store' });
       expect(downloadData).toHaveBeenCalledWith(blob, 'song.mp3');
       // The playing element keeps its URL, so a download does not restart playback.
       expect(srcOf(audio())).toBe(OLD_URL);

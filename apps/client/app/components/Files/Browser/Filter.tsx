@@ -60,6 +60,7 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
         sx={theme => ({
           flexGrow: 1,
           width: '70%',
+          minWidth: 0,
           minHeight: '32px',
           boxShadow: 'none',
           fontSize: '14px',
@@ -94,6 +95,8 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
         indicator={<KeyboardArrowDownIcon sx={{ fontSize: 10 }} />}
         sx={{
           width: '150px',
+          // The search input absorbs a narrow row; shrinking this instead cuts the selected type to its arrow.
+          flexShrink: 0,
           height: '32px',
           minHeight: '32px',
           paddingTop: 0,

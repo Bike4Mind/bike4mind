@@ -403,6 +403,9 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
         <Box
           sx={{
             display: 'flex',
+            // Full width on phones, so the media player's maxWidth resolves against the row, not its own 320px.
+            width: { xs: '100%', md: 'auto' },
+            minWidth: 0,
             flexDirection: { xs: 'column', md: 'row' },
             alignItems: { xs: 'flex-start', md: 'center' },
             gap: { xs: '4px', md: '8px' },

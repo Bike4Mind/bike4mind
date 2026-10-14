@@ -87,11 +87,13 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
     if (!src) return;
     setDownloading(true);
     try {
-      let response = await fetch(src);
+      // no-store: the element fetched this same URL without an Origin header, so S3's cached reply carries no CORS
+      // headers, and reusing it fails the first fetch with a CORS error.
+      let response = await fetch(src, { cache: 'no-store' });
       if (!response.ok) {
         // Most likely expired while the player sat open; re-sign once and try again. The element keeps its own
         // src so playback is not interrupted; it re-signs through onError if it needs to.
-        response = await fetch(await fetchFreshUrl(file.id));
+        response = await fetch(await fetchFreshUrl(file.id), { cache: 'no-store' });
       }
       if (!response.ok) throw new Error(`download failed: ${response.status}`);
       downloadData(await response.blob(), file.fileName);
