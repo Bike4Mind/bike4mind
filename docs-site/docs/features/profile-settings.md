@@ -111,7 +111,7 @@ The **Application Settings** area of the Settings tab has a **Notebooks** card a
 
 **Import LLM History:** The **Import LLM History** button at the top of the section imports chat history from OpenAI or Claude.
 
-**Export My Data:** Under **Beta Features**, once your telemetry level is Basic or Enhanced, **Export My Data** downloads your telemetry data.
+**Export telemetry data:** Under **Beta Features**, once your telemetry level is Basic or Enhanced, **Export telemetry data** downloads your usage telemetry as a JSON file. It does not include your content; use **Export All** on the Notebooks and Knowledge Files cards for that.
 
 You can also delete an individual notebook or file from its own menu. For account deletion, see the Privacy Policy.
 

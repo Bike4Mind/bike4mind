@@ -9,6 +9,7 @@ import {
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { releaseLakeClaimBestEffort } from './LakeConnectorClaimModel';
+import { findOrphanedLakeConnections } from './orphanedLakeConnections';
 import { randomUUID } from 'crypto';
 
 const MAX_LAST_ERROR_LEN = 500;
@@ -260,6 +261,17 @@ class OrgGoogleDriveConnectionRepository
       .sort({ lastPolledAt: 1 })
       .limit(limit)
       .then(docs => docs.map(d => d.toJSON()));
+  }
+
+  async findOrphaned(limit: number): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument)[]> {
+    if (limit <= 0) return [];
+    return findOrphanedLakeConnections(limit, (afterId, pageSize) =>
+      this.model
+        .find(afterId ? { _id: { $gt: afterId } } : {})
+        .sort({ _id: 1 })
+        .limit(pageSize)
+        .then(docs => docs.map(d => d.toJSON()))
+    );
   }
 
   /**

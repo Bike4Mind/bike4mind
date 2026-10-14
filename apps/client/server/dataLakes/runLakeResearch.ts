@@ -1,6 +1,7 @@
 import {
   adminSettingsRepository,
   apiKeyRepository,
+  creditTransactionRepository,
   dataLakeProposalRepository,
   dataLakeRepository,
   dataLakeResearchRunRepository,
@@ -185,10 +186,11 @@ export async function runLakeResearch(
       });
       return;
     }
-    // `recordOperationalUsage` needs a real, billable IUserDocument even with bypassCreditBilling
-    // set (its credit-deduction path shares the same required type) - there is no safe synthetic
-    // stand-in for a creator whose account was deleted. Logged so the drop is traceable instead of
-    // the money silently vanishing from the Spend tab a second time.
+    // `recordOperationalUsage` needs a real, billable IUserDocument (its credit-deduction path
+    // shares the same required type) - there is no safe synthetic stand-in for a creator whose
+    // account was deleted. Logged so the drop is traceable instead of the money silently vanishing
+    // from the Spend tab a second time. The run's ceiling check in startResearchRun refuses this
+    // same case up front, so reaching here means the owner went away between start and execution.
     const user = await userRepository.findById(lake.createdByUserId).catch(() => null);
     if (!user) {
       logger.warn('[lakeResearch] research spend not recorded: the lake creator could not be resolved', {
@@ -215,15 +217,29 @@ export async function runLakeResearch(
         // RelevanceJudgeService.priceCall. The ledger's cost figure is real; only the token column
         // reads zero.
         inputTokens: 0,
+        // The ACTUAL spend, not the ceiling: the ceiling is what the balance pre-flight had to
+        // cover, and it is the in-run guard that stops the loop - charging the ceiling here would
+        // bill for judgments that never ran.
         costUsd: amountMicroUsd / 1_000_000,
         source: 'system',
-        // Already governed by the run's own cost ceiling (executeResearchRun stops the run once
-        // spentMicroUsd reaches levers.costCeilingMicroUsd) - debiting credits on top would
-        // double-charge, the same reasoning fabFileVectorize.ts applies to its own spend-gated
-        // embed calls.
-        bypassCreditBilling: true,
+        // Charged to the lake owner (org pool when they belong to one) on every deployment that
+        // meters credits, regardless of `billOperationalUsage`. The per-run ceiling bounds one run
+        // and the owner's balance now bounds the total, so this is no longer the double-charge the
+        // old bypass avoided - it is the charge that bound relies on. `forceCreditBilling` is what
+        // makes the settlement agree with the pre-flight in startResearchRun, which refuses to start
+        // a run the owner cannot cover.
+        forceCreditBilling: true,
       },
-      { db: { usageEvents: usageEventRepository, adminSettings: adminSettingsRepository }, logger }
+      {
+        db: {
+          usageEvents: usageEventRepository,
+          adminSettings: adminSettingsRepository,
+          creditTransactions: creditTransactionRepository,
+          users: userRepository,
+          organizations: organizationRepository,
+        },
+        logger,
+      }
     ).catch(err => logger.warn(`[lakeResearch] spend record failed: ${err}`));
   };
 

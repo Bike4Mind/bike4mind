@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import {
   ApiKeyScope,
+  ChatModels,
   CREDITS_PER_USD_COST,
   ImageModels,
   ListModelsResponseSchema,
@@ -143,6 +144,59 @@ describe('GET /api/v1/models', () => {
       input: 3 * CREDITS_PER_USD_COST,
       output: 15 * CREDITS_PER_USD_COST,
       cached_input: 0.3 * CREDITS_PER_USD_COST,
+    });
+  });
+
+  it('publishes the reasoning behaviour the adapters apply, on every model', async () => {
+    const adaptiveClaude: ModelInfo = {
+      ...textModel(ChatModels.CLAUDE_5_SONNET),
+      can_think: true,
+      thinkingStyle: 'adaptive',
+    };
+    getCallerModelList.mockResolvedValue({ models: [adaptiveClaude, imageModel], supersededModels: [] });
+    const { req, res } = get();
+
+    await run(req, res);
+
+    const [claude, image] = res._getJSONData().data;
+    expect(claude).toMatchObject({
+      reasons_within_output_budget: true,
+      reasoning_efforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+    });
+    expect(image).toMatchObject({ reasons_within_output_budget: false, reasoning_efforts: [] });
+  });
+
+  it('publishes per-backend reasoning behaviour on every row of every page', async () => {
+    getCallerModelList.mockResolvedValue({
+      models: [
+        { ...textModel(ChatModels.CLAUDE_5_5_OPUS), can_think: true, thinkingStyle: 'adaptive' },
+        { ...textModel(ChatModels.O3), backend: ModelBackend.OpenAI, can_think: true },
+        { ...textModel(ChatModels.GPT4o), backend: ModelBackend.OpenAI },
+        { ...textModel(ChatModels.GEMINI_2_5_PRO), backend: ModelBackend.Gemini, can_think: true },
+        imageModel,
+      ],
+      supersededModels: [],
+    });
+    const rows: { id: string; reasons_within_output_budget: boolean; reasoning_efforts: string[] }[] = [];
+    let cursor: string | null = null;
+    do {
+      const { req, res } = get(cursor ? { limit: '2', cursor } : { limit: '2' });
+      await run(req, res);
+      const body = res._getJSONData();
+      expect(ListModelsResponseSchema.safeParse(body).success).toBe(true);
+      rows.push(...body.data);
+      cursor = body.next_cursor;
+    } while (cursor);
+
+    const byId = Object.fromEntries(
+      rows.map(row => [row.id, [row.reasons_within_output_budget, row.reasoning_efforts]])
+    );
+    expect(byId).toEqual({
+      [ChatModels.CLAUDE_5_5_OPUS]: [true, ['minimal', 'low', 'medium', 'high', 'xhigh']],
+      [ChatModels.O3]: [true, ['low', 'medium', 'high']],
+      [ChatModels.GPT4o]: [false, []],
+      [ChatModels.GEMINI_2_5_PRO]: [false, []],
+      [ImageModels.GPT_IMAGE_1]: [false, []],
     });
   });
 

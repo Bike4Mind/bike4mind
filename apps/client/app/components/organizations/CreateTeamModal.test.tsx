@@ -60,7 +60,8 @@ describe('CreateTeamModal', () => {
       </TestWrapper>
     );
 
-    expect(screen.getByText(/Team size must be between 3 and 7/)).toBeTruthy();
+    expect(screen.getByText(/covers up to 3 people, so a smaller team pays the same/)).toBeTruthy();
+    expect(screen.getByText(/up to 7, at the per-person price/)).toBeTruthy();
   });
 
   describe('with seat settings that change after mount', () => {
@@ -304,7 +305,8 @@ describe('CreateTeamModal', () => {
       await typeSize(text);
 
       expect(screen.getByTestId('create-team-size-value-error').textContent).toBe('Must be between 3 and 7');
-      expect(screen.queryByText(/Team size must be between/)).toBeNull();
+      // The flat-price note stays up, so a smaller team learns why the floor is fine for them.
+      expect(screen.getByText(/One flat price covers up to 3 people/)).toBeTruthy();
       expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
 
       await user.tab();

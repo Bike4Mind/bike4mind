@@ -664,6 +664,8 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   }
 
   async findStaleVoiceHolds(startedBefore: Date, realtimeStartedBefore: Date, limit: number) {
+    // Served by the partial voiceSessionStartedAt_1_openVoiceHold index; keep the top-level
+    // `voiceReservedCredits: { $gt: 0 }`, which is what lets the planner use it.
     const sessions = await this.sessionModel
       .find(
         {
@@ -969,11 +971,14 @@ SessionSchema.index(
 
 // Index for countActiveVoiceSessionsByUserId - runs on every voice session creation
 SessionSchema.index({ userId: 1, voiceSessionStartedAt: 1 }, { sparse: true });
-// Index for findStaleVoiceHolds (the stale voice hold sweep). Partial: only sessions carrying a
-// voice marker (a reservation, or a bare marker when enforceCredits was off), so it stays tiny.
+// Index for findStaleVoiceHolds (the stale voice hold sweep). Partial on the sweep's own top-level
+// `voiceReservedCredits: { $gt: 0 }`, so only open paid holds are indexed and the planner can prove
+// the query is covered by the filter. A `{ voiceSessionStartedAt: { $type: 'date' } }` filter is not
+// implied by the sweep's `$lt` ranges, so that index was never chosen. Named so it can coexist with
+// that index until migration 20260921235986_ensure-stale-voice-hold-index drops it.
 SessionSchema.index(
   { voiceSessionStartedAt: 1 },
-  { partialFilterExpression: { voiceSessionStartedAt: { $type: 'date' } } }
+  { name: 'voiceSessionStartedAt_1_openVoiceHold', partialFilterExpression: { voiceReservedCredits: { $gt: 0 } } }
 );
 
 export const Session: ISessionModel =

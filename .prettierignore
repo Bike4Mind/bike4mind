@@ -23,3 +23,7 @@ pnpm-workspace.yaml
 
 # Helm parses these Go templates before validating the resulting YAML.
 selfhost/kubernetes/templates/**
+
+# ESLint bulk-suppression baseline, rewritten by `eslint --suppress-rule` / `--prune-suppressions`.
+# ESLint is the authority for its format; reflowing it would churn every regeneration.
+eslint-suppressions.json

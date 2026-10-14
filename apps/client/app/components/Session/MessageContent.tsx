@@ -68,7 +68,7 @@ import ContentPreviewModal from '@client/app/components/ProfileModal/ContentPrev
 import { Article as ArticleIcon } from '@mui/icons-material';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import EditIcon from '@mui/icons-material/Edit';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { formatAnswerCost } from '@client/app/utils/formatCredits';
 import { answerCostBreakdown, formatCostParts } from '@client/app/utils/answerCostBreakdown';
 import { getToolDisplayName } from '@client/app/utils/toolMapping';
@@ -1214,7 +1214,14 @@ const MessageContent: React.FC<ContentProps> = memo(
               )}
             </Stack>
           ) : (
-            <Stack className="action-buttons-mobile" direction={'row'} gap="8px" alignItems="center">
+            <Stack
+              className="action-buttons-mobile"
+              direction={'row'}
+              gap="4px"
+              alignItems="center"
+              // Six 44px targets plus gaps are ~284px: wrap rather than overflow at 320px.
+              flexWrap="wrap"
+            >
               {!isProcessingPrompt && (
                 <>
                   {/* Advanced actions in menu */}
@@ -1419,7 +1426,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                   size="sm"
                   variant="soft"
                   sx={messageMetaChipSx}
-                  startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
+                  startDecorator={<CreditIcon sx={{ fontSize: 12 }} />}
                 >
                   {formatAnswerCost(messageData.creditsUsed)}
                   {costParts.length > 0 && ` (${formatCostParts(costParts)})`}

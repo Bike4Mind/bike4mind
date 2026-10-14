@@ -237,8 +237,12 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
     });
     expect(files.map(f => f.id)).toEqual([softDeletedFile.id]);
 
+    const increment = vi.spyOn(userRepository, 'incrementCurrentStorage').mockResolvedValue(undefined);
     const result = await purgeConnection(lake, files);
     expect(result.filesPurged).toBe(1);
+    expect(await FabFile.countDocuments({ _id: softDeletedFile.id }, { includeDeleted: true })).toBe(0);
+    // Its soft delete already refunded it, so the purge must not refund it a second time.
+    expect(increment).not.toHaveBeenCalled();
   });
 
   it("countByDriveConnectionIdInDataLake matches the purge's own finder, including an archived file", async () => {
@@ -352,11 +356,22 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
       userId: CONTRIBUTOR,
       fileSize: 300,
     });
+    const tombstone = await seedFile({
+      datalakeTag: lake.datalakeTag,
+      driveConnectionId: connectionId,
+      userId: OWNER,
+      fileSize: 200,
+    });
+    await FabFile.updateOne({ _id: tombstone.id }, { $set: { deletedAt: new Date() } });
 
     const increment = vi.spyOn(userRepository, 'incrementCurrentStorage').mockResolvedValue(undefined);
-    const files = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag);
-    await purgeConnection(lake, files);
+    const files = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag, {
+      includeDeleted: true,
+    });
+    const result = await purgeConnection(lake, files);
 
+    expect(result.filesPurged).toBe(3);
+    // The tombstone's 200 bytes were refunded by its soft delete, so OWNER gets -500, not -700.
     expect(increment).toHaveBeenCalledWith(OWNER, -500);
     expect(increment).toHaveBeenCalledWith(CONTRIBUTOR, -300);
   });

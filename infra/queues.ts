@@ -922,8 +922,9 @@ const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    // fabFileBucket for the uploads; the queue itself for deadline, rate-limit and claim-loser re-enqueues.
-    link: [...allSecrets, fabFileBucket, githubLakeIngestQueue],
+    // fabFileBucket for the uploads; the queue itself for deadline, rate-limit and claim-loser re-enqueues;
+    // githubLakeRevokeQueue because retiring a lakeless connection can defer a failed uninstall there.
+    link: [...allSecrets, fabFileBucket, githubLakeIngestQueue, githubLakeRevokeQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },

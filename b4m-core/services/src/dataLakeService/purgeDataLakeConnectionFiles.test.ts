@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
 import { purgeDataLakeConnectionFiles, type PurgeableConnectionFile } from './purgeDataLakeConnectionFiles';
+import { lakeMembershipScope } from './lakeMembershipScope';
 
 const SCOPE = { kind: 'owned', datalakeTag: 'datalake:sales' } as const;
 const CHARGED_AT = new Date('2026-10-10T00:00:00Z');
@@ -64,5 +65,79 @@ describe('purgeDataLakeConnectionFiles', () => {
 
     expect(result.filesPurged).toBe(0);
     expect(db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+  // chargedBytes alone reads a legacy pre-stamp `complete` row as charged even once tombstoned; the
+  // deletedAt guard is what keeps its soft-delete refund from being paid a second time here.
+  it('refunds nothing for a legacy pre-stamp complete tombstone', async () => {
+    const db = makeDb();
+    const files = [
+      file({ id: 'f-legacy-dead', fileSize: 200, status: 'complete', createdAt: BEFORE_STAMP, deletedAt: new Date() }),
+    ];
+
+    const result = await purgeDataLakeConnectionFiles(SCOPE, files, { db });
+
+    expect(result.filesPurged).toBe(1);
+    expect(db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+});
+
+const LAKE_SCOPE = lakeMembershipScope({
+  datalakeTag: 'datalake:sales',
+  fileTagPrefix: 'sales',
+  createdByUserId: 'owner-1',
+});
+
+const lakeFile = (id: string, userId: string, fileSize: number, extra: Record<string, unknown> = {}) =>
+  ({ id, userId, fileSize, tags: [], storageChargedAt: new Date(), ...extra }) as PurgeableConnectionFile;
+
+const makeLakeDb = (files: PurgeableConnectionFile[]) => {
+  const rows = new Set(files.map(f => f.id));
+  return {
+    fabFiles: { hardDeleteOneById: vi.fn(async (id: string) => rows.delete(id)) },
+    fabFileChunks: {
+      deleteManyByFabFileId: vi.fn(async () => {}),
+      clearRetrievalIndexConfirmedByFabFileIds: vi.fn(async () => {}),
+    },
+    users: { incrementCurrentStorage: vi.fn(async () => {}) },
+  };
+};
+
+describe('purgeDataLakeConnectionFiles storage refund', () => {
+  it('hard-deletes a tombstone without refunding it again', async () => {
+    const files = [lakeFile('dead', 'owner-1', 200, { deletedAt: new Date() })];
+    const db = makeLakeDb(files);
+
+    const result = await purgeDataLakeConnectionFiles(LAKE_SCOPE, files, { db: db as never });
+
+    expect(result.filesPurged).toBe(1);
+    expect(db.fabFiles.hardDeleteOneById).toHaveBeenCalledWith('dead');
+    expect(db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+
+  it('refunds only live and archived bytes in a mixed slice, per owner', async () => {
+    const files = [
+      lakeFile('live', 'owner-1', 500),
+      lakeFile('archived', 'owner-2', 300, { archivedAt: new Date() }),
+      lakeFile('dead', 'owner-1', 200, { deletedAt: new Date() }),
+    ];
+    const db = makeLakeDb(files);
+
+    const result = await purgeDataLakeConnectionFiles(LAKE_SCOPE, files, { db: db as never });
+
+    expect(result.filesPurged).toBe(3);
+    expect(db.users.incrementCurrentStorage).toHaveBeenCalledTimes(2);
+    expect(db.users.incrementCurrentStorage).toHaveBeenCalledWith('owner-1', -500);
+    expect(db.users.incrementCurrentStorage).toHaveBeenCalledWith('owner-2', -300);
+  });
+
+  it('does not refund again on redelivery', async () => {
+    const files = [lakeFile('live', 'owner-1', 500)];
+    const db = makeLakeDb(files);
+
+    await purgeDataLakeConnectionFiles(LAKE_SCOPE, files, { db: db as never });
+    const second = await purgeDataLakeConnectionFiles(LAKE_SCOPE, files, { db: db as never });
+
+    expect(second.filesPurged).toBe(0);
+    expect(db.users.incrementCurrentStorage).toHaveBeenCalledTimes(1);
   });
 });

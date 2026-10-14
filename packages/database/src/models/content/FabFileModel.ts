@@ -29,6 +29,7 @@ import {
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
   type FabFileTypeFilter,
+  LegalHoldError,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -3249,14 +3250,39 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   async hardDeleteByIds(fabFileIds: string[]): Promise<string[]> {
     if (fabFileIds.length === 0) return [];
+    // Blocked files are legal-hold evidence (18 U.S.C. section 2258A). Pre-check catches the
+    // common case. The deleteMany filter below is the safety net for the narrow window where
+    // a concurrent scan transitions a file to 'blocked' between the two calls.
+    const blocked = await this.fabFileModel
+      .find({ _id: { $in: fabFileIds }, moderationStatus: 'blocked' }, { _id: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    if (blocked.length > 0) {
+      const ids = blocked.map(d => String(d._id)).join(', ');
+      throw new LegalHoldError(`Cannot hard-delete FabFiles with moderationStatus 'blocked' (legal hold): ${ids}`);
+    }
     // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
-    await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds } }, { hardDelete: true } as Record<string, unknown>);
+    // The moderationStatus guard here is the belt to the pre-check's suspenders.
+    await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds }, moderationStatus: { $ne: 'blocked' } }, {
+      hardDelete: true,
+    } as Record<string, unknown>);
     return fabFileIds;
   }
 
   async hardDeleteWithChunks(fabFileId: string, chunkBatchSize = 1000): Promise<void> {
     if (!Number.isInteger(chunkBatchSize) || chunkBatchSize < 1 || chunkBatchSize > 1000) {
       throw new Error('Cleanup chunk batch size must be between 1 and 1000');
+    }
+    // Guard before the chunk deletion loop: a blocked file with >1000 chunks would otherwise
+    // lose its first chunk batches before hardDeleteOneById fires the legal-hold check inside
+    // the final transaction. Checking here is a belt-and-suspenders measure -- the atomic check
+    // inside hardDeleteOneById still applies -- but it prevents partial chunk destruction.
+    const candidate = await this.fabFileModel
+      .findOne({ _id: fabFileId }, { moderationStatus: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    if (candidate?.moderationStatus === 'blocked') {
+      throw new LegalHoldError(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
     }
     for (;;) {
       const chunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
@@ -3284,12 +3310,27 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async hardDeleteOneById(fabFileId: string): Promise<boolean> {
-    // findOneAndDelete, not deleteMany: it is the delete and the claim in one round trip, so of two
-    // concurrent purges of the same document exactly one is told it did the deleting.
+    // Blocked files are legal-hold evidence (18 U.S.C. section 2258A). The moderationStatus guard
+    // is folded into findOneAndDelete atomically so a concurrent scan that transitions the file
+    // from 'pending' -> 'blocked' between a pre-check and the delete cannot slip through.
     const doc = await this.fabFileModel
-      .findOneAndDelete({ _id: fabFileId }, { hardDelete: true } as Record<string, unknown>)
+      .findOneAndDelete({ _id: fabFileId, moderationStatus: { $ne: 'blocked' } }, { hardDelete: true } as Record<
+        string,
+        unknown
+      >)
       .setOptions({ includeDeleted: true });
-    return !!doc;
+    if (!doc) {
+      // Null means either the file does not exist or it is blocked. Check which.
+      const existing = await this.fabFileModel
+        .findOne({ _id: fabFileId }, { moderationStatus: 1 })
+        .setOptions({ includeDeleted: true })
+        .lean();
+      if (existing?.moderationStatus === 'blocked') {
+        throw new LegalHoldError(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
+      }
+      return false;
+    }
+    return true;
   }
 
   async hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
