@@ -12,6 +12,7 @@ import {
   QuestCallbackStateSchema,
   ChatToolModeSchema,
   type GenerationJobRef,
+  GENERATION_JOB_KINDS,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
@@ -588,7 +589,13 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     // Legacy: read only (see questGenerationJobs); new jobs go to generationJobs.
     videoJobIds: { type: [String], default: undefined },
     generationJobs: {
-      type: [{ _id: false, id: { type: String, required: true }, kind: { type: String, required: true } }],
+      type: [
+        {
+          _id: false,
+          id: { type: String, required: true },
+          kind: { type: String, enum: GENERATION_JOB_KINDS, required: true },
+        },
+      ],
       default: undefined,
     },
     // Agent-mode video clips claimed by this run; the per-run cap's counter (see claimAgentVideoClip).
@@ -1656,7 +1663,15 @@ export const questRepository = new QuestRepository(Quest);
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
-  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'generationJobs' | 'structuredReplies' | 'toolResults'
+  | 'agentExecutionId'
+  | 'reply'
+  | 'replies'
+  | 'images'
+  | 'videos'
+  | 'videoJobIds'
+  | 'generationJobs'
+  | 'structuredReplies'
+  | 'toolResults'
 >;
 
 /**
@@ -1670,5 +1685,13 @@ export type UnfinishedQuestView = { id: string } & Pick<
  */
 export type StaleRunningQuestView = { id: string; updatedAt: Date } & Pick<
   IChatHistoryItem,
-  'status' | 'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'generationJobs' | 'structuredReplies' | 'toolResults'
+  | 'status'
+  | 'reply'
+  | 'replies'
+  | 'images'
+  | 'videos'
+  | 'videoJobIds'
+  | 'generationJobs'
+  | 'structuredReplies'
+  | 'toolResults'
 >;

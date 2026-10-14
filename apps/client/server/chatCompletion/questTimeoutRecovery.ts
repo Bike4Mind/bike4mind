@@ -76,6 +76,8 @@ export type QuestContentView = Pick<
   'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'generationJobs' | 'structuredReplies' | 'toolResults'
 >;
 
+const hasGenerationJobs = (quest: QuestContentView): boolean => questGenerationJobs(quest).length > 0;
+
 /**
  * `structuredReplies` / `toolResults` count as content. A tool-heavy run can
  * produce a fully renderable answer (notebook cells, tool output) while leaving
@@ -94,8 +96,6 @@ export type QuestContentView = Pick<
  * unclosed `<think>` marker, which is real text but renders nothing (#3223) -
  * counting it as content would mark the quest done with no error and no answer.
  */
-const hasGenerationJobs = (quest: QuestContentView): boolean => questGenerationJobs(quest).length > 0;
-
 function hasRenderableContent(quest: QuestContentView): boolean {
   return Boolean(
     visibleReplyText(quest.reply) ||

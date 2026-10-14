@@ -11,6 +11,11 @@ import { videoGenerationKeys } from '@client/app/hooks/data/videoGenerationKeys'
 
 type JobUpdate = IGenerationJobUpdatedAction['job'];
 
+// 'all', not the default 'active': a card that is unmounted now (another notebook is open) skips its refetch on
+// mount, so an invalidation that only marks it stale would leave it showing the old state when it comes back.
+const refetchDetail = (queryClient: QueryClient, queryKey: readonly unknown[]): Promise<void> =>
+  queryClient.invalidateQueries({ queryKey, exact: true, refetchType: 'all' });
+
 const handleVideoUpdate = async (queryClient: QueryClient, { id, state, progress }: JobUpdate): Promise<void> => {
   const cached = patchVideoGeneration(queryClient, { id, state, progress });
   const pending: Promise<void>[] = [];
@@ -19,7 +24,7 @@ const handleVideoUpdate = async (queryClient: QueryClient, { id, state, progress
     pending.push(queryClient.invalidateQueries({ queryKey: videoGenerationKeys.list }));
   }
   if (isTerminalGenerationState(state)) {
-    pending.push(queryClient.invalidateQueries({ queryKey: videoGenerationKeys.detail(id) }));
+    pending.push(refetchDetail(queryClient, videoGenerationKeys.detail(id)));
     pending.push(queryClient.invalidateQueries({ queryKey: CREDITS_BALANCE_KEY }));
   }
   await Promise.all(pending);
@@ -30,7 +35,7 @@ const handleMusicUpdate = async (queryClient: QueryClient, { id, state }: JobUpd
   patchMusicGeneration(queryClient, { id, state });
   if (!isTerminalGenerationState(state)) return;
   await Promise.all([
-    queryClient.invalidateQueries({ queryKey: musicGenerationKeys.detail(id) }),
+    refetchDetail(queryClient, musicGenerationKeys.detail(id)),
     queryClient.invalidateQueries({ queryKey: CREDITS_BALANCE_KEY }),
   ]);
 };
@@ -39,7 +44,7 @@ const handleMusicUpdate = async (queryClient: QueryClient, { id, state }: JobUpd
 const invalidateUnfinishedDetails = (queryClient: QueryClient, detailsKey: readonly unknown[]): void => {
   for (const [key, job] of queryClient.getQueriesData<VideoGeneration | MusicGeneration>({ queryKey: detailsKey })) {
     if (job && (!isTerminalGenerationState(job.state) || isAwaitingGenerationOutput(job))) {
-      void queryClient.invalidateQueries({ queryKey: key, exact: true });
+      void refetchDetail(queryClient, key);
     }
   }
 };

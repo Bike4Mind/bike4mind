@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, render } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IGenerationJobUpdatedAction, MusicGeneration, VideoGeneration } from '@bike4mind/common';
 
@@ -77,7 +77,11 @@ describe('GenerationUpdatesListener', () => {
       })
     );
     expect(detail('job-1')).toMatchObject({ state: 'failed', error: null });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.detail('job-1') });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: videoGenerationKeys.detail('job-1'),
+      exact: true,
+      refetchType: 'all',
+    });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'] });
   });
 
@@ -135,9 +139,21 @@ describe('GenerationUpdatesListener', () => {
     rerender(tree());
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.detail('live'), exact: true });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.detail('no-output'), exact: true });
-    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: videoGenerationKeys.detail('done'), exact: true });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: videoGenerationKeys.detail('live'),
+      exact: true,
+      refetchType: 'all',
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: videoGenerationKeys.detail('no-output'),
+      exact: true,
+      refetchType: 'all',
+    });
+    expect(invalidate).not.toHaveBeenCalledWith({
+      queryKey: videoGenerationKeys.detail('done'),
+      exact: true,
+      refetchType: 'all',
+    });
     expect(invalidate).toHaveBeenCalledTimes(3);
 
     rerender(tree());
@@ -161,7 +177,11 @@ describe('GenerationUpdatesListener music jobs', () => {
     renderListener();
     await send(frame({ id: 'song-1', kind: 'music', state: 'succeeded' }));
     expect(musicDetail('song-1')?.state).toBe('succeeded');
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: musicGenerationKeys.detail('song-1') });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: musicGenerationKeys.detail('song-1'),
+      exact: true,
+      refetchType: 'all',
+    });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
   });
@@ -188,8 +208,53 @@ describe('GenerationUpdatesListener music jobs', () => {
     h.readyState = 1;
     rerender(tree());
 
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: musicGenerationKeys.detail('live'), exact: true });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: musicGenerationKeys.detail('no-output'), exact: true });
-    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: musicGenerationKeys.detail('done'), exact: true });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: musicGenerationKeys.detail('live'),
+      exact: true,
+      refetchType: 'all',
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: musicGenerationKeys.detail('no-output'),
+      exact: true,
+      refetchType: 'all',
+    });
+    expect(invalidate).not.toHaveBeenCalledWith({
+      queryKey: musicGenerationKeys.detail('done'),
+      exact: true,
+      refetchType: 'all',
+    });
+  });
+});
+
+describe('GenerationUpdatesListener inactive music details', () => {
+  // No observer is mounted: only refetchType 'all' reaches a query like this (the card is in another notebook).
+  const seedInactiveRunningSong = (id: string) => {
+    const queryFn = vi.fn().mockResolvedValue(musicJob({ id, state: 'succeeded', output: musicOutput() }));
+    queryClient.setQueryDefaults(musicGenerationKeys.detail(id), { queryFn });
+    queryClient.setQueryData(musicGenerationKeys.detail(id), musicJob({ id, state: 'running' }));
+    return queryFn;
+  };
+
+  it('refetches an inactive song detail on a terminal frame', async () => {
+    const queryFn = seedInactiveRunningSong('song-1');
+    renderListener();
+    await send(frame({ id: 'song-1', kind: 'music', state: 'succeeded' }));
+    expect(queryFn).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(musicDetail('song-1')?.output).not.toBeNull());
+  });
+
+  it('refetches an inactive running song detail on reconnect', async () => {
+    const queryFn = seedInactiveRunningSong('song-1');
+    const { rerender } = renderListener();
+    const tree = () => (
+      <QueryClientProvider client={queryClient}>
+        <GenerationUpdatesListener />
+      </QueryClientProvider>
+    );
+    h.readyState = 3;
+    rerender(tree());
+    h.readyState = 1;
+    rerender(tree());
+    await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
   });
 });

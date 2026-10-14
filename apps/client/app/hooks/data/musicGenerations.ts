@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import type { MusicGeneration } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
+import { fabFileKeys } from './fabFileKeys';
 import { generationJobPollInterval } from './generationJobPolling';
 import { upsertMusicGeneration } from './musicGenerationCache';
 import { musicGenerationKeys } from './musicGenerationKeys';
@@ -20,10 +21,20 @@ export const musicGenerationPollInterval = (
 
 export function useMusicGeneration(jobId: string) {
   const { readyState } = useWebsocket();
+  const queryClient = useQueryClient();
   const socketOpen = readyState === ReadyState.OPEN;
   return useQuery({
     queryKey: musicGenerationKeys.detail(jobId),
-    queryFn: async () => (await api.get<MusicGeneration>(musicJobUrl(jobId))).data,
+    queryFn: async () => {
+      const previous = queryClient.getQueryData<MusicGeneration>(musicGenerationKeys.detail(jobId));
+      const job = (await api.get<MusicGeneration>(musicJobUrl(jobId))).data;
+      // The song's file is saved after the chat turn ended, past the one-shot session-files refresh that follows
+      // it (useSubscribeChatCompletion), so refresh the file lists once the file first shows up.
+      if (previous && !previous.output?.file_id && job.output?.file_id) {
+        void queryClient.invalidateQueries({ queryKey: fabFileKeys.own });
+      }
+      return job;
+    },
     enabled: jobId.length > 0,
     // Websocket patches keep this fresh; a mount right after one must not refetch.
     staleTime: 30_000,

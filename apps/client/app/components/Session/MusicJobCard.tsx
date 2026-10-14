@@ -79,7 +79,7 @@ const MusicJobCard = ({ jobId }: { jobId: string }) => {
           {statusLabel}
         </Chip>
         <Typography level="body-xs">
-          {job.duration_seconds}s{job.instrumental ? ', Instrumental' : ''}
+          {output?.duration_seconds ?? job.duration_seconds}s{job.instrumental ? ', Instrumental' : ''}
         </Typography>
       </Stack>
 

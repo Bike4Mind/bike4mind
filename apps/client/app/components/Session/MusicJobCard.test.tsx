@@ -74,6 +74,13 @@ describe('MusicJobCard states', () => {
     expect(screen.getByTestId('music-job-card-prompt')).toHaveTextContent('a calm piano piece');
   });
 
+  it('shows the duration the song really has when it differs from the requested one', () => {
+    showJob(succeeded(musicOutput({ duration_seconds: 28 }), { duration_seconds: 30 }));
+    render(card());
+    expect(screen.getByText('28s')).toBeInTheDocument();
+    expect(screen.queryByText('30s')).not.toBeInTheDocument();
+  });
+
   it('shows Finishing while a succeeded frame has no output yet', () => {
     showJob(succeeded(null));
     render(card());
@@ -115,6 +122,14 @@ describe('MusicJobCard player', () => {
     expect(screen.getByTestId('music-job-card-status')).toHaveTextContent('Ready');
   });
 
+  it('refetches the job when the audio fails to load', () => {
+    showJob(succeeded(musicOutput()));
+    render(card());
+    expect(h.query.refetch).not.toHaveBeenCalled();
+    fireEvent.error(screen.getByTestId('music-job-card-player'));
+    expect(h.query.refetch).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the first src when the job re-signs mid-play', () => {
     showJob(succeeded(musicOutput()));
     const { rerender } = render(card());
@@ -129,6 +144,12 @@ describe('MusicJobCard player', () => {
 
 describe('MusicJobCard lyrics', () => {
   it('has no lyrics block for an instrumental song', () => {
+    showJob(succeeded(musicOutput(), { instrumental: true, lyrics: null }));
+    render(card());
+    expect(screen.queryByTestId('music-job-card-lyrics-toggle')).not.toBeInTheDocument();
+  });
+
+  it('has no lyrics block when the job has no lyrics', () => {
     showJob(succeeded(musicOutput()));
     render(card());
     expect(screen.queryByTestId('music-job-card-lyrics-toggle')).not.toBeInTheDocument();
@@ -169,6 +190,13 @@ describe('MusicJobCard actions', () => {
     showJob(musicJob({ state: 'running' }));
     render(card());
     expect(screen.getByTestId('music-job-card-status')).toHaveTextContent('Cancelling');
+  });
+
+  it('disables Cancel once the cancel was accepted', () => {
+    h.cancel = { mutate: vi.fn(), isPending: false, isSuccess: true };
+    showJob(musicJob({ state: 'running' }));
+    render(card());
+    expect(screen.getByTestId('music-job-card-cancel-btn')).toBeDisabled();
   });
 
   it('opens the file browser from Open in Files', () => {

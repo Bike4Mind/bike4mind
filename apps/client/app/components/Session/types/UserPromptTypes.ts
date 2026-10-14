@@ -64,7 +64,7 @@ export interface ReplyContainerProps {
   videos?: string[];
   /** Generation jobs (video, music) started by the agent tool this turn, one live card each. */
   generationJobs?: GenerationJobRef[];
-  /** Audio tracks a tool generated this turn (music_generation), rendered as inline players. */
+  /** Audio tracks a tool generated this turn (audio_generation, or a pre-job music turn), rendered as inline players. */
   audio?: string[];
   search?: string;
   isExpandable?: boolean;

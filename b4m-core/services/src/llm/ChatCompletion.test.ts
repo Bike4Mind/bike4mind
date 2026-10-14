@@ -1869,6 +1869,29 @@ describe('ChatCompletionProcess', () => {
         expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
       });
 
+      it('adds no notice when a tool started a generation job and the model wrote no caption', async () => {
+        setupTurn(async cb => {
+          const toolsUsed = [{ name: 'music_generation', arguments: '{"prompt":"a shanty"}', id: 't1' }];
+          // What applyQuestStatusChanges does when the tool calls statusUpdate({ generationJobs }).
+          mockQuest.generationJobs = [...(mockQuest.generationJobs ?? []), { id: 'job-1', kind: 'music' }];
+          await cb(['<think>started</think>'], { toolsUsed });
+          await cb([], { toolsUsed, stopReason: 'end_turn' });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
+      it('still adds the notice when the only job card is from an earlier turn', async () => {
+        mockQuest.videoJobIds = ['old-job'];
+        setupTurn(cb => toolLoop(cb, ['<think>', 'more reasoning', '</think>']));
+
+        await runTurn();
+
+        expect(mockQuest.replies.at(-1)).toBe(`\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+      });
+
       it('adds no notice when a tool left a pendingAction for the user and wrote no text', async () => {
         setupTurn(async cb => {
           const toolsUsed = [{ name: 'image_generation', arguments: '{"prompt":"a cat"}', id: 't1' }];

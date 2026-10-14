@@ -551,7 +551,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
 
   const generatedImagesUrl = `${cdnUrl}/generated`;
   // quest.images carries every file a tool generated this turn, but not all of them are
-  // images - e.g. excel_generation drops an .xlsx and music_generation an audio track in
+  // images - e.g. excel_generation drops an .xlsx and audio_generation (or a pre-job music turn) an audio track in
   // here. Classify once into the inline grid, inline audio players, and download chips
   // (non-image/-audio files, also surfaced in the Knowledge Base) so each lands in exactly
   // one place instead of rendering as a broken <img>. See classifyGeneratedFiles.
