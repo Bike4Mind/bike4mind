@@ -696,7 +696,12 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                   {isBulkSharingSessions ? (
                     "Anyone with the link can open these notebooks after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off from each notebook's Share menu."
                   ) : !isBulkSharing && type === InviteType.Session ? (
-                    "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off."
+                    <>
+                      {
+                        "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share."
+                      }{' '}
+                      {canTurnOffLinks ? 'Links keep working until you turn them off.' : "Links don't expire."}
+                    </>
                   ) : (
                     <>
                       Anyone with the link can open {isBulkSharing ? 'these items' : `this ${itemType}`} after signing
