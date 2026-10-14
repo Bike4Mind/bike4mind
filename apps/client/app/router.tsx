@@ -513,7 +513,7 @@ const hearthRoute = createRoute({
 });
 
 // Studio: one page per generation modality (/studio/video), each a CapabilityForm and the gallery of the user's jobs.
-const studioRoute = createRoute({
+export const studioRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/studio/$modality',
   params: {

@@ -16,9 +16,9 @@ import {
   newRoute,
   notebooksIndexRoute,
   router,
+  studioRoute,
   subscriptionsIndexRoute,
 } from './router';
-import { parseStudioModality } from './components/Studio/studioModality';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 
 // validateSearch is what makes a bare /feedback/rollup URL load at all (see the route's own
@@ -112,9 +112,10 @@ describe('Studio route', () => {
     expect(isNotFound(studioMatch('/studio/hologram')?.paramsError)).toBe(true);
   });
 
-  // The assertion above only sees the match's paramsError. This renders the route with its parser to pin what the
-  // user gets: the not-found page, not the error boundary. The route is rebuilt here rather than through the app
-  // tree because the notebook layout's auth guard redirects to /login before the 404 is reached.
+  // The assertion above only sees the match's paramsError. This renders the route with its own params wiring
+  // (studioRoute.options.params) to pin what the user gets: the not-found page, not the error boundary. The tree
+  // is rebuilt here rather than through the app router because the notebook layout's auth guard redirects to
+  // /login before the 404 is reached.
   it('renders the not-found page, not the error boundary, for an unknown modality', async () => {
     const root = createRootRoute({
       component: () => <Outlet />,
@@ -124,7 +125,7 @@ describe('Studio route', () => {
     const route = createRoute({
       getParentRoute: () => root,
       path: '/studio/$modality',
-      params: { parse: ({ modality }) => ({ modality: parseStudioModality(modality) }) },
+      params: studioRoute.options.params,
       component: () => <div data-testid="probe-studio" />,
     });
     const probe = createRouter({
