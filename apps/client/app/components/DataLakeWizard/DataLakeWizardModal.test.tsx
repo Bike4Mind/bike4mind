@@ -624,6 +624,20 @@ describe('DataLakeWizardModal - Drive-only create', () => {
     expect(screen.getByTestId('storage-limit-exceeded-alert')).toBeInTheDocument();
   });
 
+  it('agrees with the summary on a truncated estimate whose partial Drive bytes already exceed the quota', () => {
+    driveEstimate.current = estimate({ knownBytes: 2_000_000, truncated: true, truncatedReason: 'deadline' });
+    userUsing(0);
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+
+    // The button blocks on those partial bytes, so the summary must report them rather than claiming
+    // the folder could not be estimated.
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeDisabled();
+    expect(screen.getByTestId('drive-estimate-summary')).toHaveTextContent('at least');
+    expect(screen.queryByTestId('drive-estimate-unavailable')).toBeNull();
+  });
+
   it('blocks a folder over the per-sync file cap, which the sync would refuse whole', () => {
     driveEstimate.current = estimate({ fileCount: 20001, truncated: true, overCandidateCap: true });
     seedDriveOnly({ step: 'config' });

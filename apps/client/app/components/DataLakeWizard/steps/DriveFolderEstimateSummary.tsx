@@ -39,9 +39,10 @@ export default function DriveFolderEstimateSummary({ driveFolderId }: { driveFol
     );
   }
 
-  // A truncated walk whose partial bytes already exceed the quota still blocks in the modal, so its
-  // partial counts are shown (as lower bounds) rather than "could not be estimated".
-  if (isError || !estimate || (estimate.truncated && !gate.exceedsStorage)) {
+  // A truncated walk whose partial DRIVE bytes already exceed the quota still blocks in the modal,
+  // so its partial counts are shown (as lower bounds) rather than "could not be estimated". Keyed on
+  // the Drive bytes, not the whole commit: local files alone can put it over with nothing to report.
+  if (isError || !estimate || (estimate.truncated && !(estimate.knownBytes > 0 && gate.exceedsStorage))) {
     return (
       <Typography level="body-sm" color="neutral" data-testid="drive-estimate-unavailable">
         This Drive folder is too large to estimate quickly, or could not be estimated; the sync still enforces your

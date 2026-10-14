@@ -4,6 +4,7 @@ import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import type { IUserDocument } from '@bike4mind/common';
 import DriveFolderEstimateSummary from './DriveFolderEstimateSummary';
 
@@ -45,7 +46,10 @@ const loaded = (over: Record<string, unknown> = {}) => ({
 const renderSummary = () => render(<DriveFolderEstimateSummary driveFolderId="F1" />, { wrapper: TestWrapper });
 
 describe('DriveFolderEstimateSummary', () => {
-  afterEach(() => useUser.setState({ currentUser: null }));
+  afterEach(() => {
+    useUser.setState({ currentUser: null });
+    useDataLakeWizardStore.getState().resetWizard();
+  });
 
   it('shows a loading line while the folder is being walked', () => {
     query.current = { data: undefined, isLoading: true, isError: false };
@@ -100,6 +104,23 @@ describe('DriveFolderEstimateSummary', () => {
       'Drive folder: at least 12 files, at least 3 MB'
     );
     expect(screen.queryByTestId('drive-estimate-unavailable')).toBeNull();
+  });
+
+  it('does not print "at least 0" for a truncated walk with no Drive bytes, even when local files are over quota', () => {
+    // The commit is over quota on the local files alone, but none of that is the folder's bytes - so
+    // there is nothing to report as "at least 0 files, at least 0 B".
+    useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 1 } as IUserDocument });
+    useDataLakeWizardStore.setState(state => ({
+      allFiles: [
+        { relativePath: 'a.txt', size: 2_000_000, type: 'text/plain', excluded: false, isDuplicate: false },
+      ] as never,
+      config: { ...state.config, conflictResolution: 'skip' },
+    }));
+    query.current = loaded({ truncated: true, truncatedReason: 'page_cap', knownBytes: 0 });
+    renderSummary();
+
+    expect(screen.getByTestId('drive-estimate-unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('drive-estimate-summary')).toBeNull();
   });
 
   it('warns when only the unknown-size worst case would exceed the storage limit', () => {
