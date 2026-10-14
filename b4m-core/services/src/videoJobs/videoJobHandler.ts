@@ -259,6 +259,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
           prompt: payload.request.prompt,
           durationSeconds: common.durationSeconds,
         },
+        ...(job.questId && { questId: job.questId }),
         signal: context.signal,
       });
       let output: VideoJobOutput;
