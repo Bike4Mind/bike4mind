@@ -125,8 +125,8 @@ export type StartAgentExecutionInput = {
   routingSource?: AgentExecutionRoutingSource;
   /**
    * Extra system context for this run only. Forwarded on the executor start payload and
-   * deliberately NOT snapshotted on the execution doc or the Quest: the executor folds it
-   * into the system message it checkpoints, so continuations carry it without a copy here.
+   * kept off the execution doc's own fields and the Quest: the executor folds it into the
+   * system message, carried in the server-only checkpoint so continuations keep it.
    */
   systemContext?: string;
 };

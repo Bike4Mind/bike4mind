@@ -76,10 +76,9 @@ describe('useSendMessage - briefcase toolsOverride on the orchestration path (#9
 describe('useSendMessage - per-send systemContext reaches both routes', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
 
-  it('builds the field only when the send carries one, so an absent value adds nothing', () => {
-    expect(source).toMatch(
-      /const systemContextField = options\?\.systemContext \? \{ systemContext: options\.systemContext \} : \{\};/
-    );
+  it('trims once and builds the field only when non-empty, so an absent or blank value adds nothing', () => {
+    expect(source).toMatch(/const systemContext = options\?\.systemContext\?\.trim\(\) \|\| undefined;/);
+    expect(source).toMatch(/const systemContextField = systemContext \? \{ systemContext \} : \{\};/);
   });
 
   it('spreads it into the command-map dispatch and the direct LLM dispatch', () => {

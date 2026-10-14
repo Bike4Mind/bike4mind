@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef } from 'react';
 
-import type { B4MLLMTools, IChatHistoryItemDocument, ISessionDocument } from '@bike4mind/common';
+import { toast } from 'sonner';
+
+import {
+  PROMPT_TEXT_MAX,
+  type B4MLLMTools,
+  type IChatHistoryItemDocument,
+  type ISessionDocument,
+} from '@bike4mind/common';
 import { ReadyState } from '@client/app/contexts/WebsocketContext';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { isFreshNonce } from '@client/app/utils/briefcase/dispatchDedup';
@@ -97,8 +104,19 @@ export function useProgrammaticSubmit({
     const content = dispatch.promptContent;
     // Rides the send options, never the prompt text, so it reaches the model without
     // appearing in the user's bubble. Spread only when set, so a launch without it
-    // makes exactly the call it always did.
+    // makes exactly the call it always did (the send trims it).
     const systemContext = dispatch.systemContext || undefined;
+    // Enforce the cap here so both routes refuse the same way. Past this point the agent
+    // route's server-side schema would reject it with no reply reaching the user, and the
+    // chat route has no cap at all. The launch is already cleared, so it is not retried.
+    const systemContextLength = systemContext?.trim().length ?? 0;
+    if (systemContextLength > PROMPT_TEXT_MAX) {
+      console.error(
+        `[useProgrammaticSubmit] Refused launch: systemContext is ${systemContextLength} characters (max ${PROMPT_TEXT_MAX}).`
+      );
+      toast.error('This prompt could not be sent: its extra instructions are too long.');
+      return;
+    }
     // The elected session at consume time - the send is dropped if it changes
     // during the settle delay (election must hold through to the actual send).
     const electedSessionId = session?.id ?? null;

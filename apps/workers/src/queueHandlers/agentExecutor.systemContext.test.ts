@@ -46,7 +46,9 @@ describe('systemContext call site in agentExecutor', () => {
     expect(call![0]).toContain('...(startPayload?.systemContext ? { context: startPayload.systemContext } : {})');
   });
 
-  it('never persists systemContext on the execution doc', () => {
+  // Only what this checks: the executor never reads or writes a `systemContext` field on the
+  // execution doc. The content does reach the doc's server-only checkpoint via messages[0].
+  it('never reads or writes systemContext as a field of the execution doc', () => {
     expect(source).not.toMatch(/execution\.systemContext/);
   });
 });

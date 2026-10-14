@@ -130,9 +130,20 @@ export interface IResolvedPromptDispatch {
   /** The session this dispatch targets, so only the matching surface consumes it. */
   sessionId?: string | null;
   /**
-   * System context delivered with the send this launch starts, as one extra system
-   * message on that request only. It is never shown in the transcript and never
-   * persisted on the stored turn. Absent leaves the request exactly as it was.
+   * System context delivered with the send this launch starts, for that request only.
+   * Never shown in the transcript. Absent (or whitespace-only) leaves the request exactly
+   * as it was.
+   *
+   * - Chat route: one extra system message in `extraContextMessages`, which the server
+   *   does not persist.
+   * - Agent route: appended to the run's system message. Kept off the execution doc's own
+   *   fields and the Quest; carried in the server-only checkpoint so continuations keep it.
+   * - Capped at `PROMPT_TEXT_MAX` characters (after trimming): a longer value refuses the
+   *   launch with an error toast instead of sending.
+   * - Not carried by a retry/regenerate of the turn, which re-runs from the stored prompt
+   *   (the same as `requiredTools`).
+   * - Ignored by image-model routes.
+   * - Suppresses the instant ack (rapid reply) for the send, which cannot see it.
    */
   systemContext?: string;
 }

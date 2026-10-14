@@ -40,12 +40,15 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 vi.mock('@client/app/hooks/useChatInput', () => ({
   useChatInput: { getState: h.getState, subscribe: h.subscribe },
 }));
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+vi.mock('sonner', () => ({ toast: { error: toastError } }));
 vi.mock('@client/app/utils/briefcase/dispatchDedup', () => ({
   isFreshNonce: () => h.store.isFresh,
 }));
 
 import { useProgrammaticSubmit } from '../useProgrammaticSubmit';
 import { ReadyState } from '@client/app/contexts/WebsocketContext';
+import { PROMPT_TEXT_MAX } from '@bike4mind/common';
 
 const SESSION = { id: 's1' } as unknown as ISessionDocument;
 
@@ -165,6 +168,33 @@ describe('useProgrammaticSubmit › programmaticLaunch', () => {
 
     const options = props.handleSendClick.mock.calls[0][1] as Record<string, unknown>;
     expect(options).not.toHaveProperty('systemContext');
+  });
+
+  it('refuses an over-cap systemContext loudly instead of sending, and does not retry it', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    toastError.mockClear();
+    h.store.state.programmaticLaunch = launch({ systemContext: 'x'.repeat(PROMPT_TEXT_MAX + 1) });
+    const props = baseProps();
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    expect(props.handleSendClick).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining(String(PROMPT_TEXT_MAX + 1)));
+    // Consumed, so the retry effect cannot fire it later.
+    expect(h.store.state.programmaticLaunch).toBeNull();
+    consoleError.mockRestore();
+  });
+
+  it('accepts a systemContext exactly at the cap', () => {
+    h.store.state.programmaticLaunch = launch({ systemContext: 'x'.repeat(PROMPT_TEXT_MAX) });
+    const props = baseProps();
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    expect(props.handleSendClick).toHaveBeenCalledTimes(1);
   });
 
   it('drops a stale-nonce launch without sending', () => {

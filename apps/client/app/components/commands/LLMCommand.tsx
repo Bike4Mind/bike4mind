@@ -56,7 +56,8 @@ export type LLMCommandArgs = {
   skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
   /**
    * Suppresses the instant ack for this turn. Set for tool-directed launches: the ack model
-   * runs with no tools, so given a prompt that orders a tool call it fakes one as text.
+   * runs with no tools, so given a prompt that orders a tool call it fakes one as text. Also
+   * set when `systemContext` is present, which the ack model never sees.
    */
   skipRapidReply?: boolean;
   /**

@@ -57,7 +57,8 @@ export const StartExecutionSchema = z.object({
   enableArtifacts: z.boolean().optional(),
   // Per-send system context from the caller, for this run only. Passed to the first
   // `runIteration` as `context`, which ReActAgent appends to the system message it then
-  // checkpoints - so continuations replay it without it being persisted on the doc. Same
+  // checkpoints - so continuations replay it. Kept off the doc's own fields; it is at rest
+  // only in that server-only checkpoint. Same
   // cap as the WS `start` schema (agentExecute.ts).
   systemContext: z.string().max(PROMPT_TEXT_MAX).optional(),
 });

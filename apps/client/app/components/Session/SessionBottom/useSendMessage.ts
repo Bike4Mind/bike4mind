@@ -734,10 +734,15 @@ export function useSendMessage({
       options?.onRefused?.();
       return;
     }
-    // Tool-directed send: see LLMCommandArgs.skipRapidReply.
-    const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0;
-    // Spread into each route's payload only when set, so a send without it is unchanged.
-    const systemContextField = options?.systemContext ? { systemContext: options.systemContext } : {};
+    // Trimmed once here, the boundary every caller passes through: whitespace-only counts
+    // as absent. Spread into each route's payload only when set, so a send without it is
+    // unchanged.
+    const systemContext = options?.systemContext?.trim() || undefined;
+    const systemContextField = systemContext ? { systemContext } : {};
+    // Tool-directed or context-carrying send: see LLMCommandArgs.skipRapidReply. The ack
+    // model sees neither the tools nor the hidden system context, so with either present an
+    // instant ack could contradict what the real reply is told to do.
+    const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0 || systemContext !== undefined;
 
     // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
     // models: for image models "vision" is irrelevant - image-input capability is handled by
