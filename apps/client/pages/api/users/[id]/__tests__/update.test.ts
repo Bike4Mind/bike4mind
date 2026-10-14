@@ -202,9 +202,9 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { tags: ['opti'] } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    // The guard snapshot, the in-transaction snapshot and the post-update refetch; the guard
-    // itself never counts admins.
-    expect(mockUserFindById).toHaveBeenCalledTimes(3);
+    // Only the in-transaction snapshot and the post-update refetch; the guard's isAdmin read
+    // is skipped entirely.
+    expect(mockUserFindById).toHaveBeenCalledTimes(2);
     expect(mockCount).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });
@@ -213,8 +213,8 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { isAdmin: true } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    // Guard snapshot, in-transaction snapshot, refetch.
-    expect(mockUserFindById).toHaveBeenCalledTimes(3);
+    // In-transaction snapshot and refetch; no guard read.
+    expect(mockUserFindById).toHaveBeenCalledTimes(2);
     expect(mockCount).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });

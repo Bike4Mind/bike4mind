@@ -154,11 +154,9 @@ const handler = baseApi().put(
       // Admin role (self-demote). The old checkbox UI allowed both - a pre-existing
       // footgun the Roles radio (admin-roles-product-access-redesign M1) closes here,
       // at the actual write path, not just in the UI.
-      // This read only serves the guard below; the session-end decision reads its own
-      // snapshot inside the transaction, so it compares against the same state the write does.
-      const before = (await User.findById(userId).select('isAdmin').lean()) as AccountStateSnapshot | null;
       if (body.isAdmin === false) {
-        if (before?.isAdmin) {
+        const targetUser = (await User.findById(userId).select('isAdmin').lean()) as Record<string, unknown> | null;
+        if (targetUser?.isAdmin) {
           if (currentUser.id === userId) {
             return res.status(400).json({ error: 'You cannot remove your own Super Admin role.' });
           }
