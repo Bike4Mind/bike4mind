@@ -1,4 +1,4 @@
-import { Box, Button, Divider, Typography } from '@mui/joy';
+import { Box, Button, Typography } from '@mui/joy';
 import type { ReactNode } from 'react';
 import { CreditOfferActions } from './CreditOfferActions';
 import { ComposerNote } from './ComposerNote';
@@ -110,16 +110,14 @@ export function LowCreditsWarning({ show, currentCredits, onDismiss, actions }: 
 /**
  * Out of credits: takes the place of the message box rather than covering it.
  * There is nothing to type into, so the box is not drawn at all - the block
- * sits above the toolbar, divided from it, and says what happened and what to
+ * sits above the toolbar and says what happened and what to
  * do in the same calm register as the rest of the composer.
  */
 export function CreditsWarning({ show, actions }: CreditsWarningProps) {
   if (!show) return null;
 
   return (
-    // The 10px top padding matches the message row this replaces, which carries the
-    // same padding to clear the grid's negative margin above it.
-    <Box data-testid="session-credits-warning" sx={{ width: '100%', pt: '10px' }}>
+    <Box data-testid="session-credits-warning" sx={{ width: '100%' }}>
       {/* One row on desktop. On a phone the row is too narrow for the copy and two
           buttons side by side, so the copy goes on top and the buttons share a full-width
           row under it, split evenly. */}
@@ -130,7 +128,11 @@ export function CreditsWarning({ show, actions }: CreditsWarningProps) {
           alignItems: { xs: 'stretch', sm: 'center' },
           justifyContent: 'space-between',
           gap: { xs: '12px', sm: 2 },
-          py: '12px',
+          // 4px on top of the box's own 12px puts the heading 16px down, where the message text
+          // it replaces starts (SessionBottom, .lexical-chat-input).
+          pt: '4px',
+          // The same 20px down to the toolbar as the message text (the editor wrapper's bottom padding).
+          pb: '20px',
         }}
       >
         <Box sx={{ minWidth: 0 }}>
@@ -149,7 +151,6 @@ export function CreditsWarning({ show, actions }: CreditsWarningProps) {
           {actions ?? <CreditOfferActions moment="out" />}
         </Box>
       </Box>
-      <Divider />
     </Box>
   );
 }

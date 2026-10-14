@@ -56,7 +56,11 @@ function AskAdminButton({ organizationId, secondary = false }: { organizationId:
 }
 
 interface CreditOfferActionsProps {
-  /** Only changes the pack button's wording: `low` is a top-up, `out` is buying a pack. */
+  /**
+   * `low` is a heads-up under the copy: a single action stays secondary and Subscribe leads on the
+   * left. `out` blocks sending and its actions sit at the right edge: they are primary, with
+   * Subscribe last, on the far right.
+   */
   moment: 'low' | 'out';
 }
 
@@ -77,18 +81,16 @@ export function CreditOfferActionsView({ moment, account }: CreditOfferActionsPr
   if (account.kind === 'subscriber') {
     return (
       <Box data-testid="credit-offer-actions" sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-        <SessionCreditsButton
-          secondary={moment === 'low'}
-          label={moment === 'low' ? 'Add Credits' : 'Buy a credit pack'}
-        />
+        <SessionCreditsButton secondary={moment === 'low'} />
       </Box>
     );
   }
 
   return (
     <Box data-testid="credit-offer-actions" sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-      <SubscribeButton label="Subscribe" />
-      <SessionCreditsButton secondary label={moment === 'low' ? 'Add Credits' : 'Buy a credit pack'} />
+      {moment === 'low' && <SubscribeButton />}
+      <SessionCreditsButton secondary />
+      {moment === 'out' && <SubscribeButton />}
     </Box>
   );
 }

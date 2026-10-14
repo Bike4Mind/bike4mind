@@ -652,7 +652,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   width: '100%',
                   paddingX: '0',
                   borderRadius: '6px',
-                  marginTop: '-10px',
                   position: 'relative',
                 }}
               >
@@ -664,7 +663,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                     direction="row"
                     spacing={2}
                     alignItems="center"
-                    sx={{ position: 'relative', paddingTop: '10px' }}
+                    sx={{ position: 'relative' }}
                   >
                     <Box
                       className="session-bottom-editor-wrapper"

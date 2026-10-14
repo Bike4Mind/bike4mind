@@ -71,7 +71,7 @@ describe('InsufficientCreditsNotice', () => {
       </TestWrapper>
     );
 
-    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Buy a credit pack');
+    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Add Credits');
     expect(screen.getByTestId('session-subscribe-btn')).toHaveTextContent(/^Subscribe$/);
   });
 

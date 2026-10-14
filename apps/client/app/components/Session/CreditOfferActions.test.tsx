@@ -6,8 +6,10 @@ import { getThemeConfig } from '../../utils/themes';
 
 vi.mock('./SessionCreditsButtons', () => ({
   SECONDARY_CREDIT_BUTTON_PROPS: { variant: 'outlined', color: 'neutral' },
-  SubscribeButton: ({ label }: { label?: string }) => <button data-testid="session-subscribe-btn">{label}</button>,
-  SessionCreditsButton: ({ secondary, label }: { secondary?: boolean; label?: string }) => (
+  SubscribeButton: ({ label = 'Subscribe' }: { label?: string }) => (
+    <button data-testid="session-subscribe-btn">{label}</button>
+  ),
+  SessionCreditsButton: ({ secondary, label = 'Add Credits' }: { secondary?: boolean; label?: string }) => (
     <button data-testid="session-credits-btn" data-secondary={String(!!secondary)}>
       {label}
     </button>
@@ -57,9 +59,11 @@ describe('CreditOfferActions', () => {
     expect(screen.queryByTestId('credit-offer-ask-admin-btn')).toBeNull();
   });
 
-  it('offers the pack as buying one when credits are out', () => {
+  it('puts Subscribe on the far right once credits are out, after Add Credits', () => {
     renderActions('out');
-    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Buy a credit pack');
+    const buttons = screen.getAllByRole('button');
+    expect(buttons.map(b => b.getAttribute('data-testid'))).toEqual(['session-credits-btn', 'session-subscribe-btn']);
+    expect(screen.getByTestId('session-credits-btn')).toHaveTextContent('Add Credits');
   });
 
   it('offers a subscriber only a credit pack, never the plan they already hold', () => {
