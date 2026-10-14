@@ -5,6 +5,8 @@ import {
   contractIndexFromOpenApi,
   extractApiPaths,
   formatCallerPath,
+  isFallbackRoute,
+  isInsideRepo,
   matchCallerPath,
   reexportedDefault,
   renderInventoryMarkdown,
@@ -53,7 +55,7 @@ describe('analyzeRouteSource', () => {
 
   it('reads the auth option', () => {
     expect(analyze(`baseApi({ auth: 'jwtOnly' }).get(a)`).auth).toEqual(['jwt']);
-    expect(analyze(`baseApi({ auth: false }).get(a)`).auth).toEqual(['none']);
+    expect(analyze(`baseApi({ auth: false }).get(a)`).auth).toEqual(['handler']);
     expect(analyze(`import { optionalAuth } from 'x'; baseApi({ auth: false }).use(optionalAuth).get(a)`).auth).toEqual(
       ['optional']
     );
@@ -95,11 +97,26 @@ describe('analyzeRouteSource', () => {
     });
   });
 
-  it('marks a file without baseApi as custom auth with its method literals', () => {
-    const result = analyze(
-      `export default function handler(req, res) { if (req.method !== 'POST') return res.status(405).end(); }`
-    );
-    expect(result).toMatchObject({ methods: ['POST'], auth: ['custom'] });
+  it('reads raw handler verbs from req.method checks only', () => {
+    const result = analyze(`
+      /** Accepts POST from the docs example. */
+      const ALLOWED = ['GET', 'HEAD'];
+      export default async function handler(req, res) {
+        if (!ALLOWED.includes(req.method)) return res.status(405).end();
+        await fetch(url, { method: 'PUT' });
+      }
+    `);
+    expect(result).toMatchObject({ methods: ['GET'], acceptsAnyMethod: false, auth: ['handler'] });
+    expect(
+      analyze(`export default function h(req, res) { switch (req.method) { case 'DELETE': break; } }`).methods
+    ).toEqual(['DELETE']);
+  });
+
+  it('distinguishes a raw handler with no method check from one built by an imported factory', () => {
+    expect(analyze(`export default function h(req, res) { res.send(html); }`)).toMatchObject({
+      acceptsAnyMethod: true,
+    });
+    expect(analyze(`export default createSpecHandler(load);`)).toMatchObject({ methods: [], acceptsAnyMethod: false });
   });
 
   it('takes a contracted route its auth and scopes from the OpenAPI operations it serves', () => {
@@ -107,7 +124,7 @@ describe('analyzeRouteSource', () => {
       paths: {
         '/api/v1/things/{id}': {
           get: { security: [{ bearerAuth: [] }, { apiKeyAuth: [] }], 'x-required-scopes': ['things:read'] },
-          delete: { security: [{ jwtAuth: [] }] },
+          delete: { security: [{ bearerAuth: [] }, { apiKeyAuth: [] }], 'x-required-scopes': ['things:write'] },
           put: { security: [] },
         },
       },
@@ -124,8 +141,12 @@ describe('analyzeRouteSource', () => {
     expect(result).toEqual({
       methods: ['GET', 'DELETE'],
       acceptsAnyMethod: false,
-      auth: ['jwt', 'jwt+key'],
-      scopes: ['things:read'],
+      auth: ['jwt+key'],
+      scopes: ['things:read', 'things:write'],
+      methodScopes: [
+        { methods: ['GET'], scopes: ['things:read'] },
+        { methods: ['DELETE'], scopes: ['things:write'] },
+      ],
       contracted: true,
     });
   });
@@ -207,8 +228,28 @@ describe('matchCallerPath', () => {
     expect(match(`'/api/no/such/route'`)).toEqual(['/api/[...unmatched]']);
   });
 
+  it('treats only a root or version-root catch-all as the 404 fallback', () => {
+    expect(isFallbackRoute('/api/[...unmatchedApiPath]')).toBe(true);
+    expect(isFallbackRoute('/api/v1/[...unmatchedV1Path]')).toBe(true);
+    expect(isFallbackRoute('/api/app-files/serve/[...key]')).toBe(false);
+    expect(isFallbackRoute('/api/sessions/[id]')).toBe(false);
+  });
+
   it('does not let a parameter stand in for a static segment', () => {
     expect(match(`\`/api/\${kind}\``)).toEqual(['/api/[...unmatched]']);
+  });
+});
+
+describe('isInsideRepo', () => {
+  it('refuses any path in the repo, whatever its case', () => {
+    expect(isInsideRepo('/repo/docs/api-route-inventory.md', '/repo')).toBe(true);
+    expect(isInsideRepo('/repo/Docs/inventory-full.md', '/repo')).toBe(true);
+    expect(isInsideRepo('/REPO/docs/x.md', '/repo')).toBe(true);
+  });
+
+  it('allows paths outside the repo, including a sibling that shares its prefix', () => {
+    expect(isInsideRepo('/tmp/routes.md', '/repo')).toBe(false);
+    expect(isInsideRepo('/repo-other/routes.md', '/repo')).toBe(false);
   });
 });
 
@@ -238,6 +279,21 @@ describe('renderInventoryMarkdown', () => {
     expect(markdown).toContain('| `/api/quests/[id]` | GET | jwt+key | - | yes | `/api/v1/quests/[id]` | 0 |');
     expect(markdown).toContain('| `/api/sessions` | any |');
     expect(markdown).toContain('4: `a.ts`, `b.ts`, `c.ts` +1 more');
+    expect(markdown).toContain('| quests | 1 | 0 |');
+  });
+
+  it('shows per-verb scopes when the verbs disagree', () => {
+    const markdown = renderInventoryMarkdown([
+      record({
+        methods: ['GET', 'DELETE'],
+        scopes: ['files:read', 'files:write'],
+        methodScopes: [
+          { methods: ['GET'], scopes: ['files:read'] },
+          { methods: ['DELETE'], scopes: ['files:write'] },
+        ],
+      }),
+    ]);
+    expect(markdown).toContain('| GET: `files:read`; DELETE: `files:write` |');
   });
 
   it('lists client paths with no route once each', () => {

@@ -6,9 +6,10 @@
  *   pnpm --filter @bike4mind/scripts api-routes:inventory --include-overlays --out /tmp/routes.md
  *
  * Overlay routes (b4mContributions.apiRouteStubs of the packages/premium/* checkouts) are opt-in and
- * can never be written to the committed doc: this repo is public and the overlays are not.
+ * may only be written outside the repo: this repo is public and the overlays are not. They are listed
+ * by path only; following each stub into its overlay package is not implemented.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -19,7 +20,8 @@ import {
   contractIndexFromOpenApi,
   extractApiPaths,
   formatCallerPath,
-  isCatchAllRoute,
+  isFallbackRoute,
+  isInsideRepo,
   isTestFile,
   matchCallerPath,
   reexportedDefault,
@@ -120,7 +122,7 @@ function collectRecords(includeOverlays: boolean): { records: RouteRecord[]; unr
     return [{ route, file, callers: [], ...analyzeFile(file, route, scopeTable, contracts) }];
   });
   if (includeOverlays) {
-    // Overlay sources are not in this tree, so only the path is known.
+    // Path only: the stubs re-export from the overlay packages, which the analyzer does not follow.
     records.push(
       ...overlayRoutes().map(({ route, file }) => ({
         route,
@@ -150,7 +152,7 @@ function attachCallers(records: RouteRecord[]): UnresolvedCall[] {
     const reached = new Set<string>();
     for (const callerPath of extractApiPaths(file, read(file))) {
       const routes = matchCallerPath(callerPath, matchers);
-      if (routes.every(isCatchAllRoute)) {
+      if (routes.every(isFallbackRoute)) {
         unresolved.push({ path: formatCallerPath(callerPath), caller });
       } else {
         routes.forEach(route => reached.add(route));
@@ -168,9 +170,16 @@ function main(): void {
       'include-overlays': { type: 'boolean', default: false },
     },
   });
-  const output = path.resolve(ROOT, values.out);
-  if (values['include-overlays'] && output === path.join(ROOT, DEFAULT_OUTPUT)) {
-    throw new Error(`--include-overlays output must not go to the committed ${DEFAULT_OUTPUT}; pass --out <path>`);
+  // pnpm --filter runs scripts from the package dir; INIT_CWD is where the user typed the command.
+  const output =
+    values.out === DEFAULT_OUTPUT
+      ? path.join(ROOT, DEFAULT_OUTPUT)
+      : path.resolve(process.env.INIT_CWD ?? process.cwd(), values.out);
+  if (
+    values['include-overlays'] &&
+    isInsideRepo(path.join(realpathSync(path.dirname(output)), path.basename(output)), realpathSync(ROOT))
+  ) {
+    throw new Error('--include-overlays lists private overlay routes; pass an --out path outside this public repo');
   }
 
   const { records, unresolved } = collectRecords(values['include-overlays']);
