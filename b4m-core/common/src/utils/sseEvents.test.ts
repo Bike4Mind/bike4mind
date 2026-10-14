@@ -166,6 +166,23 @@ describe('buildSSEEvent', () => {
     expect(e.credits).toMatchObject({ used: 2, usdCost: 0.0123 });
   });
 
+  it('carries text written at index 2+ (after a tool search) instead of blanking it', () => {
+    const sparse: string[] = [];
+    sparse[3] = 'Found it.';
+    expect(buildSSEEvent(sparse).text).toBe('Found it.');
+  });
+
+  it('keeps the [1]-over-[0] read for the shapes that depend on it', () => {
+    expect(buildSSEEvent(['first', 'second']).text).toBe('second');
+    expect(buildSSEEvent(['only']).text).toBe('only');
+  });
+
+  it('still blanks a reasoning frame written at index 2+', () => {
+    const sparse: string[] = [];
+    sparse[2] = 'interleaved thought';
+    expect(buildSSEEvent(sparse, { channel: 'reasoning' }).text).toBe('');
+  });
+
   it('projects tools down to name/arguments/id, dropping returnValue and success', () => {
     const e = buildSSEEvent(['', 'the answer'], {
       toolsUsed: [

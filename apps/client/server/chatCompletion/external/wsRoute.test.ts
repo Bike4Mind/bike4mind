@@ -2,7 +2,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
+import { CliCompletionChunkAction } from '@bike4mind/common';
+import { executeCompletion } from '@bike4mind/services/cliCompletions';
+import { Connection } from '@bike4mind/database/social';
 import { checkRateLimit } from '@server/cli/auth';
+import { sendToConnection } from '@server/websocket/utils';
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
@@ -28,8 +32,8 @@ vi.mock('@bike4mind/database', () => ({
   userApiKeyRepository: {},
 }));
 
-// No registered connection, so the handler answers 400 right after authentication and never
-// starts a completion: the rate-limit call is all these tests look at.
+// No registered connection by default, so the handler answers 400 right after authentication and
+// never starts a completion; the streaming test registers one.
 vi.mock('@bike4mind/database/social', () => ({ Connection: { find: vi.fn().mockResolvedValue([]) } }));
 
 vi.mock('@server/cli/auth', () => ({
@@ -48,10 +52,13 @@ import { registerWsCompletionRoutes } from './wsRoute';
 
 let server: Server;
 let baseUrl: string;
+const tracked: Promise<void>[] = [];
 
 beforeAll(async () => {
   const app = express();
-  registerWsCompletionRoutes(app, () => {});
+  registerWsCompletionRoutes(app, p => {
+    tracked.push(p);
+  });
   await new Promise<void>(resolve => {
     server = app.listen(0, () => {
       baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -96,5 +103,28 @@ describe('JWT rate limiting', () => {
   it('answers 401 when the limiter rejects', async () => {
     vi.mocked(checkRateLimit).mockRejectedValue(new Error('Rate limit exceeded.'));
     expect((await postAs({ 'user-agent': 'b4m-cli/1.0.0' })).status).toBe(401);
+  });
+});
+
+describe('streaming over the WebSocket', () => {
+  it('sends a provider block as its own provider_block chunk, in order with content', async () => {
+    const block = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: { query: 'x' } };
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockImplementationOnce(async ({ onChunk }) => {
+      await onChunk(['', 'searching'], {});
+      await onChunk([], { providerBlock: { provider: 'anthropic', block } });
+      await onChunk(['', 'found it'], { outputTokens: 5 });
+    });
+
+    expect((await postAs({ 'user-agent': 'b4m-cli/1.0.0' })).status).toBe(202);
+    await Promise.all(tracked);
+
+    const chunks = vi
+      .mocked(sendToConnection)
+      .mock.calls.map(call => call[2] as { action: string })
+      .filter(data => data.action === 'cli_completion_chunk')
+      .map(data => CliCompletionChunkAction.parse(data).chunk);
+    expect(chunks.map(c => c.type)).toEqual(['content', 'provider_block', 'content']);
+    expect(chunks[1]).toEqual({ type: 'provider_block', provider: 'anthropic', block });
   });
 });

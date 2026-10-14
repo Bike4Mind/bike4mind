@@ -2857,7 +2857,6 @@ export class AnthropicBackend implements ICompletionBackend {
         input_schema: parameters,
       };
     });
-    if (providerTools.length === 0) return customTools;
     return [...customTools, ...providerTools];
   }
 

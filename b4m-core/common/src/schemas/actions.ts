@@ -14,6 +14,7 @@ import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constant
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
 import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
+import { CompletionProviderBlockEventSchema } from './cliCompletions';
 
 // Schemas for actions sent over the WebSocket connection.
 
@@ -613,11 +614,7 @@ export const CliCompletionChunkAction = z.object({
         .optional(),
       thinking: z.array(z.unknown()).optional(),
     }),
-    z.object({
-      type: z.literal('provider_block'),
-      provider: z.literal('anthropic'),
-      block: z.record(z.string(), z.unknown()),
-    }),
+    CompletionProviderBlockEventSchema,
   ]),
 });
 export type ICliCompletionChunkAction = z.infer<typeof CliCompletionChunkAction>;

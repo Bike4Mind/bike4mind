@@ -4,7 +4,8 @@
  * verbatim on the next turn whether or not thinking is on, and only tool_use blocks executed.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { ChatModels, type IMessage } from '@bike4mind/common';
+import { buildCompletionStreamEvent, ChatModels, type IMessage } from '@bike4mind/common';
+import type { Logger } from '@bike4mind/observability';
 import { AnthropicBackend } from './anthropicBackend';
 import type { CompletionInfo, ICompletionOptionTools, ICompletionOptions } from './backend';
 
@@ -20,8 +21,8 @@ function asyncIterable(events: unknown[]) {
 }
 
 /** Each create() call answers with the next scripted turn: an event list when streaming, a message otherwise. */
-function buildBackend(turns: unknown[]) {
-  const backend = new AnthropicBackend('test-key');
+function buildBackend(turns: unknown[], logger?: Logger) {
+  const backend = new AnthropicBackend('test-key', logger);
   const captured: Params[] = [];
   (backend as unknown as { _api: unknown })._api = {
     messages: {
@@ -389,6 +390,211 @@ describe('AnthropicBackend tool search (non-streaming)', () => {
     expect(providerBlocks()).toEqual([
       { provider: 'anthropic', block: serverToolUse },
       { provider: 'anthropic', block: searchResult },
+    ]);
+  });
+});
+
+describe.each(THINKING_MODES)(
+  'AnthropicBackend text after a tool search (thinking %s)',
+  (mode, model, reasoningEffort) => {
+    it('reaches the content frame at its content-block index', async () => {
+      const thinking = mode === 'on';
+      const searchTurn = searchThenCallTurn(thinking, []);
+      const textIndex = thinking ? 4 : 3;
+      // Splice the post-search text in before message_delta / message_stop.
+      searchTurn.splice(
+        -2,
+        0,
+        { type: 'content_block_start', index: textIndex, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: textIndex, delta: { type: 'text_delta', text: 'Found it.' } },
+        { type: 'content_block_stop', index: textIndex }
+      );
+      const { backend } = buildBackend([searchTurn]);
+      const contentTexts: string[] = [];
+      const indices: number[] = [];
+
+      await backend.complete(
+        model,
+        [{ role: 'user', content: 'weather?' }],
+        {
+          stream: true,
+          executeTools: false,
+          reasoningEffort,
+          tools: [tool('get_weather')],
+          providerTools: [searchTool],
+        },
+        async (text, info) => {
+          if (text.indexOf('Found it.') >= 0) indices.push(text.indexOf('Found it.'));
+          const event = buildCompletionStreamEvent(text, info);
+          if (event.type === 'content' && event.text) contentTexts.push(event.text);
+        }
+      );
+
+      expect(indices).toEqual([textIndex]);
+      expect(contentTexts).toEqual(['Let me ', 'search.', 'Found it.']);
+    });
+  }
+);
+
+describe('AnthropicBackend plain tool loop replay (thinking off, no server blocks)', () => {
+  const toolUse = { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Oslo' } };
+  const expectedReplay = [
+    { role: 'assistant', content: [toolUse] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
+  ];
+
+  it('replays a bare tool_use turn when streaming', async () => {
+    const turn = [
+      messageStart,
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Let me check.' } },
+      { type: 'content_block_stop', index: 0 },
+      {
+        type: 'content_block_start',
+        index: 1,
+        content_block: { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: {} },
+      },
+      { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"city":"Oslo"}' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 20 } },
+      { type: 'message_stop' },
+    ];
+    const { backend, captured } = buildBackend([turn, finalTurn]);
+
+    await backend.complete(
+      ChatModels.CLAUDE_5_SONNET,
+      [{ role: 'user', content: 'weather in Oslo?' }],
+      { stream: true, executeTools: true, reasoningEffort: 'none', tools: [tool('get_weather')] },
+      collect().cb
+    );
+
+    expect((captured[1].messages as unknown[]).slice(-2)).toEqual(expectedReplay);
+  });
+
+  it('replays a bare tool_use turn when not streaming', async () => {
+    const { backend, captured } = buildBackend([
+      {
+        content: [{ type: 'text', text: 'Let me check.' }, toolUse],
+        stop_reason: 'tool_use',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      {
+        content: [{ type: 'text', text: 'Sunny.' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    ]);
+
+    await backend.complete(
+      ChatModels.CLAUDE_5_SONNET,
+      [{ role: 'user', content: 'weather in Oslo?' }],
+      { stream: false, executeTools: true, reasoningEffort: 'none', tools: [tool('get_weather')] },
+      collect().cb
+    );
+
+    expect((captured[1].messages as unknown[]).slice(-2)).toEqual(expectedReplay);
+  });
+});
+
+describe('AnthropicBackend server_tool_use input', () => {
+  const serverToolStart = {
+    type: 'content_block_start',
+    index: 0,
+    content_block: { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: {} },
+  };
+  const endTurn = [
+    { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 } },
+    { type: 'message_stop' },
+  ];
+
+  async function run(events: unknown[]) {
+    const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
+    const { backend } = buildBackend([events], logger as unknown as Logger);
+    const { cb, providerBlocks } = collect();
+    await backend.complete(
+      ChatModels.CLAUDE_5_SONNET,
+      [{ role: 'user', content: 'weather?' }],
+      {
+        stream: true,
+        executeTools: false,
+        reasoningEffort: 'none',
+        tools: [tool('get_weather')],
+        providerTools: [searchTool],
+      },
+      cb
+    );
+    return { logger, providerBlocks: providerBlocks() };
+  }
+
+  it('still emits the block with an empty input and warns once when the input JSON is malformed', async () => {
+    const { logger, providerBlocks } = await run([
+      messageStart,
+      serverToolStart,
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"query":' } },
+      { type: 'content_block_stop', index: 0 },
+      ...endTurn,
+    ]);
+
+    expect(providerBlocks).toEqual([{ provider: 'anthropic', block: serverToolStart.content_block }]);
+    const malformedWarns = logger.warn.mock.calls.filter(([msg]) =>
+      String(msg).includes('Malformed server tool input')
+    );
+    expect(malformedWarns).toHaveLength(1);
+  });
+
+  it('emits the block with an empty input when no input delta arrives', async () => {
+    const { logger, providerBlocks } = await run([
+      messageStart,
+      serverToolStart,
+      { type: 'content_block_stop', index: 0 },
+      ...endTurn,
+    ]);
+
+    expect(providerBlocks).toEqual([{ provider: 'anthropic', block: serverToolStart.content_block }]);
+    expect(logger.warn.mock.calls.filter(([msg]) => String(msg).includes('Malformed server tool input'))).toHaveLength(
+      0
+    );
+  });
+});
+
+describe('AnthropicBackend non-streaming provider block replay (thinking off)', () => {
+  it('replays server blocks on an executeTools turn', async () => {
+    const serverToolUse = {
+      type: 'server_tool_use',
+      id: 'srvtoolu_1',
+      name: 'tool_search_tool_regex',
+      input: searchInput,
+    };
+    const toolUse = { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Oslo' } };
+    const { backend, captured } = buildBackend([
+      {
+        content: [serverToolUse, searchResult, toolUse],
+        stop_reason: 'tool_use',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      {
+        content: [{ type: 'text', text: 'Sunny.' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    ]);
+
+    await backend.complete(
+      ChatModels.CLAUDE_5_SONNET,
+      [{ role: 'user', content: 'weather in Oslo?' }],
+      {
+        stream: false,
+        executeTools: true,
+        reasoningEffort: 'none',
+        tools: [tool('get_weather', { defer_loading: true })],
+        providerTools: [searchTool],
+      },
+      collect().cb
+    );
+
+    expect((captured[1].messages as unknown[]).slice(-2)).toEqual([
+      { role: 'assistant', content: [serverToolUse, searchResult, toolUse] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
     ]);
   });
 });

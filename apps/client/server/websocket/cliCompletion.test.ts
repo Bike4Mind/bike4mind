@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CliCompletionChunkAction } from '@bike4mind/common';
 
 const mockExecuteCompletion = vi.fn();
 const mockLogCompletionAnalytics = vi.fn();
@@ -143,6 +144,25 @@ describe('cliCompletion websocket handler', () => {
       expect.objectContaining({ error: 'API key rate limit exceeded', retryAfter: 30 })
     );
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('sends a provider block as its own provider_block chunk, in order with content', async () => {
+    const block = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: { query: 'x' } };
+    mockExecuteCompletion.mockImplementationOnce(async ({ onChunk }) => {
+      await onChunk(['', 'searching'], {});
+      await onChunk([], { providerBlock: { provider: 'anthropic', block } });
+      await onChunk(['', 'found it'], { outputTokens: 5 });
+    });
+
+    await run();
+
+    const chunks = vi
+      .mocked(sendToConnection)
+      .mock.calls.map(call => call[2] as { action: string })
+      .filter(data => data.action === 'cli_completion_chunk')
+      .map(data => CliCompletionChunkAction.parse(data).chunk);
+    expect(chunks.map(c => c.type)).toEqual(['content', 'provider_block', 'content']);
+    expect(chunks[1]).toEqual({ type: 'provider_block', provider: 'anthropic', block });
   });
 
   it('logs success analytics with source cli', async () => {

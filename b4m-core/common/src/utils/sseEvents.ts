@@ -155,10 +155,10 @@ export function buildCompletionStreamEvent(
  * Build SSE event from LLM completion callback
  * @param text - Sparse array indexed by the provider's content-block/choice index (may
  *   contain null/undefined/holes). NOT [thinking, response] - see
- *   {@link resolveResponseText} for the real shape. This positional read is kept for
- *   the authenticated API/CLI streams that already depend on it; anonymous callers use
- *   {@link buildPublicSSEEvent}, which resolves the whole array. Either way the text of a
- *   reasoning-tagged frame is dropped.
+ *   {@link resolveResponseText} for the real shape. This positional read (with a joined
+ *   fallback for index 2+) is kept for the authenticated API/CLI streams that already depend
+ *   on it; anonymous callers use {@link buildPublicSSEEvent}, which resolves the whole array.
+ *   Either way the text of a reasoning-tagged frame is dropped.
  * @param info - Completion metadata (tools, usage)
  * @returns SSE event object
  */
@@ -166,8 +166,9 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
   // A reasoning-tagged frame is never reply prose, and no caller of this builder (the public
   // completions API, its WebSocket twin, the CLI) shows it: blank its text so tagged reasoning
   // never reaches an API consumer. Usage, tools and thinking blocks still ride the frame. Families
-  // that inline reasoning untagged (inlinesReasoningIntoText) are not covered by this.
-  const textContent = info?.channel === 'reasoning' ? '' : text[1] || text[0] || '';
+  // that inline reasoning untagged (inlinesReasoningIntoText) are not covered by this. Text at
+  // index 2+ (after a tool search's server blocks) falls through to the joined array.
+  const textContent = info?.channel === 'reasoning' ? '' : text[1] || text[0] || resolveResponseText(text);
 
   const event: SSEContentEvent = {
     type: info?.toolsUsed && info.toolsUsed.length > 0 ? 'tool_use' : 'content',

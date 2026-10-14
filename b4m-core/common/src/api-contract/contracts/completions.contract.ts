@@ -7,7 +7,7 @@ import {
   ApiErrorSchema,
   InsufficientCreditsErrorSchema,
   ProviderNotConfiguredErrorSchema,
-  UnknownModelErrorSchema,
+  CompletionsBadRequestErrorSchema,
 } from '../../schemas/chat';
 
 /**
@@ -89,7 +89,7 @@ export const createCompletionContract = defineEndpoint({
         'that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), ' +
         '`deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` ' +
         'naming a tool not in `tools`).',
-      schema: UnknownModelErrorSchema,
+      schema: CompletionsBadRequestErrorSchema,
     },
     413: { description: 'Request body over 25 MB.', schema: ApiErrorSchema },
     422: {

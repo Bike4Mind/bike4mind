@@ -79,6 +79,8 @@ export type CompletionsToolCapabilityModel = ClaudeToolCapabilityModel & {
 };
 
 // Mirrors getLlmByModel's dispatch: a catalog row routes on adapterFamily first, everything else on backend.
+// MUST STAY IN SYNC WITH getLlmByModel (llm-adapters/src/index.ts) and backendForAdapterFamily
+// (llm-adapters/src/adapterFamilyDispatch.ts).
 // Bedrock Claude is left out until its adapter forwards defer_loading and replays server blocks.
 function completionsForwardsNativeTools(model: CompletionsToolCapabilityModel): boolean {
   return model.adapterFamily ? model.adapterFamily === 'anthropic-messages' : model.backend === ModelBackend.Anthropic;
@@ -87,9 +89,4 @@ function completionsForwardsNativeTools(model: CompletionsToolCapabilityModel): 
 /** supportsToolSearch, narrowed to models whose `/api/ai/v1/completions` adapter actually forwards it. */
 export function completionsSupportsToolSearch(model: CompletionsToolCapabilityModel): boolean {
   return completionsForwardsNativeTools(model) && supportsToolSearch(model);
-}
-
-/** supportsToolChanges, narrowed the same way as completionsSupportsToolSearch. */
-export function completionsSupportsToolChanges(model: CompletionsToolCapabilityModel): boolean {
-  return completionsForwardsNativeTools(model) && supportsToolChanges(model);
 }
