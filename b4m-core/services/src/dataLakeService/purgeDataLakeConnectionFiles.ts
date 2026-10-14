@@ -25,7 +25,9 @@ import {
  */
 export type PurgeableConnectionFile = Pick<
   IFabFileDocument,
-  'id' | 'userId' | 'fileSize' | 'filePath' | 'versions' | 'tags'
+  // deletedAt: the refund gate reads it (see the tombstone note in the sweep below). Callers hand
+  // over whole finder rows, so it rides along for free.
+  'id' | 'userId' | 'fileSize' | 'filePath' | 'versions' | 'tags' | 'deletedAt'
 >;
 
 export interface PurgeDataLakeConnectionFilesAdapters {
@@ -116,6 +118,13 @@ const DEFAULT_CHUNK_SIZE = 100;
  * `hardDeleteOneById`'s own return decides whether a file's bytes count toward the storage refund -
  * not merely "this call attempted the delete" - so two concurrent sweeps racing the same connection
  * (a retry racing the original, say) can never refund the same owner's bytes twice.
+ *
+ * A row already soft-deleted when the sweep reaches it (`deletedAt` set) is hard-deleted like any
+ * other - it has to be, or it would outlive the connection - but is NOT refunded: a soft delete
+ * already refunded it through `deleteFabFile`'s `onDeleteComplete`, and it leaves the lake meta-tag
+ * in place, which is exactly why the connection-scoped finder still resolves it here. Refunding it
+ * again would debit the owner twice, drifting the counter low (and below zero the clamp in
+ * `incrementCurrentStorage` then hides it). See the tombstone note in the sweep.
  */
 export const purgeDataLakeConnectionFiles = async (
   scope: DataLakeMembershipScope,
@@ -149,14 +158,17 @@ export const purgeDataLakeConnectionFiles = async (
 
   for (let i = 0; i < files.length; i += chunkSize) {
     const slice = files.slice(i, i + chunkSize);
-    const deletedFiles: DataLakeSweptFile[] = [];
+    // Two sets, not one: every row this call removes (filesPurged), and the subset of those still
+    // owed a storage refund - a tombstone is removed but was already refunded at soft-delete.
+    let removedByThisChunk = 0;
+    const refundableFiles: DataLakeSweptFile[] = [];
     try {
       // BEFORE the slice's rows go, mirroring cleanupDeletedDataLake's own ordering: once a row is
       // hard-deleted its id is no longer resolvable by any finder, so a findings sweep placed
       // after would permanently miss whatever this slice removes on the next call.
       await db.dataLakeFindings?.deleteForPurgedDocuments(slice.map(file => file.id));
       // allSettled, not all: every task in the chunk must have settled before the refund below
-      // reads deletedFiles, or a sibling still running past a rejection would miss it.
+      // reads refundableFiles, or a sibling still running past a rejection would miss it.
       const settled = await Promise.allSettled(
         slice.map(async file => {
           if (storage) {
@@ -177,10 +189,17 @@ export const purgeDataLakeConnectionFiles = async (
           }
           const deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
           if (deletedByThisCall) {
+            removedByThisChunk++;
+            // A tombstone was already refunded when it was soft-deleted (deleteFabFile's
+            // onDeleteComplete), and a soft delete leaves the lake meta-tag in place, so this
+            // connection-scoped finder resolves it here too - refunding it again would debit the
+            // owner twice. It is still hard-deleted (and shredded/unlinked) below like any row.
             // Recorded (and shredded/unlinked) BEFORE the chunk delete: the row has no retry door
             // once hard-deleted, so a chunk-delete throw below must not cost this file its refund,
             // shred or session unlink too.
-            deletedFiles.push({ id: file.id, userId: file.userId, fileSize: file.fileSize });
+            if (!file.deletedAt) {
+              refundableFiles.push({ id: file.id, userId: file.userId, fileSize: file.fileSize });
+            }
             const tagNames = (file.tags ?? [])
               .map(tag => tag?.name)
               .filter((name): name is string => typeof name === 'string');
@@ -205,9 +224,10 @@ export const purgeDataLakeConnectionFiles = async (
     } finally {
       // Per chunk, not once per call: a run killed mid-sweep (a Lambda timeout) never reaches a
       // final refund, so each chunk refunds the rows it hard-deleted as soon as it settles.
-      // `deletedFiles` only holds rows this call actually removed (hardDeleteOneById's return).
-      filesPurged += deletedFiles.length;
-      await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(deletedFiles, -1), logger);
+      // `removedByThisChunk` counts every row this call actually removed (hardDeleteOneById's
+      // return), tombstones included; `refundableFiles` is the subset still owed a refund.
+      filesPurged += removedByThisChunk;
+      await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(refundableFiles, -1), logger);
     }
   }
 

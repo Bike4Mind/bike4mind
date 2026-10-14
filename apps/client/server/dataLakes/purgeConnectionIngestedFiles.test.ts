@@ -48,6 +48,19 @@ describe('purgeConnectionIngestedFiles', () => {
     expect(h.recomputeLakeStats).toHaveBeenCalled();
   });
 
+  it('passes a soft-deleted row straight through to the shared sweep rather than filtering it out', async () => {
+    // The refund gate lives in purgeDataLakeConnectionFiles, not here: a tombstone must still reach
+    // the sweep so its row, chunks and objects are removed - only its refund is skipped there.
+    // Filtering it out at this layer would strand it past the disconnect with its bytes still
+    // counted, the opposite failure.
+    const tombstone = { ...file('f-dead'), deletedAt: new Date() };
+    const findFiles = vi.fn().mockResolvedValue([tombstone]);
+
+    await purgeConnectionIngestedFiles(LAKE, findFiles, { connectionId: 'conn1', label: 'Test', logger });
+
+    expect(h.purgeDataLakeConnectionFiles).toHaveBeenCalledWith(LAKE, [tombstone], expect.any(Object));
+  });
+
   it('calls findFiles with no limit and reports nothing remaining when sliceSize is unset', async () => {
     const findFiles = vi.fn().mockResolvedValue(FILES);
     const result = await purgeConnectionIngestedFiles(LAKE, findFiles, {

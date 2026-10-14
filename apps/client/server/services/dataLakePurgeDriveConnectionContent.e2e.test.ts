@@ -12,6 +12,7 @@ import {
   fabFileRepository,
   Session,
   sessionRepository,
+  User,
   userRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
@@ -46,6 +47,7 @@ afterEach(async () => {
   await FabFileChunk.deleteMany({});
   await DataLakeModel.deleteMany({});
   await Session.deleteMany({}, { hardDelete: true } as Record<string, unknown>);
+  await User.deleteMany({}, { hardDelete: true } as Record<string, unknown>);
   vi.clearAllMocks();
 });
 
@@ -91,6 +93,17 @@ const fakeStorage = () => {
   const deleted: string[] = [];
   return { deleted, storage: { delete: async (path: string) => void deleted.push(path) } };
 };
+
+/** A real owner row, so the refund writes land in Mongo instead of a spy's call log. */
+const seedOwnerStorage = (currentStorageSize: number) =>
+  User.create({
+    _id: OWNER,
+    username: `owner-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name: 'Owner',
+    currentStorageSize,
+  });
+
+const currentStorageSizeOf = async () => (await User.findById(OWNER).lean())?.currentStorageSize;
 
 const seedSession = (knowledgeIds: string[]) =>
   Session.create({
@@ -327,6 +340,70 @@ describe('data lake purge Drive teardown - ingested content (real repos + Mongo)
 
     expect(increment).toHaveBeenCalledWith(OWNER, -500);
     expect(increment).toHaveBeenCalledWith(CONTRIBUTOR, -300);
+  });
+
+  it('leaves the counter untouched when every purged row was already refunded at soft-delete', async () => {
+    // This file's afterEach only clears calls, not implementations, so the spy on
+    // incrementCurrentStorage set by an earlier test would still be installed and this test's
+    // assertion would read a call log instead of Mongo. Restore the real repository first.
+    vi.restoreAllMocks();
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const softDeleted = await seedFile({
+      datalakeTag: lake.datalakeTag,
+      driveConnectionId: connectionId,
+      fileSize: 400,
+    });
+    await FabFile.updateOne({ _id: softDeleted.id }, { $set: { deletedAt: new Date() } });
+
+    // Well above the row's own size on purpose: incrementCurrentStorage floors the counter at zero,
+    // which would mask a spurious second refund on an account already at (or near) empty.
+    await seedOwnerStorage(5000);
+
+    const files = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag, {
+      includeDeleted: true,
+    });
+    expect(files.map(f => f.id)).toEqual([softDeleted.id]);
+
+    await purgeConnection(lake, files);
+
+    expect(await currentStorageSizeOf()).toBe(5000);
+    expect(await FabFile.countDocuments({ _id: softDeleted.id }, { includeDeleted: true })).toBe(0);
+  });
+
+  it('refunds only the live rows of a mixed slice, leaving a tombstone out of the delta', async () => {
+    // See the note in the test above: restore the spy from an earlier test so the refund lands in Mongo.
+    vi.restoreAllMocks();
+    const lake = await seedLake();
+    const connectionId = new mongoose.Types.ObjectId().toHexString();
+    const softDeleted = await seedFile({
+      datalakeTag: lake.datalakeTag,
+      driveConnectionId: connectionId,
+      fileSize: 400,
+    });
+    await FabFile.updateOne({ _id: softDeleted.id }, { $set: { deletedAt: new Date() } });
+    // An archived lake's member is archivedAt-stamped, NOT deleted: still counted, still owed a refund.
+    const archived = await seedFile({
+      datalakeTag: lake.datalakeTag,
+      driveConnectionId: connectionId,
+      fileSize: 300,
+    });
+    await FabFile.updateOne({ _id: archived.id }, { $set: { archivedAt: new Date() } });
+
+    await seedOwnerStorage(5000);
+
+    const files = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, lake.datalakeTag, {
+      includeDeleted: true,
+    });
+    expect(files).toHaveLength(2);
+
+    await purgeConnection(lake, files);
+
+    // -300 for the live archived row only; counting the tombstone too would leave 4300.
+    expect(await currentStorageSizeOf()).toBe(4700);
+    expect(
+      await FabFile.countDocuments({ _id: { $in: [softDeleted.id, archived.id] } }, { includeDeleted: true })
+    ).toBe(0);
   });
 
   it('refunds each chunk as it settles, so a run killed partway keeps the refunds already earned', async () => {

@@ -159,6 +159,19 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
 
   it('converges under a redelivered message without refunding any owner twice', async () => {
     const { lake, conn } = await seed(4);
+    // A row the user already soft-deleted: it was refunded then, so the sweep must remove it
+    // without adding its bytes to the delta - live bytes only, even across a redelivery.
+    const tombstone = await FabFile.create({
+      userId: OWNER,
+      fileName: `deleted-${Math.random().toString(36).slice(2)}.txt`,
+      type: KnowledgeType.FILE,
+      status: 'complete',
+      fileSize: 250,
+      filePath: `files/${new mongoose.Types.ObjectId().toHexString()}`,
+      tags: [{ name: lake.datalakeTag, strength: 1 }],
+      driveConnectionId: conn.id,
+      deletedAt: new Date(),
+    });
     await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG_OWNER);
     const refunds: number[] = [];
     vi.spyOn(userRepository, 'incrementCurrentStorage').mockImplementation(async (_userId, delta) => {
@@ -176,7 +189,9 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
     await drain(payload, 3);
 
     expect(await FabFile.countDocuments({ driveConnectionId: conn.id })).toBe(0);
+    expect(await FabFile.countDocuments({ _id: tombstone.id }, { includeDeleted: true })).toBe(0);
     expect(await OrgGoogleDriveConnection.findById(conn.id)).toBeNull();
+    // -400: the four live rows only. Refunding the tombstone too would total -650.
     expect(refunds.reduce((sum, delta) => sum + delta, 0)).toBe(-400);
   });
 
