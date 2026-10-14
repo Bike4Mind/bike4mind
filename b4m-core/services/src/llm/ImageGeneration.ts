@@ -80,6 +80,7 @@ import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { recordGeneratedImages } from './recordGeneratedImages';
+import { saveGeneratedImage, type SaveGeneratedAssetFn } from './saveGeneratedImage';
 import { fromZodError } from 'zod-validation-error';
 import {
   OMITTED_QUALITY_TIER,
@@ -137,6 +138,11 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   /** Resolved by the API route. Defaults to 'fresh' if absent. */
   intent: PromptIntentSchema.optional(),
+  /**
+   * Minted per invoke() and carried on the queue message, so a redelivery saves the same files while a retry of
+   * the quest (same questId) saves new ones. Absent on messages queued before it existed.
+   */
+  generationId: z.string().optional(),
 });
 export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
 
@@ -167,6 +173,8 @@ interface IImageGenerationServiceOptions {
   /** Storage where the generated images will be stored. */
   storage: BaseStorage;
   fabFileStorage: BaseStorage;
+  /** Keeps each generated image in the user's files. Optional so existing callers/tests keep compiling. */
+  saveGeneratedAsset?: SaveGeneratedAssetFn;
   invokeSessionAutoNaming?: (sessionId: string, userId: string) => Promise<void>;
   /**
    * Publish a `session.summarize` event so the summarization Lambda runs after image generation.
@@ -209,6 +217,7 @@ export class ImageGenerationService {
   private abilityGetter: IImageGenerationServiceOptions['abilityGetter'];
   private storage: BaseStorage;
   private fabFileStorage: BaseStorage;
+  private saveGeneratedAsset?: SaveGeneratedAssetFn;
   private tokenizer: TiktokenTokenizer;
   private invokeSessionAutoNaming: IImageGenerationServiceOptions['invokeSessionAutoNaming'];
   private invokeSummarizeSession: IImageGenerationServiceOptions['invokeSummarizeSession'];
@@ -223,6 +232,7 @@ export class ImageGenerationService {
     this.logEvent = options.logEvent;
     this.storage = options.storage;
     this.fabFileStorage = options.fabFileStorage;
+    this.saveGeneratedAsset = options.saveGeneratedAsset;
     this.abilityGetter = options.abilityGetter;
     this.tokenizer = new TiktokenTokenizer({ logger: Logger.globalInstance });
     this.invokeSessionAutoNaming = options.invokeSessionAutoNaming;
@@ -421,6 +431,7 @@ export class ImageGenerationService {
           promptEnhancement,
           organizationId,
           intent,
+          generationId: uuidv4(),
         })
       );
 
@@ -812,6 +823,7 @@ export class ImageGenerationService {
       referenceImageFabFileIds,
       organizationId,
       intent = 'fresh',
+      generationId,
     } = ImageGenerationBodySchema.parse(body);
     const billedN = isKontextModel(model) ? 1 : n;
 
@@ -1455,6 +1467,25 @@ export class ImageGenerationService {
             questId,
             model,
           });
+
+          await saveGeneratedImage(
+            this.saveGeneratedAsset,
+            {
+              userId,
+              bytes: buffer,
+              contentType: fileType?.mime ?? 'image/png',
+              generation: {
+                generator: 'image',
+                provider: modelInfo.backend,
+                modelId: model,
+                ...(generationId && { jobId: `${generationId}-${index}` }),
+                prompt,
+              },
+              sessionId,
+              questId,
+            },
+            logger
+          );
 
           return path;
         })

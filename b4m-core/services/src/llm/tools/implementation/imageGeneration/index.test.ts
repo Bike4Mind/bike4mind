@@ -47,6 +47,12 @@ vi.mock('../../../../apiKeyService', async importOriginal => {
   return { ...actual, getEffectiveApiKey: vi.fn().mockResolvedValue('fake-gemini-key') };
 });
 
+const { mockSaveFromTool } = vi.hoisted(() => ({ mockSaveFromTool: vi.fn() }));
+vi.mock('../../helpers/persistGeneratedFile', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../helpers/persistGeneratedFile')>();
+  return { ...actual, saveGeneratedAssetFromTool: mockSaveFromTool };
+});
+
 // Imported after the mocks so `processAndStoreImages` and the Gemini branch pick up the fakes.
 const { processAndStoreImages, imageGenerationTool } = await import('./index');
 
@@ -85,8 +91,11 @@ function createFakeContext(): ToolContext {
 }
 
 describe('image_generation processAndStoreImages moderation gate (agent-tool serve-gate bypass)', () => {
+  const RENDER = { model: 'gpt-image-2', provider: 'openai', prompt: 'a lighthouse at dusk' };
+
   beforeEach(() => {
     mockCheckImage.mockReset();
+    mockSaveFromTool.mockReset().mockResolvedValue({ saved: true, fileId: 'f1', s3Key: 'k', fileName: 'n' });
   });
 
   it('block: moderation rejects the image — upload is NOT called and the call rejects', async () => {
@@ -95,22 +104,47 @@ describe('image_generation processAndStoreImages moderation gate (agent-tool ser
     );
     const context = createFakeContext();
 
-    await expect(processAndStoreImages([PNG_DATA_URL], context, 'gpt-image-2', 'openai')).rejects.toBeInstanceOf(
+    await expect(processAndStoreImages([PNG_DATA_URL], context, RENDER)).rejects.toBeInstanceOf(
       ImageModerationBlockedError
     );
 
     expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
+    expect(mockSaveFromTool).not.toHaveBeenCalled();
   });
 
   it('clean image: moderation passes — upload IS called', async () => {
     mockCheckImage.mockResolvedValue(undefined);
     const context = createFakeContext();
 
-    const result = await processAndStoreImages([PNG_DATA_URL], context, 'gpt-image-2', 'openai');
+    const result = await processAndStoreImages([PNG_DATA_URL], context, RENDER);
 
     expect(mockCheckImage).toHaveBeenCalledTimes(1);
     expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
     expect(result).toHaveLength(1);
+  });
+
+  it('saves each image to files with the prompt and model', async () => {
+    mockCheckImage.mockResolvedValue(undefined);
+    const context = createFakeContext();
+
+    await processAndStoreImages([PNG_DATA_URL, PNG_DATA_URL], context, RENDER);
+
+    expect(mockSaveFromTool).toHaveBeenCalledTimes(2);
+    expect(mockSaveFromTool).toHaveBeenCalledWith(context, {
+      bytes: expect.any(Buffer),
+      contentType: 'image/png',
+      generation: { generator: 'image', provider: 'openai', modelId: 'gpt-image-2', prompt: RENDER.prompt },
+    });
+  });
+
+  it('a skipped save still returns the stored images', async () => {
+    mockCheckImage.mockResolvedValue(undefined);
+    mockSaveFromTool.mockResolvedValue({ saved: false, reason: 'storage_limit' });
+    const context = createFakeContext();
+
+    const result = await processAndStoreImages([PNG_DATA_URL], context, RENDER);
+
+    expect(result).toEqual(['generated/stored-key.png']);
   });
 });
 
