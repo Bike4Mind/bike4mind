@@ -44,6 +44,7 @@ import type { ISkill, ISkillListing } from '@bike4mind/common';
 import { submitListingVersion, decideVersion } from './submitVersion';
 import { searchListings } from './search';
 import { attachMarketStatus } from './marketStatus';
+import { serializeListing } from './market';
 import { runSkillMarketReviewSla } from './reviewSla';
 import type { ClassifierLlm } from './classifySkill';
 import importHandler from '@pages/api/skills/market/[id]/import';
@@ -262,6 +263,12 @@ describe('Skill Market (real mongod)', () => {
     });
     // Until v3 is approved, the market still serves v1.
     expect((await SkillListing.findById(listing.id))!.currentVersion).toBe(1);
+    // Non-privileged viewers cannot even see that an unreviewed version is waiting.
+    const held = (await SkillListing.findById(listing.id))!;
+    for (const key of ['pendingVersionId', 'pendingVersion', 'latestVersion', 'sourceSkillId', 'shareToken']) {
+      expect(serializeListing(held)).not.toHaveProperty(key);
+    }
+    expect(serializeListing(held, { privileged: true })).toMatchObject({ pendingVersion: 3 });
     await decideVersion(v3.id, admin, [], { action: 'approve', ackMismatch: true });
     expect((await SkillListing.findById(listing.id))!.currentVersion).toBe(3);
   });

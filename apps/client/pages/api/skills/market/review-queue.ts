@@ -70,7 +70,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: 
         return listing
           ? [
               {
-                listing: serializeListing(listing, { includeToken: true }),
+                listing: serializeListing(listing, { privileged: true }),
                 count: g.count,
                 reports: g.reports.slice(0, 20),
               },
@@ -107,7 +107,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: 
       return [
         {
           version: v.toJSON(),
-          listing: serializeListing(listing, { includeToken: true }),
+          listing: serializeListing(listing, { privileged: true }),
           previous: prev && String(prev.id) !== String(v._id) ? prev : null,
           // Self-approvals are audited by someone else, never by their author.
           canDecide:

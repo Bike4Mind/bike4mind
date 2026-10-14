@@ -42,7 +42,7 @@ export async function buildListingDetail(listing: ISkillListing, actor: MarketAc
   const myCopy = myImport ? await skillRepository.findById(myImport.skillId) : null;
 
   return {
-    listing: serializeListing(listing, { includeToken: isAuthor || canModerate }),
+    listing: serializeListing(listing, { privileged: isAuthor || canModerate }),
     version: versionDoc ? publicVersionView(versionDoc.toJSON() as unknown as ISkillListingVersion) : null,
     // Ratings are shown anonymously as "verified importer" reviews.
     ratings: ratingRows.map(r => ({

@@ -22,7 +22,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
 
   res.json({
     data: listings.map(l => ({
-      ...serializeListing(l, { includeToken: true }),
+      ...serializeListing(l, { privileged: true }),
       versions: byListing.get(String(l._id)) ?? [],
     })),
   });

@@ -37,7 +37,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       getClassifier: () => getOperationsClassifierLlm(req.logger, user.id),
     });
     const fresh = await SkillListing.findById(listing.id);
-    res.status(201).json({ listing: serializeListing(fresh!, { includeToken: true }), version });
+    res.status(201).json({ listing: serializeListing(fresh!, { privileged: true }), version });
   });
 
 export default handler;

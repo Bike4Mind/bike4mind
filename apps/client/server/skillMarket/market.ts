@@ -179,20 +179,21 @@ export function validateListingTags(value: unknown): string[] {
   return tags;
 }
 
-/** JSON form of a listing for a viewer. The unlisted share token is the author's (and reviewers') only. */
-export function serializeListing(
-  listing: ISkillListing | ISkillListingDocument,
-  opts: { includeToken?: boolean } = {}
-): Omit<ISkillListing, 'shareToken'> & { shareToken?: string; ratingAvg: number } {
+/**
+ * JSON form of a listing for a viewer. Only a privileged viewer (the author or a reviewer) gets the
+ * unlisted share token, the author's private source skill id, and the pending/latest version
+ * pointers that would reveal an unreviewed version is waiting.
+ */
+export function serializeListing(listing: ISkillListing | ISkillListingDocument, opts: { privileged?: boolean } = {}) {
   const plain = (
     'toJSON' in listing && typeof listing.toJSON === 'function' ? listing.toJSON() : listing
   ) as ISkillListing & { _id?: unknown; __v?: unknown };
-  const { shareToken, _id, __v: _v, ...rest } = plain;
+  const { shareToken, sourceSkillId, pendingVersionId, pendingVersion, latestVersion, _id, __v: _v, ...rest } = plain;
   return {
     ...rest,
     id: String(rest.id ?? _id),
     ratingAvg: rest.ratingCount > 0 ? Math.round((rest.ratingSum / rest.ratingCount) * 10) / 10 : 0,
-    ...(opts.includeToken ? { shareToken } : {}),
+    ...(opts.privileged ? { shareToken, sourceSkillId, pendingVersionId, pendingVersion, latestVersion } : {}),
   };
 }
 
