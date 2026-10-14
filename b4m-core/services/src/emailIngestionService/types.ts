@@ -26,6 +26,8 @@ export interface ParsedEmailObject {
   bcc?: EmailAddress | EmailAddress[];
   subject?: string;
   date?: Date;
+  /** Value of the topmost Authentication-Results header; see findTopmostAuthenticationResults */
+  authenticationResults?: string;
 
   // Content
   text?: string; // Plain text body
@@ -197,6 +199,7 @@ export const parsedEmailObjectSchema = z.object({
   bcc: z.any().optional(),
   subject: z.string().optional(),
   date: z.date().optional(),
+  authenticationResults: z.string().optional(),
   text: z.string().optional(),
   html: z.string().optional(),
   attachments: z.array(emailAttachmentSchema).optional(),

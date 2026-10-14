@@ -19,9 +19,11 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockProcessIngestedEmail = vi.fn();
+const mockFindTopmostAuthenticationResults = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   emailIngestionService: {
     processIngestedEmail: (...args: unknown[]) => mockProcessIngestedEmail(...args),
+    findTopmostAuthenticationResults: (...args: unknown[]) => mockFindTopmostAuthenticationResults(...args),
   },
 }));
 
@@ -78,6 +80,7 @@ const parsedMail = {
   text: 'hello',
   html: false,
   attachments: [],
+  headerLines: [{ key: 'authentication-results', line: 'Authentication-Results: amazonses.com; dmarc=pass' }],
 };
 
 const ingestResult = {
@@ -93,6 +96,22 @@ describe('emailParser dispatch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSimpleParser.mockResolvedValue(parsedMail);
+    mockFindTopmostAuthenticationResults.mockReturnValue('amazonses.com; dmarc=pass');
+  });
+
+  it('hands the topmost Authentication-Results from the parsed headers to the ingestion service', async () => {
+    mockS3Send.mockResolvedValue({ Body: s3Body('raw email bytes') });
+    mockProcessIngestedEmail.mockResolvedValue(ingestResult);
+
+    await dispatch({ Records: [makeSqsRecord('msg-1', 'key-1')] } as never, {} as never, undefined as never);
+
+    expect(mockFindTopmostAuthenticationResults).toHaveBeenCalledWith(parsedMail.headerLines);
+    expect(mockProcessIngestedEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ authenticationResults: 'amazonses.com; dmarc=pass' }),
+      'key-1',
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('reports only the failing record in batchItemFailures, still processing the rest', async () => {

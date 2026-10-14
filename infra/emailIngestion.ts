@@ -224,7 +224,7 @@ const sesReceiptRule = sesReceiptRuleSet
         name: `${$app.stage}-email-ingest`, // Shortened to stay under 32 char limit
         recipients: [], // Empty array = catch-all for verified domain
         enabled: true,
-        scanEnabled: true, // Spam and virus scanning
+        scanEnabled: true, // Spam/virus scanning and SPF/DKIM/DMARC verdicts; authenticateSender rejects mail without them
         tlsPolicy: 'Optional',
         s3Actions: [
           {

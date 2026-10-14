@@ -17,7 +17,7 @@ import { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
 
-const { processIngestedEmail } = emailIngestionService;
+const { processIngestedEmail, findTopmostAuthenticationResults } = emailIngestionService;
 type IEmailParserAdapter = emailIngestionService.IEmailParserAdapter;
 type ParsedEmailObject = emailIngestionService.ParsedEmailObject;
 
@@ -70,6 +70,7 @@ class MailparserAdapter implements IEmailParserAdapter {
       bcc: parsed.bcc,
       subject: parsed.subject,
       date: parsed.date,
+      authenticationResults: findTopmostAuthenticationResults(parsed.headerLines),
       text: parsed.text,
       html: parsed.html || undefined, // Convert false to undefined
       attachments: parsed.attachments.map(att => ({

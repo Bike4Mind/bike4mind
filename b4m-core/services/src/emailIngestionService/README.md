@@ -38,6 +38,7 @@ Vendor-agnostic email processing service for ingesting emails into the Bike4Mind
 
 The Email Ingestion Service provides a complete solution for processing incoming emails:
 
+- **Sender Authentication**: Rejects mail whose From address SES did not authenticate (DMARC pass, or a DKIM pass aligned with the From domain when it has no DMARC record)
 - **Sender Validation**: Checks if the sender is authorized to send to a user's platform email
 - **Email Storage**: Stores email metadata in MongoDB with threading support
 - **Attachment Processing**: Uploads email attachments to fabFiles service
@@ -82,7 +83,7 @@ The Email Ingestion Service provides a complete solution for processing incoming
 │  1. Download raw email from storage          │
 │  2. Parse with email parser adapter          │
 │  3. Call processIngestedEmail()  ◄────────── │ @bike4mind/services
-│     - Validate sender                        │
+│     - Authenticate + validate sender         │
 │     - Store email                            │
 │     - Process attachments → fabFiles         │
 │     - Process body → fabFile (if substantial)│
@@ -136,10 +137,11 @@ The Email Ingestion Service provides a complete solution for processing incoming
 
 #### Email Ingestion Service
 1. **`processIngestedEmail`** - Main orchestration function
-2. **`validateSenderAuthorization`** - Checks if sender is authorized
-3. **`processAttachments`** - Handles email attachments
-4. **`processEmailBody`** - Converts and stores email body
-5. **`extractPlatformEmail`**, **`extractSenderEmail`**, **`extractEmails`** - Email parsing utilities
+2. **`authenticateSender`** - Checks the topmost SES `Authentication-Results` header against the From address; the parser adapter supplies it via **`findTopmostAuthenticationResults`**
+3. **`validateSenderAuthorization`** - Checks if sender is authorized
+4. **`processAttachments`** - Handles email attachments
+5. **`processEmailBody`** - Converts and stores email body
+6. **`extractPlatformEmail`**, **`extractSenderEmail`**, **`extractEmails`** - Email parsing utilities
 
 #### Email Analysis Service (Optional)
 1. **`analyzeEmail`** - AI-powered email analysis with Claude/GPT
@@ -697,6 +699,7 @@ export const handler: SQSHandler = async (event: SQSEvent) => {
 
 | Error | Cause | Solution |
 |-------|-------|----------|
+| `Sender failed email authentication` | SES did not authenticate the From address (spoofed, DMARC fail, unaligned DKIM, or no SES `Authentication-Results` header); the reason is in the warn log | Send from a domain with DMARC or aligned DKIM; for mail written to S3 directly, stamp the header as `packages/scripts/testEmailIngestLambda.ts` does |
 | `Unauthorized sender or invalid platform email` | Sender not in `authorizedEmailAddresses` | Add sender to user's authorized list |
 | `User not found` | Platform email doesn't match any user | Check `platformEmailAddress` in user collection |
 | `File type not supported` | Attachment MIME type not allowed | Check `SupportedFabFileMimeTypes` in common package |
@@ -785,6 +788,7 @@ describe('processIngestedEmail', () => {
 3. Check MongoDB connection string
 4. Verify user has `platformEmailAddress` set
 5. Verify sender is in `authorizedEmailAddresses`
+6. Check for a `Rejected inbound email that failed sender authentication` warn log and its `reason`
 
 ### Attachments Not Uploading
 

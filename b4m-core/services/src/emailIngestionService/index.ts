@@ -11,6 +11,13 @@ export { processIngestedEmail } from './processIngestedEmail';
 export { processAttachments } from './processAttachments';
 export { processEmailBody } from './processEmailBody';
 export { validateSenderAuthorization, extractPlatformEmail, extractSenderEmail, extractEmails } from './validateSender';
+export {
+  authenticateSender,
+  findTopmostAuthenticationResults,
+  parseAuthenticationResults,
+  SES_AUTHSERV_ID,
+} from './authenticateSender';
+export type { SenderAuthenticationVerdict, SenderAuthenticationRejection, HeaderLine } from './authenticateSender';
 
 export type {
   ParsedEmailObject,
