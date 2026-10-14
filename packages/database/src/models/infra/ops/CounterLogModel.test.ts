@@ -36,6 +36,9 @@ const outOfWindow = new Date('2026-05-30T12:00:00.000Z');
 const threeDaysBefore = new Date('2026-05-29T12:00:00.000Z');
 const sixDaysBefore = new Date('2026-05-26T12:00:00.000Z');
 const eightDaysBefore = new Date('2026-05-24T12:00:00.000Z');
+// The weekly-active cutoff for REPORT_DATE (weekEnd - 7d) is 2026-05-25T23:59:59.999Z.
+const justBeforeWauBound = new Date('2026-05-25T12:00:00.000Z');
+const justAfterWauBound = new Date('2026-05-26T00:00:00.000Z');
 
 async function seedUser(email: string) {
   const _id = new mongoose.Types.ObjectId();
@@ -152,6 +155,17 @@ describe('CounterLogRepository.metricsByDate - weeklyActiveUsers (real WAU)', ()
 
     const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
 
+    expect(count(result.weeklyActiveUsers)).toBe(1);
+  });
+
+  it('pins the 7-day lower bound: just before the cutoff is excluded, the day after is included', async () => {
+    const beforeCutoff = await seedUser('before-cutoff@example.com');
+    const afterCutoff = await seedUser('after-cutoff@example.com');
+    await CounterLog.insertMany([logFor(beforeCutoff, justBeforeWauBound), logFor(afterCutoff, justAfterWauBound)]);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    // Exactly one of the two straddles the cutoff, so a widened or narrowed window fails this.
     expect(count(result.weeklyActiveUsers)).toBe(1);
   });
 
