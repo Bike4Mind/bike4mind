@@ -1,6 +1,6 @@
 import { ListDecisionModelsResponseSchema } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@server/middlewares/defineNextRoute', () => ({
   nextRouteForContract: () => {
@@ -13,8 +13,8 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
 const { registeredModels, callableProviders } = vi.hoisted(() => ({
-  registeredModels: { value: ['gpt-6-luna'] as string[] },
-  callableProviders: { value: ['openai', 'typesafe', 'test'] as string[] },
+  registeredModels: { value: [] as string[] },
+  callableProviders: { value: [] as string[] },
 }));
 vi.mock('@server/decisions/providers', () => ({
   getDecisionProviderRegistry: () => ({ models: () => registeredModels.value }),
@@ -31,6 +31,11 @@ const listModels = async () => {
 };
 
 describe('GET /api/v1/decision-models', () => {
+  beforeEach(() => {
+    registeredModels.value = ['gpt-6-luna'];
+    callableProviders.value = ['openai', 'typesafe', 'test'];
+  });
+
   it('exposes the jev-latest alias target and that it takes no images', async () => {
     registeredModels.value = ['jev-latest'];
     const [model] = (await listModels()).models;
@@ -40,7 +45,6 @@ describe('GET /api/v1/decision-models', () => {
       alias_of: 'jev-1.13.0',
       supports_images: false,
     });
-    registeredModels.value = ['gpt-6-luna'];
   });
 
   it('lists only the registered models, in the public wire shape', async () => {
@@ -56,8 +60,5 @@ describe('GET /api/v1/decision-models', () => {
 
     callableProviders.value = ['openai', 'typesafe'];
     expect((await listModels()).models.map(model => model.id)).toEqual(['gpt-6-luna', 'jev-1.13.0', 'jev-latest']);
-
-    registeredModels.value = ['gpt-6-luna'];
-    callableProviders.value = ['openai', 'typesafe', 'test'];
   });
 });
