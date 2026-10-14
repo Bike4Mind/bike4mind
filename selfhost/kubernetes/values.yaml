@@ -1,4 +1,6 @@
 existingSecret: ''
+externalMongo:
+  enabled: false
 images:
   app: ''
   chatcompletion: ''

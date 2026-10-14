@@ -15,6 +15,13 @@ env:
         name: {{ $.Values.existingSecret }}
         key: {{ $key }}
 {{- end }}
+{{- if .Values.externalMongo.enabled }}
+  - name: MONGODB_URI
+    valueFrom:
+      secretKeyRef:
+        name: {{ .Values.existingSecret }}
+        key: MONGODB_URI
+{{- end }}
 {{- end -}}
 {{- define "b4m.pod" -}}
 automountServiceAccountToken: false
@@ -49,10 +56,25 @@ initContainers:
       - /bin/sh
       - -ec
       - |
+        {{- if .Values.externalMongo.enabled }}
+        for i in $(seq 1 60); do
+          mongosh --nodb --quiet --eval '
+            try {
+              const uri = process.env.MONGODB_URI;
+              if (!uri) quit(1);
+              const separator = uri.includes("?") ? "&" : "?";
+              const database = connect(uri + separator + "serverSelectionTimeoutMS=10000&connectTimeoutMS=10000&socketTimeoutMS=10000");
+              if (!database.hello().isWritablePrimary) quit(1);
+            } catch (_) { quit(1); }
+          ' >/dev/null 2>&1 && exit 0
+          sleep 2
+        done
+        {{- else }}
         for i in $(seq 1 180); do
           mongosh "$MONGODB_URI" --quiet --eval 'if (!db.hello().isWritablePrimary) quit(1)' && exit 0
           sleep 2
         done
+        {{- end }}
         exit 1
     {{ include "b4m.env" . | nindent 4 }}
     resources: {{ .Values.resources.backing | toJson }}

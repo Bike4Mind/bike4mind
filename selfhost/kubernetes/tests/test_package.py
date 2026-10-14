@@ -118,6 +118,51 @@ class PackageTests(unittest.TestCase):
         self.assertIsNotNone(stage, 'Fanout must receive the application stage')
         self.assertEqual(stage['valueFrom']['configMapKeyRef'], {'name': 'test-config', 'key': 'APP_STAGE'})
 
+    def test_external_mongo_omits_local_resources_and_requires_secret_uri(self):
+        objects = self.render({'externalMongo': {'enabled': True}})
+        self.assertFalse(any(obj['metadata']['name'] in ['test-mongo', 'test-mongo-data'] for obj in objects))
+        config = next(obj for obj in objects if obj['metadata']['name'] == 'test-config')
+        scripts = next(obj for obj in objects if obj['metadata']['name'] == 'test-scripts')
+        self.assertNotIn('MONGODB_URI', config['data'])
+        self.assertNotIn('mongo-dns-guard.sh', scripts['data'])
+        app = next(obj for obj in objects if obj['metadata']['name'] == 'test-app' and obj['kind'] == 'Deployment')
+        wait = next(c for c in app['spec']['template']['spec']['initContainers'] if c['name'] == 'wait-mongo')
+        uri = next(e for e in wait['env'] if e['name'] == 'MONGODB_URI')
+        self.assertEqual(uri['valueFrom']['secretKeyRef'], {'name': 'runtime', 'key': 'MONGODB_URI'})
+        self.assertNotIn('optional', uri['valueFrom']['secretKeyRef'])
+        self.assertIn('process.env.MONGODB_URI', wait['command'][-1])
+        self.assertNotIn('mongosh "$MONGODB_URI"', wait['command'][-1])
+        self.assertNotIn('rs.initiate', str(wait))
+        self.assertEqual(len([o for o in objects if o['kind'] == 'PersistentVolumeClaim']), 2)
+
+    def test_external_mongo_check_resolves_environment_and_fails_closed(self):
+        objects = self.render({'externalMongo': {'enabled': True}})
+        app = next(o for o in objects if o['kind'] == 'Deployment' and o['metadata']['name'] == 'test-app')
+        wait = next(c for c in app['spec']['template']['spec']['initContainers'] if c['name'] == 'wait-mongo')
+        javascript = wait['command'][-1].split("--eval '", 1)[1].split("' >/dev/null", 1)[0]
+        for uri, primary, expected in [('mongodb://example/test', True, 0), ('mongodb://example/test?tls=true', True, 0), ('', True, 1), ('mongodb://example/test', False, 1)]:
+            with self.subTest(uri=uri, primary=primary):
+                prelude = 'process.env.MONGODB_URI=' + json.dumps(uri) + '; const quit=process.exit; const connect=(resolved)=>{if(!resolved.includes("serverSelectionTimeoutMS=10000") || !resolved.includes("connectTimeoutMS=10000") || !resolved.includes("socketTimeoutMS=10000") || !resolved.startsWith(process.env.MONGODB_URI)) process.exit(2); return {hello:()=>({isWritablePrimary:' + str(primary).lower() + '})};};'
+                result = subprocess.run(['node', '-e', prelude + javascript], capture_output=True, text=True)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertEqual(result.stdout, '')
+                self.assertEqual(result.stderr, '')
+
+    def test_argocd_example_requires_manual_preparation(self):
+        application = yaml.safe_load((CHART / 'argocd-application.example.yaml').read_text())
+        spec = application['spec']
+        self.assertNotIn('syncPolicy', spec)
+        self.assertEqual(spec['source']['targetRevision'], 'REPLACE_WITH_IMMUTABLE_COMMIT_SHA')
+        values = spec['source']['helm']['valuesObject']
+        self.assertEqual(values['existingSecret'], 'bike4mind-runtime')
+        self.assertFalse(values['externalMongo']['enabled'])
+        self.assertEqual(values['storage']['className'], 'gp3-retain')
+        self.assertTrue(all('localhost' in value for value in values['config'].values()))
+        self.render(values, success=False)
+
+    def test_external_mongo_uri_cannot_be_supplied_in_values(self):
+        self.render({'externalMongo': {'enabled': True}, 'config': {'MONGODB_URI': 'mongodb://example/db'}}, success=False)
+
     def test_missing_secret_floating_image_and_secret_in_values_fail(self):
         for overrides in [{'existingSecret': ''}, {'images': {'app': 'example/app:latest'}}, {'config': {'JWT_SECRET': 'unsafe'}}]:
             with self.subTest(overrides=overrides):

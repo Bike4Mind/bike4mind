@@ -1,0 +1,4 @@
+# Supply MONGODB_URI only in this pre-created runtime Secret.
+existingSecret: runtime
+externalMongo:
+  enabled: true
