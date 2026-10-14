@@ -7,14 +7,19 @@ const owner = (currentStorageSize: number) =>
   ({ id: 'owner', storageLimit: 1, currentStorageSize }) as unknown as IUserDocument;
 
 type Pre = { userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date };
-const makeDb = (pre: Pre | null = null) => ({
-  fabFiles: { commitContentRewrite: vi.fn().mockResolvedValue(pre) },
+const makeDb = (pre: Pre | null = null, stored: Pre | null = pre) => ({
+  fabFiles: {
+    commitContentRewrite: vi.fn().mockResolvedValue(pre),
+    findChargeState: vi.fn().mockResolvedValue(stored),
+  },
   users: { findById: vi.fn(), incrementCurrentStorage: vi.fn() },
 });
 
 const before = new Date('2026-01-01T00:00:00Z');
 // Charged by the S3 handler before it stamped anything (see isStorageCharged in @bike4mind/common).
 const legacy = { status: 'complete', createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1) };
+// Predates the status field: no `status` key at all.
+const legacyNoStatus = { createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1) };
 const unchargedNew = { status: 'complete', createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() + 1) };
 
 describe('commitContentRewrite', () => {
@@ -48,6 +53,12 @@ describe('commitContentRewrite', () => {
     expect(db.users.incrementCurrentStorage).toHaveBeenCalledWith('owner', 100);
   });
 
+  it('moves a legacy row with no status by the delta, not the full new size', async () => {
+    const db = makeDb({ userId: 'owner', fileSize: 1000, ...legacyNoStatus });
+    await commitContentRewrite({ fabFileId: 'f1', newSize: 1000 }, db);
+    expect(db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+
   it('charges nothing more when the S3 event already claimed this upload', async () => {
     // The claim wrote the new size and charged the difference; the commit sees it in the pre-image.
     const db = makeDb({ userId: 'owner', fileSize: 150, storageChargedAt: new Date() });
@@ -61,6 +72,7 @@ describe('commitContentRewrite', () => {
     let counter = 1000;
     const db = {
       fabFiles: {
+        findChargeState: vi.fn(),
         commitContentRewrite: vi.fn(async (_id: string, set: Record<string, unknown>) => {
           const pre = row;
           row = { ...row, ...set, storageChargedAt: new Date() };
@@ -91,10 +103,11 @@ describe('commitContentRewrite', () => {
 });
 
 describe('assertRewriteFits', () => {
-  const row = { userId: 'owner', fileSize: 0.5 * MB, storageChargedAt: before };
+  const stored = { userId: 'owner', fileSize: 0.5 * MB, storageChargedAt: before };
+  const row = { id: 'f1' };
 
   it('refuses growth past the quota', async () => {
-    const db = makeDb();
+    const db = makeDb(null, stored);
     await expect(assertRewriteFits(row, 1.2 * MB, db, owner(0.9 * MB))).rejects.toThrow(BadRequestError);
     await expect(assertRewriteFits(row, 1.2 * MB, db, owner(0.9 * MB))).rejects.toThrow(
       'File size exceeds storage limit'
@@ -102,21 +115,25 @@ describe('assertRewriteFits', () => {
   });
 
   it('measures only the growth, not the whole new size', async () => {
-    await expect(assertRewriteFits(row, 0.6 * MB, makeDb(), owner(0.9 * MB))).resolves.toBeUndefined();
+    await expect(assertRewriteFits(row, 0.6 * MB, makeDb(null, stored), owner(0.9 * MB))).resolves.toBeUndefined();
   });
 
   it('never refuses a shrink, even over quota', async () => {
-    await expect(assertRewriteFits(row, 0.1 * MB, makeDb(), owner(5 * MB))).resolves.toBeUndefined();
+    await expect(assertRewriteFits(row, 0.1 * MB, makeDb(null, stored), owner(5 * MB))).resolves.toBeUndefined();
   });
 
-  it('never refuses a shrink of a legacy unstamped row near the quota', async () => {
-    const legacyRow = { userId: 'owner', fileSize: 5 * MB, ...legacy };
+  it.each([
+    ['complete', legacy],
+    ['no-status', legacyNoStatus],
+  ])('never refuses a shrink of a legacy %s unstamped row near the quota', async (_label, fields) => {
+    const db = makeDb(null, { userId: 'owner', fileSize: 5 * MB, ...fields });
     const ownerAt = { id: 'owner', storageLimit: 10, currentStorageSize: 9.9 * MB } as unknown as IUserDocument;
-    await expect(assertRewriteFits(legacyRow, 4 * MB, makeDb(), ownerAt)).resolves.toBeUndefined();
+    await expect(assertRewriteFits(row, 4 * MB, db, ownerAt)).resolves.toBeUndefined();
+    expect(db.fabFiles.findChargeState).toHaveBeenCalledWith('f1');
   });
 
   it('throws NotFoundError when the owner of a growing file is gone', async () => {
-    const db = makeDb();
+    const db = makeDb(null, stored);
     db.users.findById.mockResolvedValue(null);
     const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
 
@@ -124,7 +141,7 @@ describe('assertRewriteFits', () => {
   });
 
   it('measures against the owner, not an update-share editor', async () => {
-    const db = makeDb();
+    const db = makeDb(null, stored);
     db.users.findById.mockResolvedValue(owner(0.9 * MB));
     const editor = { id: 'editor', storageLimit: 1000, currentStorageSize: 0 } as unknown as IUserDocument;
 

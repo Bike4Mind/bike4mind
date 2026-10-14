@@ -5,7 +5,8 @@
  * Must stay in sync: `isStorageCharged` and `STORAGE_CHARGED_FILTER` encode the same rule.
  *
  * Charged = stamped by a charge (apps/client/server/s3/storageCharge.ts; a notebook import can stamp
- * a still-`pending` row), or a legacy `complete` row from before the stamping release. That legacy
+ * a still-`pending` row), or a legacy non-`pending` row from before the stamping release (an absent
+ * `status` predates the field and counts as complete, as in findByContentHashes). That legacy
  * arm is the HOSTED prod history: there the ObjectCreated handler charged every upload it marked
  * `complete`. A self-host install's webhook marked rows `complete` without charging them, so its
  * pre-cutoff rows read as charged here - they over-refund (the counter clamps at 0) and
@@ -25,7 +26,10 @@ export const STORAGE_CHARGE_STAMP_CUTOFF = new Date('2026-10-08T00:00:00Z');
  * query has no `$or` of its own, otherwise combine with `$and`.
  */
 export const STORAGE_CHARGED_FILTER = {
-  $or: [{ storageChargedAt: { $ne: null } }, { status: 'complete', createdAt: { $lt: STORAGE_CHARGE_STAMP_CUTOFF } }],
+  $or: [
+    { storageChargedAt: { $ne: null } },
+    { status: { $ne: 'pending' }, createdAt: { $lt: STORAGE_CHARGE_STAMP_CUTOFF } },
+  ],
 };
 
 export interface StorageChargeFields {
@@ -36,7 +40,7 @@ export interface StorageChargeFields {
 
 export const isStorageCharged = (row: StorageChargeFields): boolean => {
   if (row.storageChargedAt != null) return true;
-  if (row.status !== 'complete' || row.createdAt == null) return false;
+  if (row.status === 'pending' || row.createdAt == null) return false;
   return new Date(row.createdAt).getTime() < STORAGE_CHARGE_STAMP_CUTOFF.getTime();
 };
 

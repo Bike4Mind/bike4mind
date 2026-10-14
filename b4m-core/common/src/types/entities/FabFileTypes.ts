@@ -1134,6 +1134,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   sumFileSizeByUserId(userId: string): Promise<number>;
 
   /**
+   * The live row's stored charge fields, read lean: a hydrated document reports a missing `status`
+   * as its `'pending'` default, which would misread a legacy row as never charged. Null when gone.
+   */
+  findChargeState(
+    id: string
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null>;
+
+  /**
    * The atomic write of a content rewrite: `$set`s `set` plus `storageChargedAt = now` on the live
    * row matching `{ _id: id, ...filter }`, and returns the PRE-image's charge fields, or null when
    * the filter missed. Accounting lives in fabFileService/rewriteStorage.ts; call it, not this.

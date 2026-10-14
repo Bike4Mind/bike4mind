@@ -160,14 +160,18 @@ const firstUpload = async (fileSize: number) => {
   return String(row._id);
 };
 
-/** A file the S3 handler charged before rows were stamped: complete, unstamped, created pre-cutoff. */
-const legacyFile = async (fileSize: number) => {
+/**
+ * A file the S3 handler charged before rows were stamped: complete (or, older still, with no status
+ * at all), unstamped, created pre-cutoff.
+ */
+const legacyFile = async (fileSize: number, { noStatus = false } = {}) => {
   const [row] = await FabFile.create([
     { userId: USER, fileName: 'x', mimeType: 'text/plain', fileSize, filePath: 'files/x', type: 'FILE' },
   ]);
+  const createdAt = new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000);
   await FabFile.collection.updateOne(
     { _id: row._id },
-    { $set: { status: 'complete', createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000) } }
+    noStatus ? { $set: { createdAt }, $unset: { status: 1 } } : { $set: { status: 'complete', createdAt } }
   );
   await userRepository.incrementCurrentStorage(USER, fileSize);
   return String(row._id);
@@ -219,14 +223,44 @@ describe('content rewrite storage charge', () => {
     expect(await storedSize()).toBe(await truth());
   });
 
-  it('never refuses a shrink of a legacy unstamped file near the quota', async () => {
+  it('charges a legacy rewrite only the delta when its S3 event is processed before the commit', async () => {
     await seedUser();
-    const id = await legacyFile(850_000);
-    const row = await FabFile.findById(id).lean();
+    const id = await legacyFile(5000);
+
+    await rewrite(id, 5100, async eventTime => {
+      expect(await s3Event(id, eventTime, 5100)).toBe(100);
+    });
+
+    expect(await storedSize()).toBe(BASELINE_BYTES + 5100);
+    expect(await storedSize()).toBe(await truth());
+  });
+
+  it('counts a legacy file with no status as charged', async () => {
+    await seedUser();
+    const id = await legacyFile(1000, { noStatus: true });
+    expect(await storedSize()).toBe(await truth());
+
+    for (const size of [1000, 1500]) {
+      const eventTime = await rewrite(id, size);
+      await s3Event(id, eventTime, size);
+      expect(await storedSize()).toBe(BASELINE_BYTES + size);
+      expect(await storedSize()).toBe(await truth());
+    }
+  });
+
+  it.each([
+    ['complete', false, 'complete'],
+    ['no-status', true, 'pending'],
+  ])('never refuses a shrink of a legacy %s unstamped file near the quota', async (_label, noStatus, readStatus) => {
+    await seedUser();
+    const id = await legacyFile(850_000, { noStatus });
+    // Rewrite sites pass a hydrated row, which reports a missing status as its 'pending' default.
+    const row = await FabFile.findById(id);
+    expect(row?.status).toBe(readStatus);
     const owner = await User.findById(USER_ID);
 
     await expect(
-      fabFilesService.assertRewriteFits({ ...row, userId: USER }, 800_000, rewriteDb, owner as never)
+      fabFilesService.assertRewriteFits(row as never, 800_000, rewriteDb, owner as never)
     ).resolves.toBeUndefined();
   });
 
@@ -243,6 +277,18 @@ describe('content rewrite storage charge', () => {
     await fabFilesService.commitContentRewrite({ fabFileId: id, newSize: 3000 }, rewriteDb);
     expect(await s3Event(id, eventA, 2000)).toBeNull();
     expect(await s3Event(id, eventB, 3000)).toBeNull();
+    expect(await storedSize()).toBe(await truth());
+
+    // E (-> 2500) and F (-> 3500): both events claim before either commits.
+    const eventE = new Date();
+    await tick();
+    const eventF = new Date();
+    await tick();
+    expect(await s3Event(id, eventE, 2500)).toBe(-500);
+    expect(await s3Event(id, eventF, 3500)).toBe(1000);
+    await fabFilesService.commitContentRewrite({ fabFileId: id, newSize: 2500 }, rewriteDb);
+    await fabFilesService.commitContentRewrite({ fabFileId: id, newSize: 3500 }, rewriteDb);
+    expect((await FabFile.findById(id).lean())?.fileSize).toBe(3500);
     expect(await storedSize()).toBe(await truth());
 
     // C (-> 500) commits; then D (-> 700)'s own event claims before D commits.

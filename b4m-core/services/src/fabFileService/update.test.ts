@@ -347,6 +347,7 @@ describe('updateFabFile (narrowed write pins)', () => {
         pullTagsByFabFileId: Mock;
         computeDataLakeStats: Mock;
         commitContentRewrite: Mock;
+        findChargeState: Mock;
       };
       users: { findById: Mock; incrementCurrentStorage: Mock };
       dataLakes: { findByDatalakeTag: Mock; find: Mock; setStats: Mock; activateIfDraft: Mock };
@@ -385,6 +386,7 @@ describe('updateFabFile (narrowed write pins)', () => {
           commitContentRewrite: vi
             .fn()
             .mockResolvedValue({ userId: 'user-123', fileSize: 3, storageChargedAt: new Date('2025-12-01T00:00:00Z') }),
+          findChargeState: vi.fn(() => findUpdateAccessById()),
         },
         users: { findById: vi.fn(), incrementCurrentStorage: vi.fn() },
         dataLakes: {

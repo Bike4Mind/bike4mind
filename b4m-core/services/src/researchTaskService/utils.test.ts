@@ -110,6 +110,7 @@ describe('findExistingResearchData utils', () => {
       findById: vi.fn(),
       update: vi.fn(),
       commitContentRewrite: vi.fn(),
+      findChargeState: vi.fn((id: string) => mockFabFilesRepo.findById(id)),
     };
     mockUsersRepo = { findById: vi.fn(), incrementCurrentStorage: vi.fn() };
 

@@ -20,6 +20,12 @@ describe('isStorageCharged / chargedBytes', () => {
     expect(chargedBytes({ status: 'complete', createdAt: before.toISOString(), fileSize: 10 })).toBe(10);
   });
 
+  it('counts a legacy row with no status (it predates the field) from before the cutoff', () => {
+    expect(chargedBytes({ createdAt: before, fileSize: 10 })).toBe(10);
+    expect(chargedBytes({ status: null, createdAt: before, fileSize: 10 })).toBe(10);
+    expect(chargedBytes({ createdAt: after, fileSize: 10 })).toBe(0);
+  });
+
   it('does not count an unstamped complete row from after the cutoff', () => {
     expect(chargedBytes({ status: 'complete', createdAt: after, fileSize: 10 })).toBe(0);
     expect(chargedBytes({ status: 'complete', createdAt: STORAGE_CHARGE_STAMP_CUTOFF, fileSize: 10 })).toBe(0);

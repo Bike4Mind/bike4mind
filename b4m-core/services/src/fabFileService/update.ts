@@ -54,7 +54,13 @@ interface UpdateFabFileAdapters extends LakeConfigAuditAdapters, LakeMembershipA
     LakeMembershipAuditAdapters['db'] & {
       fabFiles: Pick<
         IFabFileRepository,
-        'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats' | 'commitContentRewrite'
+        | 'shareable'
+        | 'update'
+        | 'findById'
+        | 'pullTagsByFabFileId'
+        | 'computeDataLakeStats'
+        | 'commitContentRewrite'
+        | 'findChargeState'
       >;
       /** Charges a content rewrite to the file's OWNER, who may not be `user` (an update share). */
       users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;

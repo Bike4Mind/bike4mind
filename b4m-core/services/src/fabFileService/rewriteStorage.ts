@@ -4,7 +4,6 @@ import {
   type IFabFileRepository,
   type IUserDocument,
   type IUserRepository,
-  type StorageChargeFields,
 } from '@bike4mind/common';
 import { checkStorageLimit } from '@bike4mind/utils';
 
@@ -19,26 +18,27 @@ import { checkStorageLimit } from '@bike4mind/utils';
  */
 
 export type RewriteStorageDb = {
-  fabFiles: Pick<IFabFileRepository, 'commitContentRewrite'>;
+  fabFiles: Pick<IFabFileRepository, 'commitContentRewrite' | 'findChargeState'>;
   users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
 };
 
-type ChargeFields = StorageChargeFields & { fileSize?: number | null };
-
 /**
  * Throws the standard 400 "File size exceeds storage limit" when the rewrite would grow the
- * OWNER's usage past their quota. A shrinking or same-size rewrite never throws. `actor` is
+ * OWNER's usage past their quota. A shrinking or same-size rewrite never throws. Measures against the
+ * stored row (findChargeState), not `row`, whose `status` may be a hydration default. `actor` is
  * reused when it is the owner, else the owner is loaded (an update-share editor is not charged).
  */
 export async function assertRewriteFits(
-  row: ChargeFields & { userId: string },
+  row: { id: string },
   newSize: number,
-  db: Pick<RewriteStorageDb, 'users'>,
+  db: Pick<RewriteStorageDb, 'fabFiles' | 'users'>,
   actor?: IUserDocument
 ): Promise<void> {
-  const growth = newSize - chargedBytes(row);
+  const stored = await db.fabFiles.findChargeState(row.id);
+  if (!stored) return;
+  const growth = newSize - chargedBytes(stored);
   if (growth <= 0) return;
-  const owner = actor && actor.id === row.userId ? actor : await db.users.findById(row.userId);
+  const owner = actor && actor.id === stored.userId ? actor : await db.users.findById(stored.userId);
   if (!owner) throw new NotFoundError('File owner not found');
   await checkStorageLimit(owner, growth);
 }

@@ -69,7 +69,7 @@ export async function findOrUpdateExistingResearchData(
   adapters: {
     db: {
       researchDatas: IResearchDataRepository;
-      fabFiles: Pick<IFabFileRepository, 'findById' | 'update' | 'commitContentRewrite'>;
+      fabFiles: Pick<IFabFileRepository, 'findById' | 'update' | 'commitContentRewrite' | 'findChargeState'>;
       users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
     };
     storage: CreateFabFileAdapters['storage'];

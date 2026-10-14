@@ -1206,6 +1206,23 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return row?.total ?? 0;
   }
 
+  async findChargeState(
+    id: string
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null> {
+    const row = await this.fabFileModel
+      .findOne({ _id: id, deletedAt: null }, { userId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 })
+      .lean();
+    return row
+      ? {
+          userId: String(row.userId),
+          fileSize: row.fileSize,
+          storageChargedAt: row.storageChargedAt,
+          status: row.status,
+          createdAt: row.createdAt,
+        }
+      : null;
+  }
+
   async commitContentRewrite(
     id: string,
     set: Record<string, unknown>,
