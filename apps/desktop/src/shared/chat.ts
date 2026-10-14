@@ -989,6 +989,17 @@ interface ChatSessionMeta {
 }
 
 /** A session without its messages - what the sidebar needs, so a long thread is not loaded to list it. */
+/**
+ * Long enough to tell two threads apart in the sidebar, short enough not to wrap. SessionStore's
+ * deriveTitle ellipsizes past it; the rename inputs cap at it, so a typed name is kept as typed.
+ */
+export const SESSION_TITLE_MAX_LENGTH = 60;
+
+/** A typed name the way SessionStore will store it, so an optimistic title matches the saved one. */
+export function normalizeSessionTitle(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, SESSION_TITLE_MAX_LENGTH);
+}
+
 export interface ChatSessionSummary extends ChatSessionMeta {
   messageCount: number;
 }

@@ -12,6 +12,7 @@ import type {
   ChatSpawnSuggestion,
   ReasoningEffortSetting,
 } from '@shared/chat';
+import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { storedReasoningEffortSetting } from './reasoningEffort';
 import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
 
@@ -19,9 +20,6 @@ import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionSco
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 const UNTITLED = 'New chat';
-
-/** Long enough to tell two threads apart in the sidebar, short enough not to wrap. */
-const TITLE_MAX_LENGTH = 60;
 
 export function isValidSessionId(id: string): boolean {
   return SESSION_ID_PATTERN.test(id);
@@ -34,8 +32,8 @@ export function isValidSessionId(id: string): boolean {
 export function deriveTitle(prompt: string): string {
   const oneLine = prompt.replace(/\s+/g, ' ').trim();
   if (!oneLine) return UNTITLED;
-  if (oneLine.length <= TITLE_MAX_LENGTH) return oneLine;
-  return `${oneLine.slice(0, TITLE_MAX_LENGTH - 3).trimEnd()}...`;
+  if (oneLine.length <= SESSION_TITLE_MAX_LENGTH) return oneLine;
+  return `${oneLine.slice(0, SESSION_TITLE_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
 /**

@@ -91,6 +91,7 @@ export function renderSidebar(
         onDelete={() => {}}
         onTogglePin={() => {}}
         onToggleArchived={() => {}}
+        onRename={() => {}}
       />
     </CssVarsProvider>
   );

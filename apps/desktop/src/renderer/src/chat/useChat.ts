@@ -15,6 +15,7 @@ import type {
   ReasoningEffortSetting,
   UpdateProjectRequest,
 } from '@shared/chat';
+import { normalizeSessionTitle } from '@shared/chat';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
@@ -40,6 +41,10 @@ export interface SessionsController {
   remove: (sessionId: string) => Promise<void>;
   togglePin: (session: ChatSessionSummary) => Promise<void>;
   toggleArchived: (session: ChatSessionSummary) => Promise<void>;
+  /** Rename any listed session, shown at once and rolled back (with `renameError`) if main refuses. */
+  rename: (session: ChatSessionSummary, title: string) => Promise<void>;
+  renameError: string | null;
+  clearRenameError: () => void;
   /** Apply a summary main just returned, so the sidebar reorders without a full reload. */
   apply: (summary: ChatSessionSummary) => void;
 }
@@ -49,6 +54,7 @@ export function useSessions(): SessionsController {
   const [loading, setLoading] = useState(true);
   const [creatingCode, setCreatingCode] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     const next = await window.b4m.chat.listSessions();
@@ -117,7 +123,35 @@ export function useSessions(): SessionsController {
     setSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
   }, []);
 
+  const rename = useCallback(
+    async (session: ChatSessionSummary, title: string) => {
+      const next = normalizeSessionTitle(title);
+      if (!next || next === session.title) return;
+      setRenameError(null);
+      const retitle = (from: string, to: string) =>
+        setSessions(current =>
+          current.map(entry => (entry.id === session.id && entry.title === from ? { ...entry, title: to } : entry))
+        );
+      retitle(session.title, next);
+      let updated: ChatSessionSummary | null = null;
+      try {
+        updated = await window.b4m.chat.renameSession(session.id, next);
+      } catch {
+        updated = null;
+      }
+      if (updated) {
+        apply(updated);
+        return;
+      }
+      // Only undone if nothing has renamed the row since, so a later name is not clobbered.
+      retitle(next, session.title);
+      setRenameError(`Could not rename "${session.title}".`);
+    },
+    [apply]
+  );
+
   const clearCodeError = useCallback(() => setCodeError(null), []);
+  const clearRenameError = useCallback(() => setRenameError(null), []);
 
   return {
     sessions,
@@ -131,6 +165,9 @@ export function useSessions(): SessionsController {
     remove,
     togglePin,
     toggleArchived,
+    rename,
+    renameError,
+    clearRenameError,
     apply,
   };
 }

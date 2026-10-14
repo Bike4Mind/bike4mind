@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
+import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Dropdown from '@mui/joy/Dropdown';
@@ -13,7 +14,13 @@ import ListItemButton from '@mui/joy/ListItemButton';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import {
+  normalizeSessionTitle,
+  SESSION_TITLE_MAX_LENGTH,
+  type ChatSessionMode,
+  type ChatSessionStatus,
+  type ChatSessionSummary,
+} from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { groupSessions, orderedSessions, type ProjectGroup } from './grouping';
 import { ArtifactIcon, ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon } from './icons';
@@ -94,15 +101,21 @@ export function NavItem({
   );
 }
 
+/** One object for the whole list, stable across renders, so a memoized row only redraws when its own data does. */
+interface RowActions {
+  select: (sessionId: string) => void;
+  remove: (sessionId: string) => void;
+  togglePin: (session: ChatSessionSummary) => void;
+  toggleArchived: (session: ChatSessionSummary) => void;
+  rename: (session: ChatSessionSummary, title: string) => void;
+}
+
 interface RowProps {
   session: ChatSessionSummary;
-  activeId: string | null;
-  statuses: ReadonlyMap<string, ChatSessionStatus>;
-  prSummaries: ReadonlyMap<string, PrSummary>;
-  onSelect: (sessionId: string) => void;
-  onDelete: (sessionId: string) => void;
-  onTogglePin: (session: ChatSessionSummary) => void;
-  onToggleArchived: (session: ChatSessionSummary) => void;
+  selected: boolean;
+  status: ChatSessionStatus;
+  pr: PrSummary | undefined;
+  actions: RowActions;
 }
 
 /**
@@ -110,10 +123,12 @@ interface RowProps {
  * the row takes 2rem away from the title when its menu button appears and hands it back
  * when it goes, so the answer changes without the text changing.
  */
-function useTitleClipped(title: string) {
+function useTitleClipped(title: string, editing: boolean) {
   const ref = useRef<HTMLElement>(null);
   const [clipped, setClipped] = useState(false);
 
+  // `editing` is a dependency because the title node is replaced by the input and comes back
+  // as a new node, which the old observer is not watching.
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
@@ -124,79 +139,155 @@ function useTitleClipped(title: string) {
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [title]);
+  }, [title, editing]);
 
   return { ref, clipped };
 }
 
-function SessionRow({
-  session,
-  activeId,
-  statuses,
-  prSummaries,
-  onSelect,
-  onDelete,
-  onTogglePin,
-  onToggleArchived,
-}: RowProps) {
+/** Swallowed so the row underneath neither opens the session nor sees the keys as its own. */
+const isolate = (event: SyntheticEvent) => event.stopPropagation();
+
+/**
+ * The title as an input, for renaming in place. Enter and blur save, Escape cancels; an empty,
+ * blank or unchanged name saves nothing.
+ *
+ * Keydown stops here, which is also what keeps SessionList's window-level Cmd shortcuts away
+ * while typing: React's handler runs at the root, before the event reaches window.
+ */
+function RenameInput({ title, onDone }: { title: string; onDone: (next: string | null) => void }) {
+  const [draft, setDraft] = useState(title);
+  const input = useRef<HTMLInputElement>(null);
+  const finished = useRef(false);
+
+  useEffect(() => {
+    input.current?.focus();
+    input.current?.select();
+  }, []);
+
+  // Enter unmounts the input, and some engines blur a focused node as it goes; one answer only.
+  const finish = (next: string | null) => {
+    if (finished.current) return;
+    finished.current = true;
+    onDone(next);
+  };
+  const save = () => {
+    const next = normalizeSessionTitle(draft);
+    finish(next && next !== title ? next : null);
+  };
+
+  return (
+    <Input
+      size="sm"
+      value={draft}
+      onChange={event => setDraft(event.target.value)}
+      onBlur={save}
+      onKeyDown={event => {
+        event.stopPropagation();
+        if (event.key === 'Enter') save();
+        if (event.key === 'Escape') finish(null);
+      }}
+      onClick={isolate}
+      onDoubleClick={isolate}
+      onMouseDown={isolate}
+      slotProps={{
+        input: {
+          ref: input,
+          maxLength: SESSION_TITLE_MAX_LENGTH,
+          'aria-label': 'Rename session',
+          'data-testid': 'chat-session-rename-input',
+        },
+      }}
+      sx={{
+        flex: 1,
+        minWidth: 0,
+        // Shorter than Joy's sm floor so the row keeps its 28px height while editing.
+        '--Input-minHeight': '22px',
+        '--Input-paddingInline': '4px',
+        '--Input-radius': '4px',
+        fontSize: '0.8125rem',
+      }}
+    />
+  );
+}
+
+const SessionRow = memo(function SessionRow({ session, selected, status, pr, actions }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const status = statuses.get(session.id) ?? 'done';
-  const pr = prSummaries.get(session.id);
+  const [editing, setEditing] = useState(false);
   const needsAction = status === 'needs-action';
-  const { ref: titleRef, clipped } = useTitleClipped(session.title);
+  const { ref: titleRef, clipped } = useTitleClipped(session.title, editing);
+
+  const onRenameDone = (next: string | null) => {
+    setEditing(false);
+    if (next) actions.rename(session, next);
+  };
 
   return (
     <ListItem
-      sx={{
-        // Hidden until the row is hovered, focused, or its own menu is open. Focus counts as
-        // much as hover: revealing on hover alone would put the row's only actions out of
-        // reach of the keyboard, and the open menu takes focus into a portal, so it has to
-        // hold the row open by itself.
-        '--row-actions-opacity': menuOpen ? 1 : 0,
-        // Joy's own reservation for an endAction, which it otherwise pins at 2.5rem whether
-        // the button is showing or not. Driven by the same three states as the opacity above,
-        // so the title owns the whole row until there is actually a button to run under.
-        '--ListItem-endActionWidth': menuOpen ? MENU_BUTTON_WIDTH : '0px',
-        '&:hover, &:focus-within': {
-          '--row-actions-opacity': 1,
-          '--ListItem-endActionWidth': MENU_BUTTON_WIDTH,
-        },
-      }}
+      sx={
+        editing
+          ? { '--ListItem-endActionWidth': '0px' }
+          : {
+              // Hidden until the row is hovered, focused, or its own menu is open. Focus counts as
+              // much as hover: revealing on hover alone would put the row's only actions out of
+              // reach of the keyboard, and the open menu takes focus into a portal, so it has to
+              // hold the row open by itself.
+              '--row-actions-opacity': menuOpen ? 1 : 0,
+              // Joy's own reservation for an endAction, which it otherwise pins at 2.5rem whether
+              // the button is showing or not. Driven by the same three states as the opacity above,
+              // so the title owns the whole row until there is actually a button to run under.
+              '--ListItem-endActionWidth': menuOpen ? MENU_BUTTON_WIDTH : '0px',
+              '&:hover, &:focus-within': {
+                '--row-actions-opacity': 1,
+                '--ListItem-endActionWidth': MENU_BUTTON_WIDTH,
+              },
+            }
+      }
       endAction={
-        <Box sx={{ opacity: 'var(--row-actions-opacity)', transition: 'opacity 120ms' }}>
-          <Dropdown open={menuOpen} onOpenChange={(_event, open) => setMenuOpen(open)}>
-            <MenuButton
-              slots={{ root: IconButton }}
-              slotProps={{
-                root: {
-                  size: 'sm',
-                  variant: 'plain',
-                  color: 'neutral',
-                  'aria-label': `Options for ${session.title}`,
-                  'data-testid': 'chat-session-menu-btn',
-                },
-              }}
-            >
-              <MoreIcon />
-            </MenuButton>
-            <Menu size="sm" placement="bottom-end">
-              <MenuItem onClick={() => onTogglePin(session)} data-testid="chat-pin-session-btn">
-                {session.pinned ? 'Unpin' : 'Pin'}
-              </MenuItem>
-              <MenuItem onClick={() => onToggleArchived(session)} data-testid="chat-archive-session-btn">
-                {session.archived ? 'Unarchive' : 'Archive'}
-              </MenuItem>
-              <MenuItem color="danger" onClick={() => onDelete(session.id)} data-testid="chat-delete-session-btn">
-                Delete
-              </MenuItem>
-            </Menu>
-          </Dropdown>
-        </Box>
+        // Gone while editing, not just hidden: closing the menu hands focus back to its button,
+        // which would blur - and so save - the input the Rename item just opened.
+        editing ? undefined : (
+          <Box sx={{ opacity: 'var(--row-actions-opacity)', transition: 'opacity 120ms' }}>
+            <Dropdown open={menuOpen} onOpenChange={(_event, open) => setMenuOpen(open)}>
+              <MenuButton
+                slots={{ root: IconButton }}
+                slotProps={{
+                  root: {
+                    size: 'sm',
+                    variant: 'plain',
+                    color: 'neutral',
+                    'aria-label': `Options for ${session.title}`,
+                    'data-testid': 'chat-session-menu-btn',
+                  },
+                }}
+              >
+                <MoreIcon />
+              </MenuButton>
+              <Menu size="sm" placement="bottom-end">
+                <MenuItem onClick={() => actions.togglePin(session)} data-testid="chat-pin-session-btn">
+                  {session.pinned ? 'Unpin' : 'Pin'}
+                </MenuItem>
+                <MenuItem onClick={() => setEditing(true)} data-testid="chat-rename-session-btn">
+                  Rename
+                </MenuItem>
+                <MenuItem onClick={() => actions.toggleArchived(session)} data-testid="chat-archive-session-btn">
+                  {session.archived ? 'Unarchive' : 'Archive'}
+                </MenuItem>
+                <MenuItem
+                  color="danger"
+                  onClick={() => actions.remove(session.id)}
+                  data-testid="chat-delete-session-btn"
+                >
+                  Delete
+                </MenuItem>
+              </Menu>
+            </Dropdown>
+          </Box>
+        )
       }
     >
       <ListItemButton
-        selected={session.id === activeId}
-        onClick={() => onSelect(session.id)}
+        selected={selected}
+        onClick={editing ? undefined : () => actions.select(session.id)}
         sx={{
           // Paired with the opacity the button fades in on, so the title's edge travels with
           // the button instead of snapping the moment the pointer lands.
@@ -209,32 +300,38 @@ function SessionRow({
       >
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
           <SessionBadge status={status} pr={pr} />
-          {/* Between Joy's body-sm and body-xs: at body-xs the row matches its own group header,
-              which is bold, so the header outweighs the content it labels. The weight is spelled
-              out because Joy's body-xs level carries fontWeight md, which drew every title
-              heavier than the rest of the sidebar - a title is content, not a heading. */}
-          <Typography
-            ref={titleRef}
-            level="body-xs"
-            noWrap
-            sx={{
-              minWidth: 0,
-              fontSize: '0.8125rem',
-              fontWeight: 'normal',
-              // noWrap brings an ellipsis with it; the mask replaces it. Only when the text
-              // really is clipped - a fade over the last pixels of a short title reads as a
-              // rendering fault.
-              textOverflow: 'clip',
-              ...(clipped && { WebkitMaskImage: TITLE_FADE, maskImage: TITLE_FADE }),
-            }}
-          >
-            {session.title}
-          </Typography>
+          {editing ? (
+            <RenameInput title={session.title} onDone={onRenameDone} />
+          ) : (
+            /* Between Joy's body-sm and body-xs: at body-xs the row matches its own group header,
+               which is bold, so the header outweighs the content it labels. The weight is spelled
+               out because Joy's body-xs level carries fontWeight md, which drew every title
+               heavier than the rest of the sidebar - a title is content, not a heading. */
+            <Typography
+              ref={titleRef}
+              level="body-xs"
+              noWrap
+              onDoubleClick={() => setEditing(true)}
+              sx={{
+                minWidth: 0,
+                fontSize: '0.8125rem',
+                fontWeight: 'normal',
+                // noWrap brings an ellipsis with it; the mask replaces it. Only when the text
+                // really is clipped - a fade over the last pixels of a short title reads as a
+                // rendering fault.
+                textOverflow: 'clip',
+                ...(clipped && { WebkitMaskImage: TITLE_FADE, maskImage: TITLE_FADE }),
+              }}
+              data-testid="chat-session-title-text"
+            >
+              {session.title}
+            </Typography>
+          )}
         </Stack>
       </ListItemButton>
     </ListItem>
   );
-}
+});
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
@@ -302,6 +399,9 @@ export function SessionList({
   onDelete,
   onTogglePin,
   onToggleArchived,
+  onRename,
+  renameError,
+  onDismissRenameError,
   customize,
   footer,
 }: {
@@ -323,6 +423,10 @@ export function SessionList({
   onDelete: (sessionId: string) => void;
   onTogglePin: (session: ChatSessionSummary) => void;
   onToggleArchived: (session: ChatSessionSummary) => void;
+  onRename: (session: ChatSessionSummary, title: string) => void;
+  /** Set when a rename was refused and rolled back; cleared by clicking it. */
+  renameError?: string | null;
+  onDismissRenameError?: () => void;
   /** The Customize nav row, which carries its own attention badge. */
   customize?: ReactNode;
   footer?: ReactNode;
@@ -351,9 +455,22 @@ export function SessionList({
   const ordered = useMemo(() => orderedSessions(sections), [sections]);
 
   // Read inside the key handler so the listener is bound once rather than rebuilt on every
-  // keystroke in the search box, which re-orders this list.
-  const target = useRef({ ordered, onSelect, onToggleCollapsed });
-  target.current = { ordered, onSelect, onToggleCollapsed };
+  // keystroke in the search box, which re-orders this list. The row actions read it for the
+  // same reason: the shell hands down fresh callbacks on every render, and passing those to
+  // the rows would redraw all of them each time.
+  const target = useRef({ ordered, onSelect, onToggleCollapsed, onDelete, onTogglePin, onToggleArchived, onRename });
+  target.current = { ordered, onSelect, onToggleCollapsed, onDelete, onTogglePin, onToggleArchived, onRename };
+
+  const actions = useMemo<RowActions>(
+    () => ({
+      select: sessionId => target.current.onSelect(sessionId),
+      remove: sessionId => target.current.onDelete(sessionId),
+      togglePin: session => target.current.onTogglePin(session),
+      toggleArchived: session => target.current.onToggleArchived(session),
+      rename: (session, title) => target.current.onRename(session, title),
+    }),
+    []
+  );
 
   /**
    * The modifier plus 1-9 opens the nth row, counted the way the sidebar draws them and
@@ -387,7 +504,16 @@ export function SessionList({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const rowProps = { activeId, statuses, prSummaries, onSelect, onDelete, onTogglePin, onToggleArchived };
+  const row = (session: ChatSessionSummary) => (
+    <SessionRow
+      key={session.id}
+      session={session}
+      selected={session.id === activeId}
+      status={statuses.get(session.id) ?? 'done'}
+      pr={prSummaries.get(session.id)}
+      actions={actions}
+    />
+  );
 
   if (collapsed) {
     return (
@@ -480,6 +606,18 @@ export function SessionList({
             slotProps={{ input: { 'data-testid': 'chat-search-input' } }}
           />
         </Box>
+        {renameError && (
+          <Alert
+            size="sm"
+            color="danger"
+            variant="soft"
+            sx={{ cursor: 'pointer', mx: 0.5 }}
+            onClick={onDismissRenameError}
+            data-testid="chat-rename-error"
+          >
+            {renameError}
+          </Alert>
+        )}
       </Stack>
 
       <Box
@@ -505,9 +643,7 @@ export function SessionList({
               <Box data-testid="sidebar-pinned">
                 <SectionLabel>Pinned</SectionLabel>
                 <List size="sm" sx={SESSION_LIST_SX}>
-                  {sections.pinned.map(session => (
-                    <SessionRow key={session.id} session={session} {...rowProps} />
-                  ))}
+                  {sections.pinned.map(row)}
                 </List>
               </Box>
             )}
@@ -516,9 +652,7 @@ export function SessionList({
               <Box key={group.directory} data-testid="project-group">
                 <ProjectHeader group={group} onCreateInProject={target => onCreateInProject(target.directory)} />
                 <List size="sm" sx={SESSION_LIST_SX}>
-                  {group.sessions.map(session => (
-                    <SessionRow key={session.id} session={session} {...rowProps} />
-                  ))}
+                  {group.sessions.map(row)}
                 </List>
               </Box>
             ))}
@@ -531,9 +665,7 @@ export function SessionList({
                   <SectionLabel>{mode === 'code' ? 'No project' : 'Conversations'}</SectionLabel>
                 )}
                 <List size="sm" sx={SESSION_LIST_SX}>
-                  {sections.loose.map(session => (
-                    <SessionRow key={session.id} session={session} {...rowProps} />
-                  ))}
+                  {sections.loose.map(row)}
                 </List>
               </Box>
             )}
@@ -556,9 +688,7 @@ export function SessionList({
                 </Button>
                 {archivedOpen && (
                   <List size="sm" sx={SESSION_LIST_SX}>
-                    {sections.archived.map(session => (
-                      <SessionRow key={session.id} session={session} {...rowProps} />
-                    ))}
+                    {sections.archived.map(row)}
                   </List>
                 )}
               </Box>

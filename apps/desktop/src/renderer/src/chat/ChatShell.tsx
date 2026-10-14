@@ -9,6 +9,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { effectiveContextLimit } from '@shared/contextLimit';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
@@ -78,7 +79,7 @@ function SessionHeader({ title, onRename }: { title: string; onRename: (title: s
             setEditing(false);
           }
         }}
-        slotProps={{ input: { 'data-testid': 'chat-rename-input' } }}
+        slotProps={{ input: { maxLength: SESSION_TITLE_MAX_LENGTH, 'data-testid': 'chat-rename-input' } }}
       />
     );
   }
@@ -148,6 +149,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     remove,
     togglePin,
     toggleArchived,
+    rename,
+    renameError,
+    clearRenameError,
     apply,
   } = useSessions();
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -163,6 +167,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const settling = loading || restoring;
 
   const conversation = useConversation(activeId, apply);
+  // The header follows the sidebar's copy of the title, so a rename from any row - including
+  // its optimistic title and any rollback - shows above the thread too.
+  const activeSummary = useMemo(() => sessions.find(session => session.id === activeId), [sessions, activeId]);
   // A conversation picked before its transcript has been read would otherwise show the empty
   // thread's "send a message" line for a frame - or, on a switch, the PREVIOUS conversation's
   // transcript under this one's id until the read lands.
@@ -477,6 +484,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onDelete={sessionId => void onDelete(sessionId)}
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
+        onRename={(session, title) => void rename(session, title)}
+        renameError={renameError}
+        onDismissRenameError={clearRenameError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         footer={account?.(
           <TurnDot
@@ -500,8 +510,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                 {conversation.session ? (
                   <>
                     <SessionHeader
-                      title={conversation.session.title}
-                      onRename={title => void conversation.rename(title)}
+                      title={activeSummary?.title ?? conversation.session.title}
+                      onRename={title =>
+                        void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
+                      }
                     />
                     {conversation.session.project && <WorkingDirectoryLine project={conversation.session.project} />}
                   </>
