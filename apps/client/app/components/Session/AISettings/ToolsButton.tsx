@@ -29,6 +29,8 @@ interface ToolsButtonProps {
   setTools: (tools: B4MLLMTools[]) => void;
   /** The current session's `disabledTools`, hidden from the panel. */
   disabledTools?: readonly string[];
+  /** A square icon button, no label or indicators - the composer is too narrow (useComposerCompact). */
+  iconOnly?: boolean;
 }
 
 const ToolsButton: FC<ToolsButtonProps> = ({
@@ -45,6 +47,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
   availableMcpServers,
   setTools,
   disabledTools,
+  iconOnly = false,
 }) => {
   const [open, setOpen] = useState(false);
   const [isDeepResearchModalOpen, setIsDeepResearchModalOpen] = useState(false);
@@ -76,7 +79,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
   }, [model, modelInfoRepo]);
 
   // Mirrors ToolIndicators: the "+N" badge is its last item whenever it renders.
-  const showsCountBadge = toolMode !== 'fast' && modelSupportsTools && otherActiveToolsCount > 0;
+  const showsCountBadge = !iconOnly && toolMode !== 'fast' && modelSupportsTools && otherActiveToolsCount > 0;
 
   const toolsSectionProps = {
     tools,
@@ -166,11 +169,13 @@ const ToolsButton: FC<ToolsButtonProps> = ({
       <MenuButton
         data-testid="session-tools-dropdown-toggle"
         variant="outlined"
+        aria-label={iconOnly ? 'Tools' : undefined}
         sx={{
           display: 'flex',
           borderRadius: '6px',
           ...fixedHeight,
           px: 1,
+          ...(iconOnly && { px: 0, width: '32px', minWidth: '32px' }),
           // When the count badge ends the button, give it the same 6px to the edge as above and
           // below it (5px padding + the 1px border).
           ...(showsCountBadge && { pr: '5px' }),
@@ -181,7 +186,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
             <ConstructionIcon
               sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]}
             />
-            {!isTablet && (
+            {!isTablet && !iconOnly && (
               <Typography
                 level="body-sm"
                 sx={{
@@ -198,7 +203,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
               icons, count, and thinking): Fast mode sends no tools, and a model that cannot run
               them has its selection stripped at dispatch (resolveTools in useLLMSettingsAssembly).
               Selections persist either way and reappear on a Smart, tool-capable model. */}
-          {toolMode !== 'fast' && modelSupportsTools && (
+          {!iconOnly && toolMode !== 'fast' && modelSupportsTools && (
             <ToolIndicators
               activePrimaryTools={activePrimaryTools}
               isThinkingActive={isThinkingActive}

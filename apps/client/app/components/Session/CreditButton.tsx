@@ -2,6 +2,7 @@ import { Box, Button, Tooltip, Typography } from '@mui/joy';
 import InfoRoundedIcon from '@mui/icons-material/InfoRounded';
 import type { ISessionDocument } from '@bike4mind/common';
 import { useCreditPayerNote } from './CreditPayerNote';
+import { useStatusLineCompact } from './SessionBottom/ComposerStatusLine';
 import { FC, useState } from 'react';
 import CreditIcon from '../svgs/icons/CreditIcon';
 import { orange } from '@client/app/utils/themes/colors';
@@ -37,6 +38,9 @@ export const CreditBalanceChipView: FC<{
 }> = ({ credits, lowCreditsThreshold, onClick, payerNote }) => {
   const color = credits <= 0 ? 'danger' : credits < lowCreditsThreshold ? 'warning' : 'neutral';
   const balanceText = balanceTooltip(credits, lowCreditsThreshold);
+  // Out of room on the status line: the number without "credits" (the icon says it; the name keeps it).
+  const compact = useStatusLineCompact();
+  const shown = compact ? Math.max(0, Math.floor(credits)).toLocaleString('en-US') : formatCreditBalance(credits);
   const title = payerNote ? (
     <Box sx={{ maxWidth: 280, display: 'flex', flexDirection: 'column', gap: '4px' }}>
       <Typography level="body-xs" textColor="inherit" sx={{ fontWeight: 600 }}>
@@ -88,7 +92,7 @@ export const CreditBalanceChipView: FC<{
           }),
         }}
       >
-        {formatCreditBalance(credits)}
+        {shown}
       </Button>
     </Tooltip>
   );

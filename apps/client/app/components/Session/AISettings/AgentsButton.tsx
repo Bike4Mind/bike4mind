@@ -16,9 +16,11 @@ interface AgentsButtonProps {
   isMobile: boolean;
   isTablet: boolean;
   activeAgentsCount: number;
+  /** A square icon button, no label or count - the composer is too narrow (useComposerCompact). */
+  iconOnly?: boolean;
 }
 
-const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsCount }) => {
+const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsCount, iconOnly = false }) => {
   const [desktopOpen, setDesktopOpen] = useState(false);
   const [isAgentSettingsModalOpen, setIsAgentSettingsModalOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -58,17 +60,19 @@ const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsC
     >
       <MenuButton
         variant="outlined"
+        aria-label={iconOnly ? 'Agents' : undefined}
         sx={{
           display: 'flex',
           borderRadius: '6px',
           px: 1,
           ...fixedHeight,
+          ...(iconOnly && { px: 0, width: '32px', minWidth: '32px' }),
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <SmartToyIcon sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]} />
-            {!isTablet && (
+            {!isTablet && !iconOnly && (
               <Typography
                 level="body-sm"
                 sx={{
@@ -81,7 +85,9 @@ const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsC
               </Typography>
             )}
           </Box>
-          <AgentsCountBadge count={activeAgentsCount} sx={{ px: 1, minWidth: 'auto', width: 'auto', ml: 0 }} />
+          {!iconOnly && (
+            <AgentsCountBadge count={activeAgentsCount} sx={{ px: 1, minWidth: 'auto', width: 'auto', ml: 0 }} />
+          )}
         </Box>
       </MenuButton>
       <Menu

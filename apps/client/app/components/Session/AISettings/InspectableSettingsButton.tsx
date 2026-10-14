@@ -19,12 +19,13 @@ const InspectableSettingsButton: FC<InspectableSettingsButtonProps> = ({
   const showModelName = !hideModelName && !!modelName;
 
   return (
-    <Tooltip title="AI Settings" placement="top">
+    // A hidden name moves into the tooltip, so the model stays one hover away.
+    <Tooltip title={!showModelName && modelName ? `AI Settings - ${modelName}` : 'AI Settings'} placement="top">
       <IconButton
         data-testid="ai-settings-btn"
         variant="outlined"
         onClick={onClick}
-        aria-label={showModelName ? `AI Settings, model: ${modelName}` : 'AI Settings'}
+        aria-label={modelName ? `AI Settings, model: ${modelName}` : 'AI Settings'}
         className="quick-model-preview-btn"
         sx={{
           display: 'flex',
@@ -41,6 +42,8 @@ const InspectableSettingsButton: FC<InspectableSettingsButtonProps> = ({
           height: '32px',
           minHeight: 'auto',
           py: 0,
+          // Without the name it is a 32px square like the other icon buttons in the row.
+          ...(!showModelName && { px: 0, width: '32px' }),
           ...buttonSx,
 
           '& svg': {

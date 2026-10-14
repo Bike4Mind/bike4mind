@@ -5,11 +5,13 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { isImageModel } from '@client/app/utils/commands';
 import { orange } from '@client/app/utils/themes/colors';
+import { useStatusLineCompact } from '@client/app/components/Session/SessionBottom/ComposerStatusLine';
 
 const ResearchModeIndicator: FC = () => {
   const researchMode = useLLM(state => state.researchMode);
   const model = useLLM(state => state.model);
   const openModal = useAdvancedAISettings(s => s.openModal);
+  const compact = useStatusLineCompact();
 
   const enabledCount = useMemo(
     () => researchMode?.configurations?.filter(c => c.enabled).length ?? 0,
@@ -23,8 +25,12 @@ const ResearchModeIndicator: FC = () => {
     ? 'No models to compare yet. Click to add them.'
     : `Comparing ${enabledCount} ${enabledCount === 1 ? 'model' : 'models'} in parallel. Click to change them.`;
 
+  const label = noModels ? 'Research mode' : `Research mode (${enabledCount})`;
+  // Out of room on the status line: the flask and the count (just the flask without models).
+  const shown = compact ? (noModels ? null : String(enabledCount)) : label;
+
   return (
-    <Tooltip title={tooltip} placement="top" variant="soft">
+    <Tooltip title={compact ? `${label}. ${tooltip}` : tooltip} placement="top" variant="soft">
       {/* Quiet text on the composer's status line (ComposerStatusLine), matching the notebook files
           and the balance (NotebookFilesChip, CreditBalanceChip); warning-coloured while no model is
           set up to compare. */}
@@ -33,6 +39,7 @@ const ResearchModeIndicator: FC = () => {
         variant="plain"
         color={noModels ? 'warning' : 'neutral'}
         data-testid="research-mode-status-btn"
+        aria-label={compact ? label : undefined}
         onClick={() => openModal('research-mode')}
         startDecorator={<ScienceIcon sx={{ fontSize: 14, color: 'inherit' }} />}
         sx={{
@@ -60,7 +67,7 @@ const ResearchModeIndicator: FC = () => {
               }),
         }}
       >
-        {noModels ? 'Research mode' : `Research mode (${enabledCount})`}
+        {shown}
       </Button>
     </Tooltip>
   );

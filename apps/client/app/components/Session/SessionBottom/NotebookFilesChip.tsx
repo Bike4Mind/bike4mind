@@ -6,6 +6,7 @@ import FilesSection from '@client/app/components/Session/AISettings/FilesSection
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
+import { useStatusLineCompact } from './ComposerStatusLine';
 
 interface NotebookFilesChipProps {
   totalFilesCount: number;
@@ -48,6 +49,7 @@ const NotebookFilesChip: FC<NotebookFilesChipProps> = ({
   const { t } = useTranslation();
   const menuRef = useRef<HTMLDivElement>(null);
   const setSessionFilesOpen = useAdvancedAISettings(s => s.setSessionFilesOpen);
+  const compact = useStatusLineCompact();
 
   if (totalFilesCount <= 0) return null;
 
@@ -56,6 +58,9 @@ const NotebookFilesChip: FC<NotebookFilesChipProps> = ({
   const tooltip = hasEmbeddingMismatches
     ? 'Some files were indexed for a different model, so search cannot reach them. Open to reprocess.'
     : 'Kept with this notebook and sent with every message';
+  // Out of room on the status line: the icon and the number, the words in the tooltip and the name.
+  const shown = compact ? String(totalFilesCount) : label;
+  const title = compact ? `${label}. ${tooltip}` : tooltip;
   const color = hasEmbeddingMismatches ? 'danger' : 'neutral';
   const sx = {
     ...quietSx,
@@ -75,9 +80,10 @@ const NotebookFilesChip: FC<NotebookFilesChipProps> = ({
         data-testid="session-files-btn"
         startDecorator={icon}
         onClick={() => setSessionFilesOpen(true)}
+        aria-label={compact ? label : undefined}
         sx={sx}
       >
-        {label}
+        {shown}
       </Button>
     );
   }
@@ -90,14 +96,15 @@ const NotebookFilesChip: FC<NotebookFilesChipProps> = ({
         if (isOpen) setTimeout(() => menuRef.current?.focus(), 100);
       }}
     >
-      <Tooltip title={tooltip} placement="top" variant="soft">
+      <Tooltip title={title} placement="top" variant="soft">
         <MenuButton
           slots={{ root: Button }}
           slotProps={{ root: { size: 'sm', variant: 'plain', color, startDecorator: icon } }}
           data-testid="session-files-btn"
+          aria-label={compact ? label : undefined}
           sx={sx}
         >
-          {label}
+          {shown}
         </MenuButton>
       </Tooltip>
       {/* Framed like the Tools dropdown (ToolsButton + the sticky header in ToolsSection). */}

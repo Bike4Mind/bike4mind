@@ -1,4 +1,4 @@
-import { FC, useCallback, useEffect } from 'react';
+import { FC, useCallback, useEffect, useRef } from 'react';
 
 import { Box } from '@mui/joy';
 
@@ -26,6 +26,7 @@ import { PromptBuilderModal } from './PromptBuilder/PromptBuilderModal';
 // Re-export store for consumers that import from this file
 export { useAdvancedAISettings } from './AISettings/useAdvancedAISettingsStore';
 import { useAdvancedAISettings } from './AISettings/useAdvancedAISettingsStore';
+import { useOverflowCompact } from './AISettings/useOverflowCompact';
 
 interface AISettingsProps {
   stream: boolean;
@@ -119,6 +120,11 @@ const AISettings: FC<AISettingsProps> = ({
 
   const isMobile = useIsMobile();
   const isTablet = useIsTablet();
+  // Split views, docked and floating chats and small windows leave the row too little room for the
+  // model name and Tools and Agents with labels and indicators; all three shrink to square icon
+  // buttons until it fits, the model name moving to the gear's tooltip.
+  const rowRef = useRef<HTMLDivElement>(null);
+  const composerCompact = useOverflowCompact(rowRef);
   const { data: modelInfoRepo } = useModelInfo();
   const modelInfo = modelInfoRepo?.find(m => m.id === model);
 
@@ -150,6 +156,7 @@ const AISettings: FC<AISettingsProps> = ({
   return (
     <>
       <Box
+        ref={rowRef}
         display="flex"
         justifyContent="flex-start"
         alignItems="center"
@@ -161,12 +168,17 @@ const AISettings: FC<AISettingsProps> = ({
         }}
       >
         {/* AI Model Picker */}
-        <InspectableSettingsButton onClick={() => setShowAdvancedSettings(true)} modelName={modelInfo?.name} />
+        <InspectableSettingsButton
+          onClick={() => setShowAdvancedSettings(true)}
+          modelName={modelInfo?.name}
+          hideModelName={composerCompact}
+        />
 
         {/* Tools */}
         <ToolsButton
           isMobile={isMobile}
           isTablet={isTablet}
+          iconOnly={composerCompact}
           tools={tools}
           toolMode={toolMode}
           model={model}
@@ -182,7 +194,12 @@ const AISettings: FC<AISettingsProps> = ({
 
         {/* Agents */}
         {isAgentsFeatureEnabled && (
-          <AgentsButton isMobile={isMobile} isTablet={isTablet} activeAgentsCount={activeAgentsCount} />
+          <AgentsButton
+            isMobile={isMobile}
+            isTablet={isTablet}
+            activeAgentsCount={activeAgentsCount}
+            iconOnly={composerCompact}
+          />
         )}
       </Box>
 
