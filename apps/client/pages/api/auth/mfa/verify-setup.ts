@@ -70,16 +70,17 @@ const handler = baseApi()
           db: { users: userRepository, authSessions: authSessionRepository },
           logger: req.logger,
         });
+        // Enrollment that finishes a sign-in (enforceMFA) is that sign-in's session, so it keeps
+        // the first-factor origin exactly as completeMfaLogin does. Enrolling from an existing
+        // session carries no origin, and there the session is the enrollment itself.
+        const signInOrigin = readSignInOrigin(req.user);
         const { accessToken } = await issueBrowserSession(req, res, result.user.id, {
-          createdVia: 'mfa-setup',
+          createdVia: signInOrigin?.createdVia ?? 'mfa-setup',
           tokenVersion: newTokenVersion,
         });
         const tokens = { accessToken };
 
         await logAuthAudit(req, { userId: result.user.id, event: 'mfa_enrolled' });
-        // Enrollment that finishes a sign-in (enforceMFA) is that sign-in's login; enrolling
-        // from an existing session carries no origin and is not.
-        const signInOrigin = readSignInOrigin(req.user);
         if (signInOrigin) await logSecondFactorSignIn(req, result.user.id, signInOrigin);
 
         setupBody = {

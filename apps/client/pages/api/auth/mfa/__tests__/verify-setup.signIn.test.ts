@@ -64,6 +64,10 @@ describe('POST /api/auth/mfa/verify-setup - sign-in audit', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.logSecondFactorSignIn).toHaveBeenCalledTimes(1);
     expect(mocks.logSecondFactorSignIn).toHaveBeenCalledWith(expect.anything(), 'u1', origin);
+    expect(mocks.issueBrowserSession).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'u1', {
+      createdVia: 'oauth',
+      tokenVersion: 4,
+    });
   });
 
   it('records no sign-in when an existing session enrolls (no origin)', async () => {
@@ -72,5 +76,9 @@ describe('POST /api/auth/mfa/verify-setup - sign-in audit', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.logAuthAudit).toHaveBeenCalledWith(expect.anything(), { userId: 'u1', event: 'mfa_enrolled' });
     expect(mocks.logSecondFactorSignIn).not.toHaveBeenCalled();
+    expect(mocks.issueBrowserSession).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'u1', {
+      createdVia: 'mfa-setup',
+      tokenVersion: 4,
+    });
   });
 });
