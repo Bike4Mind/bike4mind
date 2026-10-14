@@ -149,6 +149,71 @@ export const GET_PROJECT_ITEM_QUERY = `
   }
 `;
 
+// Confirmation-preview lookups: resolve the labels a preview shows from the ids that execute.
+
+export const GET_ADD_TO_PROJECT_PREVIEW_QUERY = `
+  query($projectId: ID!, $contentId: ID!) {
+    project: node(id: $projectId) {
+      __typename
+      ... on ProjectV2 {
+        id
+        title
+      }
+    }
+    content: node(id: $contentId) {
+      __typename
+      ... on Issue {
+        number
+        title
+        repository {
+          nameWithOwner
+        }
+      }
+      ... on PullRequest {
+        number
+        title
+        repository {
+          nameWithOwner
+        }
+      }
+    }
+  }
+`;
+
+export const GET_PROJECT_ITEM_PREVIEW_QUERY = `
+  query($itemId: ID!) {
+    node(id: $itemId) {
+      __typename
+      ... on ProjectV2Item {
+        project {
+          id
+          title
+        }
+        content {
+          __typename
+          ... on Issue {
+            number
+            title
+            repository {
+              nameWithOwner
+            }
+          }
+          ... on PullRequest {
+            number
+            title
+            repository {
+              nameWithOwner
+            }
+          }
+          ... on DraftIssue {
+            title
+          }
+        }
+      }
+    }
+  }
+`;
+
 export const ADD_PROJECT_ITEM_MUTATION = `
   mutation($projectId: ID!, $contentId: ID!) {
     addProjectV2ItemById(input: {

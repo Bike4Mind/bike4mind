@@ -97,6 +97,7 @@ import type { CitableSource, WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
+import { isConfirmableMcpTool } from '@client/app/utils/confirmableMcpTool';
 import {
   extractChessJson,
   validateChessFen,
@@ -1896,7 +1897,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
         </Stack>
       )}
 
-      {pendingAction && completed && (
+      {pendingAction && completed && isConfirmableMcpTool(pendingAction.tool) && (
         <PendingActionButtons
           pendingAction={pendingAction}
           messageId={messageId}

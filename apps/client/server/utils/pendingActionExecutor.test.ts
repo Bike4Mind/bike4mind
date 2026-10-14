@@ -6,9 +6,14 @@ import { JIRA_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 
 vi.mock('@bike4mind/database', () => ({
   Quest: { findById: vi.fn(), findOneAndUpdate: vi.fn(), findByIdAndUpdate: vi.fn() },
-  FabFile: { findById: vi.fn() },
   Session: { findById: vi.fn() },
+  fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
 }));
+
+vi.mock('@server/utils/storage', () => {
+  const storage = { download: vi.fn().mockResolvedValue(Buffer.from('file-bytes')) };
+  return { getFilesStorage: () => storage };
+});
 
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('@server/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
@@ -26,7 +31,8 @@ vi.mock('@bike4mind/slack', () => {
   };
 });
 
-import { Quest, Session } from '@bike4mind/database';
+import { fabFileRepository, Quest, Session } from '@bike4mind/database';
+import { getFilesStorage } from '@server/utils/storage';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { isFeatureEnabled } from '@server/middlewares/featureFlag';
 import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
@@ -128,18 +134,57 @@ describe('executePendingAction', () => {
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
-  it('still executes for a legacy button that carries no expected ts', async () => {
-    const result = await executePendingAction(QUEST_ID, dbUser, logger, undefined);
+  it.each(['image_generation', 'get_issue', 'unknown_tool'])(
+    'refuses a pending action for the non-confirmable tool %s',
+    async tool => {
+      storePendingAction({ tool, params: {}, ts });
 
-    expect(result.success).toBe(true);
-    expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
-      { _id: QUEST_ID, 'pendingAction.ts': ts },
-      { $unset: { pendingAction: 1 } }
-    );
-    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({ _executeFromButton: true });
-    expect(vi.mocked(Quest.findOneAndUpdate).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(invokeMcpHandler).mock.invocationCallOrder[0]
-    );
+      const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+      expect(result.success).toBe(false);
+      expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(invokeMcpHandler).not.toHaveBeenCalled();
+    }
+  );
+
+  describe('attachment upload from a stored file', () => {
+    const FAB_FILE_ID = 'cccccccccccccccccccccccc';
+
+    beforeEach(() => {
+      storePendingAction({
+        tool: JIRA_UPLOAD_ATTACHMENT,
+        params: { issueKey: 'K-1', filename: 'a.txt', fabFileId: FAB_FILE_ID },
+        ts,
+      });
+    });
+
+    it('looks the file up scoped to the confirming user and uploads its bytes', async () => {
+      vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue({
+        filePath: 'files/a.txt',
+        mimeType: 'text/plain',
+        moderationStatus: 'clean',
+      } as never);
+
+      const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+      expect(result.success).toBe(true);
+      expect(fabFileRepository.shareable.findAccessibleById).toHaveBeenCalledWith(dbUser, FAB_FILE_ID);
+      expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
+        content: Buffer.from('file-bytes').toString('base64'),
+        mimeType: 'text/plain',
+      });
+    });
+
+    it('refuses a file the confirming user cannot access, without claiming or invoking', async () => {
+      vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue(null);
+
+      const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+      expect(result.success).toBe(false);
+      expect(getFilesStorage().download).not.toHaveBeenCalled();
+      expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(invokeMcpHandler).not.toHaveBeenCalled();
+    });
   });
 
   it('claims an expired action by its stored ts and does not invoke the tool', async () => {

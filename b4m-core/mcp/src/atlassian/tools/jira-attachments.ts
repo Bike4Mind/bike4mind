@@ -5,7 +5,6 @@
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { z } from 'zod';
 import { getErrorMessage, formatFileSize, getFileTypeEmoji } from '@bike4mind/common';
 import { getJiraApi } from '../client.js';
 import { createJsonResponse, createErrorResponse } from '../helpers/responses.js';
@@ -200,27 +199,39 @@ export function registerJiraAttachmentTools(server: McpServer) {
     'Delete an attachment from a Jira issue by attachment ID. First use jira_list_attachments to get attachment IDs.',
     {
       attachmentId: attachmentIdSchema,
-      filename: z
-        .string()
-        .optional()
-        .describe('Optional: The filename for display purposes (shown in preview). Get from jira_list_attachments.'),
       ...confirmationParams,
     },
-    async ({ attachmentId, filename, _executeFromButton }) => {
+    async ({ attachmentId, _executeFromButton }) => {
       const shouldExecute = _executeFromButton === true;
 
       if (!shouldExecute) {
+        // The preview names the file from Jira itself; an attachment that cannot be fetched gets no confirm token.
+        let attachment: JiraAttachmentMetadata;
+        try {
+          attachment = await fetchJiraAttachmentMetadata(attachmentId);
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Error: Could not look up attachment ${attachmentId} for the delete preview: ${getErrorMessage(error)}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
         return createPreviewResponse(
           '⚠️ Preview: Jira Attachment to be Deleted',
           {
             attachmentId,
-            display_filename: filename || attachmentId,
+            display_filename: attachment.filename,
             warning: 'This action cannot be undone.',
           },
           'attachment',
           {
             tool: JIRA_DELETE_ATTACHMENT,
-            params: { attachmentId, filename },
+            params: { attachmentId, display_filename: attachment.filename },
           }
         );
       }
@@ -250,4 +261,14 @@ export function registerJiraAttachmentTools(server: McpServer) {
       }
     }
   );
+}
+
+type JiraAttachmentMetadata = { id: string; filename: string };
+
+async function fetchJiraAttachmentMetadata(attachmentId: string): Promise<JiraAttachmentMetadata> {
+  const metadata = await getJiraApi().getAttachment({ attachmentId });
+  if (typeof metadata.filename !== 'string' || metadata.filename === '') {
+    throw new Error('Jira returned no filename for this attachment');
+  }
+  return { id: String(metadata.id ?? attachmentId), filename: metadata.filename };
 }

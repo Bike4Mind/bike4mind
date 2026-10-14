@@ -1302,6 +1302,16 @@ async function handleConfirmAction(
     return NOT_REQUESTER_RESPONSE;
   }
 
+  // A button that does not name the action it displayed cannot prove which action the click approves.
+  if (pendingActionTs === undefined) {
+    logger.warn('[Slack Interactive] Confirm button carries no pending action ts', { questId });
+    return {
+      text: '\u274C This confirmation is out of date. Please make the request again.',
+      replace_original: true,
+      response_type: 'in_channel',
+    };
+  }
+
   const result = await executePendingAction(questId, dbUser, logger, pendingActionTs);
 
   return {

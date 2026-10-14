@@ -24,6 +24,7 @@ import {
   CONFLUENCE_DELETE_ATTACHMENT,
 } from '@bike4mind/mcp/atlassian/constants';
 import { RestrictionPreviewItem } from '@bike4mind/common';
+import { escapeSlackMrkdwn } from '../SlackClient';
 
 /**
  * Slack preview truncation limits. Section blocks have a 3000 char limit, so
@@ -68,13 +69,23 @@ function buildPreviewMessage(
 }
 
 /**
+ * "Label (id)" for a tool-resolved label next to the id that executes; the bare id when no label was resolved.
+ */
+function labelWithId(label: unknown, id: unknown): string {
+  const idText = id === undefined || id === null || id === '' ? 'Unknown' : String(id);
+  const text = label ? `${String(label)} (${idText})` : idText;
+  return escapeSlackMrkdwn(text);
+}
+
+/**
  * Format attachment upload preview (DRY for both Jira and Confluence)
  */
 function formatAttachmentUploadPreview(params: Record<string, unknown>, target: 'jira' | 'confluence'): string {
-  const filename = String(params.filename || params.display_filename || 'Unknown file');
+  // Only executed values (and the page title the tool looked up from pageId) are shown, never a model label.
+  const filename = escapeSlackMrkdwn(String(params.filename || 'Unknown file'));
 
   if (target === 'jira') {
-    const issueKey = String(params.issueKey || params.display_issue_key || 'Unknown');
+    const issueKey = escapeSlackMrkdwn(String(params.issueKey || 'Unknown'));
     return buildPreviewMessage(
       '📎',
       'Jira Attachment Upload',
@@ -85,16 +96,17 @@ function formatAttachmentUploadPreview(params: Record<string, unknown>, target: 
       'upload this attachment'
     );
   } else {
-    const pageId = String(params.pageId || params.display_page_id || '');
-    const pageTitle = String(params.display_page_title || pageId || 'Unknown');
-    const comment = params.comment || params.display_comment;
+    const pageId = String(params.pageId || '');
+    const pageTitle = params.display_page_title ? String(params.display_page_title) : '';
+    const pageLabel = pageTitle && pageTitle !== pageId ? `${pageTitle} (${pageId})` : pageId || 'Unknown';
+    const comment = params.comment ? escapeSlackMrkdwn(String(params.comment)) : undefined;
     return buildPreviewMessage(
       '📎',
       'Confluence Attachment Upload',
       [
-        { label: 'Page', value: pageTitle },
+        { label: 'Page', value: escapeSlackMrkdwn(pageLabel) },
         { label: 'File', value: filename },
-        { label: 'Comment', value: comment ? String(comment) : undefined },
+        { label: 'Comment', value: comment },
       ],
       'upload this attachment'
     );
@@ -105,14 +117,15 @@ function formatAttachmentUploadPreview(params: Record<string, unknown>, target: 
  * Format attachment deletion preview (DRY for both Jira and Confluence)
  */
 function formatAttachmentDeletePreview(params: Record<string, unknown>, target: 'jira' | 'confluence'): string {
-  // Prefer display names over IDs for better UX
-  const filename = String(params.display_filename || params.filename || params.attachmentId || 'Unknown');
+  // display_filename is the name the delete tool fetched for attachmentId; a model-supplied filename is ignored.
+  const attachmentId = String(params.attachmentId || 'Unknown');
+  const filename = params.display_filename ? String(params.display_filename) : '';
   const targetLabel = target === 'jira' ? 'Jira' : 'Confluence';
 
   return buildPreviewMessage(
     '⚠️',
     `${targetLabel} Attachment Deletion`,
-    [{ label: 'File', value: filename }],
+    [{ label: 'File', value: escapeSlackMrkdwn(filename ? `${filename} (${attachmentId})` : attachmentId) }],
     'DELETE this attachment',
     'This action cannot be undone!'
   );
@@ -562,19 +575,19 @@ export function formatPreviewFromParams(tool: string, params: Record<string, unk
       return formatAttachmentDeletePreview(params, 'confluence');
 
     case TOOL_ADD_ISSUE_TO_PROJECT: {
-      const projectName = params.display_project_name || 'GitHub Project';
-      const issueTitle = params.display_issue_title || 'Issue';
-      const repository = params.display_repository;
+      // display_* here were resolved by the tool from project_id/issue_node_id, not supplied by the model.
+      const projectLabel = labelWithId(params.display_project_name, params.project_id);
+      const issueLabel = labelWithId(params.display_issue_title, params.issue_node_id);
 
       const lines = [
         '📋 *Preview: Add Issue to GitHub Project*',
         '',
-        `> *Target Project:* ${projectName}`,
-        `> *Issue:* ${issueTitle}`,
+        `> *Target Project:* ${projectLabel}`,
+        `> *Issue:* ${issueLabel}`,
       ];
 
-      if (repository) {
-        lines.push(`> *Repository:* ${repository}`);
+      if (params.display_repository) {
+        lines.push(`> *Repository:* ${escapeSlackMrkdwn(String(params.display_repository))}`);
       }
 
       lines.push(
@@ -588,42 +601,25 @@ export function formatPreviewFromParams(tool: string, params: Record<string, unk
     }
 
     case TOOL_UPDATE_PROJECT_ITEM_FIELDS: {
-      // Handle both single and batch field updates
-      const projectName = params.display_project_name || 'GitHub Project';
-      const issueTitle = params.display_issue_title || 'Issue';
+      // display_* here were resolved by the tool from the ids that execute; field_name/new_value/current_value
+      // are model-authored and deliberately not read.
       const updates = Array.isArray(params.updates) ? params.updates : [];
-
-      if (updates.length === 0 && params.field_name) {
-        // Single field update (old API)
-        const fieldName = String(params.field_name || 'field');
-        const newValue = String(params.new_value || params.display_new_value || 'value');
-        const currentValue = String(params.current_value || params.display_current_value || '');
-
-        return [
-          '📋 *Preview: Update GitHub Project Field*',
-          '',
-          `> *Project:* ${projectName}`,
-          `> *Issue:* ${issueTitle}`,
-          '>',
-          `> *${fieldName}:* ${currentValue ? `${currentValue} → ${newValue}` : `→ ${newValue}`}`,
-          '',
-          'Click ✅ Confirm to update this field, or ❌ Cancel to abort.',
-        ].join('\n');
-      }
-
-      // Batch updates
-      const fieldLines = updates.map((update: any) => {
-        const fieldName = update.field_name || 'Field';
-        const newValue = update.new_value || String(update.value);
-        const currentValue = update.current_value;
-        return `> *${fieldName}:* ${currentValue ? `${currentValue} → ${newValue}` : `→ ${newValue}`}`;
+      const fieldLines = updates.map((update: unknown) => {
+        const entry = typeof update === 'object' && update !== null ? (update as Record<string, unknown>) : {};
+        const fieldLabel = labelWithId(entry.display_field_name, entry.field_id);
+        const value = escapeSlackMrkdwn(String(entry.display_value ?? entry.value ?? ''));
+        return `> *${fieldLabel}:* -> ${value}`;
       });
+      const repository = params.display_repository
+        ? [`> *Repository:* ${escapeSlackMrkdwn(String(params.display_repository))}`]
+        : [];
 
       return [
         '📋 *Preview: Update GitHub Project Fields*',
         '',
-        `> *Project:* ${projectName}`,
-        `> *Issue:* ${issueTitle}`,
+        `> *Project:* ${labelWithId(params.display_project_name, params.project_id)}`,
+        `> *Item:* ${labelWithId(params.display_issue_title, params.item_id)}`,
+        ...repository,
         '>',
         `> *Updates (${updates.length} fields):*`,
         ...fieldLines,

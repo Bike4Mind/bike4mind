@@ -311,29 +311,45 @@ export function registerConfluenceAttachmentTools(server: McpServer) {
     'Delete an attachment from a Confluence page by attachment ID. First use confluence_list_attachments to get attachment IDs.',
     {
       attachmentId: attachmentIdSchema,
-      filename: z
-        .string()
-        .optional()
-        .describe(
-          'Optional: The filename for display purposes (shown in preview). Get from confluence_list_attachments.'
-        ),
       ...confirmationParams,
     },
-    async ({ attachmentId, filename, _executeFromButton }) => {
+    async ({ attachmentId, _executeFromButton }) => {
       const shouldExecute = _executeFromButton === true;
 
       if (!shouldExecute) {
+        // The preview names the file from Confluence itself; an attachment that cannot be fetched gets no confirm token.
+        let filename: string;
+        try {
+          const attachment = await getConfluenceApi().get<{ id?: string; title?: string }>(
+            `/attachments/${encodeURIComponent(attachmentId)}`
+          );
+          if (typeof attachment.title !== 'string' || attachment.title === '') {
+            throw new Error('Confluence returned no filename for this attachment');
+          }
+          filename = attachment.title;
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Error: Could not look up attachment ${attachmentId} for the delete preview: ${getErrorMessage(error)}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
         return createPreviewResponse(
           '⚠️ Preview: Confluence Attachment to be Deleted',
           {
             attachmentId,
-            display_filename: filename || attachmentId,
+            display_filename: filename,
             warning: 'This action cannot be undone.',
           },
           'attachment',
           {
             tool: CONFLUENCE_DELETE_ATTACHMENT,
-            params: { attachmentId, filename },
+            params: { attachmentId, display_filename: filename },
           }
         );
       }
