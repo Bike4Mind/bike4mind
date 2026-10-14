@@ -36,6 +36,10 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
 
+vi.mock('@server/utils/storage', () => ({
+  getFilesStorage: () => ({ bucket: 'files', delete: vi.fn() }),
+  getGeneratedImageStorage: () => ({ bucket: 'generated', delete: vi.fn() }),
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
 
 vi.mock('@bike4mind/services', async orig => {
@@ -138,6 +142,17 @@ describe('DELETE /api/sessions/bulk', () => {
     expect(mockWithTransaction).toHaveBeenCalledTimes(2);
     expect(sawTransaction).toEqual([true, true]);
     expect(res._getJSONData()).toEqual({ deletedCount: 2, newLastNotebookId: 'other-session' });
+  });
+
+  it('hands each delete both buckets, so the files and their generated copies leave storage too', async () => {
+    const { req, res } = fire(['s1']);
+    await handler(req, res);
+
+    const [, , adapters] = mockDeleteSession.mock.calls[0];
+    expect(adapters.storage).toEqual({
+      files: expect.objectContaining({ bucket: 'files' }),
+      generated: expect.objectContaining({ bucket: 'generated' }),
+    });
   });
 
   it('keeps going after one session fails and does not count it', async () => {

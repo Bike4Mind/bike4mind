@@ -15,6 +15,7 @@ import { satisfiesMembershipScope, type MembershipLake } from '../dataLakeServic
 import { registryMembershipScope } from '../dataLakeService/lakeMembershipScope';
 import type { ManageActor } from '../dataLakeService/manageRule';
 import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
+import { deleteStoredObjects, type ObjectStorage } from './deleteStoredObjects';
 import {
   recordLakeMembershipChange,
   type LakeMembershipAuditAdapters,
@@ -58,9 +59,13 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
     // below is skipped entirely rather than failing to compile (see LakeMembershipAuditAdapters).
     dataLakes?: Pick<IDataLakeRepository, 'find' | 'findByDatalakeTag'>;
   };
-  storage: {
-    delete: (path: string) => Promise<unknown>;
-  };
+  storage: ObjectStorage;
+  /**
+   * The generated-content bucket, for the inline-playback copy an in-chat generated asset keeps there. Optional
+   * so the doors that never delete generated files need not wire it; a door that can must, or the copy outlives
+   * the file.
+   */
+  generatedStorage?: ObjectStorage;
   onDeleteComplete?: (fabFile: IFabFileDocument, sizeToDeduct: number) => Promise<void>;
   /**
    * Self-host OpenSearch only (undefined elsewhere) - without this, a deleted file's chunks
@@ -85,7 +90,16 @@ export const deleteFabFile = async (
   parameters: DeleteFabFileParameters,
   adapter: DeleteFabFileAdapter
 ): Promise<DeleteFabFileResult> => {
-  const { db, storage, onDeleteComplete, searchIndex, origin = 'person', auditPrincipal, logger } = adapter;
+  const {
+    db,
+    storage,
+    generatedStorage,
+    onDeleteComplete,
+    searchIndex,
+    origin = 'person',
+    auditPrincipal,
+    logger,
+  } = adapter;
   const { id } = secureParameters(parameters, deleteFabFileSchema);
 
   const user = await db.users.findById(userId);
@@ -134,15 +148,9 @@ export const deleteFabFile = async (
       );
     }
 
-    // Delete the main file in S3 and calculate size
     let sizeToDeduct = 0;
-    const storagePathsToDelete: string[] = [];
-    if (ownedFile.filePath) {
-      Logger.globalInstance.log(`[deleteFabFile] Deleting S3 object — path: ${ownedFile.filePath}`);
-      storagePathsToDelete.push(ownedFile.filePath);
-      if (typeof ownedFile.fileSize === 'number') {
-        sizeToDeduct += ownedFile.fileSize;
-      }
+    if (ownedFile.filePath && typeof ownedFile.fileSize === 'number') {
+      sizeToDeduct += ownedFile.fileSize;
     }
 
     // Resolve BEFORE the Mongo chunks are deleted below - the chunk rows are the only place this
@@ -166,10 +174,8 @@ export const deleteFabFile = async (
       await db.sessions.update({ id: notebook.id, knowledgeIds: updatedKnowledgeIds });
     }
 
-    // Delete the file in S3
-    for (const path of storagePathsToDelete) {
-      await storage.delete(path);
-    }
+    Logger.globalInstance.log(`[deleteFabFile] Deleting stored objects - path: ${ownedFile.filePath}`);
+    await deleteStoredObjects([ownedFile], { files: storage, generated: generatedStorage });
 
     // sizeToDeduct is always a positive number, representing the amount to deduct from the user's storage
     if (onDeleteComplete) {

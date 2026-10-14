@@ -726,6 +726,13 @@ describe('video job end to end with the test provider', () => {
     });
   });
 
+  it("passes a chat job's quest so the saved clip joins that notebook", async () => {
+    const t = setup();
+    await createVideoJob({ user, request: request(), source: 'studio', questId: 'q1' }, t.deps);
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(expect.objectContaining({ questId: 'q1' }));
+  });
+
   it('store may run twice for one job: both runs save under the same job id, which saveToFiles dedups', async () => {
     const t = setup();
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);

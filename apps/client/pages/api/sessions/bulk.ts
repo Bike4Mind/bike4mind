@@ -2,6 +2,7 @@ import { SessionEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sessionService } from '@bike4mind/services';
+import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { sessionRepository } from '@bike4mind/database/auth';
 import {
   projectRepository,
@@ -50,6 +51,7 @@ const handler = baseApi()
                     users: userRepository,
                     sessionAgentConfigs: sessionAgentConfigRepository,
                   },
+                  storage: { files: getFilesStorage(), generated: getGeneratedImageStorage() },
                   logger: req.logger,
                 }
               )

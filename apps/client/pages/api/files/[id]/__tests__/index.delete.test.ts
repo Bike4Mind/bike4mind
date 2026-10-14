@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   activateIfDraft: vi.fn(),
   find: vi.fn(),
   storageDelete: vi.fn(),
+  generatedStorageDelete: vi.fn(),
   recordConfigChange: vi.fn(),
 }));
 
@@ -41,6 +42,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ delete: h.storageDelete, upload: vi.fn(), getSignedUrl: vi.fn() }),
+  getGeneratedImageStorage: () => ({ delete: h.generatedStorageDelete }),
 }));
 
 // Spread the real module first for the same reason index.put.test.ts does: a transitively-loaded
@@ -319,6 +321,30 @@ describe('DELETE /api/files/[id] - tag activity', () => {
 // Regression: deleteFabFile's 'denied' action (file exists, caller has no access) must never
 // reach the client as-is - that would let this route be used to probe for other users' file ids,
 // the same no-enumeration convention bulk-delete.ts follows.
+describe('DELETE /api/files/[id] - stored objects', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: OWNER });
+    h.update.mockResolvedValue(undefined);
+    h.deleteManyByFabFileId.mockResolvedValue(undefined);
+    h.findAllWithKnowledgeId.mockResolvedValue([]);
+  });
+
+  it("removes a generated file's object and its inline chat copy", async () => {
+    const doc = fabFile({
+      filePath: 'generated-audio/x.mp3',
+      sourceMetadata: { sessionId: 's1', generatedCopyKey: 'x.mp3' },
+    });
+    h.findById.mockResolvedValue(doc);
+    h.findByIdAndUserId.mockResolvedValue(doc);
+
+    await run(makeRes().res);
+
+    expect(h.storageDelete).toHaveBeenCalledWith('generated-audio/x.mp3');
+    expect(h.generatedStorageDelete).toHaveBeenCalledWith('x.mp3');
+  });
+});
+
 describe('DELETE /api/files/[id] - denied normalization', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -18,7 +18,7 @@ import {
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { logEvent } from '@server/utils/analyticsLog';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 
 // Each verb's auth mode, required scope, and path/body validation come from its contract
 // (sessionGetContract, sessionUpdateContract, sessionDeleteContract), the single source of truth
@@ -54,6 +54,7 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
           users: userRepository,
           sessionAgentConfigs: sessionAgentConfigRepository,
         },
+        storage: { files: getFilesStorage(), generated: getGeneratedImageStorage() },
         logger: req.logger,
       }
     )
@@ -90,10 +91,7 @@ const putHandler = nextRouteForContract(sessionUpdateContract).put(async (req, r
         (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
       // The attachment door's lake arms, so an added lake file passes the access check.
       resolveAttachmentLakeAccess: async () =>
-        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(
-          req.user!,
-          req.logger
-        )(),
+        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user!, req.logger)(),
       storage: getFilesStorage(),
     }
   );

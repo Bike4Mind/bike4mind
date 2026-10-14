@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   upload: vi.fn(),
   generatedDownload: vi.fn(),
   findSessionIdsByImage: vi.fn(),
+  findQuestById: vi.fn(),
   findAllByIds: vi.fn(),
   saveGeneratedAssetToFiles: vi.fn(),
 }));
@@ -22,7 +23,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
   return {
     ...actual,
     fabFileRepository: { findByIdAndUserId: mocks.findByIdAndUserId, findOne: mocks.findOne },
-    questRepository: { findSessionIdsByImage: mocks.findSessionIdsByImage },
+    questRepository: { findSessionIdsByImage: mocks.findSessionIdsByImage, findById: mocks.findQuestById },
     sessionRepository: { findAllByIds: mocks.findAllByIds },
   };
 });
@@ -122,6 +123,22 @@ describe('saveToFiles', () => {
     await expect(saveToFiles(params)).resolves.toBe(result);
     expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledTimes(1);
     expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith(params, expect.anything());
+  });
+
+  it("links a chat job's clip to its quest's notebook", async () => {
+    const params = {
+      userId: 'u',
+      bytes: Buffer.from('v'),
+      contentType: 'video/mp4',
+      generation: { generator: 'video' as const, provider: 'veo', jobId: 'j', prompt: 'p' },
+      questId: 'q1',
+      signal: new AbortController().signal,
+    };
+    mocks.findQuestById.mockResolvedValue({ id: 'q1', sessionId: 's1' });
+    mocks.saveGeneratedAssetToFiles.mockResolvedValue({ saved: false, reason: 'error' });
+    await saveToFiles(params);
+    expect(mocks.findQuestById).toHaveBeenCalledWith('q1');
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith({ ...params, sessionId: 's1' }, expect.anything());
   });
 
   it('passes a not-saved result through unchanged', async () => {

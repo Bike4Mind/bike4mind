@@ -250,7 +250,12 @@ const loadInputGeneratedImage = async (userId: string, key: string) => {
   return { bytes, mimeType };
 };
 
-export const saveToFiles: MusicJobDeps['saveToFiles'] = params => saveGeneratedAssetToFiles(params, logger);
+export const saveToFiles: MusicJobDeps['saveToFiles'] = async params => {
+  if (!params.questId) return saveGeneratedAssetToFiles(params, logger);
+  // Linked through the quest's notebook like every in-chat asset, so deleting the notebook takes the video or song too.
+  const sessionId = (await questRepository.findById(params.questId))?.sessionId;
+  return saveGeneratedAssetToFiles({ ...params, ...(sessionId && { sessionId }) }, logger);
+};
 
 const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ key, bytes, contentType, signal }) => {
   await getGeneratedImageStorage().upload(bytes, key, { ContentType: contentType }, signal);

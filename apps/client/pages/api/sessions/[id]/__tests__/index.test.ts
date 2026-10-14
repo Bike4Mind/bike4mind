@@ -62,6 +62,7 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mo
 // unavailable in a test process) - only PUT's adapters touch this.
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(), getMetadata: vi.fn() }),
+  getGeneratedImageStorage: () => ({ delete: vi.fn() }),
 }));
 
 vi.mock('@bike4mind/services', async orig => {

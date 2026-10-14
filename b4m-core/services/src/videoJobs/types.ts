@@ -37,6 +37,8 @@ export type VideoJobDeps = {
     bytes: Buffer;
     contentType: string;
     generation: GeneratedAssetMetadata & { jobId: string };
+    /** A chat-made job's quest; the save links the file to that quest's notebook, so a notebook delete takes it. */
+    questId?: string;
     signal: AbortSignal;
   }): Promise<SaveGeneratedAssetResult>;
   saveToGeneratedBucket(params: {

@@ -9,6 +9,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { bestEffortAdjustOwnerStorage, groupStorageDeltaByOwner } from '../dataLakeService/ports';
+import { deleteStoredObjects, type StoredObjectBuckets } from '../fabFileService/deleteStoredObjects';
 import { grantWrite } from '../sharingService/grantWrite';
 
 const deleteSessionSchema = z.object({
@@ -31,6 +32,12 @@ interface DeleteSessionAdapters {
     // compiling and running without it - the cleanup below is then just skipped for that caller.
     sessionAgentConfigs?: ISessionAgentConfigRepository;
   };
+  /**
+   * Where the deleted files' objects live. Optional for the same published-signature reason as `users`, but
+   * absent, the tombstoned files' objects (generated media included) stay in storage with nothing left to
+   * reach them - so every in-repo route must wire it.
+   */
+  storage?: StoredObjectBuckets;
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
 }
 
@@ -39,7 +46,7 @@ export const deleteSession = async (
   parameters: DeleteSessionParameters,
   adapters: DeleteSessionAdapters
 ) => {
-  const { db, logger } = adapters;
+  const { db, storage, logger } = adapters;
   const { id } = secureParameters(parameters, deleteSessionSchema);
 
   const session = await db.sessions.findByIdAndUserId(id, userId);
@@ -113,6 +120,10 @@ export const deleteSession = async (
   // stale row on session-not-found/deleted, it never deletes it (see getEligibleConfigs.ts).
   // Optional so a caller on the pre-cleanup adapter shape still compiles and runs.
   await db.sessionAgentConfigs?.deleteBySessionId(session.id);
+
+  // Last of the writes, since a deleted object cannot come back. Only a failed commit of the caller's
+  // transaction can still strand a live row without its object - the same tradeoff DELETE /api/files makes.
+  if (storage) await deleteStoredObjects(ownedFiles, storage);
 
   const mostRecent = await db.sessions.findRecentlyUpdatedByUserId(userId);
 

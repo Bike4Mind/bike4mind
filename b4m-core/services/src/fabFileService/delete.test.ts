@@ -123,6 +123,18 @@ describe('deleteFabFile', () => {
       expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(mockFabFile, 1024);
     });
 
+    it("also removes a generated file's inline-playback copy from the generated bucket", async () => {
+      const generatedFile = { ...mockFabFile, sourceMetadata: { sessionId: 's1', generatedCopyKey: 'abc.mp3' } };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(generatedFile);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(generatedFile);
+      const generatedStorage = { delete: vi.fn().mockResolvedValue(undefined) };
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, { ...mockAdapter, generatedStorage });
+
+      expect(mockAdapter.storage.delete).toHaveBeenCalledWith('uploads/test-file.txt');
+      expect(generatedStorage.delete).toHaveBeenCalledWith('abc.mp3');
+    });
+
     it('should skip S3 deletion when file has no filePath', async () => {
       const fileWithoutPath = { ...mockFabFile, filePath: undefined, fileSize: 0 };
       mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(fileWithoutPath);
