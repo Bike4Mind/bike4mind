@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
-import { StorageLimitError } from '@bike4mind/common';
+import { NotFoundError, StorageLimitError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   file: undefined as Record<string, unknown> | undefined,
@@ -120,6 +120,13 @@ describe('POST /api/fabfiles/[id]/edit (applyImmediately) storage accounting', (
       await expect(call()).rejects.toMatchObject({ message: QUOTA, info: { used_bytes: 900 } });
       expect(h.upload).not.toHaveBeenCalled();
       expect(h.commitContentRewrite).not.toHaveBeenCalled();
+    });
+
+    it('propagates a missing owner as a 404 rather than rewrapping it as a 400', async () => {
+      h.assertRewriteFits.mockRejectedValue(new NotFoundError('File owner not found'));
+
+      await expect(call()).rejects.toMatchObject({ statusCode: 404 });
+      expect(h.upload).not.toHaveBeenCalled();
     });
   });
 

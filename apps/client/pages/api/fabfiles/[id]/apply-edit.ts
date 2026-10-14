@@ -4,7 +4,7 @@ import { fabFilesService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isValidObjectId } from '@server/utils/objectId';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, HTTPError, NotFoundError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
 import { deleteDroppedVersions, getAiEditVersionRetention } from '@server/utils/aiEditVersionRetention';
 import { TEXT_EDIT_BACKUP_PREFIX } from '@server/utils/textEditBackupPrefix';
@@ -176,7 +176,9 @@ const handler = baseApi()
         });
       } catch (error) {
         console.error('Apply edit error:', error);
-        if (isStorageLimitError(error)) throw error;
+        // The storage gate and a missing owner already carry their own status code; rethrow them
+        // instead of flattening every error to a 400.
+        if (isStorageLimitError(error) || error instanceof HTTPError) throw error;
         throw new BadRequestError(error instanceof Error ? error.message : 'Failed to apply edit');
       }
     })

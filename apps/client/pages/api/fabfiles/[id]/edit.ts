@@ -18,7 +18,7 @@ import { diffLines } from 'diff';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isValidObjectId } from '@server/utils/objectId';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, HTTPError, NotFoundError } from '@bike4mind/utils';
 import { getFilesStorage } from '@server/utils/storage';
 import { deleteDroppedVersions, getAiEditVersionRetention } from '@server/utils/aiEditVersionRetention';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -412,7 +412,9 @@ Return only the edited content without any markdown code blocks or explanations.
         return res.json(result);
       } catch (error) {
         console.error('Edit file error:', error);
-        if (isStorageLimitError(error)) throw error;
+        // The storage gate and a missing owner already carry their own status code; rethrow them
+        // instead of flattening every error to a 400.
+        if (isStorageLimitError(error) || error instanceof HTTPError) throw error;
         throw new BadRequestError(error instanceof Error ? error.message : 'Failed to generate edit');
       }
     })
