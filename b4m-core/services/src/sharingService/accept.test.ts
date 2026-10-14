@@ -949,6 +949,15 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
     }
   );
 
+  it('looks a Session inviter up once for both the re-check and file propagation', async () => {
+    const adapters = makeAdapters(InviteType.Session, shareLink, makeDoc(shareLink), sharerId);
+
+    await acceptInvite(userId, { id: inviteId }, adapters as never);
+
+    expect(adapters.db.users.findById.mock.calls.filter(([id]) => id === sharerId)).toHaveLength(1);
+    expect(adapters.db.sessions.update).toHaveBeenCalled();
+  });
+
   it('refuses a link whose minter account no longer exists', async () => {
     const adapters = makeAdapters(
       InviteType.Session,

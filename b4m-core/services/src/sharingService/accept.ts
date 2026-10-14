@@ -168,7 +168,8 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
     case InviteType.Session: {
       const session = await db.sessions.findById(invite.documentId);
       if (!session) throw new NotFoundError('Session not found');
-      const granted = await permissionsInviterCanStillGrant(session, invite, invitePermissions, db.users);
+      const inviter = invite.inviterId ? await db.users.findById(invite.inviterId) : null;
+      const granted = await permissionsInviterCanStillGrant(session, invite, invitePermissions, db.users, inviter);
 
       // A session's knowledgeIds can point at files the inviter neither owns nor holds
       // share on (e.g. attached from someone else's shared session), so accepting must
@@ -176,7 +177,6 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
       // what the INVITER actually holds on it, not the invite's face-value permissions.
       // A legacy invite with no inviterId falls back to the conservative case: only
       // propagate to files the session owner themselves owns.
-      const inviter = invite.inviterId ? await db.users.findById(invite.inviterId) : null;
 
       if (session.knowledgeIds && session.knowledgeIds.length > 0) {
         await Promise.all(
@@ -349,11 +349,12 @@ const permissionsInviterCanStillGrant = async (
   doc: IShareableDocument & { userId: string },
   invite: IInvite,
   permissions: Permission[],
-  users: AcceptInviteAdapters['db']['users']
+  users: AcceptInviteAdapters['db']['users'],
+  resolvedInviter?: Awaited<ReturnType<AcceptInviteAdapters['db']['users']['findById']>>
 ): Promise<Permission[]> => {
   if (!invite.inviterId || invite.inviterId === doc.userId) return permissions;
 
-  const inviter = await users.findById(invite.inviterId);
+  const inviter = resolvedInviter !== undefined ? resolvedInviter : await users.findById(invite.inviterId);
   const held = grantablePermissions(doc as ShareableAccessShape, inviter?.id, inviter?.groups ?? []);
   const granted = held.has(Permission.share) ? permissions.filter(permission => held.has(permission)) : [];
   if (granted.length === 0) throw new ForbiddenError('The person who shared this can no longer share it');
