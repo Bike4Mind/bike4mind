@@ -8,7 +8,6 @@ import { verifyCallback } from '@server/utils/auth/verifyCallback';
 import { Config } from '@server/utils/config';
 
 import { Request, RequestHandler, Response } from 'express';
-import { Strategy as GitHubStrategy } from 'passport-github';
 import GoogleStrategy from 'passport-google-oauth20';
 import { ExtractJwt, Strategy as JwtStrategy } from 'passport-jwt';
 import {
@@ -25,6 +24,7 @@ import { authTokenGenerator } from './tokenGenerator';
 import { isRotatedSecretWithinGraceWindow } from './secretRotationGrace';
 import { verifyJwtPayload } from './verifyJwtPayload';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
+import { createGitHubStrategy } from './githubStrategy';
 import { isPolicyConsentRequired, type ConsentGateUser } from './consentGate';
 import { samlRequestCache } from './samlRequestCache';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
@@ -198,19 +198,7 @@ new FacebookStrategy(
 if (Config.GITHUB_CLIENT_ID && Config.GITHUB_CLIENT_ID !== 'not-configured') {
   passport.use(
     AuthStrategy.Github,
-    // tsgo (TypeScript 7.0 RC) only resolves the FINAL constructor overload of
-    // passport-github's Strategy - a known divergence for `export =` classes that
-    // extend another class - so it wrongly demands the passReqToCallback:true
-    // signature and rejects this valid StrategyOptions call. Classic tsc resolves
-    // the overloads correctly. Cast around the RC's faulty overload resolution;
-    // runtime is unchanged (passReqToCallback defaults to false, so verify receives
-    // (accessToken, refreshToken, profile, done)). See typecheck-report.md.
-    new (
-      GitHubStrategy as unknown as new (
-        options: Record<string, unknown>,
-        verify: (...args: any[]) => void
-      ) => GitHubStrategy
-    )(
+    createGitHubStrategy(
       {
         clientID: Config.GITHUB_CLIENT_ID,
         clientSecret: Config.GITHUB_CLIENT_SECRET,
@@ -218,9 +206,10 @@ if (Config.GITHUB_CLIENT_ID && Config.GITHUB_CLIENT_ID !== 'not-configured') {
         store: githubOAuthStateStore,
         // Request the user's email. GitHub omits the email from the basic
         // profile when it is private; with this scope passport-github fetches
-        // /user/emails and populates the verified primary. Without it, SSO
-        // logins resolve with email=null and fall into the account-create path
-        // instead of matching the user's existing account by email.
+        // /user/emails and populates the verified primary (which only works
+        // because createGitHubStrategy sends the token in a header). Without
+        // it, SSO logins resolve with email=null and fall into the
+        // account-create path instead of matching the existing account by email.
         scope: ['user:email'],
       },
       verifyCallback(AuthStrategy.Github)
