@@ -29,6 +29,14 @@ describe('collectDagChildArtifactBlocks', () => {
     expect(blocks).toEqual([artifact('shared')]);
   });
 
+  it('drops a child draft the parent refined under the same explicit identifier', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: `Refined chart:\n${artifact('chart', 'graph TD; A-->B; B-->C')}`,
+      childAnswers: [`Draft chart:\n${artifact('chart', 'graph TD; A-->B')}`],
+    });
+    expect(blocks).toEqual([]);
+  });
+
   it('keeps two children whose different untitled scripts share a promoted id', () => {
     const script = (n: number) => `\`\`\`python\nimport os\nx = ${n}\nprint(x)\n\`\`\``;
     const blocks = collectDagChildArtifactBlocks({
