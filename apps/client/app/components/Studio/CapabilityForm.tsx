@@ -142,9 +142,9 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
               onClick={field.onPick}
               data-testid={`${testId}-pick-btn`}
             >
-              {field.fileName ? 'Change image' : 'Choose image'}
+              {field.fileName !== null ? 'Change image' : 'Choose image'}
             </Button>
-            {field.fileName && (
+            {field.fileName !== null && (
               <Typography level="body-sm" data-testid={`${testId}-name`}>
                 {field.fileName}
               </Typography>

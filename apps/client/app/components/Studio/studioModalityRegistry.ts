@@ -6,10 +6,10 @@ import type { StudioModality } from './studioModality';
 export type StudioModalityDefinition = {
   title: string;
   galleryTitle: string;
-  // `<testId>-page`; the workspace reuses it for its own states.
+  // `<testId>-page`, and the prefix of the workspace's loading, error and empty states.
   testId: string;
   // Model picker and CapabilityForm, gated on the modality's usable models.
-  Workspace: ComponentType;
+  Workspace: ComponentType<{ testId: string }>;
   Gallery: ComponentType;
 };
 

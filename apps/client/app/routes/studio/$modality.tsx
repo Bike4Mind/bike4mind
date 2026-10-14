@@ -12,7 +12,7 @@ const StudioPage = ({ modality }: { modality: StudioModality }) => {
     <PageFrame testId={`${testId}-page`}>
       <Stack gap={3}>
         <Typography level="h2">{title}</Typography>
-        <Workspace />
+        <Workspace testId={testId} />
         <Typography level="title-lg">{galleryTitle}</Typography>
         <Gallery />
       </Stack>
