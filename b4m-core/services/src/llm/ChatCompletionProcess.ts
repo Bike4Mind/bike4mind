@@ -5259,7 +5259,15 @@ export class ChatCompletionProcess {
             // protective try/catch around post-streaming processing further down. A crash degrades
             // to "nothing detected"; the reply and its artifacts always stand.
             try {
-              for (const artifact of detectElision ? artifacts : []) {
+              // Scan only what main's server pass promoted: the merged pass also promotes tsx/jsx and
+              // python fences, and a routine edit snippet ("// ... existing code") would stamp a verdict.
+              const elisionArtifacts =
+                detectElision && artifacts.some(a => a.type === 'react' || a.type === 'python')
+                  ? parseArtifacts(
+                      convertCodeBlocksToArtifacts(reply, { ...convertOptions, skipClientOnlyPromotions: true })
+                    ).artifacts
+                  : artifacts;
+              for (const artifact of detectElision ? elisionArtifacts : []) {
                 const elision = detectElision!(artifact.content, artifact.type);
                 if (!elision.elided) continue;
                 elisionHits.push({

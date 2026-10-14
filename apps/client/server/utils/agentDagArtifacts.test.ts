@@ -29,6 +29,17 @@ describe('collectDagChildArtifactBlocks', () => {
     expect(blocks).toEqual([artifact('shared')]);
   });
 
+  it('keeps two children whose different untitled scripts share a promoted id', () => {
+    const script = (n: number) => `\`\`\`python\nimport os\nx = ${n}\nprint(x)\n\`\`\``;
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: [`A\n${script(1)}`, `B\n${script(2)}`],
+    });
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toContain('x = 1');
+    expect(blocks[1]).toContain('x = 2');
+  });
+
   it('keeps distinct child artifacts and preserves child order', () => {
     const blocks = collectDagChildArtifactBlocks({
       parentAnswer: 'Summary.',

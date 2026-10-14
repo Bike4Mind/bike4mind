@@ -16,10 +16,11 @@ import { parseArtifacts, convertCodeBlocksToArtifacts, createToolEchoMatcher } f
  * raw `<artifact>…</artifact>` blocks the children produced and append the ones
  * the parent didn't already reproduce to the parent's persisted reply text.
  *
- * Dedup is by artifact identifier (falling back to trimmed content when a block
- * has no identifier), against BOTH the parent's own artifacts and earlier child
- * blocks - so a block the parent reproduced, or two children emitting the same
- * id, renders exactly once. Extraction is the same pipeline the client render path runs
+ * Dedup is by artifact identifier plus trimmed content, against BOTH the parent's
+ * own artifacts and earlier child blocks - so a block the parent reproduced, or two
+ * children emitting the same block, renders exactly once. Content is in the key
+ * because promoted fences get title-derived ids ("python-script", "component"), so
+ * two children's different scripts can share one. Extraction is the same pipeline the client render path runs
  * (`convertCodeBlocksToArtifacts` then `parseArtifacts`, one shared detector set in core) so
  * fenced chart/code output counts the same as explicit `<artifact>` tags. `childSteps[i]` is child i's persisted
  * steps: web tool output that child quoted back is not promoted, same as chat's echo matcher.
@@ -32,7 +33,7 @@ export function collectDagChildArtifactBlocks(args: {
   const { parentAnswer, childAnswers, childSteps } = args;
 
   const keyOf = (a: { identifier?: string; content: string }): string =>
-    a.identifier ? `id:${a.identifier}` : `content:${a.content.trim()}`;
+    `${a.identifier ? `id:${a.identifier}` : 'content'}:${a.content.trim()}`;
 
   const parseBlocks = (text: string, steps?: readonly unknown[]) => {
     if (!text) return [];

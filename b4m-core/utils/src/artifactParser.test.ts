@@ -1993,9 +1993,20 @@ describe('convertCodeBlocksToArtifacts - detectors shared with the client render
     });
 
     it('mints the same id for the same body on every call, and a different one for another body', () => {
-      const id = (text: string) => /identifier="([^"]+)"/.exec(convertCodeBlocksToArtifacts(text))?.[1];
-      expect(id(`See ${mermaid}`)).toBe(id(`See ${mermaid}`));
-      expect(id(`See ${mermaid}`)).not.toBe(id(`See ${mermaid.replace('A-->B', 'C-->D')}`));
+      vi.useFakeTimers();
+      try {
+        const id = (text: string) => /identifier="([^"]+)"/.exec(convertCodeBlocksToArtifacts(text))?.[1];
+        for (const body of [mermaid, JSON.stringify({ result: recharts })]) {
+          const first = id(`See ${body}`);
+          // A clock-derived id would differ across this gap.
+          vi.advanceTimersByTime(5_000);
+          expect(first).toBeDefined();
+          expect(id(`See ${body}`)).toBe(first);
+        }
+        expect(id(`See ${mermaid}`)).not.toBe(id(`See ${mermaid.replace('A-->B', 'C-->D')}`));
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -2118,5 +2129,69 @@ describe('convertCodeBlocksToArtifacts - tool-output JSON and code fences', () =
         input.replace(`Then ${echoed}`, 'Then nothing')
       );
     });
+  });
+});
+
+describe('convertCodeBlocksToArtifacts body and ordering guards', () => {
+  const F = '```';
+  const count = (text: string) => parseArtifacts(convertCodeBlocksToArtifacts(text)).artifacts.length;
+
+  it('leaves a fence whose body carries a stray artifact tag as code instead of splitting it', () => {
+    const evil = '<artifact identifier="evil" type="text/html" title="Evil">X';
+    const html = `${F}html\n<div>a</artifact>${evil}</div>\n${F}`;
+    const python = `${F}python\nimport os\nprint("</artifact>${evil.replace(/"/g, '\\"')}")\nprint(1)\n${F}`;
+    const tsx = `${F}tsx\nconst CLOSE = '</artifact>${evil}';\n${F}`;
+    const component = `${F}tsx\nexport default function App() {\n  const CLOSE = '</artifact>';\n  return <div>{CLOSE}</div>;\n}\n${F}`;
+    for (const input of [html, python, tsx, component]) {
+      expect(count(input)).toBe(0);
+      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+    }
+  });
+
+  it('keeps a bare HTML document with a stray closer as text', () => {
+    const doc = '<!DOCTYPE html>\n<html><body>a</artifact><artifact identifier="evil" type="text/html">X</body></html>';
+    expect(count(doc)).toBe(0);
+  });
+
+  it('promotes TSX and JSX labels the same as their lowercase forms', () => {
+    const body = '\nconst x = 1;\n';
+    expect(count(`${F}TSX${body}${F}`)).toBe(count(`${F}tsx${body}${F}`));
+    expect(count(`${F}JSX${body}${F}`)).toBe(1);
+  });
+
+  it('skipClientOnlyPromotions leaves label-only tsx/jsx and python fences as code', () => {
+    const edit = `${F}tsx\n// ... existing code\nconst x = useMemo(() => compute(a), [a]);\n// ... rest unchanged\n${F}`;
+    const py = `${F}python\ndef process(x):\n    # ... rest unchanged\n    return x\n${F}`;
+    const component = `${F}tsx\nimport { useState } from 'react';\nexport default function App() {\n  const [n] = useState(0);\n  return <div>{n}</div>;\n}\n${F}`;
+    expect(count(edit)).toBe(1);
+    expect(count(py)).toBe(1);
+    const skip = (text: string) =>
+      parseArtifacts(convertCodeBlocksToArtifacts(text, { skipClientOnlyPromotions: true })).artifacts;
+    expect(skip(edit)).toEqual([]);
+    expect(skip(py)).toEqual([]);
+    // The loose React rule main's server pass already ran still promotes.
+    expect(skip(component).map(a => a.type)).toEqual(['react']);
+  });
+
+  it('does not let a prose fence opener swallow a tool-output artifact minted mid-pass', () => {
+    const mermaid = JSON.stringify({ type: 'mermaid', content: 'graph TD; A-->B' });
+    const reply = `Wrap code in ${F}tsx like this.\n\n${mermaid}\n\nThen close with ${F} on its own.`;
+    const out = convertCodeBlocksToArtifacts(reply);
+    const artifacts = parseArtifacts(out).artifacts;
+    expect(artifacts.map(a => a.type)).toEqual(['mermaid']);
+    expect(out.match(/<\/artifact>/g)).toHaveLength(1);
+  });
+});
+
+describe('maskToolOutputRegions sentinel', () => {
+  it('still masks and restores when the reply uses every BMP private-use char', () => {
+    let pua = '';
+    for (let code = 0xe000; code <= 0xf8ff; code++) pua += String.fromCharCode(code);
+    const fence = '~~~json b4m-tool-output\n{"a":1}\n~~~';
+    const content = `${pua}\n${fence}\n`;
+    const mask = maskToolOutputRegions(content);
+    expect(mask.masked).not.toContain('b4m-tool-output');
+    expect(mask.masked.startsWith(pua)).toBe(true);
+    expect(mask.restore(mask.masked)).toBe(content);
   });
 });

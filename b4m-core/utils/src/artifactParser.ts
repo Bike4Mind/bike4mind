@@ -397,6 +397,14 @@ function tildeLineRun(line: string): number {
   return trimmed.length;
 }
 
+/** A reply that uses every BMP private-use char gets a supplementary one (a surrogate pair). */
+function supplementarySentinel(content: string): string {
+  for (let code = 0xf0000; ; code++) {
+    const candidate = String.fromCodePoint(code);
+    if (!content.includes(candidate)) return candidate;
+  }
+}
+
 /**
  * Hides every closed `~~~<lang> b4m-tool-output` fence behind a placeholder so no
  * detector can promote its body or count the backticks inside it. An opener with no
@@ -410,8 +418,8 @@ export function maskToolOutputRegions(content: string): ToolOutputMask {
     if (c >= 0xe000) used.add(c);
   }
   let code = 0xe000;
-  while (used.has(code)) code++;
-  const sentinel = String.fromCharCode(code);
+  while (code <= 0xf8ff && used.has(code)) code++;
+  const sentinel = code <= 0xf8ff ? String.fromCharCode(code) : supplementarySentinel(content);
   const regions: string[] = [];
   const protect = (region: string): string => {
     regions.push(region);
@@ -504,6 +512,13 @@ export interface ConvertCodeBlocksOptions {
    * after the block closes.
    */
   rewriteNestedMarkdown?: boolean;
+  /**
+   * Skip the promotions the merged pass took over from the client render: tsx/jsx fences on the
+   * label or the 2-indicator rule alone, and python fences. The server chat path sets it for the
+   * elision scan only, where a promoted edit snippet ("// ... existing code") would otherwise
+   * stamp a suspected-elision verdict on the quest.
+   */
+  skipClientOnlyPromotions?: boolean;
 }
 
 /**
@@ -622,19 +637,19 @@ function sanitizeToolOutputTitle(title: unknown): string {
  * Escapes the literal "</artifact>" sequence in a JSON artifact body so it cannot truncate
  * parseArtifacts' non-greedy body match and leave a following "<artifact ...>" to be read
  * as a second, model-chosen artifact. JSON.parse reads "\/" as "/", so the consumer
- * restores the original losslessly. Twin of escapeArtifactBodyJson in b4m-core services
- * (llm/tools/utils/artifactEmission), which this package cannot import; keep in sync.
+ * restores the original losslessly. Also used by the services artifact-emitting tools.
  */
-function escapeArtifactBodyJson(body: string): string {
+export function escapeArtifactBodyJson(body: string): string {
   return body.replace(/<\/artifact>/gi, '<\\/artifact>');
 }
 
 /**
  * Same protection for a RAW (non-JSON) body, where the JSON backslash escape would render
- * as garbage. Matches the bare "<artifact"/"</artifact>" the parsers match and no more.
- * Twin of stripArtifactTagsFromRawBody in b4m-core services; keep in sync.
+ * as garbage. Matches exactly the bare "<artifact"/"</artifact>" every artifact matcher in the
+ * repo requires and no more: tolerating "< / artifact" would neutralize nothing real, and two
+ * adjacent unbounded \s* runs would make the scan quadratic on a long run after a lone "<".
  */
-function stripArtifactTagsFromRawBody(body: string): string {
+export function stripArtifactTagsFromRawBody(body: string): string {
   return body.replace(/<(\/?)artifact\b/gi, '&lt;$1artifact');
 }
 
@@ -985,6 +1000,8 @@ function mapOutsideCode(
   return out + mapProse(copied, content.length);
 }
 
+const ARTIFACT_TAG_IN_BODY = /<\/?artifact\b/i;
+
 function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions, echoOnly: boolean): string {
   const mask = maskToolOutputRegions(content);
   const spans = protectArtifactSpans(mask.masked, mask);
@@ -995,7 +1012,10 @@ function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions,
   // Echoed spans become marked fences, protected at once so later passes skip them too.
   // A span that holds a placeholder wraps a protected region (tool output or an existing artifact);
   // promoting it would put that region back inside a new artifact when restore runs.
-  const { holds } = mask;
+  // A body with a stray artifact tag stays code too: the first closer ends the wrapper, so a
+  // following opener would parse as a second, body-authored artifact, and no escape is lossless
+  // across react/html/svg/python.
+  const holds = (value: string): boolean => mask.holds(value) || ARTIFACT_TAG_IN_BODY.test(value);
   const echoFence = (lang: string, body: string, whole: string, start: number, end: number): string | null =>
     isToolEcho?.(body)
       ? mask.protect(toolOutputFence(lang, body, whole.slice(Math.max(0, start - 1), start), whole.slice(end, end + 2)))
@@ -1113,7 +1133,8 @@ ${codeContent.trim()}
   // An echo becomes a protected marked fence so a later convert without isToolEcho skips it too;
   // a "result": "..." chunk is fenced as matched, splitting the JSON string that quoted it.
   const convertToolOutputs = (text: string, mark: ToolOutputEchoes['mark']) =>
-    convertToolOutputsToArtifacts(text, holds, { isToolEcho, mark, only: echoOnly });
+    // mask.holds, not holds: these branches escape or strip artifact tags in the body themselves.
+    convertToolOutputsToArtifacts(text, mask.holds, { isToolEcho, mark, only: echoOnly });
   content = mapOutsideCode(
     content,
     (text, before, after) =>
@@ -1136,40 +1157,51 @@ ${codeContent.trim()}
     }
   );
 
-  promoteReactFences((language, code) => language === 'tsx' || language === 'jsx' || hasReactIndicators(code));
+  // Again for the tool-output artifacts just minted, so a fence opener in earlier prose cannot
+  // stretch across one below and swallow it.
+  content = protectArtifactSpans(content, mask).masked;
+
+  const skipClientOnly = options.skipClientOnlyPromotions === true && !echoOnly;
+  if (!skipClientOnly) {
+    promoteReactFences((language, code) => {
+      const label = language.toLowerCase();
+      return label === 'tsx' || label === 'jsx' || hasReactIndicators(code);
+    });
+  }
 
   // Detect Python code blocks - convert substantial Python code to Python artifacts
   const pythonCodeBlockRegex = /```(python|py)([\s\S]*?)```/gi;
 
-  content = content.replace(
-    pythonCodeBlockRegex,
-    (match, language: string, codeContent: string, offset: number, whole: string) => {
-      if (holds(codeContent)) return match;
-      const trimmedCode = codeContent.trim();
+  if (!skipClientOnly)
+    content = content.replace(
+      pythonCodeBlockRegex,
+      (match, language: string, codeContent: string, offset: number, whole: string) => {
+        if (holds(codeContent)) return match;
+        const trimmedCode = codeContent.trim();
 
-      // Only convert if it's substantial code (more than a simple one-liner)
-      // This helps avoid converting simple inline examples
-      const lineCount = trimmedCode.split('\n').length;
-      const hasImports = /^(?:import|from)\s+\w+/m.test(trimmedCode);
-      const hasDefinitions = /^(?:def|class)\s+\w+/m.test(trimmedCode);
-      const hasPrint = /print\s*\(/.test(trimmedCode);
-      const hasSubstantialCode = lineCount >= 3 || hasImports || hasDefinitions;
+        // Only convert if it's substantial code (more than a simple one-liner)
+        // This helps avoid converting simple inline examples
+        const lineCount = trimmedCode.split('\n').length;
+        const hasImports = /^(?:import|from)\s+\w+/m.test(trimmedCode);
+        const hasDefinitions = /^(?:def|class)\s+\w+/m.test(trimmedCode);
+        const hasPrint = /print\s*\(/.test(trimmedCode);
+        const hasSubstantialCode = lineCount >= 3 || hasImports || hasDefinitions;
 
-      // Keep simple examples as regular code blocks
-      if (!hasSubstantialCode && !(hasPrint && lineCount >= 2)) return match;
+        // Keep simple examples as regular code blocks
+        if (!hasSubstantialCode && !(hasPrint && lineCount >= 2)) return match;
 
-      const echoed = echoFence(language, codeContent, whole, offset, offset + match.length);
-      if (echoed !== null) return echoed;
-      if (echoOnly) return match;
+        const echoed = echoFence(language, codeContent, whole, offset, offset + match.length);
+        if (echoed !== null) return echoed;
+        if (echoOnly) return match;
 
-      const title = sanitizeHTMLTitle(extractPythonTitle(trimmedCode), 'Python Script');
-      const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
+        const title = sanitizeHTMLTitle(extractPythonTitle(trimmedCode), 'Python Script');
+        const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
-      return `<artifact identifier="${identifier}" type="application/vnd.ant.python" title="${title}">
+        return `<artifact identifier="${identifier}" type="application/vnd.ant.python" title="${title}">
 ${trimmedCode}
 </artifact>`;
-    }
-  );
+      }
+    );
 
   // See ConvertCodeBlocksOptions.rewriteNestedMarkdown. Never under echoOnly, which must leave
   // every other byte alone.

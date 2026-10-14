@@ -219,12 +219,34 @@ function isMalformed(input: string): boolean {
 // be looked at. Every accepted delta is an old-flow bug or a half-tag the old flow leaked; see the PR.
 // 28 of H1's and H2's are tool-output JSON after an unclosed or glued fence, which the old flow
 // promoted out of what renders as code and the line-paired fence scan now leaves alone.
-const ACCEPTED_MALFORMED_DELTAS = { H1: 43, H2: 39, H3: 0 };
+// When a count moves, the failure message lists every mismatch (describeMismatches): diff it
+// against a run on the parent commit to find the case that moved, then re-pin the new count.
+const ACCEPTED_MALFORMED_DELTAS = { H1: 55, H2: 39, H3: 0 };
+
+// Inputs (160 well-formed, 22 malformed) where the old pass wrapped a freshly promoted artifact in a
+// second one, e.g. an html fence inside a bare <html> document: same artifact count, but an old body
+// carries a nested tag. The merged pass leaves any body holding an artifact tag as text. The same
+// guard moved 14 malformed deltas (into H1's 55): a fence with a glued closer no longer stretches
+// across a just-promoted artifact and swallows it.
+const ACCEPTED_NESTED_TAG_DELTAS = { H1: 182, H2: 0, H3: 0 };
+
+const bodyHasArtifactTag = (r: NormalizedResult) =>
+  r.artifacts.some(a => /<\/?artifact\b/i.test((JSON.parse(a) as { content: string }).content));
+
+function isNestedTagFix(m: Mismatch): boolean {
+  return (
+    m.left.artifacts.length === m.right.artifacts.length && bodyHasArtifactTag(m.right) && !bodyHasArtifactTag(m.left)
+  );
+}
 
 function expectParity(label: keyof typeof ACCEPTED_MALFORMED_DELTAS, mismatches: Mismatch[]): void {
-  const wellFormed = mismatches.filter(m => !isMalformed(m.input));
-  expect(wellFormed.length, describeMismatches(label, wellFormed)).toBe(0);
-  expect(mismatches.length, describeMismatches(label, mismatches)).toBe(ACCEPTED_MALFORMED_DELTAS[label]);
+  const nestedTagFixes = mismatches.filter(isNestedTagFix);
+  const unexplained = mismatches.filter(m => !isMalformed(m.input) && !isNestedTagFix(m));
+  expect(unexplained.length, describeMismatches(label, unexplained)).toBe(0);
+  expect(nestedTagFixes.length, describeMismatches(label, nestedTagFixes)).toBe(ACCEPTED_NESTED_TAG_DELTAS[label]);
+  expect(mismatches.length - nestedTagFixes.length, describeMismatches(label, mismatches)).toBe(
+    ACCEPTED_MALFORMED_DELTAS[label]
+  );
 }
 
 function describeMismatches(label: string, mismatches: Mismatch[]): string {
