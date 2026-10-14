@@ -5,7 +5,7 @@ import { clearClientCaches } from '@client/app/utils/clearClientCaches';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import { api, isPublicPath } from './apiClient';
 import { refreshSession } from '@client/app/utils/refreshCoordinator';
-import { registerStepUpInterceptor } from '@client/app/utils/stepUpInterceptor';
+import { isStepUpRequired, registerStepUpInterceptor } from '@client/app/utils/stepUpInterceptor';
 
 // The axios instance and its request-side interceptors live in ./apiClient (a leaf module, so the
 // refresh coordinator can reach the transport without importing this file back). Re-exported here
@@ -93,14 +93,11 @@ api.interceptors.response.use(
     // 401 handling below run (it already no-ops the redirect for mfaPending).
     const isMfaPending401 =
       isAxiosError(error) && error.response?.status === 401 && error.response?.data?.mfaPending === true;
-    // Also expected: the step-up interceptor below turns it into a verification prompt.
-    const isStepUpRequired403 =
-      isAxiosError(error) && error.response?.status === 403 && error.response?.data?.code === 'step_up_required';
-
-    // Suppress logging for the expected rejections above; log everything else.
+    // Suppress logging for the expected mid-MFA rejection and for a 403 step_up_required, which
+    // the step-up interceptor below turns into a verification prompt; log everything else.
     // TODO: have graceful toasters for customers vs developers
     // For now just a console.log
-    if (!isMfaPending401 && !isStepUpRequired403) {
+    if (!isMfaPending401 && !isStepUpRequired(error)) {
       if (isAxiosError(error)) {
         if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
           console.error('Network Error: Backend may not be running. Check that SST is started.');

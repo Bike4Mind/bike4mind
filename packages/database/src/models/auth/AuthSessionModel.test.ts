@@ -274,6 +274,36 @@ describe('AuthSessionModel repository', () => {
     expect(updated?.recoveries).toBe(0);
   });
 
+  it('stepUpAt survives refresh rotation and recovery rotation', async () => {
+    const stepUpAt = new Date(Date.now() - 60_000);
+    await authSessionRepository.create(base({ sid: 'keep-rot', refreshTokenHash: 'h0', stepUpAt }));
+    const rotated = await authSessionRepository.rotateHash('keep-rot', {
+      expectedCurrentHash: 'h0',
+      nextHash: 'h1',
+      replayExpiresAt: new Date(Date.now() + 5000),
+      newExpiresAt: FAR_FUTURE(),
+    });
+    expect(rotated?.stepUpAt?.getTime()).toBe(stepUpAt.getTime());
+
+    await authSessionRepository.create(
+      base({
+        sid: 'keep-rec',
+        refreshTokenHash: 'orphaned',
+        previousRefreshTokenHash: 'held',
+        graceExpiresAt: new Date(Date.now() - 1000),
+        stepUpAt,
+      })
+    );
+    const recovered = await authSessionRepository.recoverRotateHash('keep-rec', {
+      expectedPreviousHash: 'held',
+      nextHash: 'recovered',
+      replayExpiresAt: new Date(Date.now() + 5000),
+      maxRecoveries: 3,
+    });
+    expect(recovered?.refreshTokenHash).toBe('recovered');
+    expect(recovered?.stepUpAt?.getTime()).toBe(stepUpAt.getTime());
+  });
+
   it('recoverRotateHash rotates from the previous hash once its grace window has closed', async () => {
     await authSessionRepository.create(
       base({

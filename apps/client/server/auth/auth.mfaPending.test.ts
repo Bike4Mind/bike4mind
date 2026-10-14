@@ -125,7 +125,12 @@ describe('auth middleware: mfaPending sign-in token', () => {
   });
 
   it('still admits the sign-in enrollment and verification routes', async () => {
-    for (const url of ['/api/auth/mfa/setup', '/api/auth/mfa/verify']) {
+    for (const url of [
+      '/api/auth/mfa/setup',
+      '/api/auth/mfa/verify-setup',
+      '/api/auth/mfa/verify',
+      '/api/auth/mfa/cancel-setup',
+    ]) {
       const { res, handlerFn } = await callAsMfaPending('POST', url);
       expect(handlerFn).toHaveBeenCalledTimes(1);
       expect(res._getStatusCode()).toBe(200);

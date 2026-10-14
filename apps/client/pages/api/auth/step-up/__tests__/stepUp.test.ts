@@ -304,6 +304,16 @@ describe('POST /api/auth/step-up - password', () => {
     expect(sessions.get('sid-1')!.stepUpAt).toBeNull();
   });
 
+  it('answers 403 and logs no success when the session was revoked mid-request', async () => {
+    vi.spyOn(authSessionRepository, 'markStepUp').mockResolvedValueOnce(null);
+
+    await expect(
+      call(stepUpHandler, { body: { method: 'password', password: 'correct horse' } })
+    ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { code: 'step_up_unavailable' } });
+    expect(h.logAuthAudit).not.toHaveBeenCalled();
+    expect(sessions.get('sid-1')!.stepUpAt).toBeNull();
+  });
+
   it('cannot step up a request that has no session id', async () => {
     await expect(
       call(stepUpHandler, { body: { method: 'password', password: 'correct horse' }, sid: null })
@@ -389,6 +399,14 @@ describe('POST /api/auth/step-up - email', () => {
   it('sends nothing when the challenge cannot be stored on the session', async () => {
     vi.spyOn(authSessionRepository, 'setStepUpEmailChallenge').mockResolvedValueOnce(false);
     await expect(call(emailSendHandler)).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.publishEmail).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing to a request that has no session id', async () => {
+    await expect(call(emailSendHandler, { sid: null })).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { code: 'step_up_unavailable' },
+    });
     expect(h.publishEmail).not.toHaveBeenCalled();
   });
 

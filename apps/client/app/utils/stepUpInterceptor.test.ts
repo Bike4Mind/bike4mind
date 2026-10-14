@@ -6,6 +6,10 @@ import { useStepUpStore } from '@client/app/stores/useStepUpStore';
 import { isStepUpCancelled } from './stepUpInterceptor';
 
 vi.mock('@client/app/utils/clearClientCaches', () => ({ clearClientCaches: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@client/app/utils/refreshCoordinator', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/refreshCoordinator')>()),
+  refreshSession: vi.fn().mockResolvedValue({}),
+}));
 
 const failWith = (config: InternalAxiosRequestConfig, status: number, data: unknown): AxiosError =>
   new AxiosError('failed', 'ERR_BAD_REQUEST', config, {}, {
@@ -98,6 +102,30 @@ describe('step-up response interceptor', () => {
     expect(isStepUpCancelled(error)).toBe(false);
     expect(calls).toHaveLength(2);
     expect(useStepUpStore.getState().open).toBe(false);
+  });
+
+  it('prompts only once when a 401 refresh replay is then cancelled', async () => {
+    let attempt = 0;
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      calls.push(config.url ?? '');
+      attempt += 1;
+      return Promise.reject(
+        attempt === 1 ? failWith(config, 401, { error: 'Unauthorized' }) : failWith(config, 403, stepUpRequired)
+      );
+    }) as AxiosAdapter;
+    // Dismiss every prompt as it opens, counting them.
+    let prompts = 0;
+    const unsubscribe = useStepUpStore.subscribe((state, previous) => {
+      if (!state.open || previous.open) return;
+      prompts += 1;
+      queueMicrotask(() => useStepUpStore.getState().cancelStepUp());
+    });
+
+    const error = await api.post('/api/email/change', {}).catch((caught: unknown) => caught);
+    unsubscribe();
+    expect(isStepUpCancelled(error)).toBe(true);
+    expect(prompts).toBe(1);
+    expect(calls).toEqual(['/api/email/change', '/api/email/change']);
   });
 
   it('leaves other 403s alone', async () => {

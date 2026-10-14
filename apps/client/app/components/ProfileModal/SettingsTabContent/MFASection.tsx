@@ -204,6 +204,7 @@ const MFASection: React.FC = () => {
               color="primary"
               variant="solid"
               startDecorator={<VpnKeyIcon />}
+              data-testid="mfa-enable-btn"
               onClick={handleEnableMFA}
               loading={setupMFA.isPending}
               fullWidth
@@ -317,6 +318,7 @@ const MFASection: React.FC = () => {
               color="primary"
               variant="solid"
               startDecorator={<VpnKeyIcon />}
+              data-testid="mfa-enable-btn"
               onClick={handleEnableMFA}
               loading={setupMFA.isPending}
               fullWidth
@@ -333,6 +335,7 @@ const MFASection: React.FC = () => {
                 <StyledButton
                   color="danger"
                   startDecorator={<VpnKeyIcon />}
+                  data-testid="mfa-disable-btn"
                   onClick={handleDisableMFA}
                   loading={disableMFA.isPending}
                   fullWidth
@@ -346,6 +349,7 @@ const MFASection: React.FC = () => {
                 color="neutral"
                 variant="outlined"
                 startDecorator={<RefreshIcon />}
+                data-testid="mfa-regenerate-backup-codes-btn"
                 onClick={handleRegenerateBackupCodes}
                 loading={regenerateBackupCodes.isPending}
                 fullWidth

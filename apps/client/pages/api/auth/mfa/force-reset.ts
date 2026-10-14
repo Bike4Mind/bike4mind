@@ -26,6 +26,13 @@ const handler = baseApi().post(
 
     const { userId } = forceResetBodySchema.parse(req.body);
 
+    // Resetting your own MFA must go through /api/auth/mfa/disable, which requires recent
+    // verification and honours enforceMFA. Ids compare case-insensitively: Mongo resolves an
+    // upper-case hex id to the same user.
+    if (adminUser.id.toLowerCase() === userId.toLowerCase()) {
+      return res.status(403).json({ error: 'Use /api/auth/mfa/disable to turn off your own MFA.' });
+    }
+
     let resetBody: unknown;
     try {
       // A suspected-compromise reset must not leave an enrolled passkey able to satisfy MFA.

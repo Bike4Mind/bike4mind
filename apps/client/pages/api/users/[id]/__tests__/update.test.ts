@@ -193,6 +193,26 @@ describe('PUT /api/users/:id/update - changing your own password', () => {
     expect(mockUpdateUser).not.toHaveBeenCalled();
   });
 
+  // applyBaseUserUpdates hashes '' as a real password, so the gate must not use a truthiness check.
+  it('gates an empty-string password too', async () => {
+    mockRequireStepUp.mockRejectedValue(stepUpRequired);
+    const { promise } = run({ user: SELF, userId: 'u1', body: { password: '' } });
+    await expect(promise).rejects.toBe(stepUpRequired);
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('refuses an empty-string password from an API key outright', async () => {
+    const { promise } = run({
+      user: SELF,
+      userId: 'u1',
+      body: { password: '' },
+      apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] },
+    });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+  });
+
   it('writes once recently verified', async () => {
     const { res, promise } = run({ user: SELF, userId: 'u1', body: { password: 'new-password' } });
     await promise;
@@ -555,6 +575,7 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     const { promise } = run({ user: SELF, userId: 'u1', body: { password: '' } });
     await promise;
 
+    expect(mockRequireStepUp).toHaveBeenCalledTimes(1);
     expect(mockSessionEnded).toHaveBeenCalledTimes(1);
     expect(mockSessionEnded).toHaveBeenCalledWith({ userId: 'u1', reason: 'password_changed' });
   });

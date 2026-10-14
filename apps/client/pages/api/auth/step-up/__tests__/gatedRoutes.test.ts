@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   startPasskeyRegistration: vi.fn(),
   removePasskey: vi.fn(),
   requestEmailChange: vi.fn(),
+  forceResetMFA: vi.fn(),
+  removeAllPasskeys: vi.fn(),
   passThrough: () => (_req: unknown, _res: unknown, next: () => void) => next(),
   user: {
     id: 'user-1',
@@ -79,7 +81,11 @@ vi.mock('@bike4mind/database', () => ({
     findByIdWithMfaSecrets: async () => h.user,
   },
   adminSettingsRepository: { findBySettingName: async () => null },
-  passkeyCredentialRepository: { remove: h.removePasskey, removeAllForUser: async () => 0, countByUser: async () => 0 },
+  passkeyCredentialRepository: {
+    remove: h.removePasskey,
+    removeAllForUser: h.removeAllPasskeys,
+    countByUser: async () => 0,
+  },
   passkeyChallengeRepository: {},
   trustedDeviceRepository: { revokeAllForUser: async () => 0 },
   withTransaction: (fn: () => unknown) => fn(),
@@ -88,6 +94,7 @@ vi.mock('@bike4mind/services', () => ({
   mfaService: {
     setupMFA: h.setupMFA,
     disableMFA: h.disableMFA,
+    forceResetMFA: h.forceResetMFA,
     userCanDisableMFA: () => true,
     regenerateBackupCodes: h.regenerateBackupCodes,
     startPasskeyRegistration: h.startPasskeyRegistration,
@@ -105,6 +112,7 @@ import regenerateRoute from '@pages/api/auth/mfa/regenerate-backup-codes';
 import registerOptionsRoute from '@pages/api/auth/mfa/passkey/register-options';
 import deletePasskeyRoute from '@pages/api/auth/mfa/passkey/[id]';
 import changeEmailRoute from '@pages/api/email/change';
+import forceResetRoute from '@pages/api/auth/mfa/force-reset';
 
 const USER = h.user;
 
@@ -169,6 +177,8 @@ beforeEach(() => {
   h.startPasskeyRegistration.mockResolvedValue({ challenge: 'c' });
   h.removePasskey.mockResolvedValue(true);
   h.requestEmailChange.mockResolvedValue(undefined);
+  h.forceResetMFA.mockResolvedValue({ success: true, user: { id: 'other-user' } });
+  h.removeAllPasskeys.mockResolvedValue(0);
 });
 
 it.each([
@@ -225,5 +235,23 @@ describe('POST /api/auth/mfa/passkey/register-options', () => {
     const res = await call(registerOptionsRoute, { body: {} });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ challenge: 'c' });
+  });
+});
+
+describe('POST /api/auth/mfa/force-reset', () => {
+  const ADMIN = { ...USER, isAdmin: true, sid: 'sid-1' };
+
+  // An admin's own reset would otherwise bypass the step-up gate on /api/auth/mfa/disable.
+  it.each([USER.id, USER.id.toUpperCase()])('refuses an admin resetting their own MFA (%s)', async userId => {
+    const res = await call(forceResetRoute, { user: ADMIN, body: { userId } });
+    expect(res._getStatusCode()).toBe(403);
+    expect(h.removeAllPasskeys).not.toHaveBeenCalled();
+    expect(h.forceResetMFA).not.toHaveBeenCalled();
+  });
+
+  it("still resets another user's MFA", async () => {
+    const res = await call(forceResetRoute, { user: ADMIN, body: { userId: 'other-user' } });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.forceResetMFA).toHaveBeenCalledTimes(1);
   });
 });

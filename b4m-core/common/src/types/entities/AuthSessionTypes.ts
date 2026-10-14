@@ -81,6 +81,12 @@ export interface IAuthSession {
 /** Proofs a session can re-verify with (POST /api/auth/step-up); the server picks which apply. */
 export type StepUpMethod = 'totp' | 'passkey' | 'password' | 'email';
 
+/** Error `code` a step-up-gated route returns (status 403); the client keys its verification prompt on it. */
+export const STEP_UP_REQUIRED_CODE = 'step_up_required';
+
+/** Error `code` POST /api/auth/step-up returns (status 400) for a wrong, expired or used-up proof. */
+export const STEP_UP_FAILED_CODE = 'step_up_failed';
+
 export interface IAuthSessionStepUpEmailChallenge {
   /** sha256 of the opaque pending token handed to the client. */
   tokenHash: string;

@@ -1,4 +1,5 @@
 import { isAxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
+import { STEP_UP_REQUIRED_CODE } from '@bike4mind/common';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useStepUpStore } from '@client/app/stores/useStepUpStore';
 
@@ -16,10 +17,11 @@ const STEP_UP_CANCELLED = Symbol('stepUpCancelled');
 export const isStepUpCancelled = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && STEP_UP_CANCELLED in error;
 
-const isStepUpRequired = (error: unknown): boolean =>
+/** True for the 403 a step-up-gated route returns when the session has not recently verified. */
+export const isStepUpRequired = (error: unknown): boolean =>
   isAxiosError(error) &&
   error.response?.status === 403 &&
-  (error.response.data as { code?: unknown } | undefined)?.code === 'step_up_required';
+  (error.response.data as { code?: unknown } | undefined)?.code === STEP_UP_REQUIRED_CODE;
 
 /**
  * On a 403 `step_up_required`, prompts for verification (one shared prompt for concurrent
@@ -30,6 +32,9 @@ export function registerStepUpInterceptor(client: AxiosInstance): void {
   client.interceptors.response.use(
     response => response,
     async (error: unknown) => {
+      // A replay (e.g. the 401 refresh retry) runs this chain nested inside the outer one, so a
+      // prompt the inner pass already saw dismissed must not be shown again on the way out.
+      if (isStepUpCancelled(error)) return Promise.reject(error);
       if (!isStepUpRequired(error) || !isAxiosError(error)) return Promise.reject(error);
 
       const config = error.config as StepUpRetryConfig | undefined;

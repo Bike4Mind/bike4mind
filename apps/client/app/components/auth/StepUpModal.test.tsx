@@ -148,6 +148,28 @@ describe('StepUpModal', () => {
     expect(mockPost).toHaveBeenNthCalledWith(2, '/api/auth/step-up', { method: 'passkey', response: { id: 'cred' } });
   });
 
+  it('keeps the modal open and shows an error when the passkey ceremony is rejected', async () => {
+    await openWith(['passkey']);
+    mockPost.mockResolvedValue({ data: { challenge: 'c' } });
+    mockStartAuthentication.mockRejectedValue(new Error('The operation failed'));
+    fireEvent.click(await screen.findByTestId('step-up-modal-passkey-btn'));
+
+    expect(await screen.findByTestId('step-up-modal-error')).toBeTruthy();
+    expect(useStepUpStore.getState().open).toBe(true);
+    expect(mockPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the modal open and shows an error when the email code cannot be sent', async () => {
+    await openWith(['email']);
+    mockPost.mockRejectedValue(axiosFailure({ error: 'Too many requests' }));
+    fireEvent.click(await screen.findByTestId('step-up-modal-email-send-btn'));
+
+    const alert = await screen.findByTestId('step-up-modal-error');
+    expect(alert.textContent).toContain('Too many requests');
+    expect(useStepUpStore.getState().open).toBe(true);
+    expect(screen.queryByTestId('step-up-modal-email-code-input')).toBeNull();
+  });
+
   it('verifies a password', async () => {
     const { pending } = await openWith(['password']);
     mockPost.mockResolvedValue({ data: {} });

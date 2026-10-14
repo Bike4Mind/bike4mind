@@ -460,6 +460,7 @@ const GeneralSettingsTab = () => {
                     <StyledButton
                       color="primary"
                       variant="solid"
+                      data-testid="settings-enable-mfa-btn"
                       onClick={handleEnableMFA}
                       loading={setupMFA.isPending}
                       sx={{ fontSize: '13px' }}

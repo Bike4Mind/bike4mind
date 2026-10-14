@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from 'express';
-import { ForbiddenError, type IUserDocument, type StepUpMethod } from '@bike4mind/common';
+import { ForbiddenError, STEP_UP_REQUIRED_CODE, type IUserDocument, type StepUpMethod } from '@bike4mind/common';
 import { mfaService } from '@bike4mind/services';
 import { authSessionRepository, passkeyCredentialRepository } from '@bike4mind/database';
 
@@ -11,13 +11,7 @@ import { authSessionRepository, passkeyCredentialRepository } from '@bike4mind/d
  */
 export const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
 
-/** Error `code` a gated route returns; the client's HTTP layer keys its verification prompt on it. */
-export const STEP_UP_REQUIRED_CODE = 'step_up_required';
-
-/** Error `code` POST /api/auth/step-up returns (status 400) for a wrong, expired or used-up proof. */
-export const STEP_UP_FAILED_CODE = 'step_up_failed';
-
-export type { StepUpMethod } from '@bike4mind/common';
+export { STEP_UP_REQUIRED_CODE, STEP_UP_FAILED_CODE, type StepUpMethod } from '@bike4mind/common';
 
 type StepUpUser = Pick<IUserDocument, 'id'> & { sid?: string };
 
