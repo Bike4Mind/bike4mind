@@ -34,6 +34,7 @@ const FORCED_MODELS = [
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_OPUS,
   ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_5_5_HAIKU,
 ];
 
 const SCHEMA = {
