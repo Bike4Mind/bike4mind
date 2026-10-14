@@ -44,7 +44,7 @@ let seq = 0;
 const publishReply = (
   ownerId: string,
   messageId: string,
-  over: { tier?: 'user' | 'organization'; scopeId?: string; visibility?: string } = {}
+  over: { tier?: 'user' | 'project' | 'organization'; scopeId?: string; visibility?: string } = {}
 ) => {
   seq += 1;
   return PublishedArtifact.create({
@@ -86,6 +86,23 @@ describe('restrictDuplicatePublications (real database)', () => {
     expect(invalidateMock.mock.calls.map(([t]) => (t as { publicId: string }).publicId).sort()).toEqual(
       [oldTeam.publicId, oldPersonal.publicId].sort()
     );
+  });
+
+  it('a project keeper narrows an older Team copy, which is more open than project', async () => {
+    const keep = await publishReply('owner', 'm1', { tier: 'project', scopeId: 'proj1', visibility: 'project' });
+    const oldTeam = await publishReply('owner', 'm1', {
+      tier: 'organization',
+      scopeId: 'org1',
+      visibility: 'organization',
+    });
+    const oldProject = await publishReply('owner', 'm1', { tier: 'project', scopeId: 'proj2', visibility: 'project' });
+
+    expect(await restrictDuplicatePublications(keep)).toBe(1);
+
+    expect(await visibilityOf(oldTeam.publicId)).toMatchObject({ visibility: 'private', discoverable: false });
+    expect(resolveVisibility(oldTeam.tier, 'private').ok).toBe(true);
+    expect((await visibilityOf(oldProject.publicId)).visibility).toBe('project');
+    expect(invalidateMock).not.toHaveBeenCalled();
   });
 
   it('is a no-op the second time', async () => {

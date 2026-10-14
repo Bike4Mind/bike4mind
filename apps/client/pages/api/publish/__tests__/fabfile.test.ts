@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   publishedFindOneLean: vi.fn(),
   publishedFindOne: vi.fn(),
   invalidatePublishCdn: vi.fn(),
+  restrictDuplicatePublications: vi.fn(),
+  checkPublishQuota: vi.fn(),
   findOneAndUpdate: vi.fn(),
   download: vi.fn(),
 }));
@@ -33,10 +35,15 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/services/publish', () => ({
   resolveVisibility: (_tier: string, visibility?: string) => ({ ok: true, visibility: visibility ?? 'public' }),
   checkScopePermission: () => ({ ok: true }),
-  checkPublishQuota: () => ({ ok: true }),
+}));
+// The real settlePublication runs; its own collaborators are stubbed here.
+vi.mock('@server/services/publish/checkPublishQuota', () => ({ checkPublishQuota: mocks.checkPublishQuota }));
+vi.mock('@server/services/publish/invalidatePublishCdn', () => ({
   invalidatePublishCdn: mocks.invalidatePublishCdn,
-  restrictDuplicatePublications: vi.fn(),
   toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
+}));
+vi.mock('@server/services/publish/restrictDuplicatePublications', () => ({
+  restrictDuplicatePublications: mocks.restrictDuplicatePublications,
 }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ download: mocks.download }),
@@ -77,6 +84,7 @@ const snapshottedBody = (): string => {
 describe('POST /api/publish/fabfile - body sourcing (#722)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.checkPublishQuota.mockResolvedValue({ ok: true });
     mocks.publishedFindOneLean.mockResolvedValue(null);
     mocks.findOneAndUpdate.mockResolvedValue({ publicId: 'f-abc', slug: 'f-abc' });
   });
@@ -206,6 +214,7 @@ describe('POST /api/publish/fabfile - body sourcing (#722)', () => {
 describe('POST /api/publish/fabfile - re-publish updates the owner record in place', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.checkPublishQuota.mockResolvedValue({ ok: true });
     mocks.fileLean.mockResolvedValue({ userId: OWNER, moderationStatus: 'clean', mimeType: 'text/plain', text: 'hi' });
     mocks.publishedFindOneLean.mockResolvedValue({
       _id: 'row1',
@@ -241,5 +250,37 @@ describe('POST /api/publish/fabfile - re-publish updates the owner record in pla
     const res = await run(makeReq());
     expect(res.statusCode).toBe(409);
     expect(mocks.invalidatePublishCdn).not.toHaveBeenCalled();
+  });
+
+  it('narrows any older duplicate of the same file to the saved record', async () => {
+    const req = makeReq();
+    req.body.visibility = 'private';
+    await run(req);
+    expect(mocks.restrictDuplicatePublications).toHaveBeenCalledWith(
+      expect.objectContaining({ publicId: 'live1', visibility: 'private' }),
+      expect.anything()
+    );
+  });
+
+  it('moves a Team page to Private in place instead of minting a second record', async () => {
+    mocks.publishedFindOneLean.mockResolvedValue({
+      _id: 'row1',
+      publicId: 'live1',
+      slug: 'f-live1',
+      tier: 'organization',
+      scopeId: 'org1',
+      visibility: 'organization',
+    });
+    const req = makeReq();
+    req.body.visibility = 'private';
+    const res = await run(req);
+    expect(res.statusCode).toBe(200);
+    expect(mocks.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    const [filter, update] = mocks.findOneAndUpdate.mock.calls[0] as [unknown, { $set: Record<string, unknown> }];
+    expect(filter).toMatchObject({ _id: 'row1' });
+    expect(update.$set).toMatchObject({ publicId: 'live1', tier: 'user', scopeId: OWNER, visibility: 'private' });
+    expect(mocks.checkPublishQuota).toHaveBeenCalledWith(
+      expect.objectContaining({ replacing: { tier: 'organization', scopeId: 'org1', slug: 'f-live1' } })
+    );
   });
 });

@@ -22,7 +22,12 @@ vi.mock('@aws-sdk/client-cloudfront', () => ({
 // drive it per-test. Throwing models "not linked" (local/test) -> invalidation no-ops.
 vi.mock('@server/security/wafSharedHelpers', () => ({ resolveRouterDistributionId: resolveIdMock }));
 
-import { invalidatePublishCdn, invalidatePublishCdnMany, publishCachePaths } from './invalidatePublishCdn';
+import {
+  invalidatePublishCdn,
+  invalidatePublishCdnMany,
+  publishCachePaths,
+  MAX_PER_PAGE_WILDCARDS,
+} from './invalidatePublishCdn';
 
 const DIST_ID = 'E1A2B3C4D5E6F'; // valid CloudFront id format
 
@@ -119,16 +124,44 @@ describe('invalidatePublishCdnMany', () => {
         (cmd as { input: { InvalidationBatch: { Paths: { Items: string[] } } } }).input.InvalidationBatch.Paths.Items
     );
 
-  it('sends the exact paths of many replies and files in one request, and their query variants in one more', async () => {
+  it('sends the exact paths of a few replies and files in one request, and a per-page wildcard for each in one more', async () => {
     await invalidatePublishCdnMany([...short(3, 'reply'), ...short(2, 'fabfile')]);
 
     expect(sentPaths()).toEqual([
       ['/p/r/reply-0', '/p/r/reply-1', '/p/r/reply-2', '/p/f/fabfile-0', '/p/f/fabfile-1'],
-      ['/p/r/*', '/p/f/*'],
+      ['/p/r/reply-0*', '/p/r/reply-1*', '/p/r/reply-2*', '/p/f/fabfile-0*', '/p/f/fabfile-1*'],
     ]);
   });
 
-  it('never sends a per-page wildcard for replies or files, however many there are', async () => {
+  it('removing one public reply invalidates only that page, not every reply page', async () => {
+    await invalidatePublishCdnMany(short(1, 'reply'));
+
+    const wildcards = sentPaths()
+      .flat()
+      .filter(p => p.includes('*'));
+    expect(wildcards).toEqual(['/p/r/reply-0*']);
+  });
+
+  it('uses per-page wildcards right up to the budget', async () => {
+    await invalidatePublishCdnMany(short(MAX_PER_PAGE_WILDCARDS, 'reply'));
+
+    const wildcards = sentPaths()
+      .flat()
+      .filter(p => p.includes('*'));
+    expect(wildcards).toHaveLength(MAX_PER_PAGE_WILDCARDS);
+    expect(wildcards).not.toContain('/p/r/*');
+  });
+
+  it('collapses to one wildcard per kind above the budget', async () => {
+    await invalidatePublishCdnMany([...short(MAX_PER_PAGE_WILDCARDS, 'reply'), ...short(1, 'fabfile')]);
+
+    const wildcards = sentPaths()
+      .flat()
+      .filter(p => p.includes('*'));
+    expect(wildcards).toEqual(['/p/r/*', '/p/f/*']);
+  });
+
+  it('never sends more than one wildcard per kind for a large takedown', async () => {
     await invalidatePublishCdnMany(short(40, 'reply'));
 
     const wildcards = sentPaths()
@@ -155,7 +188,7 @@ describe('invalidatePublishCdnMany', () => {
       { publicId: 'b2', tier: 'user', scopeId: 'u1', slug: 'two', sourceKind: 'bundle' },
     ]);
 
-    expect(sentPaths().map(p => p[0])).toEqual(['/p/u/u1/one', '/p/u/u1/two', '/p/r/reply-0', '/p/r/*']);
+    expect(sentPaths().map(p => p[0])).toEqual(['/p/u/u1/one', '/p/u/u1/two', '/p/r/reply-0', '/p/r/reply-0*']);
   });
 
   it('sends nothing for an empty list or an unconfigured distribution', async () => {

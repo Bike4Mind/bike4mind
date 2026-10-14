@@ -101,31 +101,41 @@ export async function invalidatePublishCdn(target: PublishCacheTarget, logger?: 
 // Well under CloudFront's cap on paths in flight per distribution.
 const MAX_PATHS_PER_BATCH = 1000;
 
+// CloudFront allows only a handful of wildcard paths in flight per distribution (15, versus
+// thousands of plain paths), shared with every concurrent single-page purge. Up to this many
+// reply/file pages get their own `/p/r/{id}*` wildcard; above it they collapse into one
+// `/p/r/*` and/or `/p/f/*`, which invalidates every page of that kind but costs one slot.
+export const MAX_PER_PAGE_WILDCARDS = 10;
+
 /**
- * Invalidate many removed pages (a bulk takedown) without one CloudFront call per page. The exact
- * reply/file paths share batches. Their query-variant wildcards (`/p/r/{id}*`, see
- * publishCachePaths) are not batched per page: CloudFront caps wildcard paths far lower than plain
- * ones, so a batch of per-page wildcards would fail every page in it. They collapse into one
- * `/p/r/*` and/or `/p/f/*` request, sent on its own so a throttled wildcard cannot take the exact
- * paths down with it. Bundles keep one call each (their wildcards are per bundle). Never throws.
+ * Invalidate many removed pages (a bulk takedown, or deleting a notebook or file that had
+ * publications) without one CloudFront call per page. The exact reply/file paths share batches.
+ * Their query-variant wildcards (`/p/r/{id}*`, see publishCachePaths) go in one separate request
+ * so a throttled wildcard cannot take the exact paths down with it: per page up to
+ * MAX_PER_PAGE_WILDCARDS, else collapsed to the per-kind wildcard. Bundles keep one call each
+ * (their wildcards are per bundle). Never throws.
  */
 export async function invalidatePublishCdnMany(targets: PublishCacheTarget[], logger?: MinimalLogger): Promise<void> {
   if (targets.length === 0) return;
   const distributionId = getRouterDistributionId(logger);
   if (!distributionId) return;
   const shortPaths: string[] = [];
-  const variantPaths = new Set<string>();
+  const pageWildcards = new Set<string>();
+  const kindWildcards = new Set<string>();
   for (const target of targets) {
     if (target.sourceKind === 'bundle') {
       await sendInvalidation(distributionId, target.publicId, publishCachePaths(target), logger);
     } else {
-      shortPaths.push(...publishCachePaths(target).filter(p => !p.includes('*')));
-      variantPaths.add(target.sourceKind === 'reply' ? '/p/r/*' : '/p/f/*');
+      const paths = publishCachePaths(target);
+      shortPaths.push(...paths.filter(p => !p.includes('*')));
+      for (const p of paths.filter(p => p.includes('*'))) pageWildcards.add(p);
+      kindWildcards.add(target.sourceKind === 'reply' ? '/p/r/*' : '/p/f/*');
     }
   }
   for (let i = 0; i < shortPaths.length; i += MAX_PATHS_PER_BATCH) {
     await sendInvalidation(distributionId, `batch-${i}`, shortPaths.slice(i, i + MAX_PATHS_PER_BATCH), logger);
   }
+  const variantPaths = pageWildcards.size <= MAX_PER_PAGE_WILDCARDS ? pageWildcards : kindWildcards;
   if (variantPaths.size > 0) await sendInvalidation(distributionId, 'variants', [...variantPaths], logger);
 }
 

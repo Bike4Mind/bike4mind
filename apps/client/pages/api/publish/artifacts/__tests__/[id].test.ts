@@ -361,6 +361,27 @@ describe('PATCH /api/publish/artifacts/[id] - discoverable de-arms on leaving op
     expect(invalidatePublishCdn).toHaveBeenCalled();
   });
 
+  it('does not respond until the CDN purge has been sent', async () => {
+    const { invalidatePublishCdn } = await import('@server/services/publish');
+    let release!: () => void;
+    vi.mocked(invalidatePublishCdn).mockImplementationOnce(() => new Promise<void>(r => (release = r)));
+    findOne.mockResolvedValue(listedArtifact());
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = { visibility: 'private' };
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    const done = (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    await vi.waitFor(() => expect(invalidatePublishCdn).toHaveBeenCalled());
+    await new Promise(r => setTimeout(r, 0));
+    expect(res._isEndCalled()).toBe(false);
+
+    release();
+    await done;
+    expect(res._getStatusCode()).toBe(200);
+  });
+
   it('carries a visibility change over to older duplicates of the same source, and only then', async () => {
     const { restrictDuplicatePublications } = await import('@server/services/publish');
     vi.mocked(restrictDuplicatePublications).mockClear();

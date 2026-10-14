@@ -1,23 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { randomUUID } from 'node:crypto';
-import { Quest, PublishedArtifact, Session } from '@bike4mind/database';
-import {
-  PublishReplyRequestSchema,
-  type PublishResult,
-  type PublishScopeTier,
-  type PublishVisibility,
-  type CitableSource,
-  visibleReplyText,
-} from '@bike4mind/common';
-import {
-  resolveVisibility,
-  checkScopePermission,
-  checkPublishQuota,
-  invalidatePublishCdn,
-  restrictDuplicatePublications,
-  toCacheTarget,
-  type PublishUser,
-} from '@server/services/publish';
+import { Quest, Session } from '@bike4mind/database';
+import { PublishReplyRequestSchema, type PublishResult, type CitableSource, visibleReplyText } from '@bike4mind/common';
+import { resolveVisibility, checkScopePermission, type PublishUser } from '@server/services/publish';
+import { settlePublication } from '@server/services/publish/settlePublication';
 import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
 import {
   REPLY_TITLE_MAX,
@@ -33,10 +18,6 @@ import {
  * /p/r/{publicId}. Re-publishing the same message updates the owner's existing record in place
  * (same publicId), including its scope and visibility.
  */
-
-function publicId(): string {
-  return randomUUID().replace(/-/g, '').slice(0, 12);
-}
 
 /**
  * Extract the assistant reply as markdown, mirroring the client's extractReplies:
@@ -142,82 +123,23 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
 
-  // One publication per owner+reply, whatever scope it was first published into: re-publishing
-  // (including a Team <-> Private switch) rewrites that record in place, so the /p/r link the
-  // owner already handed out is the one the new visibility applies to. Scoping by tier+scopeId
-  // instead minted a second record and left the first one live. Owner-scoped so an admin
-  // publishing someone else's reply never rewrites the owner's record.
-  const existing = await PublishedArtifact.findOne({
+  // One publication per owner+reply, rewritten in place on re-publish - see settlePublication.
+  const settled = await settlePublication({
     ownerId: userId,
-    'source.kind': 'reply',
-    'source.sessionId': body.sessionId,
-    'source.messageId': body.messageId,
-    deletedAt: null,
-  })
-    .sort({ publishedAt: -1 })
-    .lean<{
-      _id: unknown;
-      publicId: string;
-      slug: string;
-      tier: PublishScopeTier;
-      scopeId: string;
-      visibility: PublishVisibility;
-    } | null>();
-
-  const id = existing?.publicId ?? publicId();
-  const slug = existing?.slug ?? `r-${id}`;
-
-  // Cumulative per-owner quota. Re-publishing the same reply (existing) overwrites
-  // in place, so exclude that key from usage; a fresh publish counts as a new row.
-  const quota = await checkPublishQuota({
-    ownerId: userId,
-    orgScopeId: tier === 'organization' ? scopeId : null,
     isAdmin: req.user.isAdmin,
-    incoming: { bytes: Buffer.byteLength(markdown), fileCount: 0 },
-    replacing: existing ? { tier: existing.tier, scopeId: existing.scopeId, slug } : null,
+    source: { kind: 'reply', sessionId: body.sessionId, messageId: body.messageId },
+    tier,
+    scopeId,
+    visibility: viz.visibility,
+    title: body.title?.trim() || deriveTitle(markdown),
+    renderedBody: markdown,
+    extraSet: { citables: quest.promptMeta?.citables ?? undefined },
+    logger: req.logger,
   });
-  if (!quota.ok) {
-    return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
+  if (!settled.ok) {
+    return res.status(settled.status).json(settled.body);
   }
-
-  const title = body.title?.trim() || deriveTitle(markdown);
-  const now = new Date();
-
-  const saved = await PublishedArtifact.findOneAndUpdate(
-    existing ? { _id: existing._id, ownerId: userId, deletedAt: null } : { tier, scopeId, slug, deletedAt: null },
-    {
-      $set: {
-        publicId: id,
-        tier,
-        scopeId,
-        title,
-        visibility: viz.visibility,
-        lastPublishedBy: userId,
-        source: { kind: 'reply', sessionId: body.sessionId, messageId: body.messageId },
-        storageKeyPrefix: '',
-        size: { totalBytes: Buffer.byteLength(markdown), fileCount: 0 },
-        manifest: [],
-        renderedBody: markdown,
-        citables: quest.promptMeta?.citables ?? undefined,
-        publishedAt: now,
-      },
-      $setOnInsert: { ownerId: userId },
-    },
-    // Upsert only for a first publish. If `existing` was deleted after the lookup, an upsert would
-    // try to re-insert its _id over the soft-deleted row and fail with a duplicate key.
-    { upsert: !existing, new: true }
-  );
-  if (!saved) {
-    return res.status(409).json({ error: 'This page was removed while it was being updated. Please try again.' });
-  }
-
-  // The serve route lets a CDN cache open-public pages, so a page that WAS public must be purged
-  // or a downgrade to Private/Team keeps serving the cached public copy until its TTL runs out.
-  if (existing?.visibility === 'public' || saved.visibility === 'public') {
-    await invalidatePublishCdn(toCacheTarget(saved), req.logger);
-  }
-  // Records minted before one-per-owner+source can still be serving this reply; narrow them too.
-  await restrictDuplicatePublications(saved, req.logger);
+  const { saved, slug, publishedAt } = settled;
 
   req.logger.info(`[PUBLISH] reply session=${body.sessionId} msg=${body.messageId} → /p/r/${saved.publicId}`);
 
@@ -228,7 +150,7 @@ const handler = baseApi().post(async (req, res) => {
     scopeId,
     slug,
     visibility: viz.visibility,
-    publishedAt: now.toISOString(),
+    publishedAt: publishedAt.toISOString(),
   };
   return res.status(200).json(response);
 });

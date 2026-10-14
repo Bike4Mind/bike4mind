@@ -10,6 +10,7 @@ const dbMocks = vi.hoisted(() => ({
   publishedFindOne: vi.fn(),
   invalidatePublishCdn: vi.fn(),
   restrictDuplicatePublications: vi.fn(),
+  checkPublishQuota: vi.fn(),
   findOneAndUpdate: vi.fn(),
 }));
 
@@ -35,10 +36,15 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/services/publish', () => ({
   resolveVisibility: (_tier: string, visibility?: string) => ({ ok: true, visibility: visibility ?? 'public' }),
   checkScopePermission: () => ({ ok: true }),
-  checkPublishQuota: () => ({ ok: true }),
+}));
+// The real settlePublication runs; its own collaborators are stubbed here.
+vi.mock('@server/services/publish/checkPublishQuota', () => ({ checkPublishQuota: dbMocks.checkPublishQuota }));
+vi.mock('@server/services/publish/invalidatePublishCdn', () => ({
   invalidatePublishCdn: dbMocks.invalidatePublishCdn,
-  restrictDuplicatePublications: dbMocks.restrictDuplicatePublications,
   toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
+}));
+vi.mock('@server/services/publish/restrictDuplicatePublications', () => ({
+  restrictDuplicatePublications: dbMocks.restrictDuplicatePublications,
 }));
 
 import handler, { deriveTitle, truncateAtWord } from '../reply';
@@ -129,6 +135,7 @@ describe('POST /api/publish/reply - ownership', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    dbMocks.checkPublishQuota.mockResolvedValue({ ok: true });
     dbMocks.questLean.mockResolvedValue({ reply: 'Hello world' });
     dbMocks.sessionLean.mockResolvedValue({ userId: OWNER });
     dbMocks.publishedFindOneLean.mockResolvedValue(null);
@@ -221,6 +228,7 @@ describe('POST /api/publish/reply - re-publish updates the owner record in place
 
   beforeEach(() => {
     vi.clearAllMocks();
+    dbMocks.checkPublishQuota.mockResolvedValue({ ok: true });
     dbMocks.questLean.mockResolvedValue({ reply: 'Hello world' });
     dbMocks.sessionLean.mockResolvedValue({ userId: OWNER });
     // Only the owner has a publication of this reply.
@@ -289,6 +297,14 @@ describe('POST /api/publish/reply - re-publish updates the owner record in place
     const [filter, update] = upsertCall();
     expect(filter).toMatchObject({ _id: 'row1' });
     expect(update.$set).toMatchObject({ publicId: 'live123', tier: 'user', scopeId: OWNER, visibility: 'private' });
+  });
+
+  it("frees the row's OLD Team tier and scope in the quota check, not the requested ones", async () => {
+    dbMocks.publishedFindOneLean.mockResolvedValue({ ...EXISTING, tier: 'organization', scopeId: 'org1' });
+    await run({ id: OWNER }, { visibility: 'private' });
+    expect(dbMocks.checkPublishQuota).toHaveBeenCalledWith(
+      expect.objectContaining({ replacing: { tier: 'organization', scopeId: 'org1', slug: 'r-live123' } })
+    );
   });
 
   it('looks up the existing publication by the CALLER as owner, never across users', async () => {

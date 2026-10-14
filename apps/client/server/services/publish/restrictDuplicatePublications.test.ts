@@ -59,7 +59,7 @@ describe('restrictDuplicatePublications', () => {
       'source.kind': 'reply',
       'source.messageId': 'msg1',
       deletedAt: null,
-      visibility: { $ne: 'private' },
+      visibility: { $in: ['project', 'organization', 'public'] },
     });
     expect(updateManyMock).toHaveBeenCalledWith(
       { _id: { $in: ['id-old-pub', 'id-old-team'] }, ownerId: 'owner1', deletedAt: null },
@@ -71,7 +71,12 @@ describe('restrictDuplicatePublications', () => {
 
   it('for a Team keeper, only narrows duplicates that are still public', async () => {
     await restrictDuplicatePublications(keeper({ visibility: 'organization' }));
-    expect(findMock).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'public' }));
+    expect(findMock).toHaveBeenCalledWith(expect.objectContaining({ visibility: { $in: ['public'] } }));
+  });
+
+  it('for a project keeper, also narrows Team duplicates, which are more open than project', async () => {
+    await restrictDuplicatePublications(keeper({ visibility: 'project' }));
+    expect(findMock).toHaveBeenCalledWith(expect.objectContaining({ visibility: { $in: ['organization', 'public'] } }));
   });
 
   it('keys a file on its fabFileId', async () => {

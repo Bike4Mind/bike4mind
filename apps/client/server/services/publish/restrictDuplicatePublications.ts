@@ -1,5 +1,10 @@
 import { PublishedArtifact } from '@bike4mind/database';
-import type { PublishScopeTier, PublishSourceKind, PublishVisibility } from '@bike4mind/common';
+import {
+  VISIBILITY_ORDER,
+  type PublishScopeTier,
+  type PublishSourceKind,
+  type PublishVisibility,
+} from '@bike4mind/common';
 import { invalidatePublishCdn, toCacheTarget } from './invalidatePublishCdn';
 
 interface MinimalLogger {
@@ -19,12 +24,14 @@ export interface DuplicateKeeper {
  * Replies and files are one record per owner+source (reply.ts / fabfile.ts), but before that
  * rule a re-publish into another scope minted a second record, so a Private pick on the record
  * the dialog shows must not leave an older copy serving. Only ever narrows: a sibling that is
- * more open than `keep` is set to private and, if it was public, purged from the CDN. Bundles
+ * more open than `keep` (VISIBILITY_ORDER) is set to private - the one rung every tier allows
+ * (SCOPE_POLICY) - and, if it was public, purged from the CDN. Bundles
  * are skipped - several publications of one notebook artifact are legitimate there.
  * Returns how many siblings were changed. Never throws on the purge (invalidatePublishCdn).
  */
 export async function restrictDuplicatePublications(keep: DuplicateKeeper, logger?: MinimalLogger): Promise<number> {
-  if (keep.visibility === 'public') return 0;
+  const moreOpen = VISIBILITY_ORDER.slice(VISIBILITY_ORDER.indexOf(keep.visibility) + 1);
+  if (moreOpen.length === 0) return 0;
   const key =
     keep.source.kind === 'reply' && keep.source.messageId
       ? { 'source.messageId': keep.source.messageId }
@@ -39,8 +46,7 @@ export async function restrictDuplicatePublications(keep: DuplicateKeeper, logge
     'source.kind': keep.source.kind,
     ...key,
     deletedAt: null,
-    // Private is the floor; for a Team/project keeper only a public sibling is more open.
-    visibility: keep.visibility === 'private' ? { $ne: 'private' } : 'public',
+    visibility: { $in: moreOpen },
   })
     .select('_id publicId tier scopeId slug source visibility')
     .lean<
