@@ -681,6 +681,29 @@ const generationJobSweepCron = new sst.aws.Cron('generationJobSweep', {
 });
 
 /**
+ * Skill Market Review SLA
+ * Reminds authors and reviewers about Skill Market versions held for human review past the
+ * SkillMarketReviewSlaHours admin setting. Never approves anything.
+ *
+ * Schedule: daily
+ * Enabled: every stage (a no-op when nothing is overdue)
+ * Self-host: apps/workers/src/selfhost/skillMarketReviewSla.ts
+ */
+const skillMarketReviewSlaCron = new sst.aws.Cron('skillMarketReviewSla', {
+  schedule: 'rate(1 day)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/skillMarketReviewSla.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets],
+    timeout: '2 minutes',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+});
+
+/**
  * Agent Execution Abandoned Sweep
  * Releases agent-execution slots that the reactive in-Lambda sweep cannot
  * reach because the owning user never returns to start another execution.
@@ -1011,6 +1034,7 @@ export {
   modelDiscoveryStalenessCron,
   questTimeoutSweepCron,
   generationJobSweepCron,
+  skillMarketReviewSlaCron,
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
