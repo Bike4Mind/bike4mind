@@ -10,34 +10,35 @@ function run(facet: Record<string, unknown>) {
   return getCounterTotalsForLast24Hours({ date: '2026-06-01' }, { db: { counterLogs }, logger });
 }
 
-describe('getCounterTotalsForLast24Hours - activeUsers24h', () => {
+describe('getCounterTotalsForLast24Hours - DAU/WAU inputs', () => {
   const topUsers = Array.from({ length: 20 }, (_, i) => ({
     _id: `u${i}`,
     email: `u${i}@example.com`,
     interactions: 1,
   }));
 
-  it('maps the uncapped activeUsers facet to activeUsers24h instead of topUsers length', async () => {
+  it('derives externalUsers from the uncapped facets, not the capped topUsers length', async () => {
     const result = await run({
-      activeUsers: [{ count: 42 }],
-      topUsers,
       allUsers: [{ count: 50 }],
       internalUsers: [{ count: 8 }],
+      topUsers,
     });
 
-    expect(result.userActivity.activeUsers24h).toBe(42);
+    expect(result.userActivity.externalUsers).toBe(42);
     expect(result.userActivity.topUsers).toHaveLength(20);
   });
 
-  it('defaults activeUsers24h to 0 when no active users are found', async () => {
-    const result = await run({ activeUsers: [], topUsers: [] });
+  it('maps the weeklyActiveUsers facet to the 7-day weekly active count', async () => {
+    const result = await run({ weeklyActiveUsers: [{ count: 120 }], topUsers });
 
-    expect(result.userActivity.activeUsers24h).toBe(0);
+    expect(result.userActivity.weeklyActiveUsers).toBe(120);
   });
 
-  it('defaults activeUsers24h to 0 when the facet is absent from the aggregation result', async () => {
-    const result = await run({ topUsers });
+  it('defaults weeklyActiveUsers to 0 when the facet is empty or absent', async () => {
+    const empty = await run({ weeklyActiveUsers: [], topUsers: [] });
+    const absent = await run({ topUsers: [] });
 
-    expect(result.userActivity.activeUsers24h).toBe(0);
+    expect(empty.userActivity.weeklyActiveUsers).toBe(0);
+    expect(absent.userActivity.weeklyActiveUsers).toBe(0);
   });
 });
