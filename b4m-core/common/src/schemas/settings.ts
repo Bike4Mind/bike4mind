@@ -456,6 +456,17 @@ export const SettingKeySchema = z.enum([
   // Knowledge
   'enableAutoChunk',
 
+  // Skill Market moderation
+  'SkillMarketHighRiskTools',
+  'SkillMarketUrlAllowlist',
+  'SkillMarketClassifierMinConfidence',
+  'SkillMarketAuditSampleRate',
+  'SkillMarketReviewSlaHours',
+  'SkillMarketDailySubmitLimit',
+  'SkillMarketMaxListingsPerUser',
+  'SkillMarketPublicMinAccountAgeDays',
+  'SkillMarketReportAutoHideThreshold',
+
   // Slack Webhook URL settings
   'SlackDefaultWebhookUrl',
   'SlackGeneralWebhookUrl',
@@ -2726,6 +2737,86 @@ export const settingsMap = {
     defaultValue: true,
     description:
       'Whether to run generated images through content moderation (Rekognition) and block explicit content. Legal-safety control (#9776) — default ON.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketHighRiskTools: makeStringSetting({
+    key: 'SkillMarketHighRiskTools',
+    name: 'Skill Market High-Risk Tools',
+    defaultValue: '',
+    description:
+      'Comma-separated tool names that force a Skill Market listing into human review. Empty uses the built-in list (outbound fetch, file edit, publishing, data-lake writes, agent delegation). Tools not in the built-in catalog are always high-risk.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketUrlAllowlist: makeStringSetting({
+    key: 'SkillMarketUrlAllowlist',
+    name: 'Skill Market URL Allowlist',
+    defaultValue: '',
+    description:
+      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a Public listing for review.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketClassifierMinConfidence: makeNumberSetting({
+    key: 'SkillMarketClassifierMinConfidence',
+    name: 'Skill Market Classifier Min Confidence',
+    defaultValue: 0.8,
+    min: 0,
+    max: 1,
+    description: 'Below this classifier confidence a passing skill lands in the review tier instead of clean.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketAuditSampleRate: makeNumberSetting({
+    key: 'SkillMarketAuditSampleRate',
+    name: 'Skill Market Audit Sample Rate',
+    defaultValue: 0.1,
+    min: 0,
+    max: 1,
+    description: 'Share of auto-approved Skill Market versions sent to the admin audit queue.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketReviewSlaHours: makeNumberSetting({
+    key: 'SkillMarketReviewSlaHours',
+    name: 'Skill Market Review SLA (hours)',
+    defaultValue: 72,
+    min: 1,
+    int: true,
+    description:
+      'A held Skill Market version waiting longer than this triggers a daily reminder to the author and reviewers. It is never auto-approved.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketDailySubmitLimit: makeNumberSetting({
+    key: 'SkillMarketDailySubmitLimit',
+    name: 'Skill Market Daily Submit Limit',
+    defaultValue: 20,
+    min: 1,
+    int: true,
+    description: 'Max Skill Market submissions (new listings plus new versions) per user per 24 hours.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketMaxListingsPerUser: makeNumberSetting({
+    key: 'SkillMarketMaxListingsPerUser',
+    name: 'Skill Market Max Listings Per User',
+    defaultValue: 25,
+    min: 1,
+    int: true,
+    description: 'Max live (not withdrawn or delisted) Skill Market listings one author may hold.',
+    category: 'AI Moderation',
+  }),
+  SkillMarketPublicMinAccountAgeDays: makeNumberSetting({
+    key: 'SkillMarketPublicMinAccountAgeDays',
+    name: 'Skill Market Public Min Account Age (days)',
+    defaultValue: 3,
+    min: 0,
+    description: 'Accounts younger than this cannot publish Public listings (Organization and Unlisted are allowed).',
+    category: 'AI Moderation',
+  }),
+  SkillMarketReportAutoHideThreshold: makeNumberSetting({
+    key: 'SkillMarketReportAutoHideThreshold',
+    name: 'Skill Market Report Auto-Hide Threshold',
+    defaultValue: 3,
+    min: 1,
+    int: true,
+    description:
+      'Open reports from this many distinct users hide a listing from the market until an admin restores or delists it.',
     category: 'AI Moderation',
   }),
   FormatPromptTemplate: makeStringSetting({

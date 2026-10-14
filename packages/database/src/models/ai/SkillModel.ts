@@ -248,6 +248,19 @@ export const SkillSchema = new Schema<ISkill, ISkillModel, ISkillMethods>(
     organizationId: { type: String },
     isSystem: { type: Boolean },
 
+    importedFrom: {
+      type: new Schema(
+        {
+          listingId: { type: String, required: true },
+          versionId: { type: String, required: true },
+          version: { type: Number, required: true },
+          contentHash: { type: String, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+
     ...ShareableDocumentSchema,
   },
   {
@@ -275,6 +288,7 @@ SkillSchema.pre('validate', function (next) {
 // at the bottom of the schema, never as `index: true` on field definitions.
 SkillSchema.index({ userId: 1, deletedAt: 1 });
 SkillSchema.index({ organizationId: 1, deletedAt: 1 });
+SkillSchema.index({ 'importedFrom.listingId': 1 });
 // Unique partial indexes on (name, scope) - the application-level uniqueness
 // check in POST /api/skills was racy: two concurrent creates of the same name
 // could both pass the findByNameForUser check before either insert landed.

@@ -16,9 +16,12 @@
 import { parseSkillArguments, substituteArguments } from './skillArguments';
 import type { ISkill } from '../types/entities/SkillTypes';
 
-/** Sentinel delimiters bracketing untrusted skill content in the prompt. */
-const UNTRUSTED_OPEN = '<<<UNTRUSTED_SKILL_CONTENT>>>';
-const UNTRUSTED_CLOSE = '<<<END_UNTRUSTED_SKILL_CONTENT>>>';
+/**
+ * Sentinel delimiters bracketing untrusted skill content in the prompt. Exported so the Skill
+ * Market scanner can reject bodies that forge them (apps/client/server/skillMarket/scanRules.ts).
+ */
+export const UNTRUSTED_OPEN = '<<<UNTRUSTED_SKILL_CONTENT>>>';
+export const UNTRUSTED_CLOSE = '<<<END_UNTRUSTED_SKILL_CONTENT>>>';
 
 /**
  * Wrap a non-owner skill body so the model treats it as data, not as a trusted
