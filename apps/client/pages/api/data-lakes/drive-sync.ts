@@ -93,6 +93,9 @@ async function findOwnIdleConnection(req: Request, driveFolderId: string, dataLa
  * Google does well before the stored expiresAt, so it is retried once through a forced refresh and
  * Google's invalid_grant decides. A terminal grant failure parks the caller's own connection in
  * credential_error (so its card offers Reconnect instead of reading Connected) and rethrows as a 400.
+ *
+ * The ingest worker's probe (driveLakeIngest.ts, probeFolder + stopOnRevokedGrant) retries the same
+ * 401 the same way: keep the two policies in sync.
  */
 async function getFolderAccessAsUser(
   req: Request,

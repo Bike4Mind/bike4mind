@@ -663,6 +663,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     }
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
 
+    // A revoked/expired grant reaches this run at one of two token resolutions - the fetch below or the
+    // probe's forced refresh - and both exits do the same thing: the connection is already
+    // credential_error (which ends the claim), so log, settle the adopted batch, and stop rather than
+    // let SQS redeliver into the DLQ. Mirrors drive-sync.ts's retry-on-401 policy (getFolderAccessAsUser):
+    // keep the two in sync.
+    const stopOnRevokedGrant = async () => {
+      logger.warn('[driveLakeIngest] Drive grant was revoked; connection marked credential_error', { connectionId });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+    };
+
     // An org connection's own token, else (every personal connection) the connecting user's live grant.
     // A terminal grant failure has already marked the connection credential_error (which ends the claim),
     // so the run stops here like the probe's revoked-grant exit below; only a transient one throws for SQS.
@@ -671,8 +681,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       accessToken = await getValidConnectionDriveAccessToken(connectionId, connectionOwner);
     } catch (e) {
       if (!isTerminalDriveGrantError(e)) throw e;
-      logger.warn('[driveLakeIngest] Drive grant was revoked; connection marked credential_error', { connectionId });
-      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      await stopOnRevokedGrant();
       return;
     }
     let drive = createDriveClient(accessToken);
@@ -778,8 +787,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       folderReachability = await probeFolder();
     } catch (e) {
       if (isTerminalDriveGrantError(e)) {
-        logger.warn('[driveLakeIngest] Drive grant was revoked; connection marked credential_error', { connectionId });
-        if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+        await stopOnRevokedGrant();
         return;
       }
       // probeFolder already retried a 401 on a fresh token, so this one is Drive refusing the grant itself.
