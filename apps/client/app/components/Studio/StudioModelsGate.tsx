@@ -7,8 +7,11 @@ type StudioModelsGateProps<TModel> = {
   // Lower case, as it reads mid-sentence: "video", "music".
   noun: string;
   models: { isPending: boolean; data: TModel[] | undefined };
-  children: (models: TModel[]) => ReactNode;
+  children: (models: readonly [TModel, ...TModel[]]) => ReactNode;
 };
+
+/** The form state needs a model to start from; this is also what narrows the gate's list to a non-empty tuple. */
+const isNonEmpty = <TModel,>(models: TModel[]): models is [TModel, ...TModel[]] => models.length > 0;
 
 /** Renders a modality's form only once it has at least one usable model, and says why when it does not. */
 const StudioModelsGate = <TModel,>({ testId, noun, models, children }: StudioModelsGateProps<TModel>) => {
@@ -21,7 +24,7 @@ const StudioModelsGate = <TModel,>({ testId, noun, models, children }: StudioMod
       </Typography>
     );
   }
-  if (models.data.length === 0) {
+  if (!isNonEmpty(models.data)) {
     return (
       <Typography level="body-sm" data-testid={`${testId}-empty`}>
         {noun.charAt(0).toUpperCase() + noun.slice(1)} generation is not available for your account yet.

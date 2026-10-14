@@ -17,7 +17,7 @@ import {
 const VIDEO_FORM_RULES: StudioFormRules<VideoModel, VideoFormState> = { initialFor: initialFormFor, clampToModel };
 
 type VideoStudioFormProps = {
-  models: VideoModel[];
+  models: readonly [VideoModel, ...VideoModel[]];
   isSubmitting: boolean;
   onSubmit: (body: CreateVideoGenerationBody) => void;
 };

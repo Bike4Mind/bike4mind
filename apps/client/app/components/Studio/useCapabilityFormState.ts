@@ -11,9 +11,12 @@ export type StudioFormRules<TModel extends StudioModel, TState extends { modelId
   clampToModel: (state: TState, model: TModel) => { state: TState; changes: string[] };
 };
 
-/** Form state shared by every Studio modality: the values, the selected model, and what a model switch changed. */
+/**
+ * Form state shared by every Studio modality: the values, the selected model, and what a model switch changed.
+ * The model list is a non-empty tuple so the initial state always has a model to describe.
+ */
 export function useCapabilityFormState<TModel extends StudioModel, TState extends { modelId: string }>(
-  models: readonly TModel[],
+  models: readonly [TModel, ...TModel[]],
   rules: StudioFormRules<TModel, TState>
 ) {
   const [form, setForm] = useState<TState>(() => rules.initialFor(models[0]));
@@ -23,7 +26,7 @@ export function useCapabilityFormState<TModel extends StudioModel, TState extend
   // The model list can change under the form (an admin disables a model, a key goes away). Move to a model that is
   // still offered and say so, rather than submit one the server will refuse with model_disabled.
   useEffect(() => {
-    if (model || models.length === 0) return;
+    if (model) return;
     const fallback = models[0];
     const clamped = rules.clampToModel(form, fallback);
     setForm(clamped.state);

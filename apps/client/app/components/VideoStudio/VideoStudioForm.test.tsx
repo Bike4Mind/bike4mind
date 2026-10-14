@@ -42,7 +42,7 @@ import VideoStudioForm from './VideoStudioForm';
 const appTheme = extendTheme({ ...getThemeConfig() });
 const onSubmit = vi.fn();
 
-const tree = (models: VideoModel[]) => (
+const tree = (models: readonly [VideoModel, ...VideoModel[]]) => (
   <CssVarsProvider theme={appTheme}>
     <VideoStudioForm models={models} isSubmitting={false} onSubmit={onSubmit} />
   </CssVarsProvider>
