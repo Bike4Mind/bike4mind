@@ -18,10 +18,11 @@ export async function getAiEditVersionRetention(): Promise<number> {
 /**
  * Best-effort delete of the objects behind versions trimmed by `appendEditedVersion`. Call only
  * after the DB write that drops them from `versions[]` has succeeded; a failed delete just
- * orphans the object, it never fails the edit.
+ * orphans the object, it never fails the edit. `async` in the map turns a synchronous throw from
+ * `getFilesStorage()` into a rejection that `allSettled` absorbs.
  */
 export async function deleteDroppedVersions(dropped: IFabFileVersion[]): Promise<void> {
-  const results = await Promise.allSettled(dropped.map(v => getFilesStorage().delete(v.filePath)));
+  const results = await Promise.allSettled(dropped.map(async v => getFilesStorage().delete(v.filePath)));
   results.forEach((result, i) => {
     if (result.status === 'rejected') {
       Logger.globalInstance.warn(

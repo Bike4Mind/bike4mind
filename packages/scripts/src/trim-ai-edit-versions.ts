@@ -31,7 +31,8 @@ async function main() {
 
   const maxArg = maxFlag >= 0 ? process.argv[maxFlag + 1] : undefined;
   // A typo must not silently fall back to the default on a run that deletes objects.
-  if (maxFlag >= 0 && !Number.isFinite(Number(maxArg))) throw new Error(`--max needs a number, got "${maxArg}"`);
+  if (maxFlag >= 0 && (!maxArg?.trim() || !Number.isFinite(Number(maxArg))))
+    throw new Error(`--max needs a number, got "${maxArg}"`);
   const configured =
     maxArg ??
     (await getSettingsByNames(['AiEditVersionRetention'], { adminSettings: adminSettingsRepository }))

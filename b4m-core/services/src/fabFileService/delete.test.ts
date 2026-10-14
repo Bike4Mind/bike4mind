@@ -166,6 +166,38 @@ describe('deleteFabFile', () => {
       expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(edited, 1024);
     });
 
+    it('keeps going and still refunds quota when one key delete rejects', async () => {
+      const v = (version: number, filePath: string) => ({
+        version,
+        filePath,
+        fileSize: 1,
+        mimeType: 'x',
+        createdAt: new Date(0),
+      });
+      const edited = {
+        ...mockFabFile,
+        filePath: 'files/u/f/v3_report.docx',
+        versions: [v(1, 'uploads/report.docx'), v(2, 'files/u/f/v2_report.docx'), v(3, 'files/u/f/v3_report.docx')],
+      };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(edited);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(edited);
+      mockAdapter.onDeleteComplete = vi.fn().mockResolvedValue(undefined);
+      mockAdapter.storage.delete.mockImplementation(async (key: string) => {
+        if (key === 'files/u/f/v2_report.docx') throw new Error('S3 unavailable');
+      });
+
+      await expect(deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter)).resolves.toMatchObject({
+        action: 'deleted',
+      });
+
+      expect(mockAdapter.storage.delete.mock.calls.map(([key]) => key)).toEqual([
+        'uploads/report.docx',
+        'files/u/f/v2_report.docx',
+        'files/u/f/v3_report.docx',
+      ]);
+      expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(edited, 1024);
+    });
+
     it('still deletes version keys when the file has no filePath', async () => {
       const noCurrent = {
         ...mockFabFile,

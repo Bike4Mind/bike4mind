@@ -172,9 +172,19 @@ export const deleteFabFile = async (
       await db.sessions.update({ id: notebook.id, knowledgeIds: updatedKnowledgeIds });
     }
 
-    // Delete the file in S3
+    // Delete the file in S3. Best-effort per key: the row is already soft-deleted and its chunks gone,
+    // so a throw here would be unretryable and would skip the quota refund below. A failed key is
+    // logged and orphaned; the rest (including `filePath`) are still attempted.
     for (const path of storagePathsToDelete) {
-      await storage.delete(path);
+      try {
+        await storage.delete(path);
+      } catch (error) {
+        Logger.globalInstance.error('[deleteFabFile] failed to delete stored object', {
+          fileId: ownedFile.id,
+          filePath: path,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
     }
 
     // sizeToDeduct is always a positive number, representing the amount to deduct from the user's storage
