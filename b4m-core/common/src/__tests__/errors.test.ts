@@ -16,6 +16,11 @@ import {
   isChunkClaimLostError,
   DuplicateFabFileError,
   isDuplicateFabFileError,
+  StorageLimitError,
+  describeStorageLimitError,
+  isStorageLimitError,
+  parseStorageLimitErrorInfo,
+  type StorageLimitErrorInfo,
 } from '../errors';
 
 describe('HttpStatus enum', () => {
@@ -147,5 +152,72 @@ describe('PermissionDeniedError', () => {
     expect(err.message).toContain('web_search');
     expect(err.name).toBe('PermissionDeniedError');
     expect(err).toBeInstanceOf(Error);
+  });
+});
+
+describe('StorageLimitError', () => {
+  const info: StorageLimitErrorInfo = {
+    errorCode: 'storage_limit_exceeded',
+    used_bytes: 800_000,
+    limit_bytes: 1_000_000,
+    requested_bytes: 300_000,
+    owner: 'user',
+  };
+
+  it('is a 400 BadRequestError that carries its info as additionalInfo', () => {
+    const err = new StorageLimitError('whatever', info);
+    expect(err).toBeInstanceOf(BadRequestError);
+    expect(err.statusCode).toBe(400);
+    expect(err.additionalInfo).toEqual(info);
+  });
+
+  it('is recognised by class, and by name plus a valid info across a module boundary', () => {
+    expect(isStorageLimitError(new StorageLimitError('x', info))).toBe(true);
+    const foreign = Object.assign(new Error('x'), { name: 'StorageLimitError', info });
+    expect(isStorageLimitError(foreign)).toBe(true);
+  });
+
+  it('rejects a lookalike without a valid info, and unrelated values', () => {
+    expect(isStorageLimitError(Object.assign(new Error('x'), { name: 'StorageLimitError' }))).toBe(false);
+    expect(
+      isStorageLimitError(
+        Object.assign(new Error('x'), { name: 'StorageLimitError', info: { ...info, errorCode: 'nope' } })
+      )
+    ).toBe(false);
+    expect(isStorageLimitError(new BadRequestError('File size exceeds storage limit'))).toBe(false);
+    expect(isStorageLimitError(null)).toBe(false);
+  });
+
+  it('parses a response body that carries the info and ignores the envelope around it', () => {
+    expect(parseStorageLimitErrorInfo({ ...info, error: 'x', request_id: 'r' })).toEqual(info);
+  });
+
+  it('parses nothing from a body with an unknown code or negative bytes', () => {
+    expect(parseStorageLimitErrorInfo({ ...info, errorCode: 'insufficient_credits' })).toBeUndefined();
+    expect(parseStorageLimitErrorInfo({ ...info, used_bytes: -1 })).toBeUndefined();
+    expect(parseStorageLimitErrorInfo({ error: 'x' })).toBeUndefined();
+  });
+
+  it('words each code from its numbers with the default byte formatter', () => {
+    expect(describeStorageLimitError(info)).toBe(
+      'Not enough storage: you are using 800 kB of 1 MB, and this upload needs 300 kB. Free up at least 100 kB to continue.'
+    );
+    expect(
+      describeStorageLimitError({ ...info, errorCode: 'org_storage_limit_exceeded', owner: 'org', used_bytes: 0 })
+    ).toBe("This upload (300 kB) is larger than your organization's storage limit of 1 MB.");
+    expect(describeStorageLimitError({ ...info, errorCode: 'file_too_large', used_bytes: 0 })).toBe(
+      'This file (300 kB) is larger than the maximum file size of 1 MB.'
+    );
+  });
+
+  it('formats plain bytes and larger units', () => {
+    expect(
+      describeStorageLimitError({
+        ...info,
+        errorCode: 'file_too_large',
+        requested_bytes: 512,
+        limit_bytes: 2_500_000_000,
+      })
+    ).toBe('This file (512 B) is larger than the maximum file size of 2.5 GB.');
   });
 });
