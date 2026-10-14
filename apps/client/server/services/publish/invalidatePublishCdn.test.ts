@@ -26,7 +26,7 @@ import {
   invalidatePublishCdn,
   invalidatePublishCdnMany,
   publishCachePaths,
-  MAX_PER_PAGE_WILDCARDS,
+  MAX_WILDCARDS_PER_BULK_CALL,
 } from './invalidatePublishCdn';
 
 const DIST_ID = 'E1A2B3C4D5E6F'; // valid CloudFront id format
@@ -143,17 +143,17 @@ describe('invalidatePublishCdnMany', () => {
   });
 
   it('uses per-page wildcards right up to the budget', async () => {
-    await invalidatePublishCdnMany(short(MAX_PER_PAGE_WILDCARDS, 'reply'));
+    await invalidatePublishCdnMany(short(MAX_WILDCARDS_PER_BULK_CALL, 'reply'));
 
     const wildcards = sentPaths()
       .flat()
       .filter(p => p.includes('*'));
-    expect(wildcards).toHaveLength(MAX_PER_PAGE_WILDCARDS);
+    expect(wildcards).toHaveLength(MAX_WILDCARDS_PER_BULK_CALL);
     expect(wildcards).not.toContain('/p/r/*');
   });
 
   it('collapses to one wildcard per kind above the budget', async () => {
-    await invalidatePublishCdnMany([...short(MAX_PER_PAGE_WILDCARDS, 'reply'), ...short(1, 'fabfile')]);
+    await invalidatePublishCdnMany([...short(MAX_WILDCARDS_PER_BULK_CALL, 'reply'), ...short(1, 'fabfile')]);
 
     const wildcards = sentPaths()
       .flat()

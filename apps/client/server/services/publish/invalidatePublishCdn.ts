@@ -102,18 +102,19 @@ export async function invalidatePublishCdn(target: PublishCacheTarget, logger?: 
 const MAX_PATHS_PER_BATCH = 1000;
 
 // CloudFront allows only ~15 wildcard paths in flight per distribution (versus thousands of plain
-// paths), shared with every concurrent single-page purge. This is the TOTAL wildcard budget for
-// one invalidatePublishCdnMany call: bundle wildcards count against it first, and the reply/file
-// pages only get their own `/p/r/{id}*` wildcards if the rest fits. Otherwise they collapse into
-// one `/p/r/*` and/or `/p/f/*`, which invalidates every page of that kind but costs one slot.
-export const MAX_PER_PAGE_WILDCARDS = 5;
+// paths), shared with every concurrent single-page purge. This budgets the reply/file variant
+// wildcards for one invalidatePublishCdnMany call: the bundle wildcards sent by that call are
+// counted first, and the reply/file pages only get their own `/p/r/{id}*` wildcards if the rest
+// fits. Otherwise they collapse into one `/p/r/*` and/or `/p/f/*`, which invalidates every page of
+// that kind but costs one slot. It does not cap the bundle wildcards themselves.
+export const MAX_WILDCARDS_PER_BULK_CALL = 5;
 
 /**
  * Invalidate many removed pages (a bulk takedown, or deleting a notebook or file that had
  * publications) without one CloudFront call per page. The exact reply/file paths share batches.
  * Their query-variant wildcards (`/p/r/{id}*`, see publishCachePaths) go in one separate request
  * so a throttled wildcard cannot take the exact paths down with it: per page up to
- * the remaining wildcard budget (MAX_PER_PAGE_WILDCARDS minus the bundle wildcards sent in this
+ * the remaining wildcard budget (MAX_WILDCARDS_PER_BULK_CALL minus the bundle wildcards sent in this
  * call), else collapsed to the per-kind wildcard; a failed per-page request is retried once with
  * the per-kind wildcards. Bundles keep one call each (their wildcards are per bundle). Never throws.
  */
@@ -141,7 +142,7 @@ export async function invalidatePublishCdnMany(targets: PublishCacheTarget[], lo
     await sendInvalidation(distributionId, `batch-${i}`, shortPaths.slice(i, i + MAX_PATHS_PER_BATCH), logger);
   }
   if (pageWildcards.size === 0) return;
-  const perPage = pageWildcards.size <= MAX_PER_PAGE_WILDCARDS - bundleWildcards;
+  const perPage = pageWildcards.size <= MAX_WILDCARDS_PER_BULK_CALL - bundleWildcards;
   const sent = await sendInvalidation(
     distributionId,
     'variants',
