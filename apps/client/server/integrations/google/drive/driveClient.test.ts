@@ -13,6 +13,8 @@ import {
   isDriveInvalidCursorError,
   getFileParents,
   isDriveFileAccessDeniedError,
+  isDriveAuthError,
+  withDriveReconnectOnAuthError,
   probeConnectedFolder,
   UNREACHABLE_FOLDER_MESSAGES,
 } from './driveClient';
@@ -630,5 +632,33 @@ describe('probeConnectedFolder', () => {
 describe('UNREACHABLE_FOLDER_MESSAGES', () => {
   it.each(['not_found', 'forbidden', 'trashed'] as const)('has a user-facing message for %s', reason => {
     expect(UNREACHABLE_FOLDER_MESSAGES[reason].length).toBeGreaterThan(0);
+  });
+});
+
+describe('isDriveAuthError / withDriveReconnectOnAuthError', () => {
+  const gaxios = (status: number, reason?: string) =>
+    Object.assign(new Error('drive'), {
+      status,
+      response: { status, data: { error: { errors: reason ? [{ reason }] : [] } } },
+    });
+
+  it.each([
+    ['a 401', gaxios(401, 'authError'), true],
+    ['a 403 with a revoked scope', gaxios(403, 'insufficientPermissions'), true],
+    ['a per-file 403', gaxios(403, 'insufficientFilePermissions'), false],
+    ['a throttle 403', gaxios(403, 'userRateLimitExceeded'), false],
+    ['a 404', gaxios(404), false],
+    ['a non-object', 'boom', false],
+  ])('classifies %s', (_label, e, expected) => {
+    expect(isDriveAuthError(e)).toBe(expected);
+  });
+
+  it('rethrows a Drive 401 as a reconnect 400 and anything else unchanged', async () => {
+    await expect(withDriveReconnectOnAuthError(() => Promise.reject(gaxios(401)))).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Google Drive access was revoked - reconnect required',
+    });
+    const other = gaxios(404);
+    await expect(withDriveReconnectOnAuthError(() => Promise.reject(other))).rejects.toBe(other);
   });
 });

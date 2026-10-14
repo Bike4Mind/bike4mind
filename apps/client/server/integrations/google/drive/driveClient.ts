@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { auth as googleAuth, drive as driveApi, drive_v3 } from '@googleapis/drive';
+import { BadRequestError } from '@server/utils/errors';
 
 export type DriveFile = {
   id: string;
@@ -194,6 +195,43 @@ export function isDriveFileAccessDeniedError(e: unknown): boolean {
   );
 }
 
+// The 403 reasons Drive gives when the credential itself is no good (scopes revoked), as opposed to
+// a per-file denial (DRIVE_FILE_ACCESS_DENIED_REASONS) or a throttle.
+const DRIVE_AUTH_403_REASONS = new Set(['authError', 'insufficientPermissions']);
+
+/** Is this error Drive rejecting the access token itself (revoked/expired grant), i.e. a reconnect? */
+export function isDriveAuthError(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null) return false;
+  const err = e as Record<string, unknown>;
+  const response = err.response as Record<string, unknown> | undefined;
+  const data = response?.data as { error?: { errors?: unknown } } | undefined;
+  const statuses = [err.code, err.status, response?.status].map(raw => (typeof raw === 'string' ? Number(raw) : raw));
+  if (statuses.includes(401)) return true;
+  if (!statuses.includes(403)) return false;
+  return [err.errors, data?.error?.errors].some(
+    list =>
+      Array.isArray(list) &&
+      list.some(detail => {
+        const reason = (detail as { reason?: unknown } | null)?.reason;
+        return typeof reason === 'string' && DRIVE_AUTH_403_REASONS.has(reason);
+      })
+  );
+}
+
+/**
+ * Run a user-facing Drive call, turning a token Drive rejects into a reconnect 400. Left raw, the
+ * gaxios error's numeric `status` 401 passes through errorHandler as an HTTP 401, which ApiContext
+ * reads as the APP session expiring and signs the user out.
+ */
+export async function withDriveReconnectOnAuthError<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (e) {
+    if (isDriveAuthError(e)) throw new BadRequestError('Google Drive access was revoked - reconnect required');
+    throw e;
+  }
+}
+
 // Drive file/folder ids are URL-safe tokens ([A-Za-z0-9_-]); the alias 'root' also matches. The
 // length bound (real ids are ~33-44 chars) stops ~1MB of legal characters being interpolated into
 // the `q` string and sent outbound. Validate before interpolating so a crafted id can't break out.
@@ -206,7 +244,7 @@ export function isValidDriveFolderId(id: unknown): id is string {
 // Page cap: bounds outbound Drive calls against a pathological/looping pageToken. Exceeding it
 // THROWS in listFolderChildren rather than truncating - a partial listing under a "the folder's
 // children" contract would silently drop files. 100 x pageSize(1000) = 100k children.
-const MAX_LIST_PAGES = 100;
+export const MAX_LIST_PAGES = 100;
 
 /**
  * Build a per-call Drive v3 client from an OAuth access token.

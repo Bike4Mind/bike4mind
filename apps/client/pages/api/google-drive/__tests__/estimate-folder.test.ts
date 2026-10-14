@@ -18,6 +18,11 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: vi.fn().mockResolvedValue({ allowed: true, headers: {} }),
 }));
+// The real limiter counts in Mongo; the route's own limit options are not what these tests pin.
+vi.mock('@server/middlewares/rateLimit', () => ({
+  // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
+  rateLimit: () => (_req: any, _res: any, next: any) => next(),
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
@@ -63,6 +68,7 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
+import { BadRequestError } from '@server/utils/errors';
 import handler from '../estimate-folder';
 
 const ESTIMATE = {
@@ -147,5 +153,32 @@ describe('POST /api/google-drive/estimate-folder', () => {
     expect(opts.maxFolders).toBe(2000);
     expect(opts.deadlineMs - before).toBeGreaterThanOrEqual(20_000);
     expect(opts.deadlineMs - before).toBeLessThan(30_000);
+  });
+
+  it('400s when Drive is not connected, without walking', async () => {
+    mockGetToken.mockRejectedValue(new BadRequestError('Google Drive not connected'));
+    const { req, res } = fire({ bearer: 'live-jwt', body: { folderId: 'F1' } });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockEstimate).not.toHaveBeenCalled();
+  });
+
+  // A bare 401 would read to ApiContext as the app session expiring and sign the user out.
+  it('maps a Drive 401 to a reconnect 400, never a 401', async () => {
+    mockEstimate.mockRejectedValue(Object.assign(new Error('Invalid Credentials'), { status: 401 }));
+    const { req, res } = fire({ bearer: 'live-jwt', body: { folderId: 'F1' } });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(JSON.stringify(res._getJSONData())).toContain('reconnect required');
+  });
+
+  it('500s on any other Drive failure', async () => {
+    mockEstimate.mockRejectedValue(new Error('Drive exploded'));
+    const { req, res } = fire({ bearer: 'live-jwt', body: { folderId: 'F1' } });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(500);
   });
 });

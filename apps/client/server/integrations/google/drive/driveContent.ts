@@ -11,7 +11,7 @@ import {
   DriveListingIncompleteError,
   type DriveFile,
 } from './driveClient';
-import { MAX_INGEST_CANDIDATES, MAX_INGEST_FILE_BYTES } from './driveIngestLimits';
+import { MAX_INGEST_CANDIDATES, driveIngestSkipReason } from './driveIngestLimits';
 
 const GOOGLE_DOC = 'application/vnd.google-apps.document';
 const GOOGLE_SHEET = 'application/vnd.google-apps.spreadsheet';
@@ -268,7 +268,7 @@ export type DriveFolderEstimate = {
   unsupportedCount: number;
   /** The walk stopped early, so every count above is a lower bound. */
   truncated: boolean;
-  truncatedReason?: 'deadline' | 'folder_cap' | 'rate_limited' | 'candidate_cap';
+  truncatedReason?: 'deadline' | 'folder_cap' | 'rate_limited' | 'candidate_cap' | 'page_cap';
   /** More files than one sync accepts (MAX_INGEST_CANDIDATES); the worker refuses the folder. */
   overCandidateCap: boolean;
 };
@@ -276,8 +276,9 @@ export type DriveFolderEstimate = {
 /**
  * Pre-flight size estimate of a Drive folder tree for the Create Data Lake wizard. Walks like
  * walkFolder (BFS, cycle guard, de-dup by file id as the worker does) but never throws on a bound:
- * past `deadlineMs`, `maxFolders`, a throttle, or the candidate cap it returns what it has so far
- * with `truncated` set. Any other Drive error (a revoked grant, a 404) is rethrown.
+ * past `deadlineMs`, `maxFolders`, a throttle, a folder over the listing page cap, or the candidate
+ * cap it returns what it has so far with `truncated` set. Only the candidate cap blocks: it is judged
+ * on files actually counted, the same `walked.length` the worker gates on. Any other Drive error (a revoked grant, a 404) is rethrown.
  *
  * Classifies in the worker's order (driveLakeIngest skips oversized before fetching, and
  * fetchDriveFileContent then rejects unsupported types), so must stay in sync with it.
@@ -302,8 +303,6 @@ export async function estimateFolder(
     if (reason === 'candidate_cap') estimate.overCandidateCap = true;
     return estimate;
   };
-  // One folder with more full pages than this already holds more children than the candidate cap.
-  const maxPages = Math.ceil(MAX_INGEST_CANDIDATES / 1000) + 1;
   const visited = new Set<string>();
   const seen = new Set<string>();
   const queue = [rootFolderId];
@@ -317,9 +316,9 @@ export async function estimateFolder(
 
     let children: DriveFile[];
     try {
-      children = await listFolderChildren(drive, id, { maxPages, deadlineMs });
+      children = await listFolderChildren(drive, id, { deadlineMs });
     } catch (e) {
-      if (e instanceof DriveListingIncompleteError) return stop(e.reason === 'page_cap' ? 'candidate_cap' : 'deadline');
+      if (e instanceof DriveListingIncompleteError) return stop(e.reason);
       if (isDriveRateLimitError(e)) return stop('rate_limited');
       throw e;
     }
@@ -332,10 +331,9 @@ export async function estimateFolder(
       if (seen.has(child.id)) continue;
       seen.add(child.id);
       estimate.fileCount++;
-      const { size } = child;
-      if (size != null && (size > MAX_INGEST_FILE_BYTES || size >= maxFileSize)) estimate.overSizeLimitCount++;
+      if (driveIngestSkipReason(child.size, maxFileSize)) estimate.overSizeLimitCount++;
       else if (!driveIngestMimeType(child)) estimate.unsupportedCount++;
-      else if (size != null) estimate.knownBytes += size;
+      else if (child.size != null) estimate.knownBytes += child.size;
       else estimate.unknownSizeCount++;
     }
     if (estimate.fileCount > MAX_INGEST_CANDIDATES) return stop('candidate_cap');

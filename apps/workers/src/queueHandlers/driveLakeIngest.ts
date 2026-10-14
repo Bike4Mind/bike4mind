@@ -60,7 +60,11 @@ import {
   DriveWalkTimeBudgetExceededError,
   type WalkedDriveFile,
 } from '@server/integrations/google/drive/driveContent';
-import { MAX_INGEST_CANDIDATES, MAX_INGEST_FILE_BYTES } from '@server/integrations/google/drive/driveIngestLimits';
+import {
+  MAX_INGEST_CANDIDATES,
+  MAX_INGEST_FILE_BYTES,
+  driveIngestSkipReason,
+} from '@server/integrations/google/drive/driveIngestLimits';
 import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
@@ -1208,13 +1212,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // Native binaries carry a size, so skip the oversized ones BEFORE spending a Drive download.
         // Editors exports have no size here; they are bounded by Drive's own ~10 MB export cap
         // (surfaced as export_too_large) plus the post-fetch guard below.
-        if (file.size != null && file.size > MAX_INGEST_FILE_BYTES) {
-          await skip(file, 'oversized');
-          continue;
-        }
-
-        if (file.size != null && file.size >= maxFileSize) {
-          await skip(file, 'exceeds_max_file_size');
+        const sizeSkipReason = driveIngestSkipReason(file.size, maxFileSize);
+        if (sizeSkipReason) {
+          await skip(file, sizeSkipReason);
           continue;
         }
 

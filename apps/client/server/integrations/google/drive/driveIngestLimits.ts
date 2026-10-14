@@ -33,3 +33,17 @@ export const MAX_INGEST_FILE_BYTES = 50 * 1024 * 1024;
 // document's worst-case size (and, with failedFileNames also accumulating, moves it closer to the 16MB
 // BSON ceiling) as well as the walk+diff cost the comment above is about.
 export const MAX_INGEST_CANDIDATES = 20000;
+
+/**
+ * The size-based skip the worker applies before fetching a file, shared with the estimate so the two
+ * cannot classify differently. `undefined` size (Editors files) is never skipped here.
+ */
+export function driveIngestSkipReason(
+  size: number | undefined,
+  maxFileSize: number
+): 'oversized' | 'exceeds_max_file_size' | null {
+  if (size == null) return null;
+  if (size > MAX_INGEST_FILE_BYTES) return 'oversized';
+  if (size >= maxFileSize) return 'exceeds_max_file_size';
+  return null;
+}

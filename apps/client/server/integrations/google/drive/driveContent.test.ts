@@ -11,7 +11,7 @@ import {
   driveIngestMimeType,
 } from './driveContent';
 import { MAX_INGEST_CANDIDATES, MAX_INGEST_FILE_BYTES } from './driveIngestLimits';
-import { FOLDER_MIME_TYPE, isDriveRateLimitError } from './driveClient';
+import { FOLDER_MIME_TYPE, MAX_LIST_PAGES, isDriveRateLimitError } from './driveClient';
 
 const folder = (id: string, name: string) => ({ id, name, mimeType: FOLDER_MIME_TYPE });
 const file = (id: string, name: string, mimeType: string) => ({ id, name, mimeType });
@@ -401,12 +401,32 @@ describe('estimateFolder', () => {
     expect(list).toHaveBeenCalledTimes(1);
   });
 
-  it('maps one folder with more pages than the candidate cap allows to overCandidateCap', async () => {
+  // A page counts every child (subfolders too), so a page count says nothing about the file count the
+  // worker gates on: many small pages below the candidate cap must not block.
+  it('does not flag a folder with many pages but fewer files than the candidate cap', async () => {
+    const pages = Math.ceil(MAX_INGEST_CANDIDATES / 1000) + 5;
+    let page = 0;
+    const list = vi.fn(async () => {
+      page++;
+      return {
+        data: {
+          files: [file(`f${page}`, `${page}.txt`, 'text/plain')],
+          nextPageToken: page < pages ? 'more' : undefined,
+        },
+      };
+    });
+    const drive = { files: { list } } as unknown as drive_v3.Drive;
+    const e = await estimateFolder(drive, 'root', opts());
+    expect(e).toMatchObject({ fileCount: pages, truncated: false, overCandidateCap: false });
+    expect(list).toHaveBeenCalledTimes(pages);
+  });
+
+  it('maps a folder past the listing page cap to a non-blocking page_cap truncation', async () => {
     const list = vi.fn(async () => ({ data: { files: [file('x', 'x.txt', 'text/plain')], nextPageToken: 'more' } }));
     const drive = { files: { list } } as unknown as drive_v3.Drive;
     const e = await estimateFolder(drive, 'root', opts());
-    expect(e).toMatchObject({ truncated: true, truncatedReason: 'candidate_cap', overCandidateCap: true });
-    expect(list).toHaveBeenCalledTimes(Math.ceil(MAX_INGEST_CANDIDATES / 1000) + 1);
+    expect(e).toMatchObject({ truncated: true, truncatedReason: 'page_cap', overCandidateCap: false });
+    expect(list).toHaveBeenCalledTimes(MAX_LIST_PAGES);
   });
 
   it('returns a truncated partial result past the deadline instead of throwing', async () => {
