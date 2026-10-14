@@ -99,7 +99,8 @@ interface SendClickOptions {
   /**
    * Extra system context for this one send (a programmatic launch's `systemContext`).
    * Delivered as a system message on whichever route the send takes; never part of the
-   * prompt, so it is neither shown in the bubble nor persisted on the turn.
+   * prompt, so it is neither shown in the bubble nor persisted on the turn. A host-managed
+   * first send (`hostCreateSession`) re-dispatches only the prompt, so it does not carry this.
    */
   systemContext?: string;
   /** Called when the send is refused before dispatch (one already in flight, validation, setup). */
@@ -414,6 +415,21 @@ export function useSendMessage({
       options?.onRefused?.();
       return;
     }
+    // Normalized and capped here, the boundary every caller passes through,
+    // and before any session creation or host hand-off so an over-cap value never half-sends. Spread into each
+    // route's payload only when set, so a send without it is unchanged.
+    const resolvedSystemContext = resolveSystemContext(options?.systemContext);
+    if (resolvedSystemContext.kind === 'tooLong') {
+      console.error(
+        `[useSendMessage] Refused send: systemContext is ${resolvedSystemContext.length} characters (max ${PROMPT_TEXT_MAX}).`
+      );
+      toast.error('This prompt could not be sent: its extra instructions are too long.');
+      setSubmitting(false);
+      options?.onRefused?.();
+      return;
+    }
+    const systemContext = resolvedSystemContext.kind === 'ok' ? resolvedSystemContext.systemContext : undefined;
+    const systemContextField = systemContext ? { systemContext } : {};
     if (currentSession && newestTurn?.suggestedChoices && choiceKey?.pickedIndex != null) {
       void recordReplyChoice(queryClient, {
         sessionId: currentSession.id,
@@ -736,20 +752,6 @@ export function useSendMessage({
       options?.onRefused?.();
       return;
     }
-    // Normalized and capped here, the boundary every caller passes through. Spread into each
-    // route's payload only when set, so a send without it is unchanged.
-    const resolvedSystemContext = resolveSystemContext(options?.systemContext);
-    if (resolvedSystemContext.kind === 'tooLong') {
-      console.error(
-        `[useSendMessage] Refused send: systemContext is ${resolvedSystemContext.length} characters (max ${PROMPT_TEXT_MAX}).`
-      );
-      toast.error('This prompt could not be sent: its extra instructions are too long.');
-      setSubmitting(false);
-      options?.onRefused?.();
-      return;
-    }
-    const systemContext = resolvedSystemContext.kind === 'ok' ? resolvedSystemContext.systemContext : undefined;
-    const systemContextField = systemContext ? { systemContext } : {};
     // Tool-directed or context-carrying send: see LLMCommandArgs.skipRapidReply. The ack
     // model sees neither the tools nor the hidden system context, so with either present an
     // instant ack could contradict what the real reply is told to do.

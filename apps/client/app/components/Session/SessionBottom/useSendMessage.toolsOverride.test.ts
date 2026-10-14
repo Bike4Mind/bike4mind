@@ -92,18 +92,35 @@ describe('useSendMessage - per-send systemContext reaches both routes', () => {
   });
 
   it('refuses an over-cap value through onRefused before any dispatch', () => {
-    const refusalStart = source.indexOf("if (resolvedSystemContext.kind === 'tooLong')");
+    const refusalStart = source.indexOf("if (resolvedSystemContext.kind === 'tooLong') {");
     expect(refusalStart).toBeGreaterThan(-1);
-    const refusal = source.slice(refusalStart, source.indexOf('return;', refusalStart));
+    // Brace-match the `if` block itself, so a `return;` elsewhere in the file cannot satisfy it.
+    let depth = 0;
+    let refusalEnd = -1;
+    for (let index = source.indexOf('{', refusalStart); index < source.length; index++) {
+      if (source[index] === '{') depth++;
+      if (source[index] === '}' && --depth === 0) {
+        refusalEnd = index;
+        break;
+      }
+    }
+    expect(refusalEnd).toBeGreaterThan(refusalStart);
+    const refusal = source.slice(refusalStart, refusalEnd);
+    expect(refusal).toContain('toast.error(');
     expect(refusal).toContain('setSubmitting(false);');
-    expect(refusal).toContain('options?.onRefused?.();');
+    expect(refusal).toMatch(/options\?\.onRefused\?\.\(\);\s*return;\s*$/);
+    // Ahead of the host hand-off and every dispatch.
+    expect(refusalStart).toBeLessThan(source.indexOf('useSessionRouter.getState().hostCreateSession'));
     expect(refusalStart).toBeLessThan(source.indexOf('handleCommand(commandHandlers, {'));
   });
 
   it.each(['handleCommand(commandHandlers, {', 'handleLLMCommand({', 'agentExecution.start({'])(
     'spreads it into %s',
     opener => {
-      expect(callSlice(opener)).toContain('...systemContextField,');
+      const slice = callSlice(opener);
+      expect(slice).toContain('...systemContextField,');
+      // A later `systemContext: undefined,` would erase the spread at runtime.
+      expect(slice).not.toMatch(/\bsystemContext\s*:/);
     }
   );
 

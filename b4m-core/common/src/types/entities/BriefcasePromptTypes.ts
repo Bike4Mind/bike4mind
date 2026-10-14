@@ -131,13 +131,15 @@ export interface IResolvedPromptDispatch {
   sessionId?: string | null;
   /**
    * System context for the one send this launch starts, delivered to the model as a system
-   * message. Never shown in the transcript or stored on the turn. Absent or whitespace-only
-   * leaves the send exactly as it was.
+   * message. Never shown in the transcript or stored on the turn (a continuation keeps it
+   * through the server-only checkpoint). Absent or whitespace-only leaves the send exactly
+   * as it was.
    *
    * - Capped at `PROMPT_TEXT_MAX` characters after trimming; a longer value refuses the send.
    * - Not carried by a retry/regenerate of the turn (the same as `requiredTools`).
    * - Read only by plain chat and agent sends; a prompt that is a slash command other than
-   *   `/llm`, or a send to an image model, ignores it.
+   *   `/llm`, a send to an image model, or a send that must first create its session through
+   *   a host (`hostCreateSession`) ignores it.
    */
   systemContext?: string;
 }
