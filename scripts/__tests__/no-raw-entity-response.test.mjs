@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RuleTester } from 'eslint';
+import { ESLint, RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
 import { afterAll, describe, expect, it } from 'vitest';
 import rule, { ENTITY_BASE } from '../../eslint-rules/no-raw-entity-response.mjs';
@@ -82,5 +82,27 @@ describe('ENTITY_BASE', () => {
   it('matches the entity base interface in @bike4mind/common', () => {
     const source = readFileSync(path.join(testDir, '../../b4m-core/common/src/types/entities/common.ts'), 'utf8');
     expect(source).toMatch(new RegExp(`export interface ${ENTITY_BASE}\\b`));
+  });
+});
+
+// Without the entity base in the program (an unbuilt core) every entity would pass silently.
+describe('unresolvable entity base', () => {
+  it('fails loudly instead of reporting nothing', async () => {
+    const eslint = new ESLint({
+      cwd: fixtureDir,
+      overrideConfigFile: true,
+      overrideConfig: {
+        files: ['**/*.ts'],
+        languageOptions: {
+          parser: tseslint.parser,
+          parserOptions: { projectService: true, tsconfigRootDir: fixtureDir },
+        },
+        plugins: { b4m: { rules: { 'no-raw-entity-response': rule } } },
+        rules: { 'b4m/no-raw-entity-response': 'error' },
+      },
+    });
+    const code =
+      'interface Res { status(code: number): Res; json(body?: unknown): Res }\ndeclare const res: Res;\nres.json({});\n';
+    await expect(eslint.lintText(code, { filePath: filename })).rejects.toThrow(/cannot resolve IMongoDocument/);
   });
 });

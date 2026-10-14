@@ -55,6 +55,26 @@ function isEntityPayload(checker, type) {
   return extendsEntityBase(checker, type, new Set());
 }
 
+// Per TS program: does it contain the entity base at all? Core types resolve through built
+// `dist/*.d.mts`, so with no build every entity is an unresolved import and the rule would pass
+// everything silently. The scan is deferred to the first Express-like send so unrelated files skip it.
+const entityBaseResolved = new WeakMap();
+
+function assertEntityBaseResolvable(program) {
+  let resolved = entityBaseResolved.get(program);
+  if (resolved === undefined) {
+    const declaration = `interface ${ENTITY_BASE}`;
+    resolved = program.getSourceFiles().some(file => file.text.includes(declaration));
+    entityBaseResolved.set(program, resolved);
+  }
+  if (!resolved) {
+    throw new Error(
+      `b4m/no-raw-entity-response cannot resolve ${ENTITY_BASE}: @bike4mind/common types are missing or ` +
+        'unbuilt, so every entity would pass. Run `pnpm turbo:core:build` first.'
+    );
+  }
+}
+
 /** A response sends only if it is Express-like; any other object's `json()`/`send()` is ignored. */
 function isResponseLike(type) {
   return Boolean(type.getProperty('status') && type.getProperty('json'));
@@ -100,6 +120,7 @@ export default {
         const [body] = node.arguments;
         if (!SENDING_METHODS.has(method) || !body) return;
         if (!isResponseLike(services.getTypeAtLocation(node.callee.object))) return;
+        assertEntityBaseResolvable(services.program);
         reportEntitiesIn(body, method);
       },
     };

@@ -824,11 +824,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/users/[id]/delete.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/users/[id]/projects.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
