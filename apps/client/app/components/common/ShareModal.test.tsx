@@ -107,11 +107,43 @@ describe('ShareModal - By Link tab', () => {
     expect(screen.getByTestId('share-modal-submit-button')).not.toBeDisabled();
   });
 
-  it('says who can open the link', () => {
+  it('tells a notebook owner the link reaches its shareable attached files, before anything is generated', () => {
     renderModal();
+    expect(screen.queryByTestId('share-modal-generated-link')).not.toBeInTheDocument();
     expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
-      'Anyone with the link can open this notebook after signing in'
+      "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share. They can share it on. Nothing is shared until you tap Generate, and links don't expire until you turn them off."
     );
+  });
+
+  it('keeps the file note free of the notebook-only attached-files wording', () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal id="file-1" name="a.pdf" type={InviteType.FabFile} ownerId="u1" open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    const note = screen.getByTestId('share-modal-link-access-note');
+    expect(note).toHaveTextContent(
+      "Anyone with the link can open this item after signing in, and can share it on. Links don't expire."
+    );
+    expect(note).not.toHaveTextContent('attached files');
+  });
+
+  it('describes a bulk link as covering these items, without the attached-files wording', () => {
+    renderModal([{ id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument]);
+    const note = screen.getByTestId('share-modal-link-access-note');
+    expect(note).toHaveTextContent('Anyone with the link can open these items after signing in');
+    expect(note).not.toHaveTextContent('attached files');
+  });
+
+  it('lets a file owner turn off links for that file after confirmation', async () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal id="file-1" name="a.pdf" type={InviteType.FabFile} ownerId="u1" open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    await userEvent.setup().click(screen.getByTestId('share-modal-turn-off-links-button'));
+    mocks.confirm.mock.calls[0][0].onOk();
+    expect(mocks.cancelInvite).toHaveBeenCalledWith({ id: 'file-1', type: InviteType.FabFile });
   });
 
   it('shows the whole generated link as text next to a labelled copy button', () => {
