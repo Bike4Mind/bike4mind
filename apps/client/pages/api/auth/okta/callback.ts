@@ -26,9 +26,10 @@ import {
   readPkceVerifierCookie,
   clearPkceVerifierCookie,
 } from '@server/auth/oauthFlowCookie';
-import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
+import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
 import { OKTA_STATE_AUDIENCE, OktaStatePayload } from '@server/auth/oktaConstants';
 import { issueBrowserSession } from '@server/auth/issueSession';
+import { logSignInSuccess, resolveSecondFactor, type SecondFactorOutcome } from '@server/auth/signInSecondFactor';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy } from '@bike4mind/common';
@@ -470,6 +471,33 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       throw new ForbiddenError('User is banned');
     }
 
+    // Audited before the second-factor gate, which may end the request: the link is already
+    // persisted. Mirrors verifyCallback.ts for the generic OAuth path.
+    if (isNewProviderLink) {
+      await logAuthAudit(req, { userId: user.id, event: 'oauth_link', strategy: AuthStrategy.Okta });
+    }
+
+    // Resume the originally requested path (round-tripped via the state JWT).
+    // /auth/success applies sanitizeRedirectTo before navigating, so it is
+    // passed through as an opaque, URL-encoded query value.
+    const successQuery = authSuccessRedirectQuery(redirectTo);
+
+    // An Okta IdP record is bound to its org's email domain (checked above), so that IdP owns
+    // MFA. The unbound SST-secret fallback has no such binding and is challenged like a
+    // consumer social sign-in.
+    const secondFactor: SecondFactorOutcome = idp
+      ? { kind: 'satisfied', trustedDevice: null }
+      : await resolveSecondFactor(req, user);
+    if (secondFactor.kind !== 'satisfied') {
+      const handoff = mfaHandoffFragment({
+        mfaToken: secondFactor.mfaToken,
+        userId: user.id,
+        mode: secondFactor.kind === 'challenge' ? 'verify' : 'setup',
+        passkeyAvailable: secondFactor.kind === 'challenge' && secondFactor.passkeyAvailable,
+      });
+      return res.redirect(`/auth/success${successQuery}${handoff}`);
+    }
+
     // Generate our session tokens (distinct from the Okta IdP accessToken/refreshToken above).
     const session = await issueBrowserSession(req, res, user.id, {
       createdVia: 'okta',
@@ -488,20 +516,13 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       },
     });
 
-    await logAuthAudit(req, { userId: user.id, event: 'login_success', strategy: AuthStrategy.Okta });
-
-    // Record the forensic trail for a genuine new account-link (not a re-login),
-    // mirroring verifyCallback.ts for the generic OAuth path.
-    if (isNewProviderLink) {
-      await logAuthAudit(req, { userId: user.id, event: 'oauth_link', strategy: AuthStrategy.Okta });
-    }
+    await logSignInSuccess(req, {
+      userId: user.id,
+      strategy: AuthStrategy.Okta,
+      trustedDevice: secondFactor.trustedDevice,
+    });
 
     Logger.debug('[Okta Callback] Authentication successful for user:', user.id);
-
-    // Resume the originally requested path (round-tripped via the state JWT).
-    // /auth/success applies sanitizeRedirectTo before navigating, so it is
-    // passed through as an opaque, URL-encoded query value.
-    const successQuery = authSuccessRedirectQuery(redirectTo);
 
     // Redirect to the application with tokens in URL fragment (not query string)
     // Using fragments prevents tokens from being logged in server access logs,

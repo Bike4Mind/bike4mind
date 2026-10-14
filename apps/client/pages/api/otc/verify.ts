@@ -15,7 +15,6 @@ import {
   creditLotRepository,
   pendingOtcTokenRepository,
   authSessionRepository,
-  passkeyCredentialRepository,
   oauthClientRepository,
 } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
@@ -30,17 +29,14 @@ import {
   reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
+import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { setRefreshCookie } from '@server/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { Config } from '@server/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
-import { logAuthAudit } from '@server/utils/authAudit';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
-import { mfaService } from '@bike4mind/services';
-import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import * as z from 'zod';
@@ -214,37 +210,20 @@ const handler = baseApi({ auth: false })
         }
       }
 
-      // --- MFA LOGIC (same as password login) ---
-      const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-      const enforceMFA = getSettingsValue('enforceMFA', settings) || false;
-      const userHasMFA = mfaService.userHasMFAConfigured(existingUser);
-
-      // "Remember this device": a live trust for THIS account skips the TOTP re-challenge
-      // for the rest of its window. It only ever suppresses the SECOND factor - the emailed
-      // code above is still required, so the cookie alone is not a credential. It cannot
-      // stand in for MFA *enrollment* either: the enforceMFA/!userHasMFA branch below is
-      // deliberately outside this check.
-      const trustedDevice =
-        userHasMFA && (await trustedDevicesAllowed()) ? await consumeTrustedDevice(req, existingUser.id) : null;
-
-      if ((userHasMFA && !trustedDevice) || (enforceMFA && !userHasMFA)) {
-        // Only issue the short-lived mfaPending access token (no refresh token).
-        // /api/auth/mfa/verify mints the full token pair on success. Without this
-        // omission, a client could POST the mfaPending refresh token directly to
-        // /api/auth/refreshToken (which has no mfaPending check) and get a full
-        // session without passing the second factor.
-        const mfaAccessToken = jwt.sign(
-          { id: existingUser.id, mfaPending: true, tokenVersion: existingUser.tokenVersion ?? 0 },
-          Config.JWT_SECRET,
-          { algorithm: 'HS256', expiresIn: '10m' }
-        );
-        // Lets the challenge UI offer "use a passkey" up front instead of failing after a tap.
-        const passkeyAvailable = userHasMFA && (await passkeyCredentialRepository.countByUser(existingUser.id)) > 0;
+      // --- SECOND FACTOR --- (a remembered device skips the challenge, never enrollment)
+      const secondFactor = await resolveSecondFactor(req, existingUser);
+      if (secondFactor.kind === 'challenge') {
         return res.status(200).json({
-          ...(userHasMFA ? { mfaRequired: true, passkeyAvailable } : { mfaSetupRequired: true }),
+          mfaRequired: true,
+          passkeyAvailable: secondFactor.passkeyAvailable,
           userId: existingUser.id,
-          accessToken: mfaAccessToken,
+          accessToken: secondFactor.mfaToken,
         });
+      }
+      if (secondFactor.kind === 'enroll') {
+        return res
+          .status(200)
+          .json({ mfaSetupRequired: true, userId: existingUser.id, accessToken: secondFactor.mfaToken });
       }
 
       // --- DIRECT LOGIN ---
@@ -263,30 +242,17 @@ const handler = baseApi({ auth: false })
 
       // Analytics + device history are best-effort for the same post-rotation reason as
       // above: the login is already proven, so none of these writes may fail the response.
-      // (logAuthAudit already swallows internally by design.)
+      // (logSignInSuccess -> logAuthAudit already swallows internally by design.)
       await logEvent({
         userId: existingUser.id,
         type: AuthEvents.LOGIN,
         metadata: { strategy: 'otc', ip, userAgent: req.headers['user-agent'] || 'unknown' },
       }).catch(err => req.logger.error('OTC login analytics log failed', err));
-      await logAuthAudit(req, {
+      await logSignInSuccess(req, {
         userId: existingUser.id,
-        event: 'login_success',
         strategy: 'otc',
-        metadata: trustedDevice ? { trustedDeviceId: trustedDevice.id } : undefined,
+        trustedDevice: secondFactor.trustedDevice,
       });
-      if (trustedDevice) {
-        await logAuthAudit(req, {
-          userId: existingUser.id,
-          event: 'trusted_device_used',
-          strategy: 'otc',
-          metadata: {
-            deviceId: trustedDevice.id,
-            label: trustedDevice.label,
-            expiresAt: trustedDevice.expiresAt.toISOString(),
-          },
-        });
-      }
 
       // Update login records
       const clientData = req.body.clientData;

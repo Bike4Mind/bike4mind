@@ -8,6 +8,9 @@ import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { parseAuthParams } from '@client/app/utils/authParams';
 import { applyRedirect } from '@client/app/utils/authRedirect';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
+import { usePublicConfig } from '@client/app/hooks/data/settings';
+import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
+import MFAModal from '@client/app/components/common/MFAModal';
 
 const AuthSuccessPage = () => {
   const navigate = useNavigate();
@@ -16,6 +19,21 @@ const AuthSuccessPage = () => {
   const { currentUser, setCurrentUser } = useUser();
   const { setVerifiedSession } = useAccessToken();
   const hasProcessed = useRef(false);
+  const { data: publicConfig } = usePublicConfig();
+  const redirectTo = (search as { redirectTo?: string }).redirectTo;
+  // Set when an SSO signup arrives still owing a second factor: the conversion fires once
+  // the session exists, as it does for a direct sign-in.
+  const pendingSignupMethod = useRef<string | null>(null);
+  const mfaChallenge = useMfaChallenge({
+    allowRememberDevice: publicConfig?.allowTrustedDevices ?? false,
+    onComplete: ({ user }) => {
+      setCurrentUser(user);
+      if (pendingSignupMethod.current) trackSignupConversion(pendingSignupMethod.current);
+      applyRedirect(router.history, redirectTo);
+    },
+    onCancel: mode =>
+      navigate({ to: '/login', search: { error: mode === 'setup' ? 'mfa_setup_required' : 'mfa_required' } }),
+  });
 
   useEffect(() => {
     // Guard against Strict Mode double-invoke and React 18 Concurrent Mode
@@ -24,11 +42,28 @@ const AuthSuccessPage = () => {
     hasProcessed.current = true;
 
     const handleAuthSuccess = async () => {
-      const { token, error, userId, isNewUser, signupMethod } = parseAuthParams(search as Record<string, unknown>);
+      const { token, error, userId, isNewUser, signupMethod, mfa } = parseAuthParams(search as Record<string, unknown>);
 
       if (error) {
         console.error('Authentication error:', error);
         navigate({ to: '/login', search: { error: error as string } });
+        return;
+      }
+
+      if (mfa && userId) {
+        // Never trade a live session for a pending one: the handoff sets no cookie, so an
+        // already signed-in browser keeps its session and simply moves on.
+        if (currentUser?.id) {
+          applyRedirect(router.history, redirectTo);
+          return;
+        }
+        if (isNewUser) pendingSignupMethod.current = signupMethod || 'oauth';
+        await mfaChallenge.begin({
+          userId,
+          mfaToken: mfa.token,
+          mode: mfa.mode,
+          passkeyAvailable: mfa.passkeyAvailable,
+        });
         return;
       }
 
@@ -39,7 +74,7 @@ const AuthSuccessPage = () => {
         // login (no currentUser) or a re-login as the same user proceeds normally.
         if (currentUser?.id && currentUser.id !== userId) {
           console.warn('[auth/success] Ignoring URL token for a different user than the active session');
-          applyRedirect(router.history, (search as { redirectTo?: string }).redirectTo);
+          applyRedirect(router.history, redirectTo);
           return;
         }
 
@@ -79,7 +114,7 @@ const AuthSuccessPage = () => {
             // query string survives - e.g. the OAuth authorize URL
             // `/oauth/authorize?client_id=...&redirect_uri=...`, which navigate({ to })
             // would URL-encode into the path and break.
-            applyRedirect(router.history, (search as { redirectTo?: string }).redirectTo);
+            applyRedirect(router.history, redirectTo);
           } else {
             throw new Error(`Failed to fetch user data: ${response.statusText}`);
           }
@@ -98,7 +133,7 @@ const AuthSuccessPage = () => {
         // they hold a valid session, so forwarding them is the correct outcome.
         const { accessToken } = useAccessToken.getState();
         if (accessToken) {
-          applyRedirect(router.history, (search as { redirectTo?: string }).redirectTo);
+          applyRedirect(router.history, redirectTo);
         } else {
           navigate({ to: '/login', search: { error: 'missing_tokens' } });
         }
@@ -129,6 +164,7 @@ const AuthSuccessPage = () => {
           Please wait while we set up your session.
         </Typography>
       </Box>
+      <MFAModal {...mfaChallenge.modalProps} />
     </Container>
   );
 };

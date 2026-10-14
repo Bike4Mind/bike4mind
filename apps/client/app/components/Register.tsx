@@ -2,9 +2,8 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
-import { useVerifyMFA, useSetupMFA, useVerifyMFASetup, MFASetupResponse } from '@client/app/hooks/data/mfa';
-import { describePasskeyMfaError, passkeysSupported, useVerifyPasskeyMFA } from '@client/app/hooks/data/passkeys';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
+import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import MFAModal from './common/MFAModal';
 import { useTheme } from '@mui/joy/styles';
 import { useCommonStyles } from '@client/app/hooks/useCommonStyles';
@@ -86,16 +85,25 @@ const Register: React.FC = () => {
   // MFA state - the verify call can come back as a LOGIN when the email already has an
   // account (the user forgot they registered, or a prior attempt created it), and that
   // login can demand MFA. Mirrors MultiStepLogin.
-  const [showMFAModal, setShowMFAModal] = useState(false);
-  const [mfaUserId, setMfaUserId] = useState<string | null>(null);
-  const [mfaError, setMfaError] = useState<string | null>(null);
-  const [mfaMode, setMfaMode] = useState<'verify' | 'setup'>('verify');
-  const [mfaSetupData, setMfaSetupData] = useState<MFASetupResponse | null>(null);
-  const [mfaPasskeyAvailable, setMfaPasskeyAvailable] = useState(false);
-  const verifyMFA = useVerifyMFA();
-  const verifyPasskeyMFA = useVerifyPasskeyMFA();
-  const setupMFA = useSetupMFA();
-  const verifyMFASetup = useVerifyMFASetup();
+  const mfaChallenge = useMfaChallenge({
+    // Setting currentUser triggers the redirect effect.
+    onComplete: ({ user }) => setCurrentUser(user),
+    onCancel: mode => {
+      // The nonce behind the held pendingToken was consumed by the submit that raised the MFA
+      // challenge, so the code step can't be resumed (any retry dies as "Invalid code.").
+      // Restart cleanly from the form.
+      setCurrentStep('form');
+      setOtcCode('');
+      setPendingToken(null);
+      if (mode === 'setup') {
+        toast.info(
+          'Multi-factor authentication setup is required by your administrator. Please complete the setup to continue.'
+        );
+      } else {
+        toast.error('Multi-factor authentication is required to sign in. Please enter your code to continue.');
+      }
+    },
+  });
 
   // Resend cooldown
   const [resendCooldown, setResendCooldown] = useState(0);
@@ -234,97 +242,6 @@ const Register: React.FC = () => {
     }
   };
 
-  const handleMFASetup = async () => {
-    try {
-      const result = await setupMFA.mutateAsync();
-      setMfaSetupData(result);
-      setShowMFAModal(true);
-    } catch (error: unknown) {
-      const errorMessage = (error as Record<string, unknown>)?.response
-        ? (error as Record<string, Record<string, Record<string, string>>>).response?.data?.error
-        : (error as Error).message || 'MFA setup failed';
-      toast.error(errorMessage);
-      useAccessToken.getState().resetTokens();
-      setMfaUserId(null);
-      setMfaMode('verify');
-      setMfaSetupData(null);
-    }
-  };
-
-  const finishMfaLogin = (result: { accessToken: string; user: Parameters<typeof setCurrentUser>[0] }) => {
-    resetRefreshCoordinator();
-    // Drop the cached cold-load result: this browser just acquired a session, so the next
-    // protected navigation must not reuse the "no session" answer from before login.
-    resetSessionBootstrap();
-    useAccessToken.getState().setVerifiedSession(result.accessToken);
-    setShowMFAModal(false);
-    setMfaPasskeyAvailable(false);
-    // Setting currentUser triggers the redirect effect above.
-    setCurrentUser(result.user);
-  };
-
-  const handlePasskeyVerification = async () => {
-    if (!mfaUserId) return;
-    setMfaError(null);
-    try {
-      finishMfaLogin(await verifyPasskeyMFA.mutateAsync({}));
-    } catch (error: unknown) {
-      setMfaError(describePasskeyMfaError(error));
-    }
-  };
-
-  const handleMFAVerification = async (token: string) => {
-    if (!mfaUserId) return;
-    setMfaError(null);
-    try {
-      let result;
-      if (mfaMode === 'setup') {
-        result = await verifyMFASetup.mutateAsync({ token });
-      } else {
-        result = await verifyMFA.mutateAsync({ token });
-      }
-      finishMfaLogin(result);
-    } catch (error: unknown) {
-      const errorData = (error as Record<string, Record<string, Record<string, unknown>>>)?.response?.data;
-      if (errorData?.forceLogout) {
-        useAccessToken.getState().forceLogoutTokens();
-        setShowMFAModal(false);
-        setMfaUserId(null);
-        setMfaError(null);
-        setMfaMode('verify');
-        setMfaSetupData(null);
-        toast.error((errorData.error as string) || 'Too many failed attempts. Please try again.');
-        return;
-      }
-      const baseError = (errorData?.error as string) || (error as Error).message || 'MFA verification failed';
-      const attemptsInfo = errorData?.attemptsRemaining ? ` (${errorData.attemptsRemaining} attempts remaining)` : '';
-      setMfaError(baseError + attemptsInfo);
-    }
-  };
-
-  const handleMFACancel = () => {
-    useAccessToken.getState().resetTokens();
-    setShowMFAModal(false);
-    setMfaPasskeyAvailable(false);
-    setMfaUserId(null);
-    setMfaError(null);
-    setMfaMode('verify');
-    setMfaSetupData(null);
-    // The nonce behind the held pendingToken was consumed by the submit that raised the MFA
-    // challenge, so the code step can't be resumed (any retry dies as "Invalid code.").
-    // Restart cleanly from the form.
-    setCurrentStep('form');
-    setOtcCode('');
-    setPendingToken(null);
-    if (mfaMode === 'setup') {
-      toast.info(
-        'Multi-factor authentication setup is required by your administrator. Please complete the setup to continue.'
-      );
-    } else {
-      toast.error('Multi-factor authentication is required to sign in. Please enter your code to continue.');
-    }
-  };
-
   const handleOTCVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!submittedData || !isSubmittableOtcCode(otcCode)) return;
@@ -361,22 +278,16 @@ const Register: React.FC = () => {
       // shapes, including MFA challenges. Without these branches the code below would set
       // up a half-session from an MFA response that has no refreshToken.
       if ('mfaRequired' in response && response.mfaRequired) {
-        if ('accessToken' in response) {
-          useAccessToken.getState().setMfaPendingTokens(response.accessToken);
-        }
-        setMfaUserId(response.userId);
-        setMfaMode('verify');
-        setMfaPasskeyAvailable(!!response.passkeyAvailable);
-        setShowMFAModal(true);
+        await mfaChallenge.begin({
+          userId: response.userId,
+          mfaToken: response.accessToken,
+          mode: 'verify',
+          passkeyAvailable: !!response.passkeyAvailable,
+        });
         return;
       }
       if ('mfaSetupRequired' in response && response.mfaSetupRequired) {
-        if ('accessToken' in response) {
-          useAccessToken.getState().setMfaPendingTokens(response.accessToken);
-        }
-        setMfaUserId(response.userId);
-        setMfaMode('setup');
-        await handleMFASetup();
+        await mfaChallenge.begin({ userId: response.userId, mfaToken: response.accessToken, mode: 'setup' });
         return;
       }
 
@@ -972,29 +883,7 @@ const Register: React.FC = () => {
 
       {/* MFA Modal — only reachable when the verify call resolved to a login of an
           already-existing account whose org enforces (or user configured) MFA. */}
-      <MFAModal
-        className="mfa-modal"
-        open={showMFAModal}
-        onClose={handleMFACancel}
-        onCancel={handleMFACancel}
-        onVerify={handleMFAVerification}
-        loading={verifyMFA.isPending || verifyMFASetup.isPending}
-        error={mfaError}
-        title={mfaMode === 'setup' ? 'Set Up Multi-Factor Authentication' : 'Multi-Factor Authentication Required'}
-        description={
-          mfaMode === 'setup'
-            ? 'Your administrator requires MFA. Scan the QR code with your authenticator app to set up MFA.'
-            : mfaPasskeyAvailable && passkeysSupported()
-              ? 'Use your passkey, or enter your 6-digit code or backup code to continue.'
-              : 'Enter your 6-digit code or backup code to continue.'
-        }
-        qrCodeUrl={mfaSetupData?.qrCodeUrl}
-        manualEntryKey={mfaSetupData?.manualEntryKey}
-        backupCodes={mfaSetupData?.backupCodes}
-        showVerify={true}
-        onPasskeyVerify={mfaPasskeyAvailable ? handlePasskeyVerification : undefined}
-        passkeyLoading={verifyPasskeyMFA.isPending}
-      />
+      <MFAModal {...mfaChallenge.modalProps} />
     </>
   );
 };
