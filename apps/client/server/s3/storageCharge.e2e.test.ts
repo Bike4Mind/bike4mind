@@ -212,40 +212,34 @@ describe('content rewrite storage charge', () => {
     expect(await storedSize()).toBe(await truth());
   });
 
-  it('charges a rewrite of a legacy unstamped file only the delta', async () => {
+  // Every row shape the charge rule distinguishes, in both event orders, for growth, no change and shrink.
+  const shapes = {
+    stamped: () => firstUpload(5000),
+    'legacy complete': () => legacyFile(5000),
+    'legacy no-status': () => legacyFile(5000, { noStatus: true }),
+  };
+  it.each(
+    (Object.keys(shapes) as (keyof typeof shapes)[]).flatMap(shape =>
+      (['commit first', 'event first'] as const).flatMap(order =>
+        [5100, 5000, 4000].map(newSize => [shape, order, newSize] as const)
+      )
+    )
+  )('charges a rewrite of a %s file only the delta (%s, to %i bytes)', async (shape, order, newSize) => {
     await seedUser();
-    const id = await legacyFile(5000);
-
-    const eventTime = await rewrite(id, 5100);
-    await s3Event(id, eventTime, 5100);
-
-    expect(await storedSize()).toBe(BASELINE_BYTES + 5100);
-    expect(await storedSize()).toBe(await truth());
-  });
-
-  it('charges a legacy rewrite only the delta when its S3 event is processed before the commit', async () => {
-    await seedUser();
-    const id = await legacyFile(5000);
-
-    await rewrite(id, 5100, async eventTime => {
-      expect(await s3Event(id, eventTime, 5100)).toBe(100);
-    });
-
-    expect(await storedSize()).toBe(BASELINE_BYTES + 5100);
-    expect(await storedSize()).toBe(await truth());
-  });
-
-  it('counts a legacy file with no status as charged', async () => {
-    await seedUser();
-    const id = await legacyFile(1000, { noStatus: true });
+    const id = await shapes[shape]();
     expect(await storedSize()).toBe(await truth());
 
-    for (const size of [1000, 1500]) {
-      const eventTime = await rewrite(id, size);
-      await s3Event(id, eventTime, size);
-      expect(await storedSize()).toBe(BASELINE_BYTES + size);
-      expect(await storedSize()).toBe(await truth());
+    if (order === 'event first') {
+      await rewrite(id, newSize, async eventTime => {
+        expect(await s3Event(id, eventTime, newSize)).toBe(newSize - 5000);
+      });
+    } else {
+      const eventTime = await rewrite(id, newSize);
+      expect(await s3Event(id, eventTime, newSize)).toBeNull();
     }
+
+    expect(await storedSize()).toBe(BASELINE_BYTES + newSize);
+    expect(await storedSize()).toBe(await truth());
   });
 
   it.each([

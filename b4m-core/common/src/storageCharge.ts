@@ -1,7 +1,9 @@
 /**
  * The one definition of whether a FabFile's `fileSize` is counted in its owner's
- * `currentStorageSize`. Every refund/re-charge site goes through `chargedBytes`, and the recalc truth
- * (FabFileRepository.sumFileSizeByUserId) matches `STORAGE_CHARGED_FILTER`.
+ * `currentStorageSize`. The S3 charge claim (apps/client/server/s3/storageCharge.ts), the content
+ * rewrite commit and its quota gate (b4m-core/services/src/fabFileService/rewriteStorage.ts) go
+ * through `chargedBytes`, always on a lean row: a hydrated FabFile reports an absent `status` as its
+ * 'pending' default. `STORAGE_CHARGED_FILTER` is the Mongo form, for readers that query charged rows.
  * Must stay in sync: `isStorageCharged` and `STORAGE_CHARGED_FILTER` encode the same rule.
  *
  * Charged = stamped by a charge (apps/client/server/s3/storageCharge.ts; a notebook import can stamp

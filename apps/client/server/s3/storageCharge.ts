@@ -26,7 +26,7 @@ export const claimStorageCharge = async (
       projection: { fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 },
       ...(session ? { session } : {}),
     }
-  );
+  ).lean(); // A hydrated pre-image reports a legacy row's absent status as its 'pending' default.
   return pre ? size - chargedBytes(pre) : null;
 };
 
