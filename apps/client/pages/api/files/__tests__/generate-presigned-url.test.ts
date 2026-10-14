@@ -341,7 +341,10 @@ describe('POST /api/files/generate-presigned-url - MaxFileSize resolution', () =
     vi.mocked(getSettingsMap).mockResolvedValue({ MaxFileSize: stored });
     const { res } = makeRes();
 
-    await expect(run(body({ fileSize: mb(DEFAULT_MB + 5) }), res)).rejects.toThrow(/maximum file size/i);
+    await expect(run(body({ fileSize: mb(DEFAULT_MB + 5) }), res)).rejects.toMatchObject({
+      message: expect.stringMatching(/maximum file size/i),
+      info: { errorCode: 'file_too_large', limit_bytes: mb(DEFAULT_MB), requested_bytes: mb(DEFAULT_MB + 5) },
+    });
     expect(h.createFabFile).not.toHaveBeenCalled();
   });
 
