@@ -132,7 +132,9 @@ export type PublicUserProfile = z.infer<typeof publicUserProfileResponseSchema>;
 /**
  * Mirrors `redactUserSecretsForSelf()`: the caller's OWN full profile, returned by
  * the self-view endpoints (identify, the auth/session routes, users/[id] self and
- * update). Unlike the schemas above this is a broad profile, so it is assembled from
+ * update). Also used when an admin views or edits another user (users/[id] and update admin
+ * branches, force-reset target, bulk-create rows), so do not tighten it as self-only.
+ * Unlike the schemas above this is a broad profile, so it is assembled from
  * a key list that the compiler holds to `IUserDocument`: adding a field to IUser
  * fails the build here until it is classified, either as a passthrough below or as a
  * secret in USER_SECRET_FIELDS. A new field can therefore never leak by default. The
