@@ -25,7 +25,6 @@ import {
   ListItemButton,
   ListItemDecorator,
   Radio,
-  Switch,
   Tooltip,
   Typography,
   useTheme,
@@ -66,6 +65,7 @@ import { useComposerMenuOpen } from '@client/app/stores/useComposerMenuOpen';
 import { ATTACH_SCOPE_MODES, type AttachScopeMode } from '@bike4mind/common';
 import { brandAlpha, grayAlpha } from '@client/app/utils/themes/colors';
 import { toolbarIconSx } from '@client/app/components/Session/toolbarIconSx';
+import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 
 ensureGoogleDrivePickerStyles();
 
@@ -86,6 +86,11 @@ const ATTACH_SCOPE_COPY: Record<AttachScopeMode, { label: string; description: s
     description: 'Nothing is kept - files attach to one message only.',
   },
 };
+
+// The green square toggle the Tools panel uses (SquareSlideToggle), scaled down to sit inside a
+// 32px row; its thumb is sized in percent, so it keeps its proportions.
+const TOGGLE_W = 34;
+const TOGGLE_H = 20;
 
 // Rows styled like the sidebar's Quick Filters (Notebook/Search/QuickFilters.tsx): 32px rows,
 // 6px corners, 8px side padding, 12px from icon to label and the same hover fill - keep the two in
@@ -743,14 +748,14 @@ const AttachFileButton = ({
                   <ListItem
                     sx={{ p: 0 }}
                     endAction={
-                      <Switch
-                        size="sm"
+                      <SquareSlideToggle
+                        width={TOGGLE_W}
+                        height={TOGGLE_H}
                         checked={agentMode.enabled}
                         disabled={agentModeDisabled}
                         onChange={toggleAgentMode}
-                        slotProps={{
-                          input: { 'aria-label': 'Agent mode', 'data-testid': 'attach-menu-agent-mode-switch' },
-                        }}
+                        aria-label="Agent mode"
+                        data-testid="attach-menu-agent-mode-switch"
                       />
                     }
                   >
@@ -775,13 +780,13 @@ const AttachFileButton = ({
                   <ListItem
                     sx={{ p: 0 }}
                     endAction={
-                      <Switch
-                        size="sm"
+                      <SquareSlideToggle
+                        width={TOGGLE_W}
+                        height={TOGGLE_H}
                         checked={researchMode.enabled}
                         onChange={event => setLLM({ researchMode: { ...researchMode, enabled: event.target.checked } })}
-                        slotProps={{
-                          input: { 'aria-label': 'Research mode', 'data-testid': 'attach-menu-research-mode-switch' },
-                        }}
+                        aria-label="Research mode"
+                        data-testid="attach-menu-research-mode-switch"
                       />
                     }
                   >
