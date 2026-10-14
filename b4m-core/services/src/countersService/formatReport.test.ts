@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { CompletionSource } from '@bike4mind/common';
-import { formatUsageBySource } from './formatReport';
+import type { UserActivityMetrics } from './types';
+import { formatCustomSlackMessage, formatUsageBySource } from './formatReport';
 
 describe('formatUsageBySource', () => {
   it('returns null for undefined or empty input', () => {
@@ -44,5 +45,50 @@ describe('formatUsageBySource', () => {
       { source: 'agent', count: 1 },
     ]);
     expect(out).toBe('web: 89.0% · cli: 10.0% · agent: 1.0%');
+  });
+});
+
+describe('formatCustomSlackMessage - DAU', () => {
+  const topUsers = Array.from({ length: 20 }, (_, i) => ({
+    _id: `u${i}`,
+    email: `u${i}@example.com`,
+    interactions: 20 - i,
+  }));
+  const baseActivity: UserActivityMetrics = {
+    totalUniqueUsers: 60,
+    internalUsers: 5,
+    externalUsers: 55,
+    topUsers,
+    topModels: [],
+  };
+
+  it('reports DAU from activeUsers24h rather than the capped topUsers length', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: { ...baseActivity, activeUsers24h: 42 },
+    });
+
+    expect(message).toContain('Daily Active (DAU): *42* users');
+    expect(message).toContain('Active Users: *42* users');
+  });
+
+  it('uses staff-excluded externalUsers as the DAU/WAU denominator', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: { ...baseActivity, activeUsers24h: 11, externalUsers: 55 },
+    });
+
+    expect(message).toContain('Weekly Active (WAU): *55* users');
+    expect(message).toContain('DAU/WAU Ratio:');
+    expect(message).toContain('20.0%');
+  });
+
+  it('describes the leaderboard overflow by what the list holds, not as active-user count', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: { ...baseActivity, activeUsers24h: 42 },
+    });
+
+    expect(message).toContain('...and 10 more in the top 20');
   });
 });
