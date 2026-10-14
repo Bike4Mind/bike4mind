@@ -293,6 +293,12 @@ export interface BuildSharedToolsOptions {
   toolAvailability?: ToolAvailability;
 }
 
+/** Namespaced `server__tool` ids of the only tools whose `_attachmentList` result is trusted. */
+const ATTACHMENT_LIST_SOURCE_BY_TOOL: ReadonlyMap<string, 'jira' | 'confluence'> = new Map([
+  [`atlassian__${JIRA_LIST_ATTACHMENTS}`, 'jira'],
+  [`atlassian__${CONFLUENCE_LIST_ATTACHMENTS}`, 'confluence'],
+]);
+
 // Sentinel types for wrapping. A tool may emit one of these generic
 // optimization-console side-effects; the type must be allowlisted here so its
 // payload is dispatched via onUiSideEffect (and the terse displayMessage replaces
@@ -301,12 +307,6 @@ export interface BuildSharedToolsOptions {
 // `populateScheduleRace` carries a solve tool's scheduling problem + its bounded race under a
 // type distinct from `populateProblem`, so a client predating it ignores the race rather than
 // persisting the wrapper as the brief (allowlisting it here is what lets the frame through).
-/** Namespaced `server__tool` ids of the only tools whose `_attachmentList` result is trusted. */
-const ATTACHMENT_LIST_SOURCE_BY_TOOL: Readonly<Record<string, 'jira' | 'confluence'>> = {
-  [`atlassian__${JIRA_LIST_ATTACHMENTS}`]: 'jira',
-  [`atlassian__${CONFLUENCE_LIST_ATTACHMENTS}`]: 'confluence',
-};
-
 const VALID_SIDE_EFFECT_TYPES = new Set([
   'populateProblem',
   'populateScheduleRace',
@@ -842,7 +842,7 @@ function createMcpToolWrapper(
           const parsed = JSON.parse(result);
           // Only the Atlassian list tools may mint a list the delete buttons act on; the source comes
           // from which tool ran, never from the (tool-controlled) payload.
-          const attachmentListSource = ATTACHMENT_LIST_SOURCE_BY_TOOL[name];
+          const attachmentListSource = ATTACHMENT_LIST_SOURCE_BY_TOOL.get(name);
           if (attachmentListSource && parsed._attachmentList === true && Array.isArray(parsed.attachments)) {
             logger.debug(`[MCP] Extracted attachment list from tool ${name}`, {
               source: attachmentListSource,

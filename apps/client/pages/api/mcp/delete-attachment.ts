@@ -9,6 +9,7 @@ import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { isValidObjectId } from '@server/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { parseMcpResult } from '@server/utils/parseMcpResult';
+import { getMcpToolText, isMcpToolError } from '@server/utils/isMcpToolError';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
 import { JiraResource } from '@bike4mind/slack';
 import { ConfluenceResource } from '@bike4mind/slack';
@@ -97,6 +98,12 @@ const handler = baseApi().post(async (req, res) => {
       userId: user.id,
     });
 
+    if (isMcpToolError(result)) {
+      const error = getMcpToolText(result) ?? 'Attachment deletion failed';
+      logger.error('[Web MCP Delete] Attachment deletion failed', { error });
+      return res.status(500).json({ success: false, error });
+    }
+
     const resultData = parseMcpResult(result, logger, '[Web MCP Delete]');
 
     if (resultData?.error) {
@@ -113,6 +120,9 @@ const handler = baseApi().post(async (req, res) => {
       attachmentId,
       filename,
     });
+
+    // Drop the entry so the stored list matches what is left on the remote item.
+    await Quest.updateOne({ _id: quest._id }, { $pull: { 'attachmentList.attachments': { id: attachmentId } } });
 
     // For Confluence: clean up page content to remove macros referencing the deleted attachment
     if (source === 'confluence' && pageId) {

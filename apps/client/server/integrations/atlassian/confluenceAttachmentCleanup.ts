@@ -63,7 +63,13 @@ export async function cleanupConfluencePageContent(
     return;
   }
 
-  await confluence.updatePage({ pageId, title: page.title, content: cleanedContent });
+  // expectedVersion makes Confluence reject the write if the page was edited since the read above.
+  await confluence.updatePage({
+    pageId,
+    title: page.title,
+    content: cleanedContent,
+    expectedVersion: page.version,
+  });
 
   logger.info(`[Confluence Cleanup] Removed macros for "${filename}" from page ${pageId}`);
 }

@@ -20,7 +20,7 @@ vi.mock('@server/integrations/atlassian/confluenceAttachmentCleanup', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   Session: { findById: vi.fn() },
-  Quest: { findOne: vi.fn() },
+  Quest: { findOne: vi.fn(), updateOne: vi.fn() },
 }));
 
 vi.mock('@bike4mind/slack', () => {
@@ -69,6 +69,7 @@ describe('POST /api/mcp/delete-attachment', () => {
 
   it("deletes a listed attachment using the stored source under the requesting user's tenant, and cleans up the stored page id", async () => {
     vi.mocked(Quest.findOne).mockResolvedValue({
+      _id: 'quest-1',
       attachmentList: {
         source: 'confluence',
         pageId: '555',
@@ -101,5 +102,42 @@ describe('POST /api/mcp/delete-attachment', () => {
       'stored.png',
       expect.anything()
     );
+  });
+
+  it('prunes the deleted entry from the stored list, scoped to the quest', async () => {
+    vi.mocked(Quest.findOne).mockResolvedValue({
+      _id: 'quest-1',
+      attachmentList: { source: 'jira', attachments: [{ id: 'att-1', filename: 'a.png' }] },
+    } as never);
+
+    const res = await post({ sessionId: SESSION_ID, attachmentId: 'att-1' });
+
+    expect(res.statusCode).toBe(200);
+    expect(Quest.updateOne).toHaveBeenCalledWith(
+      { _id: 'quest-1' },
+      { $pull: { 'attachmentList.attachments': { id: 'att-1' } } }
+    );
+  });
+
+  it('reports a failed tool result as an error, without cleanup or pruning', async () => {
+    vi.mocked(Quest.findOne).mockResolvedValue({
+      _id: 'quest-1',
+      attachmentList: {
+        source: 'confluence',
+        pageId: '555',
+        attachments: [{ id: 'att-1', filename: 'stored.png' }],
+      },
+    } as never);
+    vi.mocked(invokeMcpHandler).mockResolvedValue({
+      content: [{ type: 'text', text: 'Error: permission denied' }],
+      isError: true,
+    } as never);
+
+    const res = await post({ sessionId: SESSION_ID, attachmentId: 'att-1' });
+
+    expect(res.statusCode).toBe(500);
+    expect(res._getJSONData()).toMatchObject({ success: false, error: 'Error: permission denied' });
+    expect(cleanupConfluencePageContent).not.toHaveBeenCalled();
+    expect(Quest.updateOne).not.toHaveBeenCalled();
   });
 });

@@ -14,6 +14,7 @@ import { Logger } from '@bike4mind/observability';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { Config, isDevelopment } from '@server/utils/config';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { getMcpToolText, isMcpToolError } from '@server/utils/isMcpToolError';
 import {
   JiraResource,
   ConfluenceResource,
@@ -1791,7 +1792,7 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
     const envVariables = await resource.getMcpEnvVariables();
     const toolName = source === 'jira' ? JIRA_DELETE_ATTACHMENT : CONFLUENCE_DELETE_ATTACHMENT;
 
-    await invokeMcpHandler({
+    const deleteResult = await invokeMcpHandler({
       envVariables,
       name: 'atlassian',
       toolName,
@@ -1799,6 +1800,16 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
       action: 'callTool',
       userId: dbUser.id,
     });
+
+    if (isMcpToolError(deleteResult)) {
+      const reason = getMcpToolText(deleteResult) ?? 'Unknown error';
+      logger.error('[Slack Interactive] Attachment deletion failed', { error: reason, attachmentId, filename });
+      return {
+        text: `\u274C Failed to delete *${filename}*: ${reason}`,
+        response_type: 'ephemeral',
+        replace_original: true,
+      };
+    }
 
     // For Confluence: clean up page content to remove macros referencing the deleted attachment
     if (source === 'confluence' && questAny.attachmentList.pageId) {

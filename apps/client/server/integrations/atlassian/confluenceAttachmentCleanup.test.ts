@@ -44,7 +44,12 @@ describe('cleanupConfluencePageContent', () => {
     await cleanupConfluencePageContent(env, '123', 'pic.png', logger);
 
     expect(confluenceApi.getPageStorage).toHaveBeenCalledWith({ pageId: '123' });
-    expect(confluenceApi.updatePage).toHaveBeenCalledWith({ pageId: '123', title: 'Page', content: '<p>keep</p>' });
+    expect(confluenceApi.updatePage).toHaveBeenCalledWith({
+      pageId: '123',
+      title: 'Page',
+      content: '<p>keep</p>',
+      expectedVersion: 3,
+    });
   });
 
   it('does not update a page that has no macro for the attachment', async () => {

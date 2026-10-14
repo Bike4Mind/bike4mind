@@ -565,33 +565,52 @@ export class ConfluenceApi {
   }
 
   /**
-   * Update an existing Confluence page
+   * Update an existing Confluence page.
+   *
+   * With `expectedVersion` the page is not refetched: the write is sent as `expectedVersion + 1`, so Confluence
+   * rejects it (409) if the page changed since the caller read it. `title` is then required.
    */
-  async updatePage(params: { pageId: string; title?: string; content: string }): Promise<FormattedPage> {
-    const { pageId, title, content } = params;
+  async updatePage(params: {
+    pageId: string;
+    title?: string;
+    content: string;
+    expectedVersion?: number;
+  }): Promise<FormattedPage> {
+    const { pageId, title, content, expectedVersion } = params;
 
     if (!pageId || !content) {
       throw new Error('pageId, and content are required to update a page.');
     }
 
-    const currentPage = await this.get<ConfluenceApiResponse>(apiPath`/pages/${pageId}`);
-    const currentVersion = currentPage?.version?.number;
-    const currentTitle = currentPage?.title;
+    let nextVersion: number;
+    let resolvedTitle: string | undefined = title;
 
-    if (typeof currentVersion !== 'number') {
-      throw new Error(`Unable to determine current version for page ${pageId}.`);
+    if (expectedVersion !== undefined) {
+      if (!title) {
+        throw new Error('title is required when expectedVersion is provided.');
+      }
+      nextVersion = expectedVersion + 1;
+    } else {
+      const currentPage = await this.get<ConfluenceApiResponse>(apiPath`/pages/${pageId}`);
+      const currentVersion = currentPage?.version?.number;
+
+      if (typeof currentVersion !== 'number') {
+        throw new Error(`Unable to determine current version for page ${pageId}.`);
+      }
+      nextVersion = currentVersion + 1;
+      resolvedTitle = title || currentPage?.title;
     }
 
     const payload = {
       id: pageId,
-      title: title || currentTitle,
+      title: resolvedTitle,
       body: {
         value: content,
         representation: 'storage',
       },
       status: 'current',
       version: {
-        number: currentVersion + 1,
+        number: nextVersion,
       },
     };
 
