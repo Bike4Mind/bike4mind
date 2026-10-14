@@ -21,8 +21,6 @@ import AttachFileButton from '@client/app/components/Session/AttachFileButton';
 import FilesSection from '@client/app/components/Session/AISettings/FilesSection';
 import AdvancedAISettings from '@client/app/components/Session/AdvancedAISettings';
 import RephraseButton from '@client/app/components/Session/RephraseButton';
-import AgentModeToggleButton from '@client/app/components/Session/SessionBottom/AgentModeToggleButton';
-import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import VoiceRecordButton, { VoiceRecordButtonRef } from '@client/app/components/common/VoiceRecordButton';
 import VoiceInlineButton, {
   VoiceControlsStrip,
@@ -144,14 +142,6 @@ export function SessionToolbar(props: SessionToolbarProps) {
   const [recording, setRecording] = useState(false);
   const [isSettingsExiting] = useState(false);
 
-  // Layer-1 admin gate via `useFeatureEnabled('agentMode')` - honors the
-  // EnableAgentMode / EnableAgentModeDefault admin settings, not just the raw
-  // per-user pref, so the org-wide kill switch and admin default both reach the
-  // composer. When false, the toggle button renders nothing - non-gated users
-  // see zero change to the composer surface.
-  const { isFeatureEnabled } = useFeatureEnabled();
-  const agentModeFeatureEnabled = isFeatureEnabled('agentMode');
-
   const sendBlockedLabel = sendBlockedReason ? getSendBlockedLabel(sendBlockedReason, t) : null;
   // VoiceRecordButton captures onRecordingEnd when recording starts, so the gate has to be
   // read at transcript time, not from that render's closure.
@@ -205,6 +195,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
                   onAttachScopeModeChange={setAttachScopeMode}
                   totalFilesCount={totalFilesCount}
                   chatInputValue={chatInputValue}
+                  agentModeDisabled={submitting}
                   onOptimizePrompt={async () => {
                     if (!chatInputValue?.trim()) return;
                     try {
@@ -345,11 +336,6 @@ export function SessionToolbar(props: SessionToolbarProps) {
                 onRollDice={rollRandomDice}
                 currentSession={currentSession}
               />
-
-              {/* Agent-mode toggle. Layer-1 gated - completely hidden
-                  when the gate (`useFeatureEnabled('agentMode')`, resolved above)
-                  is false, so non-gated users see the composer exactly as before. */}
-              {agentModeFeatureEnabled && <AgentModeToggleButton disabled={submitting} />}
 
               {/* Action buttons: Rephrase, Voice Record, Stop/Send */}
               {!isMobile && chatInputValue && chatInputValue.trim() !== '' && (

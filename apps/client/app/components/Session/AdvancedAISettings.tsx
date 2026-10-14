@@ -1,6 +1,6 @@
-import { ChangeEvent, FC, useCallback, useEffect, useState } from 'react';
+import { FC, useCallback, useEffect } from 'react';
 
-import { Badge, Box, IconButton, Input, Tooltip } from '@mui/joy';
+import { Box } from '@mui/joy';
 
 import { ImageModels, ISessionDocument, isGPTImageModel } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -8,37 +8,24 @@ import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useConfig } from '@client/app/hooks/data/settings';
-import { filterToolsForDisplay, isToolDenied } from '@client/app/utils/toolMapping';
+import { filterToolsForDisplay } from '@client/app/utils/toolMapping';
 import { useIsMobile, useIsTablet } from '@client/app/hooks/useIsMobile';
-import { Casino as CasinoIcon, Tag as TagIcon } from '@mui/icons-material';
 import { useShallow } from 'zustand/react/shallow';
 import { useModelInfo } from '../../hooks/data/useModelInfo';
 import InspectableSettingsButton from './AISettings/InspectableSettingsButton';
 import { AdvancedAIModal } from './AISettings/AdvancedAIModal';
 import { useHydrateModelFromSession } from './AISettings/useHydrateModelFromSession';
 import { isImageModel } from '@client/app/utils/commands';
-import { keyframes } from '@mui/system';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import ToolsButton from './AISettings/ToolsButton';
 import { ICONED_MCP_SERVERS, AGENT_ONLY_MCP_SERVERS } from '../common/ToolIndicators';
 import AgentsButton from './AISettings/AgentsButton';
 import StaleModelPrompt from './AISettings/StaleModelPrompt';
-import BriefcaseButton from './AISettings/BriefcaseButton';
-import ResearchModeIndicator from './AISettings/ResearchModeIndicator';
-import { ImageTemplateControls } from './ImageTemplates/ImageTemplateControls';
 import { PromptBuilderModal } from './PromptBuilder/PromptBuilderModal';
-import { isImageGenerationModel } from './PromptBuilder/models';
-import { usePromptBuilderFirstRun } from './PromptBuilder/usePromptBuilderFirstRun';
-import { AutoAwesome as PromptBuilderIcon } from '@mui/icons-material';
 
 // Re-export store for consumers that import from this file
 export { useAdvancedAISettings } from './AISettings/useAdvancedAISettingsStore';
 import { useAdvancedAISettings } from './AISettings/useAdvancedAISettingsStore';
-
-const rollAnimation = keyframes`
-0% { transform: rotate(0deg); }
-100% { transform: rotate(360deg); }
-`;
 
 interface AISettingsProps {
   stream: boolean;
@@ -59,18 +46,15 @@ const AISettings: FC<AISettingsProps> = ({
   onRollDice,
   currentSession,
 }) => {
-  const [showAdvancedSettings, setShowAdvancedSettings, setPromptBuilderOpen] = useAdvancedAISettings(
-    useShallow(state => [state.showAdvancedSettings, state.setShowAdvancedSettings, state.setPromptBuilderOpen])
+  const [showAdvancedSettings, setShowAdvancedSettings] = useAdvancedAISettings(
+    useShallow(state => [state.showAdvancedSettings, state.setShowAdvancedSettings])
   );
 
   const { isFeatureEnabled, isAdminFeatureEnabled } = useFeatureEnabled();
   const isAgentsFeatureEnabled = isFeatureEnabled('enableAgents');
   const isQuestMasterFeatureEnabled = isFeatureEnabled('enableQuestMaster');
   const isLatticeFeatureEnabled = isFeatureEnabled('enableLattice');
-  const isBriefcaseEnabled = isFeatureEnabled('enableBriefcase');
-  const isImageTemplatesEnabled = isAdminFeatureEnabled('EnableImageTemplates');
   const isPromptBuilderEnabled = isAdminFeatureEnabled('EnablePromptBuilder');
-  const { showHint: showPromptBuilderHint, markSeen: markPromptBuilderSeen } = usePromptBuilderFirstRun();
 
   const tools = useLLM(state => state.tools);
   const toolMode = useLLM(state => state.toolMode);
@@ -92,16 +76,9 @@ const AISettings: FC<AISettingsProps> = ({
   const isLatticeEnabled = useLLM(state => state.isLatticeEnabled);
   const isAgentsEnabled = useLLM(state => state.isAgentsEnabled);
 
-  const [model, isQuestMasterEnabled, thinking, quality, n] = useLLM(
-    useShallow(s => [s.model, s.isQuestMasterEnabled, s.thinking, s.quality, s.n])
+  const [model, isQuestMasterEnabled, thinking, quality] = useLLM(
+    useShallow(s => [s.model, s.isQuestMasterEnabled, s.thinking, s.quality])
   );
-
-  const handleResponseCountChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const newValue = parseInt(e.target.value, 10);
-    if (!isNaN(newValue) && newValue >= 1 && newValue <= 4) {
-      setLLM({ n: newValue });
-    }
-  };
 
   const primaryTools = ['web_search', 'web_fetch', 'image_generation'] as const;
   // Indicators must agree with the Tools picker: a tool whose key is missing renders
@@ -112,7 +89,6 @@ const AISettings: FC<AISettingsProps> = ({
   const disabledTools = currentSession?.disabledTools;
   const displayTools = filterToolsForDisplay(tools, serverConfig?.toolAvailability, disabledTools);
   const activePrimaryTools = primaryTools.filter(tool => displayTools.includes(tool));
-  const isImageGenerationDenied = isToolDenied('image_generation', disabledTools);
   const isThinkingActive = thinking?.enabled ?? false;
   // Integrations that actually reach this turn. "Only tools I pick" withholds every
   // non-agent-only MCP tool server-side (`offerOnlyNamedTools` in sharedToolBuilder), so
@@ -145,14 +121,6 @@ const AISettings: FC<AISettingsProps> = ({
   const isTablet = useIsTablet();
   const { data: modelInfoRepo } = useModelInfo();
   const modelInfo = modelInfoRepo?.find(m => m.id === model);
-
-  const [isRolling, setIsRolling] = useState(false);
-
-  const handleClickDice = () => {
-    setIsRolling(true);
-    setTimeout(() => setIsRolling(false), 4000);
-    onRollDice();
-  };
 
   // Adopt the session's pinned model once per session. Must NOT re-run on every
   // `currentSession` identity change -- see useHydrateModelFromSession for why that
@@ -216,102 +184,6 @@ const AISettings: FC<AISettingsProps> = ({
         {/* Agents */}
         {isAgentsFeatureEnabled && (
           <AgentsButton isMobile={isMobile} isTablet={isTablet} activeAgentsCount={activeAgentsCount} />
-        )}
-
-        {/* Briefcase - one-click prompt catalog */}
-        {isBriefcaseEnabled && <BriefcaseButton isMobile={isMobile} isTablet={isTablet} />}
-
-        {/* Images per prompt. Image models only - `n` reaches only the image services; the text
-            path destructures it and never uses it. */}
-        {!isTablet && isImageModel(model) && (
-          <Tooltip
-            title="How many images to generate from your prompt. More images cost proportionally more credits."
-            placement="top"
-          >
-            <Input
-              data-testid="image-response-count-input"
-              // The icon rides inside the field as a decorator, matching every other control in
-              // this row. `--Icon-margin` is Joy's own -3px nudge for decorator icons, which pulls
-              // it off-centre; cancel the variable rather than compensating on the icon.
-              startDecorator={<TagIcon sx={{ color: 'text.primary', fontSize: '18px' }} />}
-              sx={{
-                '--Icon-margin': '0px',
-                width: '76px',
-                height: '32px',
-                backgroundColor: 'background.surface',
-                color: 'text.primary',
-              }}
-              size="sm"
-              id="nEdit"
-              variant="outlined"
-              type="number"
-              value={n ?? 1}
-              onChange={handleResponseCountChange}
-              slotProps={{ input: { sx: { textAlign: 'center' }, min: 1, max: 4 } }}
-            />
-          </Tooltip>
-        )}
-
-        {/* Image Templates (save/apply reusable image-mode settings) */}
-        {isImageTemplatesEnabled && isImageModel(model) && <ImageTemplateControls />}
-
-        {/* Prompt Builder (guided prompt construction; generation models only) */}
-        {isPromptBuilderEnabled && isImageGenerationModel(model) && !isImageGenerationDenied && (
-          <Tooltip title={showPromptBuilderHint ? 'New: build image prompts here' : 'Prompt Builder'}>
-            <Badge
-              size="sm"
-              color="primary"
-              variant="solid"
-              badgeInset="4px"
-              invisible={!showPromptBuilderHint}
-              data-testid="prompt-builder-hint-badge"
-            >
-              <IconButton
-                data-testid="prompt-builder-open-btn"
-                variant="outlined"
-                color="neutral"
-                size="sm"
-                sx={{ height: '32px', width: '32px', borderRadius: '6px' }}
-                onClick={() => {
-                  markPromptBuilderSeen();
-                  setPromptBuilderOpen(true);
-                }}
-              >
-                <PromptBuilderIcon sx={{ fontSize: '16px' }} />
-              </IconButton>
-            </Badge>
-          </Tooltip>
-        )}
-
-        {!isTablet && (
-          <>
-            {/* Dice Roll Icon. displayTools, not raw `tools`: dice_roll needs no API key, so only
-                a session denylist can filter it out, and then the panel hides its row too. */}
-            {displayTools.includes('dice_roll') && (
-              <Tooltip title="Roll Dice">
-                <IconButton
-                  variant={'outlined'}
-                  color={'neutral'}
-                  size="sm"
-                  sx={{ height: '32px', width: '32px', borderRadius: '6px' }}
-                  disabled={isRolling}
-                  onClick={handleClickDice}
-                >
-                  <Box
-                    sx={{
-                      animation: isRolling ? `${rollAnimation} 0.5s linear infinite` : 'none',
-                      display: 'flex',
-                    }}
-                  >
-                    <CasinoIcon sx={{ fontSize: '16px' }} />
-                  </Box>
-                </IconButton>
-              </Tooltip>
-            )}
-
-            {/* Research Mode Indicator */}
-            <ResearchModeIndicator />
-          </>
         )}
       </Box>
 

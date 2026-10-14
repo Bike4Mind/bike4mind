@@ -6,22 +6,32 @@ import { useConnectGoogleDrive } from '@client/app/hooks/data/googleDrive';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import SiGoogledrive, { defaultColor as SiGoogledriveHex } from '@icons-pack/react-simple-icons/icons/SiGoogledrive';
-import { AttachFile, ArrowBack, InsertDriveFileOutlined } from '@mui/icons-material';
+import {
+  ArrowBack,
+  Bolt as BoltIcon,
+  ChevronRight as ChevronRightIcon,
+  ImageOutlined as ImageOutlinedIcon,
+  InsertDriveFileOutlined,
+  SettingsOutlined as SettingsOutlinedIcon,
+  WorkOutline as BriefcaseIcon,
+} from '@mui/icons-material';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import CasinoIcon from '@mui/icons-material/Casino';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import {
   Box,
-  Chip,
   IconButton,
   List,
+  ListDivider,
   ListItem,
   ListItemButton,
   ListItemDecorator,
   Radio,
   RadioGroup,
+  Switch,
   Tooltip,
   Typography,
+  useTheme,
 } from '@mui/joy';
 import axios from 'axios';
 import AddIcon from '@mui/icons-material/Add';
@@ -37,7 +47,7 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { isToolDenied } from '@client/app/utils/toolMapping';
-import { useState, useRef, useEffect } from 'react';
+import { FC, useState, useRef, useEffect } from 'react';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { useCreateNewSession, useUpdateSession } from '@client/app/hooks/data/sessions';
@@ -51,8 +61,12 @@ import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import CountBadge from '@client/app/components/common/CountBadge';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePickerStyles';
+import { isImageModel } from '@client/app/utils/commands';
+import { BriefcasePanel } from '@client/app/components/Briefcase/BriefcasePanel';
+import ImageOptionsPanel from '@client/app/components/Session/AISettings/ImageOptionsPanel';
 
 import { ATTACH_SCOPE_MODES, type AttachScopeMode } from '@bike4mind/common';
+import { brandAlpha, grayAlpha } from '@client/app/utils/themes/colors';
 
 ensureGoogleDrivePickerStyles();
 
@@ -73,6 +87,99 @@ const ATTACH_SCOPE_COPY: Record<AttachScopeMode, { label: string; description: s
   },
 };
 
+// Rows styled like the sidebar's Quick Filters (Notebook/Search/QuickFilters.tsx): 32px rows,
+// 6px corners, 8px side padding, 12px from icon to label, 4px between rows, and the same hover
+// fill - keep the two in sync. Joy paints the hover through its variant vars, not a plain &:hover.
+const plusMenuListSx = (mode: 'light' | 'dark') => {
+  const hoverBg = mode === 'dark' ? grayAlpha[775][30] : brandAlpha[100][12];
+  return {
+    '--List-padding': '0px',
+    '--List-gap': '4px',
+    '--ListItem-minHeight': '32px',
+    '--ListItem-radius': '6px',
+    '--ListItem-paddingX': '8px',
+    '--ListItem-paddingY': '0px',
+    '--ListItemDecorator-size': '30px',
+    '& .MuiListItemButton-root': {
+      '--variant-plainHoverBg': hoverBg,
+      '--variant-plainActiveBg': hoverBg,
+      transition: 'background-color 0.15s ease',
+    },
+    '& .MuiListItemButton-root.Mui-selected': { backgroundColor: hoverBg, color: 'text.primary' },
+  };
+};
+
+type Submenu = 'briefcase' | 'image' | 'uploadScope';
+
+/**
+ * How long a file uploaded from this device stays in the notebook. Only the device upload (and a
+ * drop onto the composer) honours it - Drive, the file browser and paste always keep the file.
+ * Three-valued, not a switch: "this document, just once" and "this image, keep it" are opposite
+ * overrides of the default and a boolean can only express one of them.
+ */
+const UploadScopeOptions: FC<{ value: AttachScopeMode; onChange: (mode: AttachScopeMode) => void }> = ({
+  value,
+  onChange,
+}) => {
+  const theme = useTheme();
+  const hoverBg = theme.palette.mode === 'dark' ? grayAlpha[775][30] : brandAlpha[100][12];
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <Typography level="body-xs" sx={{ color: 'text.tertiary', px: '8px', pt: '4px', pb: '2px' }}>
+        Files uploaded from this device
+      </Typography>
+      <RadioGroup
+        size="sm"
+        value={value}
+        data-testid="attach-file-scope-radiogroup"
+        onChange={event => onChange(event.target.value as AttachScopeMode)}
+        sx={{ gap: '4px', m: 0 }}
+      >
+        {ATTACH_SCOPE_MODES.map(mode => (
+          // overlay makes the whole row the radio's hit target; the row is positioned for it.
+          <Box
+            key={mode}
+            sx={{
+              position: 'relative',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '2px',
+              px: '8px',
+              py: '6px',
+              borderRadius: '6px',
+              transition: 'background-color 0.15s ease',
+              '&:hover': { backgroundColor: hoverBg },
+            }}
+          >
+            <Radio
+              overlay
+              value={mode}
+              label={ATTACH_SCOPE_COPY[mode].label}
+              data-testid={`attach-file-scope-${mode}-radio`}
+              slotProps={{
+                input: { 'aria-describedby': `attach-scope-${mode}-desc` },
+                // overlay stretches the action over the row, and globals.css frames a checked action
+                // with an !important green border - meant for the small radio, it would box the whole
+                // row here. The doubled class outranks that rule; the row's own hover is the cue.
+                action: {
+                  sx: {
+                    '&&, &&.Mui-checked': { border: 'none !important', backgroundColor: 'transparent' },
+                  },
+                },
+              }}
+              sx={{ '--Radio-gap': '12px', color: 'text.primary' }}
+            />
+            {/* Lines up under the label: 16px radio + the 12px gap. */}
+            <Typography id={`attach-scope-${mode}-desc`} level="body-xs" sx={{ color: 'text.tertiary', pl: '28px' }}>
+              {ATTACH_SCOPE_COPY[mode].description}
+            </Typography>
+          </Box>
+        ))}
+      </RadioGroup>
+    </Box>
+  );
+};
+
 interface IProps {
   onUploadFromComputer: () => void;
   onAddFromGoogleDrive: (fabFile: IFabFileDocument) => void;
@@ -82,6 +189,8 @@ interface IProps {
   totalFilesCount?: number;
   chatInputValue?: string;
   onOptimizePrompt?: () => void;
+  /** Agent mode can't change while a turn is being sent. */
+  agentModeDisabled?: boolean;
 }
 
 const AttachFileButton = ({
@@ -93,7 +202,9 @@ const AttachFileButton = ({
   totalFilesCount,
   chatInputValue,
   onOptimizePrompt,
+  agentModeDisabled = false,
 }: IProps) => {
+  const theme = useTheme();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -102,9 +213,21 @@ const AttachFileButton = ({
   const [openPicker] = useDrivePicker();
 
   const currentUser = useUser(state => state.currentUser);
-  const [currentView, setCurrentView] = useState<'main' | 'other-apps'>('main');
+  const [currentView, setCurrentView] = useState<'main' | 'other-apps' | Submenu>('main');
+
   const [isOpen, setIsOpen] = useState(false);
   const [isProcessingFile, setIsProcessingFile] = useState(false);
+  // Desktop side panel next to the menu (prompt catalog, image options); phones use currentView.
+  // Every close path (outside click, a picked item, a new file landing) drops it too.
+  const [flyout, setFlyout] = useState<Submenu | null>(null);
+  // Where the upload-settings panel lines up: level with the upload row, not the menu's bottom.
+  const uploadRowRef = useRef<HTMLLIElement>(null);
+  const [flyoutTop, setFlyoutTop] = useState<number | null>(null);
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (wasOpen !== isOpen) {
+    setWasOpen(isOpen);
+    if (!isOpen) setFlyout(null);
+  }
   // A file can land while the menu is open without going through one of its items (the native
   // picker, drag and drop), so a new attachment closes the menu instead of leaving it over the composer.
   const [seenFilesCount, setSeenFilesCount] = useState(totalFilesCount);
@@ -153,6 +276,31 @@ const AttachFileButton = ({
 
   const { settings: userSettings } = useUserSettings();
   const isResearchModeFeatureEnabled = userSettings.experimentalFeatures?.enableResearchMode === true;
+
+  const isAgentModeFeatureEnabled = isFeatureEnabled('agentMode');
+  const isBriefcaseEnabled = isFeatureEnabled('enableBriefcase');
+  const agentMode = useLLM(state => state.agentMode);
+  const model = useLLM(state => state.model);
+  const { setState: setLLM } = useLLM;
+  const showDice = tools.includes('dice_roll') && !isToolDenied('dice_roll', currentSession?.disabledTools);
+  const showImageOptions = isImageModel(model);
+
+  const closeMenu = () => {
+    setIsOpen(false);
+    setCurrentView('main');
+    setFlyout(null);
+  };
+  const openSubmenu = (panel: Submenu) => {
+    if (isMobile) {
+      setCurrentView(panel);
+      return;
+    }
+    const row = uploadRowRef.current?.getBoundingClientRect();
+    const menu = dropdownRef.current?.getBoundingClientRect();
+    setFlyoutTop(panel === 'uploadScope' && row && menu ? row.top - menu.top : null);
+    setFlyout(current => (current === panel ? null : panel));
+  };
+  const uploadScopeOpen = flyout === 'uploadScope' || currentView === 'uploadScope';
 
   const handleOpenPicker = async () => {
     const { data } = await api.get<{ accessToken?: string; authUrl?: string }>('/api/google-drive/token');
@@ -338,17 +486,17 @@ const AttachFileButton = ({
 
   return (
     <Box sx={{ position: 'relative', display: 'inline-block' }}>
-      <Tooltip title="Attach Files" placement="top">
+      <Tooltip title="Add files and more" placement="top">
         <IconButton
           data-testid="attach-files-btn"
           ref={buttonRef}
           variant="outlined"
           color="neutral"
           size="sm"
-          onClick={() => setIsOpen(!isOpen)}
+          onClick={() => (isOpen ? closeMenu() : setIsOpen(true))}
           sx={{ zIndex: 100 }}
         >
-          {isMobile ? <AddIcon sx={{ fontSize: 16 }} /> : <AttachFile sx={{ fontSize: '18px' }} />}
+          <AddIcon sx={{ fontSize: isMobile ? 16 : 20 }} />
         </IconButton>
       </Tooltip>
 
@@ -367,198 +515,91 @@ const AttachFileButton = ({
             borderRadius: 'sm',
             boxShadow: 'md',
             zIndex: 1000,
-            p: isMobile ? '0.75rem' : '0.5rem',
+            p: '8px',
           }}
         >
-          {/* File Upload Mode Toggle */}
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1.5,
-              mb: 1.5,
-              pb: 1,
-              borderBottom: '1px solid',
-              borderColor: 'divider',
-            }}
-          >
-            {/* Three-valued, not a switch: "this document, just once" and "this image,
-                keep it" are opposite overrides of the default and a boolean can only
-                express one of them. */}
-            <RadioGroup
-              orientation="horizontal"
-              size="sm"
-              value={attachScopeMode}
-              data-testid="attach-file-scope-radiogroup"
-              onChange={event => onAttachScopeModeChange(event.target.value as AttachScopeMode)}
-              sx={{ gap: 1.5, flexWrap: 'wrap' }}
-            >
-              {ATTACH_SCOPE_MODES.map(mode => {
-                const selected = attachScopeMode === mode;
-                // 44px is the minimum touch target; coarse pointers only, so the desktop pill
-                // keeps its compact height (WCAG 2.5.5).
-                return (
-                  <Chip
-                    key={mode}
-                    variant={selected ? 'solid' : 'outlined'}
-                    color={selected ? 'primary' : 'neutral'}
-                    size="sm"
-                    sx={{ '@media (pointer: coarse)': { minHeight: 44 } }}
-                  >
-                    {/* disableIcon drops the dot so the pill fill IS the selection cue; overlay
-                        makes the focus ring follow the pill instead of boxing the whole row. It is
-                        NOT what makes the row clickable - Radio renders its action slot
-                        unconditionally and absolutely positions it over its nearest positioned
-                        ancestor, so the label was always part of the hit target.
-
-                        variant/color are passed down deliberately: Radio reads RadioGroupContext
-                        and FormControlContext, never ChipContext, so without these it resolves its
-                        own default outlined/primary. Under disableIcon that repaints BOTH the label
-                        colour and the action's background, and the action sits at zIndex 1 over the
-                        chip - so an outlined Radio in a solid Chip paints primary.outlinedColor on
-                        primary.solidBg (1.08:1) and inverts to near-white on hover. Matching the
-                        Chip's own variant/color makes the action paint the token the chip already
-                        paints, which is a no-op at rest and a proper darken on hover. */}
-                    <Radio
-                      disableIcon
-                      overlay
-                      variant={selected ? 'solid' : 'outlined'}
-                      color={selected ? 'primary' : 'neutral'}
-                      value={mode}
-                      label={ATTACH_SCOPE_COPY[mode].label}
-                      data-testid={`attach-file-scope-${mode}-radio`}
-                    />
-                  </Chip>
-                );
-              })}
-            </RadioGroup>
-          </Box>
-          <Box sx={{ mb: 1.5 }}>
-            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-              {ATTACH_SCOPE_COPY[attachScopeMode].description}
-            </Typography>
-          </Box>
-
-          <List sx={{ '--List-padding': '0px' }}>
+          <List sx={plusMenuListSx(theme.palette.mode)}>
             {currentView === 'main' ? (
               <>
-                {/* Open the Knowledge Base (Knowledge Viewer) for the current session.
-                    Previously the only way in was the "Open in Knowledge Viewer" button on
-                    an artifact card — this surfaces it directly so users can browse session
-                    files, generated files, and recent artifacts without needing one first. */}
-                {currentSessionId && (
-                  <ListItem sx={{ p: 0 }}>
-                    <ListItemButton
-                      data-testid="open-knowledge-base-btn"
-                      onClick={() => {
-                        setIsOpen(false);
-                        setCurrentView('main');
-                        setSessionLayout({ layout: 'vertical' });
-                      }}
+                {/* Always shown, dimmed like the sidebar's row menu icon (SidenavItem) and full strength
+                    on hover or while its panel is open. */}
+                <ListItem
+                  ref={uploadRowRef}
+                  sx={{ p: 0 }}
+                  endAction={
+                    <IconButton
+                      data-testid="upload-scope-settings-btn"
+                      aria-label="Upload settings"
+                      aria-expanded={uploadScopeOpen}
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      onClick={() => openSubmenu('uploadScope')}
                       sx={{
-                        color: 'text.primary',
-                        paddingX: '12px',
-                        m: 0,
+                        '--IconButton-size': '28px',
+                        '@media (pointer: coarse)': { '--IconButton-size': '44px' },
+                        '& .MuiSvgIcon-root': {
+                          opacity: uploadScopeOpen ? 1 : 0.5,
+                          transition: 'opacity 0.3s ease',
+                        },
+                        '&:hover, &:focus-visible': {
+                          backgroundColor: 'transparent',
+                          '& .MuiSvgIcon-root': { opacity: 1 },
+                        },
                       }}
                     >
-                      <ListItemDecorator>
-                        <MenuBookIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
-                      </ListItemDecorator>
-                      Open Knowledge Base
-                    </ListItemButton>
-                  </ListItem>
-                )}
-
-                {/* Research Mode (opens Research Mode tab in Advanced Settings) */}
-                {isResearchModeFeatureEnabled && (
-                  <ListItem sx={{ p: 0 }}>
-                    <ListItemButton
-                      onClick={() => {
-                        setIsOpen(false);
-                        setCurrentView('main');
-                        openAdvancedSettings('research-mode');
-                      }}
-                      sx={{
-                        color: 'text.primary',
-                        paddingX: '12px',
-                        m: 0,
-                      }}
-                    >
-                      <ListItemDecorator>
-                        <ScienceIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
-                      </ListItemDecorator>
-                      Research Mode
-                    </ListItemButton>
-                  </ListItem>
-                )}
-
-                {/* Mobile only - Agents */}
-                {isMobile && isAgentsEnabled && (
-                  <ListItem sx={{ p: 0 }}>
-                    <ListItemButton
-                      onClick={() => {
-                        setIsOpen(false);
-                        setCurrentView('main');
-                        setAgentsDropdownOpen(true);
-                      }}
-                      sx={{
-                        color: 'text.primary',
-                        m: 0,
-                      }}
-                    >
-                      <ListItemDecorator>
-                        <SmartToyIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
-                      </ListItemDecorator>
-                      Agents
-                      <CountBadge count={activeAgentsCount} prefix="" margin={{ ml: 'auto' }} />
-                    </ListItemButton>
-                  </ListItem>
-                )}
-
-                {/* Mobile only - Session Files */}
-                {isMobile && !!totalFilesCount && totalFilesCount > 0 && (
-                  <ListItem sx={{ p: 0 }}>
-                    <ListItemButton
-                      onClick={() => {
-                        setIsOpen(false);
-                        setCurrentView('main');
-                        setSessionFilesOpen(true);
-                      }}
-                      sx={{
-                        color: 'text.primary',
-                        m: 0,
-                      }}
-                    >
-                      <ListItemDecorator>
-                        <InsertDriveFileOutlined sx={{ color: 'text.primary50', fontSize: '18px' }} />
-                      </ListItemDecorator>
-                      Session Files
-                      <CountBadge count={totalFilesCount ?? 0} prefix="" margin={{ ml: 'auto' }} />
-                    </ListItemButton>
-                  </ListItem>
-                )}
-
-                {/* Mobile only - Optimize Prompt */}
-                {isMobile && chatInputValue && chatInputValue.trim() !== '' && onOptimizePrompt && (
-                  <ListItem sx={{ p: 0 }}>
-                    <ListItemButton
-                      onClick={() => {
-                        setIsOpen(false);
-                        setCurrentView('main');
-                        onOptimizePrompt();
-                      }}
-                      sx={{
-                        color: 'text.primary',
-                        m: 0,
-                      }}
-                    >
-                      <ListItemDecorator>
-                        <AutoAwesomeOutlinedIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
-                      </ListItemDecorator>
-                      Optimize Prompt
-                    </ListItemButton>
-                  </ListItem>
-                )}
+                      <SettingsOutlinedIcon sx={{ fontSize: '16px' }} />
+                    </IconButton>
+                  }
+                >
+                  <ListItemButton
+                    data-testid="upload-from-device-btn"
+                    onClick={() => {
+                      setIsOpen(false);
+                      setCurrentView('main');
+                      onUploadFromComputer();
+                    }}
+                    sx={{
+                      color: 'text.primary',
+                      m: 0,
+                    }}
+                  >
+                    <ListItemDecorator>
+                      <PostAddIcon
+                        style={{
+                          color: 'var(--joy-palette-text-primary50)',
+                          fontSize: '18px',
+                        }}
+                      />
+                    </ListItemDecorator>
+                    {isMobile ? 'Add from device' : 'Upload from Computer'}
+                  </ListItemButton>
+                </ListItem>
+                {/* Files Section */}
+                <ListItem sx={{ p: 0 }}>
+                  <ListItemButton
+                    data-testid="add-from-file-browser-btn"
+                    onClick={() => {
+                      setIsOpen(false);
+                      setCurrentView('main');
+                      onAddFromFileBrowser();
+                    }}
+                    sx={{
+                      color: 'text.primary',
+                      m: 0,
+                    }}
+                  >
+                    <ListItemDecorator>
+                      <FolderSharedIcon
+                        sx={{
+                          color: 'text.primary50',
+                          fontSize: '18px',
+                        }}
+                      />
+                    </ListItemDecorator>
+                    Add from File Browser
+                  </ListItemButton>
+                </ListItem>
 
                 {/* Desktop only, google drive */}
                 {!isMobile && (
@@ -612,56 +653,223 @@ const AttachFileButton = ({
                   </ListItem>
                 )}
 
-                {/* Files Section */}
-                <ListItem sx={{ p: 0 }}>
-                  <ListItemButton
-                    data-testid="add-from-file-browser-btn"
-                    onClick={() => {
-                      setIsOpen(false);
-                      setCurrentView('main');
-                      onAddFromFileBrowser();
-                    }}
-                    sx={{
-                      color: 'text.primary',
-                      m: 0,
-                    }}
-                  >
-                    <ListItemDecorator>
-                      <FolderSharedIcon
-                        sx={{
-                          color: 'text.primary50',
-                          fontSize: '18px',
-                        }}
-                      />
-                    </ListItemDecorator>
-                    Add from File Browser
-                  </ListItemButton>
-                </ListItem>
+                {/* Open the Knowledge Base (Knowledge Viewer) for the current session.
+                    Previously the only way in was the "Open in Knowledge Viewer" button on
+                    an artifact card - this surfaces it directly so users can browse session
+                    files, generated files, and recent artifacts without needing one first. */}
+                {currentSessionId && (
+                  <ListItem sx={{ p: 0 }}>
+                    <ListItemButton
+                      data-testid="open-knowledge-base-btn"
+                      onClick={() => {
+                        setIsOpen(false);
+                        setCurrentView('main');
+                        setSessionLayout({ layout: 'vertical' });
+                      }}
+                      sx={{
+                        color: 'text.primary',
+                        m: 0,
+                      }}
+                    >
+                      <ListItemDecorator>
+                        <MenuBookIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
+                      </ListItemDecorator>
+                      Open Knowledge Base
+                    </ListItemButton>
+                  </ListItem>
+                )}
 
+                {/* Mobile only - Agents */}
+                {isMobile && isAgentsEnabled && (
+                  <ListItem sx={{ p: 0 }}>
+                    <ListItemButton
+                      onClick={() => {
+                        setIsOpen(false);
+                        setCurrentView('main');
+                        setAgentsDropdownOpen(true);
+                      }}
+                      sx={{
+                        color: 'text.primary',
+                        m: 0,
+                      }}
+                    >
+                      <ListItemDecorator>
+                        <SmartToyIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
+                      </ListItemDecorator>
+                      Agents
+                      <CountBadge count={activeAgentsCount} prefix="" margin={{ ml: 'auto' }} />
+                    </ListItemButton>
+                  </ListItem>
+                )}
+
+                {/* Mobile only - Session Files */}
+                {isMobile && !!totalFilesCount && totalFilesCount > 0 && (
+                  <ListItem sx={{ p: 0 }}>
+                    <ListItemButton
+                      onClick={() => {
+                        setIsOpen(false);
+                        setCurrentView('main');
+                        setSessionFilesOpen(true);
+                      }}
+                      sx={{
+                        color: 'text.primary',
+                        m: 0,
+                      }}
+                    >
+                      <ListItemDecorator>
+                        <InsertDriveFileOutlined sx={{ color: 'text.primary50', fontSize: '18px' }} />
+                      </ListItemDecorator>
+                      Session Files
+                      <CountBadge count={totalFilesCount ?? 0} prefix="" margin={{ ml: 'auto' }} />
+                    </ListItemButton>
+                  </ListItem>
+                )}
+
+                {(isAgentModeFeatureEnabled || isResearchModeFeatureEnabled) && <ListDivider />}
+
+                {/* Agent mode moved here from the composer row; the menu stays open so the switch
+                    can be read back. */}
+                {isAgentModeFeatureEnabled && (
+                  <ListItem sx={{ p: 0 }}>
+                    <ListItemButton
+                      data-testid="attach-menu-agent-mode-btn"
+                      aria-pressed={agentMode.enabled}
+                      disabled={agentModeDisabled}
+                      onClick={() => setLLM({ agentMode: { enabled: !agentMode.enabled, source: 'toggle' } })}
+                      sx={{ color: 'text.primary', m: 0 }}
+                    >
+                      <ListItemDecorator>
+                        <BoltIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
+                      </ListItemDecorator>
+                      Agent mode
+                      <Switch
+                        size="sm"
+                        checked={agentMode.enabled}
+                        sx={{ ml: 'auto', pointerEvents: 'none' }}
+                        slotProps={{ input: { tabIndex: -1, 'aria-hidden': true } }}
+                      />
+                    </ListItemButton>
+                  </ListItem>
+                )}
+
+                {/* Research Mode (opens Research Mode tab in Advanced Settings) */}
+                {isResearchModeFeatureEnabled && (
+                  <ListItem sx={{ p: 0 }}>
+                    <ListItemButton
+                      onClick={() => {
+                        setIsOpen(false);
+                        setCurrentView('main');
+                        openAdvancedSettings('research-mode');
+                      }}
+                      sx={{
+                        color: 'text.primary',
+                        m: 0,
+                      }}
+                    >
+                      <ListItemDecorator>
+                        <ScienceIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
+                      </ListItemDecorator>
+                      Research Mode
+                    </ListItemButton>
+                  </ListItem>
+                )}
+
+                {(isMobile || isBriefcaseEnabled || showDice || showImageOptions) && <ListDivider />}
+
+                {/* Mobile only - Optimize Prompt */}
+                {isMobile && chatInputValue && chatInputValue.trim() !== '' && onOptimizePrompt && (
+                  <ListItem sx={{ p: 0 }}>
+                    <ListItemButton
+                      onClick={() => {
+                        setIsOpen(false);
+                        setCurrentView('main');
+                        onOptimizePrompt();
+                      }}
+                      sx={{
+                        color: 'text.primary',
+                        m: 0,
+                      }}
+                    >
+                      <ListItemDecorator>
+                        <AutoAwesomeOutlinedIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
+                      </ListItemDecorator>
+                      Optimize Prompt
+                    </ListItemButton>
+                  </ListItem>
+                )}
+
+                {isBriefcaseEnabled && (
+                  <ListItem sx={{ p: 0 }}>
+                    <ListItemButton
+                      data-testid="attach-menu-prompt-catalog-btn"
+                      selected={flyout === 'briefcase'}
+                      onClick={() => openSubmenu('briefcase')}
+                      sx={{ color: 'text.primary', m: 0 }}
+                    >
+                      <ListItemDecorator>
+                        <BriefcaseIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
+                      </ListItemDecorator>
+                      Prompt catalog
+                      <ChevronRightIcon sx={{ ml: 'auto', fontSize: '18px', color: 'text.tertiary' }} />
+                    </ListItemButton>
+                  </ListItem>
+                )}
+
+                {showDice && (
+                  <ListItem sx={{ p: 0 }}>
+                    <ListItemButton
+                      data-testid="attach-menu-roll-dice-btn"
+                      onClick={() => {
+                        closeMenu();
+                        rollRandomDice();
+                      }}
+                      sx={{ color: 'text.primary', m: 0 }}
+                    >
+                      <ListItemDecorator>
+                        <CasinoIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
+                      </ListItemDecorator>
+                      Roll Dice
+                    </ListItemButton>
+                  </ListItem>
+                )}
+                {showImageOptions && (
+                  <ListItem sx={{ p: 0 }}>
+                    <ListItemButton
+                      data-testid="attach-menu-image-options-btn"
+                      selected={flyout === 'image'}
+                      onClick={() => openSubmenu('image')}
+                      sx={{ color: 'text.primary', m: 0 }}
+                    >
+                      <ListItemDecorator>
+                        <ImageOutlinedIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
+                      </ListItemDecorator>
+                      Image options
+                      <ChevronRightIcon sx={{ ml: 'auto', fontSize: '18px', color: 'text.tertiary' }} />
+                    </ListItemButton>
+                  </ListItem>
+                )}
+              </>
+            ) : currentView === 'briefcase' || currentView === 'image' || currentView === 'uploadScope' ? (
+              <>
+                {/* Phones have no room for a side panel, so a submenu replaces the list. */}
                 <ListItem sx={{ p: 0 }}>
                   <ListItemButton
-                    data-testid="upload-from-device-btn"
-                    onClick={() => {
-                      setIsOpen(false);
-                      setCurrentView('main');
-                      onUploadFromComputer();
-                    }}
-                    sx={{
-                      color: 'text.primary',
-                      m: 0,
-                    }}
+                    onClick={() => setCurrentView('main')}
+                    sx={{ color: 'text.primary', borderBottom: '1px solid', borderColor: 'divider', mb: 0.5 }}
                   >
                     <ListItemDecorator>
-                      <PostAddIcon
-                        style={{
-                          color: 'var(--joy-palette-text-primary50)',
-                          fontSize: '18px',
-                        }}
-                      />
+                      <ArrowBack sx={{ color: 'text.primary50', fontSize: '18px' }} />
                     </ListItemDecorator>
-                    {isMobile ? 'Add from device' : 'Upload from Computer'}
+                    Back
                   </ListItemButton>
                 </ListItem>
+                {currentView === 'briefcase' ? (
+                  <BriefcasePanel onLaunched={closeMenu} />
+                ) : currentView === 'image' ? (
+                  <ImageOptionsPanel onOpenPromptBuilder={closeMenu} />
+                ) : (
+                  <UploadScopeOptions value={attachScopeMode} onChange={onAttachScopeModeChange} />
+                )}
               </>
             ) : currentView === 'other-apps' ? (
               <>
@@ -722,32 +930,35 @@ const AttachFileButton = ({
                 </ListItem>
               </>
             ) : null}
-
-            {/* Mobile only - roll dice */}
-            {isMobile &&
-              tools.includes('dice_roll') &&
-              !isToolDenied('dice_roll', currentSession?.disabledTools) &&
-              currentView === 'main' && (
-                <ListItem sx={{ p: 0 }}>
-                  <ListItemButton
-                    onClick={() => {
-                      setIsOpen(false);
-                      setCurrentView('main');
-                      rollRandomDice();
-                    }}
-                    sx={{
-                      color: 'text.primary',
-                      m: 0,
-                    }}
-                  >
-                    <ListItemDecorator>
-                      <CasinoIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
-                    </ListItemDecorator>
-                    Roll Dice
-                  </ListItemButton>
-                </ListItem>
-              )}
           </List>
+
+          {!isMobile && flyout && (
+            <Box
+              data-testid="attach-menu-flyout"
+              sx={{
+                position: 'absolute',
+                left: 'calc(100% + 4px)',
+                ...(flyoutTop !== null ? { top: flyoutTop } : { bottom: 0 }),
+                width: flyout === 'uploadScope' ? '300px' : '340px',
+                maxHeight: '480px',
+                overflow: 'auto',
+                backgroundColor: 'background.surface',
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 'sm',
+                boxShadow: 'md',
+                p: '8px',
+              }}
+            >
+              {flyout === 'briefcase' ? (
+                <BriefcasePanel onLaunched={closeMenu} />
+              ) : flyout === 'image' ? (
+                <ImageOptionsPanel onOpenPromptBuilder={closeMenu} />
+              ) : (
+                <UploadScopeOptions value={attachScopeMode} onChange={onAttachScopeModeChange} />
+              )}
+            </Box>
+          )}
         </Box>
       )}
     </Box>

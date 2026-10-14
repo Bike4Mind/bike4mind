@@ -6,19 +6,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { ATTACH_SCOPE_MODES } from '@bike4mind/common';
 
 /**
- * The attach-scope control: three Joy `Chip`s each wrapping a `disableIcon`/`overlay` `Radio`.
- *
- * The assertions that matter here are about the variant/color reaching the inner `Radio`. Joy's
- * `Radio` reads `RadioGroupContext` and `FormControlContext` but never `ChipContext`, so it does NOT
- * inherit the Chip's variant/color - it falls back to its own `outlined` default. Under `disableIcon`
- * that default repaints the label colour AND the action's background, and the action is absolutely
- * positioned over the chip, so an outlined Radio inside a solid Chip renders a blue label on a blue
- * pill (1.08:1) that inverts to near-white on hover. Passing them down explicitly is the fix.
- *
- * jsdom does not resolve CSS custom properties, so the resolved contrast cannot be asserted directly.
- * Joy's variant/color classes are the durable proxy: they are exactly what selects the palette tokens
- * the contrast falls out of, so `variantSolid`/`colorPrimary` on the selected Radio is the guard, and
- * it fails the moment someone drops those props again.
+ * The attach-scope control: a list of radios with a description each, in a side panel opened from
+ * the gear on the "Upload from Computer" row of the plus menu. Only device uploads honour it.
  */
 
 const hoisted = vi.hoisted(() => ({ isFeatureEnabled: vi.fn(() => false) }));
@@ -77,14 +66,11 @@ const renderControl = (attachScopeMode: (typeof ATTACH_SCOPE_MODES)[number] = 'a
       />
     </Wrapper>
   );
-  // The control lives inside the attach dropdown, which is mounted only while open.
+  // The control lives behind the upload row's gear, inside the menu, both mounted only while open.
   fireEvent.click(screen.getByTestId('attach-files-btn'));
+  fireEvent.click(screen.getByTestId('upload-scope-settings-btn'));
   return { onAttachScopeModeChange };
 };
-
-/** The Joy Radio root, which is where variant/color classes land (the <input> is a descendant). */
-const radioRoot = (mode: string) =>
-  screen.getByTestId(`attach-file-scope-${mode}-radio`).closest('.MuiRadio-root') as HTMLElement;
 
 describe('AttachFileButton attach-scope control', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -100,30 +86,10 @@ describe('AttachFileButton attach-scope control', () => {
     expect(screen.getByText('Just this message')).toBeInTheDocument();
   });
 
-  it('gives the SELECTED radio the chip variant/color, not its own outlined default', () => {
-    // The #2084 review defect: without these props the Radio resolves outlined/primary and paints
-    // primary.outlinedColor on the chip's primary.solidBg - 1.08:1, on first render, before any
-    // interaction. `auto` is the mount-time default, so the control shipped looking broken.
-    renderControl('auto');
-    const selected = radioRoot('auto');
-    expect(selected).toHaveClass('MuiRadio-variantSolid');
-    expect(selected).toHaveClass('MuiRadio-colorPrimary');
-    expect(selected).not.toHaveClass('MuiRadio-variantOutlined');
-  });
-
-  it('leaves the UNSELECTED radios outlined/neutral, matching their chips', () => {
-    renderControl('auto');
-    for (const mode of ['notebook', 'message']) {
-      const unselected = radioRoot(mode);
-      expect(unselected).toHaveClass('MuiRadio-variantOutlined');
-      expect(unselected).toHaveClass('MuiRadio-colorNeutral');
-    }
-  });
-
-  it('moves the solid treatment with the selection', () => {
+  it('checks the current mode', () => {
     renderControl('message');
-    expect(radioRoot('message')).toHaveClass('MuiRadio-variantSolid');
-    expect(radioRoot('auto')).toHaveClass('MuiRadio-variantOutlined');
+    expect(screen.getByRole('radio', { name: 'Just this message' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Smart' })).not.toBeChecked();
   });
 
   it('reports a change when an option is chosen', () => {
@@ -135,9 +101,30 @@ describe('AttachFileButton attach-scope control', () => {
     expect(onAttachScopeModeChange).toHaveBeenCalledWith('notebook');
   });
 
-  it('describes the selected mode beneath the control', () => {
-    renderControl('message');
+  it('describes every mode next to its option', () => {
+    renderControl('auto');
     expect(screen.getByText('Nothing is kept - files attach to one message only.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Everything is kept for this notebook and re-sent with every message.')
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the gear on the upload row only, out of the way until clicked', () => {
+    render(
+      <Wrapper>
+        <AttachFileButton
+          onUploadFromComputer={vi.fn()}
+          onAddFromGoogleDrive={vi.fn()}
+          onAddFromFileBrowser={vi.fn()}
+          attachScopeMode="auto"
+          onAttachScopeModeChange={vi.fn()}
+        />
+      </Wrapper>
+    );
+    fireEvent.click(screen.getByTestId('attach-files-btn'));
+    expect(screen.queryByTestId('attach-file-scope-radiogroup')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('upload-scope-settings-btn'));
+    expect(screen.getByTestId('attach-file-scope-radiogroup')).toBeInTheDocument();
   });
 });
 
@@ -158,10 +145,10 @@ describe('AttachFileButton menu after a file is attached', () => {
   it('closes when the attached file count goes up', () => {
     const { rerender } = render(button(0));
     fireEvent.click(screen.getByTestId('attach-files-btn'));
-    expect(screen.getByTestId('attach-file-scope-radiogroup')).toBeInTheDocument();
+    expect(screen.getByTestId('upload-from-device-btn')).toBeInTheDocument();
 
     rerender(button(1));
-    expect(screen.queryByTestId('attach-file-scope-radiogroup')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('upload-from-device-btn')).not.toBeInTheDocument();
   });
 
   it('stays open when a file is removed', () => {
@@ -169,6 +156,6 @@ describe('AttachFileButton menu after a file is attached', () => {
     fireEvent.click(screen.getByTestId('attach-files-btn'));
 
     rerender(button(1));
-    expect(screen.getByTestId('attach-file-scope-radiogroup')).toBeInTheDocument();
+    expect(screen.getByTestId('upload-from-device-btn')).toBeInTheDocument();
   });
 });

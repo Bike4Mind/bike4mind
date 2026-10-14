@@ -85,6 +85,7 @@ import { useModalState } from './useModalState';
 import { useVoiceState } from './useVoiceState';
 import ComposerStatusLine from './ComposerStatusLine';
 import CreditBalanceChip from '@client/app/components/Session/CreditButton';
+import ResearchModeIndicator from '@client/app/components/Session/AISettings/ResearchModeIndicator';
 import { pickerAttachedAgents } from './resolveDispatchAgent';
 import { SlashCommandSuggestions } from '@client/app/components/common/CommandSuggestions';
 import { useContentTransformDetector } from '@client/app/hooks/useContentTransformDetector';
@@ -583,6 +584,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       {/* Above the box rather than under it: the file viewer and other embedded chats leave no room
           below, and on phones the box sits on the keyboard. */}
       <ComposerStatusLine
+        left={<ResearchModeIndicator />}
         right={<CreditBalanceChip />}
         sx={{
           width: '100%',

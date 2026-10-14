@@ -1,17 +1,11 @@
 import { FC, useMemo } from 'react';
-import { Box, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, Tooltip, Typography } from '@mui/joy';
 import { Science as ScienceIcon } from '@mui/icons-material';
-import { blackAlpha, red } from '@client/app/utils/themes/colors';
+import { blackAlpha } from '@client/app/utils/themes/colors';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { isImageModel } from '@client/app/utils/commands';
-
-const fixedHeight = {
-  height: '32px !important',
-  minHeight: '32px !important',
-  maxHeight: '32px !important',
-};
 
 const ResearchModeIndicator: FC = () => {
   const researchMode = useLLM(state => state.researchMode);
@@ -25,6 +19,7 @@ const ResearchModeIndicator: FC = () => {
   );
 
   if (!researchMode?.enabled || isImageModel(model)) return null;
+  const noModels = (researchMode?.configurations?.length ?? 0) === 0;
 
   return (
     <Tooltip
@@ -58,7 +53,7 @@ const ResearchModeIndicator: FC = () => {
                   opacity: 0.5,
                 }}
               >
-                {researchMode?.configurations?.length === 0
+                {noModels
                   ? 'Click to add models in the configuration to start using research mode'
                   : `Comparing ${enabledConfigs.length} models in parallel:`}
               </Typography>
@@ -149,45 +144,34 @@ const ResearchModeIndicator: FC = () => {
         },
       }}
     >
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          borderRadius: '6px',
-          border: '1px solid',
-          borderColor: researchMode?.configurations?.length === 0 ? red[600] : 'border.solid',
-          backgroundColor: theme => theme.palette.primary.softBg,
-          cursor: 'pointer',
-          transition: 'all 0.2s',
-          px: 1,
-          ...fixedHeight,
-          '&:hover': {
-            backgroundColor: theme => theme.palette.primary.softHoverBg,
-            borderColor: 'primary.plainColor',
-          },
-        }}
+      {/* Quiet text on the composer's status line (ComposerStatusLine), matching the balance on
+          the other side; warning-coloured while no model is set up to compare. */}
+      <Button
+        size="sm"
+        variant="plain"
+        color={noModels ? 'warning' : 'neutral'}
+        data-testid="research-mode-status-btn"
         onClick={() => openModal('research-mode')}
+        startDecorator={<ScienceIcon sx={{ fontSize: 14 }} />}
+        sx={{
+          height: '24px',
+          minHeight: '24px',
+          px: 0.75,
+          gap: 0.25,
+          borderRadius: '6px',
+          whiteSpace: 'nowrap',
+          fontSize: '12px',
+          fontWeight: 400,
+          ...(!noModels && {
+            '--variant-plainColor': 'var(--joy-palette-text-tertiary)',
+            '--variant-plainHoverColor': 'var(--joy-palette-text-secondary)',
+          }),
+        }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <ScienceIcon
-            sx={{
-              color: 'text.primary',
-              width: '14px',
-              height: '14px',
-            }}
-          />
-          <Typography
-            level="body-sm"
-            sx={{
-              color: 'text.primary',
-              fontWeight: '400',
-              fontSize: '14px',
-            }}
-          >
-            {enabledConfigs.length}
-          </Typography>
-        </Box>
-      </Box>
+        {noModels
+          ? 'Research mode \u00b7 add models'
+          : `Research mode \u00b7 ${enabledConfigs.length} ${enabledConfigs.length === 1 ? 'model' : 'models'}`}
+      </Button>
     </Tooltip>
   );
 };

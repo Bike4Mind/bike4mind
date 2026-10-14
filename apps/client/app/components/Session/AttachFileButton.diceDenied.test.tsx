@@ -5,8 +5,8 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 /**
- * The mobile-only "Roll Dice" attach-menu item must follow the session denylist: a denied dice_roll
- * is never offered to the model, so the shortcut must not be offered to the user either.
+ * The "Roll Dice" plus-menu item must follow the session denylist: a denied dice_roll is never
+ * offered to the model, so the shortcut must not be offered to the user either.
  */
 
 const hoisted = vi.hoisted(() => ({
@@ -38,7 +38,10 @@ vi.mock('@client/app/contexts/SessionsContext', () => ({
 }));
 vi.mock('@client/app/hooks/useSessionLayout', () => ({ setSessionLayout: vi.fn() }));
 vi.mock('@client/app/hooks/data/agents', () => ({ useGetSessionAgents: () => ({ data: [] }) }));
-vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: () => [['dice_roll']] }));
+vi.mock('@client/app/contexts/LLMContext', () => {
+  const state = { tools: ['dice_roll'], agentMode: { enabled: false }, model: 'gpt-4.1-2025-04-14' };
+  return { useLLM: Object.assign((select: (s: typeof state) => unknown) => select(state), { setState: vi.fn() }) };
+});
 vi.mock('@client/app/components/Session/AdvancedAISettings', () => ({
   useAdvancedAISettings: () => vi.fn(),
 }));
