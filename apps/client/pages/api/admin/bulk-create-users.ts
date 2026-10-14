@@ -161,6 +161,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       })
     );
 
+    // Validates after users are created and invites sent: a bad success row would 500 a batch that
+    // succeeded and a retry would hit duplicates, so keep the row schema permissive.
     return respond(res, bulkCreateResponseSchema, {
       success: true,
       results,
