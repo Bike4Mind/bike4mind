@@ -69,4 +69,11 @@ describe('resolveCallableDecisionProviders', () => {
     expect([...callable]).toEqual(['test']);
     expect(getEffectiveLLMApiKeys).not.toHaveBeenCalled();
   });
+
+  it('keeps the test provider and filters the rest with a single key lookup', async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-openai', typesafe: undefined });
+    const callable = await resolveCallableDecisionProviders('user-1', ['test', 'openai', 'typesafe'], logger);
+    expect([...callable].sort()).toEqual(['openai', 'test']);
+    expect(getEffectiveLLMApiKeys).toHaveBeenCalledTimes(1);
+  });
 });
