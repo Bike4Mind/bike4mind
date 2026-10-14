@@ -217,8 +217,12 @@ const ImageContainer: FC<ImageContainerProps> = ({
       // of racing the S3 event. 'pending' still dispatches: the server gate waits and decides.
       if ((await moderateFabFileNow(maskFabFile.id)) === 'blocked') {
         // No dispatch means the server's mask cleanup never runs, so drop the mask here.
-        await deleteFileUtility(maskFabFile.id);
         toast.error('The edit mask was blocked by moderation. Please try again.');
+        try {
+          await deleteFileUtility(maskFabFile.id);
+        } catch (deleteError) {
+          console.error('Failed to delete blocked edit mask: ', deleteError);
+        }
         return;
       }
       await onSendMessage({ fabFileIds: [maskFabFile.id], prompt }, { isImageEdit: true, image: sourceImageUrl });
