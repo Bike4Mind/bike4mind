@@ -4,6 +4,7 @@ import {
   ModelBackend,
   isFieldGroup,
   isRenderableModelType,
+  isDedicatedApiModel,
   toModelInfo,
   toModelRecord,
 } from '@bike4mind/common';
@@ -323,6 +324,8 @@ function invocabilityBlocker(record: RenderableModelRecord): string | null {
     return `adapterFamily "${record.adapterFamily}" is not dispatchable by this build`;
   }
   if (!record.dispatchProfile) return 'no dispatchProfile';
+  if (isDedicatedApiModel(record.id))
+    return 'needs a dedicated API or a mandatory tool; not callable as a plain text model';
   return null;
 }
 

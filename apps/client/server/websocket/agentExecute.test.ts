@@ -98,7 +98,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   },
 }));
 
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, PROMPT_TEXT_MAX } from '@bike4mind/common';
 import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
@@ -682,6 +682,56 @@ describe('start command credential threading', () => {
 
     const input = vi.mocked(startAgentExecution).mock.calls[0][0];
     expect(input.apiKeyInfo).toBeUndefined();
+  });
+});
+
+describe('start command system context', () => {
+  const startEvent = (extra: Record<string, unknown> = {}) => ({
+    requestContext: { connectionId: 'conn-1', domainName: 'example.com', stage: 'dev' },
+    body: JSON.stringify({
+      accessToken: 'jwt',
+      action: 'agent_execute',
+      command: 'start',
+      sessionId: 's1',
+      questId: 'q1',
+      query: 'go',
+      model: 'm',
+      ...extra,
+    }),
+  });
+
+  beforeEach(() => {
+    vi.mocked(startAgentExecution)
+      .mockReset()
+      .mockResolvedValue({ ok: true } as never);
+    vi.mocked(verifyApiKey).mockRejectedValue(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-1' } as never);
+  });
+
+  it('forwards systemContext to the run, separate from the query', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent({ systemContext: 'Extra instructions for this send.' }), {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.systemContext).toBe('Extra instructions for this send.');
+    expect(input.query).toBe('go');
+  });
+
+  it('leaves systemContext undefined when the client sends none', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent(), {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.systemContext).toBeUndefined();
+  });
+
+  it('rejects a systemContext over the prompt-text cap without starting a run', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent({ systemContext: 'x'.repeat(PROMPT_TEXT_MAX + 1) }), {}, noopLogger).catch(
+      () => undefined
+    );
+
+    expect(startAgentExecution).not.toHaveBeenCalled();
   });
 });
 

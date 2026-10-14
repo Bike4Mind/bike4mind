@@ -51,6 +51,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 vi.mock('@server/utils/starterCredits', () => ({ getOpenSignupStarterCredits: () => Promise.resolve(0) }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ delete: vi.fn().mockResolvedValue(undefined) }),
+  getGeneratedImageStorage: () => ({ delete: vi.fn().mockResolvedValue(undefined) }),
   getPublishedArtifactsStorage: () => ({ download: vi.fn() }),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));

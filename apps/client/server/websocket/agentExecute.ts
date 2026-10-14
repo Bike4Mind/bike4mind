@@ -38,7 +38,7 @@ import {
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { z } from 'zod';
-import { GenerateImageToolCallSchema, AudioGenerationToolCallSchema } from '@bike4mind/common';
+import { GenerateImageToolCallSchema, AudioGenerationToolCallSchema, PROMPT_TEXT_MAX } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 /**
@@ -147,6 +147,12 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // classifier-routed responses on reload. Pure metadata - the executor
   // doesn't branch on it.
   routingSource: z.enum(['mention', 'agent_literal', 'toggle', 'classifier', 'user-default', 'complexity']).optional(),
+  // Per-send system context (a programmatic launch's `systemContext`). Forwarded on the
+  // executor's start payload, where it joins the run's system message. Kept off the
+  // AgentExecution doc's own fields and the Quest; carried in the server-only checkpoint so
+  // continuations keep it. Capped like every other caller-supplied prompt body (the client
+  // refuses an over-cap launch before sending). Must stay in sync with `StartExecutionSchema`.
+  systemContext: z.string().max(PROMPT_TEXT_MAX).optional(),
 });
 
 const AbortCommandSchema = BaseMessageSchema.extend({
@@ -306,6 +312,7 @@ async function handleStart(
       imageConfig: cmd.imageConfig,
       audioConfig: cmd.audioConfig,
       routingSource: cmd.routingSource,
+      systemContext: cmd.systemContext,
     },
     logger
   );

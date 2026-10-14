@@ -48,7 +48,9 @@ export class GenerationJobEngine {
     if (deps.leaseMs <= STEP_COMMIT_MARGIN_MS) {
       throw new Error(`leaseMs must exceed ${STEP_COMMIT_MARGIN_MS}ms, got ${deps.leaseMs}`);
     }
-    this.handlers = new Map(deps.handlers.map(handler => [handler.kind, handler]));
+    // The one narrowing point: handlers are typed per kind, and the map is keyed by kind, so the handler looked up
+    // for a job's kind only ever receives jobs of that kind. Every use below goes through this map.
+    this.handlers = new Map(deps.handlers.map(handler => [handler.kind, handler as GenerationJobHandler]));
   }
 
   async requestCancel(jobId: string): Promise<IGenerationJobDocument | null> {

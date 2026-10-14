@@ -33,7 +33,10 @@ vi.mock('@bike4mind/services', () => ({
     isOpaqueRefreshToken: (...args: any[]) => mockIsOpaque(...(args as [])),
     rotateSession: (...args: any[]) => mockRotateSession(...args),
     issueSession: (...args: any[]) => mockIssueSession(...args),
+    revokeSession: vi.fn(),
   },
+  // Stand-in for accountState.accountBlockReasons, which assertAccountStateUsable reads.
+  userService: { accountBlockReasons: () => [] },
 }));
 
 const mockFindById = vi.fn();

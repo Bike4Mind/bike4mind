@@ -62,3 +62,46 @@ describe('Bike4MindUserDetails — credit reason input', () => {
     expect(onCreditReasonChange).toHaveBeenCalledWith('Manual top-up');
   });
 });
+
+describe('Bike4MindUserDetails - storage usage', () => {
+  // 920,000,000 of a 1000 MB limit is 92% to enforcement, which reads storageLimit as decimal MB.
+  const nearlyFullUser = { ...(user as object), storageLimit: 1000, currentStorageSize: 920_000_000 } as never;
+
+  it('labels the limit in decimal MB, as enforcement reads it', () => {
+    renderDetails({ user: nearlyFullUser });
+    expect(screen.getByTestId('admin-user-storage-label')).toHaveTextContent('920 MB / 1 GB');
+  });
+
+  it('shows the danger state at 92% of the limit', () => {
+    renderDetails({ user: nearlyFullUser });
+    const progress = screen.getByTestId('admin-user-storage-progress');
+    expect(progress).toHaveAttribute('aria-valuenow', '92');
+    expect(progress.className).toContain('MuiLinearProgress-colorDanger');
+  });
+
+  it.each([
+    [740_000_000, 'Primary'],
+    [750_000_000, 'Warning'],
+    [899_000_000, 'Warning'],
+    [900_000_000, 'Danger'],
+  ])('colours %i bytes of a 1000 MB limit as %s', (currentStorageSize, color) => {
+    renderDetails({ user: { ...(user as object), storageLimit: 1000, currentStorageSize } as never });
+    expect(screen.getByTestId('admin-user-storage-progress').className).toContain(`MuiLinearProgress-color${color}`);
+  });
+
+  it('reads danger when usage is over the limit', () => {
+    renderDetails({ user: { ...(user as object), storageLimit: 1000, currentStorageSize: 2_000_000_000 } as never });
+    const progress = screen.getByTestId('admin-user-storage-progress');
+    expect(progress).toHaveAttribute('aria-valuenow', '200');
+    expect(progress.className).toContain('MuiLinearProgress-colorDanger');
+    expect(screen.getByTestId('admin-user-storage-label')).toHaveTextContent('2 GB / 1 GB');
+  });
+
+  // Same fixture as the SlimUsersView zero-limit case, so the list and detail screens are pinned to agree.
+  it.each([0, 500_000_000])('reads a zero limit as full with %i bytes used, since every upload is refused', used => {
+    renderDetails({ user: { ...(user as object), storageLimit: 0, currentStorageSize: used } as never });
+    const progress = screen.getByTestId('admin-user-storage-progress');
+    expect(progress).toHaveAttribute('aria-valuenow', '100');
+    expect(progress.className).toContain('MuiLinearProgress-colorDanger');
+  });
+});

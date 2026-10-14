@@ -88,7 +88,7 @@ async function probeSlack(logger: Logger, _ctx: ProbeContext): Promise<ProbeResu
     }
 
     const latencyMs = Date.now() - start;
-    const data = await response.json();
+    const data = (await response.json()) as { ok?: boolean; error?: string };
 
     if (!response.ok || !data.ok) {
       return {
