@@ -67,3 +67,64 @@ describe('useSendMessage - briefcase toolsOverride on the orchestration path (#9
     expect(refusedIdx).toBeLessThan(branchIdx);
   });
 });
+
+/**
+ * Per-send system context (a programmatic launch's `systemContext`). Same source-level approach
+ * as above. The behaviour on each wire is covered where it is built: `LLMCommand.payload.test.ts`
+ * (chat route) and `agentExecute.test.ts` / `startAgentExecution.test.ts` (agent route).
+ */
+describe('useSendMessage - per-send systemContext reaches both routes', () => {
+  const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
+
+  // One call, from its opener to the first `});` after it. Bounding the slice is the point: an
+  // unbounded lazy regex would let a call missing its spread match on the NEXT call's spread.
+  const callSlice = (opener: string): string => {
+    const start = source.indexOf(opener);
+    expect(start, `${opener} not found in useSendMessage.ts`).toBeGreaterThan(-1);
+    const end = source.indexOf('});', start);
+    expect(end).toBeGreaterThan(start);
+    return source.slice(start, end);
+  };
+
+  it('resolves it once via resolveSystemContext and builds the field only when set', () => {
+    expect(source).toMatch(/const resolvedSystemContext = resolveSystemContext\(options\?\.systemContext\);/);
+    expect(source).toMatch(/const systemContextField = systemContext \? \{ systemContext \} : \{\};/);
+  });
+
+  it('refuses an over-cap value through onRefused before any dispatch', () => {
+    const refusalStart = source.indexOf("if (resolvedSystemContext.kind === 'tooLong') {");
+    expect(refusalStart).toBeGreaterThan(-1);
+    // Brace-match the `if` block itself, so a `return;` elsewhere in the file cannot satisfy it.
+    let depth = 0;
+    let refusalEnd = -1;
+    for (let index = source.indexOf('{', refusalStart); index < source.length; index++) {
+      if (source[index] === '{') depth++;
+      if (source[index] === '}' && --depth === 0) {
+        refusalEnd = index;
+        break;
+      }
+    }
+    expect(refusalEnd).toBeGreaterThan(refusalStart);
+    const refusal = source.slice(refusalStart, refusalEnd);
+    expect(refusal).toContain('toast.error(');
+    expect(refusal).toContain('setSubmitting(false);');
+    expect(refusal).toMatch(/options\?\.onRefused\?\.\(\);\s*return;\s*$/);
+    // Ahead of the host hand-off and every dispatch.
+    expect(refusalStart).toBeLessThan(source.indexOf('useSessionRouter.getState().hostCreateSession'));
+    expect(refusalStart).toBeLessThan(source.indexOf('handleCommand(commandHandlers, {'));
+  });
+
+  it.each(['handleCommand(commandHandlers, {', 'handleLLMCommand({', 'agentExecution.start({'])(
+    'spreads it into %s',
+    opener => {
+      const slice = callSlice(opener);
+      expect(slice).toContain('...systemContextField,');
+      // A later `systemContext: undefined,` would erase the spread at runtime.
+      expect(slice).not.toMatch(/\bsystemContext\s*:/);
+    }
+  );
+
+  it('never folds it into the prompt text the bubble shows', () => {
+    expect(source).not.toMatch(/prompt\s*[+=].*systemContext/);
+  });
+});

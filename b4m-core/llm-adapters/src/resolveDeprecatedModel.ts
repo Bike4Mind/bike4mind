@@ -60,6 +60,11 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   // bill 20x on input. Gemini 3.1 Flash Lite is the cheapest current Gemini that keeps the
   // original's intent (thinking, vision, tools, 1M context) at $0.25/$1.50.
   'gemini-2.5-flash': 'gemini-3.1-flash-lite',
+  // Google closed the 2.5 line to new users (no shutdown date) and points them at 3.1 Flash-Lite
+  // and 3.5 Flash. Flash-Lite costs more ($0.0375/$0.30 -> $0.25/$1.50 per 1M in/out); 2.5 Pro ->
+  // 3.5 Flash trades Pro quality for GA and a near-equal price ($1.25/$10 -> $1.50/$9).
+  'gemini-2.5-pro': 'gemini-3.5-flash',
+  'gemini-2.5-flash-lite': 'gemini-3.1-flash-lite',
   // xAI models superseded by Grok 4.5. These all still resolve upstream, so nothing here
   // prevents an API failure -- they are mapped because Grok 4.5 is cheaper AND strictly more
   // capable (reasoning, vision, 500K context, cache reads) than every one of them. Grok 3 in

@@ -1,8 +1,9 @@
-import { FabFileSourceType, KnowledgeType, type GeneratedAssetMetadata } from '@bike4mind/common';
+import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
 import { createFabFile } from '../../../fabFileService/create';
 import {
   saveGeneratedAsset,
   type SaveGeneratedAssetDeps,
+  type SaveGeneratedAssetParams,
   type SaveGeneratedAssetResult,
 } from '../../../generatedAssets';
 import type { ToolContext } from '../base/types';
@@ -85,7 +86,7 @@ export async function persistGeneratedFileAsFabFile(
  */
 export async function saveGeneratedAssetFromTool(
   context: ToolContext,
-  asset: { bytes: Buffer; contentType: string; generation: GeneratedAssetMetadata }
+  asset: Pick<SaveGeneratedAssetParams, 'bytes' | 'contentType' | 'generation' | 'generatedCopyKey'>
 ): Promise<SaveGeneratedAssetResult> {
   const { sessionId, questId, userId, logger } = context;
   const adapters = toolFileAdapters(context);

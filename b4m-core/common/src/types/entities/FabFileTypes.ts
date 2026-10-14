@@ -67,6 +67,8 @@ export enum FabFileSourceType {
    * through saveGeneratedAsset carries `sourceMetadata.generation` (GeneratedAssetMetadata).
    * `sourceMetadata.sessionId`, when set, links it to the notebook it was made in - see
    * persistGeneratedFileAsFabFile for why that link is not the top-level `sessionId`.
+   * `sourceMetadata.generatedCopyKey` names a second, generated-bucket copy that deletes also
+   * remove (see generatedCopyKeyOf).
    */
   TOOL_GENERATED = 'tool_generated',
 }

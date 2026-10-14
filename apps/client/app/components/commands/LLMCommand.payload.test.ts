@@ -145,3 +145,52 @@ describe('handleLLMCommand - workbench agentIds on a new-session turn (GH #2600)
     expect(body.params).not.toHaveProperty('agentIds');
   });
 });
+
+// A programmatic launch's per-send system context rides `extraContextMessages` as one more
+// system message. It must never touch the user's message (that is the visible bubble) or
+// leak into `params`, and a send without it must not gain an empty system message.
+describe('handleLLMCommand - per-send systemContext', () => {
+  const systemMessages = (body: Record<string, unknown>) =>
+    ((body.extraContextMessages as Array<{ role: string; content: unknown }> | undefined) ?? []).filter(
+      m => m.role === 'system'
+    );
+
+  beforeEach(() => {
+    post.mockReset();
+    post.mockResolvedValue({ data: { quest: { id: 'quest-1' }, session: { id: 'session-1' } } });
+  });
+
+  it('appends systemContext as a system message in extraContextMessages', async () => {
+    await handleLLMCommand({ ...baseArgs(), systemContext: 'Extra instructions for this send.' });
+
+    const body = llmRequestBody();
+    expect(systemMessages(body).at(-1)).toEqual({ role: 'system', content: 'Extra instructions for this send.' });
+    expect(body.message).toBe('hello world');
+    expect(body).not.toHaveProperty('systemContext');
+    expect(body.params).not.toHaveProperty('systemContext');
+  });
+
+  it('carries systemContext through handleCommand("/llm")', async () => {
+    await handleCommand({ '/llm': handleLLMCommand }, {
+      ...baseArgs(),
+      command: '/llm',
+      systemContext: 'Extra instructions for this send.',
+    } as unknown as Parameters<typeof handleCommand>[1]);
+
+    const body = llmRequestBody();
+    expect(systemMessages(body).map(m => m.content)).toContain('Extra instructions for this send.');
+    expect(body.params).not.toHaveProperty('systemContext');
+  });
+
+  it('sends the same extraContextMessages as before when systemContext is absent', async () => {
+    await handleLLMCommand(baseArgs());
+    const without = llmRequestBody().extraContextMessages;
+
+    post.mockClear();
+    await handleLLMCommand({ ...baseArgs(), systemContext: 'Extra instructions for this send.' });
+    const withIt = llmRequestBody().extraContextMessages as unknown[];
+
+    expect(withIt.slice(0, -1)).toEqual((without as unknown[] | undefined) ?? []);
+    expect(llmRequestBody().params).not.toHaveProperty('systemContext');
+  });
+});

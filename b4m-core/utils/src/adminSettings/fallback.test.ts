@@ -73,6 +73,17 @@ describe('shouldTriggerFallback', () => {
       const error = new Error('Claude Fable 5 is not available. Please use Opus 4.8');
       expect(shouldTriggerFallback(error)).toBe(true);
     });
+
+    it('should return true for a Google 404 for a model closed upstream', () => {
+      const error = new Error(
+        '{"error":{"code":404,"message":"models/gemini-2.5-pro is no longer available to new users","status":"NOT_FOUND"}}'
+      );
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return false for "no longer available" without "to new users"', () => {
+      expect(shouldTriggerFallback(new Error('This export link is no longer available'))).toBe(false);
+    });
   });
 
   describe('Axios HTTP errors', () => {

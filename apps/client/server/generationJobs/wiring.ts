@@ -250,7 +250,13 @@ const loadInputGeneratedImage = async (userId: string, key: string) => {
   return { bytes, mimeType };
 };
 
-export const saveToFiles: MusicJobDeps['saveToFiles'] = params => saveGeneratedAssetToFiles(params, logger);
+export const saveToFiles: MusicJobDeps['saveToFiles'] = async params => {
+  if (!params.questId) return saveGeneratedAssetToFiles(params, logger);
+  // Linked through the quest's notebook like every in-chat asset: the link scopes the grants that notebook mints and
+  // lets the generated-copy fork guard tell the owning notebook apart. A notebook delete keeps the file.
+  const sessionId = (await questRepository.findById(params.questId))?.sessionId;
+  return saveGeneratedAssetToFiles({ ...params, ...(sessionId && { sessionId }) }, logger);
+};
 
 const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ key, bytes, contentType, signal }) => {
   await getGeneratedImageStorage().upload(bytes, key, { ContentType: contentType }, signal);

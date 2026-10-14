@@ -33,6 +33,7 @@
     "daily-insights:generate": "tsx generateUserActivity.ts",
     "weekly-insights:generate": "tsx generateWeeklyUserActivity.ts",
     "translations:sync": "tsx syncTranslations.ts",
+    "api-routes:inventory": "tsx src/generateApiRouteInventory.ts",
     "clear-resume-tokens": "tsx src/clear-resume-tokens.ts",
     "db:cleanup": "tsx migrate/index.ts cleanup",
     "db:preview-unaddressable-chunks": "tsx migrate/preview-unaddressable-fabfilechunks.ts",
