@@ -2090,6 +2090,27 @@ describe('ChatCompletionProcess', () => {
           expect(mockQuest.promptMeta.suspectedElision).toBeDefined();
         });
       });
+
+      describe('artifact type fallback', () => {
+        beforeEach(() => {
+          mockedGetSettingsValue.mockImplementation(((key: string) =>
+            key === 'EnableArtifacts' ? true : undefined) as typeof getSettingsValue);
+        });
+        afterEach(() => mockedGetSettingsValue.mockReset());
+
+        it('records an untyped model-tagged artifact as a code artifact', async () => {
+          setupTurn(async cb => {
+            await cb(['<artifact identifier="notes" title="Notes">plain body</artifact>'], { toolsUsed: [] });
+            await cb([], { toolsUsed: [], stopReason: 'end_turn' });
+          });
+
+          await runTurn();
+
+          expect(mockQuest.promptMeta.artifacts).toContainEqual(
+            expect.objectContaining({ type: 'code', content: 'plain body' })
+          );
+        });
+      });
     });
 
     // Every other test in this file mocks messageTruncation: null, which never exercises the
