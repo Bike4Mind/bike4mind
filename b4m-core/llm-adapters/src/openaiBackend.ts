@@ -59,6 +59,7 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
 } from '@bike4mind/common';
 import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
+import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object
@@ -1936,35 +1937,6 @@ export class OpenAIBackend implements ICompletionBackend {
   ): OpenAI.ChatCompletionMessageParam[] {
     const filteredMessages = isO1Model ? messages.filter(msg => msg.role !== 'system') : messages;
 
-    // Get tool names from options.tools
-    const toolNames = options.tools?.map(tool => tool.toolSchema.name) || [];
-    const isGPT5Family =
-      GPT5_MODELS.includes(model) ||
-      GPT5_1_MODELS.includes(model) ||
-      GPT5_2_MODELS.includes(model) ||
-      GPT5_4_MODELS.includes(model) ||
-      GPT5_5_MODELS.includes(model) ||
-      GPT5_6_MODELS.includes(model);
-
-    // For GPT-5 models: do NOT list tool names in the system prompt when tools are provided
-    // via the API's `tools` parameter. GPT-5 gets confused by dual descriptions (text + API)
-    // and defaults to talking ABOUT tools instead of making native function calls.
-    // For other models (GPT-4o, etc.): keep the existing behavior which works well.
-    let systemContent: string;
-    if (isGPT5Family) {
-      systemContent = 'You are a helpful assistant.';
-      if (toolNames.length > 0) {
-        systemContent += ' Use the provided tools when appropriate. Present results clearly and naturally.';
-      }
-      systemContent += `\nOnly when someone asks, remember that you are specifically the ${model} model.`;
-      if (toolNames.includes('web_search')) {
-        systemContent +=
-          '\nFor web search results, present clean human-readable answers. Do not expose raw search queries or API response metadata to the user.';
-      }
-    } else {
-      systemContent = `You are a helpful assistant${toolNames.length > 0 ? ` with access to these tools:\n      - ${toolNames.join(', ')}: Available tools for various operations\n\n      When responding:\n      1. Identify when a task can be handled by an available tool\n      2. Use the appropriate tool for accurate results\n      3. For tools other than recharts: Explain what you're doing and why\n      4. For tools other than recharts: Present results in a clear, natural way with context\n      5. For tools other than recharts: Add relevant explanations or observations when needed` : '.'}`;
-    }
-
     // Hoist any caller-supplied `role: 'system'` messages (e.g. org-authority guards,
     // CompanyFactsBinder context) into the lead system message instead of leaving them
     // buried inline in the conversation body. This mirrors AnthropicBackend's
@@ -1981,15 +1953,13 @@ export class OpenAIBackend implements ICompletionBackend {
       )
       .map(m => m.content)
       .join('\n\n');
-    // Bare-completion contract (API promptMode raw): synthesize nothing - no
-    // helpful-assistant preamble, no identity line. The lead message is then exactly the
-    // caller's own system text, or absent entirely. Must stay in sync with the same flag
-    // in anthropicBackend / bedrockBackend.
+    // The only synthesized text is the shared identity reminder, last so the cached prefix
+    // never holds the model id. Bare-completion contract (API promptMode raw): synthesize
+    // nothing, so the lead message is exactly the caller's own system text, or absent
+    // entirely. Must stay in sync with the same flag in anthropicBackend / bedrockBackend.
     const mergedContent = options.omitIdentityReminder
       ? callerSystem
-      : callerSystem
-        ? `${systemContent}\n\n${callerSystem}`
-        : systemContent;
+      : appendIdentityReminder(callerSystem, buildIdentityReminder(model));
 
     const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
       role: 'system',

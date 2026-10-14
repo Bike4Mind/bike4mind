@@ -1,6 +1,6 @@
 /**
  * Model-identity line the Anthropic-family adapters (anthropicBackend, bedrockBackend/anthropic)
- * close every system parameter with.
+ * close every system parameter with, and openaiBackend closes its lead system message with.
  *
  * It sits last so the cached system prefix never contains the model id, which puts it right
  * after whatever the final prompt layer was - on a grounded lake turn, retrieved file content.
