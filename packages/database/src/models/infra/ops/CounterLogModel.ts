@@ -185,7 +185,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
           },
         },
       ],
-      // This week's data (always 7 days for both daily and weekly reports)
+      // Report window: the last 24 hours for daily reports, the last 7 days for weekly
       thisWeek: [
         {
           $match: {
@@ -297,7 +297,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
             weeklyActiveUsers: [
               {
                 $match: {
-                  datetime: { $gte: dayjs(weekEndDate).subtract(7, 'days').toDate(), $lte: weekEndDate },
+                  datetime: { $gte: weekEnd.subtract(7, 'days').toDate(), $lte: weekEndDate },
                 },
               },
               { $group: { _id: '$userId' } },
