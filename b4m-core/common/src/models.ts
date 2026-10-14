@@ -390,9 +390,16 @@ export const ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS: ReadonlySet<string> = new Se
   ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_FABLE_5_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
   ChatModels.CLAUDE_5_OPUS,
+  ChatModels.CLAUDE_5_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_5_OPUS,
+  ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+  ChatModels.CLAUDE_5_5_HAIKU,
+  ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
 ]);
 
 /**
