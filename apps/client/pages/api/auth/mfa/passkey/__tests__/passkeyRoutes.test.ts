@@ -50,7 +50,10 @@ vi.mock('@bike4mind/services', async () => {
   };
 });
 
-vi.mock('@bike4mind/common', () => ({ redactUserSecretsForSelf: (user: unknown) => user }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  redactUserSecretsForSelf: (user: unknown) => user,
+}));
 
 import authenticateHandler from '@pages/api/auth/mfa/passkey/authenticate';
 import registerHandler from '@pages/api/auth/mfa/passkey/register';

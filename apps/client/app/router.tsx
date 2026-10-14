@@ -32,6 +32,7 @@ import { premiumRoutes } from './premium-generated/premiumRoutes.generated';
 import { partitionPremiumRoutes } from './premiumRoutePartition';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
+import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
 
 // Lazy load all route components for code splitting
@@ -87,7 +88,7 @@ const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
-const VideoStudioPage = lazy(() => import('./routes/studio/video'));
+const StudioPage = lazy(() => import('./routes/studio/$modality'));
 const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 
 // Shared coercion for the optional string search params nearly every route declares.
@@ -511,15 +512,22 @@ const hearthRoute = createRoute({
   ),
 });
 
-// Video Studio: generate clips from text or a library image, and the gallery of the user's video jobs.
-const studioVideoRoute = createRoute({
+// Studio: one page per generation modality (/studio/video), each a CapabilityForm and the gallery of the user's jobs.
+export const studioRoute = createRoute({
   getParentRoute: () => layoutRoute,
-  path: '/studio/video',
-  component: () => (
-    <Suspense fallback={<RouteLoadingFallback />}>
-      <VideoStudioPage />
-    </Suspense>
-  ),
+  path: '/studio/$modality',
+  params: {
+    parse: ({ modality }) => ({ modality: parseStudioModality(modality) }),
+    stringify: ({ modality }) => ({ modality }),
+  },
+  component: function StudioRouteComponent() {
+    const { modality } = studioRoute.useParams();
+    return (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <StudioPage modality={modality} />
+      </Suspense>
+    );
+  },
 });
 
 // Agents index route (replaces /agents/index.tsx)
@@ -1230,7 +1238,7 @@ const routeTree = rootRoute.addChildren([
     dataLakesRoute,
     hudRoute,
     hearthRoute,
-    studioVideoRoute,
+    studioRoute,
     ...builtAppShellPremiumRoutes,
   ]),
   // QA status pages (admin layout without the sidenav)

@@ -129,6 +129,7 @@ export class ChatCompletionInvoke {
       correctsQuestId,
       allowedAgents,
       enableSlackTools,
+      toolMode,
     } = ChatCompletionInvokeParamsSchema.parse(body);
 
     // Parallelize independent operations: API keys, session, organization, and the correction
@@ -292,6 +293,7 @@ export class ChatCompletionInvoke {
           : []),
         { status: 'Received by backend', timestamp: now },
       ],
+      ...(toolMode ? { toolMode } : {}),
     };
 
     // Correct-and-retry: bind the claimed correction target to the caller's session before it is

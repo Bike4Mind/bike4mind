@@ -10,6 +10,7 @@ import {
   MessageContentObject,
   QuestCallbackState,
   QuestCallbackStateSchema,
+  ChatToolModeSchema,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
@@ -446,6 +447,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       },
     ],
     offeredTools: [{ type: String, required: false }],
+    toolMode: { type: String, enum: ChatToolModeSchema.options, required: false },
     performance: {
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },

@@ -4,8 +4,8 @@ const mockProcess = vi.hoisted(() => vi.fn());
 
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
-// slackQuestProcessor.failureNotice.test.ts, which already proves this import chain resolves
-// with this mock set - only the thin edges (config, event bus, DB models, storage) are stubbed.
+// apps/workers/src/queueHandlers/slackQuestProcessor.failureNotice.test.ts, which already proves this
+// import chain resolves with this mock set - only the thin edges (config, event bus, DB models, storage) are stubbed.
 
 const benignStub: ProxyHandler<object> = {
   get(_, key) {

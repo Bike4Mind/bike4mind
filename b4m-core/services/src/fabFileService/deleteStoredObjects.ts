@@ -15,12 +15,14 @@ export type StoredObjectBuckets = {
   generated?: GeneratedCopyStore;
 };
 
-type StoredFile = Pick<IFabFileDocument, 'id' | 'filePath' | 'sourceMetadata' | 'moderationStatus'>;
+type StoredFile = Pick<IFabFileDocument, 'id' | 'filePath' | 'versions' | 'sourceMetadata' | 'moderationStatus'>;
 type WarnLogger = { warn: (message: string, ...args: unknown[]) => void };
 
 /**
- * Removes every stored object a deleted file owns: its own object in the files bucket and, for an in-chat
- * generated asset, the generated-bucket copy chat plays inline (`sourceMetadata.generatedCopyKey`).
+ * Removes every stored object a deleted file owns: its own object in the files bucket, the retained revisions an
+ * AI edit keeps under their own keys in `versions[]` (see appendEditedVersion) and, for an in-chat generated asset,
+ * the generated-bucket copy chat plays inline (`sourceMetadata.generatedCopyKey`). Revisions are deleted first and
+ * best-effort; a failure on `filePath` or the generated copy still rejects.
  * Shared by the single-file delete, the notebook delete and the delete-all route so they cannot drift.
  * A moderation-blocked file keeps its objects: they are legal-hold evidence (see FabFileModel.hardDeleteByIds).
  */
@@ -38,10 +40,34 @@ async function deleteFileObjects(file: StoredFile, buckets: StoredObjectBuckets,
     return;
   }
   const copyKey = generatedCopyKeyOf(file);
+  await deleteRetainedVersions(file, buckets.files, logger);
+  // Every delete starts before any can reject, so a failed `filePath` never skips the generated copy.
   await Promise.all([
     file.filePath ? buckets.files.delete(file.filePath) : undefined,
     copyKey ? deleteGeneratedCopy(file, copyKey, buckets.generated, logger) : undefined,
   ]);
+}
+
+/**
+ * Best-effort and first, so `filePath` goes last. A failed key is logged, never thrown: retained revisions are not
+ * part of the quota refund (`sizeToDeduct` counts the current file only), and the row is already soft-deleted by the
+ * time this runs, so nobody could retry a rejection. Rejecting would only withhold a refund for bytes that were removed.
+ */
+async function deleteRetainedVersions(file: StoredFile, files: ObjectStorage, logger: WarnLogger) {
+  const versionKeys = new Set((file.versions ?? []).map(version => version?.filePath));
+  const keys = [...versionKeys].filter(
+    (key): key is string => typeof key === 'string' && key.length > 0 && key !== file.filePath
+  );
+  const outcomes = await Promise.allSettled(keys.map(key => files.delete(key)));
+  outcomes.forEach((outcome, index) => {
+    if (outcome.status === 'rejected') {
+      logger.warn('[deleteStoredObjects] could not delete a retained version; object left behind', {
+        fileId: file.id,
+        key: keys[index],
+        reason: outcome.reason,
+      });
+    }
+  });
 }
 
 async function deleteGeneratedCopy(

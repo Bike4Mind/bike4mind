@@ -470,6 +470,11 @@ function unwrapJsonError(text: string): string {
   return text;
 }
 
+/** A failed call's recorded observation with the adapter's wrapper (prefix or JSON) removed. */
+export function unwrapToolErrorText(text: string): string {
+  return unwrapJsonError(text).replace(TOOL_ERROR_PREFIX, '');
+}
+
 function capMessage(text: string): string {
   if (text.length <= MAX_TIMEOUT_MESSAGE_CHARS) return text;
   // Drop a cut-off separator or period so the ellipsis never renders as `....` or `; ...`.
@@ -483,8 +488,7 @@ function capMessage(text: string): string {
  */
 function timeoutMessage(call: FunctionCall): string | undefined {
   if (call.success !== false && !call.error) return undefined;
-  const text = unwrapJsonError(call.error || call.returnValue || '')
-    .replace(TOOL_ERROR_PREFIX, '')
+  const text = unwrapToolErrorText(call.error || call.returnValue || '')
     .replace(/[^\x20-\x7e]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

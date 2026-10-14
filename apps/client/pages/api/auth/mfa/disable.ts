@@ -1,9 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { readEnforceMfa } from '@server/auth/signInSecondFactor';
 import { mfaService, userService } from '@bike4mind/services';
 import {
   userRepository,
-  adminSettingsRepository,
   authSessionRepository,
   trustedDeviceRepository,
   passkeyCredentialRepository,
@@ -25,8 +25,7 @@ const handler = baseApi().post(
         return res.status(404).json({ error: 'User not found in database' });
       }
 
-      const enforceMFASetting = await adminSettingsRepository.findBySettingName('enforceMFA');
-      const enforceMFA = enforceMFASetting?.settingValue === 'true' || false;
+      const enforceMFA = await readEnforceMfa();
 
       // Phase-1 passkeys are an alternative second factor, so they go with MFA. Removed BEFORE
       // the disable commits: a failure then leaves MFA on, never orphan passkeys that would

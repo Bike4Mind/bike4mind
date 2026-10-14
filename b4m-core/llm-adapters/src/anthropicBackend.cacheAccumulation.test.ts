@@ -81,6 +81,33 @@ describe('AnthropicBackend multi-turn cache accumulation', () => {
     expect(info!.outputTokens).toBe(13);
     expect(info!.cacheReadInputTokens).toBe(150);
     expect(info!.cacheCreationInputTokens).toBe(225);
+    // Each API call is tiered on its own prompt, so the per-call breakdown survives too.
+    expect(info!.turnUsage).toEqual([
+      { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 100, cacheCreationInputTokens: 200 },
+      { inputTokens: 20, outputTokens: 8, cacheReadInputTokens: 50, cacheCreationInputTokens: 25 },
+    ]);
+  });
+
+  it('forwards cache and per-call usage when tool calls are passed through (executeTools: false)', async () => {
+    const backend = buildBackend([
+      { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 200 },
+      { input_tokens: 0, output_tokens: 0 },
+    ]);
+    let lastInfo: CompletionInfo | undefined;
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'weather?' }],
+      { stream: false, tools: [weatherTool], executeTools: false },
+      async (_text, info) => {
+        if (info) lastInfo = info;
+      }
+    );
+
+    expect(lastInfo!.cacheReadInputTokens).toBe(100);
+    expect(lastInfo!.cacheCreationInputTokens).toBe(200);
+    expect(lastInfo!.turnUsage).toEqual([
+      { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 100, cacheCreationInputTokens: 200 },
+    ]);
   });
 
   it('sums when only the first turn had cache activity (terminal turn all-fresh)', async () => {

@@ -44,6 +44,7 @@ import {
   updatePublishedDiscoverable,
   updatePublishedAccessGate,
   getPublishedEmbedState,
+  getPublishedManageState,
   getShareTokenState,
   type PublishAccessGateInput,
   type PublishMode,
@@ -83,6 +84,13 @@ export interface PublishShareModalProps {
     discoverable?: boolean;
   } | null>;
   /**
+   * Optional lookup, run on open, for a source that has at most one publication (a chat reply).
+   * When it resolves to one, the dialog opens straight onto that live page - its link and its
+   * current visibility, gate and comment state - so a Private pick changes the link the owner
+   * already handed out. Without it a reopened reply showed a blank "nothing is published" form.
+   */
+  resolvePublished?: () => Promise<PublishResult | null>;
+  /**
    * When set, offers a "Team" (organization) visibility choice, publishing an org-scoped
    * page visible to org members. Supplied only when the caller is in an org ("Team") account
    * context - the publish callback maps org visibility to an org-tier page. Omit for personal
@@ -108,6 +116,12 @@ const PUBLIC_OPTION: VisibilityOption = {
   icon: <PublicIcon />,
 };
 const PRIVATE_OPTION: VisibilityOption = { value: 'private', label: 'Private', hint: 'Only you', icon: <LockIcon /> };
+const TEAM_FALLBACK_OPTION: VisibilityOption = {
+  value: 'organization',
+  label: 'Team',
+  hint: 'Members of your team',
+  icon: <GroupIcon />,
+};
 
 /** Amber accent for the currently-selected visibility - draws the eye to the
  *  active choice (and signals exposure when Public is selected). */
@@ -177,6 +191,7 @@ export function PublishShareModal({
   markdown,
   defaultVisibility = 'public',
   resolveExisting,
+  resolvePublished,
   orgOption,
   incompleteWarning,
 }: PublishShareModalProps) {
@@ -214,6 +229,10 @@ export function PublishShareModal({
   const [embedGated, setEmbedGated] = useState(false);
   // Explicit acknowledgement of `incompleteWarning`; gates the publish button.
   const [incompleteAck, setIncompleteAck] = useState(false);
+  // `resolvePublished` is in flight: hold the create button so a click can't race the lookup.
+  const [resolving, setResolving] = useState(false);
+  // The dialog opened onto a publication that already existed (see `resolvePublished`).
+  const [reopened, setReopened] = useState(false);
 
   // Reset to the choose phase each time the dialog is opened fresh.
   useEffect(() => {
@@ -233,6 +252,7 @@ export function PublishShareModal({
       setGateTouched(false);
       setEmbedGated(false);
       setIncompleteAck(false);
+      setReopened(false);
     }
   }, [open, defaultVisibility]);
 
@@ -309,6 +329,46 @@ export function PublishShareModal({
     };
   }, [open, resolveExisting]);
 
+  // Reopen onto an existing publication. Its live state is read from the record itself (not the
+  // lookup row) so the controls show what is actually being served, gate included.
+  useEffect(() => {
+    if (!open || !resolvePublished) return;
+    let active = true;
+    setResolving(true);
+    void resolvePublished()
+      .then(async found => {
+        if (!active || !found) return;
+        const [state, links] = await Promise.all([
+          getPublishedManageState(found.publicId).catch(() => null),
+          getShareTokenState(found.publicId).catch(() => null),
+        ]);
+        if (!active) return;
+        const live = state?.visibility ?? found.visibility;
+        setResult({ ...found, visibility: live });
+        setVisibility(live);
+        setReopened(true);
+        if (state) {
+          setCommentsOn(state.commentPolicy === 'open' || state.commentPolicy === 'restricted');
+          setDiscoverableOn(state.discoverable);
+          setGateKind(state.accessGate?.kind ?? 'none');
+          if (state.accessGate?.kind === 'domain') setGateDomainsText(state.accessGate.allowedDomains.join(', '));
+        }
+        if (links?.shareToken) setShareToken(links.shareToken);
+      })
+      .catch(() => {
+        /* lookup failure -> the plain publish form; the server still updates in place */
+      })
+      .finally(() => {
+        if (active) setResolving(false);
+      });
+    return () => {
+      active = false;
+      // Closing mid-lookup must not leave the create button held for the next open, which may
+      // come from a surface with no lookup at all (one hook instance serves many surfaces).
+      setResolving(false);
+    };
+  }, [open, resolvePublished]);
+
   const phase: 'choose' | 'shared' = result ? 'shared' : 'choose';
   const url = result ? toShareUrl(result) : '';
   const isPublic = visibility === 'public';
@@ -321,8 +381,8 @@ export function PublishShareModal({
   //   - user-tier page  -> Public/Private only. Offering Team here would PATCH visibility to
   //     'organization' on a user-scoped record, whose scopeId is the user id, so the serve gate
   //     would 403 every org member (moving to org scope requires re-publishing, not a PATCH).
-  //   - org-tier page   -> Public/Team only. 'private' isn't a valid override for org tier
-  //     (SCOPE_POLICY), so the server would reject it - don't offer a dead-end.
+  //   - org-tier page   -> Public/Team/Private. Private is valid at every tier (SCOPE_POLICY), so
+  //     the owner can take a Team page back to owner-only without re-publishing it.
   // In the CHOOSE phase the publish callback maps a Team pick to a real org-tier page, so the
   // full set is safe.
   const visibilityOptions = useMemo<VisibilityOption[]>(() => {
@@ -330,10 +390,10 @@ export function PublishShareModal({
       ? { value: 'organization', ...orgOption, icon: <GroupIcon /> }
       : null;
     if (result) {
+      // A reopened Team page keeps its Team choice even when the dialog was opened outside a team
+      // context (no `orgOption`), so its current visibility is shown rather than leaving only Public.
       return result.tier === 'organization'
-        ? orgEntry
-          ? [PUBLIC_OPTION, orgEntry]
-          : [PUBLIC_OPTION]
+        ? [PUBLIC_OPTION, orgEntry ?? TEAM_FALLBACK_OPTION, PRIVATE_OPTION]
         : [PUBLIC_OPTION, PRIVATE_OPTION];
     }
     return orgEntry ? [PUBLIC_OPTION, orgEntry, PRIVATE_OPTION] : [PUBLIC_OPTION, PRIVATE_OPTION];
@@ -569,12 +629,16 @@ export function PublishShareModal({
       >
         <ModalClose />
         <Typography level="title-lg" sx={{ mb: 0.5 }}>
-          {phase === 'shared' ? 'Shared & ready' : 'Share'}
+          {phase === 'shared' ? (reopened ? 'Already shared' : 'Shared & ready') : 'Share'}
         </Typography>
-        <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }}>
+        <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }} data-testid="publish-share-intro">
           {phase === 'shared'
-            ? 'Send the link, or change who can see it below.'
-            : 'Choose who can see this, then create the link. Nothing is published until you do.'}
+            ? reopened
+              ? 'This is already published. Change who can see it below - choosing Private stops this link from working for anyone else.'
+              : 'Send the link, or change who can see it below.'
+            : resolving
+              ? 'Checking whether this is already shared...'
+              : 'Choose who can see this, then create the link. Nothing is published until you do.'}
         </Typography>
 
         {phase === 'choose' && existing && (
@@ -857,7 +921,7 @@ export function PublishShareModal({
           <Button
             onClick={() => void handleCreate()}
             loading={busy}
-            disabled={!!incompleteWarning && !incompleteAck}
+            disabled={resolving || (!!incompleteWarning && !incompleteAck)}
             startDecorator={<PublicIcon />}
             data-testid="publish-share-create"
           >

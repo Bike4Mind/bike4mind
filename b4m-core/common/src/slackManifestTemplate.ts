@@ -223,15 +223,18 @@ export function getControlledManifestFields(
     },
     ...(enableWorkflowSteps
       ? {
+          // Each function takes a user_context, which Slack attests as whoever ran the workflow; a
+          // user_id input could be set to any member. Must stay in sync with resolveActingSlackUserId
+          // in b4m-core/slack/src/handlers/WorkflowStepHandler.ts.
           functions: {
             b4m_create_notebook: {
               title: 'Create Notebook',
               description: brand ? `Create a new ${brand} notebook` : 'Create a new notebook',
               input_parameters: {
-                user_id: {
-                  type: 'slack#/types/user_id',
+                user_context: {
+                  type: 'slack#/types/user_context',
                   title: 'User',
-                  description: 'The user who triggered this workflow',
+                  description: 'The person running this workflow',
                   is_required: true,
                 },
                 notebook_name: {
@@ -261,10 +264,10 @@ export function getControlledManifestFields(
               title: brand ? `Send to ${brand}` : 'Send Message',
               description: `Send a message${brand ? ` to ${brand}` : ''} and optionally wait for AI response`,
               input_parameters: {
-                user_id: {
-                  type: 'slack#/types/user_id',
+                user_context: {
+                  type: 'slack#/types/user_context',
                   title: 'User',
-                  description: 'The user who triggered this workflow',
+                  description: 'The person running this workflow',
                   is_required: true,
                 },
                 message: {
@@ -306,10 +309,10 @@ export function getControlledManifestFields(
               title: brand ? `Query ${brand}` : 'Query',
               description: `Ask${brand ? ` ${brand}` : ''} a question and get an AI response`,
               input_parameters: {
-                user_id: {
-                  type: 'slack#/types/user_id',
+                user_context: {
+                  type: 'slack#/types/user_context',
                   title: 'User',
-                  description: 'The user who triggered this workflow',
+                  description: 'The person running this workflow',
                   is_required: true,
                 },
                 query: {

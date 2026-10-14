@@ -8,6 +8,7 @@ import {
   useLakeDriveConnection,
   useLakeDriveCanManage,
   useDisconnectLakeDrive,
+  useConnectDriveFolderToLake,
   driveConnectionPollInterval,
   startGoogleDriveConnect,
   DRIVE_CONNECTION_ACTIVE_POLL_MS,
@@ -218,6 +219,27 @@ describe('useDisconnectLakeDrive', () => {
     expect(invalidatedKeys).toContainEqual(['lake-drive-connection', 'lake_1']);
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.filesOf('lake_1'));
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.tagCountsRoot);
+  });
+});
+
+// A refused Re-sync can park the connection server-side (credential_error, needs_reconnect); the card
+// only offers Reconnect if the failure refetches the status too.
+describe('useConnectDriveFolderToLake', () => {
+  it('refetches the connection status when the connect fails', async () => {
+    post.mockRejectedValue(axiosError(400));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useConnectDriveFolderToLake(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ dataLakeId: 'lake_1', driveFolderId: 'folder_1' }).catch(() => undefined);
+    });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.driveConnection('lake_1'));
   });
 });
 

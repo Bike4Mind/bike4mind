@@ -243,6 +243,8 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
   vi.mocked({
     ...createMockRepository<IUserDocument>(),
     findByEmail: vi.fn(),
+    existsOtherUserWithEmail: vi.fn().mockResolvedValue(false),
+    existsOtherUserWithUsername: vi.fn().mockResolvedValue(false),
     removeGroupsFromAllUsers: vi.fn(),
     clearOrganizationPointer: vi.fn(),
     addGroupToUser: vi.fn(),

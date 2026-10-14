@@ -2,7 +2,11 @@ import { userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Request } from 'express';
-import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import * as z from 'zod';
+
+const acceptPoliciesResponseSchema = z.object({ user: selfUserResponseSchema });
 
 /**
  * Records the authenticated user's acceptance of the current AUP/ToS + 18+ age attestation
@@ -23,7 +27,7 @@ const handler = baseApi().post(async (req: Request<unknown, unknown, { ageAttest
     { db: { users: userRepository } }
   );
 
-  return res.status(200).json({ user: redactUserSecretsForSelf(updatedUser) });
+  return respond(res, acceptPoliciesResponseSchema, { user: redactUserSecretsForSelf(updatedUser) });
 });
 
 export const config = {

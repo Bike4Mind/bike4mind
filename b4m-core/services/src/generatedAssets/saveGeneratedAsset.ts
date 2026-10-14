@@ -1,6 +1,7 @@
 import {
   extensionFromMimeType,
   FabFileSourceType,
+  GENERATED_ASSET_TAG,
   isStorageLimitError,
   KnowledgeType,
   videoFileExtension,
@@ -124,7 +125,7 @@ export async function saveGeneratedAsset(
         content: bytes,
         prefix: KEY_PREFIX[modality],
         tags: [
-          { name: 'generated', strength: 1 },
+          { name: GENERATED_ASSET_TAG, strength: 1 },
           { name: LABEL[generation.generator], strength: 1 },
           ...(jobTag ? [{ name: jobTag, strength: 1 }] : []),
         ],

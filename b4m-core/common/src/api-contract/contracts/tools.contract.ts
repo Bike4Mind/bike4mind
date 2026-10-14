@@ -11,8 +11,9 @@ import { ApiErrorSchema } from '../../schemas/chat';
  *
  * JWT-only (API keys are rejected): the handler runs `verifyJwtToken` only, so
  * `auth: 'jwtOnly'` and no `scopes`. Served by a Lambda Function URL in prod
- * (server/cli/tools.ts via defineLambdaRoute) and a thin Next route in local dev
- * (pages/api/ai/v1/tools.ts). Rate-limited to 100 requests/hour.
+ * (apps/workers/src/cli/tools.ts via defineLambdaRoute) and a thin Next route in
+ * local dev (apps/client/pages/api/ai/v1/tools.ts). Rate-limited to 100
+ * requests/hour.
  */
 export const executeToolContract = defineEndpoint({
   method: 'post',

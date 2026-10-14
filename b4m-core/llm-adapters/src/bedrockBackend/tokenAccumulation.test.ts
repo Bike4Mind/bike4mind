@@ -94,6 +94,8 @@ class TestBedrockBackend extends BaseBedrockBackend {
 interface MockUsage {
   input: number;
   output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
 }
 
 interface CapturedCb {
@@ -231,7 +233,12 @@ function turnWithToolCall(
           index: 0,
           status: ChoiceStatus.END,
           statusEndReason: ChoiceEndReason.STOP,
-          usage: { input_tokens: usage.input, output_tokens: usage.output },
+          usage: {
+            input_tokens: usage.input,
+            output_tokens: usage.output,
+            cache_read_input_tokens: usage.cacheRead,
+            cache_creation_input_tokens: usage.cacheWrite,
+          },
         },
       ],
     },
@@ -255,7 +262,12 @@ function turnWithText(text: string, usage: MockUsage): unknown[] {
           index: 0,
           status: ChoiceStatus.END,
           statusEndReason: ChoiceEndReason.STOP,
-          usage: { input_tokens: usage.input, output_tokens: usage.output },
+          usage: {
+            input_tokens: usage.input,
+            output_tokens: usage.output,
+            cache_read_input_tokens: usage.cacheRead,
+            cache_creation_input_tokens: usage.cacheWrite,
+          },
         },
       ],
     },
@@ -339,5 +351,85 @@ describe('BaseBedrockBackend multi-turn token accumulation (executeTools=true)',
     expect(lastCb).toBeDefined();
     expect(lastCb!.inputTokens).toBe(450);
     expect(lastCb!.outputTokens).toBe(41);
+  });
+});
+
+describe('BaseBedrockBackend per-call cache and turn usage', () => {
+  it('accumulates cache reads/writes across tool round-trips and reports each call as its own turn', async () => {
+    const { backend } = makeBackend([
+      turnWithToolCall('add', 'tool_t1', { a: 1, b: 1 }, { input: 100, output: 20, cacheRead: 5000, cacheWrite: 300 }),
+      turnWithText('Done.', { input: 200, output: 30, cacheRead: 5300 }),
+    ]);
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      TEST_MODEL,
+      [{ role: 'user', content: 'Add.' }],
+      { stream: true, tools: [ADD_TOOL], executeTools: true } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const lastCb = finalCbInfo(calls);
+    // The provider bills cache per call; reporting only the last call's would drop 5000 reads and the write.
+    expect(lastCb!.cacheReadInputTokens).toBe(10_300);
+    expect(lastCb!.cacheCreationInputTokens).toBe(300);
+    expect(lastCb!.turnUsage).toEqual([
+      { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 5000, cacheCreationInputTokens: 300 },
+      { inputTokens: 200, outputTokens: 30, cacheReadInputTokens: 5300 },
+    ]);
+  });
+
+  it('accumulates cache and per-call usage across a non-streaming tool round-trip', async () => {
+    const backend = new TestBedrockBackend();
+    const responses = [
+      {
+        choices: [
+          {
+            index: 0,
+            status: ChoiceStatus.END,
+            statusEndReason: ChoiceEndReason.TOOL_USE,
+            tool: { name: 'add', id: 'tool_t1', parameters: JSON.stringify({ a: 1, b: 1 }) },
+            usage: {
+              input_tokens: 100,
+              output_tokens: 20,
+              cache_read_input_tokens: 5000,
+              cache_creation_input_tokens: 300,
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            index: 0,
+            status: ChoiceStatus.END,
+            statusEndReason: ChoiceEndReason.STOP,
+            chunkText: 'Done.',
+            usage: { input_tokens: 200, output_tokens: 30, cache_read_input_tokens: 5300 },
+          },
+        ],
+      },
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => ({ body: new TextEncoder().encode(JSON.stringify(responses.shift())) }),
+    };
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      TEST_MODEL,
+      [{ role: 'user', content: 'Add.' }],
+      { stream: false, tools: [ADD_TOOL], executeTools: true } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const lastCb = finalCbInfo(calls);
+    expect(lastCb!.inputTokens).toBe(300);
+    expect(lastCb!.cacheReadInputTokens).toBe(10_300);
+    expect(lastCb!.cacheCreationInputTokens).toBe(300);
+    expect(lastCb!.turnUsage).toEqual([
+      { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 5000, cacheCreationInputTokens: 300 },
+      { inputTokens: 200, outputTokens: 30, cacheReadInputTokens: 5300 },
+    ]);
   });
 });
