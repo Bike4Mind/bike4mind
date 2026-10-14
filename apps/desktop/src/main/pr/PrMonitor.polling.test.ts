@@ -133,6 +133,18 @@ describe('PrMonitor polling', () => {
     expect(clock.delays()).toEqual([POLL_MS.onScreenSettled]);
   });
 
+  it('keeps reading a conflicting PR with auto-fix on, though no checks run on it', async () => {
+    const { store, clock, monitor } = setup(snapshot({ mergeable: 'CONFLICTING', checks: [] }));
+    await store.set(SESSION, { ...REF, source: 'shell', boundAt: '', autoFix: true, lastState: 'OPEN' });
+    await monitor.watch(1, SESSION);
+    await settle();
+    expect(clock.delays()).toEqual([POLL_MS.onScreenSettled]);
+
+    await monitor.watch(1, 'another-session');
+    await settle();
+    expect(clock.delays()).toEqual([POLL_MS.openedSettled]);
+  });
+
   it('slows down when the conversation leaves the screen', async () => {
     const { store, clock, monitor } = setup();
     await store.set(SESSION, { ...REF, source: 'shell', boundAt: '' });

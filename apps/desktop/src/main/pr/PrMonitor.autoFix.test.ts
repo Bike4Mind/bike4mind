@@ -142,4 +142,23 @@ describe('PrMonitor auto-fix', () => {
     await monitor.refresh(SESSION);
     expect(started).toHaveLength(1);
   });
+  it('starts one turn for a merge conflict and says so on the bar until the turn ends', async () => {
+    const { store, monitor, started, out, fake } = setup();
+    fake.answer(snapshot({ headSha: 'sha-head', baseSha: 'sha-base', mergeable: 'CONFLICTING' }));
+    await store.set(SESSION, bound);
+    await monitor.refresh(SESSION);
+
+    expect(started).toHaveLength(1);
+    expect(started[0].origin.summary).toBe('merge conflicts on #611');
+    expect(started[0].prompt).toContain('git fetch origin main');
+    expect((await store.get(SESSION))?.autoFixHandled).toEqual(['conflict:sha-head:sha-base']);
+    expect(out.last().autoFix).toMatchObject({ status: 'started', conflicts: true });
+
+    await monitor.refresh(SESSION);
+    expect(started).toHaveLength(1);
+
+    monitor.turnSettled(SESSION);
+    await settle();
+    expect(out.last().autoFix.conflicts).toBeUndefined();
+  });
 });

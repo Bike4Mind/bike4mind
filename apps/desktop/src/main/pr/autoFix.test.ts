@@ -122,6 +122,61 @@ describe('planAutoFix', () => {
   });
 });
 
+describe('planAutoFix on merge conflicts', () => {
+  const conflicting = snapshot({ headSha: 'sha-head', baseSha: 'sha-base', mergeable: 'CONFLICTING' });
+
+  it('starts a turn for a conflicting PR, keyed by head and base', () => {
+    const plan = planAutoFix(binding, conflicting, false);
+    expect(plan.kind).toBe('start');
+    if (plan.kind !== 'start') return;
+    expect(plan.fingerprints).toEqual(['conflict:sha-head:sha-base']);
+    expect(plan.summary).toBe('merge conflicts on #611');
+    expect(plan.prompt).toContain('git fetch origin main');
+    expect(plan.prompt).toContain('MERGE `origin/main`');
+    expect(plan.prompt).toContain('Do not rebase.');
+    expect(plan.prompt).toContain('never `git add -A`');
+    expect(plan.prompt).toContain('do not guess');
+    expect(plan.prompt).toContain('Never force-push');
+  });
+
+  it('does not act while GitHub is still computing mergeability', () => {
+    expect(planAutoFix(binding, { ...conflicting, mergeable: 'UNKNOWN' }, false)).toEqual({ kind: 'none' });
+  });
+
+  it('does not act twice on the same head and base', () => {
+    const handled = { ...binding, autoFixHandled: ['conflict:sha-head:sha-base'] };
+    expect(planAutoFix(handled, conflicting, false)).toEqual({ kind: 'none' });
+  });
+
+  it('acts again once the base branch moves', () => {
+    const handled = { ...binding, autoFixHandled: ['conflict:sha-head:sha-base'] };
+    const plan = planAutoFix(handled, { ...conflicting, baseSha: 'sha-base-2' }, false);
+    expect(plan.kind === 'start' && plan.fingerprints).toEqual(['conflict:sha-head:sha-base-2']);
+  });
+
+  it('puts the conflict first when comments and failing checks come with it', () => {
+    const plan = planAutoFix(binding, { ...conflicting, checks: [check('Build', 'fail')], threads: [thread()] }, false);
+    expect(plan.kind).toBe('start');
+    if (plan.kind !== 'start') return;
+    expect(plan.fingerprints).toEqual(['conflict:sha-head:sha-base', 'ci:sha-head', 'comment:901']);
+    expect(plan.summary).toBe('merge conflicts and 1 failing check and 1 new review comment on #611');
+    const conflictAt = plan.prompt.indexOf('merge conflicts with its base branch');
+    expect(conflictAt).toBeGreaterThan(-1);
+    expect(conflictAt).toBeLessThan(plan.prompt.indexOf('These checks failed'));
+    expect(conflictAt).toBeLessThan(plan.prompt.indexOf('New review comments'));
+  });
+
+  it('counts against the attempt limit', () => {
+    expect(planAutoFix({ ...binding, autoFixAttempts: MAX_AUTO_FIX_ATTEMPTS }, conflicting, false)).toEqual({
+      kind: 'exhausted',
+    });
+  });
+
+  it('waits for a running turn', () => {
+    expect(planAutoFix(binding, conflicting, true)).toEqual({ kind: 'wait' });
+  });
+});
+
 describe('autoFixRefusal', () => {
   it.each([
     'git push --force',

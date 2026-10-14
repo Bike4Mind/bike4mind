@@ -32,6 +32,7 @@ function barState(state: PrState, isDraft: boolean): PrBarState {
       headRefName: 'feat/widget-ladder',
       headSha: 'sha-1',
       baseRefName: 'main',
+      baseSha: 'base-1',
       additions: 1,
       deletions: 0,
       mergeable: 'MERGEABLE',

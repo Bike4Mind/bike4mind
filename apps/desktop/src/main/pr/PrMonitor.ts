@@ -132,7 +132,7 @@ interface Live {
   merging?: boolean;
   /** Read sooner than the cadence says, once: after a push or a merge something is about to change. */
   nudge?: number;
-  autoFix?: { status: PrAutoFixStatus; note?: string };
+  autoFix?: { status: PrAutoFixStatus; note?: string; conflicts?: boolean };
   /** The auto-fix decision under way; the next one waits for it so two cannot spend one failure twice. */
   autoFixing?: Promise<void>;
 }
@@ -807,6 +807,7 @@ export class PrMonitor {
     live.autoFix = {
       status: 'started',
       note: `Fixing ${plan.summary} (attempt ${attempts} of ${MAX_AUTO_FIX_ATTEMPTS}).`,
+      ...(plan.fingerprints.some(key => key.startsWith('conflict:')) ? { conflicts: true } : {}),
     };
     const started = await this.deps.chat.startAutoFix(sessionId, plan.prompt, {
       kind: 'auto-fix',
@@ -864,6 +865,9 @@ export class PrMonitor {
         attempts: binding?.autoFixAttempts ?? 0,
         max: MAX_AUTO_FIX_ATTEMPTS,
         ...(binding?.autoFix && live?.autoFix?.note ? { note: live.autoFix.note } : {}),
+        ...(binding?.autoFix && live?.autoFix?.status === 'started' && live.autoFix.conflicts
+          ? { conflicts: true }
+          : {}),
       },
     };
   }

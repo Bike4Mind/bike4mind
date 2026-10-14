@@ -30,6 +30,7 @@ function snapshot(overrides: Partial<PrSnapshot> = {}): PrBarState['snapshot'] {
     headRefName: 'feat/widget-ladder',
     headSha: 'sha-1',
     baseRefName: 'main',
+    baseSha: 'base-1',
     additions: 103,
     deletions: 16,
     mergeable: 'MERGEABLE',
@@ -49,7 +50,8 @@ function markup(
   refreshing = false,
   gh: PrBarState['gh'] = 'ok',
   autoMerge: PrBarState['autoMerge'] = { mode: 'desktop' },
-  binding: PrBinding = BINDING
+  binding: PrBinding = BINDING,
+  autoFix: PrBarState['autoFix'] = { status: 'watching', attempts: 0, max: 3 }
 ): string {
   const state: PrBarState = {
     sessionId: 'session-1',
@@ -58,7 +60,7 @@ function markup(
     gh,
     refreshing,
     autoMerge,
-    autoFix: { status: 'watching', attempts: 0, max: 3 },
+    autoFix,
   };
   return renderToStaticMarkup(
     <PrStatusBar
@@ -114,6 +116,20 @@ describe('PrStatusBar', () => {
     }
     expect(has(html, 'pr-bar-merged-icon')).toBe(false);
     expect(has(html, 'pr-bar-closed-icon')).toBe(false);
+  });
+
+  it('says the conflicts are being fixed only while an auto-fix turn for them runs', () => {
+    const conflicting = { mergeable: 'CONFLICTING' } as const;
+    const chip = (html: string) =>
+      html
+        .slice(html.indexOf('data-testid="pr-bar-conflicts"'))
+        .replace(/<[^>]*>/g, ' ')
+        .match(/(Fixing conflicts\.\.\.|Conflicts)/)?.[1];
+    expect(chip(markup(conflicting))).toBe('Conflicts');
+    const fixing = { status: 'started', attempts: 1, max: 3, conflicts: true } as const;
+    expect(chip(markup(conflicting, false, 'ok', { mode: 'desktop' }, BINDING, fixing))).toBe('Fixing conflicts...');
+    const other = { status: 'started', attempts: 1, max: 3 } as const;
+    expect(chip(markup(conflicting, false, 'ok', { mode: 'desktop' }, BINDING, other))).toBe('Conflicts');
   });
 
   it('labels the open button for the built-in browser', () => {

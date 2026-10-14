@@ -182,7 +182,7 @@ export function PrStatusBar({
 
         {snapshot?.mergeable === 'CONFLICTING' && snapshot.state === 'OPEN' && (
           <Chip size="sm" variant="soft" color="danger" data-testid="pr-bar-conflicts">
-            Conflicts
+            {state.autoFix.status === 'started' && state.autoFix.conflicts ? 'Fixing conflicts...' : 'Conflicts'}
           </Chip>
         )}
 

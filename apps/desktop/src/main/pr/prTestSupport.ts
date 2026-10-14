@@ -24,6 +24,7 @@ export function snapshot(overrides: Partial<PrSnapshot> = {}): PrSnapshot {
     headRefName: 'feat/widget-ladder',
     headSha: 'sha-1',
     baseRefName: 'main',
+    baseSha: 'base-1',
     additions: 157,
     deletions: 0,
     mergeable: 'MERGEABLE',
