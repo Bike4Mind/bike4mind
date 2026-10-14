@@ -93,7 +93,7 @@ export async function createMusicJob(
       ok: false,
       status: 400,
       code: 'storage_quota_exceeded',
-      message: 'Your file storage is full; free up space to generate music',
+      message: 'Not enough free file storage for this song',
       storage,
     };
   }

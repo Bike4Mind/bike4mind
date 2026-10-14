@@ -11451,7 +11451,7 @@ export interface operations {
           'application/json': components['schemas']['createMusicGenerationResponse202'];
         };
       };
-      /** @description Your Files storage has no room for the song (`storage_limit_exceeded`, as on the Files upload routes). The body carries `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together. This endpoint checks only the user quota, so `org_storage_limit_exceeded` is never returned here. */
+      /** @description Your Files storage has no room for the song (`storage_limit_exceeded`, as on the Files upload routes). The body carries `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together; `requested_bytes` here is the most the song can take at the requested length, not its final size. This endpoint checks only the user quota, so `org_storage_limit_exceeded` is never returned here. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
