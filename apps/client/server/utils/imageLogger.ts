@@ -1,6 +1,5 @@
 /**
- * Image generation logging utility. Toggles image generation debug logs.
- * Follows the same pattern as performanceLogger.ts
+ * Image generation logging utility, gated on NEXT_PUBLIC_VERBOSE_IMAGES. Errors always log.
  */
 
 // Environment-based configuration with flexible defaults
@@ -12,9 +11,6 @@ const isVerboseImages = (() => {
   // Default: disable in all environments for clean console (enable on demand)
   return false;
 })();
-
-// Runtime configuration (can be changed dynamically)
-let runtimeVerboseImages = isVerboseImages;
 
 // Image logger interface
 interface ImageLogger {
@@ -35,17 +31,17 @@ interface ImageLogger {
  */
 export const imageLogger: ImageLogger = {
   log: (...args: any[]) => {
-    if (runtimeVerboseImages) {
+    if (isVerboseImages) {
       console.log(...args);
     }
   },
   info: (...args: any[]) => {
-    if (runtimeVerboseImages) {
+    if (isVerboseImages) {
       console.info(...args);
     }
   },
   warn: (...args: any[]) => {
-    if (runtimeVerboseImages) {
+    if (isVerboseImages) {
       console.warn(...args);
     }
   },
@@ -54,61 +50,31 @@ export const imageLogger: ImageLogger = {
     console.error(...args);
   },
   group: (label: string) => {
-    if (runtimeVerboseImages) {
+    if (isVerboseImages) {
       console.group(label);
     }
   },
   groupEnd: () => {
-    if (runtimeVerboseImages) {
+    if (isVerboseImages) {
       console.groupEnd();
     }
   },
   time: (label: string) => {
-    if (runtimeVerboseImages) {
+    if (isVerboseImages) {
       console.time(label);
     }
   },
   timeEnd: (label: string) => {
-    if (runtimeVerboseImages) {
+    if (isVerboseImages) {
       console.timeEnd(label);
     }
   },
   debug: (...args: any[]) => {
-    if (runtimeVerboseImages) {
+    if (isVerboseImages) {
       console.log('[DEBUG]', ...args);
     }
   },
-  isEnabled: () => runtimeVerboseImages,
+  isEnabled: () => isVerboseImages,
 };
-
-// Utility functions
-export const isImageLoggingEnabled = () => runtimeVerboseImages;
-
-export const enableImageLogging = () => {
-  runtimeVerboseImages = true;
-  imageLogger.info('🎨 Image generation logging enabled');
-};
-
-export const disableImageLogging = () => {
-  runtimeVerboseImages = false;
-  console.log('🔇 Image generation logging disabled');
-};
-
-export const toggleImageLogging = () => {
-  if (runtimeVerboseImages) {
-    disableImageLogging();
-  } else {
-    enableImageLogging();
-  }
-  return runtimeVerboseImages;
-};
-
-// Global window function for runtime control (development only)
-if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
-  (window as any).enableImageLogs = enableImageLogging;
-  (window as any).disableImageLogs = disableImageLogging;
-  (window as any).toggleImageLogs = toggleImageLogging;
-  (window as any).isImageLogsEnabled = isImageLoggingEnabled;
-}
 
 export default imageLogger;
