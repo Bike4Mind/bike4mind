@@ -6,6 +6,10 @@ describe('isModerationEvidenceHold', () => {
     expect(isModerationEvidenceHold({ moderationStatus: 'blocked' })).toBe(true);
   });
 
+  it('holds a block with any other reason (only unsupported_format is exempt)', () => {
+    expect(isModerationEvidenceHold({ moderationStatus: 'blocked', blockReason: 'explicit' })).toBe(true);
+  });
+
   it('does not hold an unsupported_format block', () => {
     expect(isModerationEvidenceHold({ moderationStatus: 'blocked', blockReason: 'unsupported_format' })).toBe(false);
   });

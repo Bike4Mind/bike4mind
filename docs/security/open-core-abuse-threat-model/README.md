@@ -46,7 +46,8 @@ path does not apply to them.
   keeps its S3 objects, including retained versions and the generated copy. Both go through
   `deleteStoredObjects`, which holds a file per `isModerationEvidenceHold`: a block for
   `blockReason: 'unsupported_format'` (bytes that could not be scanned never raise an incident)
-  is not held.
+  is not held. Only the bytes follow that rule: the DB-row guards above still hold every
+  `'blocked'` row, including `unsupported_format`.
 - An `ImageModerationIncident` row written at block time carries the labels, user ID, session,
   and file reference. It has no TTL and is retained indefinitely.
 
