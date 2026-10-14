@@ -6,6 +6,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import FileBrowserFilter from './Filter';
 import GeneratedFilterToggle from './GeneratedFilterToggle';
 
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
@@ -24,7 +26,7 @@ describe('GeneratedFilterToggle', () => {
   it('works icon-only in the mobile row', () => {
     const onChange = vi.fn();
     render(<GeneratedFilterToggle active={false} onChange={onChange} compact />, { wrapper: Wrapper });
-    const button = screen.getByRole('button', { name: 'Generated' });
+    const button = screen.getByRole('button', { name: 'generated_filter.label' });
     expect(button.getAttribute('aria-pressed')).toBe('false');
     fireEvent.click(button);
     expect(onChange).toHaveBeenCalledWith(true);

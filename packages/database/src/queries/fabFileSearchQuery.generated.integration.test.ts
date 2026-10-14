@@ -35,8 +35,11 @@ beforeAll(async () => {
       { fileName: 'work-song', tags: [GENERATED_ASSET_TAG, 'music', 'work'] },
       { fileName: 'work-notes', tags: ['work'] },
       { fileName: 'notes', tags: [] },
+      { fileName: 'cased', tags: ['Generated'] },
+      { fileName: 'lookalike', tags: [`${GENERATED_ASSET_TAG}-x`] },
+      { fileName: 'foreign-song', tags: [GENERATED_ASSET_TAG], userId: 'owner-2' },
     ].map(file => ({
-      userId: OWNER,
+      userId: file.userId ?? OWNER,
       fileName: file.fileName,
       type: KnowledgeType.FILE,
       tags: file.tags.map(name => ({ name, strength: 1 })),
@@ -51,7 +54,7 @@ afterAll(async () => {
 
 describe('fabFileRepository.search generated filter', () => {
   it('lists only generated files', async () => {
-    await expect(list({ generated: true })).resolves.toEqual(['song', 'work-song']);
+    await expect(list({ generated: true })).resolves.toEqual(['cased', 'song', 'work-song']);
   });
 
   it('narrows the selected tags instead of adding to them', async () => {
@@ -59,8 +62,20 @@ describe('fabFileRepository.search generated filter', () => {
   });
 
   it('is a no-op when unset or false', async () => {
-    const all = ['notes', 'song', 'work-notes', 'work-song'];
+    const all = ['cased', 'lookalike', 'notes', 'song', 'work-notes', 'work-song'];
     await expect(list()).resolves.toEqual(all);
     await expect(list({ generated: false })).resolves.toEqual(all);
+  });
+
+  it('matches the tag case-insensitively', async () => {
+    await expect(list({ generated: true })).resolves.toContain('cased');
+  });
+
+  it('does not match tags that merely start with the generated tag', async () => {
+    await expect(list({ generated: true })).resolves.not.toContain('lookalike');
+  });
+
+  it('still scopes to the owner', async () => {
+    await expect(list({ generated: true })).resolves.not.toContain('foreign-song');
   });
 });

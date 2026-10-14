@@ -14,7 +14,8 @@ export const readGenerationMetadata = (
   return parsed.success ? parsed.data : undefined;
 };
 
-export const formatDuration = (totalSeconds: number): string => {
+/** `m:ss` from a length in seconds. */
+export const formatSecondsClock = (totalSeconds: number): string => {
   const rounded = Math.round(totalSeconds);
   const minutes = Math.floor(rounded / 60);
   const seconds = rounded % 60;
@@ -59,7 +60,7 @@ export const GenerationDetails: FC<{ file: Pick<IFabFileDocument, 'sourceMetadat
       </DetailRow>
       {generation.durationSeconds !== undefined && (
         <DetailRow label={t('generation_details.duration')} testId="generation-details-duration">
-          {formatDuration(generation.durationSeconds)}
+          {formatSecondsClock(generation.durationSeconds)}
         </DetailRow>
       )}
       <DetailRow label={t('generation_details.prompt')} testId="generation-details-prompt" multiline>

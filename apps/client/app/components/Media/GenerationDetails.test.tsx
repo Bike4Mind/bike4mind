@@ -3,7 +3,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import GenerationDetails, { formatDuration, readGenerationMetadata } from './GenerationDetails';
+import GenerationDetails, { formatSecondsClock, readGenerationMetadata } from './GenerationDetails';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
@@ -34,11 +34,11 @@ describe('readGenerationMetadata', () => {
   });
 });
 
-describe('formatDuration', () => {
+describe('formatSecondsClock', () => {
   it('formats minutes and zero-padded seconds', () => {
-    expect(formatDuration(125.4)).toBe('2:05');
-    expect(formatDuration(9.6)).toBe('0:10');
-    expect(formatDuration(59.6)).toBe('1:00');
+    expect(formatSecondsClock(125.4)).toBe('2:05');
+    expect(formatSecondsClock(9.6)).toBe('0:10');
+    expect(formatSecondsClock(59.6)).toBe('1:00');
   });
 });
 

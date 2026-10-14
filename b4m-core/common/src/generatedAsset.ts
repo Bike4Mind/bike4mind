@@ -4,7 +4,10 @@ export const GENERATED_ASSET_GENERATORS = ['music', 'video', 'image', 'speech', 
 
 export type GeneratedAssetGenerator = (typeof GENERATED_ASSET_GENERATORS)[number];
 
-/** Tag saveGeneratedAsset puts on every generated file; the Files "Generated" filter matches on it. */
+/**
+ * Tag every generated-file writer (saveGeneratedAsset, persistGeneratedFile) applies; the Files "Generated" filter
+ * matches on it.
+ */
 export const GENERATED_ASSET_TAG = 'generated';
 
 /**

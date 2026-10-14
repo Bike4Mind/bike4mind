@@ -5,14 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import MediaPlayer, { type MediaPlayerFile } from './MediaPlayer';
 
-const { getFabFileByIdFromServer, downloadData } = vi.hoisted(() => ({
+const { getFabFileByIdFromServer, downloadData, toastError } = vi.hoisted(() => ({
   getFabFileByIdFromServer: vi.fn(),
   downloadData: vi.fn(),
+  toastError: vi.fn(),
 }));
 vi.mock('@client/app/utils/filesAPICalls', () => ({ getFabFileByIdFromServer }));
 vi.mock('@client/app/utils/download', () => ({ downloadData }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { error: toastError } }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -42,11 +43,13 @@ describe('MediaPlayer', () => {
   beforeEach(() => {
     getFabFileByIdFromServer.mockReset();
     downloadData.mockReset();
+    toastError.mockReset();
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   describe('rendering', () => {
@@ -100,12 +103,22 @@ describe('MediaPlayer', () => {
       expect(srcOf(audio())).toBeNull();
       // An error from the element while the re-sign is in flight must not fail the player.
       fireEvent.error(audio());
+      expect(screen.queryByTestId('media-player-error')).toBeNull();
       await act(async () => resolve({ fileUrl: NEW_URL }));
 
       expect(srcOf(audio())).toBe(NEW_URL);
       expect(screen.queryByTestId('media-player-error')).toBeNull();
       expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(1);
       expect(getFabFileByIdFromServer).toHaveBeenCalledWith('file-1');
+    });
+
+    it('treats a URL expiring exactly now as expired', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      getFabFileByIdFromServer.mockResolvedValue({ fileUrl: NEW_URL });
+      renderPlayer(makeFile({ fileUrlExpireAt: new Date('2026-01-01T00:00:00Z') }));
+      expect(srcOf(audio())).toBeNull();
+      await waitFor(() => expect(srcOf(audio())).toBe(NEW_URL));
     });
 
     it('fetches a URL on mount when the file has none', async () => {
@@ -132,11 +145,39 @@ describe('MediaPlayer', () => {
       expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(1);
     });
 
-    it('fails at once when the server returns the same URL: the file itself is unplayable', async () => {
+    it('reloads the same URL after a transient error: the server only re-signs an expired URL', async () => {
+      getFabFileByIdFromServer.mockResolvedValue({ fileUrl: OLD_URL });
+      renderPlayer(makeFile());
+      const firstElement = audio();
+      fireEvent.error(firstElement);
+      await waitFor(() => expect(audio()).not.toBe(firstElement));
+      expect(srcOf(audio())).toBe(OLD_URL);
+      expect(screen.queryByTestId('media-player-error')).toBeNull();
+    });
+
+    it('fails when the reloaded same URL fails again: the file itself is unplayable', async () => {
       getFabFileByIdFromServer.mockResolvedValue({ fileUrl: OLD_URL });
       renderPlayer(makeFile({ mimeType: 'video/x-matroska', fileName: 'clip.mkv' }));
+      const firstElement = screen.getByTestId('media-player-video');
+      fireEvent.error(firstElement);
+      await waitFor(() => expect(screen.getByTestId('media-player-video')).not.toBe(firstElement));
       fireEvent.error(screen.getByTestId('media-player-video'));
       expect(await screen.findByTestId('media-player-error')).toBeTruthy();
+      expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(1);
+    });
+
+    it('recovers on retry once a transient error has passed, with the URL unchanged', async () => {
+      getFabFileByIdFromServer.mockResolvedValue({ fileUrl: OLD_URL });
+      renderPlayer(makeFile());
+      fireEvent.error(audio());
+      await waitFor(() => expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(1));
+      fireEvent.error(audio());
+      await screen.findByTestId('media-player-error');
+
+      fireEvent.click(screen.getByTestId('media-player-retry-btn'));
+      await waitFor(() => expect(srcOf(audio())).toBe(OLD_URL));
+      fireEvent.loadedMetadata(audio());
+      expect(screen.queryByTestId('media-player-error')).toBeNull();
     });
 
     it('fails when the server has no URL for the file', async () => {
@@ -198,7 +239,41 @@ describe('MediaPlayer', () => {
       });
       expect(fetchMock).toHaveBeenLastCalledWith(NEW_URL);
       expect(downloadData).toHaveBeenCalledWith(blob, 'song.mp3');
-      expect(srcOf(audio())).toBe(NEW_URL);
+      // The playing element keeps its URL, so a download does not restart playback.
+      expect(srcOf(audio())).toBe(OLD_URL);
+    });
+
+    it.each([
+      [
+        'the re-signed URL fails too',
+        () => {
+          vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403 }));
+          getFabFileByIdFromServer.mockResolvedValue({ fileUrl: NEW_URL });
+        },
+      ],
+      [
+        'the re-sign returns the same URL',
+        () => {
+          vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403 }));
+          getFabFileByIdFromServer.mockResolvedValue({ fileUrl: OLD_URL });
+        },
+      ],
+      [
+        'the re-sign throws',
+        () => {
+          vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403 }));
+          getFabFileByIdFromServer.mockRejectedValue(new Error('gone'));
+        },
+      ],
+      ['fetch rejects', () => vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network')))],
+    ])('shows a toast and saves nothing when %s', async (_case, arrange) => {
+      arrange();
+      renderPlayer(makeFile());
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('media-player-download-btn'));
+      });
+      expect(toastError).toHaveBeenCalledWith('media_player.download_failed');
+      expect(downloadData).not.toHaveBeenCalled();
     });
 
     it('hides the download button when asked', () => {

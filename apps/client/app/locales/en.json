@@ -596,6 +596,9 @@
     "retry": "Retry",
     "download_failed": "Failed to download file"
   },
+  "generated_filter": {
+    "label": "Generated"
+  },
   "generation_details": {
     "title": "Generation details",
     "model": "Model",

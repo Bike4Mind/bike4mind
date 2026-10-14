@@ -1,4 +1,4 @@
-import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
+import { FabFileSourceType, GENERATED_ASSET_TAG, KnowledgeType } from '@bike4mind/common';
 import { createFabFile } from '../../../fabFileService/create';
 import {
   saveGeneratedAsset,
@@ -65,7 +65,7 @@ export async function persistGeneratedFileAsFabFile(
         content: file.content,
         contentType: file.mimeType,
         prefix: 'generated',
-        tags: file.tags ?? [{ name: 'generated', strength: 1 }],
+        tags: file.tags ?? [{ name: GENERATED_ASSET_TAG, strength: 1 }],
       },
       {
         ...adapters,

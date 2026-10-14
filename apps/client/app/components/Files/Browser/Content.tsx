@@ -41,6 +41,7 @@ import TagForm from '../../Tag/Form';
 import { useFileBrowserInstance } from './instanceContext';
 import FileBrowserActions from './Actions';
 import FileBrowserFilter from './Filter';
+import { withGeneratedFilter } from './GeneratedFilterToggle';
 import FileBrowserList, { type FileBrowserListProps } from './List';
 import ResearchEngineModal from '../../ResarchEngine/Modal';
 import FileBrowserViewActions, { ViewMode } from './ViewActions';
@@ -609,12 +610,7 @@ const FileBrowserContent = () => {
             }
             onFileFilterChange={handleFileFilterChange}
             generatedOnly={filter.filters?.generated === true}
-            onGeneratedChange={generated =>
-              handleFilterChange({
-                ...filter,
-                filters: { ...(filter.filters || {}), generated: generated || undefined },
-              })
-            }
+            onGeneratedChange={generated => handleFilterChange(withGeneratedFilter(filter, generated))}
             fileTypeValue={filter.filters?.type || 'all'}
             onFileTypeChange={type => {
               handleFilterChange({

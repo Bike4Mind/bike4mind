@@ -153,10 +153,35 @@ describe('KnowledgeModal media files', () => {
     expect(getContentFromFabfile).not.toHaveBeenCalled();
     expect(screen.queryByTestId('knowledge-modal-name-input')).toBeNull();
     expect(screen.queryByText('System Instructions')).toBeNull();
+    expect(screen.queryByTestId('knowledge-modal-save-btn')).toBeNull();
+    expect(screen.getByText('Viewing: Sea Song.mp3')).toBeTruthy();
   });
 
   it('plays a video', async () => {
     await openFile({ ...song, id: 'clip-1', fileName: 'clip.mp4', mimeType: 'video/mp4' });
     expect(await screen.findByTestId('media-player-video')).toBeTruthy();
+  });
+
+  const image = {
+    ...song,
+    id: 'img-1',
+    fileName: 'fox.png',
+    mimeType: 'image/png',
+    fileUrl: 'https://files.example.test/fox.png',
+  };
+
+  it('shows generation details for a generated image', async () => {
+    await openFile({
+      ...image,
+      sourceMetadata: { generation: { generator: 'image', provider: 'test', prompt: 'a red fox' } },
+    });
+    expect(await screen.findByTestId('generation-details')).toBeTruthy();
+    expect(screen.getByTestId('generation-details-prompt').textContent).toContain('a red fox');
+  });
+
+  it('shows no generation details for an image without generation metadata', async () => {
+    await openFile({ ...image, sourceMetadata: undefined });
+    expect(await screen.findByText('Editing: fox.png')).toBeTruthy();
+    expect(screen.queryByTestId('generation-details')).toBeNull();
   });
 });

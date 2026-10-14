@@ -6,7 +6,7 @@ import { Box, Input, Option, Select } from '@mui/joy';
 import { debounce } from 'lodash';
 import { FC, useState } from 'react';
 import { FILE_TYPE_OPTIONS } from './constants';
-import GeneratedFilterToggle from './GeneratedFilterToggle';
+import GeneratedFilterToggle, { withGeneratedFilter } from './GeneratedFilterToggle';
 
 interface FileBrowserFilterProps {
   value?: ISearchFabFilesParams;
@@ -36,7 +36,7 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
   };
 
   const handleGeneratedChange = (generated: boolean) => {
-    onChange?.({ ...value, filters: { ...(value?.filters || {}), generated: generated || undefined } });
+    onChange?.(withGeneratedFilter(value, generated));
   };
 
   return (

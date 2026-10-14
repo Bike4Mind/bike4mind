@@ -28,12 +28,11 @@ const hasExpired = (expireAt: MediaPlayerFile['fileUrlExpireAt']): boolean =>
 
 /**
  * GET /api/files/:id re-signs the URL only once the stored one has expired (or fails), so asking any earlier
- * returns the same URL. A same-URL answer therefore means the URL was fine and the file itself is unplayable.
+ * returns the same URL. That answer means the URL is still valid: the caller reloads it rather than giving up.
  */
-const fetchFreshUrl = async (fileId: string, currentUrl: string | undefined): Promise<string> => {
+const fetchFreshUrl = async (fileId: string): Promise<string> => {
   const fresh = await getFabFileByIdFromServer(fileId);
   if (!fresh.fileUrl) throw new Error('the file has no signed url');
-  if (fresh.fileUrl === currentUrl) throw new Error('the signed url is still valid; the file is unplayable');
   return fresh.fileUrl;
 };
 
@@ -48,6 +47,8 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
   const [downloading, setDownloading] = useState(false);
   // One re-sign per successful load: a URL that fails right after re-signing is a missing or unplayable file.
   const resignedSinceLoadRef = useRef(false);
+  // Remounts the element after each re-sign, so a same-URL answer (a transient error) still reloads it.
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   const refresh = async () => {
     if (resignedSinceLoadRef.current) {
@@ -57,7 +58,8 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
     resignedSinceLoadRef.current = true;
     setStatus('refreshing');
     try {
-      setSrc(await fetchFreshUrl(file.id, src));
+      setSrc(await fetchFreshUrl(file.id));
+      setLoadAttempt(attempt => attempt + 1);
       setStatus('ready');
     } catch (error) {
       console.error('Media player could not re-sign the file url:', error);
@@ -82,10 +84,9 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
     try {
       let response = await fetch(src);
       if (!response.ok) {
-        // Most likely expired while the player sat open; re-sign once and try again.
-        const freshUrl = await fetchFreshUrl(file.id, src);
-        setSrc(freshUrl);
-        response = await fetch(freshUrl);
+        // Most likely expired while the player sat open; re-sign once and try again. The element keeps its own
+        // src so playback is not interrupted; it re-signs through onError if it needs to.
+        response = await fetch(await fetchFreshUrl(file.id));
       }
       if (!response.ok) throw new Error(`download failed: ${response.status}`);
       downloadData(await response.blob(), file.fileName);
@@ -123,6 +124,7 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
     // Stops propagation so the transport controls do not toggle the surrounding row's selection.
     <Stack direction="row" spacing={1} alignItems="center" onClick={event => event.stopPropagation()}>
       <Box
+        key={loadAttempt}
         component={isVideo ? 'video' : 'audio'}
         controls
         preload={preload}
