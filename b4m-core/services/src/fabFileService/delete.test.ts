@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { UnauthorizedError } from '@bike4mind/utils';
 import { deleteFabFile } from './delete';
-import { DATA_LAKES, IFabFileDocument } from '@bike4mind/common';
+import { DATA_LAKES, IFabFileDocument, STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
+
+const beforeStampCutoff = new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000);
+const afterStampCutoff = new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() + 1000);
 
 describe('deleteFabFile', () => {
   const mockUserId = 'user-123';
@@ -140,6 +143,42 @@ describe('deleteFabFile', () => {
       await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
 
       expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(pending, 0);
+    });
+
+    // A `complete` row from before the stamping release was charged by the upload event, so it
+    // refunds in full - a stamp-only rule would drop every one of these.
+    it('hands onDeleteComplete the full size for a legacy pre-stamp complete row', async () => {
+      const legacy = {
+        ...mockFabFile,
+        storageChargedAt: undefined,
+        status: 'complete' as const,
+        createdAt: beforeStampCutoff,
+      };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(legacy);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(legacy);
+      mockAdapter.onDeleteComplete = vi.fn().mockResolvedValue(undefined);
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(legacy, 1024);
+    });
+
+    // The other side of the same arm: marked uploaded before its event, but after the release that
+    // charges on that event - so it was never charged and refunds nothing.
+    it('hands onDeleteComplete 0 for a post-stamp complete row that was never charged', async () => {
+      const uncharged = {
+        ...mockFabFile,
+        storageChargedAt: undefined,
+        status: 'complete' as const,
+        createdAt: afterStampCutoff,
+      };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(uncharged);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(uncharged);
+      mockAdapter.onDeleteComplete = vi.fn().mockResolvedValue(undefined);
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(uncharged, 0);
     });
 
     it('should skip S3 deletion when file has no filePath', async () => {

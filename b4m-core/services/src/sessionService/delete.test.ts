@@ -13,6 +13,7 @@ import {
   ISessionRepository,
   ISessionAgentConfigRepository,
   IUserRepository,
+  STORAGE_CHARGE_STAMP_CUTOFF,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
@@ -163,6 +164,49 @@ describe('sessionService - delete', () => {
     await deleteSession(ownerId, { id: sessionId }, adapters);
 
     expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith(['file-pending']);
+    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+
+  // A `complete` row from before the stamping release was charged by the upload event; a stamp-only
+  // rule would silently drop these refunds.
+  it('debits storage for a legacy pre-stamp complete row', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const legacy = {
+      id: 'file-legacy',
+      userId: ownerId,
+      fileSize: 100,
+      status: 'complete',
+      createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000),
+      users: [],
+    };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([legacy]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(ownerId, -100);
+  });
+
+  it('does not debit storage for a post-stamp complete row that was never charged', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const uncharged = {
+      id: 'file-uncharged',
+      userId: ownerId,
+      fileSize: 100,
+      status: 'complete',
+      createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() + 1000),
+      users: [],
+    };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([uncharged]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith(['file-uncharged']);
     expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
