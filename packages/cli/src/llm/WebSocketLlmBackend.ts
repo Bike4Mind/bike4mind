@@ -129,7 +129,12 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
           streamLogger.streamComplete(loggedText);
           sink.end();
         } else if (action === 'cli_completion_error') {
-          const errorMsg = (message.error as string) || 'Server error';
+          const baseMessage = (message.error as string) || 'Server error';
+          const retryAfter = message.retryAfter;
+          const errorMsg =
+            typeof retryAfter === 'number' && Number.isFinite(retryAfter)
+              ? `${baseMessage} (retry after ${retryAfter}s)`
+              : baseMessage;
           streamLogger.onCriticalEvent(eventCount, 'ERROR', errorMsg);
           sink.fail(new Error(errorMsg));
         }
@@ -271,9 +276,9 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
 
   private getFallbackModels(): ModelInfo[] {
     return [
-      { id: ChatModels.CLAUDE_4_6_SONNET, name: 'Claude 4.6 Sonnet' },
-      { id: ChatModels.CLAUDE_4_5_SONNET, name: 'Claude 4.5 Sonnet' },
-      { id: ChatModels.CLAUDE_4_5_HAIKU, name: 'Claude 4.5 Haiku' },
+      { id: ChatModels.CLAUDE_4_6_SONNET, name: 'Claude Sonnet 4.6' },
+      { id: ChatModels.CLAUDE_4_5_SONNET, name: 'Claude Sonnet 4.5' },
+      { id: ChatModels.CLAUDE_4_5_HAIKU, name: 'Claude Haiku 4.5' },
       { id: ChatModels.GPT4o, name: 'GPT-4o' },
       { id: ChatModels.GPT4o_MINI, name: 'GPT-4o Mini' },
     ] as ModelInfo[];

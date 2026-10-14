@@ -48,6 +48,13 @@ describe('deriveTitle', () => {
     expect(deriveTitle('# Hello world\n\nmore text')).toBe('Hello world');
   });
 
+  it('drops inline markdown markers so the page title reads as plain text', () => {
+    expect(deriveTitle('## Session 1 Recap: *Tides of the Drowned Crown*\n\nbody')).toBe(
+      'Session 1 Recap: Tides of the Drowned Crown'
+    );
+    expect(deriveTitle('**Weekly summary**\n\nbody')).toBe('Weekly summary');
+  });
+
   it('prefers prose over a leading artifact block', () => {
     expect(deriveTitle('Intro line\n<artifact type="text/html" title="Tip">y</artifact>')).toBe('Intro line');
   });

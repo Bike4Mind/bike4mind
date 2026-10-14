@@ -32,6 +32,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { resolveRecommendedModelIds } from '@client/app/utils/recommendedModels';
+import { dedupeModelsForPicker, splitModelsByRoute } from '@client/app/utils/pickerModelDedupe';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
@@ -293,8 +294,8 @@ const ModelOption = React.memo(
   }) => {
     const priceTierInfo = getModelPriceTier(model);
     const modelSpeed = getModelSpeedFromStats(model.id, avgResponseTimeByModel);
-    // A disabled model stays in the list so users can see it, but it can't be picked:
-    // no click handler, a not-allowed cursor, dimmed, and no hover affordance.
+    // Only reached for the active model (dedupeModelsForPicker hides the rest), so it stays visible
+    // but can't be re-picked: no click handler, a not-allowed cursor, dimmed, no hover affordance.
     const isDisabled = !!model.disabled;
     const isList = viewMode === 'list';
 
@@ -309,17 +310,36 @@ const ModelOption = React.memo(
           variant="soft"
           sx={{ maxWidth: 320 }}
           disableHoverListener={!model.description}
+          // Otherwise the tooltip's title becomes the button's accessible name, hiding the model name.
+          describeChild
         >
-          <Typography
-            level="body-md"
+          {/* The card's keyboard entry point: a native button whose click bubbles to the card's
+              onClick, so Enter and Space select exactly as a pointer click does. */}
+          <Box
+            component="button"
+            type="button"
+            data-testid={`model-select-btn-${model.id}`}
+            disabled={isDisabled}
+            aria-pressed={isSelected}
             sx={{
-              textAlign: 'left',
-              color: 'text.primary',
-              fontWeight: '500',
+              all: 'unset',
+              cursor: 'inherit',
+              borderRadius: '4px',
+              '&:focus-visible': { outline: '2px solid var(--joy-palette-focusVisible)', outlineOffset: '2px' },
             }}
           >
-            {model.name}
-          </Typography>
+            <Typography
+              component="span"
+              level="body-md"
+              sx={{
+                textAlign: 'left',
+                color: 'text.primary',
+                fontWeight: '500',
+              }}
+            >
+              {model.name}
+            </Typography>
+          </Box>
         </Tooltip>
         {/* Selected Checkmark - sits right of the model name */}
         {isSelected && <SelectedCheckIcon />}
@@ -327,11 +347,13 @@ const ModelOption = React.memo(
     );
 
     const favoriteLabel = isFavorite ? 'Remove from favorites' : 'Add to favorites';
+    // Every row has a star and a gear, so the accessible names carry the model to tell them apart.
+    const favoriteAriaLabel = isFavorite ? `Remove ${model.name} from favorites` : `Add ${model.name} to favorites`;
     const favoriteToggle = onToggleFavorite && (
       <Tooltip title={favoriteLabel} placement="bottom">
         <IconButton
           data-testid={`favorite-toggle-${model.id}`}
-          aria-label={favoriteLabel}
+          aria-label={favoriteAriaLabel}
           variant="plain"
           size="sm"
           sx={{
@@ -372,7 +394,7 @@ const ModelOption = React.memo(
       <Tooltip title="View model details & settings" placement="bottom">
         <IconButton
           data-testid={`model-view-more-${model.id}`}
-          aria-label="View model details and settings"
+          aria-label={`View ${model.name} details and settings`}
           variant="plain"
           size="sm"
           sx={{
@@ -679,7 +701,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   const searchRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
-  const { isFavorite, toggleFavorite } = useFavoriteModels();
+  const { favoriteModelIds, isFavorite, toggleFavorite } = useFavoriteModels();
   const [viewMode, setViewMode] = useState<ModelViewMode>('list');
   // Below `sm` the grid is already one column, so the two layouts differ only by the
   // description and the row/column flow - not enough to justify a control. Grid wins there.
@@ -731,106 +753,130 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     setSearchQuery('');
   };
 
-  const { filteredModels, maxContextWindow, maxTokens, modelsByBackend, modelsByBackendAndType } = useMemo(() => {
-    // Start with accessible models instead of all models
-    let availableModels: ModelInfo[] = [];
+  const { getSetting, getSettingObject } = useAdminSettings();
+  const storedRecommendedIds = getSettingObject<string[]>('recommendedModelIds', emptyIds);
+  const defaultModelId = getSetting('DefaultAPIModel');
 
-    if (showAllModels) {
-      availableModels = accessibleModels;
-    } else if (modelFilter === 'video') {
-      availableModels = accessibleVideoModels;
-    } else {
-      availableModels = imageModel ? accessibleImageModels : accessibleTextModels;
-    }
+  // Favor pinned ids in provider groups unless the active model is an enabled twin.
+  const preferredModelIds = useMemo(
+    () => new Set([...favoriteModelIds, ...resolveRecommendedModelIds(storedRecommendedIds, defaultModelId)]),
+    [favoriteModelIds, storedRecommendedIds, defaultModelId]
+  );
 
-    // Filter out excluded models
-    const withoutExcluded = availableModels.filter(m => !EXCLUDED_MODEL_IDS.includes(m.id));
+  const { filteredModels, hiddenPinnedModels, maxContextWindow, maxTokens, modelsByBackend, modelsByBackendAndType } =
+    useMemo(() => {
+      // Start with accessible models instead of all models
+      let availableModels: ModelInfo[] = [];
 
-    // Filter out deprecated models (e.g., models with deprecationDate in the past)
-    const withoutDeprecated = withoutExcluded.filter(m => !isModelDeprecated(m));
+      if (showAllModels) {
+        availableModels = accessibleModels;
+      } else if (modelFilter === 'video') {
+        availableModels = accessibleVideoModels;
+      } else {
+        availableModels = imageModel ? accessibleImageModels : accessibleTextModels;
+      }
 
-    // Filter by search query if present
-    const searchFiltered = debouncedSearchQuery
-      ? withoutDeprecated.filter(m => {
-          const searchLower = debouncedSearchQuery.toLowerCase();
-          const nameMatch = m.name.toLowerCase().includes(searchLower);
-          const descMatch = m.description && m.description.toLowerCase().includes(searchLower);
-          return nameMatch || descMatch;
-        })
-      : withoutDeprecated;
+      // Filter out excluded models
+      const withoutExcluded = availableModels.filter(m => !EXCLUDED_MODEL_IDS.includes(m.id));
 
-    // Group models by backend for accordion view
-    const grouped = searchFiltered.reduce(
-      (acc, model) => {
-        const backend = getModelBackend(model);
-        if (!acc[backend]) {
-          acc[backend] = [];
-        }
-        acc[backend].push(model);
-        return acc;
-      },
-      {} as Record<string, ModelInfo[]>
-    );
+      // Filter out deprecated models (e.g., models with deprecationDate in the past)
+      const withoutDeprecated = withoutExcluded.filter(m => !isModelDeprecated(m));
 
-    // Sort within each backend by curated rank, then recency (see modelRanking.ts)
-    Object.keys(grouped).forEach(backend => {
-      grouped[backend] = sortModelsForPicker(grouped[backend]);
-    });
+      // Bedrock profiles, dated snapshots and unavailable rows collapse to one usable row per model.
+      const deduped = dedupeModelsForPicker(withoutDeprecated, preferredModelIds, model);
 
-    // Group models by backend and then by type for "All Models" view
-    const groupedByBackendAndType = searchFiltered.reduce(
-      (acc, model) => {
-        const backend = getModelBackend(model);
-        // Ensure consistent type categorization
-        const type = model.type === 'image' ? 'image' : model.type === 'video' ? 'video' : 'text';
+      const searchLower = debouncedSearchQuery.toLowerCase();
+      const matchesSearch = (candidate: ModelInfo) =>
+        !searchLower ||
+        candidate.name.toLowerCase().includes(searchLower) ||
+        !!candidate.description?.toLowerCase().includes(searchLower);
+      const searchFiltered = deduped.filter(matchesSearch);
 
-        if (!acc[backend]) {
-          acc[backend] = { text: [], image: [], video: [] };
-        }
+      // Pinned sections can still show their exact ids when an enabled active twin wins the
+      // provider row. Keep their own access, availability and search filters in step.
+      const hiddenPinnedModels = withoutDeprecated.filter(
+        candidate =>
+          preferredModelIds.has(String(candidate.id)) &&
+          !deduped.includes(candidate) &&
+          (!candidate.disabled || candidate.id === model) &&
+          matchesSearch(candidate)
+      );
 
-        // Only add the model to the appropriate type section
-        acc[backend][type].push(model);
-        return acc;
-      },
-      {} as Record<string, { text: ModelInfo[]; image: ModelInfo[]; video: ModelInfo[] }>
-    );
+      // Group models by backend for accordion view
+      const grouped = searchFiltered.reduce(
+        (acc, model) => {
+          const backend = getModelBackend(model);
+          if (!acc[backend]) {
+            acc[backend] = [];
+          }
+          acc[backend].push(model);
+          return acc;
+        },
+        {} as Record<string, ModelInfo[]>
+      );
 
-    // Sort models within each backend and type by capability
-    Object.keys(groupedByBackendAndType).forEach(backend => {
-      groupedByBackendAndType[backend].text = sortModelsForPicker(groupedByBackendAndType[backend].text);
-      groupedByBackendAndType[backend].image = sortModelsForPicker(groupedByBackendAndType[backend].image);
-      groupedByBackendAndType[backend].video = sortModelsForPicker(groupedByBackendAndType[backend].video);
-    });
+      // Sort within each backend by curated rank, then recency (see modelRanking.ts)
+      Object.keys(grouped).forEach(backend => {
+        grouped[backend] = sortModelsForPicker(grouped[backend]);
+      });
 
-    // Flatten the sorted models
-    const sorted = sortBackendsByPriority(Object.keys(grouped)).flatMap(backend => grouped[backend]);
+      // Group models by backend and then by type for "All Models" view
+      const groupedByBackendAndType = searchFiltered.reduce(
+        (acc, model) => {
+          const backend = getModelBackend(model);
+          // Ensure consistent type categorization
+          const type = model.type === 'image' ? 'image' : model.type === 'video' ? 'video' : 'text';
 
-    // Find maximum values
-    let maxCtx = 0;
-    let maxTok = 0;
+          if (!acc[backend]) {
+            acc[backend] = { text: [], image: [], video: [] };
+          }
 
-    searchFiltered.forEach(m => {
-      if (m.contextWindow > maxCtx) maxCtx = m.contextWindow;
-      if (m.max_tokens > maxTok) maxTok = m.max_tokens;
-    });
+          // Only add the model to the appropriate type section
+          acc[backend][type].push(model);
+          return acc;
+        },
+        {} as Record<string, { text: ModelInfo[]; image: ModelInfo[]; video: ModelInfo[] }>
+      );
 
-    return {
-      filteredModels: sorted,
-      maxContextWindow: maxCtx,
-      maxTokens: maxTok,
-      modelsByBackend: grouped,
-      modelsByBackendAndType: groupedByBackendAndType,
-    };
-  }, [
-    imageModel,
-    accessibleModels,
-    accessibleTextModels,
-    accessibleImageModels,
-    accessibleVideoModels,
-    modelFilter,
-    debouncedSearchQuery,
-    showAllModels,
-  ]);
+      // Sort models within each backend and type by capability
+      Object.keys(groupedByBackendAndType).forEach(backend => {
+        groupedByBackendAndType[backend].text = sortModelsForPicker(groupedByBackendAndType[backend].text);
+        groupedByBackendAndType[backend].image = sortModelsForPicker(groupedByBackendAndType[backend].image);
+        groupedByBackendAndType[backend].video = sortModelsForPicker(groupedByBackendAndType[backend].video);
+      });
+
+      // Flatten the sorted models
+      const sorted = sortBackendsByPriority(Object.keys(grouped)).flatMap(backend => grouped[backend]);
+
+      // Find maximum values
+      let maxCtx = 0;
+      let maxTok = 0;
+
+      searchFiltered.forEach(m => {
+        if (m.contextWindow > maxCtx) maxCtx = m.contextWindow;
+        if (m.max_tokens > maxTok) maxTok = m.max_tokens;
+      });
+
+      return {
+        filteredModels: sorted,
+        hiddenPinnedModels,
+        maxContextWindow: maxCtx,
+        maxTokens: maxTok,
+        modelsByBackend: grouped,
+        modelsByBackendAndType: groupedByBackendAndType,
+      };
+    }, [
+      imageModel,
+      accessibleModels,
+      accessibleTextModels,
+      accessibleImageModels,
+      accessibleVideoModels,
+      modelFilter,
+      debouncedSearchQuery,
+      showAllModels,
+      preferredModelIds,
+      model,
+    ]);
 
   // Auto-expand the selected model's backend when it changes
   useEffect(() => {
@@ -845,24 +891,28 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   }, [selectedModelBackend]);
 
   // Compute favorite models from the already-filtered list (respects search, filter, access control)
-  const favoriteModels = useMemo(() => filteredModels.filter(m => isFavorite(m.id)), [filteredModels, isFavorite]);
+  const favoriteModels = useMemo(
+    () => [...filteredModels, ...hiddenPinnedModels].filter(m => isFavorite(m.id)),
+    [filteredModels, hiddenPinnedModels, isFavorite]
+  );
 
   // Admin-ordered ids -> models. Reads from filteredModels so search, type filter and access
   // control apply, and an id that is unknown or inaccessible is dropped rather than shown dead.
-  const { getSetting, getSettingObject } = useAdminSettings();
-  const storedRecommendedIds = getSettingObject<string[]>('recommendedModelIds', emptyIds);
-  const defaultModelId = getSetting('DefaultAPIModel');
   const recommendedModels = useMemo(() => {
-    const byId = new Map<string, ModelInfo>(filteredModels.map(m => [m.id, m]));
+    const byId = new Map<string, ModelInfo>([...filteredModels, ...hiddenPinnedModels].map(m => [m.id, m]));
     return resolveRecommendedModelIds(storedRecommendedIds, defaultModelId).flatMap(id => {
       const found = byId.get(id);
       return found ? [found] : [];
     });
-  }, [filteredModels, storedRecommendedIds, defaultModelId]);
+  }, [filteredModels, hiddenPinnedModels, storedRecommendedIds, defaultModelId]);
 
   // Provider section order for display. Same ordering the memo above applies when flattening
   // filteredModels, so the accordions and the flat list agree.
   const sortedBackends = useMemo(() => sortBackendsByPriority(Object.keys(modelsByBackend)), [modelsByBackend]);
+
+  // A pinned twin can match a search while the provider row's winner does not, so the empty
+  // state has to consider the pinned sections too.
+  const hasVisibleModels = filteredModels.length > 0 || hiddenPinnedModels.length > 0;
 
   // Derive effective expanded backends from user toggles and search state
   const expandedBackends = useMemo(() => {
@@ -939,6 +989,34 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       </Box>
     );
   if (error) return <div>Error loading models: {error.message}</div>;
+
+  const renderModelCards = (cards: ModelInfo[]) => (
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
+        gap: 2,
+      }}
+    >
+      {cards.map(modelInfo => (
+        <ModelOption
+          key={modelInfo.id}
+          model={modelInfo}
+          isSelected={modelInfo.id === model}
+          maxContextWindow={maxContextWindow}
+          maxTokens={maxTokens}
+          onSelect={handleModelSelect}
+          onSettingsClick={onSettingsClick}
+          isFavorite={isFavorite(modelInfo.id)}
+          onToggleFavorite={toggleFavorite}
+          avgResponseTimeByModel={avgResponseTimeByModel}
+          statsLoading={statsLoading}
+          mode={mode}
+          viewMode={effectiveViewMode}
+        />
+      ))}
+    </Box>
+  );
 
   // Pinned sections (Recommended, Favorites) sit above the provider accordions and share one
   // layout; only the key, label, icon and model list differ.
@@ -1033,37 +1111,35 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
           }}
         />
       </AccordionSummary>
-      <AccordionDetails>
-        {expandedBackends.has(sectionKey) && (
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
-              gap: 2,
-            }}
-          >
-            {sectionModels.map(modelInfo => (
-              <ModelOption
-                key={modelInfo.id}
-                model={modelInfo}
-                isSelected={modelInfo.id === model}
-                maxContextWindow={maxContextWindow}
-                maxTokens={maxTokens}
-                onSelect={handleModelSelect}
-                onSettingsClick={onSettingsClick}
-                isFavorite={isFavorite(modelInfo.id)}
-                onToggleFavorite={toggleFavorite}
-                avgResponseTimeByModel={avgResponseTimeByModel}
-                statsLoading={statsLoading}
-                mode={mode}
-                viewMode={effectiveViewMode}
-              />
-            ))}
-          </Box>
-        )}
-      </AccordionDetails>
+      <AccordionDetails>{expandedBackends.has(sectionKey) && renderModelCards(sectionModels)}</AccordionDetails>
     </Accordion>
   );
+
+  // Direct-API rows first, then the maker's Bedrock routes under their own heading, so two cards
+  // with the same name are never neighbours told apart only by a corner badge.
+  const renderProviderModels = (backend: string, cards: ModelInfo[], section: string) => {
+    const { direct, bedrock } = splitModelsByRoute(cards);
+    if (direct.length === 0 || bedrock.length === 0) return renderModelCards(cards);
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {renderModelCards(direct)}
+        <Box
+          data-testid={`bedrock-route-section-${backend}-${section}`}
+          sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+        >
+          <Box sx={{ ml: '8px' }}>
+            <Typography level="title-sm" sx={{ color: 'text.primary' }}>
+              Via AWS Bedrock
+            </Typography>
+            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+              Served through AWS Bedrock instead of the provider&apos;s own API.
+            </Typography>
+          </Box>
+          {renderModelCards(bedrock)}
+        </Box>
+      </Box>
+    );
+  };
 
   return (
     <Box
@@ -1342,7 +1418,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
       {/* Models Grid */}
       {/* No access to any models */}
-      {filteredModels.length === 0 && !debouncedSearchQuery && (
+      {!hasVisibleModels && !debouncedSearchQuery && (
         <Box sx={{ padding: '32px', textAlign: 'center' }}>
           <Typography level="body-md" sx={{ color: 'text.primary', fontWeight: 500, mb: 1 }}>
             You don&apos;t have access to any AI models.
@@ -1354,7 +1430,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       )}
 
       {/* No models found for search query */}
-      {filteredModels.length === 0 && debouncedSearchQuery && (
+      {!hasVisibleModels && debouncedSearchQuery && (
         <Box sx={{ padding: '32px', textAlign: 'center' }}>
           <Typography level="body-sm" sx={{ color: 'neutral.500' }}>
             No models found for &quot;{searchQuery}&quot;
@@ -1363,7 +1439,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       )}
 
       {/* Display models */}
-      {filteredModels.length > 0 && (
+      {hasVisibleModels && (
         <Box
           sx={{
             display: 'flex',
@@ -1504,32 +1580,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                             <ChatIcon sx={{ fontSize: '14px', color: 'text.primary50' }} />
                             Text Models
                           </Typography>
-                          <Box
-                            sx={{
-                              display: 'grid',
-                              gridTemplateColumns:
-                                effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
-                              gap: 2,
-                            }}
-                          >
-                            {modelsByBackendAndType[backend].text.map(modelInfo => (
-                              <ModelOption
-                                key={modelInfo.id}
-                                model={modelInfo}
-                                isSelected={modelInfo.id === model}
-                                maxContextWindow={maxContextWindow}
-                                maxTokens={maxTokens}
-                                onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick}
-                                isFavorite={isFavorite(modelInfo.id)}
-                                onToggleFavorite={toggleFavorite}
-                                avgResponseTimeByModel={avgResponseTimeByModel}
-                                statsLoading={statsLoading}
-                                mode={mode}
-                                viewMode={effectiveViewMode}
-                              />
-                            ))}
-                          </Box>
+                          {renderProviderModels(backend, modelsByBackendAndType[backend].text, 'text')}
                         </Box>
                       )}
 
@@ -1553,32 +1604,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                             <ImageIcon sx={{ fontSize: '14px', color: 'text.primary50' }} />
                             Image Generation Models
                           </Typography>
-                          <Box
-                            sx={{
-                              display: 'grid',
-                              gridTemplateColumns:
-                                effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
-                              gap: 2,
-                            }}
-                          >
-                            {modelsByBackendAndType[backend].image.map(modelInfo => (
-                              <ModelOption
-                                key={modelInfo.id}
-                                model={modelInfo}
-                                isSelected={modelInfo.id === model}
-                                maxContextWindow={maxContextWindow}
-                                maxTokens={maxTokens}
-                                onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick}
-                                isFavorite={isFavorite(modelInfo.id)}
-                                onToggleFavorite={toggleFavorite}
-                                avgResponseTimeByModel={avgResponseTimeByModel}
-                                statsLoading={statsLoading}
-                                mode={mode}
-                                viewMode={effectiveViewMode}
-                              />
-                            ))}
-                          </Box>
+                          {renderProviderModels(backend, modelsByBackendAndType[backend].image, 'image')}
                         </Box>
                       )}
 
@@ -1602,62 +1628,13 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                             <VideoIcon sx={{ fontSize: '14px', color: 'text.primary50' }} />
                             Video Generation Models
                           </Typography>
-                          <Box
-                            sx={{
-                              display: 'grid',
-                              gridTemplateColumns:
-                                effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
-                              gap: 2,
-                            }}
-                          >
-                            {modelsByBackendAndType[backend].video.map(modelInfo => (
-                              <ModelOption
-                                key={modelInfo.id}
-                                model={modelInfo}
-                                isSelected={modelInfo.id === model}
-                                maxContextWindow={maxContextWindow}
-                                maxTokens={maxTokens}
-                                onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick}
-                                isFavorite={isFavorite(modelInfo.id)}
-                                onToggleFavorite={toggleFavorite}
-                                avgResponseTimeByModel={avgResponseTimeByModel}
-                                statsLoading={statsLoading}
-                                mode={mode}
-                                viewMode={effectiveViewMode}
-                              />
-                            ))}
-                          </Box>
+                          {renderProviderModels(backend, modelsByBackendAndType[backend].video, 'video')}
                         </Box>
                       )}
                     </Box>
                   ) : (
                     // Fallback to normal single-type view if grouping data is not available
-                    <Box
-                      sx={{
-                        display: 'grid',
-                        gridTemplateColumns: effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
-                        gap: 2,
-                      }}
-                    >
-                      {modelsByBackend[backend].map(modelInfo => (
-                        <ModelOption
-                          key={modelInfo.id}
-                          model={modelInfo}
-                          isSelected={modelInfo.id === model}
-                          maxContextWindow={maxContextWindow}
-                          maxTokens={maxTokens}
-                          onSelect={handleModelSelect}
-                          onSettingsClick={onSettingsClick}
-                          isFavorite={isFavorite(modelInfo.id)}
-                          onToggleFavorite={toggleFavorite}
-                          avgResponseTimeByModel={avgResponseTimeByModel}
-                          statsLoading={statsLoading}
-                          mode={mode}
-                          viewMode={effectiveViewMode}
-                        />
-                      ))}
-                    </Box>
+                    renderProviderModels(backend, modelsByBackend[backend], 'all')
                   ))}
               </AccordionDetails>
             </Accordion>

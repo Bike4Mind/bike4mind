@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -659,6 +659,7 @@ describe('MessageContent per-message credits-used chip - enforceCredits gating',
     renderMessageContent(creditsMessageData);
 
     expect(screen.getByTestId('credits-used')).toHaveTextContent('42 credits');
+    expect(within(screen.getByTestId('credits-used')).getByTestId('credit-icon')).toBeInTheDocument();
   });
 
   it('shows the chip when the user has never set the preference', () => {
@@ -686,6 +687,23 @@ describe('MessageContent per-message credits-used chip - enforceCredits gating',
     renderMessageContent(creditsMessageData);
 
     expect(screen.queryByTestId('credits-used')).not.toBeInTheDocument();
+  });
+
+  it('splits an image answer into the chat and image-tool shares', () => {
+    mocks.serverSettings = [{ settingName: 'enforceCredits', settingValue: true }];
+    mocks.showCreditsUsed = true;
+
+    renderMessageContent({
+      ...messageData,
+      creditsUsed: 184,
+      promptMeta: {
+        ...(messageData as IChatHistoryItem).promptMeta,
+        tokenUsage: { creditsUsed: 64 },
+        functionCalls: [{ name: 'image_generation', creditsUsed: 120 }],
+      },
+    } as unknown as IChatHistoryItem);
+
+    expect(screen.getByTestId('credits-used')).toHaveTextContent('184 credits (Chat 64 + Image Generation 120)');
   });
 
   it('hides the chip when the enforceCredits setting is unset (self-host default)', () => {

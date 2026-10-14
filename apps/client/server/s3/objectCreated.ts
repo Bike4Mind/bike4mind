@@ -1,23 +1,17 @@
-import {
-  adminSettingsRepository,
-  changeStorageSize,
-  dataLakeBatchRepository,
-  FabFile,
-  imageModerationIncidentRepository,
-  User,
-  withTransaction,
-} from '@bike4mind/database';
-import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
+import { adminSettingsRepository, dataLakeBatchRepository, FabFile, User, withTransaction } from '@bike4mind/database';
 import { isMediaOnlyMimeType } from '@bike4mind/common';
 import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
 import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
-import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
-import { getFilesStorage } from '@server/utils/storage';
-import { moderateUploadedFile } from '@server/s3/moderateUploadedFile';
-import { claimStorageCharge } from '@server/s3/storageCharge';
+import {
+  claimModerationScan,
+  scanUploadedObject,
+  toVerdictPatch,
+  writeModerationVerdict,
+  type ModerationVerdictPatch,
+} from '@server/s3/moderationScan';
+import { chargeUploadedObject } from '@server/s3/storageCharge';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
-import { completedBatchStatus, finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import { completedBatchStatus, finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
 import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
@@ -78,11 +72,7 @@ export const func = withContext(async (event, context, logger) => {
     // resets; moderationClaimedAt exists to replace exactly that. It is also this invocation's claim
     // identity, matched by writeVerdict below.
     const claimedAt = new Date();
-    const scanClaimed = await FabFile.findOneAndUpdate(
-      { _id: metadata._id, moderationStatus: { $in: ['pending', null] } },
-      { $set: { moderationStatus: 'scanning', moderationClaimedAt: claimedAt } },
-      { new: true }
-    );
+    const scanClaimed = await claimModerationScan(metadata._id, claimedAt);
 
     // Captured inside the transaction below; used for the ws emit afterward.
     // (`metadata.moderationStatus` itself is typed optional - pre-existing documents predate
@@ -95,31 +85,21 @@ export const func = withContext(async (event, context, logger) => {
 
     // The verdict this invocation scanned, once it has one. Written by writeVerdict rather than
     // through `metadata.save()` below, and doubles as the withTransaction retry guard.
-    let verdictPatch: { moderationStatus: 'clean' | 'blocked'; blockReason?: string } | null = null;
+    let verdictPatch: ModerationVerdictPatch | null = null;
 
-    /**
-     * Write a terminal verdict guarded on the claim stamp acquired above, NOT on 'scanning' alone.
-     * The rescue sweep returns a stale 'scanning' row to 'pending' (moderationRescueSweep.ts), so a
-     * slow invocation here can find its claim superseded and a successor scan already in flight or
-     * finished; an unguarded write would then overwrite the successor's verdict - including
-     * un-quarantining a file it had just confirmed 'blocked'. Same shape as the chunk claim's
-     * identity-guarded release in apps/workers/src/queueHandlers/fabFileChunk.ts. Returns whether the write landed.
-     */
+    // Terminal verdict write, guarded on THIS invocation's claim stamp (see writeModerationVerdict):
+    // a superseded claim must not overwrite a successor's verdict.
     const writeVerdict = async (
-      patch: { moderationStatus: 'clean' | 'blocked'; blockReason?: string },
+      patch: ModerationVerdictPatch,
       session: Parameters<Parameters<typeof withTransaction>[0]>[0]
     ): Promise<boolean> => {
-      const res = await FabFile.updateOne(
-        { _id: metadata._id, moderationStatus: 'scanning', moderationClaimedAt: claimedAt },
-        { $set: patch, $unset: { moderationClaimedAt: 1 } },
-        { session }
-      );
-      if (res.matchedCount === 0) {
+      const landed = await writeModerationVerdict(metadata._id, claimedAt, patch, session);
+      if (!landed) {
         logger.warn(
           `[Q2b] moderation claim for ${objectKey} was superseded mid-scan; discarding this invocation's verdict`
         );
       }
-      return res.matchedCount > 0;
+      return landed;
     };
 
     const user = await withTransaction(async session => {
@@ -130,8 +110,8 @@ export const func = withContext(async (event, context, logger) => {
       }
 
       // Scan uploaded images before serving them. Uploads are presigned
-      // direct-to-S3 - the server never sees the bytes until this event fires, so this
-      // is the only point where a moderation scan can gate the file becoming serveable.
+      // direct-to-S3 - the server never sees the bytes until this event fires or the caller asks for
+      // an on-demand scan (pages/api/files/[id]/moderate.ts); whichever wins claimModerationScan scans.
       //
       // S3 ObjectCreated is at-least-once delivery - a redelivered event must
       // NOT re-scan and potentially overwrite an already-terminal verdict (Rekognition
@@ -155,29 +135,18 @@ export const func = withContext(async (event, context, logger) => {
         if (current?.moderationStatus === 'clean' || current?.moderationStatus === 'blocked') {
           moderationStatus = current.moderationStatus;
         }
+        // The winner may have persisted a byte-sniffed type; carry it so the lake stats and the
+        // media-only check below do not run on the stale client-declared one. If the winner has claimed
+        // but not yet written its sniffed type, this still reads the declared one.
+        if (current?.mimeType) metadata.mimeType = current.mimeType;
         logger.info(
           `[Q2b] moderationStatus claim lost for ${objectKey} (current=${current?.moderationStatus ?? 'unset'}); skipping re-scan (owned by another invocation)`
         );
       } else {
-        const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-        const result = await moderateUploadedFile({
-          userId: metadata.userId,
-          fabFileId: metadata.id,
-          mimeType: metadata.mimeType,
-          enabled: getSettingsValue('ImageModerationEnabled', settings) ?? true,
-          service: new RekognitionImageModerationService(logger),
-          incidents: imageModerationIncidentRepository,
-          downloadBytes: () => getFilesStorage().download(objectKey),
-          downloadPartialBytes: length => getFilesStorage().downloadRange(objectKey, length),
-          moderateImageOrThrow,
-          logger,
-        });
+        const result = await scanUploadedObject({ fabFile: metadata, objectKey, logger });
         // blockReason travels with the verdict (vs. just logging) so ops can distinguish an
         // unscannable format from a confirmed-explicit match without CloudWatch.
-        verdictPatch = {
-          moderationStatus: result.moderationStatus,
-          ...(result.blockReason ? { blockReason: result.blockReason } : {}),
-        };
+        verdictPatch = toVerdictPatch(result);
         if (result.correctedMimeType && result.correctedMimeType !== metadata.mimeType) {
           // Persist the byte-sniffed real type so downstream consumers (e.g.
           // isImageServeable) see the truth instead of the client-declared mimeType. Left on
@@ -193,7 +162,7 @@ export const func = withContext(async (event, context, logger) => {
         moderationStatus = (await writeVerdict(verdictPatch, session)) ? result.moderationStatus : 'pending';
       }
 
-      if (await claimStorageCharge(metadata._id, uploadedAt, session)) changeStorageSize(user, object.size);
+      await chargeUploadedObject(metadata._id, user, object.size, uploadedAt, session);
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
       return user;

@@ -18,6 +18,7 @@ import {
   RadioGroup,
   FormControl,
   FormLabel,
+  FormHelperText,
   Autocomplete,
   ListItemContent,
   Checkbox,
@@ -61,6 +62,9 @@ import type { z } from 'zod';
 import { CurationType, ExportFormat, CurationArtifactTypeSchema } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { MAX_EMAIL_MESSAGE_LENGTH } from '@client/types/api';
+import { normalizeRecipients } from './notebookRecipients';
 
 // Inferred type for uppercase API artifact types
 type CurationArtifactTypeAPI = z.infer<typeof CurationArtifactTypeSchema>;
@@ -349,10 +353,7 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
       return;
     }
 
-    const validRecipients = emailRecipients.filter(email => {
-      const trimmed = email.trim();
-      return trimmed && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed);
-    });
+    const validRecipients = normalizeRecipients(emailRecipients);
 
     if (validRecipients.length === 0) {
       toast.error('Please enter at least one valid email address');
@@ -642,7 +643,7 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
                               <strong>Current Credits:</strong>
                             </Typography>
                             <Typography level="body-sm" sx={{ fontWeight: 600 }} data-testid="current-credits-value">
-                              {currentCredits.toLocaleString()} credits
+                              {formatCreditAmount(currentCredits)} credits
                             </Typography>
                           </Box>
                           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -654,7 +655,7 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
                                 Est.
                               </Chip>
                               <Typography level="body-sm" sx={{ fontWeight: 600 }} data-testid="estimated-cost-value">
-                                {totalEstimatedCost.toLocaleString()} credits
+                                {formatCreditAmount(totalEstimatedCost)} credits
                               </Typography>
                             </Box>
                           </Box>
@@ -671,7 +672,7 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
                                 sx={{ fontWeight: 600 }}
                                 data-testid="remaining-credits-value"
                               >
-                                {Math.max(0, currentCredits - totalEstimatedCost).toLocaleString()} credits
+                                {formatCreditAmount(Math.max(0, currentCredits - totalEstimatedCost))} credits
                               </Typography>
                             </Box>
                           </Box>
@@ -1052,7 +1053,7 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
                                   data-testid={`session-credits-used-${session.sessionId}`}
                                 >
                                   <Typography level="body-xs">
-                                    <strong>Credits Used:</strong> {session.tokensDeducted.toLocaleString()} credits
+                                    <strong>Credits Used:</strong> {formatCreditAmount(session.tokensDeducted)} credits
                                   </Typography>
                                 </Alert>
                               )}
@@ -1221,7 +1222,11 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
                   onChange={e => setEmailMessage(e.target.value)}
                   minRows={3}
                   maxRows={6}
+                  slotProps={{ textarea: { maxLength: MAX_EMAIL_MESSAGE_LENGTH } }}
                 />
+                <FormHelperText>
+                  {emailMessage.length}/{MAX_EMAIL_MESSAGE_LENGTH}
+                </FormHelperText>
               </FormControl>
 
               {batchResult && batchResult.completedCount > 0 && (

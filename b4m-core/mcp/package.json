@@ -75,6 +75,6 @@
     "@modelcontextprotocol/sdk": "1.32.1",
     "@octokit/rest": "^22.0.1",
     "unzipper": "^0.12.5",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   }
 }

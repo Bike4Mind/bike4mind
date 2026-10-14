@@ -772,7 +772,7 @@ const dataLakeCleanupQueue = new sst.aws.Queue('dataLakeCleanupQueue', {
 });
 const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/dataLakeCleanup.dispatch',
+    handler: 'apps/workers/src/queueHandlers/dataLakeCleanup.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -904,7 +904,7 @@ const driveDisconnectPurgeQueue = new sst.aws.Queue('driveDisconnectPurgeQueue',
 });
 const driveDisconnectPurgeQueueSubscription = driveDisconnectPurgeQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/driveDisconnectPurge.dispatch',
+    handler: 'apps/workers/src/queueHandlers/driveDisconnectPurge.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -922,8 +922,9 @@ const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    // fabFileBucket for the uploads; the queue itself for deadline, rate-limit and claim-loser re-enqueues.
-    link: [...allSecrets, fabFileBucket, githubLakeIngestQueue],
+    // fabFileBucket for the uploads; the queue itself for deadline, rate-limit and claim-loser re-enqueues;
+    // githubLakeRevokeQueue because retiring a lakeless connection can defer a failed uninstall there.
+    link: [...allSecrets, fabFileBucket, githubLakeIngestQueue, githubLakeRevokeQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1022,7 +1023,7 @@ const generationJobQueue = new sst.aws.Queue('generationJobQueue', {
 });
 const generationJobQueueSubscription = generationJobQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/generationJob.dispatch',
+    handler: 'apps/workers/src/queueHandlers/generationJob.dispatch',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '2048 MB',
@@ -1434,7 +1435,7 @@ const overwatchAnalyticsQueueSubscription = overwatchAnalyticsQueue.subscribe(
 //   - MAX_CHECKPOINT_DEPTH    = 50: hard ceiling; Lambda refuses to process and marks the execution failed
 //
 // Message schema: { kind: 'continuation', executionId, connectionId, checkpointDepth }
-// Handler:        apps/client/server/queueHandlers/agentExecutor.ts → processExecution()
+// Handler:        apps/workers/src/queueHandlers/agentExecutor.ts -> processExecution()
 const agentContinuationQueueDLQ = new sst.aws.Queue('agentContinuationQueueDLQ', {
   transform: {
     queue: {

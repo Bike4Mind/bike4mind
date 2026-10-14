@@ -41,7 +41,7 @@ vi.mock('@bike4mind/database', async orig =>
 vi.mock('@server/generationJobs/wiring', async () =>
   (await import('@server/videoGenerations/__test__/routeHarness')).wiringMock()
 );
-vi.mock('@server/videoGenerations/signOutputUrl', async () =>
+vi.mock('@server/generations/signOutputUrl', async () =>
   (await import('@server/videoGenerations/__test__/routeHarness')).signOutputUrlMock()
 );
 vi.mock('@server/videoGenerations/listUsableVideoModels', async orig =>
@@ -162,6 +162,67 @@ describe('POST /api/v1/video-generations', () => {
     await handler(req, res);
     expect(h.resolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), undefined);
     expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: 'billing-org' });
+  });
+
+  describe('organization_id (the account switcher)', () => {
+    const MEMBER_ORG = 'a'.repeat(24);
+    const OTHER_ORG = 'b'.repeat(24);
+    const HOME_ORG = 'c'.repeat(24);
+
+    beforeEach(async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      asUser('user-1', HOME_ORG);
+      // The real resolver, so membership is decided by the shareable gate rather than the harness default.
+      const actual = await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+      h.resolveBillingOrgId.mockImplementation(actual.resolveBillingOrgId);
+      h.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) =>
+        id === MEMBER_ORG || id === HOME_ORG ? { id } : null
+      );
+      h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    });
+
+    it('bills an org the caller belongs to', async () => {
+      const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', organization_id: MEMBER_ORG });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(202);
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: MEMBER_ORG });
+    });
+
+    it('rejects an org the caller does not belong to (403) before the domain', async () => {
+      const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', organization_id: OTHER_ORG });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(h.createVideoJob).not.toHaveBeenCalled();
+    });
+
+    it('bills personal credits for an explicit null, even with a home org', async () => {
+      const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', organization_id: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(202);
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: null });
+      expect(h.orgFindAccessibleById).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the home org when omitted', async () => {
+      const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(202);
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+    });
+
+    it.each(['', '   '])('rejects a blank organization_id %j (422) instead of billing personal', async orgId => {
+      const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', organization_id: orgId });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(h.createVideoJob).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-string organization_id (422) before the domain', async () => {
+      const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', organization_id: 42 });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(h.createVideoJob).not.toHaveBeenCalled();
+    });
   });
 
   it('falls back to personal billing when the org pointer is stale', async () => {

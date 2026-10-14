@@ -15,6 +15,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { ISessionDocument } from '@bike4mind/common';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -169,9 +170,9 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
   // Holds the latest reconnect() so the pc state handlers can invoke it without
   // creating a connect()/reconnect() dependency cycle.
   const reconnectRef = useRef<(() => void) | null>(null);
-  // The credit hold reserved by the last bootstrap, until a voice_session_ended frame
-  // settles it. A terminal teardown that finds one still set settles it at zero usage,
-  // so a call that never produced a response does not keep the whole hold.
+  // The credit hold the last bootstrap opened. Each response is billed against it by id and it
+  // stays open across responses and reconnects; a terminal teardown closes it, which refunds
+  // whatever the call did not use.
   const unsettledHoldRef = useRef<{ sessionId: string; model: string; userId: string } | null>(null);
   // Bumped by every terminal teardown. A connect compares it across its awaits (the mic
   // permission prompt, the bootstrap) to notice that End or an unmount ran meanwhile and
@@ -695,8 +696,9 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
                 model,
                 usage: usageData,
                 userId,
+                // Bills this response once, against the open hold.
+                ...(serverEvent.response?.id ? { responseId: serverEvent.response.id } : {}),
               });
-              unsettledHoldRef.current = null;
             }
 
             if (waitingForResponseDoneRef.current) {
@@ -980,6 +982,35 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
       connect().catch(err => console.error('Failed to resume voice session after navigation:', err));
     }
   }, [sessionId, connectionStatus, connect]);
+
+  // Closing or reloading the tab never runs React teardown, so settle the hold as the page goes
+  // away. A WebSocket frame sent during pagehide can be dropped, so the same hold is also ended
+  // through POST /api/voice/v2/sessions/{id}/end as a keepalive fetch, which the browser finishes
+  // after unload. Both settle through the one-shot hold claim, so whichever lands first wins and
+  // the other is a no-op. A crash sends neither; the stale-hold sweep reclaims that hold.
+  useEffect(() => {
+    const settleOnPageHide = () => {
+      const hold = unsettledHoldRef.current;
+      settleUnsettledHold();
+      if (!hold) return;
+      // A keepalive fetch cannot run the 401 refresh, so an expired token makes this /end a 401; if
+      // the WebSocket frame is dropped too, the stale-hold sweep reclaims the hold as for a crash.
+      const token = useAccessToken.getState().accessToken;
+      try {
+        void fetch(`/api/voice/v2/sessions/${encodeURIComponent(hold.sessionId)}/end`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: '{}',
+          credentials: 'same-origin',
+          keepalive: true,
+        }).catch(() => {});
+      } catch {
+        // A browser that rejects keepalive still has the WebSocket frame and the sweep.
+      }
+    };
+    window.addEventListener('pagehide', settleOnPageHide);
+    return () => window.removeEventListener('pagehide', settleOnPageHide);
+  }, [settleUnsettledHold]);
 
   // Cleanup on unmount
   useEffect(() => {

@@ -68,8 +68,10 @@ import ContentPreviewModal from '@client/app/components/ProfileModal/ContentPrev
 import { Article as ArticleIcon } from '@mui/icons-material';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import EditIcon from '@mui/icons-material/Edit';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { formatAnswerCost } from '@client/app/utils/formatCredits';
+import { answerCostBreakdown, formatCostParts } from '@client/app/utils/answerCostBreakdown';
+import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { APP_NAME } from '@client/config/general';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import ShareOutlinedIcon from '@mui/icons-material/ShareOutlined';
@@ -687,6 +689,8 @@ const MessageContent: React.FC<ContentProps> = memo(
       return modelInfo?.name || modelName;
     };
 
+    const costParts = answerCostBreakdown(messageData.promptMeta, getToolDisplayName);
+
     return (
       <Stack
         key={index}
@@ -1210,7 +1214,14 @@ const MessageContent: React.FC<ContentProps> = memo(
               )}
             </Stack>
           ) : (
-            <Stack className="action-buttons-mobile" direction={'row'} gap="8px" alignItems="center">
+            <Stack
+              className="action-buttons-mobile"
+              direction={'row'}
+              gap="4px"
+              alignItems="center"
+              // Six 44px targets plus gaps are ~284px: wrap rather than overflow at 320px.
+              flexWrap="wrap"
+            >
               {!isProcessingPrompt && (
                 <>
                   {/* Advanced actions in menu */}
@@ -1393,15 +1404,32 @@ const MessageContent: React.FC<ContentProps> = memo(
             currentUser?.showCreditsUsed !== false &&
             !isProcessingPrompt &&
             typeof messageData.creditsUsed === 'number' ? (
-              <Tooltip title="Credits this answer used. You can hide this in your profile.">
+              <Tooltip
+                title={
+                  costParts.length > 0 ? (
+                    <Box data-testid="credits-used-breakdown">
+                      {costParts.map(part => (
+                        <Box key={`${part.label}|${part.model ?? ''}`}>
+                          {part.label}
+                          {part.model ? ` (${getModelDisplayName(part.model)})` : ''}: {formatAnswerCost(part.credits)}
+                        </Box>
+                      ))}
+                      <Box sx={{ mt: 0.5 }}>You can hide this in your profile.</Box>
+                    </Box>
+                  ) : (
+                    'Credits this answer used. You can hide this in your profile.'
+                  )
+                }
+              >
                 <Chip
                   data-testid="credits-used"
                   size="sm"
                   variant="soft"
                   sx={messageMetaChipSx}
-                  startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
+                  startDecorator={<CreditIcon sx={{ fontSize: 12 }} />}
                 >
                   {formatAnswerCost(messageData.creditsUsed)}
+                  {costParts.length > 0 && ` (${formatCostParts(costParts)})`}
                 </Chip>
               </Tooltip>
             ) : null}

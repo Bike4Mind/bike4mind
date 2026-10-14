@@ -14,6 +14,7 @@ import {
   fabFileChunkQueue,
   driveLakeIngestQueue,
   githubLakeIngestQueue,
+  githubLakeRevokeQueue,
   dataLakeResearchQueue,
   generationCallbackQueue,
   generationJobQueue,
@@ -277,6 +278,29 @@ const creditLotSweepCron = new sst.aws.Cron('creditLotSweep', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Voice Hold Sweep - settles voice credit holds no client ever ended (closed tab, crashed browser,
+// failed connect) on connected time. Self-host twin: apps/workers/src/selfhost/voiceHoldSweep.ts;
+// keep the schedules in step. Settlement is DB-only and capped at VOICE_HOLD_SWEEP_LIMIT holds per
+// run. Overlapping runs (at-least-once delivery, async retry after a timeout) are safe because
+// settleVoiceHold claims each hold atomically, so a losing settler moves no credit.
+const voiceHoldSweepCron = new sst.aws.Cron('voiceHoldSweep', {
+  schedule: 'rate(5 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/voiceHoldSweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '4 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 // Integration Health Check - runs every 5 minutes to probe external APIs
 // Probes: Slack, GitHub, Jira, Confluence
 const integrationHealthCheckCron = new sst.aws.Cron('integrationHealthCheck', {
@@ -448,7 +472,7 @@ const sreStaleDispatchCron = new sst.aws.Cron('SreStaleDispatchCron', {
  * with no brand fallback (#9310/#9306).
  */
 const attackSimulationFunction = new sst.aws.Function('attackSimulationFunction', {
-  handler: 'apps/client/server/security/attackSimulation/runner.handler',
+  handler: 'apps/workers/src/security/attackSimulation/runner.handler',
   vpc: lambdaVpc,
   link: [...allSecrets],
   timeout: '14 minutes',
@@ -736,7 +760,8 @@ const creditPurchaseReconciliationCron = new sst.aws.Cron('creditPurchaseReconci
  * against its data lake and applies adds/edits/removals. Dark until both EnableDataLakes and
  * EnableDataLakeDrivePoll admin flags are on (the handler enforces the gate).
  *
- * Schedule: hourly (connections are re-polled at most every ~6h; see POLL_INTERVAL_MS in the handler)
+ * Schedule: hourly (connections are re-polled at most every ~6h; see DRIVE_LAKE_POLL_INTERVAL_MS in
+ * apps/client/server/integrations/google/drive/drivePollSchedule.ts)
  * Enabled: production + dev
  */
 const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
@@ -776,6 +801,33 @@ const githubLakeReconcileCron = new sst.aws.Cron('githubLakeReconcile', {
     // githubLakeIngestQueue: a changed HEAD is enqueued onto the shared ingest handler, so the
     // cron needs Resource.githubLakeIngestQueue.url and the sqs:SendMessage grant the link provides.
     link: [...allSecrets, githubLakeIngestQueue],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+/**
+ * Data-Lake Connector Orphan Reap
+ * Releases Drive connections and GitHub bindings whose data lake document no longer exists, so their
+ * globally unique folder / repository claims do not outlive the lake. Gated on EnableDataLakes only
+ * (cleanup runs even with polling off); the GitHub leg also needs EnableDataLakeGitHub (the handler
+ * enforces both).
+ *
+ * Schedule: daily (a bounded batch per connector; see MAX_REAPS_PER_CONNECTOR in the handler)
+ * Enabled: production + dev
+ */
+const lakeConnectorOrphanReapCron = new sst.aws.Cron('lakeConnectorOrphanReap', {
+  schedule: 'rate(1 day)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/lakeConnectorOrphanReap.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    // githubLakeRevokeQueue: releasing a GitHub binding hands a failed post-release uninstall to it
+    // (releaseGitHubLakeConnection, githubLakeConnection.ts).
+    link: [...allSecrets, githubLakeRevokeQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -949,6 +1001,7 @@ export {
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   creditLotSweepCron,
+  voiceHoldSweepCron,
   sreStaleDispatchCron,
   attackSimulationFunction,
   attackSimulationCron,
@@ -964,6 +1017,7 @@ export {
   creditPurchaseReconciliationCron,
   driveLakeResyncPollCron,
   githubLakeReconcileCron,
+  lakeConnectorOrphanReapCron,
   helpDatalakeIngestCron,
   lakeHealthSweepCron,
   lakeInconsistencySweepCron,

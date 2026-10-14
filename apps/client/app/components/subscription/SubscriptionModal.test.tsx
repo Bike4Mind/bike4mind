@@ -63,7 +63,10 @@ vi.mock('@client/app/components/organizations/CreateTeamModal', () => ({
 }));
 
 vi.mock('@client/app/hooks/useAnswerCostReference', () => ({
-  useAnswerCostReference: () => ({ modelName: 'Claude 5.5 Sonnet', creditsPerAnswer: 54 }),
+  useAnswerCostReference: () => ({
+    premium: { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 },
+    budget: { modelName: 'GPT-5.4 Mini', creditsPerAnswer: 15 },
+  }),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -100,7 +103,7 @@ describe('SubscriptionModal - Team tab', () => {
   beforeEach(() => {
     subscriptions = [];
     teamPriceActive = true;
-    settingValues = {};
+    settingValues = { enableTeamPlan: true };
   });
 
   it('opens the Business tab, so Team is on offer here as well as from Teams > Create Team', async () => {
@@ -113,9 +116,78 @@ describe('SubscriptionModal - Team tab', () => {
 
     // 4 seats x $30 from the mocked Stripe price, not a hardcoded figure.
     expect(screen.getByText(/\$120\.00/)).toBeInTheDocument();
-    expect(screen.getByText('$30.00 per seat per month, 4-seat minimum')).toBeInTheDocument();
+    expect(
+      screen.getByText('Up to 4 people at one flat price; $30.00 per month for each person after that')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Priority support in a dedicated channel')).toBeInTheDocument();
+    expect(screen.queryByText('Dedicated support channel')).not.toBeInTheDocument();
+    expect(screen.queryByText('Priority support')).not.toBeInTheDocument();
     expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
     expect(screen.queryByTestId('subscription-modal-team-unavailable')).not.toBeInTheDocument();
+  });
+
+  it('disables the Business tab with a visible, accessible reason when enableTeamPlan is off', async () => {
+    settingValues = { enableTeamPlan: false };
+    renderModal();
+
+    // The reason is described by, not part of, the tab, so the name stays 'Business'.
+    const tab = screen.getByRole('tab', { name: 'subscription_modal.business' });
+    expect(tab).toHaveAttribute('aria-disabled', 'true');
+
+    // The tab itself carries the reason; there is no extra tab stop around it.
+    const reasonId = tab.getAttribute('aria-describedby');
+    expect(reasonId).toBeTruthy();
+    expect(document.getElementById(reasonId as string)).toHaveTextContent('Team plans are not available right now.');
+
+    const wrapper = screen.getByTestId('subscription-modal-business-tab-wrapper');
+    expect(wrapper).not.toHaveAttribute('tabindex');
+    await userEvent.setup({ delay: null }).hover(wrapper);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Team plans are not available right now.');
+
+    // The Team card is not reachable.
+    expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
+  });
+
+  it('drops the Team card when the flag flips off while the Business tab is open, and stays on Personal when it returns', async () => {
+    const view = renderModal();
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
+
+    settingValues = { enableTeamPlan: false };
+    view.rerender(
+      <TestWrapper>
+        <SubscriptionModal open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
+
+    // The stored selection fell back with the gate; turning the flag back on must not pull the view to
+    // Business without a click.
+    settingValues = { enableTeamPlan: true };
+    view.rerender(
+      <TestWrapper>
+        <SubscriptionModal open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    expect(screen.queryByTestId('subscription-modal-create-team-btn')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Subscribe to Professional' })).toBeInTheDocument();
+
+    // ...and the user can still pick Business once the gate is back on.
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-modal-business-tab'));
+    expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeEnabled();
+  });
+
+  it('leaves the Business tab enabled and unexplained when enableTeamPlan is on', () => {
+    renderModal();
+
+    expect(screen.getByRole('tab', { name: 'subscription_modal.business' })).not.toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    expect(screen.getByTestId('subscription-modal-business-tab')).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByText('Team plans are not available right now.')).not.toBeInTheDocument();
   });
 
   it('says why Team cannot be bought when its Stripe price is not live, instead of hiding the tab', async () => {
@@ -126,20 +198,22 @@ describe('SubscriptionModal - Team tab', () => {
 
     expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeDisabled();
     expect(screen.getByTestId('subscription-modal-team-unavailable')).toBeInTheDocument();
-    expect(screen.getByText('4-seat minimum')).toBeInTheDocument();
+    expect(screen.getByText('Up to 4 people at one flat price')).toBeInTheDocument();
   });
 
   it('quotes seats, price and pool size from the admin team plan settings', async () => {
-    settingValues = { teamPlanMinSeats: 2, teamPlanCreditsPerSeat: 1000 };
+    settingValues = { enableTeamPlan: true, teamPlanMinSeats: 2, teamPlanCreditsPerSeat: 1000 };
     renderModal();
 
     await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
 
     expect(screen.getByText(/\$60\.00/)).toBeInTheDocument();
-    expect(screen.getByText('2 team member accounts included')).toBeInTheDocument();
+    expect(
+      screen.getByText('Up to 2 people at one flat price; $30.00 per month for each person after that')
+    ).toBeInTheDocument();
     expect(screen.getByText('subscription_modal.credits_per_month:2,000')).toBeInTheDocument();
     expect(screen.getByTestId('plan-card-answers-estimate')).toHaveTextContent(
-      /^Estimate: about 37 answers on Claude 5\.5 Sonnet/
+      /^Estimate: about 37 to 130 answers, depending on the model/
     );
   });
 });
@@ -148,7 +222,7 @@ describe('SubscriptionModal', () => {
   beforeEach(() => {
     subscriptions = [];
     teamPriceActive = true;
-    settingValues = {};
+    settingValues = { enableTeamPlan: true };
     cancelMutate.mockReset();
     subscribeMutate.mockReset();
     changeMutate.mockReset();
@@ -174,20 +248,24 @@ describe('SubscriptionModal', () => {
     expect(screen.getByText(/subscription_modal.credits_rollover/)).toBeInTheDocument();
   });
 
-  it('estimates how far the Professional credits go on a mid-tier model', () => {
+  it('estimates how far the Professional credits go as a range across models', () => {
     renderModal();
 
     expect(screen.getByTestId('plan-card-answers-estimate')).toHaveTextContent(
-      /^Estimate: about 920 answers on Claude 5\.5 Sonnet, at about 4,000 tokens in and 1,000 out per answer\./
+      /^Estimate: about 920 to 3,300 answers, depending on the model \(Claude Sonnet 5\.5 to GPT-5\.4 Mini\)/
     );
   });
 
   it('lists only Professional features a user can find in the app', () => {
     renderModal();
 
+    // Anchor: a real Professional bullet must render, or every absence check below
+    // passes vacuously on an empty card.
+    expect(screen.getByText('Single API for all models')).toBeInTheDocument();
     expect(screen.queryByText(/Phi-4/)).not.toBeInTheDocument();
     expect(screen.queryByText(/prompt engineering tools/)).not.toBeInTheDocument();
     expect(screen.queryByText(/cost optimization/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/priority support/i)).not.toBeInTheDocument();
   });
 
   it('does not badge a lone plan as Most Popular on either tab', async () => {

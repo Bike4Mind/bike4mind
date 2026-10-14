@@ -17,11 +17,11 @@ const createUserSchema = z.object({
   // Passwordless (OTC): a password is no longer used to sign in. Optional for
   // backward compat; if omitted, an unusable random value is stored.
   password: z.string().min(6, 'Password must be at least 6 characters').optional(),
-  isAdmin: z.boolean().optional().prefault(false),
-  level: z.enum(['DemoUser', 'PaidUser', 'VIPUser', 'ManagerUser', 'AdminUser']).optional().prefault('DemoUser'),
-  initialCredits: z.number().min(0).optional().prefault(0),
-  storageLimit: z.number().min(0).optional().prefault(1000),
-  tags: z.array(z.string()).optional().prefault([]),
+  isAdmin: z.boolean().prefault(false),
+  level: z.enum(['DemoUser', 'PaidUser', 'VIPUser', 'ManagerUser', 'AdminUser']).prefault('DemoUser'),
+  initialCredits: z.number().min(0).prefault(0),
+  storageLimit: z.number().min(0).prefault(1000),
+  tags: z.array(z.string()).prefault([]),
 });
 
 type CreateUserInput = z.infer<typeof createUserSchema>;
@@ -119,7 +119,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           }
         );
         if (result.nonce) {
-          await pendingOtcTokenRepository.storeNonce(newUser.email!, result.nonce);
+          await pendingOtcTokenRepository.storeNonce(newUser.email!, result.nonce, result.otcHash);
         }
       } catch (err) {
         req.logger.error('Failed to send OTC welcome email for admin-created user', err);

@@ -3,14 +3,14 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMocks } from 'node-mocks-http';
-import { MEMENTO_EMBEDDING_DIMS } from '@bike4mind/common';
+import { MEMENTO_EMBEDDING_DIMS, MEMENTO_EMBEDDING_ID, MEMENTO_EMBEDDING_MODEL } from '@bike4mind/common';
 import { memoryLedgerRepository, memoryPrincipalKeyRepository } from '@bike4mind/database';
 import { verifyChain, type MemoryEventInput, type Principal } from '@bike4mind/memory';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../packages/database/src/__test__/createMongoServer';
-import { createKeyProvider, decryptFact } from '@server/memory/factCipher';
+import { createKeyProvider, decryptFact, encryptVector } from '@server/memory/factCipher';
 import { appendMemoryEvent, createLedgerMemoryStore } from '@server/memory/ledgerMemoryStore';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -161,6 +161,36 @@ describe('POST /api/admin/mementos/reembed-ledger against a real ledger', () => 
 
     expect(await memoryLedgerRepository.listPrincipalsNeedingVectors('x', { limit: 10 })).toHaveLength(3);
     expect(await runLoop(true)).toEqual([expect.objectContaining({ processedPrincipals: 0, hasMore: false })]);
+  });
+
+  it('dry run counts match execute per arm on a mixed chain', async () => {
+    for (const subject of ['current', 'stamped', 'unstamped', 'vectorless', 'partial']) {
+      await seed(user, 'user-1', subject);
+    }
+    const [current, stamped, unstamped, , partial] = await memoryLedgerRepository.listChain('user', 'user-1', 'user-1');
+    const dek = (await keys().getDek(user))!;
+    const give = async (hash: string, model: string, dims: number) => {
+      const sealed = encryptVector(
+        dek,
+        Array.from({ length: dims }, (_, i) => i / dims)
+      );
+      await memoryLedgerRepository.rewriteEmbedding('user', 'user-1', 'user-1', hash, { ...sealed, model });
+    };
+    await give(current.hash, MEMENTO_EMBEDDING_ID, MEMENTO_EMBEDDING_DIMS);
+    await give(stamped.hash, MEMENTO_EMBEDDING_MODEL, 1536);
+    await give(unstamped.hash, MEMENTO_EMBEDDING_MODEL, 1536);
+    // A legacy vector written before the space stamp existed.
+    await mongoose.model('MemoryLedgerEvent').updateOne({ hash: unstamped.hash }, { $unset: { embeddingModel: 1 } });
+    // An empty tag is not a vector: presence needs all three cipher fields non-empty.
+    await give(partial.hash, MEMENTO_EMBEDDING_MODEL, 1536);
+    await mongoose.model('MemoryLedgerEvent').updateOne({ hash: partial.hash }, { $set: { embeddingTag: '' } });
+
+    const arms = { alreadyCurrent: 1, truncated: 1, reembedded: 1, backfilled: 2, failed: 0 };
+    const [dry] = await runLoop(false);
+    expect(dry).toMatchObject({ dryRun: true, processedPrincipals: 1, ...arms });
+    const [run] = await runLoop(true);
+    expect(run).toMatchObject({ dryRun: false, processedPrincipals: 1, ...arms });
+    expect(generateEmbedding).toHaveBeenCalledTimes(3);
   });
 
   it('resumes a principal cut short by the per-request provider cap', async () => {

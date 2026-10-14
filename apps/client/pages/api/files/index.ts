@@ -11,6 +11,7 @@ import {
 import { fabFilesService } from '@bike4mind/services';
 import { accessibleBy } from '@casl/mongoose';
 import { logEvent } from '@server/utils/analyticsLog';
+import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getFilesStorage } from '@server/utils/storage';
 import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
@@ -73,6 +74,11 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
       const deletable = accessibleBy(req.ability, Permission.delete).ofType(FabFile);
       const ownedFilter = { $and: [deletable, { userId }] };
       const sharedInFilter = { $and: [deletable, { userId: { $ne: userId } }] };
+
+      // Published files are snapshots that outlive the file, so take them down first: a retry after
+      // a failed delete still finds the files and finishes the job.
+      const fabFileIds = (await FabFile.find(ownedFilter).select('_id').lean()).map(f => String(f._id));
+      await unpublishUserArtifactsBySource(userId, { kind: 'fabfile', fabFileIds }, { logger: req.logger });
 
       await withTransaction(async session => {
         try {

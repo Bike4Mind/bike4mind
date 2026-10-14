@@ -1,5 +1,6 @@
 export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
+export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -30,6 +31,8 @@ export const API_ERROR_CODES = [
   'provider_not_configured',
   /** The provider REFUSED the key we sent. */
   'provider_rejected',
+  /** The `model` is not one this caller can use; remediation is choosing an id from GET /api/v1/models. */
+  UNKNOWN_MODEL_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',
@@ -51,6 +54,22 @@ export const API_ERROR_CODES = [
   'cancelled',
   'idempotency_key_reused',
   'invalid_idempotency_key',
+  // Decisions (POST /api/v1/decisions); see DECISIONS_ERROR_CODES.
+  /** The provider stayed overloaded or timed out through our one retry; the response carries Retry-After. */
+  'provider_overloaded',
+  /** The input exceeded the model's context window, as reported by the provider. */
+  'context_length_exceeded',
+  /** A request exceeded a per-model cap; `param` names the field and the message names the cap. */
+  'limit_exceeded',
+  /** The model cannot accept this input type (e.g. an image on a text-only model). */
+  'unsupported_input',
+  // Storage refusals on an upload; see STORAGE_ERROR_CODES.
+  /** The upload would take the user's total storage past their limit; remediation is freeing space. */
+  'storage_limit_exceeded',
+  /** The upload is larger than the organization's storage limit. */
+  'org_storage_limit_exceeded',
+  /** The file is larger than the platform's per-file size limit. */
+  'file_too_large',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

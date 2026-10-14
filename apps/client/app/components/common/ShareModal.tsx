@@ -3,6 +3,7 @@ import { useUserRevokeSharing } from '@client/app/hooks/data/user';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { useUser } from '@client/app/contexts/UserContext';
+import { MAX_EMAIL_MESSAGE_LENGTH, MAX_EMAIL_RECIPIENTS, MAX_EMAIL_RECIPIENTS_ERROR } from '@client/types/api';
 
 import { InviteType, IUserShare, Permission, IFabFileDocument, ISessionDocument } from '@bike4mind/common';
 import {
@@ -219,6 +220,11 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
       } else if (tabIndex === 0 && recipientValue.some(recipient => isSelfShareRecipient(recipient, currentUser))) {
         // Prevent self-sharing and show error message (only for "By Users" tab)
         const message = 'You cannot share files to yourself';
+        setRecipients({ ...recipients, error: message });
+        toast.error(message);
+        isInvalid = true;
+      } else if (tabIndex === 2 && recipientValue.length > MAX_EMAIL_RECIPIENTS) {
+        const message = MAX_EMAIL_RECIPIENTS_ERROR;
         setRecipients({ ...recipients, error: message });
         toast.error(message);
         isInvalid = true;
@@ -657,11 +663,20 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                     <Textarea
                       className="share-modal-email-message"
                       minRows={3}
+                      slotProps={{
+                        textarea: {
+                          maxLength: MAX_EMAIL_MESSAGE_LENGTH,
+                          'data-testid': 'share-modal-email-message-input',
+                        },
+                      }}
                       variant={'outlined'}
                       value={emailMessage}
                       onChange={e => setEmailMessage(e.target.value)}
                       placeholder="Add a personal message to include in the email..."
                     />
+                    <FormHelperText data-testid="share-modal-email-message-count">
+                      {emailMessage.length}/{MAX_EMAIL_MESSAGE_LENGTH}
+                    </FormHelperText>
                   </FormControl>
                 )}
               </Box>

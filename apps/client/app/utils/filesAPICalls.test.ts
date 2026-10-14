@@ -15,7 +15,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 vi.mock('axios', () => ({ default: { put: axiosPut, isCancel: () => false } }));
 vi.mock('./imageResizer', () => ({ resizeImageFile: vi.fn(), isImageFile: () => false }));
 
-const { createFabFileOnServerWithUpload, chunkFileUtility } = await import('./filesAPICalls');
+const { createFabFileOnServerWithUpload, chunkFileUtility, moderateFabFileNow } = await import('./filesAPICalls');
 
 const formData = {} as unknown as CreateFabFileRequestInputType;
 const fakeFile = { type: 'text/plain', size: 11 } as unknown as File;
@@ -48,6 +48,25 @@ describe('createFabFileOnServerWithUpload PUT routing', () => {
 
     expect(axiosPut).toHaveBeenCalledWith('https://s3.amazonaws.com/b/x?X-Amz=1', fakeFile, expect.anything());
     expect(apiPut).not.toHaveBeenCalled();
+  });
+});
+
+describe('moderateFabFileNow', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("posts to the file's moderate route and returns the verdict", async () => {
+    apiPost.mockResolvedValue({ data: { moderationStatus: 'clean' } });
+
+    await expect(moderateFabFileNow('ff1')).resolves.toBe('clean');
+    expect(apiPost).toHaveBeenCalledWith('/api/files/ff1/moderate');
+  });
+
+  it("degrades to 'pending' instead of throwing when the request fails", async () => {
+    apiPost.mockRejectedValue(new Error('network'));
+
+    await expect(moderateFabFileNow('ff1')).resolves.toBe('pending');
   });
 });
 

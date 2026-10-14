@@ -212,7 +212,95 @@ describe('stripSignupGateHtml', () => {
   });
 });
 
-// The brand card exactly as pages published before stripShareFooterCtaBeforeGate existed carry
+describe('baked gate detection', () => {
+  // A full-HTML artifact never has a gate baked in, but its own body may contain the gate markup.
+  const authorPage = (gateHtml: string) =>
+    `<html><body><h1>About the gate</h1>${gateHtml}<p>more author content</p></body></html>`;
+
+  it('leaves author content that contains the gate markup untouched', async () => {
+    const { buildSignupGateHtml, hasSignupGateHtml, replaceSignupGateHtml, stripSignupGateHtml } =
+      await import('./shareFooter');
+    const page = authorPage(buildSignupGateHtml().html);
+    expect(hasSignupGateHtml(page)).toBe(false);
+    expect(stripSignupGateHtml(page)).toBe(page);
+    expect(replaceSignupGateHtml(page, { starterCredits: 2500 })).toBe(page);
+  });
+
+  it('leaves a bare marker in author content untouched', async () => {
+    const { stripSignupGateHtml } = await import('./shareFooter');
+    const page = authorPage('<input type="checkbox" id="b4m-gate-dismiss">');
+    expect(stripSignupGateHtml(page)).toBe(page);
+  });
+
+  it('ignores a gate that is not the last element before the closing body tag', async () => {
+    const { buildSignupGateHtml, stripSignupGateHtml } = await import('./shareFooter');
+    const { html } = buildSignupGateHtml();
+    const page = `<html><body><p>content</p>${html}<div>trailing</div></body></html>`;
+    expect(stripSignupGateHtml(page)).toBe(page);
+  });
+
+  it('still finds the real gate when author content earlier in the page quotes it', async () => {
+    const { buildSignupGateHtml, stripSignupGateHtml } = await import('./shareFooter');
+    const { html } = buildSignupGateHtml();
+    const page = `<html><body><div>${html}</div><p>after</p>${html}</body></html>`;
+    expect(stripSignupGateHtml(page)).toBe(`<html><body><div>${html}</div><p>after</p></body></html>`);
+  });
+
+  it('finds a gate baked on a freshly rendered artifact page', async () => {
+    const { renderArtifactIndexHtml } = await import('@server/services/publish/renderArtifactHtml');
+    const { hasSignupGateHtml, stripSignupGateHtml } = await import('./shareFooter');
+    const page = renderArtifactIndexHtml('code', 'const x = 1;', 'T');
+    expect(hasSignupGateHtml(page)).toBe(true);
+    expect(stripSignupGateHtml(page)).not.toContain('id="b4m-gate-panel"');
+  });
+
+  it('strips the original overlay-style gate that older published pages carry', async () => {
+    const { hasSignupGateHtml, stripSignupGateHtml } = await import('./shareFooter');
+    const legacyGate = [
+      '<input type="checkbox" id="b4m-gate-dismiss" style="display:none">',
+      '<div id="b4m-gate-ol" aria-hidden="true"></div>',
+      '<div id="b4m-gate-panel" role="dialog" aria-label="Sign up to continue reading">',
+      '<div class="b4m-gate-handle" aria-hidden="true"></div>',
+      '<div class="b4m-gate-inner"><a href="/register" class="b4m-cta-btn">Sign up</a>',
+      '<label for="b4m-gate-dismiss" class="b4m-dismiss-label">No, I like my walled garden</label>',
+      '</div></div>',
+    ].join('');
+    const page = `<html><body><p>content</p>${legacyGate}</body></html>`;
+    expect(hasSignupGateHtml(page)).toBe(true);
+    expect(stripSignupGateHtml(page)).toBe('<html><body><p>content</p></body></html>');
+  });
+
+  // A full-HTML artifact that quotes the whole gate as the very last thing in its body is only
+  // protected by the share footer the renderer injects after it, so this pins both outcomes.
+  describe('a full-HTML artifact whose body ends with a quoted gate', () => {
+    async function renderAndStrip(env: Record<string, string>) {
+      vi.resetModules();
+      vi.unstubAllEnvs();
+      for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
+      const { renderArtifactIndexHtml } = await import('@server/services/publish/renderArtifactHtml');
+      const { buildSignupGateHtml, stripSignupGateHtml } = await import('./shareFooter');
+      const page = renderArtifactIndexHtml(
+        'html',
+        `<html><body><p>docs</p>${buildSignupGateHtml().html}</body></html>`,
+        'T'
+      );
+      return { page, stripped: stripSignupGateHtml(page) };
+    }
+
+    it('keeps the quoted gate while the renderer injects the share footer after it', async () => {
+      const { page, stripped } = await renderAndStrip({ NEXT_PUBLIC_WEBSITE_URL: 'https://acme.example' });
+      expect(stripped).toBe(page);
+    });
+
+    it('loses the quoted gate when no marketing URL is configured (accepted limitation)', async () => {
+      const { page, stripped } = await renderAndStrip({ NEXT_PUBLIC_WEBSITE_URL: '' });
+      expect(stripped).not.toBe(page);
+      expect(stripped).toContain('<p>docs</p>');
+    });
+  });
+});
+
+// The brand card exactly as pages published before holdShareFooterCtaBeforeGate existed carry
 // it (text wordmark, default palette). Pinned so a markup change cannot silently strand them.
 const LEGACY_FOOTER_CARD = `<div style="margin-top:3rem;display:flex;justify-content:center;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif">
   <a href="https://acme.example/?utm_source=shared-artifact&utm_medium=share-footer&utm_campaign=publish&utm_content=artifact" target="_blank" rel="noopener noreferrer"
@@ -231,68 +319,78 @@ ${' '.repeat(6)}
   </a>
 </div>`;
 
-describe('stripShareFooterCtaBeforeGate', () => {
+describe('holdShareFooterCtaBeforeGate', () => {
   const ACME = { NEXT_PUBLIC_WEBSITE_URL: 'https://acme.example', NEXT_PUBLIC_APP_NAME: 'Acme' };
   const countCtas = (html: string) =>
     (html.match(/utm_medium=share-footer/g) ?? []).length + (html.match(/id="b4m-gate-panel"/g) ?? []).length;
+  const held = (card: string) => `<div id="b4m-footer-held" style="display:none">${card}</div>`;
 
   it('still emits the pinned legacy card bytes', async () => {
     const build = await loadFooter(ACME);
     expect(build({ source: 'artifact' })).toBe(LEGACY_FOOTER_CARD);
   });
 
-  it('leaves exactly one sign-up CTA (the gate) on a freshly rendered artifact page', async () => {
+  it('leaves exactly one visible sign-up CTA (the gate) on a freshly rendered artifact page', async () => {
     vi.resetModules();
     vi.unstubAllEnvs();
     for (const [k, v] of Object.entries(ACME)) vi.stubEnv(k, v);
     const { renderArtifactIndexHtml } = await import('@server/services/publish/renderArtifactHtml');
-    const { stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const { holdShareFooterCtaBeforeGate } = await import('./shareFooter');
     const page = renderArtifactIndexHtml('html', '<p>body</p>', 'T');
     expect(countCtas(page)).toBe(2);
 
-    const stripped = stripShareFooterCtaBeforeGate(page);
-    expect(countCtas(stripped)).toBe(1);
+    const stripped = holdShareFooterCtaBeforeGate(page);
+    const heldAt = stripped.indexOf('<div id="b4m-footer-held" style="display:none">');
+    expect(heldAt).toBeGreaterThan(-1);
+    expect(countCtas(stripped.slice(0, heldAt))).toBe(0);
+    expect(stripped.indexOf('utm_medium=share-footer')).toBeGreaterThan(heldAt);
     expect(stripped).toContain('id="b4m-gate-panel"');
     expect(stripped).toContain('<p>body</p>');
     expect(stripped.endsWith('</body></html>')).toBe(true);
   });
 
-  it('removes a legacy baked card that sits right before the gate', async () => {
-    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+  it('holds a legacy baked card that sits right before the gate', async () => {
+    const { buildSignupGateHtml, holdShareFooterCtaBeforeGate } = await import('./shareFooter');
     const gate = buildSignupGateHtml();
     const page = `<html><body><p>content</p>${LEGACY_FOOTER_CARD}${gate.html}</body></html>`;
-    expect(stripShareFooterCtaBeforeGate(page)).toBe(`<html><body><p>content</p>${gate.html}</body></html>`);
+    expect(holdShareFooterCtaBeforeGate(page)).toBe(
+      `<html><body><p>content</p>${held(LEGACY_FOOTER_CARD)}${gate.html}</body></html>`
+    );
   });
 
   it('is a no-op without a gate, so a full-document artifact keeps its only CTA', async () => {
-    const { stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const { holdShareFooterCtaBeforeGate } = await import('./shareFooter');
     const page = `<html><body><p>content</p>${LEGACY_FOOTER_CARD}</body></html>`;
-    expect(stripShareFooterCtaBeforeGate(page)).toBe(page);
+    expect(holdShareFooterCtaBeforeGate(page)).toBe(page);
   });
 
-  it('removes the card when a pipeline left CRLF or whitespace around its close', async () => {
-    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+  it('holds the card when a pipeline left CRLF or whitespace around its close', async () => {
+    const { buildSignupGateHtml, holdShareFooterCtaBeforeGate } = await import('./shareFooter');
     const gate = buildSignupGateHtml();
     const crlf = LEGACY_FOOTER_CARD.replace(/\n/g, '\r\n');
     const page = `<html><body><p>content</p>${crlf}\r\n  ${gate.html}</body></html>`;
-    expect(stripShareFooterCtaBeforeGate(page)).toBe(`<html><body><p>content</p>${gate.html}</body></html>`);
+    expect(holdShareFooterCtaBeforeGate(page)).toBe(
+      `<html><body><p>content</p>${held(crlf)}${gate.html}</body></html>`
+    );
   });
 
-  it('strips only the card in front of the last (baked) gate when content quotes the marker', async () => {
-    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+  it('holds only the card in front of the last (baked) gate when content quotes the marker', async () => {
+    const { buildSignupGateHtml, holdShareFooterCtaBeforeGate } = await import('./shareFooter');
     const gate = buildSignupGateHtml();
     const quoted = `<p>${gate.html}</p>`;
     const page = `<html><body>${quoted}${LEGACY_FOOTER_CARD}${gate.html}</body></html>`;
-    expect(stripShareFooterCtaBeforeGate(page)).toBe(`<html><body>${quoted}${gate.html}</body></html>`);
+    expect(holdShareFooterCtaBeforeGate(page)).toBe(
+      `<html><body>${quoted}${held(LEGACY_FOOTER_CARD)}${gate.html}</body></html>`
+    );
   });
 
   it('stays linear on a very large page with a far-away card lookalike', async () => {
-    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+    const { buildSignupGateHtml, holdShareFooterCtaBeforeGate } = await import('./shareFooter');
     const gate = buildSignupGateHtml();
     const open = LEGACY_FOOTER_CARD.slice(0, LEGACY_FOOTER_CARD.indexOf('\n'));
     const page = `<html><body>${open}${'<div>x</div>'.repeat(500_000)}${gate.html}</body></html>`;
     const started = performance.now();
-    expect(stripShareFooterCtaBeforeGate(page)).toBe(page);
+    expect(holdShareFooterCtaBeforeGate(page)).toBe(page);
     expect(performance.now() - started).toBeLessThan(1000);
   });
 
@@ -304,12 +402,12 @@ describe('stripShareFooterCtaBeforeGate', () => {
     expect(hasShareFooterCardHtml('<html><body><p>utm_medium=share-footer</p></body></html>')).toBe(false);
   });
 
-  it('never removes artifact content that merely starts like the card', async () => {
-    const { buildSignupGateHtml, stripShareFooterCtaBeforeGate } = await import('./shareFooter');
+  it('never hides artifact content that merely starts like the card', async () => {
+    const { buildSignupGateHtml, holdShareFooterCtaBeforeGate } = await import('./shareFooter');
     const gate = buildSignupGateHtml();
     // An author-written lookalike followed by more author content: the span is not the exact card.
     const page = `<html><body>${LEGACY_FOOTER_CARD}<div><p>author</p></div>${gate.html}</body></html>`;
-    expect(stripShareFooterCtaBeforeGate(page)).toBe(page);
+    expect(holdShareFooterCtaBeforeGate(page)).toBe(page);
   });
 });
 

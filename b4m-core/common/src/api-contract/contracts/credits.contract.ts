@@ -24,10 +24,10 @@ export const getCreditBalanceContract = defineEndpoint({
     'before starting one. The subject is always the credential holder; this endpoint accepts no user or ' +
     "owner id. `balance` is the caller's personal ledger; a call billed to an organization draws on a pool " +
     'this number does not describe. Responses are never cacheable. Authenticate with an API key ' +
-    '(`b4m_live_`) carrying any one of `me:read`, `ai:chat` or `ai:generate`, or a JWT.',
+    '(`b4m_live_`) carrying any one of `me:read`, `ai:chat`, `ai:generate` or `ai:decide`, or a JWT.',
   tags: ['Account'],
   auth: 'apiKeyOrJwt',
-  scopes: [ApiKeyScope.ME_READ, ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
+  scopes: [ApiKeyScope.ME_READ, ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_DECIDE],
   emitsRateLimitHeaders: true,
   responses: {
     200: {

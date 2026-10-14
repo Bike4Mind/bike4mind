@@ -153,7 +153,9 @@ describe('the serwist route keeps native esbuild out of the server function', ()
   });
 
   it('registers the patch that removes the branch', () => {
-    expect(read('package.json')).toContain('"@serwist/turbopack@9.5.3": "patches/@serwist__turbopack@9.5.3.patch"');
+    expect(read('pnpm-workspace.yaml')).toContain(
+      '"@serwist/turbopack@9.5.3": "patches/@serwist__turbopack@9.5.3.patch"'
+    );
   });
 
   it('does not declare native esbuild external, which is what made the packager ship it', () => {

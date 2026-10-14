@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
-import { FabFileSourceType, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { FabFileSourceType, KnowledgeType, SupportedFabFileMimeTypes, settingsMap } from '@bike4mind/common';
 import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
 import { createFabFile, createFabFileSchema, type CreateFabFileAdapters } from './create';
 
@@ -352,6 +352,22 @@ describe('createFabFile MaxFileSize enforcement - cleared setting no longer bloc
         mockAdapters
       )
     ).resolves.toBeDefined();
+  });
+
+  it('refuses a file over the cap with a file_too_large code and the byte counts', async () => {
+    const limit = settingsMap.MaxFileSize.defaultValue! * 1024 * 1024;
+
+    await expect(
+      createFabFile(
+        mockUserId,
+        { fileName: 'huge.txt', mimeType: 'text/plain', fileSize: limit + 1, type: KnowledgeType.FILE },
+        mockAdapters
+      )
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      info: { errorCode: 'file_too_large', limit_bytes: limit, requested_bytes: limit + 1, owner: 'user' },
+    });
+    expect(fabFilesCreate).not.toHaveBeenCalled();
   });
 });
 

@@ -18,15 +18,25 @@ import {
 const STALE = 'core dist is stale - run pnpm turbo:core:build (or --force if that reports FULL TURBO)';
 
 // Everything in this file reaches @bike4mind/utils, which resolves to b4m-core/utils/dist
-// rather than source - the client parser imports stripHtmlComments, hasFullHtmlDocument and
-// hasCompleteSvg from it. A dist predating those exports does not fail to link: vitest hands
+// rather than source - the client parser imports its block extraction, the shared promoters and
+// the html/svg predicates from it. A dist predating those exports does not fail to link: vitest hands
 // the importer `undefined` for each missing name, so the first suite to call one dies with
 // `TypeError: stripHtmlComments is not a function` pointing at client source, and ~20 further
 // suites follow, none of them naming the real cause. Checking the export surface once, up
 // front, turns that into a single attributable failure.
 beforeAll(async () => {
   const core: Record<string, unknown> = await import('@bike4mind/utils/artifactParser');
-  for (const name of ['stripHtmlComments', 'hasFullHtmlDocument', 'hasCompleteSvg']) {
+  for (const name of [
+    'stripHtmlComments',
+    'hasFullHtmlDocument',
+    'hasCompleteSvg',
+    'extractArtifactBlocks',
+    'mapLanguageToArtifactType',
+    'promoteToolCallJsonArtifact',
+    'promoteBareHtmlDocument',
+    'convertCodeBlocksToArtifacts',
+    'hasSelfClosingTag',
+  ]) {
     expect(typeof core[name], `${STALE} (missing export: ${name})`).toBe('function');
   }
 });
@@ -213,6 +223,23 @@ describe('parseArtifactsWithFallback', () => {
     expect(result.artifacts).toHaveLength(1);
   });
 
+  it('keeps one mermaid artifact when a fence repeats the body of an explicit mermaid artifact', () => {
+    // Converting only the text left after parsing would drop the explicit artifact from core's
+    // dedupe set and promote the duplicate fence a second time.
+    const flow = 'flowchart TD\n    A[Start] --> B[End]';
+    const input = [
+      `<artifact identifier="flow" type="application/vnd.ant.mermaid" title="Flow">${flow}</artifact>`,
+      '',
+      '```mermaid',
+      flow,
+      '```',
+    ].join('\n');
+
+    const { artifacts } = parseArtifactsWithFallback(input);
+    expect(artifacts.filter(a => a.type === 'mermaid')).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({ identifier: 'flow', title: 'Flow', content: flow });
+  });
+
   it('parses an artifact with single-quoted attribute values', () => {
     const input = "<artifact identifier='widget' type='application/vnd.ant.react' title='My Widget'>code</artifact>";
 
@@ -244,6 +271,23 @@ describe('parseArtifactsWithFallback', () => {
 
     const result = parseArtifactsWithFallback(input);
     expect(result.artifacts).toHaveLength(0);
+  });
+
+  // The client side of the type-default split; core's parseArtifacts drops these blocks.
+  // See the extractArtifactBlocks typeFallback suite in b4m-core/utils/src/artifactParser.test.ts.
+  it('renders an untyped block as a code artifact', () => {
+    const result = parseArtifactsWithFallback('Intro <artifact identifier="x" title="T">body</artifact>');
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0]).toMatchObject({ type: 'code', language: 'text', content: 'body' });
+    expect(result.cleanedContent).toBe('Intro');
+  });
+
+  it('resolves an untyped block through its language attribute', () => {
+    const result = parseArtifactsWithFallback(
+      '<artifact identifier="x" language="tsx" title="T">export default function App() { return null; }</artifact>'
+    );
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0]).toMatchObject({ type: 'react', language: 'tsx' });
   });
 });
 
@@ -278,7 +322,9 @@ describe('hasCompleteOpeningTag', () => {
  * Small local models hallucinate a builder tool (e.g. build_html) and return the
  * artifact as tool-call JSON rather than an <artifact> tag or ```html fence. The
  * HTML in its arguments must be promoted, while ordinary JSON stays untouched.
- * Mirrors the twin suite in b4m-core/utils/src/artifactParser.test.ts.
+ * The promoter is core's promoteToolCallJsonArtifact; these cases pin it through the client's
+ * parseArtifactsWithFallback, which converts with core's detectors. Core's own cases live in
+ * b4m-core/utils/src/artifactParser.test.ts.
  */
 describe('parseArtifactsWithFallback - tool-call JSON promotion', () => {
   const buildHtmlCall = (html: string) => JSON.stringify({ name: 'build_html', arguments: { html } });
@@ -361,7 +407,8 @@ describe('parseArtifactsWithFallback - tool-call JSON promotion', () => {
 /**
  * A small local model stubs out an image as an empty <svg> placeholder alongside a
  * real generated image; it renders as a blank canvas and must be suppressed.
- * Mirrors the twin suite in b4m-core/utils/src/artifactParser.test.ts.
+ * The predicate is core's isSvgGraphicallyEmpty; the filter is applied separately by each
+ * parseArtifacts, so this pins the client's. Core's: b4m-core/utils/src/artifactParser.test.ts.
  */
 describe('parseArtifactsWithFallback - graphically-empty SVG suppression', () => {
   // The exact stub observed from qwen2.5-coder:7b on "generate fish image please".
@@ -987,9 +1034,9 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
 });
 
 /**
- * promoteBareHtmlDocument is module-private and runs last inside
- * convertCodeBlocksToArtifacts, so these cases drive it through the public entry point.
- * MUST STAY IN SYNC with the twin suite in b4m-core/utils/src/artifactParser.test.ts.
+ * promoteBareHtmlDocument is core's, called inside the convertCodeBlocksToArtifacts this module
+ * re-exports. These cases pin it through the client entry point; core's suite
+ * (b4m-core/utils/src/artifactParser.test.ts) runs the same inputs directly.
  */
 describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
   const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
@@ -1059,13 +1106,9 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
 });
 
 /**
- * apps/client depends on @bike4mind/utils, so this is the one suite that can reach
- * both parser copies and catch silent drift between the two MUST-STAY-IN-SYNC files.
- * Only behaviors both parsers genuinely implement are covered here: core has no
- * python-artifact promotion at all (that predicate is a client-only surface, unlike
- * the react fences, which are also excluded - the per-language react predicates
- * differ from core's hasReactComponentLine by design), so the python case below
- * only pins the one shape both agree on (a small fence neither promotes).
+ * The client's convertCodeBlocksToArtifacts is a re-export of core's, so this suite no longer
+ * guards two detector copies. It pins that the client parseArtifacts (render-specific stripping)
+ * and core's agree over the shared convert, and it catches a stale core dist (below).
  *
  * The core side of this comparison (coreConvertCodeBlocksToArtifacts / coreParseArtifacts)
  * resolves through @bike4mind/utils' package exports to b4m-core/utils/dist, not source.
@@ -1156,8 +1199,7 @@ describe('parity with the core parser', () => {
       promoted: true,
       type: 'html',
     },
-    // Only shape where core and client agree on python: core never promotes any
-    // python fence, so this pins the negative case rather than the (client-only) positive one.
+    // A one-line fence is below the python pass's "substantial code" bar.
     { name: 'a trivial python fence', input: '```python\nprint("hi")\n```', promoted: false },
     {
       name: 'an html document sitting inside a generic (unlabeled) code fence',

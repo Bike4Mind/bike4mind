@@ -1,3 +1,4 @@
+import { adminSettingsRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
 import { OrgSubscriptionSubscribeSchema, StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
@@ -24,6 +25,14 @@ const handler = baseApi()
 
     if (priceId !== ORGANIZATION_SUBSCRIPTION_PRICE_ID) {
       throw new BadRequestError('Invalid Organization Subscription Price ID');
+    }
+
+    // enableTeamPlan is the single gate for NEW Team purchases (mirrors the availabilityFlag check in
+    // pages/api/subscriptions/subscribe.ts). This route only ever starts a new checkout; seat changes,
+    // the billing portal, renewals and admin grants use other routes and stay open with the flag off.
+    // `=== true` so a missing or non-boolean value fails closed.
+    if ((await adminSettingsRepository.getSettingsValue('enableTeamPlan')) !== true) {
+      throw new BadRequestError('Team plans are not available right now.');
     }
 
     // Admin-configured paid-plan floor/ceiling (Admin -> Growth & Pricing).

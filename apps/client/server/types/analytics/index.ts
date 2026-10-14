@@ -49,6 +49,8 @@ import {
   MarketingReportEventPayload,
   BriefcaseEvents,
   BriefcaseEventPayload,
+  CreditPurchaseEvents,
+  CreditPurchaseEventPayload,
 } from '@bike4mind/common';
 import {
   AdminConfigAuditEvents,
@@ -83,6 +85,7 @@ export const ANALYTICS_EVENTS = {
   ...OrganizationEvents,
   ...SlackEvents,
   ...HelpEvents,
+  ...CreditPurchaseEvents,
   // Audit-log event families (registered so logAuditEvent -> logEvent does
   // not throw "Invalid counter event" inside withTransaction handlers).
   ...EmailAuditEvents,
@@ -118,4 +121,5 @@ export type AnalyticsEventPayloads =
   | SlackEventPayload
   | HelpEventPayload
   | MarketingReportEventPayload
-  | BriefcaseEventPayload;
+  | BriefcaseEventPayload
+  | CreditPurchaseEventPayload;

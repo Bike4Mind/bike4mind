@@ -24,6 +24,7 @@ export const h = {
   hasUsableKey: vi.fn(),
   providersGet: vi.fn(),
   resolveBillingOrgId: vi.fn(),
+  orgFindAccessibleById: vi.fn(),
 };
 
 export const VALID_KEY = 'sk-test-valid-key';
@@ -76,10 +77,15 @@ export const videoJobsServiceMock = async (orig: ImportOriginal) => ({
 export const databaseMock = async (orig: ImportOriginal) => {
   const actual = await orig<ModuleExports>();
   const RealUser = actual.User as Record<string, unknown>;
+  const realOrgs = actual.organizationRepository as Record<string, unknown>;
   return {
     ...actual,
     connectDB: vi.fn().mockResolvedValue(undefined),
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => h.userFindById(...a) }),
+    // Only the membership gate the real resolveBillingOrgId reaches for a non-admin caller.
+    organizationRepository: Object.assign(Object.create(realOrgs), {
+      shareable: { findAccessibleById: (...a: unknown[]) => h.orgFindAccessibleById(...a) },
+    }),
     generationJobRepository: {
       listByRequester: (...a: unknown[]) => h.listByRequester(...a),
       findById: (...a: unknown[]) => h.findById(...a),

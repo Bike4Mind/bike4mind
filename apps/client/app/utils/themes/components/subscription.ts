@@ -5,7 +5,7 @@ export const subscriptionTheme = {
     creditsModal: {
       subtitleColor: brand[100],
       dividerBackground: brandAlpha[100][8],
-      iconFill: 'transparent',
+      iconFill: brandAlpha[100][50],
     },
   },
   light: {

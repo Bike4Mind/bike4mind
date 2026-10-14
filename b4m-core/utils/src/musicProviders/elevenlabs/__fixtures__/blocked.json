@@ -1,0 +1,38 @@
+{
+  "scenario": "blocked",
+  "recordedAt": "2026-10-13T12:25:30.769Z",
+  "exchanges": [
+    {
+      "name": "generate",
+      "request": {
+        "method": "POST",
+        "path": "/v1/music/detailed?output_format=mp3_44100_128",
+        "body": {
+          "model_id": "music_v2_5",
+          "prompt": "<redacted:blocked-prompt>",
+          "music_length_ms": 10000,
+          "force_instrumental": false
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "detail": {
+            "type": "invalid_request",
+            "code": "bad_request",
+            "message": "Your prompt appears to have violated our Terms of Service. Please try again with a different prompt.",
+            "status": "bad_prompt",
+            "request_id": "4aa65f47dc773db00c570fd4c11fa440",
+            "data": {
+              "reason": "copyrighted_material_detected",
+              "prompt_suggestion": "<redacted:prompt-suggestion>"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

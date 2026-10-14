@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "Abonelik",
-    "description": "Tek bir birleşik arayüz aracılığıyla her büyük AI modeline erişin. Deepseek R1 gibi gelişmiş modelleri özel olarak çalıştırın.",
+    "description": "Tek bir birleşik arayüz aracılığıyla her büyük AI modeline erişin.",
     "no_free_tier": "ÜCRETSİZ SEVİYE YOK - PROFESYONELLERE YÖNELİK.",
     "credits_rollover": "Kullanılmayan krediler 3 ay boyunca devredilir.",
     "monthly_billing": "Aylık Faturalama",

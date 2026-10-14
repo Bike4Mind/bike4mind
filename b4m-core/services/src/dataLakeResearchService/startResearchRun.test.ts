@@ -1,8 +1,18 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IDataLakeDocument, IDataLakeResearchConfigDocument } from '@bike4mind/common';
+import { getQuestErrorCode, usdToCredits } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
+
+// The pre-flight keys off `enforceCredits` alone; pin it rather than standing up the settings cache.
+// The gate itself is covered by isOperationalBillingEnabled.test.ts.
+const { areCreditsEnforcedMock } = vi.hoisted(() => ({ areCreditsEnforcedMock: vi.fn() }));
+vi.mock('../billing/isOperationalBillingEnabled', () => ({
+  areCreditsEnforced: (...args: unknown[]) => areCreditsEnforcedMock(...args),
+}));
+
 import {
+  isResearchRunCreditRefusal,
   isResearchRunRefusal,
   RESEARCH_RUNS_PER_LAKE_PER_DAY,
   startResearchRun,
@@ -47,6 +57,8 @@ const makeAdapters = (
     config?: IDataLakeResearchConfigDocument | null;
     active?: number;
     startedToday?: number;
+    owner?: { id: string; currentCredits?: number; organizationId?: string | null } | null;
+    organization?: { id: string; currentCredits?: number } | null;
   } = {}
 ) => {
   const configs = {
@@ -59,12 +71,38 @@ const makeAdapters = (
     countStartedSince: vi.fn(async () => overrides.startedToday ?? 0),
   };
   const record = vi.fn(async () => undefined);
+  const users = { findById: vi.fn(async () => (overrides.owner === undefined ? fundedOwner() : overrides.owner)) };
+  const organizations = {
+    findById: vi.fn(async () => (overrides.organization === undefined ? null : overrides.organization)),
+  };
   const adapters = {
-    db: { dataLakeResearchConfigs: configs, dataLakeResearchRuns: runs, lakeConfigChangeEvents: { record } },
+    db: {
+      dataLakeResearchConfigs: configs,
+      dataLakeResearchRuns: runs,
+      lakeConfigChangeEvents: { record },
+      adminSettings: {},
+      users,
+      organizations,
+    },
     now: () => NOW,
   } as unknown as StartResearchRunAdapters;
-  return { adapters, configs, runs, record };
+  return { adapters, configs, runs, record, users, organizations };
 };
+
+/** Comfortably more than the default $0.05 ceiling is worth, so the pre-flight passes. */
+const fundedOwner = (overrides: Record<string, unknown> = {}) => ({
+  id: ACTOR,
+  currentCredits: 1_000_000,
+  organizationId: null,
+  ...overrides,
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Billing on by default: the pre-flight tests below turn it off explicitly, and every other test
+  // in this file would otherwise be asserting the ungated behaviour this change exists to remove.
+  areCreditsEnforcedMock.mockResolvedValue(true);
+});
 
 describe('startResearchRun', () => {
   it('queues a run carrying a normalized snapshot of the configuration levers', async () => {
@@ -162,6 +200,81 @@ describe('startResearchRun', () => {
     const { adapters, runs } = makeAdapters();
     await startResearchRun('config-1', lake(), onDemand(), adapters);
     expect(runs.countStartedSince).toHaveBeenCalledWith(LAKE, new Date('2026-02-28T12:00:00.000Z'));
+  });
+
+  describe('balance pre-flight', () => {
+    // The whole point of the change: a manager with no credits can no longer start a run that the
+    // platform pays for. Refused BEFORE the row exists, so a retry finds no orphan run.
+    it('refuses to start when the owner cannot cover the run ceiling, creating no run', async () => {
+      const { adapters, runs } = makeAdapters({ owner: fundedOwner({ currentCredits: 0 }) });
+
+      const refusal = await startResearchRun('config-1', lake(), onDemand(), adapters).catch(e => e);
+
+      expect(runs.createRun).not.toHaveBeenCalled();
+      // A 422 tagged `insufficient_credits`, the classifier the web UI's Add Credits CTA keys on.
+      expect(getQuestErrorCode(refusal)).toBe('insufficient_credits');
+      expect(isResearchRunCreditRefusal(refusal)).toBe(true);
+    });
+
+    it('charges the ceiling, not the expected spend, and rejects a balance one credit short of it', async () => {
+      const ceilingMicroUsd = 5_000_000; // $5.00 - the max ceiling
+      const required = usdToCredits(ceilingMicroUsd / 1_000_000);
+      const { adapters, runs } = makeAdapters({
+        config: storedConfig({ costCeilingMicroUsd: ceilingMicroUsd }),
+        owner: fundedOwner({ currentCredits: required - 1 }),
+      });
+
+      await expect(startResearchRun('config-1', lake(), onDemand(), adapters)).rejects.toThrow(/credits/);
+      expect(runs.createRun).not.toHaveBeenCalled();
+    });
+
+    it('starts the run when the balance exactly covers the ceiling', async () => {
+      const ceilingMicroUsd = 50_000;
+      const { adapters, runs } = makeAdapters({
+        owner: fundedOwner({ currentCredits: usdToCredits(ceilingMicroUsd / 1_000_000) }),
+      });
+
+      await startResearchRun('config-1', lake(), onDemand(), adapters);
+
+      expect(runs.createRun).toHaveBeenCalled();
+    });
+
+    // Same holder the settlement charges (deductCreditsWithOrgSupport), so the check and the charge
+    // cannot disagree about who pays: a flush owner does not vouch for a broke org.
+    it("checks the owner's organization pool when they belong to one", async () => {
+      const { adapters, runs, organizations } = makeAdapters({
+        owner: fundedOwner({ organizationId: 'org-1' }),
+        organization: { id: 'org-1', currentCredits: 0 },
+      });
+
+      await expect(startResearchRun('config-1', lake(), onDemand(), adapters)).rejects.toThrow(/organization/);
+      expect(organizations.findById).toHaveBeenCalledWith('org-1');
+      expect(runs.createRun).not.toHaveBeenCalled();
+    });
+
+    // The pre-flight and the settlement key off the same switch (enforceCredits): a deployment that
+    // does not meter credits must not start refusing research it would never charge for.
+    it('does not refuse when credits are not enforced on this deployment', async () => {
+      areCreditsEnforcedMock.mockResolvedValue(false);
+      const { adapters, runs, users } = makeAdapters({ owner: fundedOwner({ currentCredits: 0 }) });
+
+      await startResearchRun('config-1', lake(), onDemand(), adapters);
+
+      expect(runs.createRun).toHaveBeenCalled();
+      // Short-circuited before the holder read - nothing to check against.
+      expect(users.findById).not.toHaveBeenCalled();
+    });
+
+    // No owner means nothing can be billed, the same reason assertOwnerHasCredits throws on a null
+    // owner rather than passing.
+    it('refuses when the lake owner cannot be resolved', async () => {
+      const { adapters, runs } = makeAdapters({ owner: null });
+
+      const refusal = await startResearchRun('config-1', lake(), onDemand(), adapters).catch(e => e);
+
+      expect(getQuestErrorCode(refusal)).toBe('insufficient_credits');
+      expect(runs.createRun).not.toHaveBeenCalled();
+    });
   });
 
   // Starting a research run left no trace in the lake's History tab.

@@ -49,7 +49,7 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: h.recomputeUploaded,
 }));
-vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
+vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
   completedBatchStatus: h.completedBatchStatus,
 }));
@@ -275,6 +275,19 @@ describe('objectCreated - moderation claim identity', () => {
       { $set: { moderationStatus: 'clean' }, $unset: { moderationClaimedAt: 1 } },
       { session: undefined }
     );
+  });
+
+  it("adopts the winner's byte-sniffed mime type when it loses the claim", async () => {
+    // The on-demand route can win the claim and persist a corrected type; running the lake stats on
+    // the client-declared one would classify the file wrongly.
+    h.findOneAndUpdate.mockResolvedValue(null);
+    h.findById.mockReturnValue({ session: () => ({ moderationStatus: 'clean', mimeType: 'image/jpeg' }) });
+
+    await run();
+
+    expect(h.moderateUploadedFile).not.toHaveBeenCalled();
+    expect(file.mimeType).toBe('image/jpeg');
+    expect(h.recomputeUploaded).toHaveBeenCalledWith(file, { logger });
   });
 
   it('discards its verdict and reports pending when the claim was superseded mid-scan', async () => {

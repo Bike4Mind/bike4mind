@@ -176,17 +176,11 @@ export function registerContract(contract: EndpointContract): void {
     };
   }
 
-  // Any NON-streaming contract with a request body, path params, or query params
-  // documents its validation failure status. 422 is the default; legacy routes can
-  // preserve a published 400 with validationErrorStatus.
-  // Streaming endpoints are excluded: they open the stream first, so a bad body
-  // arrives as an in-band SSE `error` event, not a JSON error body.
+  // Any contract with a request body, path params, or query params documents its validation
+  // failure status. 422 is the default; legacy routes can preserve a published 400 with
+  // validationErrorStatus. Streaming contracts included: they validate before the stream opens.
   const validationStatus = contract.validationErrorStatus ?? 422;
-  if (
-    (contract.request || contract.pathParams || contract.queryParams) &&
-    !contract.streaming &&
-    !responses[String(validationStatus)]
-  ) {
+  if ((contract.request || contract.pathParams || contract.queryParams) && !responses[String(validationStatus)]) {
     responses[String(validationStatus)] = {
       description: 'Request failed validation.',
       content: { 'application/json': { schema: ErrorResponse } },
@@ -196,11 +190,9 @@ export function registerContract(contract: EndpointContract): void {
   // Same reasoning for the auth failures every authenticated route can return:
   // apiKeyAuth 401s a missing/invalid credential and 403s an under-scoped key.
   // Documenting them centrally keeps generated SDKs honest without every author
-  // remembering to declare them. Streaming endpoints are excluded: once the
-  // stream opens the status stays 200 and auth/scope failures arrive as an
-  // in-band SSE `error` event, not an HTTP 401/403. A contract may still
-  // override either.
-  if (contract.auth !== 'public' && !contract.streaming) {
+  // remembering to declare them. Streaming contracts authenticate before the stream
+  // opens, so they get them too. A contract may still override either.
+  if (contract.auth !== 'public') {
     if (!responses['401']) {
       responses['401'] = {
         description: 'Missing or invalid credentials.',

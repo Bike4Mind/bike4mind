@@ -104,6 +104,27 @@ describe('useLakeDriveConnection', () => {
     const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.filesOf('lake_1'));
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.tagCountsRoot);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.skippedFilesOf('lake_1'));
+  });
+
+  it('refreshes the not-ingested list once a sync finishes', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    get.mockResolvedValueOnce({ data: { connection: { id: 'c1', status: 'syncing', fileCount: 3 } } });
+    const { result } = renderHook(() => useLakeDriveConnection('lake_1'), { wrapper });
+    await waitFor(() => expect(result.current.data).toMatchObject({ status: 'syncing' }));
+    expect(invalidateSpy).not.toHaveBeenCalled();
+
+    get.mockResolvedValueOnce({ data: { connection: { id: 'c1', status: 'connected', fileCount: 3 } } });
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.skippedFilesOf('lake_1'));
   });
 });
 
@@ -214,6 +235,8 @@ describe('driveConnectionPollInterval', () => {
     lastError: null,
     lastUsedAt: null,
     connectedAt: null,
+    lastPolledAt: null,
+    syncSchedule: { mode: 'manual' },
     fileCount: 0,
     disconnecting: false,
     disconnectStalled: false,

@@ -52,8 +52,11 @@ import {
 } from '@bike4mind/common';
 import {
   buildThinkingParams,
+  planReasoningEffort,
   resolveOutputMaxTokens,
   THINKING_ANSWER_HEADROOM_TOKENS,
+  type AnthropicEffort,
+  type ReasoningEffortPlan,
   type ThinkingConfig,
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
@@ -75,10 +78,10 @@ import {
   type DegenerateStreamVerdict,
 } from './degenerateStreamGuard';
 
-type ExtendedMessageCreateParams = MessageCreateParamsBase &
-  Partial<Omit<ThinkingConfig, 'output_config'>> & {
-    output_config?: { effort?: 'high' | 'medium' | 'low'; format?: JSONOutputFormat };
-  };
+type ExtendedMessageCreateParams = Omit<MessageCreateParamsBase, 'thinking'> & {
+  thinking?: ThinkingConfig['thinking'] | { type: 'disabled' };
+  output_config?: { effort?: AnthropicEffort; format?: JSONOutputFormat };
+};
 
 interface ToolUseEvent {
   type: 'tool_use';
@@ -398,7 +401,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_OPUS,
         type: 'text',
-        name: 'Claude 4 Opus',
+        name: 'Claude Opus 4',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 32000,
@@ -424,7 +427,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_1_OPUS,
         type: 'text',
-        name: 'Claude 4.1 Opus',
+        name: 'Claude Opus 4.1',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -446,7 +449,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_SONNET,
         type: 'text',
-        name: 'Claude 4 Sonnet',
+        name: 'Claude Sonnet 4',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -475,7 +478,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_5_SONNET,
         type: 'text',
-        name: 'Claude 4.5 Sonnet',
+        name: 'Claude Sonnet 4.5',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -500,7 +503,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_5_HAIKU,
         type: 'text',
-        name: 'Claude 4.5 Haiku',
+        name: 'Claude Haiku 4.5',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 64000,
@@ -521,7 +524,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_5_OPUS,
         type: 'text',
-        name: 'Claude 4.5 Opus',
+        name: 'Claude Opus 4.5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -544,7 +547,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_6_SONNET,
         type: 'text',
-        name: 'Claude 4.6 Sonnet',
+        name: 'Claude Sonnet 4.6',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -569,7 +572,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_SONNET,
         type: 'text',
-        name: 'Claude 5 Sonnet',
+        name: 'Claude Sonnet 5',
         backend: ModelBackend.Anthropic,
         contextWindow: 1_000_000,
         max_tokens: 128_000,
@@ -595,7 +598,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_6_OPUS,
         type: 'text',
-        name: 'Claude 4.6 Opus',
+        name: 'Claude Opus 4.6',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -618,7 +621,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_7_OPUS,
         type: 'text',
-        name: 'Claude 4.7 Opus',
+        name: 'Claude Opus 4.7',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -642,7 +645,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_8_OPUS,
         type: 'text',
-        name: 'Claude 4.8 Opus',
+        name: 'Claude Opus 4.8',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -695,7 +698,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_OPUS,
         type: 'text',
-        name: 'Claude 5 Opus',
+        name: 'Claude Opus 5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -718,7 +721,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_5_OPUS,
         type: 'text',
-        name: 'Claude 5.5 Opus',
+        name: 'Claude Opus 5.5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -741,7 +744,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_5_HAIKU,
         type: 'text',
-        name: 'Claude 5.5 Haiku',
+        name: 'Claude Haiku 5.5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -761,7 +764,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         releaseDate: '2026-10-07',
         description:
-          "Anthropic's fastest model. Claude 5.5 Haiku targets high-volume, latency-sensitive work such as classification, extraction, routing and subagents, with adaptive thinking and a 1M-token context window.",
+          "Anthropic's fastest model. Claude Haiku 5.5 targets high-volume, latency-sensitive work such as classification, extraction, routing and subagents, with adaptive thinking and a 1M-token context window.",
       },
     ];
   }
@@ -777,6 +780,29 @@ export class AnthropicBackend implements ICompletionBackend {
    */
   private modelRecordFor(model: string): ModelInfo | undefined {
     return this.getModelInfoList().find(m => m.id === model) ?? this._dispatch.for(model);
+  }
+
+  /** Writes a reasoningEffort plan onto the request; true when it leaves thinking on. */
+  private applyReasoningEffortPlan(apiParams: ExtendedMessageCreateParams, plan: ReasoningEffortPlan): boolean {
+    switch (plan.kind) {
+      case 'default':
+        return false;
+      case 'off':
+        // The pinned SDK types predate `between_tools` (Sonnet 5.5's off switch); the API accepts it.
+        apiParams.thinking = plan.thinking as { type: 'disabled' };
+        return false;
+      case 'adaptive':
+        apiParams.thinking = plan.thinking;
+        // Merged, not assigned: output_config may already carry the structured-output format.
+        apiParams.output_config = { ...apiParams.output_config, ...plan.output_config };
+        return true;
+      case 'budget':
+        apiParams.thinking = plan.thinking;
+        if (plan.temperature === 'delete') delete apiParams.temperature;
+        else apiParams.temperature = plan.temperature;
+        delete apiParams.top_p;
+        return true;
+    }
   }
 
   /** True when only the catalog knows this model - the adapter table does not list it. */
@@ -1216,6 +1242,24 @@ export class AnthropicBackend implements ICompletionBackend {
 
         this.logger.debug(
           `[AnthropicBackend] ${isQuestMaster ? 'QuestMaster' : 'User'} thinking enabled (${currentModelInfo.thinkingStyle ?? 'legacy'}): max_tokens=${apiParams.max_tokens}, effort=${effort}`
+        );
+      } else if (options.reasoningEffort) {
+        const requested = planReasoningEffort(
+          model,
+          currentModelInfo,
+          options.reasoningEffort,
+          apiParams.max_tokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS
+        );
+        // The synthesized response_format tool is forced via tool_choice, which the API rejects
+        // alongside thinking - so only the off switch survives there. Native structured outputs
+        // (models without forced tool use) carry the format in output_config and keep any level.
+        const plan: ReasoningEffortPlan =
+          usingResponseFormatToolUse && (requested.kind === 'adaptive' || requested.kind === 'budget')
+            ? { kind: 'default' }
+            : requested;
+        this.isThinkingEnabled = this.applyReasoningEffortPlan(apiParams, plan);
+        this.logger.debug(
+          `[AnthropicBackend] reasoningEffort=${options.reasoningEffort} -> ${plan.kind}: max_tokens=${apiParams.max_tokens}`
         );
       } else {
         this.isThinkingEnabled = false;

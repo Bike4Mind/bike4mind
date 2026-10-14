@@ -24,6 +24,7 @@ import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowl
 import { chargeStampedKnowledgeStorage, stampImportedKnowledgeRows } from '@server/s3/storageCharge';
 import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
 import { withContext } from '@server/s3/utils';
+import { createOwnedArtifactSourceRefsGuard } from '@server/utils/artifactSourceRefsGuards';
 import type { ClientSession, FilterQuery } from 'mongoose';
 import type {
   IArtifactContentDocument,
@@ -167,6 +168,7 @@ export const createArtifactWrites = (session?: ClientSession) => ({
         tags: [],
       },
       {
+        assertSourceRefsAccessible: createOwnedArtifactSourceRefsGuard(),
         db: {
           artifacts: withSession<IArtifactDocument>(session, Artifact),
           artifactContents: withSession<IArtifactContentDocument>(session, ArtifactContent),

@@ -46,9 +46,7 @@ test.describe('Agents - Navigation, CRUD & Validation', () => {
 
       await projectsPage.createProject(PROJECT_NAME, 'Project for E2E agent tests');
 
-      await expect(projectsPage.page.getByTestId('project-card-name').filter({ hasText: PROJECT_NAME })).toBeVisible({
-        timeout: TIMEOUTS.VISIBLE,
-      });
+      await projectsPage.expectOnProjectPage(PROJECT_NAME);
     });
 
     await test.step('create a custom agent', async () => {

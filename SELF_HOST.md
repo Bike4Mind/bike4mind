@@ -61,10 +61,16 @@ OPENAI_API_KEY=         # GPT
 GEMINI_API_KEY=         # Google Gemini
 XAI_API_KEY=            # Grok
 DEEPSEEK_API_KEY=       # DeepSeek
+TYPESAFE_API_KEY=       # TypeSafe Jev (Decisions API models)
+SYSTEMONE_BASE_URL=     # optional: Jev-compatible server such as self-hosted Laya (default https://api.typesafe.ai); a malformed value logs an error and disables only the Jev models
 MOONSHOT_API_KEY=       # Kimi
 BFL_API_KEY=            # Black Forest Labs (FLUX image models)
 # ...plus optional GitHub/Google OAuth, Stripe, Slack - see the template
 ```
+
+Hosted (non-self-host) deployments set the TypeSafe key through the `typesafeApiKey` admin setting instead; `TYPESAFE_API_KEY` is read only when `B4M_SELF_HOST=true`.
+
+**Organization feedback summaries** - set **Organization Feedback Summary Model** (`OrgFeedbackSummaryModel`) in Admin Settings to an available model for your configured provider. The default remains Claude 4.5 Haiku via Bedrock. To run without Bedrock, explicitly select another provider's model, for example Claude 4.5 Haiku with `ANTHROPIC_API_KEY` available to the worker. The job uses the system provider credentials, not the requesting user's key. An unavailable selected model fails the job instead of silently choosing another model. Completed-job replay delivers completion again without generating or uploading another summary. Generation is capped at 2,000 output tokens; provider retries can still add cost.
 
 **No API keys? Run local models instead.** You can skip every provider key and run open-weight models (Qwen, Llama, etc.) locally via Ollama, with nothing leaving your machine. See [Local models with Ollama](#local-models-with-ollama-no-api-keys) below.
 
@@ -236,11 +242,11 @@ Authenticate with any one of: `x-api-key: b4m_...`, `Authorization: ApiKey b4m_.
 
 **Response** - a **custom SSE contract, not OpenAI's**: there is no `choices[].delta`. Each frame is either an SSE comment (a line starting with `:`) or a `data:` line carrying one JSON object, and every frame ends with a blank line (`\n\n`). The stream opens and closes in the order below, but the middle is a stream: `content` and `tool_use` frames interleave one per chunk (a tool-calling turn emits `tool_use` frames among the `content` ones), and keep-alive comments keep recurring (about every 10s) throughout:
 
-1. `: keep-alive` - an SSE comment sent immediately and then roughly every 10s so an intermediary does not drop an idle stream. EventSource ignores comment lines; a raw reader should skip any line starting with `:`.
+1. `: keep-alive` - an SSE comment sent once the provider call begins and then roughly every 10s so an intermediary does not drop an idle stream. EventSource ignores comment lines; a raw reader should skip any line starting with `:`.
 2. `data: {"type":"meta","requestId":"..."}` - always the first JSON event; use `requestId` to correlate with server logs.
 3. `data: {"type":"content","text":"...","usage":{...}}` - zero or more content chunks. `text` is the incremental output; `usage`, when present, carries `inputTokens`/`outputTokens` (and Anthropic cache-token deltas).
 4. `data: {"type":"tool_use","text":"...","tools":[...]}` - sent instead of `content` for a chunk in which the model invoked a tool.
-5. `data: {"type":"error","message":"...","requestId":"..."}` - on failure (invalid body, auth failure, or a mid-stream error); the stream then ends.
+5. `data: {"type":"error","message":"...","requestId":"..."}` - on a failure after the stream has started; the stream then ends. A failure before the stream starts (invalid body, auth, rate limit, billing) is a JSON error response with a real HTTP status instead, so check the status before reading the stream.
 6. `data: [DONE]` - terminal sentinel on success.
 
 **Example** - a local Ollama model (`-N` disables curl buffering so the stream prints live):
@@ -835,7 +841,9 @@ Notebook exports are written under `exports/` in the FabFile bucket and download
 
 ### Browser downloads from a private object store
 
-QuestMaster ZIP exports opt into `S3Storage.getSignedUrl` with `audience: 'browser'`. With the default container endpoint, the returned URL contains the internal MinIO hostname, which a browser cannot resolve. Set the optional `S3_PRESIGN_ENDPOINT` in the environment of both the app and workers to the S3 API origin the browser can reach. `AWS_ENDPOINT_URL_S3` stays on the private backend endpoint for uploads, metadata reads, downloads and default server-side signed URLs. `S3_PRESIGN_ENDPOINT` must be an absolute HTTP or HTTPS URL. If the signing override is unset, the existing signing behavior is unchanged.
+QuestMaster ZIP exports, generic file presign responses and accessible-file download responses opt into `S3Storage.getSignedUrl` with `audience: 'browser'`. Accessible-file responses include both the SPA file route and the public file API; external API clients need the same reachable download origin. With the default container endpoint, the returned URL contains the internal MinIO hostname, which a browser cannot resolve. Set the optional `S3_PRESIGN_ENDPOINT` in the environment of both the app and workers to the S3 API origin the browser can reach. `AWS_ENDPOINT_URL_S3` stays on the private backend endpoint for uploads, metadata reads, downloads and default server-side signed URLs. `S3_PRESIGN_ENDPOINT` must be an absolute HTTP or HTTPS URL. If the signing override is unset, the existing signing behavior is unchanged.
+
+The app adds the configured HTTP or HTTPS origin to its browser connection, image and media policy. Paths and query parameters are normalized to the origin; invalid values are omitted with a diagnostic naming `S3_PRESIGN_ENDPOINT`. Other policy directives and the default policy when unset remain unchanged. The object store must still provide appropriate CORS headers for cross-origin browser requests.
 
 For the local Compose evaluation stack, MinIO's API is already published on loopback port 9000. Add this to `.env.selfhost`, then recreate the app and worker services so both receive the new environment:
 
@@ -850,7 +858,7 @@ For the Kubernetes evaluation chart, follow the [chart installation guide](selfh
 
 For a remote browser, use a trusted HTTPS S3 API origin that routes to the same backend and bucket namespace. A reverse proxy must preserve the signed host, path and query. Sign that origin directly; changing the hostname of an already signed URL invalidates its signature. Keep the backing service private, and configure the object store's CORS policy for the browser origin if using cross-origin fetches or PUT uploads.
 
-This override covers only explicit browser-audience calls to `S3Storage.getSignedUrl`, currently the two QuestMaster ZIP completion paths. Default callers, including server-side file and image fetchers, retain the private endpoint. Routes that construct their own S3 client and call the SDK presigner directly do not use this override; it does not establish parity for every file upload or download path.
+This override covers only explicit browser-audience calls to `S3Storage.getSignedUrl`: the two QuestMaster ZIP completion paths, `GET /api/files/presigned-url`, and the accessible-file responses of `GET /api/files/{id}` and `GET /api/v1/files/{id}`. Other default callers, including server-side image fetchers, retain the private endpoint. `GET /api/files/presigned-url` defaults to the browser audience; a caller may pass `audience=server` to receive a private-endpoint URL (the internal data-lake `getArticle` tool does this, since the app container may not reach the browser origin). Other file readers, such as the batch file and session file listings, still return private-origin URLs (tracked in issue 4272); the override does not establish parity for every file upload or download path.
 
 ## Share your instance with friends (secure internet exposure)
 
@@ -1166,9 +1174,9 @@ Focused verification:
 pnpm --filter @bike4mind/database test src/models/ai/DataLakeModel.purge.test.ts src/models/content/FabFileModel.cleanupTransaction.test.ts
 pnpm --filter @bike4mind/services test src/dataLakeService/cleanupDeletedDataLake.test.ts
 pnpm --filter @bike4mind/workers test src/selfhost/dataLakeCleanupQueue.test.ts
-pnpm --filter @bike4mind/client test server/queueHandlers/dataLakeCleanup.test.ts
+pnpm --filter @bike4mind/workers test src/queueHandlers/dataLakeCleanup.test.ts
 # Requires an isolated loopback MinIO, a disposable bucket, and test AWS credentials.
-CLEANUP_TEST_S3_ENDPOINT=http://127.0.0.1:19000 CLEANUP_TEST_S3_BUCKET=cleanup-test pnpm --filter @bike4mind/client test:integration server/queueHandlers/dataLakeCleanup.e2e.test.ts
+CLEANUP_TEST_S3_ENDPOINT=http://127.0.0.1:19000 CLEANUP_TEST_S3_BUCKET=cleanup-test pnpm --filter @bike4mind/workers test:integration src/queueHandlers/dataLakeCleanup.e2e.test.ts
 ```
 
 The external-service suite skips when its explicit endpoint/bucket are absent. The always-on `dataLakeCleanup.recovery.e2e.test.ts` runs the real handler and replica-set Mongo with controlled storage and existing connector/memory-key test boundaries, including grant-removal recovery and transactional rollback. Mongo fencing and bounded-batch crash tests also run independently. These are application-level controls, not current Kubernetes deployment acceptance.
@@ -1229,3 +1237,77 @@ Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/
 ## Kubernetes evaluation package
 
 For an independent package using the current application and worker entrypoints, see [the Kubernetes self-host guide](selfhost/kubernetes/README.md). It runs on portable Kubernetes, including EKS, with retained database/object/queue volumes and explicit image references. It is an evaluation deployment; complete workflow parity and production readiness remain separate validation work.
+
+### Background capability inventory guard
+
+The scripts unit suite checks hosted background triggers against
+`packages/scripts/src/selfhostParityPolicy.ts`. It is a static wiring guard: it parses
+source without running SST, and proves nothing about runtime behaviour. New or changed
+declarations, stale policy entries and changed mapped local registrations require review.
+Mapped imports must resolve; boot-path checks are syntactic inside `main` and registered
+callbacks, not proof that runtime gates are enabled. It includes disabled/conditional
+schedules, shared function targets and dead-letter infrastructure; a DLQ is not another
+application workflow.
+
+Covered shapes (inventory kind in brackets):
+
+- `sst.aws.Queue` and `aws.sqs.Queue` with their `subscribe()` consumers (`queue`)
+- `sst.aws.Cron`, including shared Function `job` targets (`schedule`)
+- `sst.aws.Bus` `subscribe()` / `subscribeQueue()` (`event`)
+- bucket `notify()` notifications to a Function or queue (`notification`)
+- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`)
+- `aws.ses.ReceiptRule` (`sesRule`)
+- `aws.cloudwatch.LogSubscriptionFilter` (`logSubscription`)
+- `aws.sns.TopicSubscription` and `sst.aws.SnsTopic` `subscribe()` (`snsSubscription`)
+- standalone `sst.aws.Function` that no covered trigger targets and that has no `url` (`function`)
+- `sst.aws.Service` (`service`)
+
+A Function that a covered trigger delivers to is inventoried under that trigger. A declaration
+built inside a named factory with a computed name (for example one log subscription per log
+group) is identified by its factory site; computed queue and schedule names fail, because
+local registrations are matched by that name.
+
+Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
+reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`
+(HTTP Functions, web/router/WebSocket surfaces, topics and buses whose subscriptions are
+covered, alarms, dashboards, IAM policies, deploy-time invocations, network and WAF plumbing,
+and infrastructure contributed by private overlays). A constructor that is neither covered nor
+listed fails the guard.
+
+Run the focused guard with:
+
+```bash
+pnpm --filter @bike4mind/scripts exec vitest run src/selfhostParityInventory.test.ts
+```
+
+A failing guard reports the declaration identity, current declaration/local fingerprint
+and changed AWS signals. Inspect the corresponding infra declaration, referenced cadence
+and stage gates, selected registration/route and its imports before updating the policy.
+Copy the reported fingerprint only after that review; keep the gap linked to its capability's
+roadmap epic, or a reviewed wiring mapping. Do not automatically regenerate the policy to
+clear CI. Fingerprints follow referenced handler, job, schedule, stage, link and permission
+inputs but not environment, logging, VPC or sizing option values, so adding a key to a shared
+environment constant does not invalidate every entry.
+
+Review each changed record before updating its fingerprint. `portable` means checked
+registration or routing only: it proves the mapped local symbol exists and is reachable from
+`main`, not that it is behaviourally equivalent to the hosted handler. Required
+resource/provider configuration and outcome proof remain separate. `pending` is a gap or
+capability decision linked to a shared roadmap epic (one for schedules, one for every other
+kind), not a per-gap issue. A
+`pending` queue or schedule that a self-host file now registers under the hosted name is
+reported as `Gap now has local wiring - review`. The infrastructure records excluded as
+separate workflows still require the associated consumer's broker configuration and recovery
+proof.
+
+A hosted handler whose source file is missing fails the guard by name and path. The only
+accepted absence is a handler generated from a private overlay into the gitignored
+`apps/client/server/premium-generated/` directory.
+
+AWS signals cover known exclusive hosted permissions and direct handler SDK imports.
+They are review flags, not proof that AWS is required: a configured provider or portable
+adapter can satisfy the capability. Compatible S3/SQS SDK use is not flagged as exclusive.
+The guard does not analyze arbitrary transitive dependencies or discover every application
+feature. Unsupported dynamic declaration names/options fail rather than disappear.
+Passing this static guard does not prove browser workflows, runtime configuration,
+retry/recovery behavior, actual timed effects or production parity.

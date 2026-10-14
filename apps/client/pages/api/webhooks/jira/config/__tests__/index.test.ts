@@ -6,6 +6,8 @@ const h = vi.hoisted(() => ({
   handlers: {} as Record<string, Handler>,
   findByAtlassianCloudId: vi.fn(),
   update: vi.fn(),
+  deleteConfig: vi.fn(),
+  deleteSubs: vi.fn(),
   countByWebhookConfig: vi.fn(),
   getValidTokens: vi.fn(),
 }));
@@ -24,8 +26,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  jiraWebhookConfigRepository: { findByAtlassianCloudId: h.findByAtlassianCloudId, update: h.update },
-  jiraWebhookSubscriptionRepository: { countByWebhookConfig: h.countByWebhookConfig },
+  jiraWebhookConfigRepository: {
+    findByAtlassianCloudId: h.findByAtlassianCloudId,
+    update: h.update,
+    delete: h.deleteConfig,
+  },
+  jiraWebhookSubscriptionRepository: {
+    countByWebhookConfig: h.countByWebhookConfig,
+    deleteByWebhookConfig: h.deleteSubs,
+  },
 }));
 vi.mock('@server/security/secretEncryption', () => ({
   encryptSecret: (value: string) => `enc(${value})`,
@@ -79,5 +88,69 @@ describe('PUT /api/webhooks/jira/config without rotateSecret', () => {
 
     expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'jcfg-1', events: ['jira:issue_updated'] });
+  });
+});
+
+describe('GET /api/webhooks/jira/config with revealSecret', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getValidTokens.mockResolvedValue({ cloudId: 'cloud-1' });
+    h.findByAtlassianCloudId.mockResolvedValue({ ...storedConfig });
+    h.countByWebhookConfig.mockResolvedValue(0);
+  });
+
+  const get = async (user: { id: string; isAdmin?: boolean }) => {
+    const res = makeRes();
+    await h.handlers.get({ user, query: { revealSecret: 'true' } }, res);
+    return res.json.mock.calls[0][0] as { secret?: string; secretMasked?: string };
+  };
+
+  it('reveals the secret to the config creator or an admin only', async () => {
+    expect((await get({ id: 'user-1' })).secret).toBe('old-secret');
+    expect((await get({ id: 'admin-1', isAdmin: true })).secret).toBe('old-secret');
+
+    const other = await get({ id: 'user-2' });
+    expect(other.secret).toBeUndefined();
+    expect(other.secretMasked).toBeDefined();
+    expect(other.secretMasked).not.toContain('old-secret');
+  });
+
+  it('returns only the masked secret to the creator on a plain GET', async () => {
+    const res = makeRes();
+    await h.handlers.get({ user: { id: 'user-1' }, query: {} }, res);
+    const body = res.json.mock.calls[0][0] as { secret?: string; secretMasked?: string };
+    expect(body.secret).toBeUndefined();
+    expect(body.secretMasked).toBeDefined();
+  });
+});
+
+describe('PUT and DELETE /api/webhooks/jira/config by a user who cannot manage the config', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getValidTokens.mockResolvedValue({ cloudId: 'cloud-1' });
+    h.findByAtlassianCloudId.mockResolvedValue({ ...storedConfig });
+    h.update.mockImplementation(async (partial: Record<string, unknown>) => ({ ...storedConfig, ...partial }));
+    h.countByWebhookConfig.mockResolvedValue(0);
+    h.deleteSubs.mockResolvedValue(0);
+  });
+
+  it('refuses PUT with 403 and writes nothing', async () => {
+    await expect(h.handlers.put({ user: { id: 'user-2' }, body: { enabled: false } }, makeRes())).rejects.toMatchObject(
+      { statusCode: 403 }
+    );
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses DELETE with 403 and deletes nothing', async () => {
+    await expect(h.handlers.delete({ user: { id: 'user-2' } }, makeRes())).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.deleteSubs).not.toHaveBeenCalled();
+    expect(h.deleteConfig).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin update and delete', async () => {
+    await h.handlers.put({ user: { id: 'admin-1', isAdmin: true }, body: { enabled: false } }, makeRes());
+    expect(h.update).toHaveBeenCalledTimes(1);
+    await h.handlers.delete({ user: { id: 'admin-1', isAdmin: true } }, makeRes());
+    expect(h.deleteConfig).toHaveBeenCalledWith('jcfg-1');
   });
 });

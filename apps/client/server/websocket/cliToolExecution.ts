@@ -54,7 +54,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       const user = await verifyJwtToken(accessToken);
       userId = user.id;
       userEmail = user.email ?? undefined;
-      await checkRateLimit(userId);
+      await checkRateLimit(userId, undefined, { bucket: 'ws' });
     } catch {
       await sendToConnection(connectionId, endpoint, {
         action: 'cli_tool_response' as const,

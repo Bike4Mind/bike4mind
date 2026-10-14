@@ -4,6 +4,7 @@ import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
 import BlockRoundedIcon from '@mui/icons-material/BlockRounded';
 import { CreditOfferActions } from './CreditOfferActions';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 
 const fadeIn = keyframes`
   from {
@@ -124,7 +125,7 @@ export function LowCreditsWarning({ show, currentCredits, onDismiss }: LowCredit
             Running low on credits
           </Typography>
           <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-            {currentCredits.toLocaleString()} credits remaining. Your work isn&apos;t interrupted.
+            {formatCreditAmount(currentCredits)} credits remaining. Your work isn&apos;t interrupted.
           </Typography>
         </Box>
       </Box>
