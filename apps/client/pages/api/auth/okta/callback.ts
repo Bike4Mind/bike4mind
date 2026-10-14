@@ -436,7 +436,12 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       // ALL: this login's session is minted below, after the revoke, so it is created fresh.
       if (isNewProviderLink) {
         await authSessionRepository.revokeAllByUserId(user.id);
-        await realtimeConnectionRepository.endConnections({ userId: user.id, sessionsOnly: true });
+        // The revoke above already holds; a failed prune is backstopped by the realtime sweep.
+        try {
+          await realtimeConnectionRepository.endConnections({ userId: user.id, sessionsOnly: true });
+        } catch (error) {
+          Logger.warn('[Okta Callback] Failed to end realtime connections', error);
+        }
       }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);
     } else {

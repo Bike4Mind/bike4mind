@@ -1,4 +1,5 @@
-import { ReauthConnectionAction } from '@bike4mind/common';
+import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
+import { ForbiddenError, NotFoundError, ReauthConnectionAction, UnauthorizedError } from '@bike4mind/common';
 import { Connection, realtimeConnectionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { closeConnection } from '@server/websocket/closeConnection';
@@ -6,14 +7,24 @@ import { assertRealtimeSessionActive } from '@server/websocket/realtimeSession';
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
 import { verifyWsAccessTokenClaims } from '@server/websocket/verifyWsAccessToken';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
+import { JsonWebTokenError } from 'jsonwebtoken';
 import { Resource } from 'sst';
 
 class ReauthRefused extends Error {}
 
+/** A genuine "this credential is not acceptable" outcome, as opposed to a lookup that failed. */
+const isAuthRefusal = (error: unknown): error is Error =>
+  error instanceof UnauthorizedError ||
+  error instanceof ForbiddenError ||
+  error instanceof NotFoundError ||
+  error instanceof JsonWebTokenError;
+
 /**
  * Resolve the new auth for this connection, or throw ReauthRefused. The token must belong to the
  * user that opened the socket and, when the socket was opened by a session, to that same session:
- * reauth extends a connection, it never moves one to another credential.
+ * reauth extends a connection, it never moves one to another credential. Only genuine auth
+ * refusals become ReauthRefused; a failed lookup (database, secret fetch) propagates and leaves the
+ * connection as it was, since nothing has been changed yet.
  */
 async function resolveReauth(connectionId: string, accessToken: string) {
   const connection = await Connection.findOne({ connectionId }).lean();
@@ -25,7 +36,8 @@ async function resolveReauth(connectionId: string, accessToken: string) {
     claims = await verifyWsAccessTokenClaims(accessToken);
     await assertRealtimeSessionActive(claims.sid);
   } catch (error) {
-    throw new ReauthRefused(error instanceof Error ? error.message : 'token rejected');
+    if (!isAuthRefusal(error)) throw error;
+    throw new ReauthRefused(error.message);
   }
   if (claims.user.id !== connection.userId) throw new ReauthRefused('user mismatch');
   if (connection.sid && claims.sid !== connection.sid) throw new ReauthRefused('session mismatch');
@@ -39,11 +51,15 @@ async function resolveReauth(connectionId: string, accessToken: string) {
   };
 }
 
-/** End a connection whose reauth was refused: DB state first (always), then the socket. */
+/**
+ * End a connection the server can no longer vouch for: DB state first (always), then the socket.
+ * The ended row is deleted once the close succeeded; if it did not, the realtime sweep retries.
+ */
 async function endRefusedConnection(connectionId: string, endpoint: string, logger: Logger): Promise<void> {
   await realtimeConnectionRepository.endConnections({ connectionIds: [connectionId] });
   try {
     await closeConnection(connectionId, endpoint);
+    await realtimeConnectionRepository.deleteEndedConnections([connectionId]);
   } catch (error) {
     logger.warn(`[REAUTH] Failed to close connection ${connectionId}`, error as Error);
   }
@@ -77,6 +93,16 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     return { statusCode: 401 };
   }
 
-  await sendToConnection(connectionId, endpoint, { action: 'resubscribe_required' });
+  try {
+    await sendToConnection(connectionId, endpoint, { action: 'resubscribe_required' });
+  } catch (error) {
+    // The subscriptions are already pulled, so a client that never hears this would sit on a
+    // silent socket. A gone socket needs nothing ($disconnect cleans up); any other failure ends
+    // the connection so the client reconnects and subscribes afresh.
+    if (error instanceof GoneException) return { statusCode: 200 };
+    logger.warn(`[REAUTH] Failed to send resubscribe_required to ${connectionId}`, error as Error);
+    await endRefusedConnection(connectionId, endpoint, logger);
+    return { statusCode: 500 };
+  }
   return { statusCode: 200 };
 });

@@ -8,15 +8,13 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const { connectionId, domainName, stage } = event.requestContext;
   const endpoint = `https://${domainName}/${stage}`;
 
-  // Find the connection to get the userId
-  const connection = await Connection.findOne({ connectionId });
+  // Delete the row and read its userId in one step. findOneAndDelete is not filtered like find,
+  // so a row already ended by a revoke is still found here and removed.
+  const connection = await Connection.findOneAndDelete({ connectionId }).lean();
   const userId = connection?.userId;
 
   // Update logout time if a userId was found
   if (userId) {
-    // Delete this connection first so the count below excludes it
-    await Connection.deleteOne({ connectionId });
-
     // Only mark user offline if no other connections remain (e.g., CLI + web client both connected)
     const remainingConnections = await Connection.countDocuments({ userId });
     if (remainingConnections === 0) {
@@ -83,11 +81,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         )
       );
     }
-  }
-
-  // Delete connection if not already deleted above (no userId case)
-  if (!userId) {
-    await Connection.deleteOne({ connectionId });
   }
 
   return {

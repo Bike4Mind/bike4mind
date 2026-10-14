@@ -78,6 +78,20 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
     );
   });
 
+  it('wires the realtime connection repository so a rotation ends the key sockets', async () => {
+    const { req, res } = post('key-1');
+    await mockRefs.rotateHandler!(req, res);
+    expect(rotateUserApiKey).toHaveBeenCalledWith(
+      'admin-user',
+      { keyId: 'key-1' },
+      expect.objectContaining({
+        db: expect.objectContaining({
+          realtimeConnections: expect.objectContaining({ endConnections: expect.any(Function) }),
+        }),
+      })
+    );
+  });
+
   it('propagates a service NotFoundError', async () => {
     rotateUserApiKey.mockRejectedValueOnce(new NotFoundError('API key not found'));
     const { req, res } = post('key-1');

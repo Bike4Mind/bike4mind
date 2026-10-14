@@ -60,7 +60,12 @@ async function insertSubscription(queryId: string, connectionIds: string[]) {
   });
 }
 
+// Live connections: Connection reads skip ended rows.
 const connectionIds = async () => (await Connection.find({}).distinct('connectionId')).sort();
+// Every row, ended or not, bypassing the model's read filter.
+const rawRows = async () =>
+  (await Connection.collection.find({}).toArray()).sort((a, b) => a.connectionId.localeCompare(b.connectionId));
+const endedIds = async () => (await rawRows()).filter(row => row.endedAt).map(row => row.connectionId as string);
 const subscriberIds = async (queryId: string) => {
   const doc = await QuerySubscription.findOne({ queryId }).lean();
   return doc ? doc.subscribers.map(subscriber => subscriber.connectionId).sort() : null;
@@ -87,7 +92,7 @@ describe('realtimeConnectionRepository.endConnections', () => {
     expect(await connectionIds()).toEqual(['a2']);
   });
 
-  it('keeps the excepted session and API-key connections with exceptSid + sessionsOnly', async () => {
+  it('keeps the excepted session, sid-less rows and API-key connections with exceptSid + sessionsOnly', async () => {
     await insertConnection('keep', { sid: 's-current' });
     await insertConnection('other', { sid: 's-other' });
     await insertConnection('legacy');
@@ -99,7 +104,8 @@ describe('realtimeConnectionRepository.endConnections', () => {
       sessionsOnly: true,
     });
 
-    expect(await connectionIds()).toEqual(['keep', 'key']);
+    expect(await connectionIds()).toEqual(['keep', 'key', 'legacy']);
+    expect(await endedIds()).toEqual(['other']);
   });
 
   it('ends an API key connections by apiKeyId', async () => {
@@ -109,6 +115,40 @@ describe('realtimeConnectionRepository.endConnections', () => {
     await realtimeConnectionRepository.endConnections({ apiKeyId: 'k1' });
 
     expect(await connectionIds()).toEqual(['key-2']);
+  });
+
+  it('marks the rows ended instead of deleting them, and live reads ignore them', async () => {
+    await insertConnection('a1', { sid: 's1' });
+    await insertConnection('a2', { sid: 's2' });
+
+    await realtimeConnectionRepository.endConnections({ sid: 's1' });
+
+    expect((await rawRows()).map(row => row.connectionId)).toEqual(['a1', 'a2']);
+    expect(await endedIds()).toEqual(['a1']);
+    expect(await Connection.findOne({ connectionId: 'a1' }).lean()).toBeNull();
+    expect(await Connection.find({ userId: USER_A })).toHaveLength(1);
+    expect(await Connection.findByUserId(USER_A)).toHaveLength(1);
+    expect(await Connection.countDocuments({ userId: USER_A })).toBe(1);
+    expect(await Connection.find({ userId: USER_A }).distinct('connectionId')).toEqual(['a2']);
+  });
+
+  it('keeps the first endedAt when a row is ended again', async () => {
+    await insertConnection('a1');
+    await realtimeConnectionRepository.endConnections({ connectionIds: ['a1'] });
+    const first = (await rawRows())[0].endedAt;
+
+    await realtimeConnectionRepository.endConnections({ connectionIds: ['a1'] });
+
+    expect((await rawRows())[0].endedAt).toEqual(first);
+  });
+
+  it('does not look up already-ended rows by user, so a repeat revoke reports nothing new', async () => {
+    await insertConnection('a1');
+    await realtimeConnectionRepository.endConnections({ userId: USER_A });
+
+    const result = await realtimeConnectionRepository.endConnections({ userId: USER_A });
+
+    expect(result.connectionIds).toEqual([]);
   });
 
   it("pulls the ended connections from a shared subscription and keeps other users' subscribers", async () => {
@@ -123,6 +163,7 @@ describe('realtimeConnectionRepository.endConnections', () => {
     // A doc left with no subscribers is removed, as unsubscribe does.
     expect(await subscriberIds('only-a')).toBeNull();
     expect(await connectionIds()).toEqual(['b1']);
+    expect(await endedIds()).toEqual(['a1']);
   });
 
   it('is a no-op when nothing matches', async () => {
@@ -131,6 +172,36 @@ describe('realtimeConnectionRepository.endConnections', () => {
 
     expect(await realtimeConnectionRepository.endConnections({ sid: 'missing' })).toEqual({ connectionIds: [] });
     expect(await subscriberIds('q')).toEqual(['a1']);
+  });
+});
+
+describe('realtimeConnectionRepository filter guards', () => {
+  it.each([
+    ['an undefined sid', { sid: undefined as never }],
+    ['an empty sid', { sid: '' }],
+    ['an undefined apiKeyId', { apiKeyId: undefined as never }],
+    ['an undefined userId', { userId: undefined as never }],
+    ['an undefined exceptSid', { userId: USER_A, exceptSid: undefined }],
+    ['an empty connectionIds list', { connectionIds: [] }],
+    ['a non-string connection id', { connectionIds: [undefined as never] }],
+  ])('refuses %s and leaves every row untouched', async (_name, filter) => {
+    await insertConnection('a1', { sid: 's1' });
+    await insertConnection('b1', { userId: USER_B });
+
+    await expect(realtimeConnectionRepository.endConnections(filter)).rejects.toThrow(TypeError);
+
+    expect(await connectionIds()).toEqual(['a1', 'b1']);
+    expect(await endedIds()).toEqual([]);
+  });
+
+  it('does not end a legacy sid-less connection when excepting a session', async () => {
+    await insertConnection('current', { sid: 's-current' });
+    await insertConnection('other', { sid: 's-other' });
+    await insertConnection('legacy');
+
+    await realtimeConnectionRepository.endConnections({ userId: USER_A, exceptSid: 's-current' });
+
+    expect(await endedIds()).toEqual(['other']);
   });
 });
 
@@ -149,6 +220,27 @@ describe('realtimeConnectionRepository.reauthenticate', () => {
     expect(await subscriberIds('shared')).toEqual(['b1']);
   });
 
+  it('stamps reauthAt', async () => {
+    await insertConnection('a1');
+
+    await realtimeConnectionRepository.reauthenticate('a1', { tokenVersion: 0, authExpiresAt: at(minutes(60)) });
+
+    expect((await rawRows())[0].reauthAt).toBeInstanceOf(Date);
+  });
+
+  it('refuses to revive an ended connection', async () => {
+    await insertConnection('a1');
+    await realtimeConnectionRepository.endConnections({ connectionIds: ['a1'] });
+
+    const updated = await realtimeConnectionRepository.reauthenticate('a1', {
+      tokenVersion: 1,
+      authExpiresAt: at(minutes(60)),
+    });
+
+    expect(updated).toBe(false);
+    expect((await rawRows())[0]).toMatchObject({ tokenVersion: 0 });
+  });
+
   it('returns false when the connection row is gone', async () => {
     expect(await realtimeConnectionRepository.reauthenticate('missing', { tokenVersion: 0, authExpiresAt: NOW })).toBe(
       false
@@ -156,14 +248,29 @@ describe('realtimeConnectionRepository.reauthenticate', () => {
   });
 });
 
-describe('realtimeConnectionRepository.findSweepTargets', () => {
-  const sweep = (batchSize?: number) =>
-    realtimeConnectionRepository.findSweepTargets({
-      now: NOW,
-      graceMs: GRACE_MS,
-      isAccountBlocked: user => !!user.isBanned,
-      batchSize,
-    });
+describe('realtimeConnectionRepository sweep reads', () => {
+  const params = {
+    now: NOW,
+    graceMs: GRACE_MS,
+    isAccountBlocked: (user: { isBanned?: boolean | null }) => !!user.isBanned,
+  };
+
+  // Walks both phases the way the cron does.
+  const sweep = async (batchSize?: number) => {
+    const targets = [];
+    for (const phase of ['live', 'ended'] as const) {
+      let cursor: Awaited<ReturnType<typeof realtimeConnectionRepository.readSweepPage>>['next'] = {
+        phase,
+        afterId: null,
+      };
+      while (cursor) {
+        const page = await realtimeConnectionRepository.readSweepPage(cursor, batchSize);
+        cursor = page.next;
+        targets.push(...(await realtimeConnectionRepository.classifySweepRows(page.rows, params)));
+      }
+    }
+    return targets;
+  };
 
   it('flags each lapsed credential with its reason and leaves healthy connections', async () => {
     await insertUser(USER_A, { tokenVersion: 2 });
@@ -216,6 +323,42 @@ describe('realtimeConnectionRepository.findSweepTargets', () => {
 
     expect(await sweep()).toEqual([]);
   });
+
+  it('targets ended rows for a socket close, and lapsed ended rows for deletion', async () => {
+    await insertUser(USER_A);
+    await insertConnection('just-ended', { endedAt: at(-minutes(1)) });
+    await insertConnection('long-ended', { endedAt: at(-REALTIME_CONNECTION_MAX_LIFETIME_MS - minutes(3)) });
+    await insertConnection('live');
+
+    const targets = await sweep(2);
+
+    expect(Object.fromEntries(targets.map(target => [target.connectionId, target.reason]))).toEqual({
+      'just-ended': 'ended',
+      'long-ended': 'endedLapsed',
+    });
+  });
+
+  it('pages the live phase without returning ended rows', async () => {
+    await insertConnection('live');
+    await insertConnection('ended', { endedAt: at(-minutes(1)) });
+
+    const page = await realtimeConnectionRepository.readSweepPage({ phase: 'live', afterId: null });
+
+    expect(page.rows.map(row => row.connectionId)).toEqual(['live']);
+    expect(page.next).toBeNull();
+  });
+});
+
+describe('realtimeConnectionRepository.deleteEndedConnections', () => {
+  it('deletes ended rows only, never a live one', async () => {
+    await insertConnection('ended', { endedAt: at(-minutes(1)) });
+    await insertConnection('live');
+
+    const deleted = await realtimeConnectionRepository.deleteEndedConnections(['ended', 'live']);
+
+    expect(deleted).toBe(1);
+    expect((await rawRows()).map(row => row.connectionId)).toEqual(['live']);
+  });
 });
 
 describe('realtimeConnectionRepository.removeOrphanSubscribers', () => {
@@ -229,5 +372,40 @@ describe('realtimeConnectionRepository.removeOrphanSubscribers', () => {
     expect(removed).toBe(2);
     expect(await subscriberIds('mixed')).toEqual(['live']);
     expect(await subscriberIds('all-orphan')).toBeNull();
+  });
+
+  it('pulls subscribers whose connection row is ended', async () => {
+    await insertConnection('live');
+    await insertConnection('ended', { endedAt: at(-minutes(1)) });
+    await insertSubscription('mixed', ['live', 'ended']);
+
+    const removed = await realtimeConnectionRepository.removeOrphanSubscribers();
+
+    expect(removed).toBe(1);
+    expect(await subscriberIds('mixed')).toEqual(['live']);
+  });
+});
+
+describe('realtimeConnectionRepository.removeStaleSubscribers', () => {
+  it('pulls entries made before the connection last reauthenticated, and keeps newer ones', async () => {
+    await insertConnection('a1', { reauthAt: at(-minutes(5)) });
+    await insertConnection('a2');
+    await QuerySubscription.collection.insertOne({
+      collectionName: 'quests',
+      queryId: 'q',
+      query: {},
+      fields: {},
+      subscribers: [
+        { endpoint: 'e', connectionId: 'a1', clientId: 'old', attempts: 0, createdAt: at(-minutes(10)) },
+        { endpoint: 'e', connectionId: 'a1', clientId: 'new', attempts: 0, createdAt: at(-minutes(1)) },
+        { endpoint: 'e', connectionId: 'a2', clientId: 'other', attempts: 0, createdAt: at(-minutes(10)) },
+      ],
+    });
+
+    const removed = await realtimeConnectionRepository.removeStaleSubscribers();
+
+    expect(removed).toBe(1);
+    const doc = await QuerySubscription.findOne({ queryId: 'q' }).lean();
+    expect(doc?.subscribers.map(subscriber => subscriber.clientId).sort()).toEqual(['new', 'other']);
   });
 });

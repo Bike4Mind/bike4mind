@@ -1,3 +1,5 @@
+import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
+import { UnauthorizedError } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -5,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   verifyClaims: vi.fn(),
   assertSessionActive: vi.fn(),
   endConnections: vi.fn(),
+  deleteEndedConnections: vi.fn(),
   reauthenticate: vi.fn(),
   closeConnection: vi.fn(),
   sendToConnection: vi.fn(),
@@ -14,6 +17,7 @@ vi.mock('@bike4mind/database', () => ({
   Connection: { findOne: vi.fn(() => ({ lean: async () => mocks.connectionRow })) },
   realtimeConnectionRepository: {
     endConnections: (...args: unknown[]) => mocks.endConnections(...args),
+    deleteEndedConnections: (...args: unknown[]) => mocks.deleteEndedConnections(...args),
     reauthenticate: (...args: unknown[]) => mocks.reauthenticate(...args),
   },
 }));
@@ -61,6 +65,7 @@ const expectConnectionEnded = (result: { statusCode: number }) => {
   expect(result.statusCode).toBe(401);
   expect(mocks.endConnections).toHaveBeenCalledWith({ connectionIds: ['conn-1'] });
   expect(mocks.closeConnection).toHaveBeenCalledWith('conn-1', ENDPOINT);
+  expect(mocks.deleteEndedConnections).toHaveBeenCalledWith(['conn-1']);
   expect(mocks.reauthenticate).not.toHaveBeenCalled();
   expect(mocks.sendToConnection).not.toHaveBeenCalled();
 };
@@ -71,6 +76,7 @@ beforeEach(() => {
   mocks.verifyClaims.mockResolvedValue(claims());
   mocks.assertSessionActive.mockResolvedValue(undefined);
   mocks.endConnections.mockResolvedValue({ connectionIds: ['conn-1'] });
+  mocks.deleteEndedConnections.mockResolvedValue(1);
   mocks.reauthenticate.mockResolvedValue(true);
   mocks.closeConnection.mockResolvedValue(undefined);
   mocks.sendToConnection.mockResolvedValue(undefined);
@@ -111,12 +117,12 @@ describe('reauth_connection', () => {
   });
 
   it('ends the connection when the token is rejected (stale tokenVersion)', async () => {
-    mocks.verifyClaims.mockRejectedValue(new Error('Token version mismatch'));
+    mocks.verifyClaims.mockRejectedValue(new UnauthorizedError('Session expired'));
     expectConnectionEnded(await invoke());
   });
 
   it('ends the connection when the session is no longer active', async () => {
-    mocks.assertSessionActive.mockRejectedValue(new Error('Session expired'));
+    mocks.assertSessionActive.mockRejectedValue(new UnauthorizedError('Session expired'));
     expectConnectionEnded(await invoke());
   });
 
@@ -149,5 +155,53 @@ describe('reauth_connection', () => {
     expect(result.statusCode).toBe(401);
     expect(mocks.endConnections).toHaveBeenCalledWith({ connectionIds: ['conn-1'] });
     expect(mocks.sendToConnection).not.toHaveBeenCalled();
+  });
+
+  it('keeps the ended row for the sweep when closing the socket fails', async () => {
+    mocks.verifyClaims.mockResolvedValue(claims({ user: { id: 'user-2' } }));
+    mocks.closeConnection.mockRejectedValue(new Error('network'));
+
+    await invoke();
+
+    expect(mocks.deleteEndedConnections).not.toHaveBeenCalled();
+  });
+
+  it('propagates a failed lookup instead of refusing, leaving the connection as it was', async () => {
+    mocks.verifyClaims.mockRejectedValue(new Error('connection timed out'));
+
+    await expect(invoke()).rejects.toThrow('connection timed out');
+
+    expect(mocks.endConnections).not.toHaveBeenCalled();
+    expect(mocks.closeConnection).not.toHaveBeenCalled();
+    expect(mocks.reauthenticate).not.toHaveBeenCalled();
+  });
+
+  it('propagates a failed session lookup instead of refusing', async () => {
+    mocks.assertSessionActive.mockRejectedValue(new Error('connection timed out'));
+
+    await expect(invoke()).rejects.toThrow('connection timed out');
+
+    expect(mocks.endConnections).not.toHaveBeenCalled();
+  });
+
+  it('ends and closes the connection when resubscribe_required cannot be delivered', async () => {
+    mocks.sendToConnection.mockRejectedValue(new Error('payload rejected'));
+
+    const result = await invoke();
+
+    expect(result.statusCode).toBe(500);
+    expect(mocks.reauthenticate).toHaveBeenCalled();
+    expect(mocks.endConnections).toHaveBeenCalledWith({ connectionIds: ['conn-1'] });
+    expect(mocks.closeConnection).toHaveBeenCalledWith('conn-1', ENDPOINT);
+  });
+
+  it('leaves a gone socket to $disconnect when resubscribe_required hits a closed connection', async () => {
+    mocks.sendToConnection.mockRejectedValue(new GoneException({ message: 'gone', $metadata: {} }));
+
+    const result = await invoke();
+
+    expect(result.statusCode).toBe(200);
+    expect(mocks.endConnections).not.toHaveBeenCalled();
+    expect(mocks.closeConnection).not.toHaveBeenCalled();
   });
 });

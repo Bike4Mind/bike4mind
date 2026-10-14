@@ -21,9 +21,9 @@ const h = vi.hoisted(() => ({
   assertRealtimeSessionActive: vi.fn(),
 }));
 
-const API_KEY_EXPIRY = new Date('2030-01-01T02:00:00Z');
+const GATEWAY_CAP_EXPIRY = new Date('2030-01-01T02:00:00Z');
 vi.mock('@server/websocket/realtimeSession', () => ({
-  apiKeyConnectionExpiry: () => API_KEY_EXPIRY,
+  gatewayCapExpiry: () => GATEWAY_CAP_EXPIRY,
   assertRealtimeSessionActive: h.assertRealtimeSessionActive,
 }));
 
@@ -114,7 +114,7 @@ describe('web $connect ticket path', () => {
 
     await call(eventWith({ ticket: 't-abc' }));
 
-    expect(h.connectionCreate).toHaveBeenCalledWith(expect.objectContaining({ authExpiresAt: API_KEY_EXPIRY }));
+    expect(h.connectionCreate).toHaveBeenCalledWith(expect.objectContaining({ authExpiresAt: GATEWAY_CAP_EXPIRY }));
   });
 
   it('rejects a replayed or expired ticket (consume returns null)', async () => {

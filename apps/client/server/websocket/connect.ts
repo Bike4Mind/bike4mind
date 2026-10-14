@@ -7,7 +7,7 @@ import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/service
 import { verifyApiKey } from '@server/cli/auth';
 import { UnauthorizedError } from '@server/utils/errors';
 import { withWebSocketContext } from '@server/websocket/utils';
-import { apiKeyConnectionExpiry, assertRealtimeSessionActive } from '@server/websocket/realtimeSession';
+import { gatewayCapExpiry, assertRealtimeSessionActive } from '@server/websocket/realtimeSession';
 import { APIGatewayProxyEvent, APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
@@ -71,7 +71,7 @@ async function resolveWebTicket(
     source: 'web',
     sid: consumed.sid,
     // Tickets minted before authExpiresAt existed fall back to the gateway cap.
-    authExpiresAt: consumed.authExpiresAt ?? apiKeyConnectionExpiry(),
+    authExpiresAt: consumed.authExpiresAt ?? gatewayCapExpiry(),
   };
 }
 
@@ -120,7 +120,9 @@ async function resolveIdentity(
         userId: String(decoded.id),
         tokenVersion: decoded.tokenVersion ?? 0,
         sid: typeof decoded.sid === 'string' ? decoded.sid : undefined,
-        authExpiresAt: decoded.exp ? new Date(decoded.exp * 1000) : apiKeyConnectionExpiry(),
+        // The CLI never sends reauth_connection, so the token exp would cut a live socket every
+        // access-token lifetime; it is bounded by the gateway cap and ends on revoke instead.
+        authExpiresAt: gatewayCapExpiry(),
       };
     }
   } catch (err) {
@@ -139,7 +141,7 @@ async function resolveIdentity(
       userId: apiKeyInfo.userId,
       scopes: apiKeyInfo.scopes,
       apiKeyId: apiKeyInfo.keyId,
-      authExpiresAt: apiKeyConnectionExpiry(),
+      authExpiresAt: gatewayCapExpiry(),
     };
   } catch (apiKeyErr) {
     logger.warn('[WS_CONNECT] both JWT and API-key auth failed', {

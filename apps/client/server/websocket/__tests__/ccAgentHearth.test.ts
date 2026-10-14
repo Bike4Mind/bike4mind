@@ -50,7 +50,7 @@ const {
   resolveBridgeWsAuthMock: vi.fn(),
   canAccessTavernMock: vi.fn(),
   codeAgentEventRepositoryMock: { insert: vi.fn() },
-  connectionMock: { findOne: vi.fn(), deleteOne: vi.fn(), countDocuments: vi.fn() },
+  connectionMock: { findOneAndDelete: vi.fn(), countDocuments: vi.fn() },
   querySubscriptionMock: { updateMany: vi.fn() },
   userModelMock: { updateOne: vi.fn() },
   userServiceMock: { updateLogoutTime: vi.fn() },
@@ -215,8 +215,7 @@ function applyMockDefaults() {
       })
   );
   hearthRepositoryMock.upsertPresence.mockResolvedValue({ _id: 'presence-1' });
-  connectionMock.findOne.mockResolvedValue({ connectionId: 'conn-1', userId: USER });
-  connectionMock.deleteOne.mockResolvedValue({ deletedCount: 1 });
+  connectionMock.findOneAndDelete.mockReturnValue({ lean: async () => ({ connectionId: 'conn-1', userId: USER }) });
   connectionMock.countDocuments.mockResolvedValue(1);
   querySubscriptionMock.updateMany.mockResolvedValue({ modifiedCount: 0 });
   activeCodeAgentRepositoryMock.removeByConnectionId.mockResolvedValue([]);

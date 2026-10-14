@@ -682,9 +682,13 @@ const generationJobSweepCron = new sst.aws.Cron('generationJobSweep', {
 
 /**
  * Realtime Connection Sweep
- * Ends WebSocket connections whose credential no longer holds (token expired past grace, session
- * revoked, tokenVersion bumped, account blocked, API key inactive) and removes query subscribers
- * whose connection row is gone. Revoke paths prune directly; this is the backstop.
+ * Revoke paths mark a WebSocket connection ended (subscribers pulled, row kept); this sweep owns
+ * the socket close. It ends live connections whose credential no longer holds (token expired past
+ * grace, session revoked, tokenVersion bumped, account blocked, API key inactive), closes every
+ * ended connection's socket through the management API, and deletes the row once the close
+ * succeeded or the socket was already gone. A failed close keeps the ended row for the next run;
+ * an ended row older than any socket can live is deleted regardless. It also removes query
+ * subscribers whose connection row is missing or ended.
  *
  * Schedule: every 5 minutes
  * Enabled: every stage; a no-op when nothing has lapsed.

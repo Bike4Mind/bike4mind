@@ -15,6 +15,8 @@ const connectionFields = {
   tokenVersion: { type: Number },
   authExpiresAt: { type: Date },
   apiKeyId: { type: String },
+  endedAt: { type: Date },
+  reauthAt: { type: Date },
 } as const;
 
 export const ConnectionSchema = new mongoose.Schema<IConnectionDocument, IConnectionModel>(connectionFields, {
@@ -35,13 +37,23 @@ export const ConnectionSchema = new mongoose.Schema<IConnectionDocument, IConnec
   },
 });
 
+// A row with endedAt set is an ended connection awaiting its socket close (see
+// realtimeConnectionRepository), not a live one. Reads that mean "live connections" therefore
+// skip it here, once, rather than in every handler. A query that names endedAt itself (the
+// sweep's ended-row scan) opts out. Writes (updateOne/deleteOne) are not filtered.
+function excludeEndedConnections(this: mongoose.Query<unknown, unknown>) {
+  if ('endedAt' in this.getFilter()) return;
+  this.where({ endedAt: { $exists: false } });
+}
+ConnectionSchema.pre(['find', 'findOne', 'countDocuments', 'distinct'], excludeEndedConnections);
+
 // Performance indexes. Built by the ensure-connection-indexes migration, not autoIndex.
-// authExpiresAt: the realtime sweep's expiry scan. userId/sid/apiKeyId: realtimeConnectionRepository's
-// revoke filters (ending a user's, a session's or an API key's connections).
-ConnectionSchema.index({ authExpiresAt: 1 });
+// userId/sid/apiKeyId: realtimeConnectionRepository's revoke filters (ending a user's, a
+// session's or an API key's connections). Plain, not partial: a partial index is only usable when
+// the query repeats its filter. The realtime sweep pages by _id and needs no index of its own.
 ConnectionSchema.index({ userId: 1 });
-ConnectionSchema.index({ sid: 1 }, { partialFilterExpression: { sid: { $type: 'string' } } });
-ConnectionSchema.index({ apiKeyId: 1 }, { partialFilterExpression: { apiKeyId: { $type: 'string' } } });
+ConnectionSchema.index({ sid: 1 });
+ConnectionSchema.index({ apiKeyId: 1 });
 
 export const Connection =
   (mongoose.models.Connection as IConnectionModel) ??

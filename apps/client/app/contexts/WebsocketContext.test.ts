@@ -805,6 +805,69 @@ describe('WebsocketProvider - reauth after a token refresh', () => {
     expect(h.sendJsonMessage).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'subscribe_query', subscriptionId: 's1', accessToken: 'tok-2' })
     );
-    expect(h.queryClient.invalidateQueries).toHaveBeenCalled();
+    expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['quests', 'session'] });
+    expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['invites'] });
+  });
+
+  it('keeps the same sendJsonMessage identity across a token refresh, so hooks do not resubscribe', async () => {
+    const seen: (typeof send)[] = [];
+    const Capture = () => {
+      seen.push(useWebsocket().sendJsonMessage);
+      return null;
+    };
+    const captureElement = () =>
+      React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement(Capture));
+    const rendered = render(captureElement());
+
+    h.accessTokenState.accessToken = 'tok-2';
+    await act(async () => {
+      rendered.rerender(captureElement());
+    });
+
+    expect(new Set(seen).size).toBe(1);
+    h.sendJsonMessage.mockClear();
+    act(() => {
+      seen[0]({ action: 'unsubscribe_query', subscriptionId: 's1' } as unknown as Parameters<typeof send>[0]);
+    });
+    expect(h.sendJsonMessage).toHaveBeenCalledWith(expect.objectContaining({ accessToken: 'tok-2' }));
+  });
+
+  describe('a token refreshed while the socket is connecting', () => {
+    beforeEach(() => {
+      h.apiPost.mockReset();
+      h.apiPost.mockResolvedValue({ data: { ticket: 'ticket-abc' } });
+    });
+
+    it('sends reauth_connection on open when the token changed after the ticket was minted', async () => {
+      h.readyState = 0;
+      const rendered = render(element());
+      await act(async () => {
+        await (h.capturedUrl.current as () => Promise<string>)();
+      });
+
+      await refreshTo(rendered, 'tok-2');
+      expect(h.sendJsonMessage).not.toHaveBeenCalled();
+
+      act(() => {
+        h.capturedOptions.current.onOpen({});
+      });
+
+      expect(h.sendJsonMessage).toHaveBeenCalledTimes(1);
+      expect(h.sendJsonMessage).toHaveBeenCalledWith({ action: 'reauth_connection', accessToken: 'tok-2' });
+    });
+
+    it('does not send reauth on open when the token is unchanged since the ticket was minted', async () => {
+      h.readyState = 0;
+      render(element());
+      await act(async () => {
+        await (h.capturedUrl.current as () => Promise<string>)();
+      });
+
+      act(() => {
+        h.capturedOptions.current.onOpen({});
+      });
+
+      expect(h.sendJsonMessage).not.toHaveBeenCalled();
+    });
   });
 });

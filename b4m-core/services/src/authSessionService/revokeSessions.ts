@@ -36,7 +36,10 @@ export const revokeAllUserSessions = async (
   { db, logger }: RevokeAdapters
 ): Promise<number> => {
   const count = await db.authSessions.revokeAllByUserId(userId, options);
-  await endRealtimeConnections({ userId, exceptSid: options.exceptSid, sessionsOnly: true }, { db, logger });
+  await endRealtimeConnections(
+    { userId, ...(options.exceptSid && { exceptSid: options.exceptSid }), sessionsOnly: true },
+    { db, logger }
+  );
   logger?.log(
     'Revoked',
     count,

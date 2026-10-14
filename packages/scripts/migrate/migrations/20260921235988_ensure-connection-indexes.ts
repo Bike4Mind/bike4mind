@@ -3,7 +3,7 @@ import { type MigrationFile } from './index';
 
 /**
  * Build the Connection indexes the realtime revoke paths and the realtimeConnectionSweep cron
- * query by: authExpiresAt, userId, and the partial sid / apiKeyId indexes. `autoIndex` is off in
+ * query by: userId, sid and apiKeyId (all plain indexes). `autoIndex` is off in
  * the deployed environments, so the schema declarations alone never build them there.
  *
  * Idempotent: createIndexes is a no-op for an index that already matches.

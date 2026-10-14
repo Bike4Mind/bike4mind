@@ -38,9 +38,9 @@ vi.mock('@server/auth/assertAccountStateUsable', () => ({
 }));
 
 const mockAssertSessionActive = vi.fn();
-const API_KEY_EXPIRY = new Date('2030-01-01T02:00:00Z');
+const GATEWAY_CAP_EXPIRY = new Date('2030-01-01T02:00:00Z');
 vi.mock('@server/websocket/realtimeSession', () => ({
-  apiKeyConnectionExpiry: () => API_KEY_EXPIRY,
+  gatewayCapExpiry: () => GATEWAY_CAP_EXPIRY,
   assertRealtimeSessionActive: (...args: unknown[]) => mockAssertSessionActive(...args),
 }));
 
@@ -72,7 +72,7 @@ describe('websocket connect - token gates', () => {
     mockAssertSessionActive.mockResolvedValue(undefined);
   });
 
-  it("records a CLI JWT's sid, tokenVersion and exp on the connection", async () => {
+  it("records a CLI JWT's sid and tokenVersion, bounded by the gateway cap rather than the token exp", async () => {
     const exp = Math.floor(new Date('2030-01-01T00:30:00Z').getTime() / 1000);
     mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', sid: 'sid-9', exp });
 
@@ -80,7 +80,7 @@ describe('websocket connect - token gates', () => {
 
     expect(mockAssertSessionActive).toHaveBeenCalledWith('sid-9');
     expect(mockConnectionCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ sid: 'sid-9', tokenVersion: 3, authExpiresAt: new Date(exp * 1000) })
+      expect.objectContaining({ sid: 'sid-9', tokenVersion: 3, authExpiresAt: GATEWAY_CAP_EXPIRY })
     );
   });
 
@@ -101,7 +101,7 @@ describe('websocket connect - token gates', () => {
     await connect();
 
     const created = mockConnectionCreate.mock.calls[0][0];
-    expect(created).toEqual(expect.objectContaining({ apiKeyId: 'key-1', authExpiresAt: API_KEY_EXPIRY }));
+    expect(created).toEqual(expect.objectContaining({ apiKeyId: 'key-1', authExpiresAt: GATEWAY_CAP_EXPIRY }));
     expect(created).not.toHaveProperty('sid');
     expect(created).not.toHaveProperty('tokenVersion');
   });

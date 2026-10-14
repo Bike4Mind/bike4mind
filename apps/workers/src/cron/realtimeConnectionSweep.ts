@@ -1,11 +1,22 @@
 /**
- * Ends realtime (WebSocket) connections whose credential no longer holds, and drops query
- * subscribers whose connection row is gone. Revoke paths prune connections directly; this sweep
- * catches expiry, anything a revoke path could not reach, and fanout write-backs after a prune.
+ * Ends realtime (WebSocket) connections whose credential no longer holds, closes the sockets of
+ * connections that revoke paths already ended, and drops query subscribers that no longer belong to
+ * a live connection. Revoke paths only mark a connection ended (subscribers pulled, row kept);
+ * this sweep owns the socket close: a row is deleted once DeleteConnection succeeded or the socket
+ * was already gone, and kept for the next run when the close failed for any other reason. An ended
+ * row older than any socket can live is deleted without a close.
  * Schedule: rate(5 minutes) (infra/cron.ts realtimeConnectionSweep).
- * Self-host equivalent: apps/workers/src/selfhost/realtimeConnectionSweep.ts.
+ * Self-host equivalent: apps/workers/src/selfhost/realtimeConnectionSweep.ts, which runs this same
+ * function against the self-host gateway.
  */
-import { connectDB, realtimeConnectionRepository } from '@bike4mind/database';
+import {
+  connectDB,
+  realtimeConnectionRepository,
+  type RealtimeSweepCursor,
+  type RealtimeSweepUserState,
+  type RealtimeSweepPhase,
+  type RealtimeSweepTarget,
+} from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
 import { Config } from '@server/utils/config';
@@ -17,54 +28,134 @@ const logger = new Logger({ metadata: { service: 'realtimeConnectionSweep' } });
 /** Slack past a token's exp, so a client mid-refresh has time to reauth before it is swept. */
 export const REALTIME_SWEEP_GRACE_MS = 2 * 60_000;
 
+/** Concurrent DeleteConnection calls; keeps a large backlog from flooding the management API. */
+export const REALTIME_SWEEP_CLOSE_CONCURRENCY = 10;
+
+const SWEEP_PHASES: readonly RealtimeSweepPhase[] = ['live', 'ended'];
+
 export interface RealtimeConnectionSweepResult {
+  /** Connections this run ended (their credential had lapsed). */
   ended: number;
+  /** Sockets closed (or already gone) and rows deleted. */
+  closed: number;
   closeFailures: number;
+  /** Ended rows deleted without a close because they outlived any possible socket. */
+  lapsedDeleted: number;
+  /** Pages (chunks) that failed with a database error and were skipped. */
+  failedChunks: number;
   orphanedSubscribers: number;
+  staleSubscribers: number;
+}
+
+type CloseFn = typeof closeConnection;
+
+async function closeAll(
+  connectionIds: readonly string[],
+  close: CloseFn,
+  endpoint: string
+): Promise<{ closed: string[]; failures: number }> {
+  const closed: string[] = [];
+  let failures = 0;
+  for (let i = 0; i < connectionIds.length; i += REALTIME_SWEEP_CLOSE_CONCURRENCY) {
+    const batch = connectionIds.slice(i, i + REALTIME_SWEEP_CLOSE_CONCURRENCY);
+    const outcomes = await Promise.allSettled(batch.map(connectionId => close(connectionId, endpoint)));
+    outcomes.forEach((outcome, index) => {
+      if (outcome.status === 'fulfilled') {
+        closed.push(batch[index]);
+        return;
+      }
+      failures += 1;
+      logger.warn(`[realtimeConnectionSweep] Failed to close connection ${batch[index]}`, outcome.reason as Error);
+    });
+  }
+  return { closed, failures };
+}
+
+async function processTargets(
+  targets: readonly RealtimeSweepTarget[],
+  close: CloseFn,
+  endpoint: string
+): Promise<Pick<RealtimeConnectionSweepResult, 'ended' | 'closed' | 'closeFailures' | 'lapsedDeleted'>> {
+  const lapsed = targets.filter(target => target.reason === 'endedLapsed').map(target => target.connectionId);
+  const alreadyEnded = targets.filter(target => target.reason === 'ended').map(target => target.connectionId);
+  const toEnd = targets
+    .filter(target => target.reason !== 'endedLapsed' && target.reason !== 'ended')
+    .map(target => target.connectionId);
+
+  // End first (subscribers pulled, row marked): if the close below fails, the ended row stays
+  // behind and the next run retries it.
+  if (toEnd.length > 0) await realtimeConnectionRepository.endConnections({ connectionIds: toEnd });
+  if (lapsed.length > 0) await realtimeConnectionRepository.deleteEndedConnections(lapsed);
+
+  const { closed, failures } = await closeAll([...toEnd, ...alreadyEnded], close, endpoint);
+  if (closed.length > 0) await realtimeConnectionRepository.deleteEndedConnections(closed);
+  return { ended: toEnd.length, closed: closed.length, closeFailures: failures, lapsedDeleted: lapsed.length };
 }
 
 export async function runRealtimeConnectionSweep(
-  params: { now?: Date; close?: typeof closeConnection } = {}
+  params: { now?: Date; close?: CloseFn } = {}
 ): Promise<RealtimeConnectionSweepResult> {
   const now = params.now ?? new Date();
   const close = params.close ?? closeConnection;
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
 
-  const targets = await realtimeConnectionRepository.findSweepTargets({
+  const endpoint = Resource.websocket.managementEndpoint;
+  const classification = {
     now,
     graceMs: REALTIME_SWEEP_GRACE_MS,
-    isAccountBlocked: user => userService.accountBlockReasons(user).length > 0,
-  });
+    isAccountBlocked: (user: RealtimeSweepUserState) => userService.accountBlockReasons(user).length > 0,
+  };
+  const result: RealtimeConnectionSweepResult = {
+    ended: 0,
+    closed: 0,
+    closeFailures: 0,
+    lapsedDeleted: 0,
+    failedChunks: 0,
+    orphanedSubscribers: 0,
+    staleSubscribers: 0,
+  };
+  const reasons: Record<string, number> = {};
 
-  let ended: string[] = [];
-  if (targets.length > 0) {
-    ({ connectionIds: ended } = await realtimeConnectionRepository.endConnections({
-      connectionIds: targets.map(target => target.connectionId),
-    }));
+  // One page at a time. A database error in a page is logged and skipped so one bad chunk cannot
+  // stop the rest of the run or the subscriber passes below.
+  for (const phase of SWEEP_PHASES) {
+    let cursor: RealtimeSweepCursor | null = { phase, afterId: null };
+    while (cursor) {
+      let page: Awaited<ReturnType<typeof realtimeConnectionRepository.readSweepPage>>;
+      try {
+        page = await realtimeConnectionRepository.readSweepPage(cursor);
+      } catch (error) {
+        // Without the page there is no position to resume from; the next run starts over.
+        logger.error(`[realtimeConnectionSweep] Failed to read a ${phase} page`, error as Error);
+        result.failedChunks += 1;
+        break;
+      }
+      cursor = page.next;
+      try {
+        const targets = await realtimeConnectionRepository.classifySweepRows(page.rows, classification);
+        for (const target of targets) reasons[target.reason] = (reasons[target.reason] ?? 0) + 1;
+        const outcome = await processTargets(targets, close, endpoint);
+        result.ended += outcome.ended;
+        result.closed += outcome.closed;
+        result.closeFailures += outcome.closeFailures;
+        result.lapsedDeleted += outcome.lapsedDeleted;
+      } catch (error) {
+        logger.error(`[realtimeConnectionSweep] Failed to process a ${phase} chunk`, error as Error);
+        result.failedChunks += 1;
+      }
+    }
   }
 
-  // Rows are already gone, so a failed close only leaves an idle socket that can no longer
-  // subscribe or act; the gateway's idle timeout or 2h cap ends it.
-  const endpoint = Resource.websocket.managementEndpoint;
-  const closes = await Promise.allSettled(ended.map(connectionId => close(connectionId, endpoint)));
-  let closeFailures = 0;
-  closes.forEach((outcome, index) => {
-    if (outcome.status === 'fulfilled') return;
-    closeFailures += 1;
-    logger.warn(`[realtimeConnectionSweep] Failed to close connection ${ended[index]}`, outcome.reason as Error);
-  });
+  try {
+    result.orphanedSubscribers = await realtimeConnectionRepository.removeOrphanSubscribers();
+    result.staleSubscribers = await realtimeConnectionRepository.removeStaleSubscribers();
+  } catch (error) {
+    logger.error('[realtimeConnectionSweep] Subscriber cleanup failed', error as Error);
+    result.failedChunks += 1;
+  }
 
-  const orphanedSubscribers = await realtimeConnectionRepository.removeOrphanSubscribers();
-
-  const reasons: Record<string, number> = {};
-  for (const target of targets) reasons[target.reason] = (reasons[target.reason] ?? 0) + 1;
-  logger.info('[realtimeConnectionSweep] Sweep complete', {
-    ended: ended.length,
-    closeFailures,
-    orphanedSubscribers,
-    reasons,
-  });
-  return { ended: ended.length, closeFailures, orphanedSubscribers };
+  logger.info('[realtimeConnectionSweep] Sweep complete', { ...result, reasons });
+  return result;
 }
 
 export const handler = async () => runRealtimeConnectionSweep();

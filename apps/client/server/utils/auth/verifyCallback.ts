@@ -169,7 +169,12 @@ const authenticateUser = async (
       // login is minted later, in the callback handler, so it is created fresh and unaffected.
       if (isNewProvider) {
         await authSessionRepository.revokeAllByUserId(String(user._id));
-        await realtimeConnectionRepository.endConnections({ userId: String(user._id), sessionsOnly: true });
+        // The revoke above already holds; a failed prune is backstopped by the realtime sweep.
+        try {
+          await realtimeConnectionRepository.endConnections({ userId: String(user._id), sessionsOnly: true });
+        } catch (error) {
+          console.warn('[verifyCallback] Failed to end realtime connections', error);
+        }
       }
 
       const linkedUser = omit(user, ['password']) as typeof user & {

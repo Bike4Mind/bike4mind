@@ -135,7 +135,12 @@ export const ccBridgeDeviceRepository = {
         // disabled but device row not yet updated) stays visible in logs.
         console.info(`[CC_BRIDGE] Disabled apiKey ${device.apiKeyId} for user ${userId}, device ${deviceId}`);
       }
-      await realtimeConnectionRepository.endConnections({ apiKeyId: String(device.apiKeyId) });
+      // The key is already disabled; a failed prune is backstopped by the realtime sweep.
+      try {
+        await realtimeConnectionRepository.endConnections({ apiKeyId: String(device.apiKeyId) });
+      } catch (error) {
+        console.warn(`[CC_BRIDGE] Failed to end realtime connections for apiKey ${device.apiKeyId}`, error);
+      }
     }
 
     const res = await CcBridgeDevice.updateOne(

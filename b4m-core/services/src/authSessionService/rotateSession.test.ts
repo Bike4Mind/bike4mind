@@ -228,6 +228,19 @@ describe('rotateSession', () => {
     expect(realtimeConnections.endConnections).toHaveBeenCalledWith({ sid: SID });
   });
 
+  it('still emits the audit event and throws the reuse error when ending realtime connections fails', async () => {
+    const { authSessions, realtimeConnections, db, signAccessToken } = setup();
+    authSessions.findBySid.mockResolvedValue(makeSession({ refreshTokenHash: hashRefreshSecret('the-real-one') }));
+    realtimeConnections.endConnections.mockRejectedValue(new Error('db down'));
+    const audit = vi.fn();
+
+    await expect(
+      rotateSession(buildRefreshToken(SID, generateRefreshSecret()), { db, signAccessToken, audit })
+    ).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(authSessions.revokeBySid).toHaveBeenCalledWith(SID);
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ type: 'session_reuse_revoked', sid: SID }));
+  });
+
   it('rejects a revoked session without rotating or re-revoking', async () => {
     const { authSessions, db, signAccessToken } = setup();
     const secret = generateRefreshSecret();
