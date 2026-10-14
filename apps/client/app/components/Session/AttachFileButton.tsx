@@ -26,7 +26,6 @@ import {
   ListItemButton,
   ListItemDecorator,
   Radio,
-  RadioGroup,
   Switch,
   Tooltip,
   Typography,
@@ -63,6 +62,7 @@ import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePick
 import { isImageModel } from '@client/app/utils/commands';
 import { BriefcasePanel } from '@client/app/components/Briefcase/BriefcasePanel';
 import ImageOptionsPanel from '@client/app/components/Session/AISettings/ImageOptionsPanel';
+import { useComposerMenuOpen } from '@client/app/stores/useComposerMenuOpen';
 
 import { ATTACH_SCOPE_MODES, type AttachScopeMode } from '@bike4mind/common';
 import { brandAlpha, grayAlpha } from '@client/app/utils/themes/colors';
@@ -78,7 +78,8 @@ const ATTACH_SCOPE_COPY: Record<AttachScopeMode, { label: string; description: s
   },
   notebook: {
     label: 'Whole notebook',
-    description: 'Everything is kept for this notebook and re-sent with every message.',
+    // Non-breaking hyphen: a wrap there split it into "re-" / "sent".
+    description: 'Everything is kept for this notebook and re\u2011sent with every message.',
   },
   message: {
     label: 'Just this message',
@@ -121,65 +122,81 @@ type Submenu = 'briefcase' | 'image' | 'uploadScope';
 const UploadScopeOptions: FC<{ value: AttachScopeMode; onChange: (mode: AttachScopeMode) => void }> = ({
   value,
   onChange,
-}) => {
-  const theme = useTheme();
-  const hoverBg = theme.palette.mode === 'dark' ? grayAlpha[775][30] : brandAlpha[100][12];
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-      <Typography level="body-xs" sx={{ color: 'text.tertiary', px: '8px', pt: '4px', pb: '2px' }}>
-        Files uploaded from this device
-      </Typography>
-      <RadioGroup
-        size="sm"
-        value={value}
-        data-testid="attach-file-scope-radiogroup"
-        onChange={event => onChange(event.target.value as AttachScopeMode)}
-        sx={{ gap: '4px', m: 0 }}
-      >
-        {ATTACH_SCOPE_MODES.map(mode => (
-          // overlay makes the whole row the radio's hit target; the row is positioned for it.
+}) => (
+  // Same element as the sidebar's filter radios (layouts/Notebook/Sidenav/FiltersPanel.tsx,
+  // FilterRadioRow and sectionTitleSx), with a description under each label - keep them in sync.
+  <Box sx={{ display: 'flex', flexDirection: 'column', p: '4px' }}>
+    <Typography
+      id="attach-scope-heading"
+      level="body-xs"
+      sx={{ color: 'text.tertiary', fontSize: '12px', fontWeight: 400, letterSpacing: 0, mb: '12px', px: 1 }}
+    >
+      FILES UPLOADED FROM THIS DEVICE
+    </Typography>
+    <Box
+      role="radiogroup"
+      aria-labelledby="attach-scope-heading"
+      data-testid="attach-file-scope-radiogroup"
+      sx={{ display: 'flex', flexDirection: 'column', gap: '4px' }}
+    >
+      {ATTACH_SCOPE_MODES.map(mode => {
+        const selected = value === mode;
+        return (
           <Box
             key={mode}
-            sx={{
-              position: 'relative',
+            onClick={() => onChange(mode)}
+            sx={theme => ({
               display: 'flex',
-              flexDirection: 'column',
-              gap: '2px',
-              px: '8px',
-              py: '6px',
-              borderRadius: '6px',
-              transition: 'background-color 0.15s ease',
-              '&:hover': { backgroundColor: hoverBg },
-            }}
+              alignItems: 'flex-start',
+              gap: '12px',
+              px: 1,
+              py: '8px',
+              minHeight: '36px',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              backgroundColor: selected ? theme.palette.notebooklist.focusedBackground : 'transparent',
+              transition: 'background 0.15s',
+              '&:hover': {
+                backgroundColor: selected
+                  ? theme.palette.notebooklist.focusedBackground
+                  : theme.palette.notebooklist.hoverBg,
+              },
+            })}
           >
             <Radio
-              overlay
+              checked={selected}
+              color="success"
+              size="sm"
+              name="attach-scope"
               value={mode}
-              label={ATTACH_SCOPE_COPY[mode].label}
+              onChange={() => onChange(mode)}
+              onClick={event => event.stopPropagation()}
               data-testid={`attach-file-scope-${mode}-radio`}
               slotProps={{
-                input: { 'aria-describedby': `attach-scope-${mode}-desc` },
-                // overlay stretches the action over the row, and globals.css frames a checked action
-                // with an !important green border - meant for the small radio, it would box the whole
-                // row here. The doubled class outranks that rule; the row's own hover is the cue.
-                action: {
-                  sx: {
-                    '&&, &&.Mui-checked': { border: 'none !important', backgroundColor: 'transparent' },
-                  },
-                },
+                input: { 'aria-label': ATTACH_SCOPE_COPY[mode].label, 'aria-describedby': `attach-scope-${mode}-desc` },
               }}
-              sx={{ '--Radio-gap': '12px', color: 'text.primary' }}
+              sx={{
+                '--Radio-size': '20px',
+                // Next to a two-line description the row would otherwise squeeze it into an oval.
+                flexShrink: 0,
+                // Inner checked dot fixed to 12x12, as in the sidebar filters.
+                '& .MuiRadio-icon': { width: '12px', height: '12px', borderRadius: '50%' },
+              }}
             />
-            {/* Lines up under the label: 16px radio + the 12px gap. */}
-            <Typography id={`attach-scope-${mode}-desc`} level="body-xs" sx={{ color: 'text.tertiary', pl: '28px' }}>
-              {ATTACH_SCOPE_COPY[mode].description}
-            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+              <Typography level="body-sm" sx={{ fontWeight: 400, color: 'text.primary' }}>
+                {ATTACH_SCOPE_COPY[mode].label}
+              </Typography>
+              <Typography id={`attach-scope-${mode}-desc`} level="body-xs" sx={{ color: 'text.tertiary' }}>
+                {ATTACH_SCOPE_COPY[mode].description}
+              </Typography>
+            </Box>
           </Box>
-        ))}
-      </RadioGroup>
+        );
+      })}
     </Box>
-  );
-};
+  </Box>
+);
 
 interface IProps {
   onUploadFromComputer: () => void;
@@ -475,6 +492,13 @@ const AttachFileButton = ({
     }
   };
 
+  // Lets SessionMiddle hide its scroll-to-bottom button, which would otherwise cover this menu.
+  const setComposerMenuOpen = useComposerMenuOpen(state => state.setOpen);
+  useEffect(() => {
+    setComposerMenuOpen(isOpen);
+    return () => setComposerMenuOpen(false);
+  }, [isOpen, setComposerMenuOpen]);
+
   // Handle click outside to close dropdown
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -519,7 +543,7 @@ const AttachFileButton = ({
             position: 'absolute',
             bottom: '100%',
             left: 0,
-            mb: 0.5,
+            mb: '8px',
             // The longest row is the upload one: label, icon slot and the gear's reserved 48px fit 252px.
             width: { xs: 'calc(100vw - 32px)', sm: '320px' },
             backgroundColor: 'background.surface',
@@ -969,7 +993,8 @@ const AttachFileButton = ({
                 position: 'absolute',
                 left: 'calc(100% + 4px)',
                 top: flyoutTop ?? 0,
-                width: flyout === 'uploadScope' ? '300px' : '340px',
+                // 320px keeps each upload-scope description to two lines (308px is the minimum).
+                width: flyout === 'uploadScope' ? '320px' : '340px',
                 maxHeight: '480px',
                 overflow: 'auto',
                 backgroundColor: 'background.surface',

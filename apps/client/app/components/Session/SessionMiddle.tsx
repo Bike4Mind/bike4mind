@@ -47,6 +47,7 @@ import { useSessionReadOnly } from './SessionReadOnlyContext';
 import { buildChatHistory } from './buildChatHistory';
 import { useReplyChoices, type NewestTurn } from '@client/app/hooks/useReplyChoices';
 import { useSessionReconnectProbe } from './AgentExecution/useSessionReconnectProbe';
+import { useComposerMenuOpen } from '@client/app/stores/useComposerMenuOpen';
 
 interface IProps {
   isFullWidth?: boolean;
@@ -61,7 +62,9 @@ interface IProps {
 // of the scroll container - including Footer content (streaming messages).
 const ScrollToBottomButton = memo(
   ({ isAtBottom, scrollerRef }: { isAtBottom: boolean; scrollerRef: React.RefObject<HTMLElement | null> }) => {
-    if (isAtBottom) return null;
+    // It would cover the composer's plus menu, which lives in a lower stacking layer.
+    const composerMenuOpen = useComposerMenuOpen(state => state.open);
+    if (isAtBottom || composerMenuOpen) return null;
 
     return (
       <Box

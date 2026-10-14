@@ -105,7 +105,7 @@ describe('AttachFileButton attach-scope control', () => {
     renderControl('auto');
     expect(screen.getByText('Nothing is kept - files attach to one message only.')).toBeInTheDocument();
     expect(
-      screen.getByText('Everything is kept for this notebook and re-sent with every message.')
+      screen.getByText('Everything is kept for this notebook and re\u2011sent with every message.')
     ).toBeInTheDocument();
   });
 
