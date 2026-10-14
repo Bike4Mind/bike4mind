@@ -1,4 +1,4 @@
-import { Permission, isImageServeable, FAB_FILE_CONTENT_REWRITE_PATCH } from '@bike4mind/common';
+import { Permission, isImageServeable, FAB_FILE_CONTENT_REWRITE_PATCH, isStorageLimitError } from '@bike4mind/common';
 import { FabFile, withTransaction, fabFileRepository, userRepository } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -170,6 +170,7 @@ const handler = baseApi()
         });
       } catch (error) {
         console.error('Apply edit error:', error);
+        if (isStorageLimitError(error)) throw error;
         throw new BadRequestError(error instanceof Error ? error.message : 'Failed to apply edit');
       }
     })

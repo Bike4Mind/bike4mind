@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
+import { StorageLimitError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   file: undefined as Record<string, unknown> | undefined,
@@ -73,6 +74,14 @@ const call = () =>
     { json: vi.fn() } as unknown as Response
   );
 const QUOTA = 'File size exceeds storage limit';
+const quotaError = () =>
+  new StorageLimitError(QUOTA, {
+    errorCode: 'storage_limit_exceeded',
+    used_bytes: 900,
+    limit_bytes: 1000,
+    requested_bytes: 200,
+    owner: 'user',
+  });
 
 describe('POST /api/fabfiles/[id]/edit (applyImmediately) storage accounting', () => {
   beforeEach(() => {
@@ -105,9 +114,10 @@ describe('POST /api/fabfiles/[id]/edit (applyImmediately) storage accounting', (
     });
 
     it('refuses growth past the quota with the standard message before uploading', async () => {
-      h.assertRewriteFits.mockRejectedValue(new Error(QUOTA));
+      h.assertRewriteFits.mockRejectedValue(quotaError());
 
-      await expect(call()).rejects.toThrow(QUOTA);
+      // Rethrown as-is so the client still gets the used/limit numbers.
+      await expect(call()).rejects.toMatchObject({ message: QUOTA, info: { used_bytes: 900 } });
       expect(h.upload).not.toHaveBeenCalled();
       expect(h.commitContentRewrite).not.toHaveBeenCalled();
     });

@@ -31,7 +31,11 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: {
     findOne: h.findOne,
     updateOne: h.updateOne,
-    findOneAndUpdate: h.findOneAndUpdate,
+    // A Query: awaitable as-is, or via .lean() as the storage claim reads it.
+    findOneAndUpdate: (...args: unknown[]) => {
+      const result = Promise.resolve(h.findOneAndUpdate(...args));
+      return Object.assign(result, { lean: () => result });
+    },
     findById: h.findById,
   },
   imageModerationIncidentRepository: {},

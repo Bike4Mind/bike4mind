@@ -6,7 +6,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
+import { isStorageCharged, STORAGE_CHARGE_STAMP_CUTOFF, STORAGE_CHARGED_FILTER } from '@bike4mind/common';
 import { FabFile, Session, User, fabFileRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { fabFilesService, notebookImportService } from '@bike4mind/services';
 import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
@@ -176,6 +176,35 @@ const legacyFile = async (fileSize: number, { noStatus = false } = {}) => {
   await userRepository.incrementCurrentStorage(USER, fileSize);
   return String(row._id);
 };
+
+describe('STORAGE_CHARGED_FILTER', () => {
+  it('selects exactly the rows isStorageCharged counts', async () => {
+    const before = new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000);
+    const after = new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() + 1000);
+    const shapes: Record<string, unknown>[] = [
+      { storageChargedAt: after, status: 'pending', createdAt: after },
+      { status: 'pending', createdAt: before },
+      { status: 'complete', createdAt: before },
+      { status: 'complete', createdAt: after },
+      { status: null, createdAt: before },
+      { createdAt: before },
+      { createdAt: after },
+      { status: 'complete' },
+    ];
+    const ids = shapes.map(() => new mongoose.Types.ObjectId());
+    await FabFile.collection.insertMany(shapes.map((shape, i) => ({ _id: ids[i], userId: USER, ...shape })));
+
+    const rows = await FabFile.collection.find({ _id: { $in: ids } }).toArray();
+    const matched = await FabFile.collection.find({ _id: { $in: ids }, ...STORAGE_CHARGED_FILTER }).toArray();
+    expect(matched.map(r => String(r._id)).sort()).toEqual(
+      rows
+        .filter(r => isStorageCharged(r))
+        .map(r => String(r._id))
+        .sort()
+    );
+    expect(matched).toHaveLength(4);
+  });
+});
 
 describe('content rewrite storage charge', () => {
   const truth = async () => BASELINE_BYTES + (await fabFileRepository.sumFileSizeByUserId(USER));

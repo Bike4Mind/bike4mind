@@ -4,6 +4,7 @@ import {
   SupportedFabFileMimeTypes,
   isImageServeable,
   FAB_FILE_CONTENT_REWRITE_PATCH,
+  isStorageLimitError,
 } from '@bike4mind/common';
 import {
   FabFile,
@@ -406,6 +407,7 @@ Return only the edited content without any markdown code blocks or explanations.
         return res.json(result);
       } catch (error) {
         console.error('Edit file error:', error);
+        if (isStorageLimitError(error)) throw error;
         throw new BadRequestError(error instanceof Error ? error.message : 'Failed to generate edit');
       }
     })
