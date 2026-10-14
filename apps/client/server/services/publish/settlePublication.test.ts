@@ -122,6 +122,15 @@ describe('settlePublication - first publish', () => {
       lastPublishedBy: OWNER,
     });
   });
+
+  it('narrows legacy duplicates of a first publish to the record it just created', async () => {
+    await settlePublication(input());
+    const publicId = writeCall()[1].$set.publicId as string;
+    expect(mocks.restrictDuplicatePublications).toHaveBeenCalledWith(
+      expect.objectContaining({ publicId, visibility: 'private' }),
+      logger
+    );
+  });
 });
 
 describe('settlePublication - extra fields', () => {
