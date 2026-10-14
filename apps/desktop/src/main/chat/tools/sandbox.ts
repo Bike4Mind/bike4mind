@@ -132,8 +132,8 @@ export function buildProfile(writableRoots: readonly string[], alwaysDenied: rea
  *
  * `alwaysDenied` is for paths this app must protect regardless of what the user granted - above
  * all its own userData folder, which holds the access token. Without that entry a granted home
- * folder would let a command read the token straight out of the vault, which is the T4
- * invariant broken through the back door.
+ * folder would let a command read the token straight out of the vault, which breaks the
+ * rule that the access token never leaves the main process.
  */
 export async function sandboxCommand(
   command: string,

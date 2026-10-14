@@ -276,7 +276,7 @@ describe('ChatService approval modes', () => {
       const covers = (text: string) =>
         approvals.coversCommands(session.id, {
           namespace: 'bash_execute',
-          commands: [{ text, pattern: 'x' }],
+          commands: [{ text, pattern: 'x', coverable: true }],
           directories: [],
         });
       expect(covers('git status -s')).toBe(true);

@@ -271,6 +271,15 @@ export interface ToolContext {
   mcp?: McpToolContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
+  /**
+   * The approval key this call was let through under, whether the user answered the card, a
+   * standing answer covered it, or the mode did. Absent for a call that was never gated. Set by
+   * ChatService only, so a tool can tell what the user agreed to from what it merely ended up
+   * doing - a browser page that redirected somewhere no approval named.
+   */
+  approvedKey?: string;
+  /** Whether the user said "always" to this key in this conversation. Absent outside the chat loop. */
+  isStanding?(key: string): boolean;
 }
 
 /**
@@ -483,8 +492,11 @@ export interface ApprovalPrompt {
 export interface ApprovalAlways {
   /** The tool the patterns belong to: allowing `npm run dev *` for one tool is not allowing it for the other. */
   namespace: string;
-  /** One per sub-command, as written; matched against remembered `patterns`. */
-  commands: readonly { text: string; pattern: string }[];
+  /**
+   * One per sub-command, as written; matched against remembered `patterns`. Never covered when
+   * not `coverable` (see ShellCommand.coverable).
+   */
+  commands: readonly { text: string; pattern: string; coverable: boolean }[];
   /** Directories outside every granted root that the command reaches. */
   directories: readonly string[];
 }

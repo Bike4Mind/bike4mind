@@ -160,20 +160,45 @@ const VALUE_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   git: ['-C', '-c'],
 };
 
+// Options that only pick where a command runs or how it prints. Anything else dropped before the
+// subcommand can change what runs - `git -c core.fsmonitor=<cmd>`, `--exec-path`,
+// `npm --script-shell` - so a command carrying one is never covered by a remembered pattern.
+const SAFE_OPTIONS: Readonly<Record<string, readonly string[]>> = {
+  pnpm: PACKAGE_VALUE_OPTIONS,
+  npm: PACKAGE_VALUE_OPTIONS,
+  yarn: PACKAGE_VALUE_OPTIONS,
+  git: ['-C', '--no-pager', '-P'],
+};
+
+function leadingOptions(tokens: readonly string[]): { end: number; safe: boolean } {
+  const [program, ...rest] = tokens;
+  const valued = program === undefined ? undefined : VALUE_OPTIONS[program];
+  if (!valued) return { end: 0, safe: true };
+  const safeNames = SAFE_OPTIONS[program] ?? [];
+  let index = 0;
+  let safe = true;
+  while (index < rest.length && rest[index].startsWith('-')) {
+    const option = rest[index];
+    const equals = option.indexOf('=');
+    if (!safeNames.includes(equals === -1 ? option : option.slice(0, equals))) safe = false;
+    index += valued.includes(option) ? 2 : 1;
+  }
+  return { end: index, safe };
+}
+
 /**
  * The command with the options that sit between the program and its subcommand dropped, so
  * `pnpm --filter @x/y exec vitest run` is `pnpm exec vitest run` and `git -C dir commit` is
  * `git commit`. Both the prefix an "always allow" remembers and the match against it use this
- * form, so the two stay consistent.
+ * form, so the two stay consistent - which is only sound when droppedOnlySafeOptions holds.
  */
 export function commandTokens(tokens: readonly string[]): string[] {
   const [program, ...rest] = tokens;
   if (program === undefined) return [];
-  const valued = VALUE_OPTIONS[program];
-  if (!valued) return [...tokens];
-  let index = 0;
-  while (index < rest.length && rest[index].startsWith('-')) {
-    index += valued.includes(rest[index]) ? 2 : 1;
-  }
-  return [program, ...rest.slice(index)];
+  return [program, ...rest.slice(leadingOptions(tokens).end)];
+}
+
+/** Whether every option commandTokens drops is on the safe list for its program. */
+export function droppedOnlySafeOptions(tokens: readonly string[]): boolean {
+  return leadingOptions(tokens).safe;
 }

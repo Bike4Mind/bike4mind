@@ -427,7 +427,7 @@ export async function shellApproval(
     key,
     always: {
       namespace: tool,
-      commands: scan.commands.map(({ text, always }) => ({ text, pattern: always })),
+      commands: scan.commands.map(({ text, always, coverable }) => ({ text, pattern: always, coverable })),
       directories: [...new Set([...directories, ...scan.directories])],
     },
   };

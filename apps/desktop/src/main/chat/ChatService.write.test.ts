@@ -82,7 +82,7 @@ describe('ChatService write gate', () => {
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
   }
 
-  // The whole point of T11: the user answers a diff, not a filename.
+  // The point of the write gate: the user answers a diff, not a filename.
   it('shows the diff before asking, with the file still untouched', async () => {
     await startTurn('fix the second line');
     streams[0].write(toolTurn('c1', 'file_edit', { path: target, oldText: 'beta', newText: 'BETA' }));
@@ -151,7 +151,7 @@ describe('ChatService write gate', () => {
     expect(lastToolResult()).toMatchObject({ is_error: true, content: expect.stringMatching(/does not appear/) });
   });
 
-  // T34. The transcript keeps these rows for good, so a diff on one is a claim about the past:
+  // The transcript keeps these rows for good, so a diff on one is a claim about the past:
   // it is there when the bytes went down and absent every other time.
   describe('the diff kept on the settled call', () => {
     /** The call as one of those events carries it. `toolEvents` only filters; this narrows. */

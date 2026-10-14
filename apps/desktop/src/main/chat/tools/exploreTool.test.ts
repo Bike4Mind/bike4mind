@@ -105,6 +105,29 @@ describe('explore', () => {
     expect(progress).toContain('Reading app.ts (call 2)');
   });
 
+  it('refuses a nested read the top-level tool would ask about, instead of reading it unasked', async () => {
+    await writeFile(join(root, '.env'), 'SECRET=hunter2\n', 'utf8');
+    const { explore, requests } = fakeExplore([
+      [
+        toolUse([
+          { name: 'file_read', input: { path: join(root, '.env') } },
+          { name: 'grep_search', input: { pattern: 'SECRET', path: '.env' } },
+        ]),
+      ],
+      [{ type: 'content', text: 'done' }],
+    ]);
+
+    await exploreTool.run({ question: 'summarise the config' }, { ...context, explore });
+
+    const results = requests[1].messages.at(-1)?.content as { tool_use_id: string; content: string; is_error?: true }[];
+    expect(results).toHaveLength(2);
+    for (const result of results) {
+      expect(result).toMatchObject({ is_error: true });
+      expect(result.content).toContain('needs the user');
+      expect(result.content).not.toContain('hunter2');
+    }
+  });
+
   it('records how many rounds it took and where the time went', async () => {
     const detail = vi.fn();
     let clock = 0;

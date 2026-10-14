@@ -43,7 +43,7 @@ gitignored.
 
 The macOS `zip` is not redundant with the `dmg`. The dmg is the human-facing installer;
 the zip is the format a Squirrel.Mac auto-updater consumes, so it has to exist before
-auto-update (T44) can.
+auto-update can.
 
 ### Baking the backend URL
 
@@ -365,7 +365,7 @@ Where the icon actually shows:
   through electron-vite's `?asset` import so the PNG is copied into `out/main/chunks/` and the
   path is correct both in dev and when packaged.
 - **macOS** ignores that option - its windows have no icon - and reads the dock icon from the
-  app bundle, which only exists once T9 packages the app. `app.dock.setIcon()` covers the gap
+  app bundle, which only exists once the app is packaged. `app.dock.setIcon()` covers the gap
   for `pnpm dev`.
 - The renderer's favicon is cosmetic inside Electron, which does not apply a page favicon to
   the window. It is there for where the renderer is opened as a page: devtools and

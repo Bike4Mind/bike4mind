@@ -414,7 +414,7 @@ interface RawRound {
  * Owns conversations, the reply stream, and the tool loop.
  *
  * Streaming runs HERE, in main, and not in the renderer: the request carries the access
- * token, and T4's invariant is that tokens never leave this process. Tools run here for the
+ * token, and tokens never leave this process. Tools run here for the
  * same reason plus a second one - they touch the filesystem, which a sandboxed renderer cannot.
  */
 export type AutomaticTurnResult = { ok: true } | { ok: false; busy: boolean; error: string };
@@ -2557,6 +2557,7 @@ export class ChatService {
           ...(web ? { web } : {}),
           ...(this.deps.mcp ? { mcp: this.deps.mcp } : {}),
           report,
+          isStanding: key => !!this.deps.approvals?.isStanding(sessionId, key),
         };
 
         // Asked BEFORE 'running' is announced, so the UI never shows a command as under way
@@ -2926,7 +2927,7 @@ export class ChatService {
     });
     // The queue is the ONLY way in, for a busy target and an idle one alike: flushQueue starts
     // the turn when nothing is running and no-ops when something is, so there is no second path
-    // racing T20's - and an idle target that starts replying in this gap simply runs the
+    // racing the queue's own flush - and an idle target that starts replying in this gap simply runs the
     // message when that reply ends.
     const queued = this.isBusy(targetId);
     this.flushQueue(targetId);
@@ -3304,6 +3305,8 @@ export class ChatService {
     try {
       if (tool.needsApproval && !(await tool.needsApproval(call.input, context))) return { input: call.input };
       prompt = await tool.approval(call.input, context);
+      // Read only by `run`, which no path below that refuses the call goes on to.
+      context.approvedKey = prompt.key;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const refused: ChatToolCall = {

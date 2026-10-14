@@ -483,7 +483,7 @@ export function SessionList({
   /**
    * The modifier plus 1-9 opens the nth row, counted the way the sidebar draws them and
    * filtered the way the search box currently has them. Nothing advertises this any more -
-   * the numbered badges went in T10 and the More panel that documented it was removed - but
+   * the numbered badges were dropped and the More panel that documented it was removed - but
    * the bindings themselves still work. Bound on the window rather than the sidebar, because
    * a user reaching for it is almost always typing in the composer at the time.
    */

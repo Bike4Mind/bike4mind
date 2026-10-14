@@ -33,15 +33,17 @@ describe('ChatService agent browser', () => {
   let approvals: ApprovalGate;
   /** Where the page is right now, which is what the script gate keys on. */
   let pageUrl: string;
+  /** Hosts the user imported their own browser cookies for. */
+  let imported: string[];
 
   const page: BrowserPage = {
     currentUrl: () => pageUrl,
     navigate: async url => ({ url, title: 'App' }),
     back: async () => undefined,
     snapshot: async () => ({
-      url: 'http://localhost:3080/app',
+      url: pageUrl,
       title: 'App',
-      text: '[1] button "Add"',
+      text: pageUrl.startsWith('https://mail.') ? 'your code is 123456' : '[1] button "Add"',
       truncated: false,
     }),
     click: async () => 'Add',
@@ -59,6 +61,7 @@ describe('ChatService agent browser', () => {
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-browser-')));
     pageUrl = 'http://localhost:3080/app';
+    imported = [];
     approvals = new ApprovalGate();
     granted = [root];
     events = [];
@@ -78,7 +81,7 @@ describe('ChatService agent browser', () => {
         selectTab: () => Promise.reject(new Error('No tabs in this test.')),
         closeTab: () => Promise.reject(new Error('No tabs in this test.')),
         keepScreenshot,
-        usesImportedCookies: () => false,
+        usesImportedCookies: url => imported.includes(new URL(url).hostname),
       }),
       closeSession: async sessionId => {
         closed.push(sessionId);
@@ -253,6 +256,61 @@ describe('ChatService agent browser', () => {
   it('asks before running a script on a site that is not local, in full access', async () => {
     pageUrl = 'https://app.example.com/inbox';
     expect(await evaluateInFullAccess(await codeSession())).toBe(true);
+  });
+
+  /**
+   * One browser_snapshot round, answering its card with `answer` if one comes up. Returns
+   * whether it asked and the tool_result text the model was sent.
+   */
+  async function snapshotRound(
+    sessionId: string,
+    answer: 'once' | 'always' | undefined
+  ): Promise<{ asked: boolean; result: string }> {
+    const before = streams.length;
+    const doneBefore = events.filter(event => event.type === 'done').length;
+    const askedBefore = events.filter(e => e.type === 'tool-start' && e.call.status === 'awaiting-approval').length;
+    await service.send(sessionId, 'read the page');
+    await vi.waitUntil(() => streams.length === before + 1, { timeout: 3000, interval: 5 });
+    streams[before].write(
+      frame({ type: 'tool_use', tools: [{ id: `snap_${before}`, name: 'browser_snapshot', arguments: '{}' }] })
+    );
+    streams[before].write(frame('[DONE]'));
+    const card = await vi
+      .waitUntil(
+        () =>
+          events.filter(e => e.type === 'tool-start' && e.call.status === 'awaiting-approval').at(askedBefore) ??
+          (streams.length === before + 2 ? 'none' : undefined),
+        { timeout: 3000, interval: 5 }
+      )
+      .catch(() => undefined);
+    const asked = !!card && card !== 'none';
+    if (card && card !== 'none' && card.type === 'tool-start' && card.call.approvalId && answer) {
+      approvals.resolve(card.call.approvalId, { decision: answer });
+    }
+    await vi.waitUntil(() => streams.length === before + 2, { timeout: 3000, interval: 5 });
+    streams[before + 1].write(frame({ type: 'content', text: 'ok' }));
+    streams[before + 1].write(frame('[DONE]'));
+    await vi.waitUntil(() => events.filter(event => event.type === 'done').length > doneBefore, {
+      timeout: 3000,
+      interval: 5,
+    });
+    const end = events.filter(e => e.type === 'tool-end').at(-1);
+    return { asked, result: end && 'call' in end ? (end.call.preview ?? end.call.error ?? '') : '' };
+  }
+
+  it('asks before reading a signed-in page in full access, and an "always" covers the next read', async () => {
+    imported = ['mail.example.com'];
+    pageUrl = 'https://mail.example.com/inbox';
+    const id = await codeSession();
+    await store.setApprovalMode(id, 'full');
+
+    const first = await snapshotRound(id, 'always');
+    expect(first.asked).toBe(true);
+    expect(first.result).toContain('123456');
+
+    const second = await snapshotRound(id, undefined);
+    expect(second.asked).toBe(false);
+    expect(second.result).toContain('123456');
   });
 
   it('closes the browser with its conversation', async () => {

@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
-import { arityPrefix, commandTokens } from './bashArity';
+import { arityPrefix, commandTokens, droppedOnlySafeOptions } from './bashArity';
 import { parseBash } from './bashParser';
 import { resolveWithinRootsPhysically } from './paths';
 
@@ -11,6 +11,11 @@ export interface ShellCommand {
   text: string;
   /** What "always allow" would remember for it, e.g. `git commit *`. */
   always: string;
+  /**
+   * False when the normalising dropped something that can change what runs - an env assignment
+   * or an option off the safe list - so `text` no longer says what the command does.
+   */
+  coverable: boolean;
 }
 
 export interface ShellScan {
@@ -145,7 +150,12 @@ export async function scanShell(
       }
 
       const normalised = commandTokens(tokens);
-      commands.push({ text: normalised.join(' '), always: `${arityPrefix(normalised).join(' ')} *` });
+      const assigns = node.namedChildren.some(child => child?.type === 'variable_assignment');
+      commands.push({
+        text: normalised.join(' '),
+        always: `${arityPrefix(normalised).join(' ')} *`,
+        coverable: !assigns && droppedOnlySafeOptions(tokens),
+      });
       if (!TOUCHES_FILES.has(program)) return;
       for (const arg of rest) {
         if (arg.startsWith('-') || (program === 'chmod' && arg.startsWith('+'))) continue;

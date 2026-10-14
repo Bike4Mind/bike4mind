@@ -232,6 +232,15 @@ async function runNested(
   }
   progress(describeNested(request.name, input, context.workingDirectory));
   try {
+    // The explorer cannot show an approval card, so a call the top-level tool would ask about
+    // (a .env read) is refused here rather than run unasked.
+    if (await tool.needsApproval?.(input, context)) {
+      return {
+        ...base,
+        content: `${request.name} on this path needs the user's approval, which explore cannot ask for. Leave it out of the report; the main conversation can read it with the user's approval.`,
+        error: true,
+      };
+    }
     return { ...base, content: capOutput(await tool.run(input, context), outputCapFor(request.name)), error: false };
   } catch (err) {
     return { ...base, content: err instanceof Error ? err.message : String(err), error: true };

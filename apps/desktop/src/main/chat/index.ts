@@ -406,7 +406,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     queue,
     skills,
     // userData holds the auth vault. Without this a user who shares their home folder would be
-    // one `cat` away from the access token, which is T4's invariant broken through a side door.
+    // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
     protectedPaths: [userData],
     getApiClient: () => auth.getApiClient(),
     getEnvironmentUrl: () => auth.getState().environment.url,

@@ -72,6 +72,57 @@ function onUserSession(context: ToolContext, url: string): boolean {
 /** Added to an approval the user has to answer themselves, whatever mode they set. */
 const AS_THE_USER = { askInAuto: true, askInFull: true } as const;
 
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
+  }
+}
+
+/** Shared by browser_navigate, browser_snapshot, browser_screenshot and a tab switch: one "always" covers all. */
+function readAsYouApproval(url: string, verb: string): ApprovalPrompt {
+  return {
+    detail: `${verb} ${url} as your signed-in ${new URL(url).hostname} session`,
+    key: `browser-open-as-you:${new URL(url).origin}`,
+    ...AS_THE_USER,
+  };
+}
+
+/**
+ * Whether the model may be shown what is on `url`. A site carrying the user's imported cookies
+ * needs consent for that very origin: the approval this call ran under, or a standing one.
+ *
+ * Checked on where the page IS when it is read, never on what was typed: a redirect, a link, a
+ * script setting location.href, history and a tab the user opened all reach a page no approval
+ * named. Not a navigation gate on the view, because the user browses this pane by hand too and
+ * nothing there can tell their click from the agent's.
+ */
+function mayRead(context: ToolContext, url: string): boolean {
+  if (!onUserSession(context, url)) return true;
+  const origin = originOf(url);
+  if (!origin) return false;
+  const consented = [`browser-open-as-you:${origin}`, `browser-act-as-you:${origin}`, `browser-script:${origin}`];
+  if (context.approvedKey && consented.includes(context.approvedKey)) return true;
+  return consented.some(key => context.isStanding?.(key) ?? false);
+}
+
+/** Drains the page's events too: they came from the page being withheld. */
+function withheld(page: BrowserPage, lead: string, url: string): string {
+  page.drainEvents();
+  return (
+    `${lead}\nThe page is now on ${originOf(url)}, a site the user is signed in to with cookies imported ` +
+    "from their own browser, so its content is not shown without the user's say-so. Call " +
+    'browser_snapshot to read it, which asks them.'
+  );
+}
+
+/** Reading the open page as the signed-in user is asked about as opening it would have been. */
+const gatedRead: Pick<ToolDefinition, 'needsApproval' | 'approval'> = {
+  needsApproval: async (_input, context) => onUserSession(context, (await requireBrowser(context).page()).currentUrl()),
+  approval: async (_input, context) => readAsYouApproval((await requireBrowser(context).page()).currentUrl(), 'Read'),
+};
+
 async function actionApproval(
   verb: string,
   input: Record<string, unknown>,
@@ -143,9 +194,16 @@ function eventsSection(page: BrowserPage): string {
   return `\n\nSince the last step:${skipped > 0 ? ` (${skipped} earlier omitted)` : ''}\n${shown.map(line => `- ${line}`).join('\n')}`;
 }
 
-async function describePage(page: BrowserPage, maxChars: number, lead: string, inView = false): Promise<string> {
+async function describePage(
+  context: ToolContext,
+  page: BrowserPage,
+  maxChars: number,
+  lead: string,
+  inView = false
+): Promise<string> {
   await page.settle(SETTLE_MS);
   const snap = inView ? await page.snapshot(maxChars, true) : await page.snapshot(maxChars);
+  if (!mayRead(context, snap.url)) return withheld(page, lead, snap.url);
   const header = `${lead}\nPage: ${snap.title || '(untitled)'} - ${snap.url}`;
   const note = snap.truncated
     ? '\n[Snapshot cut at the size limit. Use browser_evaluate to read a specific part of the page.]'
@@ -169,11 +227,13 @@ async function loadAndDescribe(context: ToolContext, url: string, label: string,
       context.report?.label(label);
       const loaded = await page.navigate(url);
       const status = loaded.status ? ` (HTTP ${loaded.status})` : '';
+      // A redirect's target can carry a token in its path, so only its origin is named until it may be read.
+      const where = mayRead(context, loaded.url) ? loaded.url : originOf(loaded.url);
       const lead = loaded.stillLoading
-        ? `Loaded ${loaded.url}${status}, but it was still loading at the time limit, so loading was stopped ` +
+        ? `Loaded ${where}${status}, but it was still loading at the time limit, so loading was stopped ` +
           'there. Parts of the page may be missing.'
-        : `Loaded ${loaded.url}${status}.`;
-      return describePage(page, SNAPSHOT_CHARS, lead);
+        : `Loaded ${where}${status}.`;
+      return describePage(context, page, SNAPSHOT_CHARS, lead);
     },
     tab
   );
@@ -207,15 +267,8 @@ export const browserNavigate: ToolDefinition = {
   },
   approval(input, context) {
     const url = normalizeUrl(requireString(input, 'url'));
-    const origin = new URL(url).origin;
-    if (onUserSession(context, url)) {
-      return {
-        detail: `Open ${url} as your signed-in ${new URL(url).hostname} session`,
-        key: `browser-open-as-you:${origin}`,
-        ...AS_THE_USER,
-      };
-    }
-    return { detail: `Open ${url}`, key: `browser-open:${origin}` };
+    if (onUserSession(context, url)) return readAsYouApproval(url, 'Open');
+    return { detail: `Open ${url}`, key: `browser-open:${new URL(url).origin}` };
   },
   async run(input, context) {
     const url = normalizeUrl(requireString(input, 'url'));
@@ -250,14 +303,27 @@ function newTabUrl(input: Record<string, unknown>): string {
   return typeof input.url === 'string' && input.url.trim() ? normalizeUrl(input.url) : '';
 }
 
+/** '' for an id that is not open, which `selectTab` then refuses. */
+function selectedTabUrl(input: Record<string, unknown>, context: ToolContext): string {
+  const id = tabId(input);
+  return (
+    requireBrowser(context)
+      .tabs()
+      .find(tab => tab.id === id)?.url ?? ''
+  );
+}
+
 const tabName = (tab: BrowserTabInfo) => tab.title || (tab.url ? hostOf(tab.url) : 'New tab');
 
-function listTabs(tabs: readonly BrowserTabInfo[]): string {
+/** A signed-in tab's title and path are its content too: an inbox title carries the address and unread count. */
+function listTabs(context: ToolContext, tabs: readonly BrowserTabInfo[]): string {
   if (tabs.length === 0) return 'No tabs are open. browser_navigate or browser_tabs with action "new" opens one.';
-  const lines = tabs.map(
-    tab =>
-      `- tab ${tab.id}${tab.active ? ' (active)' : ''}: ${tab.title || '(untitled)'} - ${tab.url || '(no page yet)'}`
-  );
+  const lines = tabs.map(tab => {
+    const shown = mayRead(context, tab.url)
+      ? `${tab.title || '(untitled)'} - ${tab.url || '(no page yet)'}`
+      : `(signed in as the user; select it to read it, which asks them) - ${originOf(tab.url)}`;
+    return `- tab ${tab.id}${tab.active ? ' (active)' : ''}: ${shown}`;
+  });
   return `${tabs.length} of at most ${MAX_BROWSER_TABS} tabs open:\n${lines.join('\n')}`;
 }
 
@@ -284,16 +350,21 @@ export const browserTabs: ToolDefinition = {
     },
   },
   needsApproval(input, context) {
-    if (tabAction(input) !== 'new' || !newTabUrl(input)) return false;
+    const action = tabAction(input);
+    if (action === 'select') return onUserSession(context, selectedTabUrl(input, context));
+    if (action !== 'new' || !newTabUrl(input)) return false;
     return browserNavigate.needsApproval!({ url: newTabUrl(input) }, context);
   },
-  approval: (input, context) => browserNavigate.approval!({ url: newTabUrl(input) }, context),
+  approval(input, context) {
+    if (tabAction(input) === 'select') return readAsYouApproval(selectedTabUrl(input, context), 'Switch to');
+    return browserNavigate.approval!({ url: newTabUrl(input) }, context);
+  },
   async run(input, context) {
     const browser = requireBrowser(context);
     const action = tabAction(input);
     if (action === 'list') {
       context.report?.label('Listed tabs');
-      return listTabs(browser.tabs());
+      return listTabs(context, browser.tabs());
     }
     if (action === 'new') {
       const url = newTabUrl(input);
@@ -301,18 +372,18 @@ export const browserTabs: ToolDefinition = {
       if (!tab) throw new Error(`${AT_TAB_CAP} Close one with browser_tabs before opening another.`);
       if (url) return loadAndDescribe(context, url, `Opened tab: ${hostOf(url)}`, tab);
       context.report?.label('Opened a new tab');
-      return `Opened a blank tab, which is now the active one.\n\n${listTabs(browser.tabs())}`;
+      return `Opened a blank tab, which is now the active one.\n\n${listTabs(context, browser.tabs())}`;
     }
     const id = tabId(input);
     if (action === 'close') {
       const closed = await browser.closeTab(id);
       context.report?.label(`Closed tab: ${tabName(closed)}`);
-      return `Closed tab ${id}.\n\n${listTabs(browser.tabs())}`;
+      return `Closed tab ${id}.\n\n${listTabs(context, browser.tabs())}`;
     }
     const selected = await browser.selectTab(id);
     context.report?.label(`Switched to tab: ${tabName(selected)}`);
     if (!selected.url) return `Switched to tab ${id}, which has no page yet.`;
-    return onPage(context, page => describePage(page, SNAPSHOT_CHARS, `Switched to tab ${id}.`));
+    return onPage(context, page => describePage(context, page, SNAPSHOT_CHARS, `Switched to tab ${id}.`));
   },
 };
 
@@ -324,10 +395,11 @@ export const browserSnapshot: ToolDefinition = {
       'already return a fresh snapshot, so only call this after waiting on something slow.',
     parameters: { type: 'object', properties: {} },
   },
+  ...gatedRead,
   async run(_input, context) {
     return onPage(context, async page => {
       if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
-      return describePage(page, SNAPSHOT_CHARS, 'Current page.');
+      return describePage(context, page, SNAPSHOT_CHARS, 'Current page.');
     });
   },
 };
@@ -351,7 +423,7 @@ export const browserClick: ToolDefinition = {
     return onPage(context, async page => {
       const clicked = await page.click(ref);
       context.report?.label(`Clicked ${clicked}`);
-      return describePage(page, ACTION_SNAPSHOT_CHARS, `Clicked [${ref}] ${clicked}.`);
+      return describePage(context, page, ACTION_SNAPSHOT_CHARS, `Clicked [${ref}] ${clicked}.`);
     });
   },
 };
@@ -382,6 +454,7 @@ export const browserType: ToolDefinition = {
       if (input.submit === true) await page.press('Enter');
       context.report?.label(`Typed into [${ref}]`);
       return describePage(
+        context,
         page,
         ACTION_SNAPSHOT_CHARS,
         `[${ref}] ${filled}${input.submit === true ? ', then pressed Enter' : ''}.`
@@ -406,7 +479,7 @@ export const browserPress: ToolDefinition = {
     const key = requireString(input, 'key');
     return onPage(context, async page => {
       await page.press(key);
-      return describePage(page, ACTION_SNAPSHOT_CHARS, `Pressed ${key}.`);
+      return describePage(context, page, ACTION_SNAPSHOT_CHARS, `Pressed ${key}.`);
     });
   },
 };
@@ -483,7 +556,7 @@ export const browserScroll: ToolDefinition = {
         );
         lead = outcome;
       }
-      return describePage(page, ACTION_SNAPSHOT_CHARS, `${lead} What is in view now:`, true);
+      return describePage(context, page, ACTION_SNAPSHOT_CHARS, `${lead} What is in view now:`, true);
     });
   },
 };
@@ -497,7 +570,7 @@ export const browserBack: ToolDefinition = {
   async run(_input, context) {
     return onPage(context, async page => {
       await page.back();
-      return describePage(page, ACTION_SNAPSHOT_CHARS, 'Went back.');
+      return describePage(context, page, ACTION_SNAPSHOT_CHARS, 'Went back.');
     });
   },
 };
@@ -514,13 +587,17 @@ export const browserScreenshot: ToolDefinition = {
       properties: { caption: { type: 'string', description: 'What this screenshot shows, for the user.' } },
     },
   },
+  ...gatedRead,
   async run(input, context) {
     const browser = requireBrowser(context);
     return onPage(context, async page => {
-      const url = page.currentUrl();
-      if (!url) throw new Error('No page is open yet. Call browser_navigate first.');
+      if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
       await page.settle(SETTLE_MS);
+      const before = page.currentUrl();
       const bytes = await page.screenshot();
+      const url = page.currentUrl();
+      if (!mayRead(context, before)) return withheld(page, 'Took no screenshot.', before);
+      if (!mayRead(context, url)) return withheld(page, 'Took no screenshot.', url);
       const caption = typeof input.caption === 'string' && input.caption.trim() ? input.caption.trim() : url;
       const kept = await browser.keepScreenshot(bytes, caption);
       if (kept) context.report?.media(kept);
@@ -565,7 +642,10 @@ export const browserEvaluate: ToolDefinition = {
         throw withNullHint(error);
       });
       const rendered = value === undefined ? 'undefined' : JSON.stringify(value, null, 1);
-      return capOutput(`${rendered ?? String(value)}${eventsSection(page)}`);
+      // The value was computed in the origin the gate judged; only what the page did after can be elsewhere.
+      const after = page.currentUrl();
+      const events = mayRead(context, after) ? eventsSection(page) : `\n\n${withheld(page, '', after).trim()}`;
+      return capOutput(`${rendered ?? String(value)}${events}`);
     });
   },
 };

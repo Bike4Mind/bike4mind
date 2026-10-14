@@ -19,7 +19,7 @@ function child(last?: Partial<ChatMessage>): ChatSession {
   }
   return {
     id: CHILD_ID,
-    title: 'T4: XP engine',
+    title: 'Build the XP engine',
     model: 'claude',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:01:00.000Z',
@@ -50,16 +50,18 @@ describe('classifyChildOutcome', () => {
 
 describe('childOutcomeDisplay', () => {
   it('says only that it finished when it finished', () => {
-    expect(childOutcomeDisplay(child({ stopReason: 'end_turn' }))).toBe('The session "T4: XP engine" has finished.');
+    expect(childOutcomeDisplay(child({ stopReason: 'end_turn' }))).toBe(
+      'The session "Build the XP engine" has finished.'
+    );
   });
 
   it('distinguishes a session that never replied', () => {
-    expect(childOutcomeDisplay(child())).toBe('The session "T4: XP engine" has finished. It did not reply.');
+    expect(childOutcomeDisplay(child())).toBe('The session "Build the XP engine" has finished. It did not reply.');
   });
 
   it('distinguishes a session that failed, and says what went wrong', () => {
     expect(childOutcomeDisplay(child({ error: 'the provider refused' }))).toBe(
-      'The session "T4: XP engine" stopped with an error: the provider refused'
+      'The session "Build the XP engine" stopped with an error: the provider refused'
     );
   });
 
@@ -71,10 +73,10 @@ describe('childOutcomeDisplay', () => {
       childOutcomeDisplay(child({ stopReason: 'aborted' })),
     ];
     expect(said).toEqual([
-      'The session "T4: XP engine" stopped early after too many steps, so its work may be incomplete.',
-      'The session "T4: XP engine" stopped early because it ran out of room, so its work may be incomplete.',
-      'The session "T4: XP engine" has finished, but its last reply was cut short.',
-      'The session "T4: XP engine" was stopped before it finished.',
+      'The session "Build the XP engine" stopped early after too many steps, so its work may be incomplete.',
+      'The session "Build the XP engine" stopped early because it ran out of room, so its work may be incomplete.',
+      'The session "Build the XP engine" has finished, but its last reply was cut short.',
+      'The session "Build the XP engine" was stopped before it finished.',
     ]);
   });
 
@@ -98,7 +100,7 @@ describe('childOutcomeDisplay', () => {
       expect(text).not.toContain(CHILD_ID);
       expect(text).not.toMatch(/session_read|session_send|session_spawn|_read\b/);
       expect(text).not.toMatch(/tool_turn_limit|turn_time_limit|tool_stall_limit|context_limit|max_tokens|aborted/);
-      expect(text).toContain('T4: XP engine');
+      expect(text).toContain('Build the XP engine');
     }
   });
 });
