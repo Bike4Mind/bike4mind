@@ -1,7 +1,7 @@
 import type {
   GeneratedAssetMetadata,
   GenerationJobSource,
-  IGenerationJobDocument,
+  IGenerationJobDocumentOf,
   IGenerationJobRepository,
   UsageEventStatus,
   VideoGenerationSettings,
@@ -11,13 +11,11 @@ import type {
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { VideoProviderRegistry } from '@bike4mind/utils/videoProviders';
-import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
-/** Whether a resolveApiKey answer may reach a provider: shared by the create-time check and every job step. */
-export const isUsableApiKey = (apiKey: string | null): apiKey is string => !!apiKey && apiKey !== EXPIRED_KEY_SENTINEL;
+export { isUsableApiKey } from '../generationJobs/apiKey';
 
 // Stamped on the job as deadlineAt at create; the engine fails a pending or running job past it.
 export const VIDEO_JOB_MAX_WALL_CLOCK_MS = 20 * 60_000;
@@ -50,7 +48,7 @@ export type VideoJobDeps = {
   credits: CreditHoldAdapters;
   enqueue(jobId: string, delaySeconds: number): Promise<void>;
   recordUsage(event: {
-    job: IGenerationJobDocument;
+    job: IGenerationJobDocumentOf<'video'>;
     creditsCharged: number;
     costUsd: number;
     durationSeconds: number;
@@ -86,5 +84,5 @@ export type CreateVideoJobErrorCode =
   | 'clip_limit_reached';
 
 export type CreateVideoJobResult =
-  | { ok: true; job: IGenerationJobDocument; created: boolean }
+  | { ok: true; job: IGenerationJobDocumentOf<'video'>; created: boolean }
   | { ok: false; status: 400 | 402 | 403 | 404 | 422; code: CreateVideoJobErrorCode; message: string };

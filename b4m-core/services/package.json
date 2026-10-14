@@ -90,6 +90,16 @@
         "default": "./dist/videoJobs/index.cjs"
       }
     },
+    "./musicJobs": {
+      "import": {
+        "types": "./dist/musicJobs/index.d.mts",
+        "default": "./dist/musicJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/musicJobs/index.d.cts",
+        "default": "./dist/musicJobs/index.cjs"
+      }
+    },
     "./agentProactiveMessagingService": {
       "import": {
         "types": "./dist/agentProactiveMessagingService/index.d.mts",
