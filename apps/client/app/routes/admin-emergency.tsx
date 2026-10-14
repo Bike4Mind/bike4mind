@@ -116,6 +116,7 @@ const AdminEmergencyPage = () => {
                 onChange={e => setUsername(e.target.value)}
                 placeholder="Enter admin username"
                 disabled={isLoading}
+                slotProps={{ input: { 'data-testid': 'admin-emergency-username-input' } }}
                 sx={{
                   backgroundColor: 'rgba(255, 255, 255, 0.05)',
                   border: '1px solid rgba(255, 255, 255, 0.1)',
@@ -133,6 +134,7 @@ const AdminEmergencyPage = () => {
                 onChange={e => setPassword(e.target.value)}
                 placeholder="Enter admin password"
                 disabled={isLoading}
+                slotProps={{ input: { 'data-testid': 'admin-emergency-password-input' } }}
                 endDecorator={
                   <IconButton
                     variant="plain"
@@ -166,6 +168,7 @@ const AdminEmergencyPage = () => {
               type="submit"
               loading={isLoading}
               disabled={!username || !password}
+              data-testid="admin-emergency-login-btn"
               sx={{
                 background: 'linear-gradient(45deg, #ff6b6b, #ee5a5a)',
                 '&:hover': {

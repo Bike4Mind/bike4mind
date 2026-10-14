@@ -42,9 +42,9 @@ async function submitCredentials() {
       <AdminEmergencyPage />
     </CssVarsProvider>
   );
-  await user.type(screen.getByPlaceholderText('Enter admin username'), 'root');
-  await user.type(screen.getByPlaceholderText('Enter admin password'), 'hunter2');
-  await user.click(screen.getByRole('button', { name: 'Emergency Login' }));
+  await user.type(screen.getByTestId('admin-emergency-username-input'), 'root');
+  await user.type(screen.getByTestId('admin-emergency-password-input'), 'hunter2');
+  await user.click(screen.getByTestId('admin-emergency-login-btn'));
 }
 
 describe('admin emergency login', () => {
