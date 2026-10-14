@@ -20,6 +20,7 @@ function fakePage(start = ''): BrowserPage & { url: string; events: string[] } {
     url: start,
     events: [] as string[],
     currentUrl: () => page.url,
+    frameUrls: vi.fn(() => (page.url ? [page.url] : [])),
     navigate: vi.fn(async (url: string) => {
       page.url = url;
       return { url, title: 'Home', status: 200 };
@@ -641,5 +642,55 @@ describe('reading a page that carries the user imported cookies', () => {
     const allowed = signedIn(page, { approvedKey: `browser-open-as-you:${MAIL}` });
     await browserScreenshot.run({}, allowed.context);
     expect(allowed.images).toHaveLength(1);
+  });
+
+  /** capturePage paints every frame, so a local page can frame the signed-in site the snapshot cannot see into. */
+  describe('a page that frames a signed-in site', () => {
+    const LOCAL = 'http://localhost:3000/';
+
+    function framing(subframe: string) {
+      const page = pageThatReads(LOCAL);
+      vi.mocked(page.frameUrls).mockReturnValue([LOCAL, subframe]);
+      return page;
+    }
+
+    it('takes no screenshot of it without consent, naming only the framed origin', async () => {
+      const page = framing(INBOX);
+      const { context, images, media } = signedIn(page);
+      expect(await browserScreenshot.needsApproval!({}, context)).toBe(false);
+      const result = await browserScreenshot.run({}, context);
+      expect(result).toContain('Took no screenshot.');
+      expect(result).toContain(`The page embeds ${MAIL},`);
+      expect(result).toContain(`browser_navigate on ${MAIL}`);
+      expect(result).not.toContain('token=abc');
+      expect(result).not.toContain('123456');
+      expect(images).toEqual([]);
+      expect(media).toEqual([]);
+    });
+
+    it('takes no screenshot when the frame reaches the signed-in site during the capture', async () => {
+      const page = pageThatReads(LOCAL);
+      vi.mocked(page.screenshot).mockImplementation(async () => {
+        vi.mocked(page.frameUrls).mockReturnValue([LOCAL, INBOX]);
+        return Buffer.from('png');
+      });
+      const { context, images } = signedIn(page);
+      expect(await browserScreenshot.run({}, context)).toContain(`The page embeds ${MAIL},`);
+      expect(images).toEqual([]);
+    });
+
+    it('takes it once the user allowed that site standing', async () => {
+      const page = framing(INBOX);
+      const { context, images } = signedIn(page, { isStanding: key => key === `browser-open-as-you:${MAIL}` });
+      expect(await browserScreenshot.run({}, context)).toContain(`Captured a screenshot of ${LOCAL}`);
+      expect(images).toHaveLength(1);
+    });
+
+    it('takes it when the framed site is not one the user is signed in to', async () => {
+      const page = framing('https://www.youtube.com/embed/abc');
+      const { context, images } = signedIn(page);
+      expect(await browserScreenshot.run({}, context)).toContain(`Captured a screenshot of ${LOCAL}`);
+      expect(images).toHaveLength(1);
+    });
   });
 });

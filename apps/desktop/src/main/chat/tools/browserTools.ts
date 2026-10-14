@@ -117,6 +117,24 @@ function withheld(page: BrowserPage, lead: string, url: string): string {
   );
 }
 
+/**
+ * A cross-origin frame is opaque to the snapshot but not to capturePage, and imported cookies keep
+ * SameSite=None, so a page the agent wrote can frame a signed-in site and screenshot it as the user.
+ */
+function unreadableFrame(context: ToolContext, page: BrowserPage): string | undefined {
+  return page.frameUrls().find(url => !mayRead(context, url));
+}
+
+function withheldFrame(page: BrowserPage, url: string): string {
+  page.drainEvents();
+  const origin = originOf(url);
+  return (
+    `Took no screenshot.\nThe page embeds ${origin}, a site the user is signed in to with cookies imported ` +
+    "from their own browser, so a screenshot showing it is not taken without the user's say-so. To ask " +
+    `them, call browser_navigate on ${origin}; if they allow it always, a page embedding it can be captured.`
+  );
+}
+
 /** Reading the open page as the signed-in user is asked about as opening it would have been. */
 const gatedRead: Pick<ToolDefinition, 'needsApproval' | 'approval'> = {
   needsApproval: async (_input, context) => onUserSession(context, (await requireBrowser(context).page()).currentUrl()),
@@ -594,10 +612,13 @@ export const browserScreenshot: ToolDefinition = {
       if (!page.currentUrl()) throw new Error('No page is open yet. Call browser_navigate first.');
       await page.settle(SETTLE_MS);
       const before = page.currentUrl();
+      const framedBefore = unreadableFrame(context, page);
       const bytes = await page.screenshot();
       const url = page.currentUrl();
       if (!mayRead(context, before)) return withheld(page, 'Took no screenshot.', before);
       if (!mayRead(context, url)) return withheld(page, 'Took no screenshot.', url);
+      const framed = framedBefore ?? unreadableFrame(context, page);
+      if (framed) return withheldFrame(page, framed);
       const caption = typeof input.caption === 'string' && input.caption.trim() ? input.caption.trim() : url;
       const kept = await browser.keepScreenshot(bytes, caption);
       if (kept) context.report?.media(kept);

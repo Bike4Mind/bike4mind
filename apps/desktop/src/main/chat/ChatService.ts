@@ -499,6 +499,12 @@ export class ChatService {
    */
   private readonly sending = new Map<string, number>();
 
+  /**
+   * Sessions between a send passing the isBusy check and its reply landing in `active`; busy as
+   * `compacting` is. Unlike `sending`, a send that is merely queueing never holds it.
+   */
+  private readonly accepting = new Set<string>();
+
   /** Instructions and file tree per session, frozen so the cached system prompt never moves. */
   private readonly projectContext: ProjectContextCache;
   /** The skill list per session, frozen for the same reason. Absent when there is no catalog. */
@@ -609,7 +615,7 @@ export class ChatService {
   ): Promise<AutomaticTurnResult> {
     const queue = this.deps.queue;
     if (!queue) return { ok: false, busy: false, error: 'This conversation cannot take automatic turns.' };
-    if (this.isBusy(sessionId) || this.sending.has(sessionId) || queue.list(sessionId).length > 0) {
+    if (this.hasTurnInFlight(sessionId) || queue.list(sessionId).length > 0) {
       return { ok: false, busy: true, error: 'This conversation is busy.' };
     }
     const entry = queue.enqueueAutomatic(sessionId, text, automatic);
@@ -1194,12 +1200,18 @@ export class ChatService {
     seedHops?: number
   ): Promise<SendMessageResult> {
     this.sending.set(sessionId, (this.sending.get(sessionId) ?? 0) + 1);
+    let result: SendMessageResult | undefined;
     try {
-      return await this.acceptTurn(sessionId, text, attachments, released, seedHops);
+      result = await this.acceptTurn(sessionId, text, attachments, released, seedHops);
+      return result;
     } finally {
       const left = (this.sending.get(sessionId) ?? 1) - 1;
       if (left > 0) this.sending.set(sessionId, left);
       else this.sending.delete(sessionId);
+      // flushQueue holds off while a send is in flight, so the flush is owed now; a no-op if this
+      // send started a reply. A refused queued message is the exception: sendTaken hands it back
+      // and the chain stops there.
+      if (!(released && !result?.ok)) this.flushQueue(sessionId);
     }
   }
 
@@ -1299,6 +1311,37 @@ export class ChatService {
       return { ok: true, queued: true, message: this.deps.queue.enqueue(sessionId, prompt, attachments) };
     }
 
+    // Claimed with no await since the isBusy check above, so a second turn arriving during the
+    // awaits below (two session_sends in one round each flushing the queue) queues behind this
+    // one instead of starting a reply of its own.
+    this.accepting.add(sessionId);
+    try {
+      return await this.startAcceptedTurn(
+        sessionId,
+        prompt,
+        attachments,
+        existing,
+        invocation,
+        skillCommand,
+        released,
+        seedHops
+      );
+    } finally {
+      this.accepting.delete(sessionId);
+    }
+  }
+
+  /** The rest of acceptTurn, run with the session claimed so nothing else starts a turn in it. */
+  private async startAcceptedTurn(
+    sessionId: string,
+    prompt: string,
+    attachments: readonly ChatAttachment[],
+    existing: ChatSession,
+    invocation: ReturnType<typeof parseSkillInvocation>,
+    skillCommand: Awaited<ReturnType<SkillCatalog['get']>>,
+    released: ChatQueuedMessage | undefined,
+    seedHops: number | undefined
+  ): Promise<SendMessageResult> {
     const api = this.deps.getApiClient();
     if (!api) return { ok: false, error: 'Sign in to send a message.' };
 
@@ -1317,12 +1360,7 @@ export class ChatService {
     // writing the session: a worktree that cannot be made must refuse the turn rather than
     // leave a prompt in the thread with no reply coming.
     const workspaceFailure = await this.ensureWorkspace(existing, prompt);
-    if (workspaceFailure) {
-      // A message typed while the worktree was being cut queued behind it, and no reply is
-      // coming now to release it.
-      this.flushQueue(sessionId);
-      return { ok: false, error: workspaceFailure.error };
-    }
+    if (workspaceFailure) return { ok: false, error: workspaceFailure.error };
 
     // The skill's body becomes the turn, and `skill` records which one so the thread can show
     // "/review src/foo.ts" rather than the page of instructions that was actually sent.
@@ -1515,7 +1553,21 @@ export class ChatService {
   }
 
   private isBusy(sessionId: string): boolean {
-    return this.active.has(sessionId) || this.compacting.has(sessionId) || this.preparing.has(sessionId);
+    return (
+      this.active.has(sessionId) ||
+      this.accepting.has(sessionId) ||
+      this.compacting.has(sessionId) ||
+      this.preparing.has(sessionId)
+    );
+  }
+
+  /**
+   * isBusy, or a send still awaiting its way to the isBusy check in acceptTurn. Whatever starts
+   * a turn from outside acceptTurn reads this, or two such starts could both get past a check
+   * neither has claimed yet.
+   */
+  private hasTurnInFlight(sessionId: string): boolean {
+    return this.isBusy(sessionId) || this.sending.has(sessionId);
   }
 
   /** The summary round trip behind both compactions; see compactContext for its contract. */
@@ -2345,9 +2397,10 @@ export class ChatService {
    */
   private flushQueue(sessionId: string): void {
     const queue = this.deps.queue;
-    // A newer turn is already running (the user sent one by hand in the gap): its own ending
-    // flushes this, so taking a message out now would only put it behind that turn again.
-    if (!queue || this.isBusy(sessionId)) return;
+    // A newer turn is already running or being accepted (the user sent one by hand in the gap):
+    // its own ending, or its send settling, flushes this, so taking a message out now would only
+    // put it behind that turn again.
+    if (!queue || this.hasTurnInFlight(sessionId)) return;
 
     const next = queue.takeNext(sessionId);
     if (!next) return;
@@ -2362,7 +2415,7 @@ export class ChatService {
     // the idle composer before this ran. The promotion has lost its race, so the message goes
     // back to the HEAD of the queue to be the turn after that one, rather than being merged
     // into whatever else is waiting there and losing its identity.
-    if (this.isBusy(sessionId)) {
+    if (this.hasTurnInFlight(sessionId)) {
       queue.restore(sessionId, promoted);
       return;
     }
@@ -2926,10 +2979,11 @@ export class ChatService {
       hops: budget.hops + 1,
     });
     // The queue is the ONLY way in, for a busy target and an idle one alike: flushQueue starts
-    // the turn when nothing is running and no-ops when something is, so there is no second path
-    // racing the queue's own flush - and an idle target that starts replying in this gap simply runs the
-    // message when that reply ends.
-    const queued = this.isBusy(targetId);
+    // the turn when nothing is running or being accepted and no-ops otherwise (a second send in
+    // the same round included), so there is no second path racing the queue's own flush - and
+    // an idle target that starts replying in this gap simply runs the message when that reply
+    // ends.
+    const queued = this.hasTurnInFlight(targetId);
     this.flushQueue(targetId);
 
     this.deps.logger.debug(`CHAT: relayed a message from ${from.id} to ${targetId} at hop ${budget.hops + 1}`);

@@ -2,8 +2,9 @@ import { stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
-import { arityPrefix, commandTokens, droppedOnlySafeOptions } from './bashArity';
+import { arityPrefix, commandTokens, directoryOptionValues, droppedOnlySafeOptions } from './bashArity';
 import { parseBash } from './bashParser';
+import { isEnvFile } from './envFiles';
 import { resolveWithinRootsPhysically } from './paths';
 
 export interface ShellCommand {
@@ -22,6 +23,8 @@ export interface ShellScan {
   commands: ShellCommand[];
   /** Directories the command reaches outside every granted root and the temp dirs. */
   directories: string[];
+  /** `.env` files named as an argument or an input redirect, which auto mode must not read unasked. */
+  envFiles: string[];
 }
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
@@ -56,6 +59,24 @@ const TOUCHES_FILES = new Set([
 const SUBSHELLS = new Set(['subshell', 'command_substitution', 'process_substitution']);
 
 const HARMLESS_REDIRECT_TARGETS = new Set(['/dev/null', '/dev/stdin', '/dev/stdout', '/dev/stderr', '/dev/tty']);
+
+const WRITE_OPERATORS = new Set(['>', '>>', '>|', '&>', '&>>', '>&']);
+
+function redirectOperator(node: Node): string | undefined {
+  return node.children.find(child => child && !child.isNamed)?.type;
+}
+
+/**
+ * Whether a redirect writes a file. A write can plant config a remembered command then obeys -
+ * `cat >> .git/config` before a `git status` - so it is never covered by a pattern.
+ */
+function writesFile(node: Node): boolean {
+  if (node.type !== 'file_redirect' || !WRITE_OPERATORS.has(redirectOperator(node) ?? '')) return false;
+  const target = node.childForFieldName('destination');
+  if (!target || target.type === 'number') return false;
+  const text = unquote(target.text);
+  return !HARMLESS_REDIRECT_TARGETS.has(text) && !text.startsWith('&') && text !== '-';
+}
 
 function unquote(text: string): string {
   if (text.length < 2) return text;
@@ -122,6 +143,13 @@ export async function scanShell(
     const allowed = [...roots, ...temp];
     const commands: ShellCommand[] = [];
     const directories = new Set<string>();
+    const envFiles = new Set<string>();
+    const writtenCommands = new Set<number>();
+
+    const noteEnvFile = (raw: string): void => {
+      const path = expandHome(unquote(raw));
+      if (!isDynamic(path) && isEnvFile(path)) envFiles.add(path);
+    };
 
     const check = async (raw: string, cwd: string): Promise<string | null> => {
       const prefix = globPrefix(expandHome(unquote(raw)));
@@ -154,11 +182,14 @@ export async function scanShell(
 
       const normalised = commandTokens(tokens);
       const assigns = node.namedChildren.some(child => child?.type === 'variable_assignment');
+      const writes = writtenCommands.has(node.id) || node.namedChildren.some(child => child && writesFile(child));
       commands.push({
         text: normalised.join(' '),
         always: `${arityPrefix(normalised).join(' ')} *`,
-        coverable: !assigns && droppedOnlySafeOptions(tokens),
+        coverable: !assigns && !writes && droppedOnlySafeOptions(tokens),
       });
+      for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
+      for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       if (!TOUCHES_FILES.has(program)) return;
       for (const arg of rest) {
         if (arg.startsWith('-') || (program === 'chmod' && arg.startsWith('+'))) continue;
@@ -188,6 +219,7 @@ export async function scanShell(
       if (!target || target.type === 'number') return;
       const text = unquote(target.text);
       if (HARMLESS_REDIRECT_TARGETS.has(text) || text.startsWith('&')) return;
+      if (!WRITE_OPERATORS.has(redirectOperator(node) ?? '')) noteEnvFile(target.text);
       await check(target.text, state.cwd);
     };
 
@@ -204,6 +236,23 @@ export async function scanShell(
         commands.push({ text: node.text, always: node.text, coverable: false });
         for (const child of node.children) if (child) await visit(child);
         return;
+      }
+      // `select` parses as a for_statement too; its header rebinds a variable that may be
+      // exported, as `for HOME in .` points git at a repo-planted .gitconfig.
+      if (node.type === 'for_statement') {
+        const body = node.childForFieldName('body');
+        const header = body ? node.text.slice(0, body.startIndex - node.startIndex).replace(/[\s;]+$/, '') : node.text;
+        commands.push({ text: header, always: header, coverable: false });
+        for (const child of node.children) if (child) await visit(child);
+        return;
+      }
+      if (node.type === 'redirected_statement' && node.namedChildren.some(child => child && writesFile(child))) {
+        const body = node.childForFieldName('body');
+        if (body?.type === 'command') {
+          writtenCommands.add(body.id);
+        } else {
+          commands.push({ text: node.text, always: node.text, coverable: false });
+        }
       }
       if (node.type === 'file_redirect') {
         for (const child of node.children) if (child && child.type !== 'file_descriptor') await visit(child);
@@ -224,7 +273,7 @@ export async function scanShell(
     };
 
     await visit(tree.rootNode);
-    return { commands, directories: [...directories] };
+    return { commands, directories: [...directories], envFiles: [...envFiles] };
   } finally {
     tree.delete();
   }

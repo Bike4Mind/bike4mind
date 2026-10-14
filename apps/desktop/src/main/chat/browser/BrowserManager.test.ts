@@ -12,6 +12,8 @@ const contents = vi.hoisted(() => {
     handlers: new Map<string, Handler[]>(),
     url: '',
     loadingMainFrame: false,
+    /** Urls of the frames below the top one. */
+    subframes: [] as string[],
     stops: 0,
     nextId: 0,
     /** Every contents made, in order, so a test can reach a tab's own handlers. */
@@ -60,6 +62,9 @@ vi.mock('electron', () => {
       },
       isDestroyed: () => destroyed,
       getURL: () => contents.url,
+      get mainFrame() {
+        return { framesInSubtree: [contents.url, ...contents.subframes].map(url => ({ url })) };
+      },
       getTitle: () => 'Title',
       isLoading: () => contents.loadingMainFrame,
       isLoadingMainFrame: () => contents.loadingMainFrame,
@@ -261,6 +266,16 @@ describe('BrowserManager page deadlines', () => {
     await vi.advanceTimersByTimeAsync(15_000);
     await capturing;
   });
+
+  it('lists every frame a screenshot would show, the top one first', async () => {
+    const page = await openPage();
+    contents.subframes = ['https://mail.example.com/inbox', 'about:blank'];
+    try {
+      expect(page.frameUrls()).toEqual([contents.url, 'https://mail.example.com/inbox', 'about:blank']);
+    } finally {
+      contents.subframes = [];
+    }
+  });
 });
 
 describe('BrowserManager closing pages', () => {
@@ -326,6 +341,7 @@ describe('BrowserManager closing pages', () => {
     await manager.closeSession('a');
 
     expect(page.currentUrl()).toBe('');
+    expect(page.frameUrls()).toEqual([]);
     expect(() => page.stop()).not.toThrow();
     await expect(page.settle(1_000)).resolves.toBeUndefined();
     await expect(page.navigate('http://localhost:3080/')).rejects.toThrow('The browser was closed.');

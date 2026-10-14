@@ -232,6 +232,20 @@ describe('bash_execute', () => {
     expect(broken?.askInAuto).toBe(true);
   });
 
+  it.each(['cat .env', 'grep KEY .env.local', 'source .env', 'wc -l < .env'])(
+    'asks even in auto mode before %s reads a .env file',
+    async command => {
+      const prompt = await bashExecute.approval?.({ command, cwd: root }, context);
+      expect(prompt?.askInAuto).toBe(true);
+      expect(prompt?.detail).toContain('usually holds secrets');
+    }
+  );
+
+  it('leaves a committed .env.example to the mode', async () => {
+    const prompt = await bashExecute.approval?.({ command: 'cat .env.example', cwd: root }, context);
+    expect(prompt?.askInAuto).toBeUndefined();
+  });
+
   it('lists a cwd outside every root as a directory to ask about', async () => {
     const prompt = await bashExecute.approval?.({ command: 'ls', cwd: '/etc' }, context);
     expect(prompt?.always?.directories).toEqual(['/etc']);

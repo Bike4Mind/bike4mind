@@ -310,6 +310,11 @@ class ElectronPage implements BrowserPage {
     return this.webContents.isDestroyed() ? '' : this.webContents.getURL();
   }
 
+  frameUrls(): string[] {
+    if (this.webContents.isDestroyed()) return [];
+    return this.webContents.mainFrame.framesInSubtree.map(frame => frame.url);
+  }
+
   title(): string {
     return this.webContents.isDestroyed() ? '' : this.webContents.getTitle();
   }

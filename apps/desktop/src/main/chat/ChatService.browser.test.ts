@@ -38,6 +38,7 @@ describe('ChatService agent browser', () => {
 
   const page: BrowserPage = {
     currentUrl: () => pageUrl,
+    frameUrls: () => [pageUrl],
     navigate: async url => ({ url, title: 'App' }),
     back: async () => undefined,
     snapshot: async () => ({

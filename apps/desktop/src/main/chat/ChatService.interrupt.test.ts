@@ -50,6 +50,7 @@ describe('ChatService interrupting a running tool', () => {
 
   const page: BrowserPage = {
     currentUrl: () => 'http://localhost:3080/app',
+    frameUrls: () => ['http://localhost:3080/app'],
     navigate: () =>
       new Promise(resolve => {
         finishNavigation = resolve;

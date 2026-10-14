@@ -38,6 +38,7 @@ describe('scanShell', () => {
         'ls',
         'whoami',
         'echo "$(whoami)"',
+        'for f in a b',
         'rm "$f"',
       ]);
     });
@@ -95,8 +96,33 @@ describe('scanShell', () => {
       expect((await scan('echo hi > /etc/motd 2>/dev/null')).directories).toEqual(['/etc']);
     });
 
+    it('checks the directory a dropped -C, --dir or --prefix points at', async () => {
+      expect((await scan('git -C /etc/repo status')).directories).toEqual(['/etc']);
+      expect((await scan('pnpm --dir /etc test')).directories).toEqual(['/etc']);
+      expect((await scan('npm --prefix=/etc run test')).directories).toEqual(['/etc']);
+      expect((await scan('pnpm --filter x -C /etc test')).directories).toEqual(['/etc']);
+      expect((await scan('git -C some/dir status')).directories).toEqual([]);
+    });
+
     it('finds the path in a nested command', async () => {
       expect((await scan('echo "$(cat /etc/hosts)"')).directories).toEqual(['/etc']);
+    });
+  });
+
+  describe('.env files', () => {
+    it.each([
+      ['cat .env', ['.env']],
+      ['grep KEY .env.local', ['.env.local']],
+      ['source .env', ['.env']],
+      ['. ./.env', ['./.env']],
+      ['wc -l < .env', ['.env']],
+      ['cat "config/.env.production"', ['config/.env.production']],
+    ])('flags %s', async (command, envFiles) => {
+      expect((await scan(command)).envFiles).toEqual(envFiles);
+    });
+
+    it.each(['cat .env.example', 'ls -la', 'cat "$ENV_FILE"', 'echo x > .env'])('does not flag %s', async command => {
+      expect((await scan(command)).envFiles).toEqual([]);
     });
   });
 
@@ -222,6 +248,56 @@ describe('a standing "always" on git status', () => {
     const gate = await gateAllowing('npm run test');
     expect(gate.coversCommands('s', await alwaysFor('npm --prefix sub run test'))).toBe(true);
     expect(gate.coversCommands('s', await alwaysFor('npm --script-shell=/tmp/evil run test'))).toBe(false);
+  });
+
+  const gateAllowingAll = async (allowed: readonly string[]) => {
+    const gate = new ApprovalGate();
+    for (const command of allowed) {
+      await gate.request(
+        's',
+        `k-${command}`,
+        new AbortController().signal,
+        id => gate.resolve(id, { decision: 'always' }),
+        {
+          always: await alwaysFor(command),
+        }
+      );
+    }
+    return gate;
+  };
+
+  const planted = 'cat >> .git/config <<\'EOF\'\n[core]\n\tfsmonitor = "sh ./payload"\nEOF\ngit status';
+
+  it.each([
+    [['cat package.json', 'git status'], planted],
+    [['cat package.json', 'pnpm test x'], "cat > package.json <<'EOF'\n{}\nEOF\npnpm test x"],
+    [['git status'], 'git status > out.txt'],
+    [['git status'], 'git status 2> err.txt'],
+    [['git status'], 'git status &>> log.txt'],
+    [['git status'], '> out.txt git status'],
+    [['git status'], '{ git status; } > out.txt'],
+    [['git status'], '(git status) >| out.txt'],
+    [['git status'], 'for f in a; do git status; done > out.txt'],
+  ])('patterns %j do not cover a script that writes a file: %s', async (allowed, command) => {
+    const gate = await gateAllowingAll(allowed);
+    expect(gate.coversCommands('s', await alwaysFor(command))).toBe(false);
+  });
+
+  it.each(['git status > /dev/null', 'git status 2>/dev/null', 'git status 2>&1', 'git status < input.txt'])(
+    'still covers %s, which writes no file',
+    async command => {
+      const gate = await gateAllowing('git status');
+      expect(gate.coversCommands('s', await alwaysFor(command))).toBe(true);
+    }
+  );
+
+  it.each([
+    ['git status', 'for HOME in .; do git status; done'],
+    ['git status', 'select HOME in .; do git status; done'],
+    ['git status', 'for ((HOME=0; HOME<1; HOME++)); do git status; done'],
+  ])('a standing %s does not cover a loop that rebinds a variable: %s', async (allowed, command) => {
+    const gate = await gateAllowing(allowed);
+    expect(gate.coversCommands('s', await alwaysFor(command))).toBe(false);
   });
 
   it('a bare git pattern still does not cover an unsafe option', async () => {

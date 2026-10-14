@@ -202,3 +202,28 @@ export function commandTokens(tokens: readonly string[]): string[] {
 export function droppedOnlySafeOptions(tokens: readonly string[]): boolean {
   return leadingOptions(tokens).safe;
 }
+
+const DIRECTORY_OPTIONS = new Set(['-C', '--dir', '--prefix']);
+
+/**
+ * The directories that dropped `-C`, `--dir` and `--prefix` options point the command at. Those
+ * options are safe to drop only because the caller checks these paths as it would a `cd` target.
+ */
+export function directoryOptionValues(tokens: readonly string[]): string[] {
+  const [program, ...rest] = tokens;
+  const valued = program === undefined ? undefined : VALUE_OPTIONS[program];
+  if (!valued) return [];
+  const values: string[] = [];
+  let index = 0;
+  while (index < rest.length && rest[index].startsWith('-')) {
+    const option = rest[index];
+    const equals = option.indexOf('=');
+    const name = equals === -1 ? option : option.slice(0, equals);
+    if (DIRECTORY_OPTIONS.has(name) && valued.includes(name)) {
+      const value = equals === -1 ? rest[index + 1] : option.slice(equals + 1);
+      if (value !== undefined) values.push(value);
+    }
+    index += valued.includes(option) ? 2 : 1;
+  }
+  return values;
+}

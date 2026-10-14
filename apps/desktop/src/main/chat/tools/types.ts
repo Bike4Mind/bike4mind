@@ -136,6 +136,8 @@ export interface ToolReporter {
 export interface BrowserPage {
   /** Where the page is now; empty before the first navigation. */
   currentUrl(): string;
+  /** Every frame's committed url, the top one included: a screenshot shows them all. */
+  frameUrls(): string[];
   /**
    * Load a URL and wait for it to settle. Resolves with where it ended up; `stillLoading` when it
    * showed a page but was still loading at the deadline, and was stopped there.
