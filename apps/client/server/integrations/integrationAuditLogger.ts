@@ -213,11 +213,12 @@ function redactSensitiveData(data: Record<string, unknown>): Record<string, unkn
  * trusting the raw, spoofable leftmost x-forwarded-for value in audit records.
  * Cast is required because getClientIp is typed for express Request, while
  * audit logging takes any IncomingMessage (NextApiRequest and express Request
- * both extend it). The resolver reads only headers / socket / an optional ip.
+ * both extend it). The resolver reads headers and socket; its express-only
+ * req.ip fallback is simply undefined on a plain IncomingMessage.
  */
 function extractIp(req: IncomingMessage): string {
-  // any: getClientIp is typed for express Request; IncomingMessage carries the fields it
-  // reads (headers, socket; ip is optional there) but is not assignable.
+  // any: getClientIp is typed for express Request; IncomingMessage carries the headers and
+  // socket it reads but is not assignable (no ip field).
   return getClientIp(req as any);
 }
 
