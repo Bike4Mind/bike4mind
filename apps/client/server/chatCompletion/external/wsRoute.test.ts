@@ -113,6 +113,8 @@ describe('completion analytics', () => {
     vi.mocked(executeCompletion).mockImplementationOnce(async ({ onChunk }) => {
       await onChunk(['partial'], { inputTokens: 1000, outputTokens: 20, turnUsage: turnUsage.slice(0, 1) });
       await onChunk(['done'], { inputTokens: 3000, outputTokens: 50, turnUsage });
+      // A trailing frame without the breakdown must not clear the latched one.
+      await onChunk([''], { stopReason: 'end_turn' });
     });
 
     expect((await postAs({})).status).toBe(202);
