@@ -185,7 +185,8 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
           },
         },
       ],
-      // Report window: the last 24 hours for daily reports, the last 7 days for weekly
+      // Same window as last24h: the rolling 24 hours for today, the UTC day for past
+      // dates. startDate only flags a weekly report; it does not widen this window.
       thisWeek: [
         {
           $match: {
