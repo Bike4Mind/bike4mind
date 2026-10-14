@@ -270,6 +270,12 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
    * stale 'syncing' claim, least recently checked first. 'error' is excluded - the App cannot read it.
    */
   findDueForReconcile(limit: number): Promise<IOrgGitHubLakeConnectionDocument[]>;
+  /**
+   * Up to `limit` bindings whose targetDataLakeId names no DataLake document, regardless of enabled or
+   * status (a soft-deleted lake keeps its document, so it is not an orphan). The orphan reaper's scan:
+   * such a row would otherwise hold its unique repositoryId claim forever.
+   */
+  findOrphaned(limit: number): Promise<IOrgGitHubLakeConnectionDocument[]>;
   /** Stamps reconcileCheckedAt without touching updatedAt. */
   markReconcileChecked(ids: readonly string[], at: Date): Promise<void>;
   /** Records the reconcile's enqueue target for its retry cooldown, without touching updatedAt. */
