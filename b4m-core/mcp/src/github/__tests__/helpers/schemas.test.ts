@@ -70,6 +70,7 @@ describe('Schema Validations', () => {
   describe('githubUsernameSchema', () => {
     it('accepts a GitHub username', () => {
       expect(githubUsernameSchema.safeParse('octo-cat1').success).toBe(true);
+      expect(githubUsernameSchema.safeParse('app/dependabot').success).toBe(true);
     });
 
     it('rejects a value that would add a search qualifier', () => {

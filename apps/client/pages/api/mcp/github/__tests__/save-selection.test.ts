@@ -53,4 +53,19 @@ describe('PATCH /api/mcp/github/repositories - save selection', () => {
       'metadata.selectedRepositories': [{ fullName: 'acme/repo', owner: 'acme', repo: 'repo' }],
     });
   });
+
+  it.each([['acme'], [''], ['acme/repo/extra']])(
+    'rejects %j, which the GitHub MCP server could not parse',
+    async name => {
+      const { res } = makeRes();
+
+      await expect(
+        h.patchHandler!(
+          { user: { id: 'user-1' }, body: { selectedRepositories: [name] }, logger: { info: vi.fn() } },
+          res
+        )
+      ).rejects.toThrow(/owner\/repo/);
+      expect(h.update).not.toHaveBeenCalled();
+    }
+  );
 });

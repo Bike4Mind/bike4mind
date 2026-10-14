@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../config.js', () => ({ githubToken: 'mock-token' }));
+vi.mock('../config.js', async () => {
+  const { parseRepoScope } = await vi.importActual<typeof import('../repoScope.js')>('../repoScope.js');
+  return { githubToken: 'mock-token', repoScope: parseRepoScope(JSON.stringify(['Acme/Allowed-Repo'])) };
+});
 
 vi.mock('../client.js', () => ({
   octokit: {
@@ -9,6 +12,10 @@ vi.mock('../client.js', () => ({
   },
 }));
 
+import { McpServer as SdkMcpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { z } from 'zod';
 import type { McpServer } from '../types.js';
 import { octokit } from '../client.js';
 import { ALL_TOOL_NAMES, type ToolName } from '../constants.js';
@@ -162,7 +169,7 @@ describe('withRepoScope', () => {
 describe('the real tool registrations', () => {
   function registerAllTools(): Map<string, RegisteredTool> {
     const { server, registeredTools } = createMockServer();
-    registerGitHubTools(server, SELECTED, resolversReturning(BLOCKED));
+    registerGitHubTools(server, resolversReturning(BLOCKED));
     return registeredTools;
   }
 
@@ -188,5 +195,28 @@ describe('the real tool registrations', () => {
 
     expect(result.isError).toBe(true);
     expect(octokit.graphql).not.toHaveBeenCalled();
+  });
+});
+
+describe('withRepoScope on the real MCP server', () => {
+  it('guards a tool end to end over the protocol, with the SDK passing parsed args', async () => {
+    const server = new SdkMcpServer({ name: 'test', version: '1.0.0' });
+    const inner = vi.fn(async () => ({ content: [{ type: 'text' as const, text: '{"success":true}' }] }));
+    withRepoScope(server, SELECTED, resolversReturning(null)).tool(
+      'get_issue',
+      { owner: z.string(), repo: z.string() },
+      inner
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const refused = await client.callTool({ name: 'get_issue', arguments: { owner: 'other-org', repo: 'secret' } });
+    const allowed = await client.callTool({ name: 'get_issue', arguments: { owner: 'ACME', repo: 'allowed-repo' } });
+
+    expect(refused.isError).toBe(true);
+    expect(inner).toHaveBeenCalledOnce();
+    expect(allowed.isError).toBeFalsy();
+    await client.close();
   });
 });

@@ -44,6 +44,10 @@ export function registerRepoTools(server: McpServer, scope: RepoScope) {
 
         return createSuccessResponse({
           total_count: repositories.length,
+          // A page can be emptied by the filter while later pages still hold selected repositories.
+          ...(repositories.length < result.data.length && {
+            excluded_outside_selected_repositories: result.data.length - repositories.length,
+          }),
           repositories: repositories.map(repo => ({
             full_name: repo.full_name,
             owner: repo.owner.login,

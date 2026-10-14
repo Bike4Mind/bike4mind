@@ -3,7 +3,7 @@
  */
 
 import type { McpServer } from './types.js';
-import type { RepoScope } from './repoScope.js';
+import { repoScope } from './config.js';
 import { withRepoScope, type RepositoryResolvers } from './repoGuard.js';
 import { registerUserTools } from './tools/user.js';
 import { registerIssueTools } from './tools/issues.js';
@@ -20,14 +20,17 @@ import { registerMilestoneTools } from './tools/milestones.js';
 import { registerWorkflowTools } from './tools/workflows.js';
 import { registerReviewTools } from './tools/reviews.js';
 
-/** Registers every GitHub tool through the repository guard, so the user's selection applies to all of them. */
-export function registerGitHubTools(server: McpServer, scope: RepoScope, resolvers: RepositoryResolvers): void {
-  const guardedServer = withRepoScope(server, scope, resolvers);
+/**
+ * Registers every GitHub tool through the repository guard, so the user's selection applies to all
+ * of them. The scope comes from config rather than a parameter so no caller can register unscoped.
+ */
+export function registerGitHubTools(server: McpServer, resolvers: RepositoryResolvers): void {
+  const guardedServer = withRepoScope(server, repoScope, resolvers);
 
   registerUserTools(guardedServer);
   registerIssueTools(guardedServer);
-  registerSearchTools(guardedServer, scope);
-  registerRepoTools(guardedServer, scope);
+  registerSearchTools(guardedServer, repoScope);
+  registerRepoTools(guardedServer, repoScope);
   registerPullTools(guardedServer);
   registerBranchTools(guardedServer);
   registerContentsTools(guardedServer);

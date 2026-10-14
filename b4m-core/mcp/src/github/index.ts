@@ -11,7 +11,6 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { registerGitHubTools } from './registerTools.js';
-import { repoScope } from './config.js';
 import { getRepositoryFromIssueNodeId, getRepositoryFromProjectItemId } from './helpers/whitelist.js';
 
 const server = new McpServer({
@@ -19,7 +18,7 @@ const server = new McpServer({
   version: '1.0.0',
 });
 
-registerGitHubTools(server, repoScope, {
+registerGitHubTools(server, {
   fromIssueNodeId: getRepositoryFromIssueNodeId,
   fromProjectItemId: getRepositoryFromProjectItemId,
 });

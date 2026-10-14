@@ -50,6 +50,7 @@ describe('Search Tools', () => {
 
       expect((parsed.items as Array<{ name: string }>).map(item => item.name)).toEqual(['a.ts']);
       expect(parsed.excluded_outside_selected_repositories).toBe(1);
+      expect(parsed).not.toHaveProperty('total_count');
     });
 
     it('should return search results on success', async () => {

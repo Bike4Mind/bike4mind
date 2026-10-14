@@ -1,4 +1,5 @@
 import { IGitHubRepository, IMcpServerDocument, McpServerName } from '@bike4mind/common';
+import { GITHUB_SELECTED_REPOSITORIES_ENV_KEY } from '@bike4mind/mcp/github/constants';
 import { userRepository } from '@bike4mind/database';
 import {
   AtlassianTokenManager,
@@ -58,9 +59,6 @@ export const buildMcpEnvVariables = async (mcpServer: IMcpServerDocument): Promi
   return storedEnvVariables;
 };
 
-// Must match the variable b4m-core/mcp/src/github/config.ts reads.
-const GITHUB_SELECTED_REPOSITORIES_KEY = 'GITHUB_SELECTED_REPOSITORIES';
-
 /**
  * The GitHub server enforces the user's repository selection from this variable. It is derived from
  * metadata on every spawn, never taken from stored env, so the saved selection is the only source.
@@ -70,9 +68,9 @@ function withGitHubRepositorySelection(
   envVariables: EnvVariable[],
   selectedRepositories: IGitHubRepository[] | undefined
 ): EnvVariable[] {
-  const withoutStoredSelection = envVariables.filter(({ key }) => key !== GITHUB_SELECTED_REPOSITORIES_KEY);
+  const withoutStoredSelection = envVariables.filter(({ key }) => key !== GITHUB_SELECTED_REPOSITORIES_ENV_KEY);
   if (!selectedRepositories?.length) return withoutStoredSelection;
 
   const fullNames = selectedRepositories.map(({ fullName }) => fullName);
-  return [...withoutStoredSelection, { key: GITHUB_SELECTED_REPOSITORIES_KEY, value: JSON.stringify(fullNames) }];
+  return [...withoutStoredSelection, { key: GITHUB_SELECTED_REPOSITORIES_ENV_KEY, value: JSON.stringify(fullNames) }];
 }

@@ -14,8 +14,9 @@ import { z } from 'zod';
 // Maximum number of repositories to fetch (safety limit)
 const MAX_REPOS = 500;
 
+// The GitHub MCP server refuses to start on a malformed name, so only "owner/repo" is accepted.
 const SaveSelectionInput = z.object({
-  selectedRepositories: z.array(z.string()),
+  selectedRepositories: z.array(z.string().regex(/^[^/\s]+\/[^/\s]+$/, 'Expected "owner/repo"')),
 });
 
 /**

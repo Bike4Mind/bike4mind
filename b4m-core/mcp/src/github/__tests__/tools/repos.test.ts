@@ -87,6 +87,7 @@ describe('Repository Tools', () => {
         'owner/repo1',
       ]);
       expect(parsed.total_count).toBe(1);
+      expect(parsed.excluded_outside_selected_repositories).toBe(1);
     });
 
     it('should pass filter parameters to API', async () => {

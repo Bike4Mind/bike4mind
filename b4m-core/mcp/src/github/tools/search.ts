@@ -34,7 +34,8 @@ export function registerSearchTools(server: McpServer, scope: RepoScope) {
         const items = filterToScope(scope, result.data.items, item => item.repository.full_name);
 
         return createSuccessResponse({
-          total_count: result.data.total_count,
+          // GitHub's total counts matches in every repository, so it is only reported unrestricted.
+          ...(scope.mode === 'all' && { total_count: result.data.total_count }),
           incomplete_results: result.data.incomplete_results,
           ...(items.length < result.data.items.length && {
             excluded_outside_selected_repositories: result.data.items.length - items.length,
