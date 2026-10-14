@@ -297,11 +297,12 @@ export const formatCustomSlackMessage = (
 
   // Quick Summary Section
   const activeModels = userActivity.topModels?.length || 0;
-  const activeUsers24h = userActivity.topUsers?.length || 0;
+  const activeUsers24h = userActivity.activeUsers24h || 0;
 
   // Calculate DAU/WAU metrics
   const dau = activeUsers24h; // Daily Active Users from last 24h
-  const wau = userActivity.totalUniqueUsers || 0; // Weekly Active Users from last 7 days
+  // externalUsers (staff excluded) so the ratio uses the same definition as DAU
+  const wau = userActivity.externalUsers || 0;
   const dauWauRatioNum = wau > 0 ? (dau / wau) * 100 : 0;
   const dauWauRatio = dauWauRatioNum.toFixed(1);
   const engagementHealth = dauWauRatioNum > 40 ? '🟢' : dauWauRatioNum > 25 ? '🟡' : dauWauRatioNum > 10 ? '🟠' : '🔴';
@@ -442,7 +443,9 @@ export const formatCustomSlackMessage = (
     });
 
     if (userActivity.topUsers.length > 10) {
-      sections.push(`\n  _...and ${userActivity.topUsers.length - 10} more active users_`);
+      sections.push(
+        `\n  _...and ${userActivity.topUsers.length - 10} more in the top ${userActivity.topUsers.length}_`
+      );
     }
   } else {
     sections.push('_No user activity recorded in the last 24 hours_');
