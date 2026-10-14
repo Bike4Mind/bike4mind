@@ -25,23 +25,24 @@ vi.mock('@client/app/components/VideoStudio/VideoStudioForm', () => ({
 }));
 
 import { rangeModel } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
-import VideoStudioPage from './video';
+import StudioPage from './$modality';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderPage = () =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <VideoStudioPage />
+      <StudioPage modality="video" />
     </CssVarsProvider>
   );
 
 beforeEach(() => vi.clearAllMocks());
 
-describe('VideoStudioPage', () => {
-  it('sets the tab title', () => {
+describe('StudioPage (video)', () => {
+  it('sets the tab title and keeps the video page heading and test id', () => {
     h.models = { isPending: true, data: undefined };
     renderPage();
     expect(h.useDocumentTitle).toHaveBeenCalledWith('Video Studio');
+    expect(screen.getByTestId('video-studio-page')).toHaveTextContent('Video Studio');
   });
 
   it('renders the form and the gallery when a model is usable', () => {

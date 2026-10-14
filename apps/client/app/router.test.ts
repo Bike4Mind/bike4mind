@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { isNotFound } from '@tanstack/react-router';
 import {
   billingRoute,
   feedbackRollupRoute,
@@ -86,11 +87,19 @@ describe('QA status routes', () => {
   });
 });
 
-describe('Video studio route', () => {
+describe('Studio route', () => {
+  const studioMatch = (pathname: string) =>
+    router.matchRoutes(pathname, {}).find(match => match.routeId.endsWith('/studio/$modality'));
+
   it('renders /studio/video inside the notebook layout', () => {
     const ids = router.matchRoutes('/studio/video', {}).map(match => match.routeId);
     expect(ids).toContain('/layout');
-    expect(ids.some(id => id.endsWith('/studio/video'))).toBe(true);
+    expect(studioMatch('/studio/video')).toMatchObject({ params: { modality: 'video' } });
+    expect(studioMatch('/studio/video')?.paramsError).toBeUndefined();
+  });
+
+  it('treats an unknown modality as not found', () => {
+    expect(isNotFound(studioMatch('/studio/hologram')?.paramsError)).toBe(true);
   });
 });
 
