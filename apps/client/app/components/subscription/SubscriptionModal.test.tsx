@@ -116,7 +116,9 @@ describe('SubscriptionModal - Team tab', () => {
 
     // 4 seats x $30 from the mocked Stripe price, not a hardcoded figure.
     expect(screen.getByText(/\$120\.00/)).toBeInTheDocument();
-    expect(screen.getByText('$30.00 per seat per month, 4-seat minimum')).toBeInTheDocument();
+    expect(
+      screen.getByText('Up to 4 people at one flat price; $30.00 per month for each person after that')
+    ).toBeInTheDocument();
     expect(screen.getByText('Priority support in a dedicated channel')).toBeInTheDocument();
     expect(screen.queryByText('Dedicated support channel')).not.toBeInTheDocument();
     expect(screen.queryByText('Priority support')).not.toBeInTheDocument();
@@ -196,7 +198,7 @@ describe('SubscriptionModal - Team tab', () => {
 
     expect(screen.getByTestId('subscription-modal-create-team-btn')).toBeDisabled();
     expect(screen.getByTestId('subscription-modal-team-unavailable')).toBeInTheDocument();
-    expect(screen.getByText('4-seat minimum')).toBeInTheDocument();
+    expect(screen.getByText('Up to 4 people at one flat price')).toBeInTheDocument();
   });
 
   it('quotes seats, price and pool size from the admin team plan settings', async () => {
@@ -206,7 +208,9 @@ describe('SubscriptionModal - Team tab', () => {
     await userEvent.setup({ delay: null }).click(screen.getByRole('tab', { name: 'subscription_modal.business' }));
 
     expect(screen.getByText(/\$60\.00/)).toBeInTheDocument();
-    expect(screen.getByText('2 team member accounts included')).toBeInTheDocument();
+    expect(
+      screen.getByText('Up to 2 people at one flat price; $30.00 per month for each person after that')
+    ).toBeInTheDocument();
     expect(screen.getByText('subscription_modal.credits_per_month:2,000')).toBeInTheDocument();
     expect(screen.getByTestId('plan-card-answers-estimate')).toHaveTextContent(
       /^Estimate: about 37 to 130 answers, depending on the model/

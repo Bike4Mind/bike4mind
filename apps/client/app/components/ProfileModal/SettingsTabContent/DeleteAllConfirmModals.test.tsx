@@ -90,7 +90,7 @@ describe('DeleteAllKnowledgeFilesConfirm', () => {
     expect(text).toContain('archived data lakes');
     expect(text).toContain('attached to projects or notebooks');
     expect(text).toContain('Files others shared with you are only removed from your list');
-    expect(text).toContain('Pages you published from these files are taken down too');
+    expect(text).toContain('Pages you published from files you own are taken down too');
     expect(text).not.toContain('stay online');
     expect(text).toContain('cannot be undone');
   });
@@ -128,10 +128,31 @@ describe.each([
     expect(p.onConfirm).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['delete', 'Delete', ' DELETE', 'DELETE '])('is case- and whitespace-sensitive: rejects %j', value => {
+  it.each(['delete', 'Delete', 'DELETE DELETE', 'DEL ETE'])('is case-sensitive: rejects %j', value => {
     wrap(<Dialog {...props()} />);
     typeWord(value);
     expect(confirmBtn().disabled).toBe(true);
+  });
+
+  it.each([' DELETE', 'DELETE ', 'DELETE\n'])('ignores surrounding whitespace: accepts %j', value => {
+    wrap(<Dialog {...props()} />);
+    typeWord(value);
+    expect(confirmBtn().disabled).toBe(false);
+  });
+
+  it('asks phone keyboards for capitals and turns autocorrect off', () => {
+    wrap(<Dialog {...props()} />);
+    const input = screen.getByTestId('delete-all-confirm-input');
+    expect(input.getAttribute('autocapitalize')).toBe('characters');
+    expect(input.getAttribute('autocorrect')).toBe('off');
+  });
+
+  it('does not delete when Enter is pressed with the wrong word', () => {
+    const p = props();
+    wrap(<Dialog {...p} />);
+    typeWord('nope');
+    fireEvent.keyDown(screen.getByTestId('delete-all-confirm-input'), { key: 'Enter' });
+    expect(p.onConfirm).not.toHaveBeenCalled();
   });
 
   it('stays disabled while the delete is pending even with the word typed', () => {

@@ -65,6 +65,7 @@ overrides:
   "htmlparser2@>=11.0.0": "^10.1.0"
   "deepmerge-ts@<8.0.0": "^8.0.1"
   "undici@>=7.0.0 <8.0.0": "^7.29.0"
+  "smol-toml@<1.9.0": "^1.9.0"
 
 ignoredBuiltDependencies:
   - "aws-sdk"
