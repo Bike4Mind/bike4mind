@@ -2198,14 +2198,14 @@ async function processExecution(
         effects: {
           usdToCredits: usdToCreditsStochastic,
           now: () => Date.now(),
-          logGuardTrip: ({ inputTokensDelta, contextWindow }) =>
+          logGuardTrip: ({ requestInputTokens, contextWindow }) =>
             logger.error(
-              '[agentExecutor] iteration input tokens exceed model context window; skipping charge to avoid over-billing (#657)',
+              "[agentExecutor] a request's input tokens exceed the model context window; skipping charge to avoid over-billing (#657)",
               {
                 executionId,
                 sessionId: execution.sessionId,
                 model: execution.model,
-                inputTokensDelta,
+                requestInputTokens,
                 contextWindow,
               }
             ),

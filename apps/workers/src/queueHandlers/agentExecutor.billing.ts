@@ -175,7 +175,7 @@ export type IterationBillingEffects = {
   }) => void;
   addIterationBilling: (billing: IIterationBilling) => Promise<void>;
   sendProgress: (creditsUsed: number, iterationIndex: number) => Promise<void>;
-  logGuardTrip: (details: { inputTokensDelta: number; contextWindow: number }) => void;
+  logGuardTrip: (details: { requestInputTokens: number; contextWindow: number }) => void;
   logNegativeDelta: (details: {
     costDelta: number;
     toolCostUsd: number;
@@ -331,7 +331,8 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
 
   // Price each request this bill covers on its own tier (see unbilledTurns), cache tokens at
   // their own rates: totalInputTokens EXCLUDES cache-read/write. Mirrors the chat path.
-  const agentCostDelta = getTurnsCost(modelInfo, unbilledTurns(checkpoint, counters, deltas));
+  const turns = unbilledTurns(checkpoint, counters, deltas);
+  const agentCostDelta = getTurnsCost(modelInfo, turns);
   const cumulativeCost = counters.cumulativeCost + agentCostDelta;
   // Settle the agent's own cost growth plus any tool-internal spend (#630). Tool spend is
   // already priced per-tool, so it adds directly as USD. Both terms are >= 0, so an
@@ -351,18 +352,21 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
   }
   if (costDelta <= 0) return;
 
-  // Sanity backstop (#657): one iteration is one completion call, so its input
-  // tokens can never exceed the model's context window (totalInputTokens excludes
-  // cache-read/write, so this compares like-for-like). A larger delta means an
-  // upstream token-count corruption - a live agent run reported ~49M input tokens
-  // on a ~72K-token prompt, which billed ~$148. Fail safe: alarm and skip the
-  // credit charge rather than deduct a bogus amount.
+  // Sanity backstop (#657): one provider request's input tokens can never exceed the
+  // model's context window (totalInputTokens excludes cache-read/write, so this compares
+  // like-for-like). A larger request means an upstream token-count corruption - a live agent
+  // run reported ~49M input tokens on a ~72K-token prompt, which billed ~$148. Fail safe:
+  // alarm and skip the credit charge rather than deduct a bogus amount.
+  // Checked per request (the same turns priced above), so a bill legitimately covering two
+  // requests cannot trip it on their sum. Corrupt totals stop reconciling with the adapter's
+  // turns, so unbilledTurns falls back to the whole delta as one request and it still trips.
   // Guard on the AGENT input delta only (tool spend is a different, smaller model and is
   // not part of this sanity bound). On a trip we skip the whole iteration charge - the
   // snapshotted tool spend goes with it, consistent with dropping the agent charge; the
   // token counts that produced it were corrupt anyway.
-  if (modelInfo.contextWindow > 0 && deltas.inputTokens > modelInfo.contextWindow) {
-    effects.logGuardTrip({ inputTokensDelta: deltas.inputTokens, contextWindow: modelInfo.contextWindow });
+  const requestInputTokens = Math.max(0, ...turns.map(turn => turn.inputTokens));
+  if (modelInfo.contextWindow > 0 && requestInputTokens > modelInfo.contextWindow) {
+    effects.logGuardTrip({ requestInputTokens, contextWindow: modelInfo.contextWindow });
     // Counters still advance to the checkpoint so later iterations settle cleanly
     // from here.
     advanceCounters(counters, checkpoint, cumulativeCost);

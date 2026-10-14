@@ -132,7 +132,7 @@ describe('billIteration (#657 context-window guard)', () => {
       effects,
     });
 
-    expect(spies.logGuardTrip).toHaveBeenCalledWith({ inputTokensDelta: 2000, contextWindow: 1000 });
+    expect(spies.logGuardTrip).toHaveBeenCalledWith({ requestInputTokens: 2000, contextWindow: 1000 });
     // No ledger deduction and no progress event on trip.
     expect(spies.deductCredits).not.toHaveBeenCalled();
     expect(spies.sendProgress).not.toHaveBeenCalled();
@@ -516,6 +516,52 @@ describe('foldGeneratedMediaUsd', () => {
     ).not.toThrow();
     expect(onError).toHaveBeenCalledWith(boom);
     expect(pending.costUsd).toBe(0);
+  });
+});
+
+describe('billIteration (context-window guard is per request)', () => {
+  const guard = async (cp: BillingCheckpoint) => {
+    const { effects, spies } = makeEffects();
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: cp,
+      counters: makeCounters(),
+      modelInfo: makeModelInfo(200_000),
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+    return spies;
+  };
+
+  it('does not trip on two requests whose sum exceeds the window when each fits', async () => {
+    const spies = await guard({
+      ...checkpoint(300_000),
+      turnUsage: [
+        { inputTokens: 150_000, outputTokens: 0 },
+        { inputTokens: 150_000, outputTokens: 0 },
+      ],
+    });
+    expect(spies.logGuardTrip).not.toHaveBeenCalled();
+    expect(spies.deductCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it('trips on a single request larger than the window', async () => {
+    const spies = await guard({
+      ...checkpoint(300_000),
+      turnUsage: [
+        { inputTokens: 50_000, outputTokens: 0 },
+        { inputTokens: 250_000, outputTokens: 0 },
+      ],
+    });
+    expect(spies.logGuardTrip).toHaveBeenCalledWith({ requestInputTokens: 250_000, contextWindow: 200_000 });
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+  });
+
+  it('still trips on corrupt totals that no longer reconcile with the turns', async () => {
+    const spies = await guard({ ...checkpoint(49_000_000), turnUsage: [{ inputTokens: 72_000, outputTokens: 0 }] });
+    expect(spies.logGuardTrip).toHaveBeenCalledWith({ requestInputTokens: 49_000_000, contextWindow: 200_000 });
+    expect(spies.deductCredits).not.toHaveBeenCalled();
   });
 });
 
