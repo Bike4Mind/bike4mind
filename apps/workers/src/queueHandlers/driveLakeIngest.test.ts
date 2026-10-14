@@ -2692,6 +2692,10 @@ describe('driveLakeIngest consumer', () => {
         expect(h.probeConnectedFolder).not.toHaveBeenCalled();
         expect(h.walkFolder).not.toHaveBeenCalled();
         expect(h.sendToQueue).not.toHaveBeenCalled();
+        // A run with no resumeBatchId must not settle a batch: looking one up by an undefined id would
+        // still count as a lookup here, so pin the guard, not just the finalize.
+        expect(h.batchFindById).not.toHaveBeenCalled();
+        expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
       });
 
       it('settles the adopted batch of a continuation when the first token fetch finds the grant revoked', async () => {
