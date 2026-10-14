@@ -15,6 +15,16 @@ import { QuerySubscription } from './QuerySubscriptionModel';
 
 const ID_CHUNK_SIZE = 500;
 
+/**
+ * Keeps a revoke-prune query out of any caller's transaction. Mongoose only injects the
+ * transactionAsyncLocalStorage session when the `session` key is absent, so an explicit null opts
+ * out: a failed prune cannot abort the caller's transaction, and its writes to the QuerySubscription
+ * docs the fanout service shares never take transaction locks.
+ */
+function outsideTransaction<Q extends { session(session: null): Q }>(query: Q): Q {
+  return query.session(null);
+}
+
 /** API Gateway closes every WebSocket after 2 hours, whatever the credential behind it. */
 export const REALTIME_CONNECTION_MAX_LIFETIME_MS = 2 * 60 * 60 * 1000;
 
@@ -102,28 +112,33 @@ function toConnectionQuery(filter: RealtimeConnectionFilter): FilterQuery<unknow
  */
 async function pullSubscribers(connectionIds: readonly string[]): Promise<void> {
   for (const ids of chunk(connectionIds)) {
-    const affected = await QuerySubscription.find({ 'subscribers.connectionId': { $in: ids } }, { _id: 1 }).lean();
+    const affected = await outsideTransaction(
+      QuerySubscription.find({ 'subscribers.connectionId': { $in: ids } }, { _id: 1 })
+    ).lean();
     if (affected.length === 0) continue;
     const affectedIds = affected.map(doc => doc._id);
-    await QuerySubscription.updateMany(
-      { _id: { $in: affectedIds } },
-      { $pull: { subscribers: { connectionId: { $in: ids } } } }
+    await outsideTransaction(
+      QuerySubscription.updateMany(
+        { _id: { $in: affectedIds } },
+        { $pull: { subscribers: { connectionId: { $in: ids } } } }
+      )
     );
-    await QuerySubscription.deleteMany({ _id: { $in: affectedIds }, subscribers: { $size: 0 } });
+    await outsideTransaction(QuerySubscription.deleteMany({ _id: { $in: affectedIds }, subscribers: { $size: 0 } }));
   }
 }
 
 /**
  * Pull the connections' subscribers and mark their rows ended (kept, not deleted, so the sweep can
  * still close the sockets). Only live rows are looked up by userId/sid/apiKeyId filters; an
- * explicit connectionIds filter is trusted as given.
+ * explicit connectionIds filter is trusted as given. Never joins an ambient transaction (see
+ * outsideTransaction), even when a revoke calls it from inside withTransaction.
  */
 async function endConnections(filter: RealtimeConnectionFilter): Promise<EndRealtimeConnectionsResult> {
   const query = toConnectionQuery(filter);
   const connectionIds =
     'connectionIds' in filter
       ? [...new Set(filter.connectionIds)]
-      : ((await Connection.find(query).distinct('connectionId')) as string[]);
+      : ((await outsideTransaction(Connection.find(query)).distinct('connectionId')) as string[]);
   if (connectionIds.length === 0) return { connectionIds: [] };
 
   // Subscribers first: a crash in between leaves a live row the sweep still finds, never a
@@ -131,7 +146,9 @@ async function endConnections(filter: RealtimeConnectionFilter): Promise<EndReal
   await pullSubscribers(connectionIds);
   const endedAt = new Date();
   for (const ids of chunk(connectionIds)) {
-    await Connection.updateMany({ connectionId: { $in: ids }, endedAt: { $exists: false } }, { $set: { endedAt } });
+    await outsideTransaction(
+      Connection.updateMany({ connectionId: { $in: ids }, endedAt: { $exists: false } }, { $set: { endedAt } })
+    );
   }
   return { connectionIds };
 }

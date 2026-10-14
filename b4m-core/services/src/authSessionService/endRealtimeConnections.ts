@@ -17,7 +17,8 @@ export interface EndRealtimeConnectionsAdapters {
  *
  * Never throws: the revoke it rides on has already happened and must keep its outcome, so a
  * failure here is logged and the sweep (which also ends connections whose credential lapsed)
- * backstops it. Returns the ended connection ids, or [] on failure.
+ * backstops it. Returns the ended connection ids, or [] on failure. The repository's writes never
+ * join a caller's transaction, so a caller inside withTransaction is not aborted by a failure here.
  */
 export const endRealtimeConnections = async (
   filter: RealtimeConnectionFilter,
