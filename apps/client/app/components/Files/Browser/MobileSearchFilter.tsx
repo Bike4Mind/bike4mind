@@ -8,6 +8,7 @@ import {
 } from '@mui/icons-material';
 import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { FILE_TYPE_OPTIONS } from './constants';
+import GeneratedFilterToggle from './GeneratedFilterToggle';
 import { UploadActionsSelect } from './UploadActionsSelect';
 
 interface MobileSearchFilterProps {
@@ -22,6 +23,9 @@ interface MobileSearchFilterProps {
   // File type filter props
   fileTypeValue?: string;
   onFileTypeChange?: (type: string) => void;
+  // Generated quick filter
+  generatedOnly?: boolean;
+  onGeneratedChange?: (generatedOnly: boolean) => void;
   // Upload props
   onUploadFiles?: (files: File[]) => void;
   onAddFromUrl?: () => void;
@@ -40,6 +44,8 @@ export const MobileSearchFilter: React.FC<MobileSearchFilterProps> = ({
   onFileFilterChange,
   fileTypeValue = 'all',
   onFileTypeChange,
+  generatedOnly = false,
+  onGeneratedChange,
   onUploadFiles,
   onAddFromUrl,
   onCreateKnowledge,
@@ -387,6 +393,8 @@ export const MobileSearchFilter: React.FC<MobileSearchFilterProps> = ({
             ))}
           </Select>
         )}
+
+        {onGeneratedChange && <GeneratedFilterToggle active={generatedOnly} onChange={onGeneratedChange} compact />}
 
         {/* Upload Select */}
         {(onUploadFiles || onAddFromUrl || onCreateKnowledge || onCreateDataLake) && (
