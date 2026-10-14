@@ -156,10 +156,11 @@ export async function processIngestedEmail(
   Logger.info('Starting email ingestion process');
 
   // 1. Authenticate the From address before trusting it, then validate sender authorization
-  const authentication = authenticateSender(parsedEmail.from, parsedEmail.authenticationResults);
+  const authentication = authenticateSender(parsedEmail.from, parsedEmail.senderAuthentication);
   if (!authentication.authenticated) {
     Logger.warn('Rejected inbound email that failed sender authentication', {
       reason: authentication.reason,
+      from: extractEmails(parsedEmail.from),
       messageId: parsedEmail.messageId,
     });
     throw new UnauthorizedError('Sender failed email authentication');

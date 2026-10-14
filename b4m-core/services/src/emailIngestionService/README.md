@@ -137,7 +137,7 @@ The Email Ingestion Service provides a complete solution for processing incoming
 
 #### Email Ingestion Service
 1. **`processIngestedEmail`** - Main orchestration function
-2. **`authenticateSender`** - Checks the topmost SES `Authentication-Results` header against the From address; the parser adapter supplies it via **`findTopmostAuthenticationResults`**
+2. **`authenticateSender`** - Checks the topmost SES `Authentication-Results` header against the From address; the parser adapter supplies it via **`readSenderAuthenticationHeaders`**
 3. **`validateSenderAuthorization`** - Checks if sender is authorized
 4. **`processAttachments`** - Handles email attachments
 5. **`processEmailBody`** - Converts and stores email body

@@ -13,7 +13,7 @@ export { processEmailBody } from './processEmailBody';
 export { validateSenderAuthorization, extractPlatformEmail, extractSenderEmail, extractEmails } from './validateSender';
 export {
   authenticateSender,
-  findTopmostAuthenticationResults,
+  readSenderAuthenticationHeaders,
   parseAuthenticationResults,
   SES_AUTHSERV_ID,
 } from './authenticateSender';
@@ -27,6 +27,7 @@ export type {
   IStorageAdapter,
   EmailIngestionAdapters,
   ValidatedSender,
+  SenderAuthenticationHeaders,
   ProcessedAttachment,
   ProcessedEmailBody,
   IngestedEmailResult,

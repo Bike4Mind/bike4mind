@@ -155,11 +155,14 @@ describe('emailIngestionService - processIngestedEmail', () => {
     });
 
     it('should authenticate the From address against the Authentication-Results header', async () => {
-      const email = { ...mockParsedEmail, authenticationResults: 'amazonses.com; dmarc=pass header.from=example.com' };
+      const email = {
+        ...mockParsedEmail,
+        senderAuthentication: { authenticationResults: 'amazonses.com;\r\n dmarc=pass', fromHeaderCount: 1 },
+      };
 
       await processIngestedEmail(email, 's3://bucket/email.eml', mockAdapters);
 
-      expect(authenticateSender).toHaveBeenCalledWith(email.from, email.authenticationResults);
+      expect(authenticateSender).toHaveBeenCalledWith(email.from, email.senderAuthentication);
     });
 
     it('should throw UnauthorizedError when sender is not authorized', async () => {
