@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
-import { FabFileSourceType } from '@bike4mind/common';
+import { FabFileSourceType, StorageLimitError } from '@bike4mind/common';
+
+const storageRefusal = () =>
+  new StorageLimitError('File size exceeds storage limit', {
+    errorCode: 'storage_limit_exceeded',
+    used_bytes: 0,
+    limit_bytes: 1,
+    requested_bytes: 2,
+    owner: 'user',
+  });
 
 const h = vi.hoisted(() => ({
   order: [] as string[],
@@ -366,7 +375,7 @@ describe('runGitHubLakeSlice', () => {
 
   it('counts a storage-limit skip as transient and does not record it for the chain', async () => {
     tree(blob('a.md', 's1'));
-    h.checkStorageLimit.mockRejectedValue(new BadRequestError('File size exceeds storage limit'));
+    h.checkStorageLimit.mockRejectedValue(storageRefusal());
     await expect(runGitHubLakeSlice(input())).resolves.toEqual({ kind: 'done', batchId: 'batch1', transientSkips: 1 });
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
   });
@@ -445,7 +454,7 @@ describe('runGitHubLakeSlice', () => {
 
     it('lists a storage-limit file as retryable while keeping it out of the chain skips', async () => {
       tree(blob('a.md', 's1'));
-      h.checkStorageLimit.mockRejectedValue(new BadRequestError('File size exceeds storage limit'));
+      h.checkStorageLimit.mockRejectedValue(storageRefusal());
 
       await runGitHubLakeSlice(input());
 
