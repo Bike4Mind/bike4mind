@@ -184,8 +184,9 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { tags: ['opti'] } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    // The pre-update snapshot and the post-update refetch; the guard itself never counts admins.
-    expect(mockUserFindById).toHaveBeenCalledTimes(2);
+    // The guard snapshot, the in-transaction snapshot and the post-update refetch; the guard
+    // itself never counts admins.
+    expect(mockUserFindById).toHaveBeenCalledTimes(3);
     expect(mockCount).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });
@@ -194,7 +195,8 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { isAdmin: true } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    expect(mockUserFindById).toHaveBeenCalledTimes(2);
+    // Guard snapshot, in-transaction snapshot, refetch.
+    expect(mockUserFindById).toHaveBeenCalledTimes(3);
     expect(mockCount).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });
@@ -415,6 +417,16 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     expect(mockSessionEnded).toHaveBeenCalledWith({ userId: 'u1', reason: 'password_changed' });
   });
 
+  it('signs the user out everywhere when the self-service password is an empty string', async () => {
+    // The service writes `""` like any other password (it only skips undefined/null), so the
+    // session-end gate must match that rule rather than the string's truthiness.
+    const { promise } = run({ user: SELF, userId: 'u1', body: { password: '' } });
+    await promise;
+
+    expect(mockSessionEnded).toHaveBeenCalledTimes(1);
+    expect(mockSessionEnded).toHaveBeenCalledWith({ userId: 'u1', reason: 'password_changed' });
+  });
+
   it('leaves sessions alone for a self-service update that sets no password', async () => {
     const { promise } = run({ user: SELF, userId: 'u1', body: { name: 'New Name', password: null } });
     await promise;
@@ -425,6 +437,7 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
 
   it.each([
     ['sets their password', { password: 'n3w-Passw0rd!' }, BEFORE, 'password_changed'],
+    ['sets an empty-string password', { password: '' }, BEFORE, 'password_changed'],
     ['changes their email', { email: 'new@example.com' }, { ...BEFORE, email: 'new@example.com' }, 'email_changed'],
     ['bans them', { isBanned: true }, { ...BEFORE, isBanned: true }, 'account_blocked'],
     [

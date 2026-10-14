@@ -154,10 +154,9 @@ const handler = baseApi().put(
       // Admin role (self-demote). The old checkbox UI allowed both - a pre-existing
       // footgun the Roles radio (admin-roles-product-access-redesign M1) closes here,
       // at the actual write path, not just in the UI.
-      // One pre-update snapshot serves this guard and the session-end check after the write.
-      const before = (await User.findById(userId)
-        .select('isAdmin email isBanned disputePending moderation')
-        .lean()) as AccountStateSnapshot | null;
+      // This read only serves the guard below; the session-end decision reads its own
+      // snapshot inside the transaction, so it compares against the same state the write does.
+      const before = (await User.findById(userId).select('isAdmin').lean()) as AccountStateSnapshot | null;
       if (body.isAdmin === false) {
         if (before?.isAdmin) {
           if (currentUser.id === userId) {
@@ -178,8 +177,13 @@ const handler = baseApi().put(
       req.logger.updateMetadata({ body: req.body });
       await commitWithSessionEnd(
         req,
-        () =>
-          userService.adminUpdateUser(currentUser.id, body, {
+        async () => {
+          // Read inside the transaction so the reason sees the state the write saw; an
+          // outside read can be stale by the time the write commits.
+          const snapshot = (await User.findById(userId)
+            .select('isAdmin email isBanned disputePending moderation')
+            .lean()) as AccountStateSnapshot | null;
+          const updated = await userService.adminUpdateUser(currentUser.id, body, {
             db: {
               users: userRepository,
               organizations: Organization,
@@ -188,10 +192,12 @@ const handler = baseApi().put(
               // Audits admin `currentCredits` changes as CreditTransactions.
               creditTransactions: creditTransactionRepository,
             },
-          }),
+          });
+          return { snapshot, updated };
+        },
         // adminUpdateUser returns the user as written, read inside the same transaction.
-        updated => {
-          const reason = adminEditSessionEndReason(!!body.password, before, updated);
+        ({ snapshot, updated }) => {
+          const reason = adminEditSessionEndReason(typeof body.password === 'string', snapshot, updated);
           return reason && { userId, reason, actorUserId: currentUser.id !== userId ? currentUser.id : undefined };
         }
       );
@@ -235,7 +241,10 @@ const handler = baseApi().put(
           },
         });
       // Only a password change needs the transaction; ordinary profile and preference saves skip it.
-      if (body.password) {
+      // The service treats `""` as a password to write (it only skips undefined/null), so the gate
+      // matches that rule rather than truthiness - otherwise an empty-string password changes the
+      // credential without ending the sessions minted under it.
+      if (typeof body.password === 'string') {
         await commitWithSessionEnd(req, update, () => ({ userId, reason: 'password_changed' }));
       } else {
         await update();
