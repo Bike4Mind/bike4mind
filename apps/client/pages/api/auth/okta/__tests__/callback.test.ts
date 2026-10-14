@@ -237,7 +237,10 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2', {});
     expect(mockEndConnections).toHaveBeenCalledTimes(1);
     // The prune's failure is reported, not swallowed silently.
-    expect(reqLogger.warn).toHaveBeenCalled();
+    expect(reqLogger.warn).toHaveBeenCalledWith(
+      'Failed to end realtime connections; the sweep will retry',
+      expect.any(Error)
+    );
   });
 
   it('exempts a same-identity refresh from the gate (mismatch allowed on re-login)', async () => {
