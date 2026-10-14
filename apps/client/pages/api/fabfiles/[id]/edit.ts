@@ -366,7 +366,6 @@ Return only the edited content without any markdown code blocks or explanations.
             });
             await fabFilesService.assertRewriteFits(file, newBuffer.length, rewriteStorageDb, user);
             // The nonce-keyed upload can never collide with a concurrent edit's bytes.
-            const uploadStartedAt = new Date();
             await getFilesStorage().upload(newBuffer, newFilePath, {
               ContentType: file.mimeType || 'application/octet-stream',
             });
@@ -376,7 +375,6 @@ Return only the edited content without any markdown code blocks or explanations.
               {
                 fabFileId: String(file._id),
                 newSize: newBuffer.length,
-                uploadStartedAt,
                 filter: { filePath: s3Key },
                 set: { filePath: newFilePath, versions, updatedAt: now, ...FAB_FILE_CONTENT_REWRITE_PATCH },
               },
@@ -388,7 +386,6 @@ Return only the edited content without any markdown code blocks or explanations.
           } else {
             const newSize = Buffer.byteLength(editedContent, 'utf8');
             await fabFilesService.assertRewriteFits(file, newSize, rewriteStorageDb, user);
-            const uploadStartedAt = new Date();
             await getFilesStorage().upload(editedContent, s3Key, {
               ContentType: file.mimeType || 'text/plain',
             });
@@ -397,7 +394,6 @@ Return only the edited content without any markdown code blocks or explanations.
               {
                 fabFileId: String(file._id),
                 newSize,
-                uploadStartedAt,
                 set: { updatedAt: new Date(), ...FAB_FILE_CONTENT_REWRITE_PATCH },
               },
               rewriteStorageDb

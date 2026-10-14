@@ -99,7 +99,7 @@ describe('POST /api/fabfiles/[id]/edit (applyImmediately) storage accounting', (
 
       expect(h.assertRewriteFits).toHaveBeenCalledWith(h.file, 18, expect.anything(), user);
       expect(h.commitContentRewrite).toHaveBeenCalledWith(
-        expect.objectContaining({ fabFileId: 'ff1', newSize: 18, uploadStartedAt: expect.any(Date) }),
+        expect.objectContaining({ fabFileId: 'ff1', newSize: 18 }),
         expect.anything()
       );
     });

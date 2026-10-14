@@ -102,12 +102,11 @@ export async function findOrUpdateExistingResearchData(
         logger?.info(`🗃️ [RESEARCH_DATA_EXISTS] Uploading content to existing file ${existingFile.filePath}`);
 
         // Upload new content to existing file
-        const uploadStartedAt = new Date();
         await adapters.storage.upload(existingFile.filePath, content, {
           ContentType: contentType,
           ContentLength: newSize,
         });
-        await commitContentRewrite({ fabFileId: existingFile.id, newSize, uploadStartedAt }, adapters.db);
+        await commitContentRewrite({ fabFileId: existingFile.id, newSize }, adapters.db);
         existingFile.fileSize = newSize;
       }
 

@@ -6,6 +6,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
+import { STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
 import { FabFile, Session, User, fabFileRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { fabFilesService, notebookImportService } from '@bike4mind/services';
 import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
@@ -128,17 +129,25 @@ const importAndCharge = async (name: string) => {
 
 const rewriteDb = { fabFiles: fabFileRepository, users: userRepository };
 
+const tick = () => new Promise(resolve => setTimeout(resolve, 2));
+
+/** One S3 event as objectCreated charges it. Returns what it charged, or null when its claim lost. */
+const s3Event = async (fabFileId: unknown, eventTime: Date, size: number) => {
+  const charged = await claimStorageCharge(fabFileId as string, eventTime, size);
+  if (charged) await userRepository.incrementCurrentStorage(USER, charged);
+  return charged;
+};
+
 /**
  * A content rewrite as every rewrite site runs it, with the S3 upload elided. Returns the upload's
  * S3 eventTime, which falls between the upload starting and the commit.
  */
 const rewrite = async (fabFileId: string, newSize: number, beforeCommit?: (eventTime: Date) => Promise<void>) => {
-  const uploadStartedAt = new Date();
-  await new Promise(resolve => setTimeout(resolve, 2));
+  await tick();
   const eventTime = new Date();
-  await new Promise(resolve => setTimeout(resolve, 2));
+  await tick();
   await beforeCommit?.(eventTime);
-  await fabFilesService.commitContentRewrite({ fabFileId, newSize, uploadStartedAt }, rewriteDb);
+  await fabFilesService.commitContentRewrite({ fabFileId, newSize }, rewriteDb);
   return eventTime;
 };
 
@@ -147,7 +156,20 @@ const firstUpload = async (fileSize: number) => {
   const [row] = await FabFile.create([
     { userId: USER, fileName: 'x', mimeType: 'text/plain', fileSize, filePath: 'files/x', type: 'FILE' },
   ]);
-  if (await claimStorageCharge(row._id, new Date())) await userRepository.incrementCurrentStorage(USER, fileSize);
+  await s3Event(row._id, new Date(), fileSize);
+  return String(row._id);
+};
+
+/** A file the S3 handler charged before rows were stamped: complete, unstamped, created pre-cutoff. */
+const legacyFile = async (fileSize: number) => {
+  const [row] = await FabFile.create([
+    { userId: USER, fileName: 'x', mimeType: 'text/plain', fileSize, filePath: 'files/x', type: 'FILE' },
+  ]);
+  await FabFile.collection.updateOne(
+    { _id: row._id },
+    { $set: { status: 'complete', createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000) } }
+  );
+  await userRepository.incrementCurrentStorage(USER, fileSize);
   return String(row._id);
 };
 
@@ -162,7 +184,7 @@ describe('content rewrite storage charge', () => {
     for (const size of [300, 50, 50, 900]) {
       const eventTime = await rewrite(id, size);
       // The rewrite's own S3 event, and any redelivery of it, claims nothing.
-      expect(await claimStorageCharge(id, eventTime)).toBe(false);
+      expect(await s3Event(id, eventTime, size)).toBeNull();
       expect(await storedSize()).toBe(await truth());
     }
     expect(await storedSize()).toBe(BASELINE_BYTES + 900);
@@ -178,12 +200,57 @@ describe('content rewrite storage charge', () => {
     const id = await firstUpload(100);
 
     await rewrite(id, 400, async eventTime => {
-      // objectCreated sees the new object (still old fileSize on the row) and charges its full size.
-      expect(await claimStorageCharge(id, eventTime)).toBe(true);
-      await userRepository.incrementCurrentStorage(USER, 400);
+      // objectCreated sees the new object first: it records the new size and charges the difference.
+      expect(await s3Event(id, eventTime, 400)).toBe(300);
     });
 
     expect(await storedSize()).toBe(BASELINE_BYTES + 400);
+    expect(await storedSize()).toBe(await truth());
+  });
+
+  it('charges a rewrite of a legacy unstamped file only the delta', async () => {
+    await seedUser();
+    const id = await legacyFile(5000);
+
+    const eventTime = await rewrite(id, 5100);
+    await s3Event(id, eventTime, 5100);
+
+    expect(await storedSize()).toBe(BASELINE_BYTES + 5100);
+    expect(await storedSize()).toBe(await truth());
+  });
+
+  it('never refuses a shrink of a legacy unstamped file near the quota', async () => {
+    await seedUser();
+    const id = await legacyFile(850_000);
+    const row = await FabFile.findById(id).lean();
+    const owner = await User.findById(USER_ID);
+
+    await expect(
+      fabFilesService.assertRewriteFits({ ...row, userId: USER }, 800_000, rewriteDb, owner as never)
+    ).resolves.toBeUndefined();
+  });
+
+  it('keeps the counter at the truth when two rewrites of one file overlap, in either event order', async () => {
+    await seedUser();
+    const id = await firstUpload(1000);
+
+    // A (-> 2000) and B (-> 3000) both upload before A commits; neither event claims after the commits.
+    const eventA = new Date();
+    await tick();
+    const eventB = new Date();
+    await tick();
+    await fabFilesService.commitContentRewrite({ fabFileId: id, newSize: 2000 }, rewriteDb);
+    await fabFilesService.commitContentRewrite({ fabFileId: id, newSize: 3000 }, rewriteDb);
+    expect(await s3Event(id, eventA, 2000)).toBeNull();
+    expect(await s3Event(id, eventB, 3000)).toBeNull();
+    expect(await storedSize()).toBe(await truth());
+
+    // C (-> 500) commits; then D (-> 700)'s own event claims before D commits.
+    await rewrite(id, 500);
+    await rewrite(id, 700, async eventTime => {
+      expect(await s3Event(id, eventTime, 700)).toBe(200);
+    });
+    expect(await storedSize()).toBe(BASELINE_BYTES + 700);
     expect(await storedSize()).toBe(await truth());
   });
 
@@ -192,7 +259,7 @@ describe('content rewrite storage charge', () => {
     const id = await firstUpload(100);
 
     const committed = await fabFilesService.commitContentRewrite(
-      { fabFileId: id, newSize: 400, uploadStartedAt: new Date(), filter: { filePath: 'files/stale' } },
+      { fabFileId: id, newSize: 400, filter: { filePath: 'files/stale' } },
       rewriteDb
     );
 
@@ -221,7 +288,7 @@ describe('notebook import storage charge', () => {
     await importAndCharge('charged');
     const row = await FabFile.findOne({ userId: USER });
 
-    expect(await claimStorageCharge(row?._id, uploadedAt)).toBe(false);
+    expect(await claimStorageCharge(row?._id, uploadedAt, FILE_BYTES)).toBeNull();
   });
 
   it('leaves the S3 event for a rewrite of an imported file nothing to charge', async () => {
@@ -231,7 +298,7 @@ describe('notebook import storage charge', () => {
 
     const eventTime = await rewrite(String(row?._id), 1234);
 
-    expect(await claimStorageCharge(row?._id, eventTime)).toBe(false);
+    expect(await claimStorageCharge(row?._id, eventTime, 1234)).toBeNull();
     expect(await storedSize()).toBe(BASELINE_BYTES + (await fabFileRepository.sumFileSizeByUserId(USER)));
   });
 
@@ -241,8 +308,8 @@ describe('notebook import storage charge', () => {
     ]);
     const uploadedAt = new Date();
 
-    expect(await claimStorageCharge(row._id, uploadedAt)).toBe(true);
-    expect(await claimStorageCharge(row._id, uploadedAt)).toBe(false);
+    expect(await claimStorageCharge(row._id, uploadedAt, 5)).toBe(5);
+    expect(await claimStorageCharge(row._id, uploadedAt, 5)).toBeNull();
   });
 
   it('charges nothing when the transaction rolls back', async () => {
@@ -299,15 +366,16 @@ describe('chargeUploadedObject', () => {
     expect(await storedSize()).toBe(BASELINE_BYTES + 5_000);
   });
 
-  it('charges again for a later write to the same object', async () => {
+  it('charges a later write to the same object only its growth', async () => {
     await seedUser();
     const row = await createRow();
     const uploadedAt = new Date();
 
     await deliver(row._id, 5_000, uploadedAt);
-    await deliver(row._id, 5_000, new Date(uploadedAt.getTime() + 1000));
+    await deliver(row._id, 8_000, new Date(uploadedAt.getTime() + 1000));
 
-    expect(await storedSize()).toBe(BASELINE_BYTES + 10_000);
+    expect(await storedSize()).toBe(BASELINE_BYTES + 8_000);
+    expect((await FabFile.findById(row._id).lean())?.fileSize).toBe(8_000);
   });
 
   it('never takes the counter below zero', async () => {

@@ -1,13 +1,21 @@
-import { NotFoundError, type IFabFileRepository, type IUserDocument, type IUserRepository } from '@bike4mind/common';
+import {
+  chargedBytes,
+  NotFoundError,
+  type IFabFileRepository,
+  type IUserDocument,
+  type IUserRepository,
+  type StorageChargeFields,
+} from '@bike4mind/common';
 import { checkStorageLimit } from '@bike4mind/utils';
 
 /**
  * Storage accounting for rewriting an existing FabFile's bytes. Every rewrite site calls
- * `assertRewriteFits` before its upload and `commitContentRewrite` after it, so the owner's
- * `currentStorageSize` moves by exactly `newSize - chargedBytes(row)`. The commit stamps
- * `storageChargedAt`, which makes the rewrite's S3 event claim nothing
- * (apps/client/server/s3/storageCharge.ts). A guard test pins the known call sites, but only finds
- * new ones under its search roots (b4m-core/infra/src/__tests__/fabFileExtractedCountInvalidation.test.ts).
+ * `assertRewriteFits` before its upload and `commitContentRewrite` after it. Each write that changes a
+ * row's charged bytes - this commit, or the upload's S3 event claim (apps/client/server/s3/storageCharge.ts)
+ * - sets `fileSize` and the stamp in one atomic update and moves the owner's counter by
+ * `newSize - chargedBytes(preImage)`, so the moves add up to the truth in any order, including
+ * overlapping rewrites of one file. A guard test pins the known call sites, but only finds new ones
+ * under its search roots (b4m-core/infra/src/__tests__/fabFileExtractedCountInvalidation.test.ts).
  */
 
 export type RewriteStorageDb = {
@@ -15,10 +23,7 @@ export type RewriteStorageDb = {
   users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
 };
 
-type ChargeFields = { fileSize?: number; storageChargedAt?: Date | null };
-
-/** Bytes a row currently contributes to its owner's counter: none until something charged it. */
-export const chargedBytes = (row: ChargeFields) => (row.storageChargedAt ? (row.fileSize ?? 0) : 0);
+type ChargeFields = StorageChargeFields & { fileSize?: number | null };
 
 /**
  * Throws the standard 400 "File size exceeds storage limit" when the rewrite would grow the
@@ -40,28 +45,19 @@ export async function assertRewriteFits(
 
 /**
  * Writes `set` + `fileSize: newSize` and the charge stamp in one atomic update, then moves the
- * owner's counter by the difference. `uploadStartedAt` must be taken immediately before the upload.
- * Returns false, with the counter untouched, when `filter` missed (a lost race).
+ * owner's counter by the difference. Returns false, with the counter untouched, when `filter` missed
+ * (a lost race). The row write and the counter move are two writes, atomic only inside a caller's
+ * transaction; a crash between them drifts the counter until a storage recalc.
  */
 export async function commitContentRewrite(
-  args: {
-    fabFileId: string;
-    newSize: number;
-    uploadStartedAt: Date;
-    set?: Record<string, unknown>;
-    filter?: Record<string, unknown>;
-  },
+  args: { fabFileId: string; newSize: number; set?: Record<string, unknown>; filter?: Record<string, unknown> },
   db: RewriteStorageDb
 ): Promise<boolean> {
-  const { fabFileId, newSize, uploadStartedAt, set, filter } = args;
+  const { fabFileId, newSize, set, filter } = args;
   const pre = await db.fabFiles.commitContentRewrite(fabFileId, { ...set, fileSize: newSize }, filter);
   if (!pre) return false;
 
-  // A stamp at or after uploadStartedAt means this upload's S3 event already claimed and charged
-  // newSize, so only the old bytes come off. Otherwise our stamp (app clock, taken after the upload
-  // resolved) is later than the event's S3 eventTime, barring clock skew beyond the round-trip.
-  const delta =
-    pre.storageChargedAt && pre.storageChargedAt >= uploadStartedAt ? -chargedBytes(pre) : newSize - chargedBytes(pre);
+  const delta = newSize - chargedBytes(pre);
   if (delta !== 0) await db.users.incrementCurrentStorage(pre.userId, delta);
   return true;
 }

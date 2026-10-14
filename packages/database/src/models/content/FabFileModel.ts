@@ -1210,16 +1210,24 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     id: string,
     set: Record<string, unknown>,
     filter: Record<string, unknown> = {}
-  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date } | null> {
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null> {
     // new: false is load-bearing - the caller's storage delta is computed from the pre-image.
     const pre = await this.fabFileModel
       .findOneAndUpdate(
         { ...filter, _id: id, deletedAt: null },
         { $set: { ...set, storageChargedAt: new Date() } },
-        { new: false, projection: { userId: 1, fileSize: 1, storageChargedAt: 1 } }
+        { new: false, projection: { userId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 } }
       )
       .lean();
-    return pre ? { userId: String(pre.userId), fileSize: pre.fileSize, storageChargedAt: pre.storageChargedAt } : null;
+    return pre
+      ? {
+          userId: String(pre.userId),
+          fileSize: pre.fileSize,
+          storageChargedAt: pre.storageChargedAt,
+          status: pre.status,
+          createdAt: pre.createdAt,
+        }
+      : null;
   }
 
   async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
@@ -3273,10 +3281,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     }
     // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
     // The moderationStatus guard here is the belt to the pre-check's suspenders.
-    await this.fabFileModel.deleteMany(
-      { _id: { $in: fabFileIds }, moderationStatus: { $ne: 'blocked' } },
-      { hardDelete: true } as Record<string, unknown>
-    );
+    await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds }, moderationStatus: { $ne: 'blocked' } }, {
+      hardDelete: true,
+    } as Record<string, unknown>);
     return fabFileIds;
   }
 
@@ -3325,10 +3332,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // is folded into findOneAndDelete atomically so a concurrent scan that transitions the file
     // from 'pending' -> 'blocked' between a pre-check and the delete cannot slip through.
     const doc = await this.fabFileModel
-      .findOneAndDelete(
-        { _id: fabFileId, moderationStatus: { $ne: 'blocked' } },
-        { hardDelete: true } as Record<string, unknown>
-      )
+      .findOneAndDelete({ _id: fabFileId, moderationStatus: { $ne: 'blocked' } }, { hardDelete: true } as Record<
+        string,
+        unknown
+      >)
       .setOptions({ includeDeleted: true });
     if (!doc) {
       // Null means either the file does not exist or it is blocked. Check which.

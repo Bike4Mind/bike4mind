@@ -127,7 +127,6 @@ export const updateFabFile = async (
     let fileSize = Buffer.byteLength(fileContent, 'utf8');
     await assertRewriteFits(fabFile, fileSize, db, user);
 
-    const uploadStartedAt = new Date();
     await storage.upload(filePath, fileContent, {
       ContentType: mimeType,
     });
@@ -145,7 +144,7 @@ export const updateFabFile = async (
     }
     contentChanges.fileSize = fileSize;
     if (!fabFile.filePath) contentChanges.filePath = filePath;
-    await commitContentRewrite({ fabFileId: fabFile.id, newSize: fileSize, uploadStartedAt }, db);
+    await commitContentRewrite({ fabFileId: fabFile.id, newSize: fileSize }, db);
 
     contentChanges.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
     contentChanges.fileUrlExpireAt = new Date(Date.now() + EXPIRE_IN_SECONDS * 1000);

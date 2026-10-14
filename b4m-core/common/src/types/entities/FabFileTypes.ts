@@ -1142,7 +1142,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     id: string,
     set: Record<string, unknown>,
     filter?: Record<string, unknown>
-  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date } | null>;
+  ): Promise<{ userId: string; fileSize?: number; storageChargedAt?: Date; status?: string; createdAt?: Date } | null>;
 
   /**
    * Find a file by its ID and the user's ID.

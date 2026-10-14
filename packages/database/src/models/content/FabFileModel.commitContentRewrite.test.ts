@@ -38,7 +38,13 @@ describe('FabFileRepository.commitContentRewrite', () => {
 
     const pre = await fabFileRepository.commitContentRewrite(file.id, { fileSize: 250 });
 
-    expect(pre).toEqual({ userId: 'u-rewrite', fileSize: 100, storageChargedAt: charged });
+    expect(pre).toEqual({
+      userId: 'u-rewrite',
+      fileSize: 100,
+      storageChargedAt: charged,
+      status: file.status,
+      createdAt: file.createdAt,
+    });
     const after = await FabFile.findById(file.id).lean();
     expect(after?.fileSize).toBe(250);
     expect(after?.storageChargedAt?.getTime()).toBeGreaterThan(charged.getTime());

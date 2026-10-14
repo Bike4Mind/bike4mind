@@ -98,7 +98,6 @@ const handler = baseApi()
 
           await fabFilesService.assertRewriteFits(file, newBuffer.length, rewriteStorageDb, user);
           // The nonce-keyed upload can never collide with a concurrent edit's bytes.
-          const uploadStartedAt = new Date();
           await getFilesStorage().upload(newBuffer, newFilePath, {
             ContentType: file.mimeType || 'application/octet-stream',
           });
@@ -109,7 +108,6 @@ const handler = baseApi()
             {
               fabFileId: String(file._id),
               newSize: newBuffer.length,
-              uploadStartedAt,
               filter: { filePath: s3Key },
               set: { filePath: newFilePath, versions, updatedAt: now, ...FAB_FILE_CONTENT_REWRITE_PATCH },
             },
@@ -150,7 +148,6 @@ const handler = baseApi()
         });
 
         // Apply the new content (using the same s3Key we extracted earlier)
-        const uploadStartedAt = new Date();
         await getFilesStorage().upload(newContent, s3Key, {
           ContentType: file.mimeType || 'text/plain',
         });
@@ -159,7 +156,6 @@ const handler = baseApi()
           {
             fabFileId: String(file._id),
             newSize: contentSize,
-            uploadStartedAt,
             set: { updatedAt: new Date(), ...FAB_FILE_CONTENT_REWRITE_PATCH },
           },
           rewriteStorageDb
