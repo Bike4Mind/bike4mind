@@ -78,10 +78,11 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
   // the in-memory token with the pending one, so keep the old one to restore on cancel:
   // resetTokens() would persist hasSession:false and sign out every tab.
   const previousVerifiedToken = useRef<string | null>(null);
-  // Whether a session existed when the challenge began. A handoff that lands on a fresh document
-  // load (the /auth/success redirect) has no in-memory token to restore even though the refresh
-  // cookie is still valid, so the flag is what distinguishes "cancel this sign-in" from "sign me
-  // out everywhere".
+  // Whether this browser believed it held a session when the challenge began. A handoff that lands
+  // on a fresh document load (the /auth/success redirect) has no in-memory token to restore, so the
+  // flag is what distinguishes "cancel this sign-in" from "sign me out everywhere". It can be stale
+  // (a refresh cookie that expired while the browser was closed): the destination route's bootstrap
+  // is what decides whether a session is really there, not this flag.
   const hadSession = useRef(false);
 
   const endWithoutSession = (mode: MfaChallengeMode) => {

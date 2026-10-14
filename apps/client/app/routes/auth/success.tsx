@@ -32,9 +32,10 @@ const AuthSuccessPage = () => {
       applyRedirect(router.history, redirectTo);
     },
     onCancel: mode => {
-      // A handoff that lands while this browser already holds a session (the challenge left it
-      // intact): /login would clear its caches and reset the model choice, so send the user back
-      // where they were. Otherwise the sign-in never completed and /login is where it resumes.
+      // A handoff that lands while this browser still believes it holds a session (the challenge
+      // left it intact): /login would clear its caches and reset the model choice, so send the user
+      // back where they were and let the destination's bootstrap settle whether the session is
+      // real. Otherwise the sign-in never completed and /login is where it resumes.
       if (useAccessToken.getState().hasSession) {
         applyRedirect(router.history, redirectTo);
         return;
