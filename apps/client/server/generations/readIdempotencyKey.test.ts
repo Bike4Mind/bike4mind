@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { UnprocessableEntityError } from '@bike4mind/common';
 import { readIdempotencyKey } from './readIdempotencyKey';
 
-// The published code on the 422 (MusicGenerationApiErrorCode), not just the error class.
+// The published code on the 422 (music and video both publish it), not just the error class.
 const invalidKey = expect.objectContaining({ additionalInfo: { errorCode: 'invalid_idempotency_key' } });
 
 describe('readIdempotencyKey', () => {
