@@ -793,11 +793,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // probeFolder already retried a 401 on a fresh token, so this one is Drive refusing the grant itself.
       if (isDriveUnauthorizedError(e)) {
         logger.warn('[driveLakeIngest] Drive rejected a freshly refreshed token; needs reconnect', { connectionId });
-        if (resumeBatchId) await settleChainedBatch(resumeBatchId);
         await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
           status: 'credential_error',
           lastError: REJECTED_DRIVE_TOKEN_MESSAGE,
         });
+        if (resumeBatchId) await settleChainedBatch(resumeBatchId);
         return;
       }
       if (!isDriveRateLimitError(e)) throw e;
