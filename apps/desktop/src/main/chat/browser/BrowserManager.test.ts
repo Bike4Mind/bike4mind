@@ -258,7 +258,12 @@ describe('BrowserManager page deadlines', () => {
 
 describe('BrowserManager closing pages', () => {
   type Manager = InstanceType<typeof BrowserManager>;
-  type Internals = { sessions: Map<string, { list: unknown[] }>; byContents: Map<number, unknown>; pane: unknown };
+  type Internals = {
+    sessions: Map<string, { list: unknown[] }>;
+    byContents: Map<number, unknown>;
+    pane: unknown;
+    shown: unknown;
+  };
   const internals = (manager: Manager) => manager as unknown as Internals;
   const bounds = { x: 0, y: 0, width: 600, height: 400 };
 
@@ -279,7 +284,19 @@ describe('BrowserManager closing pages', () => {
 
     expect(internals(manager).sessions.size).toBe(0);
     expect(internals(manager).byContents.size).toBe(0);
-    expect(internals(manager).pane).toBeUndefined();
+    expect(internals(manager).shown).toBeUndefined();
+  });
+
+  it('shows the next tab of a conversation still on screen after its tabs were closed by archiving', async () => {
+    const manager = new BrowserManager();
+    const window = new BrowserWindow();
+    await open(manager, 'a');
+    manager.setPane(window, 'a', bounds);
+    await manager.closeSession('a');
+
+    const reopened = await open(manager, 'a');
+
+    expect(internals(manager).shown).toBe(reopened);
   });
 
   it('deletes several notebooks at once, including the one on screen, and keeps the rest', async () => {
@@ -290,10 +307,10 @@ describe('BrowserManager closing pages', () => {
 
     await Promise.all(['a', 'b', 'c', 'a'].map(id => manager.closeSession(id)));
 
-    const { sessions, byContents, pane } = internals(manager);
+    const { sessions, byContents, shown } = internals(manager);
     expect([...sessions.keys()]).toEqual(['d']);
     expect([...byContents.values()]).toEqual(sessions.get('d')?.list);
-    expect(pane).toBeUndefined();
+    expect(shown).toBeUndefined();
   });
 
   it('answers a tool still holding a page whose contents are gone, without throwing', async () => {
@@ -321,7 +338,12 @@ describe('BrowserManager closing pages', () => {
 
 describe('BrowserManager tabs', () => {
   type Manager = InstanceType<typeof BrowserManager>;
-  type Internals = { sessions: Map<string, { list: unknown[] }>; byContents: Map<number, unknown>; pane: unknown };
+  type Internals = {
+    sessions: Map<string, { list: unknown[] }>;
+    byContents: Map<number, unknown>;
+    pane: unknown;
+    shown: unknown;
+  };
   const internals = (manager: Manager) => manager as unknown as Internals;
   const bounds = { x: 0, y: 0, width: 600, height: 400 };
   const mac = process.platform === 'darwin';
@@ -504,11 +526,11 @@ describe('BrowserManager tabs', () => {
     };
 
     expect(press(1, 'KeyT')).toHaveBeenCalled();
-    expect(lastState().activeTabId).toBe(2);
+    await vi.waitFor(() => expect(lastState().activeTabId).toBe(2));
     press(2, 'BracketLeft', true);
-    expect(lastState().activeTabId).toBe(1);
+    await vi.waitFor(() => expect(lastState().activeTabId).toBe(1));
     press(1, 'BracketLeft', true);
-    expect(lastState().activeTabId).toBe(2);
+    await vi.waitFor(() => expect(lastState().activeTabId).toBe(2));
     press(2, 'KeyW');
     await vi.waitFor(() => expect(tabIds()).toEqual([1]));
     expect(press(1, 'KeyA')).not.toHaveBeenCalled();

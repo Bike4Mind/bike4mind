@@ -641,8 +641,12 @@ export class BrowserManager implements BrowserProvider {
     return this.stateOf(sessionId);
   }
 
+  /**
+   * The pane request is kept. Archiving closes the tabs of a conversation that stays on screen,
+   * and the renderer only reports again when its bounds move, so dropping the request would
+   * leave the next tab opened there invisible. For a deleted one it names nothing and is harmless.
+   */
   async closeSession(sessionId: string): Promise<void> {
-    if (this.pane?.sessionId === sessionId) this.pane = undefined;
     const tabs = this.sessions.get(sessionId);
     // Gone before the tabs close, so each one's 'destroyed' finds nothing left to rearrange.
     this.sessions.delete(sessionId);
@@ -731,7 +735,8 @@ export class BrowserManager implements BrowserProvider {
         this.apply();
       },
       onWindowOpen: (url, fromAgent, background) => this.openFromPage(sessionId, tab, url, fromAgent, background),
-      onShortcut: shortcut => void this.onShortcut(sessionId, shortcut),
+      // Out of the input event first: Cmd+W destroys the very contents that is dispatching it.
+      onShortcut: shortcut => setImmediate(() => void this.onShortcut(sessionId, shortcut)),
     });
     tabs.list.push(tab);
     this.byContents.set(tab.contentsId, tab);
