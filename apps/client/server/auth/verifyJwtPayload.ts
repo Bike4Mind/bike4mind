@@ -6,6 +6,9 @@ export interface JwtPayloadClaims {
   id: string;
   tokenVersion?: number;
   mfaPending?: boolean;
+  /** Pending sign-in origin (signInSecondFactor.ts SignInOrigin); present only with mfaPending. */
+  signInStrategy?: string;
+  signInVia?: string;
   impersonatedBy?: string;
   typ?: string;
   /** AuthSession id this token belongs to (present on session-store tokens; absent on legacy
@@ -54,6 +57,9 @@ export async function verifyJwtPayload(
       }
       assertAccountStateUsable(user);
       (user as any).mfaPending = !!jwt_payload.mfaPending;
+      if (jwt_payload.mfaPending && jwt_payload.signInStrategy && jwt_payload.signInVia) {
+        (user as any).mfaSignIn = { strategy: jwt_payload.signInStrategy, createdVia: jwt_payload.signInVia };
+      }
       // Propagate the impersonation marker (set by loginAs) so request handlers
       // can distinguish an admin-driven session from the real customer's - see logout.ts.
       (user as any).impersonatedBy = jwt_payload.impersonatedBy;

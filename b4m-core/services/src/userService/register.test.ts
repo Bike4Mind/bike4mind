@@ -196,6 +196,21 @@ describe('registerUser', () => {
     await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow(BadRequestError);
   });
 
+  it('rejects a username outside the allowed characters before any lookup', async () => {
+    await expect(registerUser({ ...baseParams, username: '<b>x</b>' }, mockAdapters)).rejects.toThrow(
+      "Usernames can contain letters, numbers, spaces and . _ - ' (up to 64 characters)."
+    );
+    expect(mockAdapters.db.users.findByUsernameOrEmail).not.toHaveBeenCalled();
+    expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+  });
+
+  it('stores the username trimmed', async () => {
+    await registerUser({ ...baseParams, username: '  testuser  ' }, mockAdapters);
+
+    expect(mockAdapters.db.users.findByUsernameOrEmail).toHaveBeenCalledWith('testuser', baseParams.email);
+    expect(mockAdapters.db.users.create).toHaveBeenCalledWith(expect.objectContaining({ username: 'testuser' }));
+  });
+
   it('throws if invite code is invalid', async () => {
     mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(null);
     await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('Invalid invite code');

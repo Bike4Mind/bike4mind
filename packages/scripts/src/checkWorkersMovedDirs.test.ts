@@ -106,6 +106,21 @@ const MOVED_MODULES = [
     to: 'apps/workers/src/security/attackSimulation',
     stems: ['fingerprint', 'runner'],
   },
+  // Standalone Lambda entries; the client-shared siblings in each directory stay put.
+  {
+    from: 'apps/client/server/s3',
+    to: 'apps/workers/src/s3',
+    stems: ['appFileUploadComplete', 'objectCreated'],
+  },
+  {
+    from: 'apps/client/server/utils',
+    to: 'apps/workers/src/database',
+    stems: ['manageDatabase', 'seedDatabase', 'dropPreviewDatabase'],
+  },
+  { from: 'apps/client/server/utils', to: 'apps/workers/src/media', stems: ['imageProcessor'] },
+  // `tools.` also covers tools.handler and tools.wiring, but not toolsHandler.shared, which stays.
+  { from: 'apps/client/server/cli', to: 'apps/workers/src/cli', stems: ['tools'] },
+  { from: 'apps/client/server/queueHandlers', to: 'apps/workers/src/queueHandlers', stems: ['slackQuestProcessor'] },
 ] as const;
 
 const MOVED_MODULE_CASES = MOVED_MODULES.flatMap(({ from, to, stems }) => stems.map(stem => ({ from, to, stem })));
@@ -175,6 +190,20 @@ describe('directories and modules moved out of apps/client/server stay moved', (
         'apps/workers/src/security/attackSimulation/runner.handler',
         // infra/agentExecutor.ts; the Lambda and the continuation subscriber share this export.
         'apps/workers/src/queueHandlers/agentExecutor.handler',
+        // infra/buckets.ts
+        'apps/workers/src/s3/appFileUploadComplete.func',
+        // infra/queues.ts (the bucket notification subscriber)
+        'apps/workers/src/s3/objectCreated.func',
+        // infra/database.ts
+        'apps/workers/src/database/manageDatabase.updateDatabase',
+        'apps/workers/src/database/seedDatabase.handler',
+        'apps/workers/src/database/dropPreviewDatabase.handler',
+        // infra/imageProcessor.ts
+        'apps/workers/src/media/imageProcessor.handler',
+        // infra/cliToolHandler.ts
+        'apps/workers/src/cli/tools.handler.handler',
+        // infra/functions.ts
+        'apps/workers/src/queueHandlers/slackQuestProcessor.handler',
       ])
     );
     const stale = handlers

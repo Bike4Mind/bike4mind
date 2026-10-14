@@ -113,6 +113,7 @@ export interface ISearchFabFilesParams {
     type?: FabFileTypeFilter;
     shared?: boolean;
     curated?: boolean;
+    generated?: boolean;
   };
   pagination?: { page: number; limit: number };
   order?: { by: 'fileName' | 'fileSize' | 'createdAt'; direction: 'asc' | 'desc' };

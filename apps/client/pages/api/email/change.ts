@@ -6,12 +6,13 @@ import { userService } from '@bike4mind/services';
 import { EmailEvents } from '@server/utils/eventBus';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { generateVerificationLink, getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
+import { generateVerificationLink, getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
 import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
 import { z } from 'zod';
 
 const ChangeEmailRequestSchema = z.object({
-  newEmail: z.email(),
+  // Normalized before the format check so a padded address is not rejected for its whitespace.
+  newEmail: z.string().trim().toLowerCase().pipe(z.email()),
 });
 
 // Requires authentication - users change their own email
@@ -42,7 +43,8 @@ const handler = baseApi({ auth: true })
             db: {
               users: {
                 findById: async (id: string) => userRepository.findById(id),
-                findByEmail: async (email: string) => userRepository.findByEmail(email),
+                existsOtherUserWithEmail: async (email: string, excludeUserId?: string) =>
+                  userRepository.existsOtherUserWithEmail(email, excludeUserId),
                 update: async user => userRepository.update(user),
               },
             },
@@ -97,10 +99,10 @@ const handler = baseApi({ auth: true })
             <div class="content">
               ${buildEmailLogoImg(brand, logoUrl)}
               <h2>Email Change Request</h2>
-              <p>Hello ${user.username},</p>
+              <p>Hello ${escapeHtml(user.username)},</p>
               <p>We're writing to inform you that a request has been made to change the email address associated with your account.</p>
-              <p><strong>Current email:</strong> ${user.email}</p>
-              <p><strong>New email:</strong> ${pendingNewEmail}</p>
+              <p><strong>Current email:</strong> ${escapeHtml(user.email ?? '')}</p>
+              <p><strong>New email:</strong> ${escapeHtml(pendingNewEmail)}</p>
               <div class="warning">
                 <strong>Security Alert:</strong> If you did NOT request this change, please cancel it immediately and secure your account.
               </div>
@@ -125,8 +127,8 @@ const handler = baseApi({ auth: true })
                 // An emailless account (OAuth signup with no provider-verified email) uses this
                 // same flow to add its first address, so there is no "from" address to name.
                 const intro = user.email
-                  ? `You requested to change your email address from <strong>${user.email}</strong> to <strong>${pendingNewEmail}</strong>.`
-                  : `You requested to add <strong>${pendingNewEmail}</strong> as the email address on your account.`;
+                  ? `You requested to change your email address from <strong>${escapeHtml(user.email)}</strong> to <strong>${escapeHtml(pendingNewEmail)}</strong>.`
+                  : `You requested to add <strong>${escapeHtml(pendingNewEmail)}</strong> as the email address on your account.`;
 
                 const emailBody = `
       <!DOCTYPE html>
@@ -169,7 +171,7 @@ const handler = baseApi({ auth: true })
             <div class="content">
               ${buildEmailLogoImg(brand, logoUrl)}
               <h2>${user.email ? 'Confirm Email Address Change' : 'Confirm Your Email Address'}</h2>
-              <p>Hello ${user.username},</p>
+              <p>Hello ${escapeHtml(user.username)},</p>
               <p>${intro}</p>
               <p>To confirm this change, please click the button below:</p>
               <p><a href="${verificationLink}" class="button" style="display: inline-block; padding: 12px 24px; background-color: #1a82e2; color: #ffffff; text-decoration: none; border-radius: 4px; margin: 20px 0;">Confirm Email Change</a></p>

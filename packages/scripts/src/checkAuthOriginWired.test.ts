@@ -40,7 +40,7 @@ const FORWARDERS = new Map<string, string>([
     'Runs the queued quest-start body as-is; the invoke() that queued it set authOrigin.',
   ],
   [
-    'apps/client/server/queueHandlers/slackQuestProcessor.ts',
+    'apps/workers/src/queueHandlers/slackQuestProcessor.ts',
     'Runs the queued quest-start body as-is; the Slack invoke() that queued it set authOrigin.',
   ],
   [

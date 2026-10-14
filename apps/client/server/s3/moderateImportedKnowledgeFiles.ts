@@ -103,7 +103,7 @@ function isMissingObjectError(err: unknown): boolean {
  * Scan knowledge files an import just wrote, OUT OF BAND and post-commit. The self-host object-created
  * webhook also runs this for a single freshly landed upload. The import stamps every file `pending`
  * (the schema default) and returns here once its transaction has committed - the
- * natural S3 ObjectCreated scan (see server/s3/objectCreated.ts) fires at upload time, before the
+ * natural S3 ObjectCreated scan (see apps/workers/src/s3/objectCreated.ts) fires at upload time, before the
  * row exists inside the still-open import transaction, so it always bails; without this pass an
  * imported image would sit `pending` forever (unservable) which is why the import used to
  * mis-stamp it `clean` and bypass moderation entirely. The declared mimeType is attacker-supplied,
