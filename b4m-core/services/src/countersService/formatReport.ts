@@ -297,18 +297,15 @@ export const formatCustomSlackMessage = (
 
   // Quick Summary Section
   const activeModels = userActivity.topModels?.length || 0;
-  const activeUsers24h = userActivity.activeUsers24h || 0;
-
-  // Calculate DAU/WAU metrics
-  const dau = activeUsers24h; // Daily Active Users from last 24h
-  // externalUsers (staff excluded) so the ratio uses the same definition as DAU
-  const wau = userActivity.externalUsers || 0;
+  // externalUsers is the uncapped distinct non-staff count for the window (unlike topUsers, capped at 20)
+  const dau = userActivity.externalUsers || 0;
+  const wau = userActivity.weeklyActiveUsers || 0; // distinct non-staff users over the trailing 7 days
   const dauWauRatioNum = wau > 0 ? (dau / wau) * 100 : 0;
   const dauWauRatio = dauWauRatioNum.toFixed(1);
   const engagementHealth = dauWauRatioNum > 40 ? '🟢' : dauWauRatioNum > 25 ? '🟡' : dauWauRatioNum > 10 ? '🟠' : '🔴';
 
   sections.push('\n📊 *24-Hour Snapshot*');
-  sections.push(`• Active Users: *${activeUsers24h}* users`);
+  sections.push(`• Active Users (24h, excl. staff): *${dau}* users`);
   sections.push(`• Models Used: *${activeModels}* different models`);
   sections.push(
     `• Health Score: ${getHealthIndicator(overallChange)} ${overallChange > 0 ? '↑' : overallChange < 0 ? '↓' : '→'} ${Math.abs(overallChange).toFixed(1)}% from last week`
