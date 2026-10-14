@@ -210,4 +210,24 @@ describe('buildToolCallingReport', () => {
     expect(text).toContain('web_search: calls 1, success 100.0% (1/1)');
     expect(text).not.toContain('toolMode=unset');
   });
+
+  it('renders the n/a, not-offered and error branches, and orders segments smart, fast, unset', () => {
+    const text = formatToolCallingReport(
+      buildToolCallingReport(
+        [
+          { toolMode: 'smart', offeredTools: ['web_search'], functionCalls: [{ name: 'web_search' }] },
+          { toolMode: 'fast', offeredTools: ['web_search'], functionCalls: [ok('made_up_tool')] },
+          { offeredTools: [] },
+        ],
+        new Date('2026-10-14T00:00:00Z')
+      )
+    );
+
+    expect(text).toContain('success n/a');
+    expect(text).toContain('calls per turn: n/a');
+    expect(text).toContain('not-offered 1');
+    expect(text).toContain('errors: unrecorded 1');
+    expect(text.indexOf('toolMode=smart')).toBeLessThan(text.indexOf('toolMode=fast'));
+    expect(text.indexOf('toolMode=fast')).toBeLessThan(text.indexOf('toolMode=unset'));
+  });
 });
