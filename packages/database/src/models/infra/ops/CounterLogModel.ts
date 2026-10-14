@@ -289,38 +289,35 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
           },
         },
       ],
-      // Distinct non-staff active users over the report window. Deliberately has no $limit
-      // (unlike topUsers, which is a capped leaderboard) so DAU is not bounded by it.
-      activeUsers: [
-        {
-          $match: {
-            datetime: { $gte: weekStartDate, $lte: weekEndDate },
-          },
-        },
-        { $group: { _id: '$userId' } },
-        {
-          $addFields: {
-            userObjectId: { $convert: { input: '$_id', to: 'objectId', onError: null } },
-          },
-        },
-        {
-          $lookup: {
-            from: 'users',
-            localField: 'userObjectId',
-            foreignField: '_id',
-            as: 'user',
-          },
-        },
-        ...(internalStaffRegex
-          ? [
+      // Distinct non-staff users over the 7 days ending at the report window's end. Daily reports
+      // only: the weekly formatter never reads it. No $limit, unlike the topUsers leaderboard.
+      ...(isWeeklyReport
+        ? {}
+        : {
+            weeklyActiveUsers: [
               {
-                // user is a 0-or-1 element array; a missing user doc cannot match staff, so that user stays counted.
-                $match: { 'user.email': { $not: { $regex: internalStaffRegex } } },
+                $match: {
+                  datetime: { $gte: dayjs(weekEndDate).subtract(7, 'days').toDate(), $lte: weekEndDate },
+                },
               },
-            ]
-          : []),
-        { $count: 'count' },
-      ],
+              { $group: { _id: '$userId' } },
+              {
+                $addFields: {
+                  userObjectId: { $convert: { input: '$_id', to: 'objectId', onError: null } },
+                },
+              },
+              {
+                $lookup: {
+                  from: 'users',
+                  localField: 'userObjectId',
+                  foreignField: '_id',
+                  as: 'user',
+                },
+              },
+              ...(internalStaffRegex ? [{ $match: { $nor: [{ 'user.email': { $regex: internalStaffRegex } }] } }] : []),
+              { $count: 'count' },
+            ],
+          }),
       // Model usage tracking - different for daily and weekly reports
       topModels: isWeeklyReport
         ? [
@@ -984,7 +981,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
           lastMonth: facetData.lastMonth || [],
           allUsers: facetData.allUsers || [],
           internalUsers: facetData.internalUsers || [],
-          activeUsers: facetData.activeUsers || [],
+          weeklyActiveUsers: facetData.weeklyActiveUsers || [],
           topUsers: facetData.topUsers || [],
           topModels: facetData.topModels || [],
           topOrganizations: facetData.topOrganizations || [],
