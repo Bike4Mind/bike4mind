@@ -73,6 +73,7 @@ import { startQuestHeartbeat } from './questHeartbeat';
 import { validateUserCredits as validateImageUserCredits } from './tools/base/utils';
 import { getQuestErrorCode } from '@bike4mind/common';
 import { recordGeneratedImages } from './recordGeneratedImages';
+import { saveGeneratedImage, type SaveGeneratedAssetFn } from './saveGeneratedImage';
 
 // Bounded wait at the mask gate for a scan still in flight: the client's on-demand call returned
 // 'pending', or the S3 event owns the claim ('scanning'). Both values are in ms.
@@ -105,6 +106,8 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   // through this schema, and an undeclared key is stripped before it reaches process().
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   image: z.string(),
+  /** Minted per invoke(); see ImageGenerationBodySchema.generationId. */
+  generationId: z.string().optional(),
   // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
   // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
   // accepted and ignored, never billed. Narrowing it to 1 here would 400 an API-key caller whose
@@ -140,6 +143,8 @@ interface IImageEditServiceOptions {
   /** Storage where the generated images will be stored. */
   storage: BaseStorage;
   fabFileStorage: BaseStorage;
+  /** Keeps the edited image in the user's files. Required so the app factory cannot silently drop it. */
+  saveGeneratedAsset: SaveGeneratedAssetFn;
   /** Lambda function name for image processing (from SST Resource.ImageProcessor.name) */
   imageProcessorLambdaName?: string;
   /** Checks an edited image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
@@ -165,6 +170,7 @@ export class ImageEditService {
   private abilityGetter: IImageEditServiceOptions['abilityGetter'];
   private storage: BaseStorage;
   private fabFileStorage: BaseStorage;
+  private saveGeneratedAsset: SaveGeneratedAssetFn;
   private deleteFabFile: IImageEditServiceOptions['deleteFabFile'];
   private tokenizer: TiktokenTokenizer;
   private imageProcessorLambdaName?: string;
@@ -178,6 +184,7 @@ export class ImageEditService {
     this.logEvent = options.logEvent;
     this.storage = options.storage;
     this.fabFileStorage = options.fabFileStorage;
+    this.saveGeneratedAsset = options.saveGeneratedAsset;
     this.abilityGetter = options.abilityGetter;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
     this.imageModerationService = options.imageModerationService;
@@ -280,6 +287,7 @@ export class ImageEditService {
           sessionId: session.id,
           fabFileIds,
           organizationId,
+          generationId: uuidv4(),
         })
       );
     } catch (error) {
@@ -455,6 +463,7 @@ export class ImageEditService {
       quality,
       image: sourceImageUrl,
       organizationId,
+      generationId,
     } = ImageEditBodySchema.parse(body);
     // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
     // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
@@ -784,7 +793,7 @@ export class ImageEditService {
 
       const buffer = await downloadImageAsBuffer(result);
       const fileType = await fileTypeFromBuffer(buffer);
-      const filename = `${uuidv4()}.${fileType?.ext}`;
+      const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
 
       await moderateImageOrThrow({
         service: this.imageModerationService,
@@ -903,6 +912,26 @@ export class ImageEditService {
           })
           .catch(err => logger.warn('Failed to record usage event', err));
       }
+
+      // Last, so a run that fails anywhere above (quest update, billing) leaves no file.
+      await saveGeneratedImage(
+        this.saveGeneratedAsset,
+        {
+          userId,
+          bytes: buffer,
+          contentType: fileType?.mime ?? 'image/png',
+          generation: {
+            generator: 'image',
+            provider,
+            modelId: model,
+            ...(generationId && { jobId: generationId }),
+            prompt,
+          },
+          sessionId,
+          questId,
+        },
+        logger
+      );
     } catch (error) {
       Logger.globalInstance.log(error);
       quest.reply = (error as Error).message;

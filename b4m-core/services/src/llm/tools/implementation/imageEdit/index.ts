@@ -36,6 +36,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { recordGeneratedImages } from '../../../recordGeneratedImages';
+import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
 
 async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
   try {
@@ -202,21 +203,32 @@ async function moderateToolImage(
   });
 }
 
+/**
+ * `model` is the one the moderation incident records (see the provider note in the tool body); `modelId` is the
+ * model that rendered the image, recorded as its provenance in the user's files.
+ */
 export async function processAndStoreImage(
   imageUrl: string,
   context: ToolContext,
-  model: string,
-  provider: string
+  { model, provider, prompt, modelId }: { model: string; provider: string; prompt: string; modelId: string }
 ): Promise<string> {
   const buffer = await downloadImageAsBuffer(imageUrl);
   const fileType = await fileTypeFromBuffer(buffer);
-  const filename = `${uuidv4()}.${fileType?.ext}`;
+  // Same fallback as the image_generation tool: never store a `${uuid}.undefined` key.
+  const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
   const mimeType = fileType?.mime ?? 'image/png';
 
   // Block moderated content BEFORE upload - see moderateToolImage doc comment.
   await moderateToolImage(context, buffer, mimeType, model, provider);
 
   const path = await context.imageGenerateStorage.upload(buffer, filename, {});
+
+  // A failed save resolves with a reason rather than throwing, so it never blocks the edited image.
+  await saveGeneratedAssetFromTool(context, {
+    bytes: buffer,
+    contentType: mimeType,
+    generation: { generator: 'image', provider, modelId, jobId: uuidv4(), prompt },
+  });
 
   return path;
 }
@@ -434,12 +446,12 @@ Please select a supported edit model in your image settings modal.`;
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(
-              editResponse.dataUrl,
-              context,
-              generationModel,
-              provider
-            );
+            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, {
+              model: generationModel,
+              provider,
+              prompt,
+              modelId: bflModel,
+            });
 
             return updateQuestAndReturnMarkdown(storedImagePath, context);
           }
@@ -490,12 +502,12 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(
-              editResponse.dataUrl,
-              context,
-              generationModel,
-              provider
-            );
+            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, {
+              model: generationModel,
+              provider,
+              prompt,
+              modelId: editModel,
+            });
 
             return updateQuestAndReturnMarkdown(storedImagePath, context);
           }
@@ -538,12 +550,12 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(
-              editResponse.dataUrl,
-              context,
-              generationModel,
-              provider
-            );
+            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, {
+              model: generationModel,
+              provider,
+              prompt,
+              modelId: editModel,
+            });
 
             return updateQuestAndReturnMarkdown(storedImagePath, context);
           }
