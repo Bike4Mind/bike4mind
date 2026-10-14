@@ -45,6 +45,19 @@ describe('collectDagChildArtifactBlocks', () => {
     expect(blocks).toEqual([artifact('report', '<p>first</p>'), artifact('report', '<p>second</p>')]);
   });
 
+  it('does not read a promoted fence as an explicit id the parent used', () => {
+    // The parent's "sales-chart" is model-written; the child's same id is title-derived by promotion.
+    // Only an explicit id is an identity the parent can adopt, so the child's fence is a distinct card.
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: `Mine:\n${artifact('sales-chart', '<p>mine</p>')}`,
+      childAnswers: [
+        'Child:\n```html\n<!DOCTYPE html><html><head><title>Sales Chart</title></head><body>hi</body></html>\n```',
+      ],
+    });
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toContain('identifier="sales-chart"');
+  });
+
   it('keeps two children whose different untitled scripts share a promoted id', () => {
     const script = (n: number) => `\`\`\`python\nimport os\nx = ${n}\nprint(x)\n\`\`\``;
     const blocks = collectDagChildArtifactBlocks({
