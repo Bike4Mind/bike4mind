@@ -1,4 +1,9 @@
-import { CliCompletionRequestAction, buildSSEEvent, IMessage, type CompletionSource } from '@bike4mind/common';
+import {
+  CliCompletionRequestAction,
+  buildCompletionStreamEvent,
+  IMessage,
+  type CompletionSource,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import {
@@ -166,7 +171,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         if (info?.outputTokens) finalOutputTokens = info.outputTokens;
         if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
-        const chunk = buildSSEEvent(text, info);
+        const chunk = buildCompletionStreamEvent(text, info);
         await sendToConnection(connectionId, endpoint, {
           action: 'cli_completion_chunk' as const,
           requestId,

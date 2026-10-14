@@ -119,7 +119,13 @@ describe('buildOpenApiDocument', () => {
   it('documents every pre-stream completions failure as a JSON error with a real status', () => {
     const json = (status: string) => completions.responses[status].content['application/json'].schema;
     expect(json('400')).toEqual(ref('createCompletionResponse400'));
-    expect(doc.components.schemas.createCompletionResponse400.properties.errorCode.enum).toEqual(['unknown_model']);
+    expect(doc.components.schemas.createCompletionResponse400.properties.errorCode.enum).toEqual([
+      'unknown_model',
+      'tool_search_unsupported',
+      'all_tools_deferred',
+      'deferred_tool_cache_control',
+      'unknown_tool_reference',
+    ]);
     expect(json('413')).toEqual(ref('ErrorResponse'));
     expect(json('422')).toEqual(ref('createCompletionResponse422'));
     expect(doc.components.schemas.createCompletionResponse422.properties.errorCode).toBeDefined();

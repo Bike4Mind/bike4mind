@@ -599,19 +599,26 @@ export type IVoiceCreditsExhaustedAction = z.infer<typeof VoiceCreditsExhaustedA
 export const CliCompletionChunkAction = z.object({
   action: z.literal('cli_completion_chunk'),
   requestId: z.string(),
-  chunk: z.object({
-    type: z.enum(['content', 'tool_use']),
-    text: z.string(),
-    toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
-    tools: z.array(z.unknown()).optional(),
-    usage: z
-      .object({
-        inputTokens: z.number().optional(),
-        outputTokens: z.number().optional(),
-      })
-      .optional(),
-    thinking: z.array(z.unknown()).optional(),
-  }),
+  chunk: z.union([
+    z.object({
+      type: z.enum(['content', 'tool_use']),
+      text: z.string(),
+      toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
+      tools: z.array(z.unknown()).optional(),
+      usage: z
+        .object({
+          inputTokens: z.number().optional(),
+          outputTokens: z.number().optional(),
+        })
+        .optional(),
+      thinking: z.array(z.unknown()).optional(),
+    }),
+    z.object({
+      type: z.literal('provider_block'),
+      provider: z.literal('anthropic'),
+      block: z.record(z.string(), z.unknown()),
+    }),
+  ]),
 });
 export type ICliCompletionChunkAction = z.infer<typeof CliCompletionChunkAction>;
 

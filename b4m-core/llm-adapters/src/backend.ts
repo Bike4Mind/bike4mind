@@ -15,6 +15,8 @@ import {
   type ResponseFormat,
   type StreamChannel,
   type ToolStarted,
+  type ToolSearchServerTool,
+  type ProviderBlock,
 } from '@bike4mind/common';
 import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 import type { RecordableToolUse } from './recordToolResult';
@@ -113,6 +115,8 @@ export interface ICompletionOptionTools {
       required?: string[];
     };
     strict?: boolean;
+    /** Anthropic tool search; set only by the completions path, which drops it for every other adapter. */
+    defer_loading?: boolean;
   };
   _isMcpTool?: boolean; // Flag to identify MCP tools (enables tool chaining for MCP only)
   /**
@@ -145,6 +149,11 @@ export interface ICompletionOptions {
   bestOf?: number;
   logitBias?: { [key: string]: number };
   tools: ICompletionOptionTools[];
+  /**
+   * Provider-run tools sent verbatim after `tools` (direct Anthropic only; see completionsSupportsToolSearch).
+   * Never executed locally: their blocks come back as CompletionInfo.providerBlock.
+   */
+  providerTools?: ToolSearchServerTool[];
   /** If false, backend returns tool calls without executing (for CLI). Default: true */
   executeTools?: boolean;
   /**
@@ -335,6 +344,8 @@ export type CompletionInfo = {
   channel?: StreamChannel;
   /** A tool call the provider has just opened; see CompletionInfo.toolStarted in @bike4mind/common. */
   toolStarted?: ToolStarted;
+  /** A provider-run block for the caller to echo back; see CompletionInfo.providerBlock in @bike4mind/common. */
+  providerBlock?: ProviderBlock;
   inputTokens?: number;
   outputTokens?: number;
   creditsUsed?: number;

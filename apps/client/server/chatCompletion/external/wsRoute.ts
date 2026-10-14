@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Express } from 'express';
 import {
   CompletionRequestSchema,
-  buildSSEEvent,
+  buildCompletionStreamEvent,
   IMessage,
   normalizeCompletionRequest,
   resolveRequestClient,
@@ -216,7 +216,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
               if (info?.outputTokens) finalOutputTokens = info.outputTokens;
               if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
-              const chunk = buildSSEEvent(text, info);
+              const chunk = buildCompletionStreamEvent(text, info);
               await sendToConnections({
                 action: 'cli_completion_chunk' as const,
                 requestId,

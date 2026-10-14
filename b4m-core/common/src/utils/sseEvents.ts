@@ -77,7 +77,17 @@ export interface SSEMetaEvent {
   requestId: string;
 }
 
-export type SSEEvent = SSEContentEvent | SSEErrorEvent | SSEMetaEvent;
+/** A provider content block to echo back verbatim; see CompletionProviderBlockEventSchema. */
+export interface ProviderBlock {
+  provider: 'anthropic';
+  block: Record<string, unknown>;
+}
+
+export interface SSEProviderBlockEvent extends ProviderBlock {
+  type: 'provider_block';
+}
+
+export type SSEEvent = SSEContentEvent | SSEErrorEvent | SSEMetaEvent | SSEProviderBlockEvent;
 
 export interface CompletionInfo {
   toolsUsed?: Array<{
@@ -122,6 +132,23 @@ export interface CompletionInfo {
    * what is coming instead of showing a silence. Carries no text.
    */
   toolStarted?: ToolStarted;
+  /**
+   * Set, alone, on the frame an adapter emits for a provider-run block (Anthropic tool search).
+   * The completions routes send it as its own `provider_block` event via buildProviderBlockEvent.
+   */
+  providerBlock?: ProviderBlock;
+}
+
+export function buildProviderBlockEvent(providerBlock: ProviderBlock): SSEProviderBlockEvent {
+  return { type: 'provider_block', provider: providerBlock.provider, block: providerBlock.block };
+}
+
+/** The completions frame for one adapter callback: a provider block frame when it carries one, else buildSSEEvent. */
+export function buildCompletionStreamEvent(
+  text: (string | null | undefined)[],
+  info?: CompletionInfo
+): SSEContentEvent | SSEProviderBlockEvent {
+  return info?.providerBlock ? buildProviderBlockEvent(info.providerBlock) : buildSSEEvent(text, info);
 }
 
 /**

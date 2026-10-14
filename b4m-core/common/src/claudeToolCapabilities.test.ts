@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { supportsToolChanges, supportsToolSearch } from './claudeToolCapabilities';
+import {
+  completionsSupportsToolChanges,
+  completionsSupportsToolSearch,
+  supportsToolChanges,
+  supportsToolSearch,
+} from './claudeToolCapabilities';
 import { CHAT_MODELS, ChatModels, isClaudeModelId, ModelBackend } from './models';
 
 // [tool search, tool changes]. Every Claude id in ChatModels must be listed, so a new one forces a decision.
@@ -98,5 +103,52 @@ describe('supportsToolSearch / supportsToolChanges', () => {
     expect(flags(ChatModels.GPT4o, ModelBackend.OpenAI)).toEqual([false, false]);
     expect(flags(ChatModels.GEMINI_2_5_PRO, ModelBackend.Gemini)).toEqual([false, false]);
     expect(flags(ChatModels.DEEPSEEK_R1_BEDROCK, ModelBackend.Bedrock)).toEqual([false, false]);
+  });
+});
+
+describe('completionsSupportsToolSearch / completionsSupportsToolChanges', () => {
+  const completionsFlags = (model: Parameters<typeof completionsSupportsToolSearch>[0]) => [
+    completionsSupportsToolSearch(model),
+    completionsSupportsToolChanges(model),
+  ];
+
+  it('is true only where the direct Anthropic adapter serves the model', () => {
+    expect(completionsFlags({ id: ChatModels.CLAUDE_5_5_OPUS, backend: ModelBackend.Anthropic })).toEqual([true, true]);
+    expect(completionsFlags({ id: ChatModels.CLAUDE_5_SONNET, backend: ModelBackend.Anthropic })).toEqual([
+      true,
+      false,
+    ]);
+  });
+
+  it('is false for a Bedrock row the model predicate accepts', () => {
+    expect(flags(ChatModels.CLAUDE_5_5_OPUS_BEDROCK)).toEqual([true, true]);
+    expect(completionsFlags({ id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock })).toEqual([
+      false,
+      false,
+    ]);
+  });
+
+  it('follows adapterFamily over backend, as getLlmByModel dispatches', () => {
+    const id = 'claude-opus-5-5';
+    expect(completionsFlags({ id, backend: ModelBackend.Bedrock, adapterFamily: 'anthropic-messages' })).toEqual([
+      true,
+      true,
+    ]);
+    expect(completionsFlags({ id, backend: ModelBackend.Anthropic, adapterFamily: 'bedrock-anthropic' })).toEqual([
+      false,
+      false,
+    ]);
+    expect(completionsFlags({ id, backend: ModelBackend.Anthropic, adapterFamily: 'anthropic-messages' })).toEqual([
+      true,
+      true,
+    ]);
+  });
+
+  it('is false for unsupported Claude models and non-Claude models', () => {
+    expect(completionsFlags({ id: ChatModels.CLAUDE_4_1_OPUS, backend: ModelBackend.Anthropic })).toEqual([
+      false,
+      false,
+    ]);
+    expect(completionsFlags({ id: ChatModels.GPT4o, backend: ModelBackend.OpenAI })).toEqual([false, false]);
   });
 });

@@ -17,7 +17,9 @@ import {
   PermissionDeniedError,
   REFUSAL_FALLBACK_MODELS,
   supportsForcedToolChoice,
+  TOOL_SEARCH_BLOCK_TYPES,
   type ModelInfo,
+  type ToolSearchServerTool,
 } from '@bike4mind/common';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
@@ -907,6 +909,7 @@ export class AnthropicBackend implements ICompletionBackend {
         {
           ...options,
           tools: undefined,
+          providerTools: undefined,
           // Reset a caller-forced tool_choice to 'auto' on recursion so it can't
           // persist past the first turn. (Tools are dropped here and tool_choice is
           // only applied when tools are present, so this is just an explicit invariant.)
@@ -1072,6 +1075,7 @@ export class AnthropicBackend implements ICompletionBackend {
     // explicitly enables thinking, so a flat fallback starved every in-process caller that
     // names no budget (agent mode, subagents) and truncated the visible answer.
     const currentModelInfo = this.modelRecordFor(model);
+    const hasCallerTools = !!options.tools?.length || !!options.providerTools?.length;
 
     const apiParams: ExtendedMessageCreateParams = {
       model,
@@ -1110,7 +1114,7 @@ export class AnthropicBackend implements ICompletionBackend {
       // to one or the other depending on input type, so widen here.
       system: system as ExtendedMessageCreateParams['system'],
       ...(this.omitsTopK(model) ? {} : { top_k: options.topK }),
-      ...(options.tools?.length ? { tools: this.formatTools(options.tools) } : {}),
+      ...(hasCallerTools ? { tools: this.formatTools(options.tools, options.providerTools) } : {}),
       // Attribute the request to the end user (opaque, non-PII) so Anthropic can
       // scope abuse enforcement to them instead of the shared platform key.
       // Applies to both the streaming and non-streaming messages.create() calls
@@ -1125,7 +1129,7 @@ export class AnthropicBackend implements ICompletionBackend {
     // Skip if the caller is already using their own tools (let those take
     // precedence; mixing forced-tool with executable tools can deadlock).
     const responseFormat = options.responseFormat;
-    const wantsJsonSchema = responseFormat?.type === 'json_schema' && !options.tools?.length;
+    const wantsJsonSchema = responseFormat?.type === 'json_schema' && !hasCallerTools;
     const usingResponseFormatToolUse = wantsJsonSchema && forcedToolChoiceSupported;
     // A model without forced tool use gets native structured outputs instead of the synthesized tool,
     // unless a document asks for citations (that pairing is a 400) or the schema is one structured
@@ -1169,8 +1173,8 @@ export class AnthropicBackend implements ICompletionBackend {
       apiParams.tool_choice = { type: 'tool', name: responseFormat.json_schema.name };
     }
 
-    if (options.tools?.length) {
-      apiParams.tools = this.formatTools(options.tools);
+    if (hasCallerTools) {
+      apiParams.tools = this.formatTools(options.tools, options.providerTools);
 
       if (downgradedToolChoice) {
         apiParams.tool_choice = { type: 'auto' };
@@ -1462,6 +1466,8 @@ export class AnthropicBackend implements ICompletionBackend {
               // input_json_delta events on these indices stream as text content
               // rather than being collected as a tool call.
               const responseFormatToolIndices = new Set<number>();
+              // Raw input JSON of each server_tool_use block, by content-block index.
+              const serverToolInputJson = new Map<number, string>();
 
               // Degeneration guard: watches emitted text for a stream that has
               // stopped making progress and is just repeating itself. Aborts the
@@ -1581,6 +1587,21 @@ export class AnthropicBackend implements ICompletionBackend {
                         };
                         await cb([], { toolsUsed, toolStarted: { name: toolBlock.name, id: toolBlock.id } });
                       }
+                    } else if ('content_block' in event && isProviderBlock(event.content_block)) {
+                      collectedContent[event.index] = { ...event.content_block };
+                      if (event.content_block.type === 'server_tool_use') {
+                        // Its input streams as input_json_delta; surfaced at content_block_stop once whole.
+                        serverToolInputJson.set(event.index, '');
+                      } else {
+                        await cb([], {
+                          providerBlock: { provider: 'anthropic', block: collectedContent[event.index] },
+                        });
+                      }
+                    } else if ('content_block' in event && event.content_block.type === 'text') {
+                      // Citations are not kept: the replayed turn only needs the text.
+                      collectedContent[event.index] = { type: 'text', text: event.content_block.text };
+                    } else if ('content_block' in event && event.content_block.type === 'redacted_thinking') {
+                      collectedContent[event.index] = { ...event.content_block };
                     }
                   } else if (event.type === 'content_block_delta') {
                     if ('delta' in event && event.delta.type === 'thinking_delta') {
@@ -1597,6 +1618,8 @@ export class AnthropicBackend implements ICompletionBackend {
                       streamedText[event.index] = reasoningEscaper.push(thinkingText);
                       await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
+                      const textBlock = collectedContent[event.index];
+                      if (textBlock?.type === 'text') textBlock.text = `${textBlock.text}${event.delta.text}`;
                       streamedText[event.index] = event.delta.text;
                       streamedRoundText += event.delta.text;
                       checkDegenerate(event.delta.text);
@@ -1619,6 +1642,10 @@ export class AnthropicBackend implements ICompletionBackend {
                             responseFormatMode: 'tool_use',
                           });
                         }
+                      } else if (serverToolInputJson.has(event.index)) {
+                        const partial = event.delta.partial_json || '';
+                        serverToolInputJson.set(event.index, serverToolInputJson.get(event.index) + partial);
+                        checkDegenerate(partial);
                       } else {
                         // Handle tool input JSON delta
                         if (func[event.index]) {
@@ -1667,6 +1694,24 @@ export class AnthropicBackend implements ICompletionBackend {
                           collectedContent[event.index].input = {};
                         }
                       }
+                    } else if (serverToolInputJson.has(event.index)) {
+                      const block = collectedContent[event.index];
+                      const inputJson = serverToolInputJson.get(event.index);
+                      if (inputJson) {
+                        try {
+                          block.input = JSON.parse(inputJson);
+                        } catch (e) {
+                          this.logger.warn(
+                            '[AnthropicBackend] Malformed server tool input JSON at content_block_stop',
+                            {
+                              model,
+                              toolName: block.name,
+                              error: e instanceof Error ? e.message : String(e),
+                            }
+                          );
+                        }
+                      }
+                      await cb([], { providerBlock: { provider: 'anthropic', block } });
                     }
                   } else if (this.isToolUseEvent(event)) {
                     // Handle legacy tool use events (keeping for backward compatibility)
@@ -1804,11 +1849,14 @@ export class AnthropicBackend implements ICompletionBackend {
                 return;
               }
 
-              // Store the collected content if we have tools. The accumulator holds
-              // content-block-shaped objects built from the stream; bridge to the typed
-              // ContentBlock[] at this boundary.
-              if (this.isThinkingEnabled && collectedContent.length > 0) {
-                this.lastAssistantContent = collectedContent.filter(c => c != null) as unknown as ContentBlock[];
+              // Store the collected content regardless of thinking: server tool blocks must be
+              // replayed too (see pushToolMessages). The accumulator holds content-block-shaped
+              // objects built from the stream; bridge to the typed ContentBlock[] at this boundary.
+              // Empty text blocks are dropped because the API rejects them on replay.
+              if (collectedContent.length > 0) {
+                this.lastAssistantContent = collectedContent.filter(
+                  c => c != null && !(c.type === 'text' && !c.text)
+                ) as unknown as ContentBlock[];
               }
 
               // Extract cache stats if caching was enabled and usage info is available
@@ -2345,14 +2393,15 @@ export class AnthropicBackend implements ICompletionBackend {
         const streamedText: string[] = [];
 
         if ('content' in response && Array.isArray(response.content)) {
-          // Store the complete assistant content if thinking is enabled
-          if (this.isThinkingEnabled) {
-            this.lastAssistantContent = response.content as ContentBlock[];
-          }
+          this.lastAssistantContent = response.content as ContentBlock[];
 
           for (let i = 0; i < response.content.length; i++) {
             const content = response.content[i] as ContentBlock;
-            if ('text' in content) {
+            if (isProviderBlock(content)) {
+              // Flush the text so far first, so the caller sees blocks and text in response order.
+              if (streamedText.length > 0) await cb(streamedText.splice(0), { toolsUsed });
+              await cb([], { providerBlock: { provider: 'anthropic', block: { ...content } } });
+            } else if ('text' in content) {
               streamedText.push(content.text);
               // Log each text block for debugging
               this.logger.debug('[AnthropicBackend] Text block extracted', {
@@ -2796,8 +2845,8 @@ export class AnthropicBackend implements ICompletionBackend {
     }
   }
 
-  formatTools(tools: ICompletionOptionTools[] = []) {
-    return tools.map(tool => {
+  formatTools(tools: ICompletionOptionTools[] = [], providerTools: ToolSearchServerTool[] = []) {
+    const customTools = tools.map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
       // `strict` is an OpenAI-only tool field. Anthropic rejects it with
       // "tools.N.custom.strict: Extra inputs are not permitted", so strip it from the
@@ -2808,6 +2857,8 @@ export class AnthropicBackend implements ICompletionBackend {
         input_schema: parameters,
       };
     });
+    if (providerTools.length === 0) return customTools;
+    return [...customTools, ...providerTools];
   }
 
   /**
@@ -2844,9 +2895,27 @@ export class AnthropicBackend implements ICompletionBackend {
   }
 
   pushToolMessages(messages: IMessage[], tool: IChoiceEndToolUse['tool'], result: string, thinkingBlocks?: unknown[]) {
-    // If thinking is enabled and we have the original assistant content, use it
-    if (this.isThinkingEnabled && this.lastAssistantContent.length > 0) {
-      // Include ALL content blocks: thinking (with signature) + tool_use
+    const replaysAssistantContent =
+      this.lastAssistantContent.length > 0 &&
+      (this.isThinkingEnabled || this.lastAssistantContent.some(isProviderBlock));
+    const toolResult = { type: 'tool_result' as const, tool_use_id: tool.id, content: result };
+    const previousTurn = messages[messages.length - 2];
+    const previousResults = messages[messages.length - 1];
+    // A parallel call's result joins the turn already replayed for its sibling: replaying the
+    // assistant content again would repeat every tool_use (and server block) in it.
+    if (
+      replaysAssistantContent &&
+      previousTurn?.content === (this.lastAssistantContent as unknown) &&
+      previousResults?.role === 'user' &&
+      Array.isArray(previousResults.content)
+    ) {
+      (previousResults.content as unknown[]).push(toolResult);
+      return;
+    }
+
+    // Replay the original assistant content when thinking is on or it carries server tool blocks
+    if (replaysAssistantContent) {
+      // Include ALL content blocks, in order: thinking (with signature), text, server blocks, tool_use.
       // When thinking is enabled, Anthropic API REQUIRES assistant messages with tool_use
       // to start with a thinking block. The signature field is cryptographic but must be
       // passed back unmodified for validation.
@@ -2859,7 +2928,7 @@ export class AnthropicBackend implements ICompletionBackend {
       });
 
       this.logger.debug(
-        `[AnthropicBackend] Including ${this.lastAssistantContent.length} content blocks (thinking + tool_use) in assistant message`
+        `[AnthropicBackend] Including ${this.lastAssistantContent.length} original content blocks in assistant message`
       );
     } else if (thinkingBlocks && thinkingBlocks.length > 0) {
       // Thinking blocks passed explicitly (e.g., from ReActAgent which uses executeTools: false)
@@ -2916,16 +2985,7 @@ export class AnthropicBackend implements ICompletionBackend {
       });
     }
 
-    messages.push({
-      role: 'user',
-      content: [
-        {
-          type: 'tool_result',
-          tool_use_id: tool.id,
-          content: result,
-        },
-      ],
-    });
+    messages.push({ role: 'user', content: [toolResult] });
   }
 
   replaceLastToolResultObservation(messages: IMessage[], toolCallId: string, newObservation: string): void {
@@ -3095,6 +3155,11 @@ export class AnthropicBackend implements ICompletionBackend {
       'id' in event
     );
   }
+}
+
+// Replayed verbatim and surfaced to the caller, never executed.
+function isProviderBlock(block: { type?: string } | null | undefined): boolean {
+  return !!block?.type && TOOL_SEARCH_BLOCK_TYPES.has(block.type);
 }
 
 export const extractThinkContent = (reply: string, isStreaming?: boolean): string[] => {

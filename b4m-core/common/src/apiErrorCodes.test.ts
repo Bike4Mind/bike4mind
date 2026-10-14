@@ -7,7 +7,7 @@ import {
 } from './apiErrorCodes';
 import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
-import { CompletionSseErrorEventSchema } from './schemas/cliCompletions';
+import { COMPLETION_TOOL_ERROR_CODES, CompletionSseErrorEventSchema } from './schemas/cliCompletions';
 import { VIDEO_GENERATION_API_ERROR_CODES, VIDEO_JOB_PUBLIC_ERROR_CODES } from './schemas/videoGenerations';
 import { DECISIONS_ERROR_CODES } from './schemas/decisions';
 import { STORAGE_ERROR_CODES } from './errors';
@@ -43,6 +43,7 @@ describe('API_ERROR_CODES', () => {
       VIDEO_JOB_PUBLIC_ERROR_CODES,
       DECISIONS_ERROR_CODES,
       STORAGE_ERROR_CODES,
+      COMPLETION_TOOL_ERROR_CODES,
     ];
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
     // AGENT_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/agents/createAgent.test.ts.

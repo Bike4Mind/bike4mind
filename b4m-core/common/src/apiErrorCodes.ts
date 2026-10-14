@@ -70,6 +70,15 @@ export const API_ERROR_CODES = [
   'org_storage_limit_exceeded',
   /** The file is larger than the platform's per-file size limit. */
   'file_too_large',
+  // Completions tool search (POST /api/ai/v1/completions); see COMPLETION_TOOL_ERROR_CODES.
+  /** A tool search server tool, `tool_reference` or tool search block was sent for a model that cannot serve it here. */
+  'tool_search_unsupported',
+  /** Every tool had `defer_loading: true` and no server tool was sent, so nothing would be loaded. */
+  'all_tools_deferred',
+  /** A deferred tool also carried `cache_control`, which the provider rejects. */
+  'deferred_tool_cache_control',
+  /** A `tool_reference` named a tool that is not in the request's `tools`. */
+  'unknown_tool_reference',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
