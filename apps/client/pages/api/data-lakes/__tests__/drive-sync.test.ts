@@ -45,16 +45,16 @@ vi.mock('@server/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => (h.gatedFlags.push(flag), () => {}),
 }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
-// common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: mirror BOTH arms of
-// the real isTerminalDriveGrantError (BadRequestError, or Google's invalid_grant) instead.
-vi.mock('@server/integrations/google/drive/common', async () => {
-  const { BadRequestError } = await import('@server/utils/errors');
-  return {
-    getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
-    isTerminalDriveGrantError: (e: unknown) =>
-      e instanceof BadRequestError || (e instanceof Error && e.message === 'invalid_grant'),
-  };
-});
+// common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: take the real
+// isTerminalDriveGrantError from its Config-free module instead.
+vi.mock('@server/integrations/google/drive/common', async () => ({
+  getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
+  isTerminalDriveGrantError: (
+    await vi.importActual<typeof import('@server/integrations/google/drive/driveGrantErrors')>(
+      '@server/integrations/google/drive/driveGrantErrors'
+    )
+  ).isTerminalDriveGrantError,
+}));
 // Keep isValidDriveFolderId real (the folder-id validation runs for real); mock only the Drive calls.
 vi.mock('@server/integrations/google/drive/driveClient', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>();
@@ -269,6 +269,23 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
       expect(h.connUpdateHealth).toHaveBeenCalledWith('conn1', { status: 'credential_error', lastError: REVOKED });
       expect(h.sendToQueue).not.toHaveBeenCalled();
       expect(h.connCreate).not.toHaveBeenCalled();
+    });
+
+    it('marks credential_error on a raw Google invalid_grant body, not only on a BadRequestError', async () => {
+      const gaxiosInvalidGrant = Object.assign(new Error('Request failed with status code 400'), {
+        response: { status: 400, data: { error: 'invalid_grant' } },
+      });
+      h.getFolderAccess.mockResolvedValue({ ok: false, reason: 'unauthorized' });
+      h.getValidUserDriveAccessToken.mockResolvedValueOnce('stale-token').mockRejectedValueOnce(gaxiosInvalidGrant);
+      const { res } = makeRes();
+
+      const failure = await run(makeReq(body), res).catch((e: unknown) => e);
+
+      expect(failure).toBe(gaxiosInvalidGrant);
+      expect(h.connUpdateHealth).toHaveBeenCalledWith('conn1', {
+        status: 'credential_error',
+        lastError: 'Request failed with status code 400',
+      });
     });
 
     it('rethrows a transient forced-refresh failure as-is and does not mark the connection', async () => {

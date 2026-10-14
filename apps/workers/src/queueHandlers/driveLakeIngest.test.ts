@@ -164,18 +164,18 @@ vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false })
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
-// common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: mirror BOTH arms of
-// the real isTerminalDriveGrantError (a server BadRequestError, or Google's invalid_grant) instead.
-vi.mock('@server/integrations/google/drive/common', async () => {
-  const { BadRequestError: ServerBadRequestError } = await import('@server/utils/errors');
-  return {
-    getValidConnectionDriveAccessToken: h.getValidConnectionDriveAccessToken,
-    disableDriveConnectionForLake: h.disableDriveConnectionForLake,
-    releaseDriveConnection: h.releaseDriveConnection,
-    isTerminalDriveGrantError: (e: unknown) =>
-      e instanceof ServerBadRequestError || (e instanceof Error && e.message === 'invalid_grant'),
-  };
-});
+// common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: take the real
+// isTerminalDriveGrantError from its Config-free module instead.
+vi.mock('@server/integrations/google/drive/common', async () => ({
+  getValidConnectionDriveAccessToken: h.getValidConnectionDriveAccessToken,
+  disableDriveConnectionForLake: h.disableDriveConnectionForLake,
+  releaseDriveConnection: h.releaseDriveConnection,
+  isTerminalDriveGrantError: (
+    await vi.importActual<typeof import('@server/integrations/google/drive/driveGrantErrors')>(
+      '@server/integrations/google/drive/driveGrantErrors'
+    )
+  ).isTerminalDriveGrantError,
+}));
 // isFolder/isValidDriveFolderId etc. stay real (classifyDriveChanges depends on the real isFolder),
 // and so does isDriveRateLimitError - the throttle deferrals below are exactly the behaviour a
 // stubbed predicate would fake away. Only the network-touching calls are mocked.
@@ -2680,6 +2680,26 @@ describe('driveLakeIngest consumer', () => {
           expect.anything(),
           'needs_reconnect'
         );
+      });
+
+      it('treats a revoked-scope 403 like a 401: one forced refresh, then credential_error', async () => {
+        const scopeRevoked = () =>
+          Object.assign(new Error('Insufficient Permission'), {
+            code: 403,
+            errors: [{ reason: 'insufficientPermissions' }],
+          });
+        h.probeConnectedFolder.mockRejectedValueOnce(scopeRevoked()).mockRejectedValueOnce(scopeRevoked());
+
+        await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+        expect(h.getValidConnectionDriveAccessToken).toHaveBeenLastCalledWith('conn1', expect.anything(), {
+          forceRefresh: true,
+        });
+        expect(h.updateHealth).toHaveBeenCalledWith('conn1', {
+          status: 'credential_error',
+          lastError: REJECTED_DRIVE_TOKEN_MESSAGE,
+        });
+        expect(h.sendToQueue).not.toHaveBeenCalled();
       });
 
       it('stops quietly when the first token fetch already finds the grant revoked', async () => {
