@@ -48,22 +48,21 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/infra', () => ({
   secretRotationRepository: { findByKeyNameWithSecret: vi.fn().mockResolvedValue(null) },
 }));
-vi.mock('@bike4mind/services', () => ({
-  isTokenVersionCurrent: () => true,
-  authSessionService: {
-    isOpaqueRefreshToken: (...a: unknown[]) => mockIsOpaque(...a),
-    rotateSession: (...a: unknown[]) => mockRotateSession(...a),
-    issueSession: (...a: unknown[]) => mockIssueSession(...a),
-    revokeSession: (...a: unknown[]) => mockRevokeSession(...a),
-  },
-  // Stand-in for accountState.accountBlockReasons, which assertAccountStateUsable reads.
-  userService: {
-    accountBlockReasons: (user: { isBanned?: boolean; disputePending?: boolean }) => [
-      ...(user.isBanned ? ['banned'] : []),
-      ...(user.disputePending ? ['disputePending'] : []),
-    ],
-  },
-}));
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return {
+    isTokenVersionCurrent: () => true,
+    authSessionService: {
+      isOpaqueRefreshToken: (...a: unknown[]) => mockIsOpaque(...a),
+      rotateSession: (...a: unknown[]) => mockRotateSession(...a),
+      issueSession: (...a: unknown[]) => mockIssueSession(...a),
+      revokeSession: (...a: unknown[]) => mockRevokeSession(...a),
+    },
+    // The real account-state rule, so a state a stand-in copy could not express (a suspension)
+    // is actually exercised instead of silently passing.
+    userService: { accountBlockReasons: actual.userService.accountBlockReasons },
+  };
+});
 
 import handler from '../refreshToken';
 
@@ -107,6 +106,7 @@ describe('POST /api/auth/refreshToken - account state', () => {
     it.each([
       ['banned', { isBanned: true }, 'User not found or banned'],
       ['dispute-suspended', { disputePending: true }, 'pending dispute'],
+      ['content-suspended', { moderation: { status: 'suspended' } }, 'content-policy'],
     ])('refuses a %s account, revokes the rotated session and hands back no token', async (_label, state, message) => {
       mockRotateSession.mockResolvedValue({
         status: 'rotated',

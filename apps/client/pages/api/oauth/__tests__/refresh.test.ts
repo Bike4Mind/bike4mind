@@ -32,22 +32,21 @@ vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { signAccessToken: vi.fn(() => 'a.jwt'), verifyRefreshToken: h.verifyRefreshToken },
 }));
 vi.mock('@server/auth/sessionDevice', () => ({ buildSessionDevice: () => ({}) }));
-vi.mock('@bike4mind/services', () => ({
-  isTokenVersionCurrent: () => true,
-  authSessionService: {
-    isOpaqueRefreshToken: h.isOpaqueRefreshToken,
-    rotateSession: h.rotateSession,
-    issueSession: h.issueSession,
-    revokeSession: h.revokeSession,
-  },
-  // Stand-in for accountState.accountBlockReasons, which the real refresh gate reads.
-  userService: {
-    accountBlockReasons: (user: { isBanned?: boolean; disputePending?: boolean }) => [
-      ...(user.isBanned ? ['banned'] : []),
-      ...(user.disputePending ? ['disputePending'] : []),
-    ],
-  },
-}));
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return {
+    isTokenVersionCurrent: () => true,
+    authSessionService: {
+      isOpaqueRefreshToken: h.isOpaqueRefreshToken,
+      rotateSession: h.rotateSession,
+      issueSession: h.issueSession,
+      revokeSession: h.revokeSession,
+    },
+    // The real account-state rule, so a state a stand-in copy could not express (a suspension)
+    // is actually exercised instead of silently passing.
+    userService: { accountBlockReasons: actual.userService.accountBlockReasons },
+  };
+});
 vi.mock('@bike4mind/database', () => ({
   User: { findById: h.findById },
   userRepository: {},
@@ -125,6 +124,7 @@ describe('POST /api/oauth/refresh account state', () => {
   it.each([
     ['banned', { isBanned: true }, 401],
     ['dispute-suspended', { disputePending: true }, 403],
+    ['content-suspended', { moderation: { status: 'suspended' } }, 403],
   ])('refuses a %s account, revokes the rotated session and returns no tokens', async (_label, state, status) => {
     h.rotateSession.mockResolvedValue({
       status: 'rotated',
