@@ -23,6 +23,15 @@ describe('buildDataLakeAccessContext', () => {
     });
   });
 
+  it('drops self-assertable source: tags so they can never satisfy a lake requiredUserTag', async () => {
+    const ctx = await buildDataLakeAccessContext(
+      { id: 'u1', tags: ['t1', 'source:acme', ' Source:Other '] },
+      makeResolvers()
+    );
+
+    expect(ctx.userTags).toEqual(['t1']);
+  });
+
   it('skips entitlement and org-admin reads for a platform admin but still resolves membership', async () => {
     const resolvers = makeResolvers();
 

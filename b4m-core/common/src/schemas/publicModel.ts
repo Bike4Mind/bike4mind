@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { supportsToolChanges, supportsToolSearch } from '../claudeToolCapabilities';
 import { ModelBackend, type ModelInfo } from '../models';
 import { getTextModelCreditsPer1M } from '../pricing';
 import type { ReasoningEffort } from '../types/common';
@@ -109,6 +110,20 @@ export const PublicModelSchema = z.object({
         'for the budget plus the answer.'
     ),
   supports_tools: z.boolean(),
+  supports_tool_search: z
+    .boolean()
+    .describe(
+      'Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, ' +
+        'so a large tool catalog is searched on demand instead of loaded into context up front. Describes the ' +
+        'model only: `/api/ai/v1/completions` does not accept these yet.'
+    ),
+  supports_tool_changes: z
+    .boolean()
+    .describe(
+      'Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or ' +
+        'remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not ' +
+        'accept these blocks yet.'
+    ),
   supports_vision: z.boolean(),
   deprecation_date: z.string().nullable().describe('`YYYY-MM-DD`; null when no retirement is scheduled.'),
   replaced_by: z.string().nullable().describe('The id of the recommended successor, when there is one.'),
@@ -208,6 +223,8 @@ export function toPublicModel(model: ModelInfo, reasoning: PublicModelReasoning)
     reasons_within_output_budget: reasoning.reasonsWithinOutputBudget,
     reasoning_efforts: reasoning.reasoningEfforts,
     supports_tools: model.supportsTools ?? false,
+    supports_tool_search: supportsToolSearch(model),
+    supports_tool_changes: supportsToolChanges(model),
     supports_vision: model.supportsVision ?? false,
     deprecation_date: model.deprecationDate ?? null,
     replaced_by: model.replacedBy ?? null,

@@ -30,6 +30,7 @@ const IDENTITY_SCOPES = ['openid', 'email', 'profile'];
 // user to have approved ai:generate at /authorize, so the scope must be requestable there.
 const FEDERATED_SCOPES = [...IDENTITY_SCOPES, 'ai:generate', 'me:read'];
 
+// The b4m_<slug>_<8 hex> shape is parsed back by oauthClientSourceSlug (b4m-core/common/src/constants/oauthClients.ts).
 export function generateOAuthClientId(name: string): string {
   const slug =
     name

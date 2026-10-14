@@ -99,7 +99,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 }));
 
 import { ApiKeyScope } from '@bike4mind/common';
-import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
+import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
 
@@ -650,6 +650,7 @@ describe('start command credential threading', () => {
     const input = vi.mocked(startAgentExecution).mock.calls[0][0];
     expect(input.userId).toBe('user-2');
     expect(input.apiKeyInfo).toBeUndefined();
+    expect(checkRateLimit).toHaveBeenCalledWith('user-2', undefined, { bucket: 'ws' });
   });
 
   it('never takes a key credential from the message body', async () => {

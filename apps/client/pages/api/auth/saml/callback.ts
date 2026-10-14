@@ -6,11 +6,12 @@ import { setupSamlStrategy } from '@server/auth/auth';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { AuthEvents, AuthStrategy } from '@bike4mind/common';
+import { AuthEvents, AuthStrategy, clientIdFromAuthorizeRedirect } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { LOG_URL_TRUNCATE_LENGTH } from '@server/auth/oktaConstants';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
 import { isLocalAppUrl } from '@server/utils/validators';
+import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 
 const handleSamlCallback = async (req: any, res: any) => {
   try {
@@ -132,6 +133,12 @@ const handleSamlCallback = async (req: any, res: any) => {
 
       if (user.isBanned) {
         throw new ForbiddenError('User is banned');
+      }
+
+      // RelayState is not signed, so the client id carries the same trust as the OTC path's
+      // client-supplied one: only an active registered client yields a tag.
+      if (user.isNewUser) {
+        await stampOAuthSourceTag(user.id, clientIdFromAuthorizeRedirect(redirectTo));
       }
 
       const { accessToken } = await issueBrowserSession(req, res, user.id, {

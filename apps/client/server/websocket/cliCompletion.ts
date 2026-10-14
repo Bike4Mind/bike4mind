@@ -21,6 +21,27 @@ import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { withWebSocketContext, sendToConnection } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
+import { TooManyRequestsError } from '@server/utils/errors';
+
+const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';
+
+/**
+ * A rate-limit refusal keeps its message and `retryAfter` (seconds); anything else is a plain auth failure.
+ * The message is built by the limiter itself, so it is passed through as-is: sanitizeErrorMessage matches
+ * a lowercase "rate limit" and would turn "Rate limit exceeded" into a generic internal error.
+ */
+function rateLimitOrAuthError(requestId: string, error: unknown) {
+  if (error instanceof TooManyRequestsError) {
+    const retryAfter = error.additionalInfo?.retryAfter;
+    return {
+      action: 'cli_completion_error' as const,
+      requestId,
+      error: error.message,
+      ...(typeof retryAfter === 'number' ? { retryAfter } : {}),
+    };
+  }
+  return { action: 'cli_completion_error' as const, requestId, error: AUTH_FAILED_MESSAGE };
+}
 
 /**
  * WebSocket handler for CLI LLM completions.
@@ -73,19 +94,30 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       endpoint: 'ws/cli_completion_request',
       method: 'WS',
     });
-  } catch {
-    // API key auth failed, try JWT
+  } catch (apiKeyError) {
+    // A present-but-rate-limited key reports its own limit rather than falling through to JWT.
+    if (apiKeyInfo) {
+      if (!(apiKeyError instanceof TooManyRequestsError)) {
+        logger.warn('[CLI_WS] API key rate-limit check failed unexpectedly', {
+          keyId: apiKeyInfo.keyId,
+          error: apiKeyError instanceof Error ? apiKeyError.message : String(apiKeyError),
+        });
+      }
+      await sendToConnection(connectionId, endpoint, rateLimitOrAuthError(requestId, apiKeyError));
+      return { statusCode: 200 };
+    }
     try {
       const user = await verifyJwtToken(accessToken);
       userId = user.id;
       logger.info('[CLI_WS] Authenticated via JWT', { userId });
-      await checkRateLimit(userId);
-    } catch {
-      await sendToConnection(connectionId, endpoint, {
-        action: 'cli_completion_error' as const,
-        requestId,
-        error: 'Authentication failed. Provide a valid API key or JWT token.',
-      });
+      await checkRateLimit(userId, source);
+    } catch (jwtError) {
+      if (!(jwtError instanceof TooManyRequestsError)) {
+        logger.warn('[CLI_WS] JWT authentication failed', {
+          error: jwtError instanceof Error ? jwtError.message : String(jwtError),
+        });
+      }
+      await sendToConnection(connectionId, endpoint, rateLimitOrAuthError(requestId, jwtError));
       return { statusCode: 200 };
     }
   }

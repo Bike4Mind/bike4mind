@@ -152,6 +152,9 @@ re-deciding per endpoint:
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
 | Per-tier agent cap reached | `400` | `agent_limit_reached` |
+| User storage quota exceeded | `400` | `storage_limit_exceeded` |
+| Organization per-file storage ceiling exceeded | `400` | `org_storage_limit_exceeded` |
+| Per-file size cap exceeded | `400` | `file_too_large` |
 | Rate limit exceeded | `429` | - |
 | Generated payload exceeds the platform ceiling, raw-bytes response | `303` | - (`Location` is a signed URL for the payload) |
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |

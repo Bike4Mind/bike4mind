@@ -1,4 +1,4 @@
-import { FabFileSourceType, KnowledgeType, type GeneratedAssetMetadata } from '@bike4mind/common';
+import { FabFileSourceType, KnowledgeType, StorageLimitError, type GeneratedAssetMetadata } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { saveGeneratedAsset, type SaveGeneratedAssetDeps, type SaveGeneratedAssetParams } from './saveGeneratedAsset';
 
@@ -145,13 +145,27 @@ describe('saveGeneratedAsset', () => {
   });
 
   it.each([
-    ['File size exceeds storage limit', 'storage_limit'],
-    ['File size exceeds maximum file size', 'file_too_large'],
-    ['boom', 'error'],
-  ])('maps a %j failure to %s without throwing', async (message, reason) => {
-    createFabFile.mockRejectedValue(new Error(message));
+    ['storage_limit_exceeded', 'storage_limit'],
+    ['org_storage_limit_exceeded', 'storage_limit'],
+    ['file_too_large', 'file_too_large'],
+  ] as const)('maps a %s refusal to %s whatever its message says', async (errorCode, reason) => {
+    createFabFile.mockRejectedValue(
+      new StorageLimitError('reworded message that matches nothing', {
+        errorCode,
+        used_bytes: 0,
+        limit_bytes: 1,
+        requested_bytes: 2,
+        owner: 'user',
+      })
+    );
 
     await expect(saveGeneratedAsset(params(), deps)).resolves.toEqual({ saved: false, reason });
+  });
+
+  it('maps an unrelated failure, even one that quotes the old message, to error', async () => {
+    createFabFile.mockRejectedValue(new Error('File size exceeds storage limit'));
+
+    await expect(saveGeneratedAsset(params(), deps)).resolves.toEqual({ saved: false, reason: 'error' });
   });
 
   it('reports a created file without a storage path as an error', async () => {

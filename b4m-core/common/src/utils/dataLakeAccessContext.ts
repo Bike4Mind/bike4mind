@@ -1,4 +1,5 @@
 import type { AccessContext } from '../types/entities/DataLakeTypes';
+import { isOAuthSourceTag } from '../constants/oauthClients';
 
 /** The authenticated user an `AccessContext` is built for, as every surface already holds it. */
 export type AccessContextPrincipal = {
@@ -61,7 +62,8 @@ export async function buildDataLakeAccessContext(
   return {
     userId: principal.id,
     isAdmin,
-    userTags: principal.tags ?? [],
+    // source: tags are self-assertable attribution, so keep them out of this context. Gates refuse the namespace at write time.
+    userTags: (principal.tags ?? []).filter(tag => !isOAuthSourceTag(tag)),
     organizationIds,
     entitlementKeys,
     administeredOrgIds,
