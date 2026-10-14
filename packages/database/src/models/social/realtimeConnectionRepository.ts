@@ -214,8 +214,9 @@ const UPSERT_SUBSCRIBER_MAX_PASSES = 3;
 /**
  * Register a subscriber on a query, idempotently per (connectionId, clientId): a repeat subscribe
  * refreshes the existing entry's createdAt and resets its attempts instead of adding a second entry,
- * so a live re-subscription is never mistaken for a stale one (removeStaleSubscribers) and a change
- * is delivered once. Writes are guarded so two concurrent subscribes cannot both add the entry.
+ * so a live re-subscription is never mistaken for a stale one (removeStaleSubscribers). Writes are
+ * guarded so two concurrent subscribes cannot both add the entry to an existing doc; a concurrent
+ * first subscribe can rarely create a second doc for the query (see below).
  */
 async function upsertSubscriber(
   subscription: QuerySubscriptionIdentity,
