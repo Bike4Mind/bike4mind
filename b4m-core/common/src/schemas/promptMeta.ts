@@ -231,7 +231,7 @@ const PromptMetaContextSchema = z.object({
     .optional(),
 });
 
-/** A public /api/chat request's tool-selection mode (`ChatRequestSchema.toolMode`). */
+/** A public /api/chat request's tool-selection mode (`SimplifiedChatRequestSchema.toolMode` in schemas/chat.ts). */
 export const ChatToolModeSchema = z.enum(['fast', 'smart']);
 export type ChatToolMode = z.infer<typeof ChatToolModeSchema>;
 

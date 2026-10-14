@@ -171,10 +171,12 @@ function tallyCalls(calls: readonly FunctionCall[], tallyFor: (name: string) => 
     if (!call.name) continue;
     const tally = tallyFor(call.name);
     const errorClass = classifyToolCallError(call);
-    // The adapters record malformed arguments as `{}`, so two different garbled calls would match.
+    // The adapters record malformed arguments as `{}`, so a garbled call neither repeats nor seeds a
+    // key; otherwise the model's corrected zero-argument retry would read as a repeat.
     const key = `${call.name}\u0000${canonicalJson(call.parameters ?? {})}`;
-    const repeated = errorClass !== 'malformed_arguments' && seen.has(key);
-    seen.add(key);
+    const malformed = errorClass === 'malformed_arguments';
+    const repeated = !malformed && seen.has(key);
+    if (!malformed) seen.add(key);
     if (repeated) tally.repeatedCalls += 1;
 
     if (errorClass) tally.errorClasses[errorClass] = (tally.errorClasses[errorClass] ?? 0) + 1;

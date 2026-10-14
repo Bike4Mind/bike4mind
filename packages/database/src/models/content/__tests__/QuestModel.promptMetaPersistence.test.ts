@@ -342,6 +342,19 @@ describe('QuestModel promptMeta persistence', () => {
     expect('notServingLakes' in doc!.promptMeta.retrieval).toBe(false);
   });
 
+  it('rejects a toolMode outside the public /api/chat modes', async () => {
+    await expect(
+      Quest.create({
+        sessionId: 'session-3',
+        type: 'message',
+        timestamp: new Date(),
+        prompt: 'hi',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        promptMeta: { toolMode: 'turbo' } as any, // any: the value is deliberately outside the PromptMeta type.
+      })
+    ).rejects.toThrow(/toolMode/);
+  });
+
   it('survives the ingress parse that runs on every subsequent turn', () => {
     // ChatCompletionInvoke parses the stored promptMeta before each completion, so a persisted
     // value the Zod schema rejects fails the turn outright rather than losing telemetry.

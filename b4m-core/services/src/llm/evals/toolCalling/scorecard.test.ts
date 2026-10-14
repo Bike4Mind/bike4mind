@@ -45,6 +45,17 @@ describe('classifyToolCallError', () => {
     expect(classifyToolCallError(failed('oauth_lookup', 'Error running oauth_lookup: boom'))).toBe('internal_error');
     expect(classifyToolCallError(failed('web_fetch', '{"error":"request timed out"}'))).toBe('timeout');
   });
+
+  it('classifies a call by its error before its returnValue', () => {
+    expect(
+      classifyToolCallError({
+        name: 'web_search',
+        success: false,
+        error: 'Error: Tool arguments were malformed and could not be parsed.',
+        returnValue: 'request timed out',
+      })
+    ).toBe('malformed_arguments');
+  });
 });
 
 describe('buildToolCallingScorecard', () => {
@@ -91,6 +102,60 @@ describe('buildToolCallingScorecard', () => {
       },
     ]);
     expect(card.tools[0]).toMatchObject({ repeatedCalls: 0, errorClasses: { malformed_arguments: 2 } });
+  });
+
+  it('does not count the corrected retry of a malformed call as a repeat', () => {
+    const card = buildToolCallingScorecard([
+      {
+        offeredTools: ['list_notebooks'],
+        functionCalls: [
+          failed('list_notebooks', 'Error: Tool arguments were malformed and could not be parsed.'),
+          ok('list_notebooks'),
+        ],
+      },
+    ]);
+    expect(card.tools[0].repeatedCalls).toBe(0);
+    expect(card.wasted).toEqual({ count: 1, total: 2, rate: 0.5 });
+  });
+
+  it('keys a repeat on both the tool name and its arguments', () => {
+    const card = buildToolCallingScorecard([
+      {
+        offeredTools: ['web_search', 'web_fetch'],
+        functionCalls: [
+          ok('web_search', { query: 'a' }),
+          ok('web_search', { query: 'b' }),
+          ok('web_fetch', { query: 'a' }),
+        ],
+      },
+    ]);
+    expect(card.tools.map(tool => tool.repeatedCalls)).toEqual([0, 0]);
+    expect(card.wasted.count).toBe(0);
+  });
+
+  it('does not count the same call in a later turn as a repeat', () => {
+    const turn = { offeredTools: ['web_search'], functionCalls: [ok('web_search', { query: 'a' })] };
+    const card = buildToolCallingScorecard([turn, turn]);
+    expect(card.tools[0]).toMatchObject({ invocations: 2, repeatedCalls: 0 });
+  });
+
+  it('takes nearest-rank percentiles of latency', () => {
+    const latencies = Array.from({ length: 20 }, (_, index) => index + 1);
+    const card = buildToolCallingScorecard([
+      { offeredTools: ['web_search'], functionCalls: latencies.map(ms => ok('web_search', { ms }, ms)) },
+    ]);
+    expect(card.tools[0].latencyMs).toEqual({ samples: 20, mean: 10.5, p50: 10, p95: 19, max: 20 });
+  });
+
+  it('sorts tools by invocations, then offered turns, then name', () => {
+    const card = buildToolCallingScorecard([
+      {
+        offeredTools: ['b_tool', 'c_tool', 'd_tool'],
+        functionCalls: [ok('a_tool', { n: 1 }), ok('a_tool', { n: 2 }), ok('c_tool'), ok('b_tool')],
+      },
+      { offeredTools: ['c_tool'] },
+    ]);
+    expect(card.tools.map(tool => tool.name)).toEqual(['a_tool', 'c_tool', 'b_tool', 'd_tool']);
   });
 
   it('counts a call to a tool the turn did not offer', () => {
