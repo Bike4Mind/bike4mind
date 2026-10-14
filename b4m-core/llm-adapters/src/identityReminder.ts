@@ -2,8 +2,9 @@
  * Model-identity line the Anthropic-family adapters (anthropicBackend, bedrockBackend/anthropic)
  * close every system parameter with, and openaiBackend closes its lead system message with.
  *
- * It sits last so the cached system prefix never contains the model id, which puts it right
- * after whatever the final prompt layer was - on a grounded lake turn, retrieved file content.
+ * It sits last (on the Anthropic adapters, so the cached system prefix never contains the model
+ * id; openaiBackend matches the order for parity, since its cache has no breakpoints), which
+ * puts it right after whatever the final prompt layer was - on a grounded lake turn, retrieved file content.
  * A bare imperative there reads as text smuggled into the document, so the line is fenced in its
  * own tag that names where it comes from, and the joined-string form leaves a blank line before it.
  */
