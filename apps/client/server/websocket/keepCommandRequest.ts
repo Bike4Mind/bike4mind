@@ -55,7 +55,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     try {
       const user = await verifyJwtToken(accessToken);
       userId = user.id;
-      await checkRateLimit(userId);
+      await checkRateLimit(userId, undefined, { bucket: 'ws' });
     } catch {
       await sendToConnection(connectionId, endpoint, {
         action: 'keep_command_result' as const,

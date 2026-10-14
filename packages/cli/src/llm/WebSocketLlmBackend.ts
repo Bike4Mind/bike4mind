@@ -129,7 +129,12 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
           streamLogger.streamComplete(loggedText);
           sink.end();
         } else if (action === 'cli_completion_error') {
-          const errorMsg = (message.error as string) || 'Server error';
+          const baseMessage = (message.error as string) || 'Server error';
+          const retryAfter = message.retryAfter;
+          const errorMsg =
+            typeof retryAfter === 'number' && Number.isFinite(retryAfter)
+              ? `${baseMessage} (retry after ${retryAfter}s)`
+              : baseMessage;
           streamLogger.onCriticalEvent(eventCount, 'ERROR', errorMsg);
           sink.fail(new Error(errorMsg));
         }

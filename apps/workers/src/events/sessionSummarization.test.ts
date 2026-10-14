@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
-import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '@bike4mind/common';
+import { PERSISTED_SESSION_SUMMARY_TRIGGERS, StorageLimitError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   fabFileStore: [] as Record<string, unknown>[],
@@ -564,5 +564,44 @@ describe('sessionSummarization requester write-time re-check', () => {
 
     expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
     expect(h.sessionUpdateWithUpdateAccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('sessionSummarization when the summary file cannot be stored', () => {
+  const refusal = (errorCode: 'storage_limit_exceeded' | 'file_too_large') =>
+    new StorageLimitError('reworded message that matches nothing', {
+      errorCode,
+      used_bytes: 0,
+      limit_bytes: 1,
+      requested_bytes: 2,
+      owner: 'user',
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeAdmission.mockReset();
+    h.fabFileStore.length = 0;
+    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
+    h.findOne.mockImplementation(async () => null);
+  });
+
+  it('swallows a storage quota refusal and warns, whatever its message says', async () => {
+    h.createFabFile.mockRejectedValue(refusal('storage_limit_exceeded'));
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Storage limit exceeded'));
+  });
+
+  it('rethrows a per-file size refusal', async () => {
+    h.createFabFile.mockRejectedValue(refusal('file_too_large'));
+
+    await expect(run()).rejects.toBeInstanceOf(StorageLimitError);
+  });
+
+  it('rethrows a plain error even when its message quotes the old storage text', async () => {
+    h.createFabFile.mockRejectedValue(new Error('File size exceeds storage limit'));
+
+    await expect(run()).rejects.toThrow('File size exceeds storage limit');
   });
 });

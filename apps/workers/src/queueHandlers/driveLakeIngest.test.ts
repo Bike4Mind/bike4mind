@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
-import { DATA_LAKE_STATUSES, DocumentDateSource } from '@bike4mind/common';
+import { DATA_LAKE_STATUSES, DocumentDateSource, StorageLimitError } from '@bike4mind/common';
+
+const storageRefusal = () =>
+  new StorageLimitError('File size exceeds storage limit', {
+    errorCode: 'storage_limit_exceeded',
+    used_bytes: 0,
+    limit_bytes: 1,
+    requested_bytes: 2,
+    owner: 'user',
+  });
 
 // Passthrough the wrapper so we drive the raw handler directly.
 vi.mock('@server/queueHandlers/utils', () => ({
@@ -522,9 +531,7 @@ describe('driveLakeIngest consumer', () => {
       { id: 'file-2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
     ]);
     h.fetchDriveFileContent.mockResolvedValue(okBytes());
-    h.checkStorageLimit
-      .mockRejectedValueOnce(new BadRequestError('storage limit exceeded'))
-      .mockResolvedValueOnce(undefined);
+    h.checkStorageLimit.mockRejectedValueOnce(storageRefusal()).mockResolvedValueOnce(undefined);
 
     await run();
 
@@ -546,7 +553,7 @@ describe('driveLakeIngest consumer', () => {
     ]);
     h.fetchDriveFileContent.mockResolvedValueOnce(okBytes(600)).mockResolvedValueOnce(okBytes(500));
     h.checkStorageLimit.mockImplementation(async (_user, size: number) => {
-      if (size > 1000) throw new BadRequestError('storage limit exceeded');
+      if (size > 1000) throw storageRefusal();
     });
 
     await run();
@@ -568,6 +575,16 @@ describe('driveLakeIngest consumer', () => {
 
     await expect(run()).rejects.toThrow('connection lost');
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a plain BadRequestError from the quota check rather than recording a quota skip', async () => {
+    h.walkFolder.mockResolvedValue([{ id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+    h.checkStorageLimit.mockRejectedValueOnce(new BadRequestError('Organization not found'));
+
+    await expect(run()).rejects.toThrow('Organization not found');
+    expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
   });
 
   it('credits bytes a same-run duplicate retire already reclaimed against a later quota check', async () => {
@@ -596,7 +613,7 @@ describe('driveLakeIngest consumer', () => {
     ]);
     h.fetchDriveFileContent.mockResolvedValue(okBytes(300));
     h.checkStorageLimit.mockImplementation(async (_user, size: number) => {
-      if (size > 250) throw new BadRequestError('storage limit exceeded');
+      if (size > 250) throw storageRefusal();
     });
 
     await run();
@@ -1136,7 +1153,7 @@ describe('driveLakeIngest consumer', () => {
       h.fetchDriveFileContent
         .mockResolvedValueOnce({ ok: false, reason: 'unsupported', detail: 'application/vnd.google-apps.form' })
         .mockResolvedValueOnce(okBytes());
-      h.checkStorageLimit.mockRejectedValueOnce(new BadRequestError('storage limit exceeded'));
+      h.checkStorageLimit.mockRejectedValueOnce(storageRefusal());
 
       await run();
 

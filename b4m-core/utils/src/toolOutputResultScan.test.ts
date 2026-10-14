@@ -74,14 +74,17 @@ function randomText(rand: () => number): string {
   return s;
 }
 
-// Records every call and substitutes its ordinal, so equal outputs also mean equal offsets.
+// Records every call and substitutes its ordinal, so equal outputs also mean equal match
+// positions; `offsets` holds what each call was told, which the echo marking relies on.
 function run(scan: (replacer: ResultReplacer) => string) {
   const calls: Array<[string, string]> = [];
-  const output = scan((match, captured) => {
+  const offsets: number[] = [];
+  const output = scan((match, captured, offset) => {
     calls.push([match, captured]);
+    offsets.push(offset);
     return `<#${calls.length}>`;
   });
-  return { output, calls };
+  return { output, calls, offsets };
 }
 
 // Same best-of-3 and floored baseline as assertLinearGrowth in b4m-core/utils/src/artifactParser.test.ts,
@@ -115,10 +118,10 @@ describe('tool-output result scanners', () => {
     for (let i = 0; i < 5000; i++) {
       const text = randomText(rand);
       const expected = run(replacer => text.replace(oldRegex, replacer));
-      expect(
-        run(replacer => scan(text, replacer)),
-        JSON.stringify(text)
-      ).toEqual(expected);
+      const actual = run(replacer => scan(text, replacer));
+      expect(actual, JSON.stringify(text)).toEqual(expected);
+      // The regex callback's offset argument; echo marking reads its neighbors from it.
+      expect(actual.offsets, JSON.stringify(text)).toEqual(expected.offsets);
       matched += expected.calls.length;
     }
     expect(matched).toBeGreaterThan(50);

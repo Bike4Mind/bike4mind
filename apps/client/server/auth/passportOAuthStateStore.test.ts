@@ -97,6 +97,18 @@ describe('PassportOAuthStateStore', () => {
       expect(decoded.redirectTo).toBe(redirectTo);
     });
 
+    it('embeds the clientId only when redirectTo is an /oauth/authorize URL', async () => {
+      const authorize = {
+        query: { redirectTo: '/oauth/authorize?client_id=b4m_sat_0123abcd&x=1' },
+      } as unknown as Request;
+      const other = { query: { redirectTo: '/notebooks?client_id=b4m_sat_0123abcd' } } as unknown as Request;
+      const a = jwt.decode((await callStore(store, authorize)).token!) as Record<string, unknown>;
+      const b = jwt.decode((await callStore(store, other)).token!) as Record<string, unknown>;
+      expect(a.clientId).toBe('b4m_sat_0123abcd');
+      expect(b.clientId).toBeUndefined();
+      expect(b.redirectTo).toBe('/notebooks?client_id=b4m_sat_0123abcd');
+    });
+
     it('omits redirectTo when not present on the request', async () => {
       const { token } = await callStore(store, mockReq);
       const decoded = jwt.decode(token!) as Record<string, unknown>;

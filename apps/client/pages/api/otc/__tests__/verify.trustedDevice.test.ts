@@ -67,6 +67,7 @@ vi.mock('@bike4mind/database', () => ({
     consumeOtherCodes: (...a: any[]) => mockConsumeOtherCodes(...a),
   },
   authSessionRepository: {},
+  oauthClientRepository: {},
   passkeyCredentialRepository: { countByUser: vi.fn(() => Promise.resolve(0)) },
 }));
 

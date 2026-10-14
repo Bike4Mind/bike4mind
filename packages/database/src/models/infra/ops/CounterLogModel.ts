@@ -272,9 +272,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
         },
         {
           $match: internalStaffRegex
-            ? {
-                $or: [{ userEmail: { $regex: internalStaffRegex } }, { 'user.email': { $regex: internalStaffRegex } }],
-              }
+            ? { 'user.email': { $regex: internalStaffRegex } }
             : // None configured: count no internal users.
               { $expr: false },
         },
@@ -515,11 +513,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
                 interactions: { $sum: 1 },
                 email: {
                   $first: {
-                    $cond: [
-                      { $gt: [{ $size: '$userDetails' }, 0] },
-                      { $arrayElemAt: ['$userDetails.email', 0] },
-                      '$userEmail',
-                    ],
+                    $cond: [{ $gt: [{ $size: '$userDetails' }, 0] }, { $arrayElemAt: ['$userDetails.email', 0] }, null],
                   },
                 },
               },
@@ -649,11 +643,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
                 interactions: { $sum: 1 },
                 email: {
                   $first: {
-                    $cond: [
-                      { $gt: [{ $size: '$userDetails' }, 0] },
-                      { $arrayElemAt: ['$userDetails.email', 0] },
-                      '$userEmail',
-                    ],
+                    $cond: [{ $gt: [{ $size: '$userDetails' }, 0] }, { $arrayElemAt: ['$userDetails.email', 0] }, null],
                   },
                 },
               },

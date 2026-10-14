@@ -5,6 +5,7 @@ export * from './adminUpdate';
 export * from './register';
 export * from './freeCredits';
 export * from './disposableEmail';
+export * from './sourceTag';
 export * from './recordPolicyAcceptance';
 export * from './adminDelete';
 export * from './revokeSessions';
