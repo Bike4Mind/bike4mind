@@ -328,12 +328,15 @@ describe('VeoVideoProvider specifics', () => {
     );
   });
 
-  it('reads the fixture RAI filter as blocked without marking it billed', async () => {
+  it('reads the live likeness filter (done, no video, RAI reason) as blocked without marking it billed', async () => {
     active = FIXTURES.blocked;
     settled = true;
     const result = await new VeoVideoProvider().poll(handleFor(OPERATION), ctx());
     expect(result).toMatchObject({ status: 'blocked', reason: 'veo_safety' });
     expect(result).not.toHaveProperty('billed');
+    const terminal = exchange(FIXTURES.blocked, 'poll_terminal').response.body;
+    expect(result.status === 'blocked' && result.raw).toEqual(terminal);
+    expect(JSON.stringify(terminal)).toContain('celebrity or their likenesses');
   });
 
   it('reads filter reasons without a count as blocked', async () => {
