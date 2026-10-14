@@ -153,9 +153,11 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
         </FormControl>
       );
     default: {
-      // A new CapabilityControl kind must be handled here, or the field would render as nothing.
+      // A new CapabilityControl kind must be handled above or this assignment fails to compile; if a kind is ever
+      // cast past the type check, render nothing rather than hand React an object child and crash the route.
       const unhandled: never = field;
-      return unhandled;
+      void unhandled;
+      return null;
     }
   }
 };
