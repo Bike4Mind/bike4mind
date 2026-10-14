@@ -104,6 +104,28 @@ describe('cliCompletion websocket handler', () => {
     });
     expect(frame).not.toHaveProperty('retryAfter');
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith('[CLI_WS] JWT authentication failed', { error: 'bad token' });
+  });
+
+  it('does not warn on a plain rate-limit refusal', async () => {
+    vi.mocked(checkRateLimit).mockRejectedValueOnce(new TooManyRequestsError('Rate limit exceeded', { retryAfter: 5 }));
+
+    await run();
+
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('warns when a verified API key fails its rate-limit check for a non-limit reason', async () => {
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({ userId: 'u1', keyId: 'k1', keyName: 'key' } as never);
+    vi.mocked(checkApiKeyRateLimitOrThrow).mockRejectedValueOnce(new Error('cache unavailable'));
+
+    await run();
+
+    expect(logger.warn).toHaveBeenCalledWith('[CLI_WS] API key rate-limit check failed unexpectedly', {
+      keyId: 'k1',
+      error: 'cache unavailable',
+    });
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
   it('does not fall through to JWT when a verified API key is rate limited', async () => {

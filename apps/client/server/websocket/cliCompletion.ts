@@ -97,6 +97,12 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   } catch (apiKeyError) {
     // A present-but-rate-limited key reports its own limit rather than falling through to JWT.
     if (apiKeyInfo) {
+      if (!(apiKeyError instanceof TooManyRequestsError)) {
+        logger.warn('[CLI_WS] API key rate-limit check failed unexpectedly', {
+          keyId: apiKeyInfo.keyId,
+          error: apiKeyError instanceof Error ? apiKeyError.message : String(apiKeyError),
+        });
+      }
       await sendToConnection(connectionId, endpoint, rateLimitOrAuthError(requestId, apiKeyError));
       return { statusCode: 200 };
     }
@@ -106,6 +112,11 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       logger.info('[CLI_WS] Authenticated via JWT', { userId });
       await checkRateLimit(userId, source);
     } catch (jwtError) {
+      if (!(jwtError instanceof TooManyRequestsError)) {
+        logger.warn('[CLI_WS] JWT authentication failed', {
+          error: jwtError instanceof Error ? jwtError.message : String(jwtError),
+        });
+      }
       await sendToConnection(connectionId, endpoint, rateLimitOrAuthError(requestId, jwtError));
       return { statusCode: 200 };
     }
