@@ -2450,6 +2450,31 @@ export interface components {
       upload_url: string;
       upload_url_expires_at: string;
     };
+    createFileUploadResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /**
+       * @description Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit), or `file_too_large` (the per-file size limit). Branch on this, not on the message.
+       * @enum {string}
+       */
+      errorCode?: 'storage_limit_exceeded' | 'org_storage_limit_exceeded' | 'file_too_large';
+      /** @description Bytes already stored against the limit. 0 for `org_storage_limit_exceeded` and `file_too_large`. */
+      used_bytes?: number;
+      /** @description The limit, in bytes, that the request ran into. */
+      limit_bytes?: number;
+      /** @description Size of the refused upload, in bytes. */
+      requested_bytes?: number;
+      /**
+       * @description Whose limit was hit: `user` or `org`. Always `user` for `file_too_large`, a platform-wide cap.
+       * @enum {string}
+       */
+      owner?: 'user' | 'org';
+    };
     /**
      * @example {
      *       "file_name": "reference.png",
@@ -7291,7 +7316,7 @@ export interface operations {
           'application/json': components['schemas']['createFileUploadResponse201'];
         };
       };
-      /** @description Unsupported file type, file larger than the upload limit, or storage quota exceeded. */
+      /** @description Unsupported file type, file larger than the upload limit, or storage quota exceeded. A size or quota refusal carries a stable `errorCode` plus `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together; an unsupported type carries none of them. This endpoint checks only the user quota and the per-file cap, so `org_storage_limit_exceeded` is never returned here. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -7311,7 +7336,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['createFileUploadResponse400'];
         };
       };
       /** @description Missing or invalid credentials. */

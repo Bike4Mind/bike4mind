@@ -260,7 +260,7 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
     expect(result.fabFileIds).toEqual([]);
     expect(create).not.toHaveBeenCalled();
     expect(upload).not.toHaveBeenCalled();
-    expect(result.errors[0]).toContain('storage limit');
+    expect(result.errors[0]).toContain('Not enough storage for this file.');
   });
 
   it('still succeeds for a normal in-limit attachment once both new checks are wired in', async () => {
@@ -305,7 +305,7 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
     expect(result.fileMetadata[0].filename).toBe('one.pdf');
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('two.pdf');
-    expect(result.errors[0]).toContain('storage limit');
+    expect(result.errors[0]).toContain('Not enough storage for this file.');
   });
 
   it('does not charge a file against the same-message quota unless it is actually persisted', async () => {
@@ -332,7 +332,7 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
     expect(result.fabFileIds).toEqual(['fab-one.pdf', 'fab-three.pdf']);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('fails-to-persist.pdf');
-    expect(result.errors[0]).not.toContain('storage limit');
+    expect(result.errors[0]).not.toContain('Not enough storage');
   });
 
   it('checks the org storage limit for 2+ attachments from an org-affiliated user without re-executing the lookup', async () => {
@@ -396,5 +396,65 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
       '[Slack Files] Storage limit check failed',
       expect.objectContaining({ error: expect.any(Error) })
     );
+  });
+
+  it('refuses a file larger than the organization storage limit with the organization wording', async () => {
+    const orgLookup = (org: unknown) => ({
+      select: () => ({ lean: () => ({ exec: () => Promise.resolve(org) }) }),
+    });
+    // 0.0005 MB = 500 bytes, under the 1024-byte attachment.
+    organizationFindById.mockReturnValue(orgLookup({ storageLimit: 0.0005 }));
+
+    const slackEvent = new SlackEvent({ channel: 'C1', user: 'U1', text: 'hello', ts: '1700000000.0001' } as never);
+    const user = { id: 'user-1', organizationId: 'org-1' } as never;
+    const handler = new CommandHandler(slackEvent, user, { downloadFile } as never, logger);
+
+    const result = await handler.processSlackFiles([attachment()] as never);
+
+    expect(result.fabFileIds).toEqual([]);
+    expect(create).not.toHaveBeenCalled();
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("Your organization's storage limit would be exceeded.");
+    expect(result.errors[0]).not.toContain('Not enough storage for this file.');
+  });
+
+  it('refuses the attachment that tips the running total over the org limit without claiming it is too large alone', async () => {
+    // 1 MB limit; each file is 600 kB, so the second only fails because of the first.
+    organizationFindById.mockReturnValue({
+      select: () => ({ lean: () => ({ exec: () => Promise.resolve({ storageLimit: 1 }) }) }),
+    });
+    downloadFile.mockResolvedValue(Buffer.alloc(600_000));
+
+    const slackEvent = new SlackEvent({ channel: 'C1', user: 'U1', text: 'hello', ts: '1700000000.0001' } as never);
+    const user = { id: 'user-1', organizationId: 'org-1' } as never;
+    const handler = new CommandHandler(slackEvent, user, { downloadFile } as never, logger);
+
+    const result = await handler.processSlackFiles([
+      attachment({ id: 'F1', name: 'one.pdf', size: 600_000 }),
+      attachment({ id: 'F2', name: 'two.pdf', size: 600_000 }),
+    ] as never);
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(result.fabFileIds).toHaveLength(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("Your organization's storage limit would be exceeded.");
+    expect(result.errors[0]).toContain('two.pdf');
+    expect(result.errors[0]).not.toContain('larger than');
+  });
+
+  it('echoes the message of a non-storage BadRequestError from the limit check, with a trailing period', async () => {
+    organizationFindById.mockReturnValue({
+      select: () => ({ lean: () => ({ exec: () => Promise.resolve(null) }) }),
+    });
+
+    const slackEvent = new SlackEvent({ channel: 'C1', user: 'U1', text: 'hello', ts: '1700000000.0001' } as never);
+    const user = { id: 'user-1', organizationId: 'org-1' } as never;
+    const handler = new CommandHandler(slackEvent, user, { downloadFile } as never, logger);
+
+    const result = await handler.processSlackFiles([attachment()] as never);
+
+    expect(result.fabFileIds).toEqual([]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('Organization not found. Skipping "notes.pdf".');
   });
 });
