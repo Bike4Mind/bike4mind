@@ -28,6 +28,7 @@ import { SessionToolbar } from './SessionToolbar';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { MessageFileThumbnails } from '@client/app/components/Session/MessageFileThumbnails';
 import ContextUsageChip from './ContextUsageChip';
+import { useComposerNotesHeight } from '@client/app/stores/useComposerNotesHeight';
 import { useNotebookFilepond } from '@client/app/components/Session/NotebookFilepondProvider';
 import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
 import { useGetAgents, useGetSessionAgents } from '@client/app/hooks/data/agents';
@@ -516,6 +517,30 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
   const { setOpen: setFileBrowserOpen } = useFileBrowser();
 
+  const notesRef = useRef<HTMLDivElement>(null);
+  const setNotesHeight = useComposerNotesHeight(s => s.setHeight);
+  useEffect(() => {
+    const el = notesRef.current;
+    if (!el) return;
+    // Height plus the 8px gap to the status line below, once anything shows.
+    const report = () => setNotesHeight(el.offsetHeight > 0 ? el.offsetHeight + 8 : 0);
+    report();
+    const observer = new ResizeObserver(report);
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      setNotesHeight(0);
+    };
+  }, [setNotesHeight]);
+
+  // The status line and the account notes above the box are its siblings, so they are sized to match.
+  const aboveBoxSx = {
+    width: '100%',
+    maxWidth: promptBarMaxWidth,
+    marginLeft: isCompactLayout ? '0px' : 'auto',
+    marginRight: isCompactLayout ? '0px' : 'auto',
+  };
+
   return (
     <Box
       ref={ref}
@@ -531,6 +556,14 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       justifyContent={'center'}
     >
       <HighlanderFocus targetId="chatInput" />
+      {/* Account notes stack above the status line, so the line and the box never move when one
+          appears. Their height is reported for SessionMiddle's scroll-to-bottom button. */}
+      <Box
+        ref={notesRef}
+        sx={[aboveBoxSx, { display: 'flex', flexDirection: 'column', gap: '8px', '&:not(:empty)': { mb: '8px' } }]}
+      >
+        {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
+      </Box>
       {/* Above the box rather than under it: the file viewer and other embedded chats leave no room
           below, and on phones the box sits on the keyboard. */}
       <ComposerStatusLine
@@ -559,12 +592,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
             <CreditBalanceChip />
           </>
         }
-        sx={{
-          width: '100%',
-          maxWidth: promptBarMaxWidth,
-          marginLeft: isCompactLayout ? '0px' : 'auto',
-          marginRight: isCompactLayout ? '0px' : 'auto',
-        }}
+        sx={aboveBoxSx}
       />
       <Stack
         className="session-bottom-container"
@@ -621,7 +649,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   position: 'relative',
                 }}
               >
-                {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
                 {!creditUi.replaceComposer && <CreditPayerNote session={currentSession} />}
                 {creditUi.replaceComposer ? (
                   <CreditsWarning show />

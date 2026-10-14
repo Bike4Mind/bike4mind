@@ -48,6 +48,7 @@ import { buildChatHistory } from './buildChatHistory';
 import { useReplyChoices, type NewestTurn } from '@client/app/hooks/useReplyChoices';
 import { useSessionReconnectProbe } from './AgentExecution/useSessionReconnectProbe';
 import { useComposerMenuOpen } from '@client/app/stores/useComposerMenuOpen';
+import { useComposerNotesHeight } from '@client/app/stores/useComposerNotesHeight';
 
 interface IProps {
   isFullWidth?: boolean;
@@ -64,6 +65,7 @@ const ScrollToBottomButton = memo(
   ({ isAtBottom, scrollerRef }: { isAtBottom: boolean; scrollerRef: React.RefObject<HTMLElement | null> }) => {
     // It would cover the composer's plus menu, which lives in a lower stacking layer.
     const composerMenuOpen = useComposerMenuOpen(state => state.open);
+    const composerNotesHeight = useComposerNotesHeight(state => state.height);
     if (isAtBottom || composerMenuOpen) return null;
 
     return (
@@ -71,8 +73,9 @@ const ScrollToBottomButton = memo(
         sx={{
           position: 'absolute',
           // Hangs down into the composer's status line (its empty middle) and stops 16px above the
-          // composer box. That line is 36px tall (ComposerStatusLine) - keep in sync.
-          bottom: '-20px',
+          // composer box. That line is 36px tall (ComposerStatusLine) - keep in sync. Account notes
+          // above the line push this pane's bottom up by their height, so add it back.
+          bottom: `${-20 - composerNotesHeight}px`,
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 1100,
