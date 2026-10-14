@@ -40,10 +40,26 @@ describe('StartExecutionSchema - per-send systemContext', () => {
 describe('systemContext call site in agentExecutor', () => {
   const source = readFileSync(resolve(__dirname, 'agentExecutor.ts'), 'utf8');
 
+  // The whole options object, brace-matched. A lazy regex would stop at the spread's own
+  // `: {})` and never see a later key that overrides it.
+  const runIterationOptions = (): string => {
+    const opener = 'agent.runIteration(firstIterationMessage, {';
+    const start = source.indexOf(opener);
+    expect(start, 'agent.runIteration call site not found in agentExecutor.ts').toBeGreaterThan(-1);
+    const braceStart = start + opener.length - 1;
+    let depth = 0;
+    for (let i = braceStart; i < source.length; i++) {
+      if (source[i] === '{') depth++;
+      if (source[i] === '}' && --depth === 0) return source.slice(braceStart, i + 1);
+    }
+    throw new Error('Unbalanced braces in the agent.runIteration options object');
+  };
+
   it('passes startPayload.systemContext to runIteration as context, only when set', () => {
-    const call = source.match(/agent\.runIteration\(firstIterationMessage, \{[\s\S]*?\}\)/);
-    expect(call, 'agent.runIteration call site not found in agentExecutor.ts').not.toBeNull();
-    expect(call![0]).toContain('...(startPayload?.systemContext ? { context: startPayload.systemContext } : {})');
+    const options = runIterationOptions();
+    expect(options).toContain('...(startPayload?.systemContext ? { context: startPayload.systemContext } : {})');
+    // Exactly one `context:` key, so nothing later in the object can overwrite the spread.
+    expect(options.match(/\bcontext:/g)).toHaveLength(1);
   });
 
   // Only what this checks: the executor never reads or writes a `systemContext` field on the

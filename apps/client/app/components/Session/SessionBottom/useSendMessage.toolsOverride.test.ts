@@ -76,19 +76,36 @@ describe('useSendMessage - briefcase toolsOverride on the orchestration path (#9
 describe('useSendMessage - per-send systemContext reaches both routes', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
 
-  it('trims once and builds the field only when non-empty, so an absent or blank value adds nothing', () => {
-    expect(source).toMatch(/const systemContext = options\?\.systemContext\?\.trim\(\) \|\| undefined;/);
+  // One call, from its opener to the first `});` after it. Bounding the slice is the point: an
+  // unbounded lazy regex would let a call missing its spread match on the NEXT call's spread.
+  const callSlice = (opener: string): string => {
+    const start = source.indexOf(opener);
+    expect(start, `${opener} not found in useSendMessage.ts`).toBeGreaterThan(-1);
+    const end = source.indexOf('});', start);
+    expect(end).toBeGreaterThan(start);
+    return source.slice(start, end);
+  };
+
+  it('resolves it once via resolveSystemContext and builds the field only when set', () => {
+    expect(source).toMatch(/const resolvedSystemContext = resolveSystemContext\(options\?\.systemContext\);/);
     expect(source).toMatch(/const systemContextField = systemContext \? \{ systemContext \} : \{\};/);
   });
 
-  it('spreads it into the command-map dispatch and the direct LLM dispatch', () => {
-    expect(source).toMatch(/handleCommand\(commandHandlers, \{[\s\S]*?\.\.\.systemContextField,\s*\}\);/);
-    expect(source).toMatch(/handleLLMCommand\(\{[\s\S]*?\.\.\.systemContextField,\s*\}\);/);
+  it('refuses an over-cap value through onRefused before any dispatch', () => {
+    const refusalStart = source.indexOf("if (resolvedSystemContext.kind === 'tooLong')");
+    expect(refusalStart).toBeGreaterThan(-1);
+    const refusal = source.slice(refusalStart, source.indexOf('return;', refusalStart));
+    expect(refusal).toContain('setSubmitting(false);');
+    expect(refusal).toContain('options?.onRefused?.();');
+    expect(refusalStart).toBeLessThan(source.indexOf('handleCommand(commandHandlers, {'));
   });
 
-  it('spreads it into the agent-executor start payload', () => {
-    expect(source).toMatch(/agentExecution\.start\(\{[\s\S]*?\.\.\.systemContextField,\s*\}\);/);
-  });
+  it.each(['handleCommand(commandHandlers, {', 'handleLLMCommand({', 'agentExecution.start({'])(
+    'spreads it into %s',
+    opener => {
+      expect(callSlice(opener)).toContain('...systemContextField,');
+    }
+  );
 
   it('never folds it into the prompt text the bubble shows', () => {
     expect(source).not.toMatch(/prompt\s*[+=].*systemContext/);

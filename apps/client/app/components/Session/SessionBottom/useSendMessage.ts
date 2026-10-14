@@ -17,6 +17,7 @@ import {
   IChatHistoryItemDocument,
   ISessionDocument,
   ModelName,
+  PROMPT_TEXT_MAX,
   requiresImageInput,
 } from '@bike4mind/common';
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
@@ -32,6 +33,7 @@ import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
 import { pickerAttachedAgents, resolveDispatchAgent, resolveDispatchMaxIterations } from './resolveDispatchAgent';
 import { resolveDispatchTools } from './resolveDispatchTools';
+import { resolveSystemContext } from './resolveSystemContext';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
 import { useRecordImageTemplateUse, isTemplateUseEligiblePrompt } from '../ImageTemplates/useRecordImageTemplateUse';
@@ -734,10 +736,19 @@ export function useSendMessage({
       options?.onRefused?.();
       return;
     }
-    // Trimmed once here, the boundary every caller passes through: whitespace-only counts
-    // as absent. Spread into each route's payload only when set, so a send without it is
-    // unchanged.
-    const systemContext = options?.systemContext?.trim() || undefined;
+    // Normalized and capped here, the boundary every caller passes through. Spread into each
+    // route's payload only when set, so a send without it is unchanged.
+    const resolvedSystemContext = resolveSystemContext(options?.systemContext);
+    if (resolvedSystemContext.kind === 'tooLong') {
+      console.error(
+        `[useSendMessage] Refused send: systemContext is ${resolvedSystemContext.length} characters (max ${PROMPT_TEXT_MAX}).`
+      );
+      toast.error('This prompt could not be sent: its extra instructions are too long.');
+      setSubmitting(false);
+      options?.onRefused?.();
+      return;
+    }
+    const systemContext = resolvedSystemContext.kind === 'ok' ? resolvedSystemContext.systemContext : undefined;
     const systemContextField = systemContext ? { systemContext } : {};
     // Tool-directed or context-carrying send: see LLMCommandArgs.skipRapidReply. The ack
     // model sees neither the tools nor the hidden system context, so with either present an
