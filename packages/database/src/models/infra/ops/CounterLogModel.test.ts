@@ -79,6 +79,30 @@ describe('CounterLogRepository.metricsByDate - activeUsers (DAU)', () => {
     expect(result.activeUsers?.[0]?.count).toBe(1);
   });
 
+  it('excludes nobody when no staff domains are configured', async () => {
+    delete process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS;
+    try {
+      const external = await seedUser('customer@example.com');
+      const teammate = await seedUser('teammate@staff.example.com');
+      await CounterLog.insertMany([logFor(external, inWindow), logFor(teammate, inWindow)]);
+
+      const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+      expect(result.activeUsers?.[0]?.count).toBe(2);
+    } finally {
+      process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS = 'staff.example.com';
+    }
+  });
+
+  it('counts a user whose user document no longer exists', async () => {
+    const orphanId = new mongoose.Types.ObjectId().toString();
+    await CounterLog.insertMany([logFor(orphanId, inWindow)]);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE);
+
+    expect(result.activeUsers?.[0]?.count).toBe(1);
+  });
+
   it('ignores activity outside the report window', async () => {
     const userId = await seedUser('old@example.com');
     await CounterLog.insertMany([logFor(userId, outOfWindow)]);

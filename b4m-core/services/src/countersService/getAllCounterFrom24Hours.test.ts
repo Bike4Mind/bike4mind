@@ -34,4 +34,10 @@ describe('getCounterTotalsForLast24Hours - activeUsers24h', () => {
 
     expect(result.userActivity.activeUsers24h).toBe(0);
   });
+
+  it('defaults activeUsers24h to 0 when the facet is absent from the aggregation result', async () => {
+    const result = await run({ topUsers });
+
+    expect(result.userActivity.activeUsers24h).toBe(0);
+  });
 });

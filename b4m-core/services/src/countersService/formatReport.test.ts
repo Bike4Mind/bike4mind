@@ -75,12 +75,13 @@ describe('formatCustomSlackMessage - DAU', () => {
   it('uses staff-excluded externalUsers as the DAU/WAU denominator', () => {
     const message = formatCustomSlackMessage('App', {
       metrics: {},
-      userActivity: { ...baseActivity, activeUsers24h: 11, externalUsers: 55 },
+      userActivity: { ...baseActivity, activeUsers24h: 55, externalUsers: 55 },
     });
 
     expect(message).toContain('Weekly Active (WAU): *55* users');
     expect(message).toContain('DAU/WAU Ratio:');
-    expect(message).toContain('20.0%');
+    // Against totalUniqueUsers (60, staff included) this would read 91.7%.
+    expect(message).toContain('100.0%');
   });
 
   it('describes the leaderboard overflow by what the list holds, not as active-user count', () => {

@@ -295,15 +295,9 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
         {
           $match: {
             datetime: { $gte: weekStartDate, $lte: weekEndDate },
-            userId: { $exists: true, $ne: null },
           },
         },
-        {
-          $group: {
-            _id: '$userId',
-            userEmail: { $first: '$userEmail' },
-          },
-        },
+        { $group: { _id: '$userId' } },
         {
           $addFields: {
             userObjectId: { $convert: { input: '$_id', to: 'objectId', onError: null } },
@@ -320,12 +314,8 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
         ...(internalStaffRegex
           ? [
               {
-                $match: {
-                  $nor: [
-                    { userEmail: { $regex: internalStaffRegex } },
-                    { 'user.email': { $regex: internalStaffRegex } },
-                  ],
-                },
+                // user is a 0-or-1 element array; a missing user doc cannot match staff, so that user stays counted.
+                $match: { 'user.email': { $not: { $regex: internalStaffRegex } } },
               },
             ]
           : []),
