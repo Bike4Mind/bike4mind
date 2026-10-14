@@ -11,7 +11,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
+vi.mock('@server/middlewares/perUserRateLimit', () => ({ perUserRateLimit: () => vi.fn() }));
 const { registeredModels, callableProviders } = vi.hoisted(() => ({
   registeredModels: { value: [] as string[] },
   callableProviders: { value: [] as string[] },
@@ -21,19 +21,40 @@ vi.mock('@server/decisions/providers', () => ({
   resolveCallableDecisionProviders: vi.fn(async () => new Set(callableProviders.value)),
 }));
 
+import { resolveCallableDecisionProviders } from '@server/decisions/providers';
 import handler from '../decision-models';
 
-const listModels = async () => {
+const callHandler = async () => {
   const { req, res } = createMocks({ method: 'GET' });
   Object.assign(req, { user: { id: 'user-1' }, logger: {} });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
-  return ListDecisionModelsResponseSchema.parse(res._getJSONData());
+  return res;
 };
+
+const listModels = async () => ListDecisionModelsResponseSchema.parse((await callHandler())._getJSONData());
 
 describe('GET /api/v1/decision-models', () => {
   beforeEach(() => {
     registeredModels.value = ['gpt-6-luna'];
     callableProviders.value = ['openai', 'typesafe', 'test'];
+    vi.mocked(resolveCallableDecisionProviders).mockClear();
+  });
+
+  it("filters by the caller's own keys, asking once per distinct provider", async () => {
+    registeredModels.value = ['gpt-6-luna', 'jev-1.13.0', 'jev-latest'];
+    await listModels();
+    expect(resolveCallableDecisionProviders).toHaveBeenCalledTimes(1);
+    expect(resolveCallableDecisionProviders).toHaveBeenLastCalledWith(
+      'user-1',
+      ['openai', 'typesafe'],
+      expect.anything()
+    );
+  });
+
+  // Failing open would list models that then answer 503 provider_not_configured.
+  it('fails rather than listing every model when the key lookup fails', async () => {
+    vi.mocked(resolveCallableDecisionProviders).mockRejectedValueOnce(new Error('db'));
+    await expect(callHandler()).rejects.toThrow('db');
   });
 
   it('exposes the jev-latest alias target and that it takes no images', async () => {

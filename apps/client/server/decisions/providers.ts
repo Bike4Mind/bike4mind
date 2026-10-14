@@ -87,30 +87,28 @@ const loadEffectiveKeys = (userId: string, logger: Logger): Promise<EffectiveKey
     { logger }
   );
 
+// The one key rule both resolvers below share, so the model list and a decision request cannot disagree.
+const usableDecisionProviderKey = (provider: DecisionProviderId, keys: EffectiveKeys): string | null =>
+  provider === 'test'
+    ? (selectDecisionProviderKey(provider, keys) ?? null)
+    : usableApiKey(selectDecisionProviderKey(provider, keys));
+
 export const resolveDecisionProviderKey = async (
   userId: string,
   provider: DecisionProviderId,
   logger: Logger
 ): Promise<string | null> => {
-  if (provider === 'test') return selectDecisionProviderKey(provider, {} as EffectiveKeys) ?? null;
-  return usableApiKey(selectDecisionProviderKey(provider, await loadEffectiveKeys(userId, logger)));
+  const keys = provider === 'test' ? ({} as EffectiveKeys) : await loadEffectiveKeys(userId, logger);
+  return usableDecisionProviderKey(provider, keys);
 };
 
-/**
- * The providers this caller has a usable key for, read with one key lookup. Must agree with
- * resolveDecisionProviderKey: a provider listed here is one a decision request can be served by.
- */
+/** The providers this caller has a usable key for, read with one key lookup. A failed lookup rejects. */
 export const resolveCallableDecisionProviders = async (
   userId: string,
   providers: readonly DecisionProviderId[],
   logger: Logger
 ): Promise<ReadonlySet<DecisionProviderId>> => {
   const needsKeys = providers.some(provider => provider !== 'test');
-  const keys = needsKeys ? await loadEffectiveKeys(userId, logger) : undefined;
-  return new Set(
-    providers.filter(
-      provider =>
-        provider === 'test' || (keys !== undefined && usableApiKey(selectDecisionProviderKey(provider, keys)) !== null)
-    )
-  );
+  const keys = needsKeys ? await loadEffectiveKeys(userId, logger) : ({} as EffectiveKeys);
+  return new Set(providers.filter(provider => usableDecisionProviderKey(provider, keys) !== null));
 };

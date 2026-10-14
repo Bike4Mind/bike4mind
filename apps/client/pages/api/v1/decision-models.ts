@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/common';
 import { getDecisionProviderRegistry, resolveCallableDecisionProviders } from '@server/decisions/providers';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 
 const toDecisionModel = (id: DecisionModelId): DecisionModel => {
   const { displayName, provider, aliasOf, limits, pricing } = getDecisionModelCapabilities(id);
@@ -34,7 +34,7 @@ const toDecisionModel = (id: DecisionModelId): DecisionModel => {
 
 const handler = nextRouteForContract(listDecisionModelsContract, {
   exemptReadsFromDailyRateLimit: true,
-  rateLimit: rateLimit({ limit: 60, windowMs: 60_000, bucket: 'GET /api/v1/decision-models' }),
+  rateLimit: perUserRateLimit('GET /api/v1/decision-models'),
 }).get(async (req, res) => {
   const entries = getDecisionProviderRegistry()
     .models()

@@ -46,7 +46,10 @@ describe('selectDecisionProviderKey', () => {
 
 describe('resolveCallableDecisionProviders', () => {
   const logger = {} as Logger;
-  beforeEach(() => getEffectiveLLMApiKeys.mockReset());
+  // Block body: a function returned from beforeEach runs as teardown, and mockReset() returns the mock.
+  beforeEach(() => {
+    getEffectiveLLMApiKeys.mockReset();
+  });
 
   it('keeps only the providers the caller has a usable key for', async () => {
     getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-openai', typesafe: undefined });
@@ -75,5 +78,22 @@ describe('resolveCallableDecisionProviders', () => {
     const callable = await resolveCallableDecisionProviders('user-1', ['test', 'openai', 'typesafe'], logger);
     expect([...callable].sort()).toEqual(['openai', 'test']);
     expect(getEffectiveLLMApiKeys).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a placeholder key as missing', async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'your-api-key', typesafe: 'ts-key' });
+    const callable = await resolveCallableDecisionProviders('user-1', ['openai', 'typesafe'], logger);
+    expect([...callable]).toEqual(['typesafe']);
+  });
+
+  it('returns an empty set without a key lookup for no providers', async () => {
+    const callable = await resolveCallableDecisionProviders('user-1', [], logger);
+    expect(callable.size).toBe(0);
+    expect(getEffectiveLLMApiKeys).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the key lookup fails, rather than failing open', async () => {
+    getEffectiveLLMApiKeys.mockRejectedValue(new Error('db'));
+    await expect(resolveCallableDecisionProviders('user-1', ['openai'], logger)).rejects.toThrow('db');
   });
 });
