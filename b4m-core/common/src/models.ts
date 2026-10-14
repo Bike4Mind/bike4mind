@@ -809,11 +809,11 @@ export const getTextModelCost = (
  */
 export const getTurnsCost = (model: ModelInfo, turns: readonly TurnUsage[]): number => {
   let cost = 0;
-  let usage = 0;
+  let unpricedUsage = 0;
   for (const turn of turns) {
     const cacheRead = turn.cacheReadInputTokens ?? 0;
     const cacheCreation = turn.cacheCreationInputTokens ?? 0;
-    cost += costAtTier(
+    const turnCost = costAtTier(
       model,
       turn.inputTokens + cacheRead + cacheCreation,
       turn.inputTokens,
@@ -821,9 +821,11 @@ export const getTurnsCost = (model: ModelInfo, turns: readonly TurnUsage[]): num
       cacheRead,
       cacheCreation
     );
-    usage += turn.inputTokens + turn.outputTokens + cacheRead + cacheCreation;
+    if (turnCost === 0) unpricedUsage += turn.inputTokens + turn.outputTokens + cacheRead + cacheCreation;
+    cost += turnCost;
   }
-  return alarmIfUnpriced(model, cost, usage);
+  alarmIfUnpriced(model, 0, unpricedUsage);
+  return cost;
 };
 
 /**
