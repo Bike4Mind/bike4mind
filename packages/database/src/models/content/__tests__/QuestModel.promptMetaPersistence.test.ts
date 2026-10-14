@@ -171,6 +171,8 @@ const FULL_PROMPT_META = {
       id: 'toolu_01',
     },
   ],
+  offeredTools: ['web_search'],
+  toolMode: 'smart',
   performance: {
     totalResponseTime: 1000,
     contextRetrievalTime: 100,

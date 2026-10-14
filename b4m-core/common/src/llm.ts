@@ -6,6 +6,7 @@ import { BFLSafetyToleranceSchema } from './schemas/bfl';
 import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 import { GenerationCallbackUrlSchema } from './schemas/generationCallback';
+import { ChatToolModeSchema } from './schemas/promptMeta';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -360,6 +361,8 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   allowedAgents: z.array(z.string()).optional(),
   /** When true, Quest Processor injects Slack-specific tool configs (help, notebooks, curated files) */
   enableSlackTools: z.boolean().optional(),
+  /** Public /api/chat `toolMode`, persisted on promptMeta for tool-calling evals. */
+  toolMode: ChatToolModeSchema.optional(),
   /**
    * Agent-mode toggle state forwarded from the composer. The chat
    * completion path itself does not branch on this - that decision happens

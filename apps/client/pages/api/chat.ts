@@ -479,6 +479,7 @@ function transformToInternalFormat(
     fabFileIds: [], // Empty by default, clients can use the full API for fab files
     messageFileIds: request.fileIds,
     organizationId, // Include for team-wide system prompts
+    toolMode: request.toolMode,
     params: {
       model: request.model,
       // Any of max_tokens / maxTokens / maxOutputTokens expresses the caller's budget.
