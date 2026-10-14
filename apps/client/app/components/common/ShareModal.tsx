@@ -136,6 +136,8 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
     !!ownerId &&
     ownerId === currentUser?.id &&
     (type === InviteType.Session || type === InviteType.FabFile);
+  // Shared by the notebook and file notes below so the two cannot drift apart.
+  const linkExpiryNote = canTurnOffLinks ? 'Links keep working until you turn them off.' : "Links don't expire.";
   const [revokedLink, setRevokedLink] = useState('');
   const cancelInvites = useCancelInvite({
     onSuccess: () => {
@@ -700,13 +702,12 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                       {
                         "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share."
                       }{' '}
-                      {canTurnOffLinks ? 'Links keep working until you turn them off.' : "Links don't expire."}
+                      {linkExpiryNote}
                     </>
                   ) : (
                     <>
                       Anyone with the link can open {isBulkSharing ? 'these items' : `this ${itemType}`} after signing
-                      in, and can share it on.{' '}
-                      {canTurnOffLinks ? 'Links keep working until you turn them off.' : "Links don't expire."}
+                      in, and can share it on. {linkExpiryNote}
                     </>
                   )}
                 </Typography>
