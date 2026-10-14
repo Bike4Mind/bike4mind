@@ -1783,6 +1783,12 @@ importers:
         specifier: ^4.6.6
         version: 4.6.6
     devDependencies:
+      '@babel/standalone':
+        specifier: ^8.0.4
+        version: 8.0.4
+      '@types/babel__standalone':
+        specifier: ^7.1.9
+        version: 7.1.9
       '@types/lodash':
         specifier: ^4.17.24
         version: 4.17.24

@@ -7,6 +7,10 @@ export default defineConfig({
     // Own entry so the client can import the elision detector without pulling the whole
     // utils barrel into the browser bundle (same reason as artifactParser above).
     'src/artifactElision.ts',
+    // Own entries so the client re-exports (and the sandbox route, which evaluates
+    // createImportScanner's compiled source) reach these without the utils barrel.
+    'src/toolOutputResultScan.ts',
+    'src/importStatements.ts',
     // Server-only image moderation (Rekognition + jimp). A dedicated entry, kept OUT
     // of the barrel (src/index.ts), so importing @bike4mind/utils never drags the AWS
     // SDK / jimp into a bundle that doesn't moderate images (e.g. the CLI). See #660.
