@@ -182,10 +182,7 @@ const handler = baseApi({ auth: false })
 
         const successQuery = authSuccessRedirectQuery(redirectTo);
 
-        // Redirect with tokens in URL fragment (not query string)
-        // Using fragments prevents tokens from being logged in server access logs,
-        // sent in Referer headers, or stored in browser history as query params.
-        // isNewUser/signupMethod ride the same fragment: /auth/success reads and
+        // isNewUser/signupMethod ride the redirect fragment: /auth/success reads and
         // clears it exactly once, firing the signup ad conversion for new accounts.
         const signupFragment =
           isNewUser && !isSyntheticSignup ? `&isNewUser=1&signupMethod=${encodeURIComponent(strategy)}` : '';
@@ -227,6 +224,9 @@ const handler = baseApi({ auth: false })
 
         await logSignInSuccess(req, { userId: user.id, strategy, trustedDevice: secondFactor.trustedDevice });
 
+        // Redirect with tokens in URL fragment (not query string): a fragment is never sent to
+        // the server, so the access token stays out of access logs, Referer headers and browser
+        // history.
         const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
         return res.redirect(redirectUrl);
       } catch (callbackError) {
