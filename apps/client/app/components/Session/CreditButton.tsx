@@ -1,4 +1,7 @@
-import { Button, Tooltip } from '@mui/joy';
+import { Box, Button, Tooltip, Typography } from '@mui/joy';
+import InfoRoundedIcon from '@mui/icons-material/InfoRounded';
+import type { ISessionDocument } from '@bike4mind/common';
+import { useCreditPayerNote } from './CreditPayerNote';
 import { FC, useState } from 'react';
 import CreditIcon from '../svgs/icons/CreditIcon';
 import { orange } from '@client/app/utils/themes/colors';
@@ -25,22 +28,42 @@ function balanceTooltip(credits: number, lowThreshold: number): string {
  * The balance as quiet text, coloured only when it runs low; no data of its own, so a preview can
  * render any balance. CreditBalanceChip feeds it the live one.
  */
-export const CreditBalanceChipView: FC<{ credits: number; lowCreditsThreshold: number; onClick: () => void }> = ({
-  credits,
-  lowCreditsThreshold,
-  onClick,
-}) => {
+export const CreditBalanceChipView: FC<{
+  credits: number;
+  lowCreditsThreshold: number;
+  onClick: () => void;
+  /** Who pays, in a notebook the user does not own (useCreditPayerNote): an info mark and the tooltip's first line. */
+  payerNote?: string | null;
+}> = ({ credits, lowCreditsThreshold, onClick, payerNote }) => {
   const color = credits <= 0 ? 'danger' : credits < lowCreditsThreshold ? 'warning' : 'neutral';
+  const balanceText = balanceTooltip(credits, lowCreditsThreshold);
+  const title = payerNote ? (
+    <Box sx={{ maxWidth: 280, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <Typography level="body-xs" textColor="inherit" sx={{ fontWeight: 600 }}>
+        {payerNote}
+      </Typography>
+      <Typography level="body-xs" textColor="inherit">
+        {balanceText}
+      </Typography>
+    </Box>
+  ) : (
+    balanceText
+  );
   return (
-    <Tooltip title={balanceTooltip(credits, lowCreditsThreshold)} placement="top" variant="soft">
+    <Tooltip title={title} placement="top" variant="soft">
       <Button
         size="sm"
         variant="plain"
         color={color}
         onClick={onClick}
         data-testid="credit-balance-chip"
-        aria-label={`${formatCreditBalance(credits)}. Open credits`}
+        aria-label={`${formatCreditBalance(credits)}.${payerNote ? ` ${payerNote}.` : ''} Open credits`}
         startDecorator={<CreditIcon sx={{ fontSize: 14 }} />}
+        endDecorator={
+          payerNote ? (
+            <InfoRoundedIcon data-testid="credit-payer-mark" sx={{ fontSize: 14, color: 'inherit' }} />
+          ) : undefined
+        }
         sx={{
           height: '24px',
           minHeight: '24px',
@@ -78,8 +101,9 @@ export const CreditBalanceChipView: FC<{ credits: number; lowCreditsThreshold: n
  * nothing decrements then, so a balance would mislead. Uses the display (not live) balance so it
  * holds steady through a turn's reservation dip (see useEffectiveCredits).
  */
-const CreditBalanceChip: FC = () => {
+const CreditBalanceChip: FC<{ session?: ISessionDocument | null }> = ({ session }) => {
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
+  const payerNote = useCreditPayerNote(session);
   const credits = useEffectiveCredits();
   const lowCreditsThreshold = useLowCreditsThreshold();
   const [isOpen, setIsOpen] = useState(false);
@@ -92,6 +116,7 @@ const CreditBalanceChip: FC = () => {
         credits={credits}
         lowCreditsThreshold={lowCreditsThreshold}
         onClick={() => setIsOpen(true)}
+        payerNote={payerNote}
       />
       <CreditsModal open={isOpen} onClose={() => setIsOpen(false)} />
     </>

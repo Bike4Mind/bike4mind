@@ -4,7 +4,9 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { state } = vi.hoisted(() => ({ state: { enforceCredits: true, credits: 9982.6 } }));
+const { state } = vi.hoisted(() => ({
+  state: { enforceCredits: true, credits: 9982.6, payerNote: null as string | null },
+}));
 
 // The real modal pulls react-query and the account chain; a stub that reveals its open state
 // is enough to assert the chip opens it.
@@ -12,6 +14,7 @@ vi.mock('../subscription/CreditsModal', () => ({
   default: ({ open }: { open: boolean }) => (open ? <div data-testid="credits-modal-open" /> : null),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
+vi.mock('./CreditPayerNote', () => ({ useCreditPayerNote: () => state.payerNote }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? state.enforceCredits : undefined),
 }));
@@ -30,6 +33,7 @@ describe('CreditBalanceChip', () => {
   beforeEach(() => {
     state.enforceCredits = true;
     state.credits = 9982.6;
+    state.payerNote = null;
   });
 
   it('shows a labeled balance that opens the credits modal', () => {
@@ -54,5 +58,20 @@ describe('CreditBalanceChip', () => {
     state.enforceCredits = false;
     renderChip();
     expect(screen.queryByTestId('credit-balance-chip')).not.toBeInTheDocument();
+  });
+
+  it('marks the balance with who pays in a notebook the user does not own, first in its tooltip', async () => {
+    state.payerNote = "Paid from your balance, not the owner's";
+    renderChip();
+    const chip = screen.getByTestId('credit-balance-chip');
+    expect(within(chip).getByTestId('credit-payer-mark')).toBeInTheDocument();
+    expect(chip).toHaveAttribute('aria-label', "9,982 credits. Paid from your balance, not the owner's. Open credits");
+    fireEvent.mouseOver(chip);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(/^Paid from your balance, not the owner's/);
+  });
+
+  it('has no mark in a notebook the user owns', () => {
+    renderChip();
+    expect(screen.queryByTestId('credit-payer-mark')).toBeNull();
   });
 });

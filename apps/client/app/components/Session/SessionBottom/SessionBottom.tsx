@@ -54,7 +54,6 @@ import { useTokenLimits } from '@client/app/hooks/useTokenLimits';
 import { useSessionContextUsage } from '@client/app/hooks/useSessionContextUsage';
 import { useAttachmentFitWarning } from '@client/app/hooks/useAttachmentFitWarning';
 import { MemberCreditBudgetNote } from '../MemberCreditBudgetNote';
-import { CreditPayerNote } from '../CreditPayerNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
@@ -589,7 +588,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
               inputOverLimit={isOverContextWindow}
               attachment={attachmentFit}
             />
-            <CreditBalanceChip />
+            <CreditBalanceChip session={currentSession} />
           </>
         }
         sx={aboveBoxSx}
@@ -649,7 +648,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   position: 'relative',
                 }}
               >
-                {!creditUi.replaceComposer && <CreditPayerNote session={currentSession} />}
                 {creditUi.replaceComposer ? (
                   <CreditsWarning show />
                 ) : (
