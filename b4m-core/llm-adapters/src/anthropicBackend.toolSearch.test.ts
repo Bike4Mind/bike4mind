@@ -108,6 +108,21 @@ function searchThenCallTurn(thinking: boolean, toolUses: Array<{ id: string; nam
   return events;
 }
 
+/** A turn with text and one tool_use, no server blocks - the shape of a plain tool round. */
+function plainToolUseTurn(id: string, name = 'get_weather'): unknown[] {
+  return [
+    messageStart,
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Let me check.' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id, name, input: {} } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"city":"Oslo"}' } },
+    { type: 'content_block_stop', index: 1 },
+    { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 20 } },
+    { type: 'message_stop' },
+  ];
+}
+
 const finalTurn = [
   messageStart,
   { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
@@ -371,6 +386,28 @@ describe('AnthropicBackend tool search replay', () => {
       'tool_use',
     ]);
     expect(replay?.content[0]).toEqual({ type: 'redacted_thinking', data: 'opaque' });
+  });
+
+  it('replays its own turn when a plain tool round follows a tool search round', async () => {
+    const getWeather = tool('get_weather', { defer_loading: true });
+    const { backend, captured } = buildBackend([
+      searchThenCallTurn(false, [{ id: 'toolu_A', name: 'get_weather' }]),
+      plainToolUseTurn('toolu_B'),
+      finalTurn,
+    ]);
+
+    await backend.complete(
+      ChatModels.CLAUDE_5_SONNET,
+      [{ role: 'user', content: 'weather in Oslo?' }],
+      { stream: true, executeTools: true, reasoningEffort: 'none', tools: [getWeather] },
+      collect().cb
+    );
+
+    expect(getWeather.toolFn).toHaveBeenCalledTimes(2);
+    // The search round's server blocks must not leak into the plain round's replay.
+    expect((captured[2].messages as Array<{ content: unknown }>).at(-2)?.content).toEqual([
+      { type: 'tool_use', id: 'toolu_B', name: 'get_weather', input: { city: 'Oslo' } },
+    ]);
   });
 });
 
