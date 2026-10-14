@@ -10,17 +10,10 @@ export const formatCreditAmount = (credits: number): string => credits.toLocaleS
 export const purchaseCreditsAriaLabel = (credits: number, priceDollars: number): string =>
   `Purchase ${formatCreditAmount(credits)} credits for $${priceDollars}`;
 
-// Below this, `compact` still shows every digit: abbreviating 9,903 to "9.9K" hid single-answer spends.
-const COMPACT_FROM = 100_000;
-
-/** A balance: "9,982 credits", or "124.5K credits" when `compact` and 100,000 or more. Fractions round down, negatives show 0. */
-export function formatCreditBalance(credits: number, compact = false): string {
+/** A balance: "9,982 credits". Fractions round down, negatives show 0. */
+export function formatCreditBalance(credits: number): string {
   const whole = Math.max(0, Math.floor(credits));
-  const num =
-    compact && whole >= COMPACT_FROM
-      ? new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(whole)
-      : whole.toLocaleString('en-US');
-  return `${num} ${plural(whole)}`;
+  return `${whole.toLocaleString('en-US')} ${plural(whole)}`;
 }
 
 /**

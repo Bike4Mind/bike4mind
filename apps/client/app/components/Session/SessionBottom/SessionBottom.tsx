@@ -83,6 +83,8 @@ import { useModerationScanFallback } from './useModerationScanFallback';
 import { useRollDice } from './useRollDice';
 import { useModalState } from './useModalState';
 import { useVoiceState } from './useVoiceState';
+import ComposerStatusLine from './ComposerStatusLine';
+import CreditBalanceChip from '@client/app/components/Session/CreditButton';
 import { pickerAttachedAgents } from './resolveDispatchAgent';
 import { SlashCommandSuggestions } from '@client/app/components/common/CommandSuggestions';
 import { useContentTransformDetector } from '@client/app/hooks/useContentTransformDetector';
@@ -568,14 +570,30 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       ref={ref}
       className="session-bottom"
       sx={{
-        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout || isDataLakeSurface ? '0' : '1.25rem',
-        paddingTop: isDockedLayout || isFloatingLayout ? 0 : '20px',
+        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout || isDataLakeSurface ? '0' : '8px',
+        // On desktop the status line above the box (its own padding) replaces the top padding.
+        paddingTop: isMobile ? '20px' : 0,
         position: 'relative',
       }}
       display={'flex'}
+      flexDirection={'column'}
       justifyContent={'center'}
     >
       <HighlanderFocus targetId="chatInput" />
+      {/* Phones skip the line: the composer is pinned over the keyboard there, and the balance is
+          in the profile. Above the box rather than under it because the file viewer and other
+          embedded chats leave no room below. */}
+      {!isMobile && (
+        <ComposerStatusLine
+          right={<CreditBalanceChip />}
+          sx={{
+            width: '100%',
+            maxWidth: promptBarMaxWidth,
+            marginLeft: isCompactLayout ? '0px' : 'auto',
+            marginRight: isCompactLayout ? '0px' : 'auto',
+          }}
+        />
+      )}
       <Stack
         className="session-bottom-container"
         data-testid="session-bottom-container"

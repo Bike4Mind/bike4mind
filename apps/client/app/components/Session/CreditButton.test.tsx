@@ -19,10 +19,10 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 import CreditBalanceChip from './CreditButton';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const renderChip = (props: { compact?: boolean } = {}) =>
+const renderChip = () =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <CreditBalanceChip {...props} />
+      <CreditBalanceChip />
     </CssVarsProvider>
   );
 
@@ -42,17 +42,11 @@ describe('CreditBalanceChip', () => {
     expect(screen.getByTestId('credits-modal-open')).toBeInTheDocument();
   });
 
-  it('shows the exact balance when compact below 100,000, so a small spend is visible', () => {
-    state.credits = 9903;
-    renderChip({ compact: true });
-    expect(screen.getByTestId('credit-balance-chip')).toHaveTextContent('9,903 credits');
-  });
-
-  it('keeps the full number in the accessible name when the visible label is compact', () => {
+  it('shows the full balance, with the same number in the accessible name', () => {
     state.credits = 124_560;
-    renderChip({ compact: true });
+    renderChip();
     const chip = screen.getByTestId('credit-balance-chip');
-    expect(chip).toHaveTextContent('124.6K credits');
+    expect(chip).toHaveTextContent('124,560 credits');
     expect(chip).toHaveAttribute('aria-label', '124,560 credits. Open credits');
   });
 
