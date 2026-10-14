@@ -159,6 +159,17 @@ describe('POST /api/v1/music-generations', () => {
     expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: 'billing-org' });
   });
 
+  it('bills personal credits when organization_id is explicitly null', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.resolveBillingOrgId.mockResolvedValue(null);
+    h.createMusicJob.mockResolvedValue({ ok: true, job: musicJob(), created: true });
+    const { req, res } = post({ model: 'test-music', prompt: 'p', organization_id: null });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(h.resolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), null);
+    expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: null });
+  });
+
   it.each(['', '   '])('rejects a blank organization_id %j (422) instead of billing personal', async orgId => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = post({ model: 'test-music', prompt: 'p', organization_id: orgId });
@@ -266,6 +277,10 @@ describe('GET /api/v1/music-generations', () => {
     const { req, res } = list();
     await handler(req, res);
     expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({
+      error: expect.stringMatching(/insufficient/i),
+      required_scopes: [ApiKeyScope.AI_GENERATE],
+    });
     expect(h.listByRequester).not.toHaveBeenCalled();
   });
 

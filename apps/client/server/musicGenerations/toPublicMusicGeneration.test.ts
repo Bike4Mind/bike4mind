@@ -4,9 +4,20 @@ import {
   MUSIC_JOB_PUBLIC_ERROR_CODES,
   MusicGenerationSchema,
   type IGenerationJobDocumentOf,
+  type MusicJobPublicErrorCode,
 } from '@bike4mind/common';
 import { OUTPUT_URL_TTL_SECONDS } from '@server/generations/signedOutput';
 import { toPublicMusicGeneration } from './toPublicMusicGeneration';
+
+// Pinned here so a swapped entry in the mapper's own table cannot pass the round-trip below.
+const PUBLIC_ERROR_MESSAGES: Record<MusicJobPublicErrorCode, string> = {
+  content_blocked: 'The provider declined to generate this song under its content policy.',
+  provider_timeout: 'The provider did not finish the song in time.',
+  provider_error: 'The provider failed to generate the song.',
+  region_unavailable: 'This model is not available in your region.',
+  output_too_large: 'The generated song exceeded the maximum size.',
+  cancelled: 'The generation was cancelled.',
+};
 
 const job = (overrides: Partial<IGenerationJobDocumentOf<'music'>> = {}): IGenerationJobDocumentOf<'music'> =>
   ({
@@ -171,7 +182,7 @@ describe('toPublicMusicGeneration', () => {
       job({ state: 'failed', error: { code, message: 'raw upstream text' } }),
       { sign: vi.fn(), now }
     );
-    expect(resource.error).toEqual({ code, message: expect.any(String) });
+    expect(resource.error).toEqual({ code, message: PUBLIC_ERROR_MESSAGES[code] });
     expect(JSON.stringify(resource)).not.toContain('raw upstream text');
     expect(MusicGenerationSchema.parse(resource)).toEqual(resource);
   });
