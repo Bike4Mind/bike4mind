@@ -229,7 +229,11 @@ async function scanAndDecide(
 
   const fresh = await reload(versionId);
   if (auto) {
-    await approvePendingListingVersion(listingId, versionId, version.version, denormFor(fresh, true));
+    // A newer version can take `pendingVersionId` between the two writes; then this one is superseded.
+    if (!(await approvePendingListingVersion(listingId, versionId, version.version, denormFor(fresh, true)))) {
+      await SkillListingVersion.updateOne({ _id: versionId }, { $set: { reviewStatus: 'superseded' } });
+      return reload(versionId);
+    }
     await notifyUser(
       listing.authorUserId,
       `/${version.snapshot.name} v${version.version} is live`,
@@ -320,6 +324,9 @@ export async function decideVersion(
           reviewAckHighRisk: Boolean(decision.ackHighRisk),
           reviewAckMismatch: Boolean(decision.ackMismatch),
           ...(decision.note ? { reviewNote: decision.note } : {}),
+          // An org admin may approve their own Organization listing so sharing isn't blocked, but a
+          // compromised admin must not publish unseen: every self-approval lands in the audit queue.
+          ...(listing.authorUserId === actor.id ? { auditSample: true, auditedAt: null } : {}),
         },
       }
     );

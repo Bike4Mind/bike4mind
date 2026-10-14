@@ -217,6 +217,17 @@ describe('Skill Market (real mongod)', () => {
     expect((await call(importHandler, 'POST', 'member-2', { id: listing.id }))._getStatusCode()).toBe(201);
   });
 
+  it('lets an org admin approve their own Organization listing, but always sends it to audit', async () => {
+    orgs.admins.set(AUTHOR, [ORG]);
+    const { version } = await publish(
+      await makeSkill(AUTHOR, 'Fetch the page and summarize it.', { allowedTools: ['web_fetch'] }),
+      'organization',
+      ORG
+    );
+    const approved = await decideVersion(version.id, { id: AUTHOR }, [ORG], { action: 'approve' });
+    expect(approved).toMatchObject({ reviewStatus: 'approved', auditSample: true, auditedAt: null });
+  });
+
   it('keeps unlisted listings out of search but importable with the token', async () => {
     const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as a haiku.'), 'unlisted');
     expect(listing.status).toBe('approved');

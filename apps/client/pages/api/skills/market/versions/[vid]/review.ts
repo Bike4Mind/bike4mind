@@ -39,6 +39,7 @@ const handler = baseApi().post(async (req, res) => {
   if (!canReviewListing(listing.toJSON() as unknown as ISkillListing, actor, adminOrgIds)) {
     throw new ForbiddenError("You don't have permission to review this listing");
   }
+  if (listing.authorUserId === actor.id) throw new ForbiddenError("You can't audit your own listing");
   const marked = await SkillListingVersion.updateOne(
     { _id: versionId, auditSample: true, auditedAt: null },
     { $set: { auditedAt: new Date(), reviewerUserId: actor.id } }

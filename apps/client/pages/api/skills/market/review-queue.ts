@@ -22,6 +22,10 @@ const handler = baseApi().get<Request<{}, {}, {}, { filter?: string }>>(async (r
 
   const filter = req.query.filter ?? 'pending';
   const scope = actor.isAdmin ? {} : { visibility: 'organization', organizationId: { $in: adminOrgIds } };
+  // Scope org admins BEFORE the queue limits, so other orgs' (or Public) backlog can't crowd theirs out.
+  const scopedListingIds = actor.isAdmin
+    ? null
+    : (await SkillListing.find(scope).select('_id').lean()).map(l => String(l._id));
 
   if (filter === 'legacy') {
     if (!actor.isAdmin) throw new ForbiddenError('Super-admins only');
@@ -45,7 +49,7 @@ const handler = baseApi().get<Request<{}, {}, {}, { filter?: string }>>(async (r
 
   if (filter === 'reports') {
     const grouped = await SkillListingReport.aggregate<{ _id: string; count: number; reports: unknown[] }>([
-      { $match: { status: 'open' } },
+      { $match: { status: 'open', ...(scopedListingIds ? { listingId: { $in: scopedListingIds } } : {}) } },
       { $sort: { createdAt: -1 } },
       {
         $group: {
@@ -78,9 +82,12 @@ const handler = baseApi().get<Request<{}, {}, {}, { filter?: string }>>(async (r
 
   const versionFilter =
     filter === 'audit'
-      ? { auditSample: true, auditedAt: null, reviewStatus: 'auto_approved' }
+      ? { auditSample: true, auditedAt: null, reviewStatus: { $in: ['auto_approved', 'approved'] } }
       : { reviewStatus: 'pending', scanStatus: 'passed' };
-  const versions = await SkillListingVersion.find(versionFilter)
+  const versions = await SkillListingVersion.find({
+    ...versionFilter,
+    ...(scopedListingIds ? { listingId: { $in: scopedListingIds } } : {}),
+  })
     .sort({ createdAt: 1 })
     .limit(QUEUE_LIMIT * 3);
   const listings = await SkillListing.find({ _id: { $in: versions.map(v => v.listingId) }, ...scope });
@@ -102,7 +109,9 @@ const handler = baseApi().get<Request<{}, {}, {}, { filter?: string }>>(async (r
           version: v.toJSON(),
           listing: serializeListing(listing, { includeToken: true }),
           previous: prev && String(prev.id) !== String(v._id) ? prev : null,
-          canDecide: canReviewListing(plain, actor, adminOrgIds),
+          // Self-approvals are audited by someone else, never by their author.
+          canDecide:
+            canReviewListing(plain, actor, adminOrgIds) && !(filter === 'audit' && plain.authorUserId === actor.id),
         },
       ];
     })

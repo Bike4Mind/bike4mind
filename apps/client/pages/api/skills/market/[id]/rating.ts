@@ -40,7 +40,9 @@ const handler = baseApi()
 
     const before = await SkillListingImport.findOneAndUpdate(
       { listingId: String(listing.id), userId },
-      { $set: { stars: body.stars, review: body.review || undefined, ratedAt: new Date() } },
+      body.review
+        ? { $set: { stars: body.stars, review: body.review, ratedAt: new Date() } }
+        : { $set: { stars: body.stars, ratedAt: new Date() }, $unset: { review: 1 } },
       { new: false }
     );
     if (!before) throw new ForbiddenError('Import this skill before rating it');

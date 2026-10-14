@@ -152,7 +152,9 @@ const VersionReviewCard: FC<{ item: ReviewQueueVersionItem; mode: 'pending' | 'a
       <Divider />
       {!item.canDecide ? (
         <Alert color="neutral" variant="soft">
-          You can&apos;t decide this one (you can&apos;t review your own Public listing).
+          {mode === 'audit'
+            ? 'Someone else has to audit this one (it is your own listing).'
+            : "You can't decide this one (you can't review your own Public listing)."}
         </Alert>
       ) : mode === 'audit' ? (
         <Stack direction="row" spacing={1} justifyContent="flex-end">
@@ -248,8 +250,8 @@ const VersionQueue: FC<{ mode: 'pending' | 'audit' }> = ({ mode }) => {
     <Stack spacing={2}>
       {mode === 'audit' ? (
         <Typography level="body-sm" textColor="text.tertiary">
-          A random sample of listings that went live automatically. Spot-check them and delist anything that slipped
-          through.
+          A random sample of listings that went live automatically, plus every listing an org admin approved for
+          themselves. Spot-check them and delist anything that slipped through.
         </Typography>
       ) : null}
       {data.map(item => (
