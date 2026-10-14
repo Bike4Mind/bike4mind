@@ -251,15 +251,32 @@ describe('sharingService - createInvite (session arm authority)', () => {
   const mintLink = (user: IUserDocument, permissions: Permission[] = [Permission.read]) =>
     createInvite(user, { id: SESSION_ID, type: InviteType.Session, permissions } as any, { db });
 
-  it('lets a non-owner sharee holding [read, share] mint a link', async () => {
+  it('lets a non-owner sharee holding [read, share] mint a link that passes share on', async () => {
     findShareAccessById.mockResolvedValue(notebook);
     const user = asUser(SHAREE);
 
-    const invite = await mintLink(user);
+    // ShareModal sends [read, share] for a link, so that is the shape that has to clear the cap.
+    const invite = await mintLink(user, [Permission.read, Permission.share]);
 
     expect(invite.name).toBe('Shared Notebook');
-    expect((invite as any).permissions).toEqual([Permission.read]);
+    expect((invite as any).permissions).toEqual([Permission.read, Permission.share]);
+    // accept.ts re-checks this minter's current access on redemption, keyed on inviterId.
+    expect((invite as any).inviterId).toBe(SHAREE);
     expect(findShareAccessById).toHaveBeenCalledWith(user, SESSION_ID);
+  });
+
+  it('lets a user holding share through a group mint a link', async () => {
+    findShareAccessById.mockResolvedValue({
+      ...notebook,
+      users: [],
+      groups: [{ groupId: 'group-1', permissions: [Permission.read, Permission.share] }],
+    });
+    const user = { ...asUser('group-member'), groups: ['group-1'] } as unknown as IUserDocument;
+
+    const invite = await mintLink(user, [Permission.read, Permission.share]);
+
+    expect((invite as any).permissions).toEqual([Permission.read, Permission.share]);
+    expect((invite as any).inviterId).toBe('group-member');
   });
 
   it('refuses a caller the share-access lookup does not match, e.g. a read-only sharee', async () => {

@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { KnowledgeType } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { FabFile, fabFileRepository } from './FabFileModel';
+import { Session, sessionRepository } from '../auth/SessionModel';
 
 /**
  * Integration coverage (real Mongo via createMongoServer) for the shareable access
@@ -187,6 +188,35 @@ describe('ShareableDocumentRepository.findShareAccessById', () => {
       { id: 'stranger', groups: ['other-grp'] },
       doc.id
     );
+    expect(got).toBeNull();
+  });
+});
+
+// Notebooks mint invites through this same lookup (sharingService/create.ts Session arm), so pin the
+// predicate on the sessions collection too rather than trusting the fabFiles coverage above.
+describe('ShareableDocumentRepository.findShareAccessById (sessions)', () => {
+  afterEach(async () => {
+    await Session.deleteMany({});
+  });
+
+  const seedSession = (overrides: Record<string, unknown> = {}) =>
+    Session.create({ name: 'n', userId: 'owner-1', lastUpdated: new Date(), firstCreated: new Date(), ...overrides });
+
+  it('grants a sharee holding read and share', async () => {
+    const doc = await seedSession({ users: [{ userId: 'sharer-1', permissions: ['read', 'share'] }] });
+    const got = await sessionRepository.shareable.findShareAccessById({ id: 'sharer-1', groups: [] }, doc.id);
+    expect(got?.id).toBe(doc.id);
+  });
+
+  it('denies a read-only sharee', async () => {
+    const doc = await seedSession({ users: [{ userId: 'reader-1', permissions: ['read'] }] });
+    const got = await sessionRepository.shareable.findShareAccessById({ id: 'reader-1', groups: [] }, doc.id);
+    expect(got).toBeNull();
+  });
+
+  it('denies a member of a group whose grant is read only', async () => {
+    const doc = await seedSession({ groups: [{ groupId: 'grp-1', permissions: ['read'] }] });
+    const got = await sessionRepository.shareable.findShareAccessById({ id: 'someone', groups: ['grp-1'] }, doc.id);
     expect(got).toBeNull();
   });
 });

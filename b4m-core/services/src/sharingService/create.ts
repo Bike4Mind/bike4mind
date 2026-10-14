@@ -43,8 +43,7 @@ interface CreateInviteAdapters {
     // TODO: Use Invite model create type def
     invites: IInviteRepository;
     users: Pick<IUserRepository, 'findAllByEmailsOrUsernames' | 'findById' | 'findByIds'>;
-    // add findShareAccessById to fabFiles
-    fabFiles: Pick<IFabFileRepository, 'findByIdAndUserId' | 'shareable'>;
+    fabFiles: Pick<IFabFileRepository, 'shareable'>;
     sessions: Pick<ISessionRepository, 'shareable'>;
     projects: Pick<IProjectRepository, 'shareable'>;
     // TODO: Use Organization model create type def
