@@ -23,6 +23,8 @@ export interface UserActivityMetrics {
   totalUniqueUsers: number;
   internalUsers: number;
   externalUsers: number;
+  /** Distinct non-staff users active in the report window, not bounded by the topUsers leaderboard cap. */
+  activeUsers24h?: number;
   topUsers: Array<{
     _id?: string;
     email: string;
