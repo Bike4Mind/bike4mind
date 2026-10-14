@@ -45,7 +45,7 @@ interface CreateInviteAdapters {
     users: Pick<IUserRepository, 'findAllByEmailsOrUsernames' | 'findById' | 'findByIds'>;
     // add findShareAccessById to fabFiles
     fabFiles: Pick<IFabFileRepository, 'findByIdAndUserId' | 'shareable'>;
-    sessions: Pick<ISessionRepository, 'findByIdAndUserId'>;
+    sessions: Pick<ISessionRepository, 'shareable'>;
     projects: Pick<IProjectRepository, 'shareable'>;
     // TODO: Use Organization model create type def
     organizations: IOrganizationRepository;
@@ -79,7 +79,7 @@ export const createInvite = async (
       name = (doc as IFabFileDocument)?.fileName;
       break;
     case InviteType.Session:
-      doc = await db.sessions.findByIdAndUserId(id, user.id);
+      doc = await db.sessions.shareable.findShareAccessById(user, id);
       name = doc?.name;
       break;
     case InviteType.Organization:
