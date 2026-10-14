@@ -96,12 +96,21 @@ const tokenMatches = (expected: string, given: string | undefined): boolean => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 
-/** In-memory twin of `marketVisibilityFilter` for a single listing; unlisted needs its token. */
-export function canSeeListing(listing: ISkillListing, memberOrgIds: string[], token?: string): boolean {
+/**
+ * In-memory twin of `marketVisibilityFilter` for a single listing. Unlisted needs its token, or an
+ * earlier import of it (so the importer can see and pull updates without keeping the link). That
+ * importer grant is unlisted-only: someone who left an org loses its listings like any non-member.
+ */
+export function canSeeListing(
+  listing: ISkillListing,
+  memberOrgIds: string[],
+  token?: string,
+  hasImported = false
+): boolean {
   if (listing.status !== 'approved' || listing.deletedAt || listing.hiddenByReports) return false;
   if (listing.visibility === 'public') return true;
   if (listing.visibility === 'organization') return memberOrgIds.includes(listing.organizationId ?? '');
-  return tokenMatches(listing.shareToken, token);
+  return hasImported || tokenMatches(listing.shareToken, token);
 }
 
 /**

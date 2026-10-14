@@ -45,7 +45,10 @@ const handler = baseApi()
     const userId = req.user!.id;
     const body = bodySchema.parse(req.body ?? {});
     const listing = await findListing(String(req.query.id));
-    if (!listing || !canSeeListing(listing, await memberOrgIdsFor(userId), body.token)) {
+    const hasImported = listing
+      ? Boolean(await SkillListingImport.exists({ listingId: String(listing.id), userId }))
+      : false;
+    if (!listing || !canSeeListing(listing, await memberOrgIdsFor(userId), body.token, hasImported)) {
       throw new NotFoundError('Listing not found');
     }
     if (listing.authorUserId === userId) throw new BadRequestError('This is your own listing');

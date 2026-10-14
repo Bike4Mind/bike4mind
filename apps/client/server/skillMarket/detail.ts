@@ -23,19 +23,19 @@ export async function buildListingDetail(listing: ISkillListing, actor: MarketAc
     memberOrgIdsFor(actor.id),
     organizationRepository.findIdsAdministeredBy(actor.id),
   ]);
-  const visible = canSeeListing(listing, memberOrgIds, token);
+  const listingId = String(listing.id);
+  const myImport = await SkillListingImport.findOne({ listingId, userId: actor.id }).lean();
+  const visible = canSeeListing(listing, memberOrgIds, token, Boolean(myImport));
   const isAuthor = isListingAuthor(listing, actor);
   const canModerate = canDelistListing(listing, actor, adminOrgIds);
   if (!visible && !isAuthor && !canModerate) throw new NotFoundError('Listing not found');
 
-  const listingId = String(listing.id);
-  const [versionDoc, ratingRows, myImport] = await Promise.all([
+  const [versionDoc, ratingRows] = await Promise.all([
     listing.currentApprovedVersionId ? SkillListingVersion.findById(listing.currentApprovedVersionId) : null,
     SkillListingImport.find({ listingId, stars: { $gte: 1 } })
       .sort({ ratedAt: -1 })
       .limit(20)
       .lean(),
-    SkillListingImport.findOne({ listingId, userId: actor.id }).lean(),
   ]);
 
   // The importer's copy may have been deleted since; only offer "Update" when it still exists.
