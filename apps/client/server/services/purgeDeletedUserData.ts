@@ -79,6 +79,7 @@ async function revokeIntegrationGrants(
   const context = `deleted user ${userId}`;
 
   try {
+    // Both: Atlassian does not document whether revoking the refresh token also kills issued access tokens.
     await revokeAtlassianGrant(atlassianConnect?.refreshToken, context);
     await revokeAtlassianGrant(atlassianConnect?.accessToken, context);
   } catch (err) {
