@@ -42,7 +42,12 @@ export const GeneratedFilterToggle: FC<GeneratedFilterToggleProps> = ({ active, 
     );
   }
   return (
-    <Button {...shared} size="sm" startDecorator={<AutoAwesomeIcon />} sx={{ height: 32, borderRadius: '6px' }}>
+    <Button
+      {...shared}
+      size="sm"
+      startDecorator={<AutoAwesomeIcon />}
+      sx={{ height: 32, borderRadius: '6px', flexShrink: 0 }}
+    >
       {label}
     </Button>
   );

@@ -127,7 +127,13 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
 
   return (
     // Stops propagation so the transport controls do not toggle the surrounding row's selection.
-    <Stack direction="row" spacing={1} alignItems="center" onClick={event => event.stopPropagation()}>
+    <Stack
+      direction="row"
+      spacing={1}
+      alignItems="center"
+      onClick={event => event.stopPropagation()}
+      sx={{ width: '100%' }}
+    >
       <Box
         key={loadAttempt}
         component={isVideo ? 'video' : 'audio'}
@@ -144,8 +150,8 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
         data-testid={isVideo ? 'media-player-video' : 'media-player-audio'}
         sx={
           isVideo
-            ? { width: '100%', maxHeight: '60vh', borderRadius: 'sm', bgcolor: 'black' }
-            : { width: '100%', height: 34 }
+            ? { flex: 1, minWidth: 0, maxHeight: '60vh', borderRadius: 'sm', bgcolor: 'black' }
+            : { flex: 1, minWidth: 0, height: 34 }
         }
       />
       {!hideDownload && (

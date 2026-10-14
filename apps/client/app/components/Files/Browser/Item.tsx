@@ -456,7 +456,8 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
           </Box>
 
           {isPlayableMedia(file) && (
-            <Box sx={{ width: '100%', maxWidth: 320, mt: 1 }}>
+            // A definite width: this column shrinks to its content, which a 100%-wide audio element has none of.
+            <Box sx={{ width: 320, maxWidth: '100%', mt: 1 }}>
               <RowMediaPlayer file={file} />
             </Box>
           )}
