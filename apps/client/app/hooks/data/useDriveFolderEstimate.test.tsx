@@ -53,6 +53,36 @@ describe('useDriveFolderEstimate', () => {
     expect(mockPost).not.toHaveBeenCalledWith(ESTIMATE_URL, expect.anything());
   });
 
+  it('posts again when a different folder is picked', async () => {
+    mockPost.mockResolvedValue({ data: estimate() });
+    const { result, rerender } = renderHook(({ id }: { id: string }) => useDriveFolderEstimate(id), {
+      wrapper: wrapper(),
+      initialProps: { id: 'F1' },
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    rerender({ id: 'F2' });
+    await waitFor(() => expect(mockPost.mock.calls.filter(([url]) => url === ESTIMATE_URL)).toHaveLength(2));
+  });
+
+  it('does not re-post the same folder on a remount within staleTime', async () => {
+    mockPost.mockResolvedValue({ data: estimate() });
+    // One client across both mounts: the second must read the still-fresh cache, not walk Drive again.
+    const client = new QueryClient();
+    const sharedWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+
+    const first = renderHook(() => useDriveFolderEstimate('F1'), { wrapper: sharedWrapper });
+    await waitFor(() => expect(first.result.current.isSuccess).toBe(true));
+    first.unmount();
+
+    const second = renderHook(() => useDriveFolderEstimate('F1'), { wrapper: sharedWrapper });
+    await waitFor(() => expect(second.result.current.isSuccess).toBe(true));
+
+    expect(mockPost.mock.calls.filter(([url]) => url === ESTIMATE_URL)).toHaveLength(1);
+  });
+
   it('does not retry a failed estimate', async () => {
     // Scoped to the estimate URL: other modules in the import graph fire their own api.post calls.
     mockPost.mockImplementation(async (url: string) => {
