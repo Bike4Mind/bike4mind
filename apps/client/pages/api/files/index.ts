@@ -13,7 +13,8 @@ import { accessibleBy } from '@casl/mongoose';
 import { logEvent } from '@server/utils/analyticsLog';
 import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 import { baseApi } from '@server/middlewares/baseApi';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@server/utils/storage';
+import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
 import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
 import qs from 'qs';
 
@@ -110,7 +111,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
             try {
               await fabFilesService.deleteStoredObjects(
                 files,
-                { files: getFilesStorage(), generated: getGeneratedImageStorage() },
+                { files: getFilesStorage(), generated: getGeneratedCopyStore() },
                 req.logger
               );
             } catch (error) {

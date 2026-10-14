@@ -151,7 +151,7 @@ describe('DELETE /api/sessions/bulk', () => {
     const [, , adapters] = mockDeleteSession.mock.calls[0];
     expect(adapters.storage).toEqual({
       files: expect.objectContaining({ bucket: 'files' }),
-      generated: expect.objectContaining({ bucket: 'generated' }),
+      generated: expect.objectContaining({ storage: expect.objectContaining({ bucket: 'generated' }) }),
     });
   });
 

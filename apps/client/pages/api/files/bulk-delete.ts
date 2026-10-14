@@ -15,7 +15,8 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@server/utils/storage';
+import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
 import { logEvent } from '@server/utils/analyticsLog';
 import { FileEvents } from '@bike4mind/common';
 import { Request } from 'express';
@@ -90,7 +91,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
                 ...lakeMembershipAuditDb,
               },
               storage: getFilesStorage(),
-              generatedStorage: getGeneratedImageStorage(),
+              generatedCopies: getGeneratedCopyStore(),
               onDeleteComplete: async (_fabFile, sizeToDeduct) => {
                 totalSizeToDeduct += sizeToDeduct;
               },

@@ -15,7 +15,7 @@ import { satisfiesMembershipScope, type MembershipLake } from '../dataLakeServic
 import { registryMembershipScope } from '../dataLakeService/lakeMembershipScope';
 import type { ManageActor } from '../dataLakeService/manageRule';
 import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
-import { deleteStoredObjects, type ObjectStorage } from './deleteStoredObjects';
+import { deleteStoredObjects, type GeneratedCopyStore, type ObjectStorage } from './deleteStoredObjects';
 import {
   recordLakeMembershipChange,
   type LakeMembershipAuditAdapters,
@@ -61,11 +61,10 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
   };
   storage: ObjectStorage;
   /**
-   * The generated-content bucket, for the inline-playback copy an in-chat generated asset keeps there. Optional
-   * so the doors that never delete generated files need not wire it; a door that can must, or the copy outlives
-   * the file.
+   * Where an in-chat generated asset's inline-playback copy lives. Optional so the doors that never delete
+   * generated files need not wire it; a door that can must, or the copy outlives the file.
    */
-  generatedStorage?: ObjectStorage;
+  generatedCopies?: GeneratedCopyStore;
   onDeleteComplete?: (fabFile: IFabFileDocument, sizeToDeduct: number) => Promise<void>;
   /**
    * Self-host OpenSearch only (undefined elsewhere) - without this, a deleted file's chunks
@@ -93,7 +92,7 @@ export const deleteFabFile = async (
   const {
     db,
     storage,
-    generatedStorage,
+    generatedCopies,
     onDeleteComplete,
     searchIndex,
     origin = 'person',
@@ -174,8 +173,7 @@ export const deleteFabFile = async (
       await db.sessions.update({ id: notebook.id, knowledgeIds: updatedKnowledgeIds });
     }
 
-    Logger.globalInstance.log(`[deleteFabFile] Deleting stored objects - path: ${ownedFile.filePath}`);
-    await deleteStoredObjects([ownedFile], { files: storage, generated: generatedStorage });
+    await deleteStoredObjects([ownedFile], { files: storage, generated: generatedCopies });
 
     // sizeToDeduct is always a positive number, representing the amount to deduct from the user's storage
     if (onDeleteComplete) {

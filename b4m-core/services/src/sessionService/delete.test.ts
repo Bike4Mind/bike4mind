@@ -128,7 +128,10 @@ describe('sessionService - delete', () => {
     const sharedIn = { id: 'file-shared', userId: otherUserId, filePath: 'uploads/theirs.pdf', users: [] };
     const storage = {
       files: { delete: vi.fn().mockResolvedValue(undefined) },
-      generated: { delete: vi.fn().mockResolvedValue(undefined) },
+      generated: {
+        storage: { delete: vi.fn().mockResolvedValue(undefined) },
+        quests: { findSessionIdsByImage: vi.fn().mockResolvedValue([sessionId]) },
+      },
     };
 
     (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
@@ -139,7 +142,7 @@ describe('sessionService - delete', () => {
     await deleteSession(ownerId, { id: sessionId }, { ...adapters, storage });
 
     expect(storage.files.delete.mock.calls.map(([key]) => key)).toEqual(['uploads/a.pdf', 'generated-audio/b.mp3']);
-    expect(storage.generated.delete.mock.calls).toEqual([['b.mp3']]);
+    expect(storage.generated.storage.delete.mock.calls).toEqual([['b.mp3']]);
     const tombstoneOrder = (mockFabFileRepo.deleteManyInIds as Mock).mock.invocationCallOrder[0];
     expect(storage.files.delete.mock.invocationCallOrder[0]).toBeGreaterThan(tombstoneOrder);
   });

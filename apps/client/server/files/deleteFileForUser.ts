@@ -17,7 +17,8 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@server/utils/storage';
+import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
 import type { Request } from 'express';
 
 /**
@@ -63,7 +64,7 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
           ...lakeMembershipAuditDb,
         },
         storage: getFilesStorage(),
-        generatedStorage: getGeneratedImageStorage(),
+        generatedCopies: getGeneratedCopyStore(),
         onDeleteComplete: async (_fabFile, size) => {
           sizeToDeduct = size;
         },

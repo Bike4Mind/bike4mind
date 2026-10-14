@@ -271,7 +271,7 @@ describe('DELETE /api/files', () => {
     const [files, buckets] = mockRefs.storedObjectArgs as [unknown, { files: unknown; generated: unknown }];
     expect(files).toBe(fabFileDocs);
     expect(buckets.files).toMatchObject({ bucket: 'files' });
-    expect(buckets.generated).toMatchObject({ bucket: 'generated' });
+    expect(buckets.generated).toMatchObject({ storage: { bucket: 'generated' } });
   });
 
   it('completes the request without throwing', async () => {
