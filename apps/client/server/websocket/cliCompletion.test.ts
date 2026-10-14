@@ -161,7 +161,13 @@ describe('cliCompletion websocket handler', () => {
     mockExecuteCompletion.mockImplementation(
       async ({ onChunk }: { onChunk: (text: string[], info: unknown) => Promise<void> }) => {
         await onChunk(['partial'], { inputTokens: 1000, outputTokens: 20, turnUsage: turnUsage.slice(0, 1) });
-        await onChunk(['done'], { inputTokens: 3000, outputTokens: 50, turnUsage });
+        await onChunk(['done'], {
+          inputTokens: 3000,
+          outputTokens: 50,
+          cacheReadInputTokens: 301_000,
+          cacheCreationInputTokens: 500,
+          turnUsage,
+        });
         // A trailing frame without the breakdown must not clear the latched one.
         await onChunk([''], { stopReason: 'end_turn' });
       }
@@ -170,7 +176,13 @@ describe('cliCompletion websocket handler', () => {
     await run();
 
     expect(mockLogCompletionAnalytics).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'success', finalInputTokens: 3000, finalTurnUsage: turnUsage })
+      expect.objectContaining({
+        type: 'success',
+        finalInputTokens: 3000,
+        finalCacheReadTokens: 301_000,
+        finalCacheWriteTokens: 500,
+        finalTurnUsage: turnUsage,
+      })
     );
   });
 

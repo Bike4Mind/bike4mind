@@ -112,7 +112,13 @@ describe('completion analytics', () => {
     vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'c1' }] as never);
     vi.mocked(executeCompletion).mockImplementationOnce(async ({ onChunk }) => {
       await onChunk(['partial'], { inputTokens: 1000, outputTokens: 20, turnUsage: turnUsage.slice(0, 1) });
-      await onChunk(['done'], { inputTokens: 3000, outputTokens: 50, turnUsage });
+      await onChunk(['done'], {
+        inputTokens: 3000,
+        outputTokens: 50,
+        cacheReadInputTokens: 301_000,
+        cacheCreationInputTokens: 500,
+        turnUsage,
+      });
       // A trailing frame without the breakdown must not clear the latched one.
       await onChunk([''], { stopReason: 'end_turn' });
     });
@@ -121,7 +127,13 @@ describe('completion analytics', () => {
     await Promise.all(tracked);
 
     expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'success', finalInputTokens: 3000, finalTurnUsage: turnUsage })
+      expect.objectContaining({
+        type: 'success',
+        finalInputTokens: 3000,
+        finalCacheReadTokens: 301_000,
+        finalCacheWriteTokens: 500,
+        finalTurnUsage: turnUsage,
+      })
     );
   });
 });

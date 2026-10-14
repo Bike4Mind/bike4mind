@@ -110,4 +110,22 @@ describe('logCompletionAnalytics - per-request pricing', () => {
       .mock.calls.find(([event]) => event.type === AiEvents.COMPLETION_API_COMPLETED);
     expect((completedCall?.[0] as any)?.metadata.creditsUsed).toBe(84);
   });
+
+  it('prices the cache tokens in the totals fallback when no per-request usage was reported', async () => {
+    await logCompletionAnalytics({
+      ...baseParams,
+      finalCacheReadTokens: 150_000,
+      finalCacheWriteTokens: 2_000,
+      body: { model: 'gpt-4.1', messages: [] } as any,
+    });
+
+    expect(getTurnsCost).not.toHaveBeenCalled();
+    expect(getTextModelCost).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'gpt-4.1-2025-04-14' }),
+      baseParams.finalInputTokens,
+      baseParams.finalOutputTokens,
+      150_000,
+      2_000
+    );
+  });
 });

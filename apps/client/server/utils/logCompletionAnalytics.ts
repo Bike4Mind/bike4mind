@@ -41,6 +41,9 @@ interface SuccessAnalyticsParams extends BaseAnalyticsParams {
   type: 'success';
   finalInputTokens: number;
   finalOutputTokens: number;
+  /** Cache tokens from the completion frames (disjoint from finalInputTokens), for the totals fallback. */
+  finalCacheReadTokens?: number;
+  finalCacheWriteTokens?: number;
   /** Per-request usage from the completion frames, when the adapter reports it (see getTurnsCost). */
   finalTurnUsage?: TurnUsage[];
   hasToolCalls: boolean;
@@ -52,6 +55,8 @@ interface FailureAnalyticsParams extends BaseAnalyticsParams {
   error: unknown;
   finalInputTokens?: never;
   finalOutputTokens?: never;
+  finalCacheReadTokens?: never;
+  finalCacheWriteTokens?: never;
   finalTurnUsage?: never;
   hasToolCalls?: never;
   modelInfo?: never;
@@ -74,7 +79,15 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
   const authMethod = apiKeyInfo ? ('api_key' as const) : ('jwt' as const);
 
   if (type === 'success') {
-    const { finalInputTokens, finalOutputTokens, finalTurnUsage, hasToolCalls, db } = params;
+    const {
+      finalInputTokens,
+      finalOutputTokens,
+      finalCacheReadTokens,
+      finalCacheWriteTokens,
+      finalTurnUsage,
+      hasToolCalls,
+      db,
+    } = params;
 
     let creditsUsed = 0;
     try {
@@ -91,7 +104,13 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
       if (modelInfo && finalInputTokens > 0 && finalOutputTokens > 0) {
         const costInUsd = finalTurnUsage?.length
           ? getTurnsCost(modelInfo, finalTurnUsage)
-          : getTextModelCost(modelInfo, finalInputTokens, finalOutputTokens);
+          : getTextModelCost(
+              modelInfo,
+              finalInputTokens,
+              finalOutputTokens,
+              finalCacheReadTokens ?? 0,
+              finalCacheWriteTokens ?? 0
+            );
         creditsUsed = usdToCredits(costInUsd); // markup applied here
       } else if (!modelInfo) {
         // Model not found - log warning but don't fail analytics

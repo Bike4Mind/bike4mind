@@ -181,6 +181,8 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         let apiKeyInfoForCompletion: { keyId: string; keyName: string } | undefined;
         let finalInputTokens = 0;
         let finalOutputTokens = 0;
+        let finalCacheReadTokens = 0;
+        let finalCacheWriteTokens = 0;
         let finalTurnUsage: TurnUsage[] | undefined;
         let hasToolCalls = false;
 
@@ -216,6 +218,8 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             onChunk: async (text, info) => {
               if (info?.inputTokens) finalInputTokens = info.inputTokens;
               if (info?.outputTokens) finalOutputTokens = info.outputTokens;
+              if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
+              if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
               if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
               if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
@@ -246,6 +250,8 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             method: 'POST',
             finalInputTokens,
             finalOutputTokens,
+            finalCacheReadTokens,
+            finalCacheWriteTokens,
             finalTurnUsage,
             hasToolCalls,
             db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },

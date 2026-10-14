@@ -134,6 +134,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // Track token counts for analytics
   let finalInputTokens = 0;
   let finalOutputTokens = 0;
+  let finalCacheReadTokens = 0;
+  let finalCacheWriteTokens = 0;
   let finalTurnUsage: TurnUsage[] | undefined;
   let hasToolCalls = false;
 
@@ -171,6 +173,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         // Track token counts and tool usage
         if (info?.inputTokens) finalInputTokens = info.inputTokens;
         if (info?.outputTokens) finalOutputTokens = info.outputTokens;
+        if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
+        if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
         if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
         if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
@@ -205,6 +209,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       method: 'WS',
       finalInputTokens,
       finalOutputTokens,
+      finalCacheReadTokens,
+      finalCacheWriteTokens,
       finalTurnUsage,
       hasToolCalls,
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
