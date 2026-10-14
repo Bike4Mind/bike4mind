@@ -539,7 +539,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          400000: { input: 2.5 / 1_000_000, output: 15.0 / 1_000_000 }, // $2.50 / 1M Input tokens, $15.00 / 1M Output tokens
+          272_000: { input: 2.5 / 1_000_000, output: 15.0 / 1_000_000 }, // <=272k: $2.50 / 1M in, $15.00 / 1M out
+          400000: { input: 5.0 / 1_000_000, output: 22.5 / 1_000_000 }, // >272k: $5.00 / 1M in, $22.50 / 1M out
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -630,7 +631,7 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: false,
         pricing: {
-          128_000: { input: 1.75 / 1_000_000, output: 14.0 / 1_000_000 }, // $1.25 / 1M Input tokens, $10.00 / 1M Output tokens
+          128_000: { input: 1.75 / 1_000_000, output: 14.0 / 1_000_000 }, // $1.75 / 1M Input tokens, $14.00 / 1M Output tokens
         },
         supportsVision: true,
         supportsImageVariation: false,
