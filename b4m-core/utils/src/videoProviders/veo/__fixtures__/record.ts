@@ -12,7 +12,7 @@
  *
  * `blocked` needs a prompt Veo actually refuses; the gory default was NOT blocked live (Veo made a normal video).
  * Set BLOCKED_PROMPT to override it, and BLOCKED_IMAGE=<local png/jpg/webp> to submit image-to-video instead (the
- * likeness filter fires only on an input image). BLOCKED_NAME overrides the written name (default `blocked`).
+ * likeness filter fires only on an input image).
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { extname } from 'node:path';
@@ -227,7 +227,6 @@ const scenarios: Record<string, () => Promise<void>> = {
     const blockedPrompt =
       process.env.BLOCKED_PROMPT ?? 'Extremely graphic, gory footage of a person being violently injured.';
     const imagePath = process.env.BLOCKED_IMAGE;
-    const name = process.env.BLOCKED_NAME ?? 'blocked';
     const body = imagePath
       ? submitBody(
           {
@@ -239,11 +238,11 @@ const scenarios: Record<string, () => Promise<void>> = {
       : submitBody({ prompt: blockedPrompt });
     const blocked = await call('POST', SUBMIT_PATH, body);
     const { status } = blocked.exchange.response;
-    process.stdout.write(`${name}: submit ${status}\n`);
+    process.stdout.write(`blocked: submit ${status}\n`);
     // A parameter 400 must not land as a block fixture; only one the adapter would classify as blocked does.
     if (status >= 400 && classifyGeminiSubmitFailure(status, blocked.parsed, 'veo') !== 'blocked') {
       throw new Error(
-        `${name}: submit ${status} is not a safety block; nothing written: ${JSON.stringify(blocked.exchange.response.body)}`
+        `blocked: submit ${status} is not a safety block; nothing written: ${JSON.stringify(blocked.exchange.response.body)}`
       );
     }
     const exchanges: Exchange[] = [{ name: 'submit', ...blocked.exchange }];
@@ -251,13 +250,13 @@ const scenarios: Record<string, () => Promise<void>> = {
       const { exchanges: polls, terminal } = await pollToTerminal(operationNameOf(blocked.parsed));
       // The prompt did not trigger a block (a billed video was generated): a success recording must not pass as one.
       if (findVideoUri(terminal)) {
-        throw new Error(`${name}: the operation produced a video, so the prompt was not blocked; nothing written`);
+        throw new Error(`blocked: the operation produced a video, so the prompt was not blocked; nothing written`);
       }
       exchanges.push(...polls);
     }
     const redacted = redactBlocked(exchanges, blockedPrompt);
     if (!Array.isArray(redacted)) throw new Error('redaction changed the exchange list shape');
-    write(name, redacted);
+    write('blocked', redacted);
   },
 
   // An unsupported aspect ratio is rejected at submit, before any generation is billed.
