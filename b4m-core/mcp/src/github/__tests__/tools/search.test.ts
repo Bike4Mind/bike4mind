@@ -12,6 +12,7 @@ vi.mock('../../client.js', () => ({
 import { registerSearchTools } from '../../tools/search.js';
 import { octokit } from '../../client.js';
 import { TOOL_SEARCH_CODE } from '../../constants.js';
+import { ALL_REPOSITORIES, parseRepoScope } from '../../repoScope.js';
 import { createMockServer, parseResponse, type RegisteredTool } from '../test-utils.js';
 
 describe('Search Tools', () => {
@@ -21,12 +22,34 @@ describe('Search Tools', () => {
     vi.clearAllMocks();
     const mock = createMockServer();
     registeredTools = mock.registeredTools;
-    registerSearchTools(mock.server);
+    registerSearchTools(mock.server, ALL_REPOSITORIES);
   });
 
   describe(TOOL_SEARCH_CODE, () => {
     it('should register the tool', () => {
       expect(registeredTools.has(TOOL_SEARCH_CODE)).toBe(true);
+    });
+
+    it('drops results from repositories outside the selection', async () => {
+      const mock = createMockServer();
+      registerSearchTools(mock.server, parseRepoScope(JSON.stringify(['owner/repo'])));
+      vi.mocked(octokit.search.code).mockResolvedValueOnce({
+        data: {
+          total_count: 2,
+          incomplete_results: false,
+          items: [
+            { name: 'a.ts', path: 'a.ts', repository: { full_name: 'Owner/Repo', private: false } },
+            { name: 'b.ts', path: 'b.ts', repository: { full_name: 'other/secret', private: true } },
+          ],
+        },
+      } as never);
+
+      const parsed = parseResponse(
+        await mock.registeredTools.get(TOOL_SEARCH_CODE)!.handler({ query: 'token repo:other/secret' })
+      );
+
+      expect((parsed.items as Array<{ name: string }>).map(item => item.name)).toEqual(['a.ts']);
+      expect(parsed.excluded_outside_selected_repositories).toBe(1);
     });
 
     it('should return search results on success', async () => {

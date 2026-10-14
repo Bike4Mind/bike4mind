@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { z } from 'zod';
 
 vi.mock('../../config.js', () => ({
   githubToken: 'mock-token',
@@ -44,6 +45,17 @@ describe('Pull Request Tools', () => {
   });
 
   describe(TOOL_LIST_PULL_REQUESTS, () => {
+    it('rejects an author that would add a search qualifier for another repository', () => {
+      const { server } = createMockServer();
+      registerPullTools(server);
+      const registration = vi.mocked(server.tool).mock.calls.find(([name]) => name === TOOL_LIST_PULL_REQUESTS)!;
+      // The input shape is the argument just before the handler.
+      const shape = registration[registration.length - 2] as Record<string, z.ZodType>;
+
+      expect(shape.author.safeParse('x repo:other/secret').success).toBe(false);
+      expect(shape.author.safeParse('octocat').success).toBe(true);
+    });
+
     it('should register the tool', () => {
       expect(registeredTools.has(TOOL_LIST_PULL_REQUESTS)).toBe(true);
     });

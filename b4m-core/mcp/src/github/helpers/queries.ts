@@ -267,12 +267,20 @@ export const CONVERT_PR_TO_DRAFT_MUTATION = `
   }
 `;
 
-// Repository info queries (for whitelist validation)
+// Repository info queries (resolve a node ID to its repository for the selected-repositories guard)
 
 export const GET_REPOSITORY_FROM_ISSUE_NODE_ID_QUERY = `
   query($nodeId: ID!) {
     node(id: $nodeId) {
       ... on Issue {
+        repository {
+          owner {
+            login
+          }
+          name
+        }
+      }
+      ... on PullRequest {
         repository {
           owner {
             login
@@ -290,6 +298,14 @@ export const GET_REPOSITORY_FROM_PROJECT_ITEM_ID_QUERY = `
       ... on ProjectV2Item {
         content {
           ... on Issue {
+            repository {
+              owner {
+                login
+              }
+              name
+            }
+          }
+          ... on PullRequest {
             repository {
               owner {
                 login

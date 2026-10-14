@@ -18,6 +18,7 @@ vi.mock('../../client.js', () => ({
 import { registerRepoTools } from '../../tools/repos.js';
 import { octokit } from '../../client.js';
 import { TOOL_LIST_REPOSITORIES, TOOL_GET_REPOSITORY } from '../../constants.js';
+import { ALL_REPOSITORIES, parseRepoScope } from '../../repoScope.js';
 import { createMockServer, parseResponse, type RegisteredTool } from '../test-utils.js';
 
 describe('Repository Tools', () => {
@@ -27,7 +28,7 @@ describe('Repository Tools', () => {
     vi.clearAllMocks();
     const mock = createMockServer();
     registeredTools = mock.registeredTools;
-    registerRepoTools(mock.server);
+    registerRepoTools(mock.server, ALL_REPOSITORIES);
   });
 
   describe(TOOL_LIST_REPOSITORIES, () => {
@@ -68,6 +69,24 @@ describe('Repository Tools', () => {
       expect(parsed.total_count).toBe(1);
       expect((parsed.repositories as Array<{ full_name: string }>)[0].full_name).toBe('owner/repo1');
       expect((parsed.repositories as Array<{ stars: number }>)[0].stars).toBe(100);
+    });
+
+    it('lists only selected repositories when the connection is limited to a selection', async () => {
+      const mock = createMockServer();
+      registerRepoTools(mock.server, parseRepoScope(JSON.stringify(['Owner/Repo1'])));
+      vi.mocked(octokit.repos.listForAuthenticatedUser).mockResolvedValueOnce({
+        data: [
+          { full_name: 'owner/repo1', owner: { login: 'owner' }, name: 'repo1' },
+          { full_name: 'other/secret', owner: { login: 'other' }, name: 'secret' },
+        ],
+      } as never);
+
+      const parsed = parseResponse(await mock.registeredTools.get(TOOL_LIST_REPOSITORIES)!.handler({}));
+
+      expect((parsed.repositories as Array<{ full_name: string }>).map(repo => repo.full_name)).toEqual([
+        'owner/repo1',
+      ]);
+      expect(parsed.total_count).toBe(1);
     });
 
     it('should pass filter parameters to API', async () => {
