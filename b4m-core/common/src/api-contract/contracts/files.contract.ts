@@ -10,7 +10,7 @@ import {
   ListFilesResponseSchema,
   UpdateFileRequestSchema,
 } from '../../schemas/publicFile';
-import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, ScopeForbiddenErrorSchema, StorageLimitErrorSchema } from '../../schemas/chat';
 
 /**
  * File upload and read-back for integrators - the input half of any flow that takes a file id
@@ -59,8 +59,10 @@ export const createFileUploadContract = defineEndpoint({
       },
     },
     400: {
-      description: 'Unsupported file type, file larger than the upload limit, or storage quota exceeded.',
-      schema: ApiErrorSchema,
+      description:
+        'Unsupported file type, file larger than the upload limit, or storage quota exceeded. A size or quota ' +
+        'refusal carries a stable `errorCode` plus `used_bytes`, `limit_bytes` and `requested_bytes`.',
+      schema: StorageLimitErrorSchema,
     },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
