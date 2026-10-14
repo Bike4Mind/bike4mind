@@ -37,11 +37,13 @@ import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import {
   disableDriveConnectionForLake,
   getValidConnectionDriveAccessToken,
+  isTerminalDriveGrantError,
   releaseDriveConnection,
 } from '@server/integrations/google/drive/common';
 import {
   createDriveClient,
   isDriveRateLimitError,
+  isDriveUnauthorizedError,
   listChanges,
   getStartPageToken,
   isDriveInvalidCursorError,
@@ -663,7 +665,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // An org connection's own token, else (every personal connection) the connecting user's live grant.
     // A credential failure marks the connection credential_error and throws so SQS retries -> DLQ.
     const accessToken = await getValidConnectionDriveAccessToken(connectionId, connectionOwner);
-    const drive = createDriveClient(accessToken);
+    let drive = createDriveClient(accessToken);
 
     // 1) Resolve this run's Drive-side signal: an incremental `changes.list` pull (scoped to what
     //    happened since the stored cursor) whenever the connection already carries one and the caller
@@ -745,10 +747,31 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // empty delta forever. A definite "gone" parks the connection in needs_reconnect (excluded from
     // findDueForPoll and claimForSync) until the user re-picks the folder, which heals it via
     // drive-sync's updateCredential.
+    //
+    // A 401 is Drive rejecting the token itself, which a grant revoked at Google does well before a cached
+    // user token's expiresAt. One retry through a forced refresh lets Google's invalid_grant decide: that
+    // marks the connection credential_error (and ends the claim) inside getValidConnectionDriveAccessToken,
+    // so the run stops here rather than retrying through SQS to the DLQ.
+    const probeFolder = async (id: string): Promise<ConnectedFolderReachability> => {
+      try {
+        return await probeConnectedFolder(drive, connection.driveFolderId);
+      } catch (e) {
+        if (!isDriveUnauthorizedError(e)) throw e;
+        drive = createDriveClient(
+          await getValidConnectionDriveAccessToken(id, connectionOwner, { forceRefresh: true })
+        );
+        return probeConnectedFolder(drive, connection.driveFolderId);
+      }
+    };
     let folderReachability: ConnectedFolderReachability;
     try {
-      folderReachability = await probeConnectedFolder(drive, connection.driveFolderId);
+      folderReachability = await probeFolder(connectionId);
     } catch (e) {
+      if (isTerminalDriveGrantError(e)) {
+        logger.warn('[driveLakeIngest] Drive grant was revoked; connection marked credential_error', { connectionId });
+        if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+        return;
+      }
       if (!isDriveRateLimitError(e)) throw e;
       await deferDriveSync('folder_probe', 'rate_limited', e);
       return;

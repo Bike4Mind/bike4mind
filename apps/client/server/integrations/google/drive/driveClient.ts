@@ -166,6 +166,21 @@ export function isDriveNotFoundError(e: unknown): boolean {
   return false;
 }
 
+/**
+ * Is this error Drive rejecting the access token itself (a 401)? That is a verdict on the CREDENTIAL,
+ * not on any file: a grant revoked at Google invalidates the token while our stored expiresAt still
+ * reads it as valid, so callers must route this to a refresh/reconnect rather than "folder gone".
+ */
+export function isDriveUnauthorizedError(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null) return false;
+  const err = e as Record<string, unknown>;
+  const response = err.response as Record<string, unknown> | undefined;
+  for (const raw of [err.code, err.status, response?.status]) {
+    if ((typeof raw === 'string' ? Number(raw) : raw) === 401) return true;
+  }
+  return false;
+}
+
 // The 403 reasons Drive gives for a credential that may not touch one specific file. Allow-listed
 // rather than "any non-throttle 403": project-wide 403s (dailyLimitExceeded, accessNotConfigured,
 // domainPolicy) are not about the folder, and reading them as "un-shared" would park every
@@ -230,21 +245,23 @@ export function createDriveClient(accessToken: string): drive_v3.Drive {
 }
 
 /**
- * `ok: false` means Drive never gave an access ANSWER - it throttled us. Modelled as its own arm
- * rather than a flag on the success shape so a caller cannot read `exists: false` off a throttle
- * and tell the user they lost access to their own folder (#2395).
+ * `ok: false` means Drive never gave an access ANSWER - it throttled us, or rejected the access token
+ * itself. Modelled as its own arm rather than a flag on the success shape so a caller cannot read
+ * `exists: false` off either and tell the user they lost access to their own folder (#2395).
  */
 export type FolderAccess =
   | { ok: true; exists: boolean; isFolder: boolean; canRead: boolean }
-  | { ok: false; reason: 'rate_limited'; detail?: string };
+  | { ok: false; reason: 'rate_limited'; detail?: string }
+  | { ok: false; reason: 'unauthorized'; detail?: string };
 
 /**
  * Read-access probe for a single folder, using the CALLER's own Drive credential. Drive returns 404
  * (not 403) for a file the caller can't see, so a successful `files.get` is itself proof the caller
  * can read the folder - that is the signal drive-sync uses to gate the global folder claim (a user
  * must be able to read a folder before they can claim it for a lake). Never throws: a permanent
- * error (no access, bad id) resolves to `exists: false` so the caller fails closed, and a throttle
- * that outlives the retry budget comes back as `ok: false` so the caller can say so instead.
+ * error (no access, bad id) resolves to `exists: false` so the caller fails closed, while a throttle
+ * that outlives the retry budget or a rejected access token comes back as `ok: false` so the caller
+ * can say so instead.
  */
 export async function getFolderAccess(drive: drive_v3.Drive, folderId: string): Promise<FolderAccess> {
   if (!isValidDriveFolderId(folderId)) return { ok: true, exists: false, isFolder: false, canRead: false };
@@ -265,9 +282,9 @@ export async function getFolderAccess(drive: drive_v3.Drive, folderId: string): 
       canRead: file.capabilities?.canDownload !== false,
     };
   } catch (e) {
-    if (isDriveRateLimitError(e)) {
-      return { ok: false, reason: 'rate_limited', detail: e instanceof Error ? e.message : String(e) };
-    }
+    const detail = e instanceof Error ? e.message : String(e);
+    if (isDriveRateLimitError(e)) return { ok: false, reason: 'rate_limited', detail };
+    if (isDriveUnauthorizedError(e)) return { ok: false, reason: 'unauthorized', detail };
     return { ok: true, exists: false, isFolder: false, canRead: false };
   }
 }
@@ -291,7 +308,9 @@ export const UNREACHABLE_FOLDER_MESSAGES: Record<UnreachableFolderReason, string
  * Is a connection's root folder still there for the connection's own credential? Unlike
  * getFolderAccess this THROWS on anything that is not a definite answer (a throttle, a 5xx, a network
  * blip), because a `reachable: false` here parks the connection in needs_reconnect and stops it
- * polling - a transient failure must never be read as "the folder is gone".
+ * polling - a transient failure must never be read as "the folder is gone". A rejected token (401,
+ * isDriveUnauthorizedError) also throws: it is a credential verdict, which the caller settles by
+ * refreshing the token, not a folder one.
  *
  * A trashed folder still answers files.get for its owner, and listing its children excludes trashed
  * items silently, so `trashed` is read explicitly rather than inferred from an empty walk.

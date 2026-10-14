@@ -45,9 +45,14 @@ vi.mock('@server/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => (h.gatedFlags.push(flag), () => {}),
 }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
-vi.mock('@server/integrations/google/drive/common', () => ({
-  getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
-}));
+vi.mock('@server/integrations/google/drive/common', async () => {
+  const { BadRequestError } = await import('@server/utils/errors');
+  return {
+    getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
+    // Mirrors the real predicate: every reconnect-class failure is a BadRequestError.
+    isTerminalDriveGrantError: (e: unknown) => e instanceof BadRequestError,
+  };
+});
 // Keep isValidDriveFolderId real (the folder-id validation runs for real); mock only the Drive calls.
 vi.mock('@server/integrations/google/drive/driveClient', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>();
@@ -93,6 +98,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
 });
 
 import handler from '../drive-sync';
+import { BadRequestError } from '@server/utils/errors';
 
 const FOLDER_ID = 'Folder_Abc-123';
 
@@ -225,6 +231,93 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
       h.connFindByDriveFolderId.mockResolvedValue(null);
       await resync();
       expect(h.probeConnectedFolder).not.toHaveBeenCalled();
+      expect(h.connUpdateHealth).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a re-sync after the user revoked Google access', () => {
+    const REVOKED = 'Google Drive access was revoked - reconnect required';
+    const connection = (overrides: Record<string, unknown> = {}) => ({
+      id: 'conn1',
+      targetDataLakeId: 'lake1',
+      connectedBy: 'u1',
+      status: 'connected',
+      ...overrides,
+    });
+    const body = { dataLakeId: 'lake1', driveFolderId: FOLDER_ID };
+
+    beforeEach(() => {
+      h.connFindByDriveFolderId.mockResolvedValue(connection());
+    });
+
+    it('refreshes once, and a revoked grant marks the connection credential_error and answers 400', async () => {
+      h.getFolderAccess.mockResolvedValue({ ok: false, reason: 'unauthorized' });
+      h.getValidUserDriveAccessToken
+        .mockResolvedValueOnce('stale-token')
+        .mockRejectedValueOnce(new BadRequestError(REVOKED));
+      const { res } = makeRes();
+
+      const failure = await run(makeReq(body), res).catch((e: unknown) => e);
+
+      expect(failure).toBeInstanceOf(BadRequestError);
+      expect(failure).toHaveProperty('message', REVOKED);
+      expect(h.getValidUserDriveAccessToken).toHaveBeenCalledTimes(2);
+      expect(h.getValidUserDriveAccessToken).toHaveBeenNthCalledWith(1, 'u1', { forceRefresh: false });
+      expect(h.getValidUserDriveAccessToken).toHaveBeenNthCalledWith(2, 'u1', { forceRefresh: true });
+      expect(h.connUpdateHealth).toHaveBeenCalledWith('conn1', { status: 'credential_error', lastError: REVOKED });
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.connCreate).not.toHaveBeenCalled();
+    });
+
+    it('proceeds normally when the forced refresh mints a token Drive accepts', async () => {
+      h.getFolderAccess
+        .mockResolvedValueOnce({ ok: false, reason: 'unauthorized' })
+        .mockResolvedValueOnce({ ok: true, exists: true, isFolder: true, canRead: true });
+      h.getValidUserDriveAccessToken.mockResolvedValueOnce('stale-token').mockResolvedValueOnce('fresh-token');
+      const { res, status } = makeRes();
+
+      await run(makeReq(body), res);
+
+      expect(h.createDriveClient).toHaveBeenNthCalledWith(2, 'fresh-token');
+      expect(status).toHaveBeenCalledWith(202);
+      expect(h.sendToQueue).toHaveBeenCalledWith('queue-url', expect.objectContaining({ connectionId: 'conn1' }));
+      expect(h.connUpdateHealth).not.toHaveBeenCalledWith(
+        'conn1',
+        expect.objectContaining({ status: 'credential_error' })
+      );
+    });
+
+    it('answers 400 and marks credential_error when Drive still refuses a freshly refreshed token', async () => {
+      h.getFolderAccess.mockResolvedValue({ ok: false, reason: 'unauthorized' });
+      const { res } = makeRes();
+
+      const failure = await run(makeReq(body), res).catch((e: unknown) => e);
+
+      expect(failure).toBeInstanceOf(BadRequestError);
+      expect(failure).toHaveProperty('message', expect.stringMatching(/rejected the access/i));
+      expect(h.getFolderAccess).toHaveBeenCalledTimes(2);
+      expect(h.connUpdateHealth).toHaveBeenCalledWith('conn1', {
+        status: 'credential_error',
+        lastError: expect.stringMatching(/rejected the access/i),
+      });
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['it belongs to another user', { connectedBy: 'someone-else' }],
+      ['it is mid-sync', { status: 'syncing' }],
+      ['it is already needs_reconnect', { status: 'needs_reconnect' }],
+      ['it targets a different lake', { targetDataLakeId: 'lake2' }],
+      ['a disconnect is requested', { disconnectRequestedAt: new Date() }],
+    ])('still answers 400 but writes no credential_error when %s', async (_label, overrides) => {
+      h.connFindByDriveFolderId.mockResolvedValue(connection(overrides));
+      h.getFolderAccess.mockResolvedValue({ ok: false, reason: 'unauthorized' });
+      h.getValidUserDriveAccessToken
+        .mockResolvedValueOnce('stale-token')
+        .mockRejectedValueOnce(new BadRequestError(REVOKED));
+      const { res } = makeRes();
+
+      await expect(run(makeReq(body), res)).rejects.toThrow(REVOKED);
       expect(h.connUpdateHealth).not.toHaveBeenCalled();
     });
   });

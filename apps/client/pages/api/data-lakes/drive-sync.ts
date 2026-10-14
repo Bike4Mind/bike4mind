@@ -11,8 +11,9 @@ import {
   getFolderAccess,
   probeConnectedFolder,
   UNREACHABLE_FOLDER_MESSAGES,
+  type FolderAccess,
 } from '@server/integrations/google/drive/driveClient';
-import { getValidUserDriveAccessToken } from '@server/integrations/google/drive/common';
+import { getValidUserDriveAccessToken, isTerminalDriveGrantError } from '@server/integrations/google/drive/common';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { isEncrypted } from '@server/security/secretEncryption';
 import {
@@ -65,19 +66,17 @@ async function readUserDriveCredential(userId: string): Promise<string> {
   return encryptedRefresh;
 }
 
+type DriveClient = ReturnType<typeof createDriveClient>;
+
+const REJECTED_TOKEN_MESSAGE =
+  'Google Drive rejected the access your account granted Bike4Mind. Reconnect Google Drive, then re-sync.';
+
 /**
- * A Re-sync of a folder that has gone fails the handler's getFolderAccess probe before any ingest runs, so nothing would
- * park the connection and its chip would read "Connected" until the next poll. Park it here, but only
- * on a definite verdict (probeConnectedFolder throws on anything transient) from the connection's own
- * connector: another manager lacking access proves nothing about the stored grant. A sync in flight
- * is left alone; its own probe reaches the same verdict.
+ * The caller's own idle `connected` connection for this folder + lake, or null. A failed Re-sync parks
+ * only this one: another manager's failure proves nothing about the stored grant, and a sync in flight
+ * is left alone because its own probe reaches the same verdict.
  */
-async function parkConnectionIfFolderGone(
-  req: Request,
-  userDrive: ReturnType<typeof createDriveClient>,
-  driveFolderId: string,
-  dataLakeId: string
-): Promise<void> {
+async function findOwnIdleConnection(req: Request, driveFolderId: string, dataLakeId: string) {
   const connection = await orgGoogleDriveConnectionRepository.findByDriveFolderId(driveFolderId);
   if (
     !connection ||
@@ -86,8 +85,75 @@ async function parkConnectionIfFolderGone(
     connection.status !== 'connected' ||
     connection.disconnectRequestedAt
   ) {
-    return;
+    return null;
   }
+  return connection;
+}
+
+/**
+ * Probe the folder as the caller. A 401 is Drive rejecting the cached token, which a grant revoked at
+ * Google does well before the stored expiresAt, so it is retried once through a forced refresh and
+ * Google's invalid_grant decides. A terminal grant failure parks the caller's own connection in
+ * credential_error (so its card offers Reconnect instead of reading Connected) and rethrows as a 400.
+ */
+async function getFolderAccessAsUser(
+  req: Request,
+  driveFolderId: string,
+  dataLakeId: string
+): Promise<{ userDrive: DriveClient; folderAccess: Exclude<FolderAccess, { reason: 'unauthorized' }> }> {
+  const failOnTerminalGrant = async (e: unknown): Promise<never> => {
+    if (isTerminalDriveGrantError(e)) {
+      await markOwnConnectionCredentialError(
+        req,
+        driveFolderId,
+        dataLakeId,
+        e instanceof Error ? e.message : String(e)
+      );
+    }
+    throw e;
+  };
+
+  for (const forceRefresh of [false, true]) {
+    const accessToken = await getValidUserDriveAccessToken(req.user.id, { forceRefresh }).catch(failOnTerminalGrant);
+    const userDrive = createDriveClient(accessToken);
+    const folderAccess = await getFolderAccess(userDrive, driveFolderId);
+    if (folderAccess.ok || folderAccess.reason !== 'unauthorized') return { userDrive, folderAccess };
+  }
+  // Even a token minted a moment ago is refused: only fresh consent fixes that.
+  return failOnTerminalGrant(new BadRequestError(REJECTED_TOKEN_MESSAGE));
+}
+
+async function markOwnConnectionCredentialError(
+  req: Request,
+  driveFolderId: string,
+  dataLakeId: string,
+  lastError: string
+): Promise<void> {
+  try {
+    const connection = await findOwnIdleConnection(req, driveFolderId, dataLakeId);
+    if (!connection) return;
+    await orgGoogleDriveConnectionRepository.updateHealth(connection.id, { status: 'credential_error', lastError });
+  } catch (e) {
+    // Best-effort: the caller still gets the reconnect error, and the next poll's refresh reaches the same verdict.
+    req.logger.warn('Google Drive connect: could not mark a revoked grant for reconnect', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+/**
+ * A Re-sync of a folder that has gone fails the handler's getFolderAccess probe before any ingest runs, so nothing would
+ * park the connection and its chip would read "Connected" until the next poll. Park it here, but only
+ * on a definite verdict (probeConnectedFolder throws on anything transient).
+ */
+async function parkConnectionIfFolderGone(
+  req: Request,
+  userDrive: DriveClient,
+  driveFolderId: string,
+  dataLakeId: string
+): Promise<void> {
+  const connection = await findOwnIdleConnection(req, driveFolderId, dataLakeId);
+  if (!connection) return;
   try {
     const reachability = await probeConnectedFolder(userDrive, driveFolderId);
     if (reachability.reachable) return;
@@ -155,8 +221,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     // they don't own - ids appear in shared Drive URLs - and permanently lock out its real owner. Drive
     // 404s a folder the caller can't see, so a successful read IS the ownership proof (uses the user's
     // own credential, not the org copy).
-    const userDrive = createDriveClient(await getValidUserDriveAccessToken(req.user.id));
-    const folderAccess = await getFolderAccess(userDrive, driveFolderId);
+    const { userDrive, folderAccess } = await getFolderAccessAsUser(req, driveFolderId, dataLakeId);
     // A throttle is not an access verdict: without this, Drive rate-limiting the probe would tell the
     // user they have no access to a folder they own, and they would go hunting a permission problem
     // that does not exist (#2395).
