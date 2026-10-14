@@ -140,14 +140,14 @@ describe('POST /api/email/verify-change', () => {
   });
 
   it('audits the normalized pending address', async () => {
-    h.findByPendingEmailToken.mockResolvedValue({ id: 'user-1', email: 'old@b.test', pendingEmail: ' New@B.test ' });
-    h.verifyEmailChange.mockResolvedValue(undefined);
+    mockFindByPendingToken.mockResolvedValue({ ...USER, pendingEmail: ' New@B.test ' });
+    const { req, res } = fire();
 
-    await run();
+    await handler(req, res);
 
-    expect(h.logAuditEvent).toHaveBeenCalledWith(
+    expect(mockLogAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'success', newEmail: 'new@b.test' }),
-      expect.anything()
+      req.logger
     );
   });
 });
