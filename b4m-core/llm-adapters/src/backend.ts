@@ -15,6 +15,7 @@ import {
   type ResponseFormat,
   type StreamChannel,
   type ToolStarted,
+  type TurnUsage,
 } from '@bike4mind/common';
 import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 import type { RecordableToolUse } from './recordToolResult';
@@ -218,6 +219,8 @@ export interface ICompletionOptions {
      */
     accumCacheReadTokens?: number;
     accumCacheWriteTokens?: number;
+    /** Per-request usage so far in this chain, appended (not summed) per round-trip; see CompletionInfo.turnUsage. */
+    accumTurnUsage?: TurnUsage[];
     /**
      * Multi-turn tool-call accumulator threaded through recursive complete() calls
      * (Ollama). Consumers assign rather than append functionCalls on each callback,
@@ -363,6 +366,13 @@ export type CompletionInfo = {
    */
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  /**
+   * The same usage broken down per provider request (one entry per tool round-trip), in the
+   * same disjoint convention; summing it reproduces the aggregate fields above. Settlement prices
+   * it with getTurnsCost because providers pick a long-context tier per request. Absent on adapters
+   * that do not report it yet - callers then price the aggregates.
+   */
+  turnUsage?: TurnUsage[];
   /**
    * How the backend honored `responseFormat`:
    * - 'native': provider's native structured-output API (OpenAI's response_format,

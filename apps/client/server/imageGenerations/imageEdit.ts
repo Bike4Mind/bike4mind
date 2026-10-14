@@ -20,6 +20,7 @@ import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ImageEditService } from '@bike4mind/services/llm/ImageEdit';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { fabFilesService } from '@bike4mind/services';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
@@ -77,6 +78,7 @@ export const getImageEdit = (): ImageEditService => {
       logEvent: logEvent,
       storage: getGeneratedImageStorage(),
       fabFileStorage: filesStorage,
+      saveGeneratedAsset: saveGeneratedAssetToFiles,
       abilityGetter: defineAbilitiesFor,
     });
   }

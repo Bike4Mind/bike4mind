@@ -1,4 +1,4 @@
-import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { PENDING_FREE_CREDITS_TAG, sanitizeUsername, USERNAME_MAX_LENGTH } from '@bike4mind/common';
 import { User } from '@bike4mind/database';
 import { randomUUID } from 'crypto';
 
@@ -6,6 +6,10 @@ import { randomUUID } from 'crypto';
 // six total create attempts (base + 5 retries) is already generous for a
 // username collision; if that many are exhausted something else is wrong.
 const MAX_USERNAME_RETRIES = 5;
+
+// Longest disambiguating suffix createUniqueOAuthUser appends: `-` plus 6 hex chars.
+const MAX_USERNAME_SUFFIX_LENGTH = 7;
+const MAX_OAUTH_USERNAME_BASE_LENGTH = USERNAME_MAX_LENGTH - MAX_USERNAME_SUFFIX_LENGTH;
 
 /**
  * True only for a MongoDB E11000 on the `username` unique index specifically.
@@ -26,13 +30,15 @@ function isUsernameDuplicateKeyError(err: unknown): boolean {
  * stable, unique handle (Google has no `username` field at all - only a
  * displayName), so this can legitimately be empty; User.create requires a
  * non-empty username, so fall back to the email local-part, then a random
- * handle. Never return ''.
+ * handle. Never return ''. Each candidate is coerced into the username rules
+ * (usernameSchema) and kept short enough that any retry suffix still fits.
  */
 export function deriveOAuthUsername(rawUsername: string | null, name: string, email: string | null): string {
-  const base = rawUsername ?? name;
-  if (base) return base;
-  const emailLocalPart = email?.split('@')[0];
-  if (emailLocalPart) return emailLocalPart;
+  const candidates = [(rawUsername ?? '').split('@')[0], name, email?.split('@')[0] ?? ''];
+  for (const candidate of candidates) {
+    const sanitized = sanitizeUsername(candidate, MAX_OAUTH_USERNAME_BASE_LENGTH);
+    if (sanitized) return sanitized;
+  }
   return `user-${randomUUID().slice(0, 8)}`;
 }
 

@@ -8,6 +8,7 @@ import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 import { BadRequestError } from '@server/utils/errors';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { DRIVE_RECONNECT_REQUIRED_MESSAGE } from '@server/integrations/google/drive/driveClient';
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.readonly'];
 
@@ -305,7 +306,7 @@ export async function getValidUserDriveAccessToken(
       console.warn('[googleDrive] could not expire a revoked access token', writeError)
     );
     // A revoked/expired grant is a reconnect (400), not a server fault: left raw, drive-sync 500s on it.
-    throw new BadRequestError('Google Drive access was revoked - reconnect required');
+    throw new BadRequestError(DRIVE_RECONNECT_REQUIRED_MESSAGE);
   });
   if (!credentials.access_token) throw new BadRequestError('Google Drive token refresh returned no access token');
 

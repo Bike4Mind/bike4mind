@@ -724,6 +724,58 @@ export const pricingTierForTokens = (model: ModelInfo, tokens: number): number |
 };
 
 /**
+ * One provider request's usage, in the same disjoint convention as CompletionInfo's aggregates:
+ * `inputTokens` excludes cache reads and writes. Providers pick a long-context tier per request on
+ * that request's whole prompt, so a multi-request completion (tool round-trips) has to be priced
+ * turn by turn - see getTurnsCost. Mirrored on CompletionInfo.turnUsage in @bike4mind/llm-adapters.
+ */
+export type TurnUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+};
+
+// $0 for real usage on a model not marked freeToRun means a missing or
+// zero-rate pricing map: the call settles free (stochastic rounding has no
+// 1-credit floor) and the published cost-plus markup is silently false.
+// Alarm-only: billing behavior is unchanged.
+const alarmIfUnpriced = (model: ModelInfo, cost: number, usage: number): number => {
+  if (cost === 0 && usage > 0 && !model.freeToRun) {
+    console.error(
+      `[UNPRICED_MODEL] ${model.id} (${model.backend}) computed $0 for ${usage} tokens; its pricing map is missing or zero`
+    );
+  }
+  return cost;
+};
+
+const costAtTier = (
+  model: ModelInfo,
+  tierBasisTokens: number,
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens: number,
+  cacheCreationTokens: number
+): number => {
+  const tier = pricingTierForTokens(model, tierBasisTokens);
+  // Guard against a malformed or non-tiered pricing map (e.g. a flat
+  // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing
+  // means "no cost", not a crash in post-processing.
+  const tierPricing = tier === null ? undefined : model.pricing[tier];
+  if (!tierPricing) return 0;
+
+  const cacheReadRate = tierPricing.cache_read ?? tierPricing.input * CACHE_READ_MULTIPLIER;
+  const cacheWriteRate = tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER;
+
+  return (
+    tierPricing.input * inputTokens +
+    tierPricing.output * outputTokens +
+    cacheReadRate * cacheReadTokens +
+    cacheWriteRate * cacheCreationTokens
+  );
+};
+
+/**
  * Compute USD cost for a text model call.
  *
  * Cache token accounting: Anthropic returns
@@ -732,46 +784,48 @@ export const pricingTierForTokens = (model: ModelInfo, tokens: number): number |
  * we apply 0.1x input rate to reads and 1.25x input rate to writes. Models can
  * publish explicit `cache_read` / `cache_write` rates in their pricing tier to
  * override the multipliers.
+ *
+ * The pricing tier is picked on `tierBasisTokens` (default: `inputTokens`). For usage
+ * that spans several provider requests, prefer getTurnsCost.
  */
 export const getTextModelCost = (
   model: ModelInfo,
   inputTokens: number,
   outputTokens: number,
   cacheReadTokens: number = 0,
-  cacheCreationTokens: number = 0
-): number => {
-  // $0 for real usage on a model not marked freeToRun means a missing or
-  // zero-rate pricing map: the call settles free (stochastic rounding has no
-  // 1-credit floor) and the published cost-plus markup is silently false.
-  // Alarm-only: billing behavior is unchanged.
-  const alarmIfUnpriced = (cost: number): number => {
-    const usage = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
-    if (cost === 0 && usage > 0 && !model.freeToRun) {
-      console.error(
-        `[UNPRICED_MODEL] ${model.id} (${model.backend}) computed $0 for ${usage} tokens; its pricing map is missing or zero`
-      );
-    }
-    return cost;
-  };
-
-  const tier = pricingTierForTokens(model, inputTokens);
-  if (tier === null) return alarmIfUnpriced(0);
-
-  // Guard against a malformed or non-tiered pricing map (e.g. a flat
-  // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing
-  // means "no cost", not a crash in post-processing.
-  const tierPricing = model.pricing[tier];
-  if (!tierPricing) return alarmIfUnpriced(0);
-
-  const cacheReadRate = tierPricing.cache_read ?? tierPricing.input * CACHE_READ_MULTIPLIER;
-  const cacheWriteRate = tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER;
-
-  return alarmIfUnpriced(
-    tierPricing.input * inputTokens +
-      tierPricing.output * outputTokens +
-      cacheReadRate * cacheReadTokens +
-      cacheWriteRate * cacheCreationTokens
+  cacheCreationTokens: number = 0,
+  tierBasisTokens: number = inputTokens
+): number =>
+  alarmIfUnpriced(
+    model,
+    costAtTier(model, tierBasisTokens, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens),
+    inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens
   );
+
+/**
+ * USD cost of a completion priced request by request: each turn takes the tier for its own whole
+ * prompt (input + cache read + cache write), and that tier's rates apply to every token class in it.
+ * Callers fall back to getTextModelCost on aggregates when they have no turns.
+ */
+export const getTurnsCost = (model: ModelInfo, turns: readonly TurnUsage[]): number => {
+  let cost = 0;
+  let unpricedUsage = 0;
+  for (const turn of turns) {
+    const cacheRead = turn.cacheReadInputTokens ?? 0;
+    const cacheCreation = turn.cacheCreationInputTokens ?? 0;
+    const turnCost = costAtTier(
+      model,
+      turn.inputTokens + cacheRead + cacheCreation,
+      turn.inputTokens,
+      turn.outputTokens,
+      cacheRead,
+      cacheCreation
+    );
+    if (turnCost === 0) unpricedUsage += turn.inputTokens + turn.outputTokens + cacheRead + cacheCreation;
+    cost += turnCost;
+  }
+  alarmIfUnpriced(model, 0, unpricedUsage);
+  return cost;
 };
 
 /**

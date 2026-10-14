@@ -21,12 +21,12 @@ export { PRODUCTION_STAGES };
 export const SINGLE_RECORD_BATCH = { batch: { size: 1 } } as const;
 
 /**
- * Registers the fake video provider so the generation-job path can be exercised end to end without a paid
- * provider key. Never set on production-scale stages, which must only ever reach real providers.
+ * Registers the fake video and music providers so the generation-job path can be exercised end to end without a
+ * paid provider key. Never set on production-scale stages, which must only ever reach real providers.
  */
-export const TEST_VIDEO_PROVIDER_ENVIRONMENT: Record<string, string> = PRODUCTION_STAGES.includes($app.stage)
+export const TEST_GENERATION_PROVIDER_ENVIRONMENT: Record<string, string> = PRODUCTION_STAGES.includes($app.stage)
   ? {}
-  : { ENABLE_TEST_VIDEO_PROVIDER: 'true' };
+  : { ENABLE_TEST_VIDEO_PROVIDER: 'true', ENABLE_TEST_MUSIC_PROVIDER: 'true' };
 
 /**
  * Registers the free `test-decisions` model so POST /api/v1/decisions can be exercised end to end without a vendor

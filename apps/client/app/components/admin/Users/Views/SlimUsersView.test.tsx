@@ -25,13 +25,16 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const makeUser = (id: string, name: string): WithOrgRef<IUserDocument> =>
+const makeUser = (
+  id: string,
+  name: string,
+  storage: { storageLimit: number; currentStorageSize: number } = { storageLimit: 1000, currentStorageSize: 0 }
+): WithOrgRef<IUserDocument> =>
   ({
     id,
     name,
     email: `${name.toLowerCase()}@example.com`,
-    storageLimit: 1024,
-    currentStorageSize: 0,
+    ...storage,
     loginRecords: [],
   }) as unknown as WithOrgRef<IUserDocument>;
 
@@ -82,5 +85,36 @@ describe('SlimUsersContainer', () => {
     render(<SlimUsersContainer users={users} />, { wrapper: TestWrapper });
     expect(screen.getAllByTestId('admin-user-admin-btn')).toHaveLength(2);
     expect(screen.getAllByTestId('admin-user-profile-btn')).toHaveLength(2);
+  });
+
+  describe('storage cell', () => {
+    const renderStorageCell = (storageLimit: number, currentStorageSize: number) => {
+      render(
+        <SlimUsersContainer
+          users={[makeUser('6900781a8c1b76a684f80001', 'Ada', { storageLimit, currentStorageSize })]}
+        />,
+        { wrapper: TestWrapper }
+      );
+      return {
+        cell: screen.getByTestId('admin-user-storage-cell'),
+        label: screen.getByTestId('admin-user-storage-cell-label'),
+        progress: screen.getByTestId('admin-user-storage-cell-progress'),
+      };
+    };
+
+    // 920,000,000 of a 1000 MB limit is 92% to enforcement, which reads storageLimit as decimal MB.
+    it('shows the decimal-MB limit in the tooltip and the matching percentage', () => {
+      const { cell, label, progress } = renderStorageCell(1000, 920_000_000);
+      expect(cell).toHaveAttribute('aria-label', '920 MB / 1 GB');
+      expect(label).toHaveTextContent('92%');
+      expect(progress.className).toContain('MuiLinearProgress-colorDanger');
+    });
+
+    it('reads a zero limit as full, as the detail view does', () => {
+      const { label, progress } = renderStorageCell(0, 500_000_000);
+      expect(label).toHaveTextContent('100%');
+      expect(progress).toHaveAttribute('aria-valuenow', '100');
+      expect(progress.className).toContain('MuiLinearProgress-colorDanger');
+    });
   });
 });

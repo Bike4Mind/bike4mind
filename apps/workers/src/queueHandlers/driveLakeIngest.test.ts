@@ -214,10 +214,10 @@ import {
   dispatch,
   hasDriveFileChanged,
   classifyDriveChanges,
-  MAX_INGEST_CANDIDATES,
   MAX_INGEST_REDRIVES,
   MAX_INGEST_SLICES,
 } from './driveLakeIngest';
+import { MAX_INGEST_CANDIDATES } from '@server/integrations/google/drive/driveIngestLimits';
 import { DriveWalkTimeBudgetExceededError } from '@server/integrations/google/drive/driveContent';
 import { REJECTED_DRIVE_TOKEN_MESSAGE } from '@server/integrations/google/drive/driveClient';
 

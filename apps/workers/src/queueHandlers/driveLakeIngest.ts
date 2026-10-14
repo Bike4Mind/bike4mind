@@ -63,6 +63,11 @@ import {
   DriveWalkTimeBudgetExceededError,
   type WalkedDriveFile,
 } from '@server/integrations/google/drive/driveContent';
+import {
+  MAX_INGEST_CANDIDATES,
+  MAX_INGEST_FILE_BYTES,
+  driveIngestSkipReason,
+} from '@server/integrations/google/drive/driveIngestLimits';
 import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
@@ -98,13 +103,6 @@ const Payload = z.object({
 export const MAX_INGEST_REDRIVES = 12;
 const INGEST_REDRIVE_DELAY_SECONDS = 90;
 
-// Per-file hard cap. Files are fetched and uploaded ONE at a time (only one buffer is ever live),
-// so this bounds peak memory well under the ingest queue Lambda's 1024 MB default. An oversized
-// file is skipped-and-counted (before the download when the size is known up front), so the failure
-// mode is a skipped file rather than an OOM that kills the whole run mid-loop. A streaming path for
-// genuinely large files is the "very large folders" follow-up.
-const MAX_INGEST_FILE_BYTES = 50 * 1024 * 1024;
-
 // Stop starting another file once the invocation has less than this left, and yield to a continuation
 // slice instead of being killed mid-file. Sized for the slowest realistic single file: a
 // MAX_INGEST_FILE_BYTES download plus its upload, plus a retire that may run a full deleteFabFile
@@ -133,32 +131,6 @@ const DEFAULT_RUN_BUDGET_MS = 9 * 60_000;
 // holds because the chunk pipeline each upload enqueues has drained by then - the same durability the
 // claim's staleness bound leans on, and the reason a chained claim must not be stolen mid-chain.
 export const MAX_INGEST_SLICES = 20;
-
-// Cap on the un-sliceable part of a sync: the folder walk and the diff against this connection's
-// stored set, both of which hold a full listing in memory in EVERY slice and must complete inside one
-// invocation before any file is touched - a folder-wide constant regardless of how small any one
-// slice's delta is. This is NO LONGER a throughput bound on the ingestable count - the deadline guard
-// above yields to a continuation slice rather than timing out mid-loop, so that count is bounded by
-// MAX_INGEST_SLICES x a slice's throughput (tens of thousands of files) and not by one invocation.
-// Checked against walked.length and existingDocs.length (see the enforcement below), not the delta
-// between them - gating on the delta would let a folder with a huge stable listing and a tiny delta
-// pay the walk+diff cost on every slice with the cap never tripping. Enforced up front, before any
-// membership write, so an over-cap folder is refused with nothing changed. Beyond it the folder should
-// be split into subfolders connected separately.
-//
-// Memory headroom at this value is not yet independently measured. findByDriveConnectionIdInDataLake
-// has no projection or limit, so existingDocs at the cap hydrates up to 20000 full FabFile documents
-// (previously 1500, ~13x) on the ingest queue Lambda's 1024 MB default (infra/queues.ts sets no
-// override for it, unlike most of its siblings there). If that turns out to be tight, either project
-// the query down to the fields the diff actually reads (driveFileId, md5Checksum, modifiedTime) or set
-// an explicit memory override on the Lambda - both are cheaper than lowering this constant.
-//
-// Also, indirectly, a bound on the size of ONE batch document: every candidate a chain ingests gets a
-// manifest entry in `files[]` on this same DataLakeBatch doc, and both claimFileStatus's positional
-// update and every finalize check read the whole document. Raising this constant further raises that
-// document's worst-case size (and, with failedFileNames also accumulating, moves it closer to the 16MB
-// BSON ceiling) as well as the walk+diff cost the comment above is about.
-export const MAX_INGEST_CANDIDATES = 20000;
 
 /**
  * Has a Drive file changed since it was ingested? `md5Checksum` is exact, but Google Editors files
@@ -1291,13 +1263,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // Native binaries carry a size, so skip the oversized ones BEFORE spending a Drive download.
         // Editors exports have no size here; they are bounded by Drive's own ~10 MB export cap
         // (surfaced as export_too_large) plus the post-fetch guard below.
-        if (file.size != null && file.size > MAX_INGEST_FILE_BYTES) {
-          await skip(file, 'oversized');
-          continue;
-        }
-
-        if (file.size != null && file.size >= maxFileSize) {
-          await skip(file, 'exceeds_max_file_size');
+        const sizeSkipReason = driveIngestSkipReason(file.size, maxFileSize);
+        if (sizeSkipReason) {
+          await skip(file, sizeSkipReason);
           continue;
         }
 

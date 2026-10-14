@@ -7,6 +7,8 @@ import { readRefreshCookie, setAdminReturnCookie } from '@server/auth/refreshCoo
 import { UnauthorizedError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
@@ -63,7 +65,11 @@ const handler = baseApi().post(
     });
     setAdminReturnCookie(res, adminRefreshToken);
 
-    return res.json({ user: redactUserSecretsForSelf(targetUser), accessToken, impersonating: true });
+    return respond(res, selfSessionResponseSchema, {
+      user: redactUserSecretsForSelf(targetUser),
+      accessToken,
+      impersonating: true,
+    });
   })
 );
 

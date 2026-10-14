@@ -16,6 +16,7 @@ import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLa
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { getFilesStorage } from '@server/utils/storage';
+import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
 import { logEvent } from '@server/utils/analyticsLog';
 import { FileEvents } from '@bike4mind/common';
 import { Request } from 'express';
@@ -90,6 +91,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
                 ...lakeMembershipAuditDb,
               },
               storage: getFilesStorage(),
+              generatedCopies: getGeneratedCopyStore(),
               onDeleteComplete: async (_fabFile, sizeToDeduct) => {
                 totalSizeToDeduct += sizeToDeduct;
               },

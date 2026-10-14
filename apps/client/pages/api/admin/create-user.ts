@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, usernameSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository, pendingOtcTokenRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
@@ -11,7 +11,7 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 
 const createUserSchema = z.object({
-  username: z.string().min(1, 'Username is required'),
+  username: usernameSchema,
   email: z.email('Invalid email address'),
   name: z.string().min(1, 'Name is required'),
   // Passwordless (OTC): a password is no longer used to sign in. Optional for

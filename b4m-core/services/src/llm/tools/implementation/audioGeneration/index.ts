@@ -291,7 +291,7 @@ async function persistAndUpload(
   // Always kept - this is what the inline player streams.
   const storedPath = await context.imageGenerateStorage.upload(audio, filename, { ContentType: contentType });
 
-  await saveGeneratedAssetFromTool(context, { bytes: audio, contentType, generation });
+  await saveGeneratedAssetFromTool(context, { bytes: audio, contentType, generation, generatedCopyKey: storedPath });
 
   return storedPath;
 }

@@ -50,6 +50,16 @@
         "default": "./dist/llm/evals/lakeRag/index.cjs"
       }
     },
+    "./evals/toolCalling": {
+      "import": {
+        "types": "./dist/llm/evals/toolCalling/index.d.mts",
+        "default": "./dist/llm/evals/toolCalling/index.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/evals/toolCalling/index.d.cts",
+        "default": "./dist/llm/evals/toolCalling/index.cjs"
+      }
+    },
     "./apiKeyService": {
       "import": {
         "types": "./dist/apiKeyService/index.d.mts",
@@ -88,6 +98,16 @@
       "require": {
         "types": "./dist/videoJobs/index.d.cts",
         "default": "./dist/videoJobs/index.cjs"
+      }
+    },
+    "./musicJobs": {
+      "import": {
+        "types": "./dist/musicJobs/index.d.mts",
+        "default": "./dist/musicJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/musicJobs/index.d.cts",
+        "default": "./dist/musicJobs/index.cjs"
       }
     },
     "./agentProactiveMessagingService": {

@@ -2,6 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { drive_v3 } from '@googleapis/drive';
 import {
   listFolderChildren,
+  DriveListingIncompleteError,
+  MAX_LIST_PAGES,
   getFolderAccess,
   isFolder,
   isValidDriveFolderId,
@@ -12,6 +14,8 @@ import {
   isDriveInvalidCursorError,
   getFileParents,
   isDriveFileAccessDeniedError,
+  isDriveAuthError,
+  withDriveReconnectOnAuthError,
   probeConnectedFolder,
   isDriveUnauthorizedError,
   UNREACHABLE_FOLDER_MESSAGES,
@@ -128,6 +132,51 @@ describe('listFolderChildren', () => {
     const { drive, list } = mockDrive([{ files: [] }]);
     await expect(listFolderChildren(drive, "x' in parents or '1'='1")).rejects.toThrow(/Invalid Drive folder id/);
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it('throws a page_cap DriveListingIncompleteError once the page cap still leaves a nextPageToken', async () => {
+    const { drive, list } = mockDrive(
+      Array.from({ length: MAX_LIST_PAGES }, (_, i) => ({ files: [], nextPageToken: `p${i + 2}` }))
+    );
+    const err = await listFolderChildren(drive, 'FOLDER_X').catch(e => e);
+    expect(err).toBeInstanceOf(DriveListingIncompleteError);
+    expect(err.reason).toBe('page_cap');
+    expect(err.message).toMatch(/listing is not exhaustive/);
+    expect(list).toHaveBeenCalledTimes(MAX_LIST_PAGES);
+  });
+
+  it('throws a deadline DriveListingIncompleteError instead of fetching another page past deadlineMs', async () => {
+    const { drive, list } = mockDrive([{ files: [], nextPageToken: 'p2' }, { files: [] }]);
+    const err = await listFolderChildren(drive, 'FOLDER_X', { deadlineMs: Date.now() - 1 }).catch(e => e);
+    expect(err).toBeInstanceOf(DriveListingIncompleteError);
+    expect(err.reason).toBe('deadline');
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops paginating when onPage returns false, after delivering that page', async () => {
+    const { drive, list } = mockDrive([
+      { files: [{ id: '1', name: 'a.txt', mimeType: 'text/plain' }], nextPageToken: 'p2' },
+      { files: [{ id: '2', name: 'b.txt', mimeType: 'text/plain' }] },
+    ]);
+    const onPage = vi.fn(() => false);
+    const files = await listFolderChildren(drive, 'FOLDER_X', { onPage });
+    expect(files.map(f => f.id)).toEqual(['1']);
+    expect(onPage).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it('delivers a page to onPage before the deadline throw', async () => {
+    const { drive } = mockDrive([{ files: [{ id: '1', name: 'a.txt', mimeType: 'text/plain' }], nextPageToken: 'p2' }]);
+    const onPage = vi.fn();
+    await expect(listFolderChildren(drive, 'FOLDER_X', { deadlineMs: Date.now() - 1, onPage })).rejects.toBeInstanceOf(
+      DriveListingIncompleteError
+    );
+    expect(onPage).toHaveBeenCalledWith([{ id: '1', name: 'a.txt', mimeType: 'text/plain' }]);
+  });
+
+  it('does not apply a deadline when the folder fits on one page', async () => {
+    const { drive } = mockDrive([{ files: [{ id: '1', name: 'a.txt', mimeType: 'text/plain' }] }]);
+    await expect(listFolderChildren(drive, 'FOLDER_X', { deadlineMs: Date.now() - 1 })).resolves.toHaveLength(1);
   });
 });
 
@@ -652,5 +701,37 @@ describe('probeConnectedFolder', () => {
 describe('UNREACHABLE_FOLDER_MESSAGES', () => {
   it.each(['not_found', 'forbidden', 'trashed'] as const)('has a user-facing message for %s', reason => {
     expect(UNREACHABLE_FOLDER_MESSAGES[reason].length).toBeGreaterThan(0);
+  });
+});
+
+describe('isDriveAuthError / withDriveReconnectOnAuthError', () => {
+  const gaxios = (status: number, reason?: string) =>
+    Object.assign(new Error('drive'), {
+      status,
+      response: { status, data: { error: { errors: reason ? [{ reason }] : [] } } },
+    });
+
+  it.each([
+    ['a 401', gaxios(401, 'authError'), true],
+    ['a bare status field 401', { status: 401 }, true],
+    ['a stringified code 401', { code: '401' }, true],
+    ['a 403 with a revoked scope', gaxios(403, 'insufficientPermissions'), true],
+    ['a 403 whose reasons sit at the top level', { code: 403, errors: [{ reason: 'insufficientPermissions' }] }, true],
+    ['a per-file 403', gaxios(403, 'insufficientFilePermissions'), false],
+    ['a throttle 403', gaxios(403, 'userRateLimitExceeded'), false],
+    ['a 403 with no reasons', { code: 403, errors: [] }, false],
+    ['a 404', gaxios(404), false],
+    ['a non-object', 'boom', false],
+  ])('classifies %s', (_label, e, expected) => {
+    expect(isDriveAuthError(e)).toBe(expected);
+  });
+
+  it('rethrows a Drive 401 as a reconnect 400 and anything else unchanged', async () => {
+    await expect(withDriveReconnectOnAuthError(() => Promise.reject(gaxios(401)))).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Google Drive access was revoked - reconnect required',
+    });
+    const other = gaxios(404);
+    await expect(withDriveReconnectOnAuthError(() => Promise.reject(other))).rejects.toBe(other);
   });
 });

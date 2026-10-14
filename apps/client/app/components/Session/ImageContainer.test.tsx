@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '../../utils/themes';
 import ImageContainer from './ImageContainer';
@@ -67,6 +67,21 @@ describe('ImageContainer (upload moderation gating)', () => {
 
     expect(screen.queryByTestId('image-moderation-scanning')).not.toBeInTheDocument();
     expect(screen.getByTestId('ai-response-image')).toBeInTheDocument();
+  });
+});
+
+describe('ImageContainer (missing image)', () => {
+  it('shows a no-longer-available state instead of a broken image when the image fails to load', () => {
+    render(
+      <TestWrapper>
+        <ImageContainer {...baseProps} src="https://example.com/image.png" />
+      </TestWrapper>
+    );
+
+    fireEvent.error(screen.getByTestId('ai-response-image'));
+
+    expect(screen.queryByTestId('ai-response-image')).not.toBeInTheDocument();
+    expect(screen.getByTestId('ai-response-image-unavailable')).toHaveTextContent('no longer available');
   });
 });
 
