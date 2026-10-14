@@ -36,16 +36,15 @@ export interface FunctionExecutedEvent {
 }
 
 /**
- * Typed input interfaces for each workflow step
+ * Typed input interfaces for each workflow step. The acting user is not among them: it comes
+ * from the attested `user_context` input (see resolveActingSlackUserId).
  */
 interface CreateNotebookInputs {
-  user_id: string;
   notebook_name?: string;
   send_notification?: boolean;
 }
 
 interface SendMessageInputs {
-  user_id: string;
   message: string;
   notebook_id?: string;
   wait_for_response?: boolean;
@@ -53,10 +52,44 @@ interface SendMessageInputs {
 }
 
 interface QueryInputs {
-  user_id: string;
   query: string;
   notebook_id?: string;
   send_notification?: boolean;
+}
+
+type StepRunner = (slackUserId: string, inputs: Record<string, unknown>) => Promise<WorkflowStepResult>;
+
+type ActingSlackUser = { ok: true; slackUserId: string } | { ok: false; error: string };
+
+const SLACK_USER_ID_PATTERN = /^[UW][A-Z0-9]{2,}$/;
+
+/**
+ * The step runs as the person Slack attests in the `slack#/types/user_context` input
+ * ({ id, secret }). Workflow Builder cannot set that input by hand, unlike the
+ * `slack#/types/user_id` input this used to read, where a builder could pick any member and
+ * act as them. Input types must stay in sync with the functions in slackManifestTemplate.ts.
+ */
+export function resolveActingSlackUserId(inputs: Record<string, unknown>): ActingSlackUser {
+  const userContext = inputs.user_context;
+  if (typeof userContext === 'object' && userContext !== null) {
+    const { id, secret } = userContext as Record<string, unknown>;
+    if (typeof id === 'string' && SLACK_USER_ID_PATTERN.test(id) && typeof secret === 'string' && secret) {
+      return { ok: true, slackUserId: id };
+    }
+  }
+
+  if (inputs.user_id !== undefined) {
+    return {
+      ok: false,
+      error:
+        'This workflow step was added with an outdated app configuration that cannot verify who is running it. Ask your Slack app admin to update the app manifest, then re-add the step.',
+    };
+  }
+
+  return {
+    ok: false,
+    error: 'Could not verify who is running this workflow. Start it from a trigger a person runs.',
+  };
 }
 
 /**
@@ -117,28 +150,8 @@ export class WorkflowStepHandler {
     }
 
     try {
-      let result: WorkflowStepResult;
+      const result = await this.executeStep(callbackId, inputs);
 
-      switch (callbackId) {
-        case WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK:
-          // Inputs validated inside handler; cast via unknown for type safety
-          result = await this.handleCreateNotebook(inputs as unknown as CreateNotebookInputs);
-          break;
-        case WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE:
-          // Inputs validated inside handler; cast via unknown for type safety
-          result = await this.handleSendMessage(inputs as unknown as SendMessageInputs);
-          break;
-        case WORKFLOW_STEP_CALLBACKS.QUERY:
-          // Inputs validated inside handler; cast via unknown for type safety
-          result = await this.handleQuery(inputs as unknown as QueryInputs);
-          break;
-        default:
-          this.logger.warn('[WorkflowStep] Unknown callback_id', { callbackId });
-          result = {
-            success: false,
-            error: `Unknown workflow step: ${callbackId}`,
-          };
-      }
       // Report result to Slack
       if (result.success) {
         const reported = await this.slackClient.functionCompleteSuccess(function_execution_id, result.outputs);
@@ -194,6 +207,40 @@ export class WorkflowStepHandler {
           callbackId,
         });
       }
+    }
+  }
+
+  private async executeStep(callbackId: string, inputs: Record<string, unknown>): Promise<WorkflowStepResult> {
+    const runStep = this.stepRunnerFor(callbackId);
+    if (!runStep) {
+      this.logger.warn('[WorkflowStep] Unknown callback_id', { callbackId });
+      return { success: false, error: `Unknown workflow step: ${callbackId}` };
+    }
+
+    const actingUser = resolveActingSlackUserId(inputs);
+    if (!actingUser.ok) {
+      this.logger.warn('[WorkflowStep] Rejected step without an attested acting user', {
+        callbackId,
+        hasLegacyUserIdInput: inputs.user_id !== undefined,
+      });
+      return { success: false, error: actingUser.error };
+    }
+
+    return runStep(actingUser.slackUserId, inputs);
+  }
+
+  // Inputs are validated inside each handler; cast via unknown for type safety.
+  private stepRunnerFor(callbackId: string): StepRunner | null {
+    switch (callbackId) {
+      case WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK:
+        return (slackUserId, inputs) =>
+          this.handleCreateNotebook(slackUserId, inputs as unknown as CreateNotebookInputs);
+      case WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE:
+        return (slackUserId, inputs) => this.handleSendMessage(slackUserId, inputs as unknown as SendMessageInputs);
+      case WORKFLOW_STEP_CALLBACKS.QUERY:
+        return (slackUserId, inputs) => this.handleQuery(slackUserId, inputs as unknown as QueryInputs);
+      default:
+        return null;
     }
   }
 
@@ -287,10 +334,10 @@ export class WorkflowStepHandler {
 
   /**
    * Handle "Create Notebook" workflow step
-   * Inputs: user_id (required), notebook_name (optional)
+   * Inputs: user_context (required), notebook_name (optional)
    * Outputs: notebook_id, notebook_name, notebook_url
    */
-  private async handleCreateNotebook(inputs: CreateNotebookInputs): Promise<WorkflowStepResult> {
+  private async handleCreateNotebook(slackUserId: string, inputs: CreateNotebookInputs): Promise<WorkflowStepResult> {
     // Validate APP_URL is configured
     if (!process.env.APP_URL) {
       this.logger.error('[WorkflowStep] APP_URL environment variable is not set');
@@ -300,15 +347,7 @@ export class WorkflowStepHandler {
       };
     }
 
-    const { user_id: slackUserId, notebook_name } = inputs;
-
-    // Validate required input (runtime check since inputs come from Slack)
-    if (!slackUserId) {
-      return {
-        success: false,
-        error: 'Required input "user_id" is missing or invalid',
-      };
-    }
+    const { notebook_name } = inputs;
 
     const notebookName = notebook_name || this.generateNotebookName();
 
@@ -370,10 +409,10 @@ export class WorkflowStepHandler {
 
   /**
    * Handle "Send to B4M" workflow step
-   * Inputs: user_id (required), message (required), notebook_id (optional), wait_for_response (optional)
+   * Inputs: user_context (required), message (required), notebook_id (optional), wait_for_response (optional)
    * Outputs: quest_id, response (if wait_for_response=true)
    */
-  private async handleSendMessage(inputs: SendMessageInputs): Promise<WorkflowStepResult> {
+  private async handleSendMessage(slackUserId: string, inputs: SendMessageInputs): Promise<WorkflowStepResult> {
     // Validate APP_URL is configured
     if (!process.env.APP_URL) {
       this.logger.error('[WorkflowStep] APP_URL environment variable is not set');
@@ -383,17 +422,10 @@ export class WorkflowStepHandler {
       };
     }
 
-    const { user_id: slackUserId, message, notebook_id: notebookId, wait_for_response } = inputs;
+    const { message, notebook_id: notebookId, wait_for_response } = inputs;
     const waitForResponse = wait_for_response ?? true;
 
     // Validate required inputs (runtime check since inputs come from Slack)
-    if (!slackUserId) {
-      return {
-        success: false,
-        error: 'Required input "user_id" is missing or invalid',
-      };
-    }
-
     if (!message || message.trim().length === 0) {
       return {
         success: false,
@@ -505,13 +537,13 @@ export class WorkflowStepHandler {
 
   /**
    * Handle "Query B4M" workflow step
-   * Inputs: user_id (required), query (required), notebook_id (optional)
+   * Inputs: user_context (required), query (required), notebook_id (optional)
    * Outputs: answer, sources, notebook_id
    *
    * Due to Slack's ~15 second function timeout, we don't wait for the AI response.
    * The query is submitted; the user checks their B4M notebook for the full response.
    */
-  private async handleQuery(inputs: QueryInputs): Promise<WorkflowStepResult> {
+  private async handleQuery(slackUserId: string, inputs: QueryInputs): Promise<WorkflowStepResult> {
     // Validate APP_URL is configured
     if (!process.env.APP_URL) {
       this.logger.error('[WorkflowStep] APP_URL environment variable is not set');
@@ -521,16 +553,9 @@ export class WorkflowStepHandler {
       };
     }
 
-    const { user_id: slackUserId, query, notebook_id: notebookId } = inputs;
+    const { query, notebook_id: notebookId } = inputs;
 
     // Validate required inputs (runtime check since inputs come from Slack)
-    if (!slackUserId) {
-      return {
-        success: false,
-        error: 'Required input "user_id" is missing or invalid',
-      };
-    }
-
     if (!query || query.trim().length === 0) {
       return {
         success: false,

@@ -40,6 +40,28 @@ function arraysEqual(a: string[], b: string[]): boolean {
 }
 
 /**
+ * A function's input parameter name -> type map. Only types are compared: they decide what the
+ * handler can trust (a `user_id` input is builder-settable, a `user_context` one is attested by
+ * Slack), while titles and descriptions are brand-templated copy that must not read as drift.
+ */
+function functionInputTypes(func: unknown): Record<string, unknown> {
+  if (typeof func !== 'object' || func === null) return {};
+  const params = (func as { input_parameters?: unknown }).input_parameters;
+  if (typeof params !== 'object' || params === null) return {};
+  return Object.fromEntries(
+    Object.entries(params as Record<string, unknown>).map(([name, param]) => [
+      name,
+      typeof param === 'object' && param !== null ? (param as { type?: unknown }).type : undefined,
+    ])
+  );
+}
+
+function sameInputTypes(expected: Record<string, unknown>, live: Record<string, unknown>): boolean {
+  const expectedNames = Object.keys(expected);
+  return arraysEqual(expectedNames, Object.keys(live)) && expectedNames.every(name => expected[name] === live[name]);
+}
+
+/**
  * Compare slash commands, ignoring URL domain (only comparing paths).
  * Commands are matched by their command name.
  */
@@ -99,8 +121,8 @@ export function compareManifests(
   options?: { enableWorkflowSteps?: boolean }
 ): CompareResult {
   // Brand intentionally NOT threaded here: drift comparison checks slash-command
-  // descriptions + shortcut/function presence, never the brand-templated copy, so the brand
-  // value can't cause false drift. (The live app's brand comes from the admin display name at
+  // descriptions, shortcut/function presence and function input types, never the
+  // brand-templated copy, so the brand value can't cause false drift. (The live app's brand comes from the admin display name at
   // creation, which differs from APP_NAME, so passing APP_NAME would be wrong, not just moot.)
   const expected = getControlledManifestFields(baseUrl, { enableWorkflowSteps: options?.enableWorkflowSteps });
   const differences: ManifestDifference[] = [];
@@ -230,11 +252,23 @@ export function compareManifests(
   if (expected.functions) {
     const liveFunctions = (liveManifest.functions as Record<string, unknown>) || {};
     for (const [funcName, expectedFunc] of Object.entries(expected.functions)) {
-      if (!liveFunctions[funcName]) {
+      const liveFunc = liveFunctions[funcName];
+      if (!liveFunc) {
         differences.push({
           field: `functions.${funcName}`,
           expected: expectedFunc,
           actual: undefined,
+        });
+        continue;
+      }
+
+      const expectedInputs = functionInputTypes(expectedFunc);
+      const liveInputs = functionInputTypes(liveFunc);
+      if (!sameInputTypes(expectedInputs, liveInputs)) {
+        differences.push({
+          field: `functions.${funcName}.input_parameters`,
+          expected: expectedInputs,
+          actual: liveInputs,
         });
       }
     }

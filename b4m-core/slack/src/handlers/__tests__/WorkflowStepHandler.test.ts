@@ -11,7 +11,12 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
-import { WorkflowStepHandler, FunctionExecutedEvent, WORKFLOW_STEP_CALLBACKS } from '../WorkflowStepHandler';
+import {
+  WorkflowStepHandler,
+  FunctionExecutedEvent,
+  WORKFLOW_STEP_CALLBACKS,
+  resolveActingSlackUserId,
+} from '../WorkflowStepHandler';
 
 // Mock DI registry
 const mockUser = { findOne: vi.fn() };
@@ -61,6 +66,9 @@ const Session = mockSession;
 const Quest = mockQuest;
 const createSession = mockCreateSession;
 const addMessageToSession = mockAddMessageToSession;
+
+// What Slack attests for the person running the workflow
+const ACTING_USER_CONTEXT = { id: 'U123', secret: 'test-secret' };
 
 const SAVED_NOTEBOOK = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const OTHER_NOTEBOOK = 'bbbbbbbbbbbbbbbbbbbbbbbb';
@@ -137,7 +145,7 @@ describe('WorkflowStepHandler', () => {
 
   describe('Event ID Validation', () => {
     it('should reject events with missing function_execution_id', async () => {
-      const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, { user_id: 'U123' });
+      const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, { user_context: ACTING_USER_CONTEXT });
       event.function_execution_id = '';
 
       await handler.handleFunctionExecuted(event);
@@ -151,7 +159,7 @@ describe('WorkflowStepHandler', () => {
     });
 
     it('should reject events with whitespace-only function_execution_id', async () => {
-      const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, { user_id: 'U123' });
+      const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, { user_context: ACTING_USER_CONTEXT });
       event.function_execution_id = '   ';
 
       await handler.handleFunctionExecuted(event);
@@ -163,7 +171,7 @@ describe('WorkflowStepHandler', () => {
     });
 
     it('should reject events with missing callback_id', async () => {
-      const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, { user_id: 'U123' });
+      const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, { user_context: ACTING_USER_CONTEXT });
       event.function.callback_id = '';
 
       await handler.handleFunctionExecuted(event);
@@ -179,7 +187,7 @@ describe('WorkflowStepHandler', () => {
     });
 
     it('should handle unknown callback_id', async () => {
-      const event = createEvent('unknown_callback', { user_id: 'U123' });
+      const event = createEvent('unknown_callback', { user_context: ACTING_USER_CONTEXT });
 
       await handler.handleFunctionExecuted(event);
 
@@ -203,7 +211,7 @@ describe('WorkflowStepHandler', () => {
       } as any);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         notebook_name: 'Test Notebook',
       });
 
@@ -221,22 +229,23 @@ describe('WorkflowStepHandler', () => {
       );
     });
 
-    it('should fail when user_id is missing', async () => {
+    it('should fail when user_context is missing', async () => {
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {});
 
       await handler.handleFunctionExecuted(event);
 
       expect(mockSlackClient.functionCompleteError).toHaveBeenCalledWith(
         'Fx123456',
-        'Required input "user_id" is missing or invalid'
+        'Could not verify who is running this workflow. Start it from a trigger a person runs.'
       );
+      expect(User.findOne).not.toHaveBeenCalled();
     });
 
     it('should fail when user is not linked', async () => {
       vi.mocked(User.findOne).mockResolvedValue(null);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
       });
 
       await handler.handleFunctionExecuted(event);
@@ -251,7 +260,7 @@ describe('WorkflowStepHandler', () => {
       delete process.env.APP_URL;
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
       });
 
       await handler.handleFunctionExecuted(event);
@@ -271,7 +280,7 @@ describe('WorkflowStepHandler', () => {
       } as any);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         // No notebook_name provided
       });
 
@@ -298,7 +307,7 @@ describe('WorkflowStepHandler', () => {
       } as any);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         message: 'Hello B4M!',
         wait_for_response: false,
       });
@@ -326,7 +335,7 @@ describe('WorkflowStepHandler', () => {
 
       await handler.handleFunctionExecuted(
         createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
-          user_id: 'U123',
+          user_context: ACTING_USER_CONTEXT,
           message: 'Hello',
           wait_for_response: false,
         })
@@ -340,7 +349,7 @@ describe('WorkflowStepHandler', () => {
 
     it('should fail when message is missing', async () => {
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         // No message
       });
 
@@ -354,7 +363,7 @@ describe('WorkflowStepHandler', () => {
 
     it('should fail when message is empty string', async () => {
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         message: '   ',
       });
 
@@ -375,7 +384,7 @@ describe('WorkflowStepHandler', () => {
       vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as any);
 
       await handler.handleFunctionExecuted(
-        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { user_id: 'U123', message: 'Hello' })
+        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { user_context: ACTING_USER_CONTEXT, message: 'Hello' })
       );
 
       expect(createSession).not.toHaveBeenCalled();
@@ -393,7 +402,7 @@ describe('WorkflowStepHandler', () => {
       vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as any);
 
       await handler.handleFunctionExecuted(
-        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { user_id: 'U123', message: 'Hello' })
+        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { user_context: ACTING_USER_CONTEXT, message: 'Hello' })
       );
 
       expect(createSession).not.toHaveBeenCalled();
@@ -412,7 +421,7 @@ describe('WorkflowStepHandler', () => {
       vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as any);
 
       await handler.handleFunctionExecuted(
-        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { user_id: 'U123', message: 'Hello' })
+        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { user_context: ACTING_USER_CONTEXT, message: 'Hello' })
       );
 
       expect(createSession).toHaveBeenCalled();
@@ -439,7 +448,7 @@ describe('WorkflowStepHandler', () => {
       } as any);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         message: 'Hello',
         wait_for_response: false,
       });
@@ -463,7 +472,7 @@ describe('WorkflowStepHandler', () => {
       } as any);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         message: 'Hello',
         notebook_id: 'specific_notebook_123',
         wait_for_response: false,
@@ -491,7 +500,7 @@ describe('WorkflowStepHandler', () => {
       } as any);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         message: 'Hello',
         wait_for_response: true,
       });
@@ -518,7 +527,7 @@ describe('WorkflowStepHandler', () => {
       } as any);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         message: 'Hello',
         wait_for_response: true,
       });
@@ -544,7 +553,7 @@ describe('WorkflowStepHandler', () => {
       mockSlackClient.sendDirectMessage.mockResolvedValue(true);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         message: 'Hello',
         wait_for_response: true,
         send_notification: true,
@@ -568,7 +577,7 @@ describe('WorkflowStepHandler', () => {
       vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as any);
 
       await handler.handleFunctionExecuted(
-        createEvent(WORKFLOW_STEP_CALLBACKS.QUERY, { user_id: 'U123', query: 'What is the weather?' })
+        createEvent(WORKFLOW_STEP_CALLBACKS.QUERY, { user_context: ACTING_USER_CONTEXT, query: 'What is the weather?' })
       );
 
       expect(createSession).toHaveBeenCalled();
@@ -591,7 +600,7 @@ describe('WorkflowStepHandler', () => {
       } as any);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.QUERY, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         query: 'What is the weather?',
       });
 
@@ -614,7 +623,7 @@ describe('WorkflowStepHandler', () => {
 
     it('should fail when query is missing', async () => {
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.QUERY, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         // No query
       });
 
@@ -630,7 +639,7 @@ describe('WorkflowStepHandler', () => {
       vi.mocked(User.findOne).mockResolvedValue(null);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.QUERY, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         query: 'Test query',
       });
 
@@ -654,7 +663,7 @@ describe('WorkflowStepHandler', () => {
       mockSlackClient.functionCompleteSuccess.mockResolvedValue(false);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
       });
 
       await handler.handleFunctionExecuted(event);
@@ -673,7 +682,7 @@ describe('WorkflowStepHandler', () => {
       mockSlackClient.functionCompleteError.mockResolvedValue(false);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
       });
 
       await handler.handleFunctionExecuted(event);
@@ -692,7 +701,7 @@ describe('WorkflowStepHandler', () => {
       vi.mocked(createSession).mockRejectedValue(new Error('Database connection failed'));
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
       });
 
       await handler.handleFunctionExecuted(event);
@@ -715,7 +724,7 @@ describe('WorkflowStepHandler', () => {
       mockSlackClient.sendDirectMessage.mockResolvedValue(true);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         send_notification: true,
       });
 
@@ -736,7 +745,7 @@ describe('WorkflowStepHandler', () => {
       } as any);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         // send_notification not set (defaults to false)
       });
 
@@ -755,7 +764,7 @@ describe('WorkflowStepHandler', () => {
       mockSlackClient.sendDirectMessage.mockRejectedValue(new Error('DM failed'));
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
-        user_id: 'U123',
+        user_context: ACTING_USER_CONTEXT,
         send_notification: true,
       });
 
@@ -767,6 +776,132 @@ describe('WorkflowStepHandler', () => {
         '[WorkflowStep] Failed to send DM notification user requested',
         expect.any(Object)
       );
+    });
+  });
+
+  describe('acting user attestation', () => {
+    const LEGACY_ERROR_FRAGMENT = 'update the app manifest';
+
+    it('rejects a legacy user_id-only input and never looks up a user', async () => {
+      await handler.handleFunctionExecuted(createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, { user_id: 'U123' }));
+
+      expect(mockSlackClient.functionCompleteError).toHaveBeenCalledWith(
+        'Fx123456',
+        expect.stringContaining(LEGACY_ERROR_FRAGMENT)
+      );
+      expect(mockSlackClient.functionCompleteSuccess).not.toHaveBeenCalled();
+      expect(User.findOne).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a missing secret', { id: 'U123' }],
+      ['an empty secret', { id: 'U123', secret: '' }],
+      ['an id that is not a Slack user id', { id: 'not-a-user', secret: 'test-secret' }],
+      ['a string instead of an object', 'U123'],
+    ])('rejects a malformed user_context with %s', async (_label, userContext) => {
+      await handler.handleFunctionExecuted(
+        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { user_context: userContext, message: 'Hello' })
+      );
+
+      expect(mockSlackClient.functionCompleteError).toHaveBeenCalledWith(
+        'Fx123456',
+        'Could not verify who is running this workflow. Start it from a trigger a person runs.'
+      );
+      expect(User.findOne).not.toHaveBeenCalled();
+    });
+
+    it('runs as the user_context id and ignores a conflicting user_id', async () => {
+      vi.mocked(User.findOne).mockResolvedValue(createMockUser());
+      vi.mocked(createSession).mockResolvedValue({ id: 'session_123', name: 'Test' } as any);
+
+      await handler.handleFunctionExecuted(
+        createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
+          user_context: ACTING_USER_CONTEXT,
+          user_id: 'UVICTIM',
+        })
+      );
+
+      expect(User.findOne).toHaveBeenCalledTimes(1);
+      expect(User.findOne).toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'U123' });
+      expect(User.findOne).not.toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'UVICTIM' });
+    });
+
+    it('sends the notification DM to the user_context id', async () => {
+      vi.mocked(User.findOne).mockResolvedValue(createMockUser());
+      vi.mocked(createSession).mockResolvedValue({ id: 'session_123', name: 'Test' } as any);
+      mockSlackClient.sendDirectMessage.mockResolvedValue(true);
+
+      await handler.handleFunctionExecuted(
+        createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
+          user_context: ACTING_USER_CONTEXT,
+          user_id: 'UVICTIM',
+          send_notification: true,
+        })
+      );
+
+      expect(mockSlackClient.sendDirectMessage).toHaveBeenCalledWith('U123', expect.any(String));
+      expect(mockSlackClient.sendDirectMessage).not.toHaveBeenCalledWith('UVICTIM', expect.anything());
+    });
+
+    it('still reports an unknown callback_id when user_context is absent', async () => {
+      await handler.handleFunctionExecuted(createEvent('unknown_callback', {}));
+
+      expect(mockSlackClient.functionCompleteError).toHaveBeenCalledWith(
+        'Fx123456',
+        'Unknown workflow step: unknown_callback'
+      );
+      expect(User.findOne).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('resolveActingSlackUserId', () => {
+  it('returns the id from a valid user_context', () => {
+    expect(resolveActingSlackUserId({ user_context: { id: 'U123ABC', secret: 's' } })).toEqual({
+      ok: true,
+      slackUserId: 'U123ABC',
+    });
+  });
+
+  it('accepts a W-prefixed (enterprise) id', () => {
+    expect(resolveActingSlackUserId({ user_context: { id: 'W123ABC', secret: 's' } })).toEqual({
+      ok: true,
+      slackUserId: 'W123ABC',
+    });
+  });
+
+  it('prefers user_context over a user_id input', () => {
+    expect(resolveActingSlackUserId({ user_context: { id: 'U123', secret: 's' }, user_id: 'UVICTIM' })).toEqual({
+      ok: true,
+      slackUserId: 'U123',
+    });
+  });
+
+  it('flags a legacy user_id-only input as an outdated app configuration', () => {
+    const result = resolveActingSlackUserId({ user_id: 'U123' });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('outdated app configuration');
+    expect(result.error).toContain('update the app manifest');
+  });
+
+  it('flags an invalid user_context alongside a user_id as outdated configuration', () => {
+    const result = resolveActingSlackUserId({ user_context: { id: 'U123' }, user_id: 'U123' });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('update the app manifest');
+  });
+
+  it.each([
+    ['no inputs', {}],
+    ['a null user_context', { user_context: null }],
+    ['a lowercase id', { user_context: { id: 'u123', secret: 's' } }],
+    ['a too-short id', { user_context: { id: 'U1', secret: 's' } }],
+    ['a non-string secret', { user_context: { id: 'U123', secret: 42 } }],
+  ])('returns the generic verification error for %s', (_label, inputs) => {
+    expect(resolveActingSlackUserId(inputs)).toEqual({
+      ok: false,
+      error: 'Could not verify who is running this workflow. Start it from a trigger a person runs.',
     });
   });
 });
