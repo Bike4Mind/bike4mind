@@ -120,7 +120,8 @@ const handler = baseApi().post(async (req, res) => {
   await assertMcpServerEnabled();
 
   // Keep in sync with executePendingAction (server/utils/pendingActionExecutor.ts), the Slack
-  // executor: same server routing, repo checks, expiry and claim-before-invoke ordering.
+  // executor: same routing and file loading (pendingActionTarget.ts), expiry and claim-before-invoke
+  // ordering. Only this route checks the selected repositories before invoking.
   const target = resolvePendingActionTarget(pendingAction.tool, user, logger);
   if (!target) {
     logger.warn('[Web MCP Confirm] Refusing a pending action for a non-confirmable tool', {

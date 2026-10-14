@@ -402,8 +402,12 @@ export function registerProjectTools(server: McpServer) {
 
         const fields = fieldsResult.node?.fields?.nodes ?? [];
         const resolvedUpdates: ResolvedFieldUpdate[] = [];
+        const seenFieldIds = new Set<string>();
         for (const update of updates) {
-          const resolution = resolveFieldUpdate(update, fields);
+          const resolution = seenFieldIds.has(update.field_id)
+            ? { ok: false as const, error: `Field "${update.field_id}" appears more than once in updates` }
+            : resolveFieldUpdate(update, fields);
+          seenFieldIds.add(update.field_id);
           if (!resolution.ok) {
             return createCustomErrorResponse(resolution.error, {
               project_id,
@@ -514,7 +518,10 @@ type ProjectFieldNode = {
   name?: string;
   dataType?: string;
   options?: Array<{ id: string; name: string }>;
-  configuration?: { iterations: Array<{ id: string; title: string }> };
+  configuration?: {
+    iterations: Array<{ id: string; title: string }>;
+    completedIterations?: Array<{ id: string; title: string }>;
+  };
 };
 
 type ProjectFieldsPreviewResult = {
@@ -586,6 +593,15 @@ const FIELD_UPDATE_MUTATIONS: Record<FieldUpdateKind, string> = {
   single_select: UPDATE_SINGLE_SELECT_FIELD_MUTATION,
 };
 
+/** The field dataType each mutation can write, so an update aimed at the wrong kind of field is refused at preview. */
+const FIELD_DATA_TYPE_BY_KIND: Record<FieldUpdateKind, string> = {
+  number: 'NUMBER',
+  date: 'DATE',
+  iteration: 'ITERATION',
+  text: 'TEXT',
+  single_select: 'SINGLE_SELECT',
+};
+
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}(T[\d:]+Z?)?$/;
 
 /**
@@ -637,6 +653,12 @@ function resolveFieldUpdate(
   });
 
   const kind = classifyFieldUpdate(update);
+  if (field.dataType !== FIELD_DATA_TYPE_BY_KIND[kind]) {
+    return {
+      ok: false,
+      error: `"${update.value}" would be written as ${kind.replace('_', '-')} but "${fieldName}" is a ${field.dataType ?? 'unknown'} field`,
+    };
+  }
   switch (kind) {
     case 'single_select': {
       const option = field.options?.find(candidate => candidate.id === update.value);
@@ -646,7 +668,11 @@ function resolveFieldUpdate(
       return resolved(option.name);
     }
     case 'iteration': {
-      const iteration = field.configuration?.iterations.find(candidate => candidate.id === update.value);
+      const iterations = [
+        ...(field.configuration?.iterations ?? []),
+        ...(field.configuration?.completedIterations ?? []),
+      ];
+      const iteration = iterations.find(candidate => candidate.id === update.value);
       if (!iteration) {
         return { ok: false, error: `"${update.value}" is not an iteration of the "${fieldName}" field` };
       }

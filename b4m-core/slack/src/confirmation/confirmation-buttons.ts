@@ -71,10 +71,18 @@ function buildPreviewMessage(
 /**
  * "Label (id)" for a tool-resolved label next to the id that executes; the bare id when no label was resolved.
  */
+/**
+ * Renders a value on one card line. Values reach the card from tool params, so a newline in one
+ * must not start a new quoted row that reads like another field of the action.
+ */
+function toSlackInline(text: string): string {
+  return escapeSlackMrkdwn(text.replace(/\s+/g, ' '));
+}
+
 function labelWithId(label: unknown, id: unknown): string {
   const idText = id === undefined || id === null || id === '' ? 'Unknown' : String(id);
   const text = label ? `${String(label)} (${idText})` : idText;
-  return escapeSlackMrkdwn(text);
+  return toSlackInline(text);
 }
 
 /**
@@ -82,10 +90,10 @@ function labelWithId(label: unknown, id: unknown): string {
  */
 function formatAttachmentUploadPreview(params: Record<string, unknown>, target: 'jira' | 'confluence'): string {
   // Only executed values (and the page title the tool looked up from pageId) are shown, never a model label.
-  const filename = escapeSlackMrkdwn(String(params.filename || 'Unknown file'));
+  const filename = toSlackInline(String(params.filename || 'Unknown file'));
 
   if (target === 'jira') {
-    const issueKey = escapeSlackMrkdwn(String(params.issueKey || 'Unknown'));
+    const issueKey = toSlackInline(String(params.issueKey || 'Unknown'));
     return buildPreviewMessage(
       '📎',
       'Jira Attachment Upload',
@@ -99,12 +107,12 @@ function formatAttachmentUploadPreview(params: Record<string, unknown>, target: 
     const pageId = String(params.pageId || '');
     const pageTitle = params.display_page_title ? String(params.display_page_title) : '';
     const pageLabel = pageTitle && pageTitle !== pageId ? `${pageTitle} (${pageId})` : pageId || 'Unknown';
-    const comment = params.comment ? escapeSlackMrkdwn(String(params.comment)) : undefined;
+    const comment = params.comment ? toSlackInline(String(params.comment)) : undefined;
     return buildPreviewMessage(
       '📎',
       'Confluence Attachment Upload',
       [
-        { label: 'Page', value: escapeSlackMrkdwn(pageLabel) },
+        { label: 'Page', value: toSlackInline(pageLabel) },
         { label: 'File', value: filename },
         { label: 'Comment', value: comment },
       ],
@@ -125,7 +133,7 @@ function formatAttachmentDeletePreview(params: Record<string, unknown>, target: 
   return buildPreviewMessage(
     '⚠️',
     `${targetLabel} Attachment Deletion`,
-    [{ label: 'File', value: escapeSlackMrkdwn(filename ? `${filename} (${attachmentId})` : attachmentId) }],
+    [{ label: 'File', value: toSlackInline(filename ? `${filename} (${attachmentId})` : attachmentId) }],
     'DELETE this attachment',
     'This action cannot be undone!'
   );
@@ -587,7 +595,7 @@ export function formatPreviewFromParams(tool: string, params: Record<string, unk
       ];
 
       if (params.display_repository) {
-        lines.push(`> *Repository:* ${escapeSlackMrkdwn(String(params.display_repository))}`);
+        lines.push(`> *Repository:* ${toSlackInline(String(params.display_repository))}`);
       }
 
       lines.push(
@@ -607,11 +615,11 @@ export function formatPreviewFromParams(tool: string, params: Record<string, unk
       const fieldLines = updates.map((update: unknown) => {
         const entry = typeof update === 'object' && update !== null ? (update as Record<string, unknown>) : {};
         const fieldLabel = labelWithId(entry.display_field_name, entry.field_id);
-        const value = escapeSlackMrkdwn(String(entry.display_value ?? entry.value ?? ''));
+        const value = toSlackInline(String(entry.display_value ?? entry.value ?? ''));
         return `> *${fieldLabel}:* -> ${value}`;
       });
       const repository = params.display_repository
-        ? [`> *Repository:* ${escapeSlackMrkdwn(String(params.display_repository))}`]
+        ? [`> *Repository:* ${toSlackInline(String(params.display_repository))}`]
         : [];
 
       return [

@@ -206,9 +206,9 @@ export function registerJiraAttachmentTools(server: McpServer) {
 
       if (!shouldExecute) {
         // The preview names the file from Jira itself; an attachment that cannot be fetched gets no confirm token.
-        let attachment: JiraAttachmentMetadata;
+        let filename: string;
         try {
-          attachment = await fetchJiraAttachmentMetadata(attachmentId);
+          filename = await fetchJiraAttachmentFilename(attachmentId);
         } catch (error) {
           return {
             content: [
@@ -225,13 +225,13 @@ export function registerJiraAttachmentTools(server: McpServer) {
           '⚠️ Preview: Jira Attachment to be Deleted',
           {
             attachmentId,
-            display_filename: attachment.filename,
+            display_filename: filename,
             warning: 'This action cannot be undone.',
           },
           'attachment',
           {
             tool: JIRA_DELETE_ATTACHMENT,
-            params: { attachmentId, display_filename: attachment.filename },
+            params: { attachmentId, display_filename: filename },
           }
         );
       }
@@ -263,12 +263,10 @@ export function registerJiraAttachmentTools(server: McpServer) {
   );
 }
 
-type JiraAttachmentMetadata = { id: string; filename: string };
-
-async function fetchJiraAttachmentMetadata(attachmentId: string): Promise<JiraAttachmentMetadata> {
-  const metadata = await getJiraApi().getAttachment({ attachmentId });
-  if (typeof metadata.filename !== 'string' || metadata.filename === '') {
+async function fetchJiraAttachmentFilename(attachmentId: string): Promise<string> {
+  const { filename } = await getJiraApi().getAttachment({ attachmentId });
+  if (typeof filename !== 'string' || filename === '') {
     throw new Error('Jira returned no filename for this attachment');
   }
-  return { id: String(metadata.id ?? attachmentId), filename: metadata.filename };
+  return filename;
 }

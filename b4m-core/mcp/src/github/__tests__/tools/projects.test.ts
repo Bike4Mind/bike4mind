@@ -22,6 +22,13 @@ import {
   TOOL_UPDATE_PROJECT_ITEM_FIELDS,
 } from '../../constants.js';
 import { createMockServer, parseResponse, type RegisteredTool } from '../test-utils.js';
+import {
+  UPDATE_DATE_FIELD_MUTATION,
+  UPDATE_ITERATION_FIELD_MUTATION,
+  UPDATE_NUMBER_FIELD_MUTATION,
+  UPDATE_SINGLE_SELECT_FIELD_MUTATION,
+  UPDATE_TEXT_FIELD_MUTATION,
+} from '../../helpers/queries.js';
 
 const decodeToken = (token: unknown): { tool: string; params: Record<string, unknown> } =>
   JSON.parse(Buffer.from(String(token), 'base64').toString('utf8'));
@@ -428,6 +435,7 @@ describe('Project Tools', () => {
               dataType: 'ITERATION',
               configuration: {
                 iterations: [{ id: 'iter_1', title: 'Sprint 1', startDate: '2026-01-01', duration: 14 }],
+                completedIterations: [{ id: 'iter_0', title: 'Sprint 0', startDate: '2025-12-18', duration: 14 }],
               },
             },
             { id: 'PVTF_estimate', name: 'Estimate', dataType: 'NUMBER' },
@@ -506,6 +514,9 @@ describe('Project Tools', () => {
       ['a field id that is not in the project', { field_id: 'PVTF_unknown', value: 3 }],
       ['an option id that is not one of the field options', { field_id: 'PVTSSF_status', value: 'opt_elsewhere' }],
       ['an iteration id that is not one of the field iterations', { field_id: 'PVTIF_sprint', value: 'iter_9' }],
+      ['a text value aimed at a number field', { field_id: 'PVTF_estimate', value: '5' }],
+      ['a number aimed at a single-select field', { field_id: 'PVTSSF_status', value: 3 }],
+      ['a date-looking value aimed at a number field', { field_id: 'PVTF_estimate', value: '2026-03-01' }],
     ])('refuses to preview (no token) for %s', async (_label, update) => {
       mockPreviewLookups();
 
@@ -513,6 +524,58 @@ describe('Project Tools', () => {
 
       expect(result.isError).toBe(true);
       expect(parseResponse(result)._confirmToken).toBeUndefined();
+    });
+
+    it('refuses to preview (no token) when the same field is updated twice', async () => {
+      mockPreviewLookups();
+
+      const result = await previewUpdate([
+        { field_id: 'PVTSSF_status', value: 'opt_todo' },
+        { field_id: 'PVTSSF_status', value: 'opt_progress' },
+      ]);
+
+      expect(result.isError).toBe(true);
+      expect(parseResponse(result)._confirmToken).toBeUndefined();
+    });
+
+    it('accepts a completed iteration of the field', async () => {
+      mockPreviewLookups();
+
+      const result = await previewUpdate([{ field_id: 'PVTIF_sprint', value: 'iter_0' }]);
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content[0].text).toContain('Sprint 0');
+    });
+
+    it.each([
+      ['number', 5, UPDATE_NUMBER_FIELD_MUTATION, 5],
+      ['date', '2026-03-01T10:00:00Z', UPDATE_DATE_FIELD_MUTATION, '2026-03-01'],
+      ['iteration', 'iter_1', UPDATE_ITERATION_FIELD_MUTATION, 'iter_1'],
+      ['text', 'abc', UPDATE_TEXT_FIELD_MUTATION, 'abc'],
+      ['single-select', 'opt_progress', UPDATE_SINGLE_SELECT_FIELD_MUTATION, 'opt_progress'],
+    ] as const)('executes a %s update with its own mutation', async (_kind, value, mutation, sentValue) => {
+      const fieldId = {
+        number: 'PVTF_estimate',
+        date: 'PVTF_target',
+        iteration: 'PVTIF_sprint',
+        text: 'PVTF_notes',
+        'single-select': 'PVTSSF_status',
+      }[_kind];
+      vi.mocked(octokit.graphql).mockResolvedValue({} as never);
+
+      await registeredTools.get(TOOL_UPDATE_PROJECT_ITEM_FIELDS)!.handler({
+        project_id: 'PVT_kwDO1',
+        item_id: 'PVTI_lADO789',
+        updates: [{ field_id: fieldId, value }],
+        _executeFromButton: true,
+      });
+
+      expect(octokit.graphql).toHaveBeenLastCalledWith(mutation, {
+        projectId: 'PVT_kwDO1',
+        itemId: 'PVTI_lADO789',
+        fieldId,
+        value: sentValue,
+      });
     });
 
     it('refuses to preview (no token) when the item belongs to a different project', async () => {

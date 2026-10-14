@@ -320,9 +320,7 @@ export function registerConfluenceAttachmentTools(server: McpServer) {
         // The preview names the file from Confluence itself; an attachment that cannot be fetched gets no confirm token.
         let filename: string;
         try {
-          const attachment = await getConfluenceApi().get<{ id?: string; title?: string }>(
-            `/attachments/${encodeURIComponent(attachmentId)}`
-          );
+          const attachment = await getConfluenceApi().getAttachment({ attachmentId });
           if (typeof attachment.title !== 'string' || attachment.title === '') {
             throw new Error('Confluence returned no filename for this attachment');
           }

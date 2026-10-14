@@ -56,6 +56,18 @@ describe('extractMcpPendingAction', () => {
     if (extraction.kind === 'rejected') expect(JSON.parse(extraction.result)).not.toHaveProperty('_confirmToken');
   });
 
+  it.each([
+    ['a read tool that echoed a token naming itself', 'github__get_issue', 'get_issue'],
+    ['a tool of the other confirming server', 'github__jira_create_issue', 'jira_create_issue'],
+  ])('rejects a token from %s', (_label, emittingTool, tool) => {
+    const echoed = encodeToken({ tool, params: {}, ts: 1 });
+
+    expect(extractMcpPendingAction(emittingTool, preview(echoed))).toMatchObject({
+      kind: 'rejected',
+      reason: 'untrusted-emitter',
+    });
+  });
+
   it.each(['notion__create_issue', 'create_issue', '__create_issue'])(
     'rejects a token from an emitter that is not a confirming server (%s)',
     emittingTool => {

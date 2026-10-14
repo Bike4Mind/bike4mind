@@ -64,6 +64,12 @@ export const LIST_PROJECT_FIELDS_QUERY = `
                   startDate
                   duration
                 }
+                completedIterations {
+                  id
+                  title
+                  startDate
+                  duration
+                }
               }
             }
           }

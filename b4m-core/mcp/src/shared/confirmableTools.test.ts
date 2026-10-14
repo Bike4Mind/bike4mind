@@ -10,8 +10,14 @@ const SRC_DIR = join(__dirname, '..');
 function tokenEmittingConstantNames(dirs: string[]): Set<string> {
   const names = new Set<string>();
   for (const dir of dirs) {
-    for (const file of readdirSync(join(SRC_DIR, dir)).filter(f => f.endsWith('.ts'))) {
-      const source = readFileSync(join(SRC_DIR, dir, file), 'utf8');
+    const files = readdirSync(join(SRC_DIR, dir), { recursive: true, encoding: 'utf8' }).filter(
+      file => file.endsWith('.ts') && !file.endsWith('.test.ts')
+    );
+    for (const file of files) {
+      // Comments are dropped so a commented-out preview cannot add a tool to the expected set.
+      const source = readFileSync(join(SRC_DIR, dir, file), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
       for (const match of source.matchAll(/\btool:\s*([A-Z][A-Z_]+)\b/g)) names.add(match[1]);
     }
   }
@@ -28,7 +34,7 @@ function resolveToolNames(constantNames: Set<string>, constants: Record<string, 
 
 describe('confirmable tool allowlists', () => {
   it('GITHUB_CONFIRMABLE_TOOLS is exactly the GitHub tools that issue a confirm token', () => {
-    const emitted = resolveToolNames(tokenEmittingConstantNames(['github/tools']), githubConstants);
+    const emitted = resolveToolNames(tokenEmittingConstantNames(['github/tools', 'github/helpers']), githubConstants);
     expect(new Set(emitted)).toEqual(githubConstants.GITHUB_CONFIRMABLE_TOOLS);
   });
 

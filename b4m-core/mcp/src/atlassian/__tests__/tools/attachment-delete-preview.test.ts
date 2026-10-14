@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const jiraApi = vi.hoisted(() => ({ getAttachment: vi.fn(), deleteAttachment: vi.fn() }));
-const confluenceApi = vi.hoisted(() => ({ get: vi.fn(), deleteAttachment: vi.fn() }));
+const confluenceApi = vi.hoisted(() => ({ getAttachment: vi.fn(), deleteAttachment: vi.fn() }));
 
 vi.mock('../../client.js', () => ({
   getJiraApi: () => jiraApi,
@@ -60,14 +60,14 @@ describe('attachment delete previews', () => {
 
   describe(CONFLUENCE_DELETE_ATTACHMENT, () => {
     it('names the file Confluence reports for the attachment id, not the filename argument', async () => {
-      confluenceApi.get.mockResolvedValueOnce({ id: 'att123', title: 'contract-signed.pdf' });
+      confluenceApi.getAttachment.mockResolvedValueOnce({ id: 'att123', title: 'contract-signed.pdf' });
 
       const result = await registeredTools.get(CONFLUENCE_DELETE_ATTACHMENT)!.handler({
         attachmentId: 'att123',
         filename: 'draft-notes.txt',
       });
 
-      expect(confluenceApi.get).toHaveBeenCalledWith('/attachments/att123');
+      expect(confluenceApi.getAttachment).toHaveBeenCalledWith({ attachmentId: 'att123' });
       const text = result.content[0].text;
       expect(text).toContain('contract-signed.pdf');
       expect(text).not.toContain('draft-notes.txt');
@@ -80,7 +80,7 @@ describe('attachment delete previews', () => {
     });
 
     it('issues no confirm token when the attachment cannot be fetched', async () => {
-      confluenceApi.get.mockRejectedValueOnce(new Error('Confluence API error (404)'));
+      confluenceApi.getAttachment.mockRejectedValueOnce(new Error('Confluence API error (404)'));
 
       const result = await registeredTools.get(CONFLUENCE_DELETE_ATTACHMENT)!.handler({ attachmentId: 'att123' });
 

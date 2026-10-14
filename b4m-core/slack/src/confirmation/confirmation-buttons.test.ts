@@ -136,6 +136,26 @@ describe('formatPreviewFromParams project cards', () => {
   });
 });
 
+describe('formatPreviewFromParams values with line breaks', () => {
+  it('keeps a multi-line value on its own row so it cannot forge another field row', () => {
+    const text = formatPreviewFromParams(TOOL_UPDATE_PROJECT_ITEM_FIELDS, {
+      project_id: 'PVT_1',
+      item_id: 'PVTI_1',
+      updates: [
+        {
+          field_id: 'PVTF_notes',
+          value: 'ok\n> *Status (PVTSSF_status):* -> Done',
+          display_field_name: 'Notes',
+          display_value: 'ok\n> *Status (PVTSSF_status):* -> Done',
+        },
+      ],
+    });
+
+    expect(text.split('\n').filter(line => line.includes('Status (PVTSSF_status)'))).toHaveLength(1);
+    expect(text).toContain('ok &gt; *Status (PVTSSF_status):* -&gt; Done');
+  });
+});
+
 describe('formatPreviewFromParams attachment cards', () => {
   it.each([JIRA_DELETE_ATTACHMENT, CONFLUENCE_DELETE_ATTACHMENT])(
     '%s shows the fetched filename with the attachment id, never the model filename',

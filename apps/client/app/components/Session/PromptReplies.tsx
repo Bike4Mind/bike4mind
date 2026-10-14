@@ -764,9 +764,11 @@ function getPendingActionError(error: unknown, fallbackMessage: string): { messa
   };
 }
 
-export const PendingActionButtons: FC<PendingActionButtonsProps> = props => (
-  <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
-);
+// The confirm route executes only allowlisted write tools, so any other pending action gets no card.
+export const PendingActionButtons: FC<PendingActionButtonsProps> = props =>
+  isConfirmableMcpTool(props.pendingAction.tool) ? (
+    <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
+  ) : null;
 
 const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAction, messageId, sessionId }) => {
   const storageKey = messageId ? `mcp-confirm-${messageId}-${pendingAction.ts}` : null;
@@ -1897,7 +1899,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
         </Stack>
       )}
 
-      {pendingAction && completed && isConfirmableMcpTool(pendingAction.tool) && (
+      {pendingAction && completed && (
         <PendingActionButtons
           pendingAction={pendingAction}
           messageId={messageId}
