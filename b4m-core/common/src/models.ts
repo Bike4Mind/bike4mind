@@ -511,7 +511,8 @@ const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|[./])claude-(?:opus-5-5|sonnet-5-5|fa
  * alike); `auto` and `none` still work. Adapters route json_schema through `output_config.format` and
  * downgrade a caller's required/named choice to `auto` + `strict` for these models. Haiku 5.5 is
  * deliberately absent: it accepts forced `any`/`tool` (raw Bedrock API probe, adaptive thinking on;
- * native API not yet verified) and its response just carries no thinking block.
+ * native API: forced `tool` observed via json_schema, forced `any` not probed) and its response
+ * just carries no thinking block.
  */
 export function supportsForcedToolChoice(modelId: string): boolean {
   return !NO_FORCED_TOOL_CHOICE_FAMILY.test(modelId);

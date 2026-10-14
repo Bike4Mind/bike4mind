@@ -149,6 +149,7 @@ describe('AnthropicBedrockBackend current inference profiles', () => {
 
     expect(body).not.toHaveProperty('temperature');
     expect(body).not.toHaveProperty('top_p');
+    // The Bedrock Anthropic body never carries top_k for any model; native top_k gating is pinned in anthropicBackend.dispatchModel.test.ts
     expect(body).not.toHaveProperty('top_k');
   });
 
