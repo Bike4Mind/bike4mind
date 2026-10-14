@@ -171,6 +171,16 @@ describe('renaming a session from the sidebar', () => {
     expect(input.maxLength).toBe(60);
   });
 
+  it('leaves the row menu shut once a rename from it is finished', async () => {
+    await mount([summary('a', 'Alpha')]);
+    renameFromMenu('Alpha');
+    press('Escape');
+    await settle();
+
+    expect(query('chat-rename-session-btn')).toBeNull();
+    expect(query('chat-session-menu-btn')?.getAttribute('aria-expanded')).not.toBe('true');
+  });
+
   it('enters editing on a double-click of the title', async () => {
     await mount([summary('a', 'Alpha')]);
     doubleClickTitle('Alpha');

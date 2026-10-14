@@ -45,7 +45,8 @@ const ACTIVE: ChatSessionSummary = {
  */
 function quietBridge(overrides: Record<string, unknown>) {
   return new Proxy(overrides, {
-    get(target, name: string) {
+    get(target, name: string | symbol) {
+      if (typeof name !== 'string') return undefined;
       if (name in target) return target[name];
       if (name.startsWith('on')) return () => () => undefined;
       return async () => [];
@@ -83,7 +84,8 @@ beforeEach(() => {
       }),
     },
     {
-      get(target, name: string) {
+      get(target, name: string | symbol) {
+        if (typeof name !== 'string') return undefined;
         return name in target ? target[name as 'chat'] : quietBridge({});
       },
     }

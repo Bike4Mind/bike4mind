@@ -266,7 +266,15 @@ const SessionRow = memo(function SessionRow({ session, selected, status, pr, act
                 <MenuItem onClick={() => actions.togglePin(session)} data-testid="chat-pin-session-btn">
                   {session.pinned ? 'Unpin' : 'Pin'}
                 </MenuItem>
-                <MenuItem onClick={() => setEditing(true)} data-testid="chat-rename-session-btn">
+                <MenuItem
+                  onClick={() => {
+                    // Shut by hand: the Dropdown unmounts before it can report closing, and would
+                    // otherwise come back open when editing ends.
+                    setMenuOpen(false);
+                    setEditing(true);
+                  }}
+                  data-testid="chat-rename-session-btn"
+                >
                   Rename
                 </MenuItem>
                 <MenuItem onClick={() => actions.toggleArchived(session)} data-testid="chat-archive-session-btn">
