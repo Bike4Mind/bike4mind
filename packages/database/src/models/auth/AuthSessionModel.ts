@@ -1,4 +1,4 @@
-import { IAuthSessionDocument, IAuthSessionRepository } from '@bike4mind/common';
+import { IAuthSessionDocument, IAuthSessionRepository, IAuthSessionStepUpEmailChallenge } from '@bike4mind/common';
 import mongoose, { Schema, model, Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -9,6 +9,16 @@ const AuthSessionDeviceSchema = new Schema(
     os: { type: String },
     ip: { type: String },
     location: { type: String },
+  },
+  { _id: false }
+);
+
+const StepUpEmailChallengeSchema = new Schema(
+  {
+    tokenHash: { type: String, required: true },
+    codeHash: { type: String, required: true },
+    expiresAt: { type: Date, required: true },
+    attempts: { type: Number, default: 0 },
   },
   { _id: false }
 );
@@ -28,6 +38,8 @@ const AuthSessionSchema = new Schema<IAuthSessionDocument>(
     lastUsedAt: { type: Date, required: true },
     expiresAt: { type: Date, required: true },
     revokedAt: { type: Date, default: null },
+    stepUpAt: { type: Date, default: null },
+    stepUpEmailChallenge: { type: StepUpEmailChallengeSchema, default: null, select: false },
   },
   {
     timestamps: true,
@@ -155,6 +167,66 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
         replayUses: { $not: { $gte: maxUses } },
       },
       { $inc: { replayUses: 1 }, $set: { lastUsedAt: now } },
+      { new: true }
+    ).exec();
+  }
+
+  async markStepUp(sid: string, userId: string, at: Date): Promise<IAuthSessionDocument | null> {
+    return AuthSessionModel.findOneAndUpdate(
+      { sid, userId, revokedAt: null, expiresAt: { $gt: at } },
+      { $set: { stepUpAt: at } },
+      { new: true }
+    ).exec();
+  }
+
+  async setStepUpEmailChallenge(
+    sid: string,
+    userId: string,
+    challenge: Omit<IAuthSessionStepUpEmailChallenge, 'attempts'>
+  ): Promise<boolean> {
+    const result = await AuthSessionModel.updateOne(
+      { sid, userId, revokedAt: null, expiresAt: { $gt: new Date() } },
+      { $set: { stepUpEmailChallenge: { ...challenge, attempts: 0 } } }
+    ).exec();
+    return result.matchedCount > 0;
+  }
+
+  async findStepUpEmailChallenge(sid: string, userId: string): Promise<IAuthSessionStepUpEmailChallenge | null> {
+    const now = new Date();
+    const session = await AuthSessionModel.findOne({
+      sid,
+      userId,
+      revokedAt: null,
+      expiresAt: { $gt: now },
+      'stepUpEmailChallenge.expiresAt': { $gt: now },
+    })
+      .select('+stepUpEmailChallenge')
+      .exec();
+    return session?.stepUpEmailChallenge ?? null;
+  }
+
+  async recordStepUpEmailChallengeFailure(sid: string, tokenHash: string): Promise<number | null> {
+    const session = await AuthSessionModel.findOneAndUpdate(
+      { sid, 'stepUpEmailChallenge.tokenHash': tokenHash },
+      { $inc: { 'stepUpEmailChallenge.attempts': 1 } },
+      { new: true }
+    )
+      .select('+stepUpEmailChallenge')
+      .exec();
+    return session?.stepUpEmailChallenge?.attempts ?? null;
+  }
+
+  async consumeStepUpEmailChallenge(
+    sid: string,
+    userId: string,
+    tokenHash: string,
+    at: Date
+  ): Promise<IAuthSessionDocument | null> {
+    // The tokenHash in the filter is the compare-and-swap: of N concurrent correct submissions,
+    // only the first clears the challenge, so one code yields one step-up.
+    return AuthSessionModel.findOneAndUpdate(
+      { sid, userId, revokedAt: null, expiresAt: { $gt: at }, 'stepUpEmailChallenge.tokenHash': tokenHash },
+      { $set: { stepUpAt: at, stepUpEmailChallenge: null } },
       { new: true }
     ).exec();
   }

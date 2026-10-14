@@ -235,6 +235,11 @@ export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepo
     rotateHash: vi.fn(),
     recoverRotateHash: vi.fn(),
     registerReplayUse: vi.fn(),
+    markStepUp: vi.fn(),
+    setStepUpEmailChallenge: vi.fn(),
+    findStepUpEmailChallenge: vi.fn(),
+    recordStepUpEmailChallengeFailure: vi.fn(),
+    consumeStepUpEmailChallenge: vi.fn(),
     revokeBySid: vi.fn(),
     revokeAllByUserId: vi.fn(),
   });

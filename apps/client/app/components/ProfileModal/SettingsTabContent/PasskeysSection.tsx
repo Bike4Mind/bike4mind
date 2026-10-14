@@ -22,7 +22,6 @@ const PasskeysSection: React.FC<{ enabled: boolean }> = ({ enabled }) => {
   const registerPasskey = useRegisterPasskey();
   const removePasskey = useRemovePasskey();
   const [name, setName] = useState('');
-  const [code, setCode] = useState('');
 
   if (!enabled) return null;
 
@@ -30,15 +29,13 @@ const PasskeysSection: React.FC<{ enabled: boolean }> = ({ enabled }) => {
 
   const handleAdd = () => {
     registerPasskey.mutate(
-      { name: name.trim() || undefined, token: code },
+      { name: name.trim() || undefined },
       {
         onSuccess: passkey => {
           setName('');
-          setCode('');
           toast.success(`Added passkey "${passkey.name}"`);
         },
         onError: error => {
-          setCode('');
           toast.error(describePasskeyError(error, 'Could not add the passkey'));
         },
       }
@@ -62,7 +59,7 @@ const PasskeysSection: React.FC<{ enabled: boolean }> = ({ enabled }) => {
       </Typography>
       <Typography level="body-sm" sx={{ mb: 2 }}>
         Use Face ID, Touch ID, Windows Hello or a security key instead of typing an authenticator code. Passkeys only
-        work on this site, so they cannot be phished. Adding one asks for a current authenticator code.
+        work on this site, so they cannot be phished. Adding one asks you to confirm it&apos;s you first.
       </Typography>
 
       {!supported && (
@@ -125,24 +122,7 @@ const PasskeysSection: React.FC<{ enabled: boolean }> = ({ enabled }) => {
             sx={{ flex: 1 }}
             slotProps={{ input: { 'data-testid': 'passkey-name-input', 'aria-label': 'Passkey name' } }}
           />
-          <Input
-            size="sm"
-            placeholder="Authenticator code"
-            value={code}
-            onChange={event => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
-            disabled={registerPasskey.isPending}
-            sx={{ width: { sm: 170 } }}
-            slotProps={{
-              input: { 'data-testid': 'passkey-code-input', 'aria-label': 'Authenticator code', inputMode: 'numeric' },
-            }}
-          />
-          <Button
-            size="sm"
-            data-testid="passkey-add-btn"
-            loading={registerPasskey.isPending}
-            disabled={code.length !== 6}
-            onClick={handleAdd}
-          >
+          <Button size="sm" data-testid="passkey-add-btn" loading={registerPasskey.isPending} onClick={handleAdd}>
             Add a passkey
           </Button>
         </Stack>

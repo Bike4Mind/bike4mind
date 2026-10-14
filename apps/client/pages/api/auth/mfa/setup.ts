@@ -4,8 +4,11 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { readSignInOrigin } from '@server/auth/signInSecondFactor';
+import { stepUpGate } from '@server/auth/stepUp';
 
-const handler = baseApi()
+// Sign-in enrollment (an mfaPending token) has just proved the first factor, so it skips step-up.
+const handler = baseApi({ auth: 'jwtOnly' })
+  .use(stepUpGate({ skip: req => !!req.user?.mfaPending }))
   .use(rateLimit({ limit: 3, windowMs: 15 * 60 * 1000 })) // 3 setups per 15 minutes
   .post(
     asyncHandler(async (req, res) => {

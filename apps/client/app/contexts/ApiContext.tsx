@@ -5,6 +5,7 @@ import { clearClientCaches } from '@client/app/utils/clearClientCaches';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import { api, isPublicPath } from './apiClient';
 import { refreshSession } from '@client/app/utils/refreshCoordinator';
+import { registerStepUpInterceptor } from '@client/app/utils/stepUpInterceptor';
 
 // The axios instance and its request-side interceptors live in ./apiClient (a leaf module, so the
 // refresh coordinator can reach the transport without importing this file back). Re-exported here
@@ -223,6 +224,9 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+// 403 step_up_required: prompt for recent verification, then replay once. Runs after the 401 handler above.
+registerStepUpInterceptor(api);
 
 // ApiProvider no longer registers interceptors (they live at module scope above,
 // so they're active before any render). Kept as a pass-through to preserve the

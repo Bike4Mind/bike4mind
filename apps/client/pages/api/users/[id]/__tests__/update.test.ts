@@ -3,18 +3,25 @@ import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
 import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
 
-const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount, mockSessionEnded, txnState } = vi.hoisted(
-  () => ({
-    mockUserFindById: vi.fn(),
-    mockAdminUpdateUser: vi.fn(),
-    mockUpdateUser: vi.fn(),
-    mockCount: vi.fn(),
-    mockSessionEnded: vi.fn(),
-    // Records whether a findById read ran inside the change callback, so a test can pin the
-    // session-end snapshot to the write's own transaction instead of a stale read before it.
-    txnState: { changeRunning: false, snapshotReadInsideChange: undefined as boolean | undefined },
-  })
-);
+const {
+  mockUserFindById,
+  mockAdminUpdateUser,
+  mockUpdateUser,
+  mockCount,
+  mockSessionEnded,
+  mockRequireStepUp,
+  txnState,
+} = vi.hoisted(() => ({
+  mockUserFindById: vi.fn(),
+  mockAdminUpdateUser: vi.fn(),
+  mockUpdateUser: vi.fn(),
+  mockCount: vi.fn(),
+  mockSessionEnded: vi.fn(),
+  mockRequireStepUp: vi.fn(),
+  // Records whether a findById read ran inside the change callback, so a test can pin the
+  // session-end snapshot to the write's own transaction instead of a stale read before it.
+  txnState: { changeRunning: false, snapshotReadInsideChange: undefined as boolean | undefined },
+}));
 
 // Runs the change and the session-end decision exactly as the real helper does (its transaction
 // and revoke are covered in server/auth/endUserSessions.test.ts); a decided end is recorded.
@@ -132,6 +139,9 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 
+// The gate's own behaviour is covered in server/auth/stepUp.test.ts; here only where it applies.
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
+
 import handler from '../update';
 
 const run = ({
@@ -165,6 +175,55 @@ beforeEach(() => {
   mockSessionEnded.mockReset().mockResolvedValue(undefined);
   txnState.changeRunning = false;
   txnState.snapshotReadInsideChange = undefined;
+  mockRequireStepUp.mockReset().mockResolvedValue(undefined);
+});
+
+describe('PUT /api/users/:id/update - changing your own password', () => {
+  const SELF = { id: 'u1', isAdmin: false };
+  const stepUpRequired = Object.assign(new ForbiddenError('Recent verification required'), {
+    additionalInfo: { code: 'step_up_required' },
+  });
+
+  it('requires recent verification and does not write without it', async () => {
+    mockRequireStepUp.mockRejectedValue(stepUpRequired);
+    const { promise } = run({ user: SELF, userId: 'u1', body: { password: 'new-password' } });
+    await expect(promise).rejects.toBe(stepUpRequired);
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('writes once recently verified', async () => {
+    const { res, promise } = run({ user: SELF, userId: 'u1', body: { password: 'new-password' } });
+    await promise;
+    expect(mockRequireStepUp).toHaveBeenCalledTimes(1);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('gates an admin changing their own password too', async () => {
+    mockRequireStepUp.mockRejectedValue(stepUpRequired);
+    const { promise } = run({ user: ADMIN, userId: ADMIN.id, body: { password: 'new-password' } });
+    await expect(promise).rejects.toBe(stepUpRequired);
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('refuses a password from an API key outright', async () => {
+    const { promise } = run({
+      user: SELF,
+      userId: 'u1',
+      body: { password: 'new-password' },
+      apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] },
+    });
+    await expect(promise).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it("leaves updates without a password, and an admin setting another user's password, ungated", async () => {
+    await run({ user: SELF, userId: 'u1', body: { name: 'New' } }).promise;
+    await run({ user: SELF, userId: 'u1', body: { password: null } }).promise;
+    await run({ user: ADMIN, userId: 'other-user', body: { password: 'reset-value' } }).promise;
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+  });
 });
 
 describe('PUT /api/users/:id/update - lockout guard', () => {

@@ -22,7 +22,8 @@ const verifySetupResponseSchema = z.object({
   user: selfUserResponseSchema,
 });
 
-const handler = baseApi()
+// Gated by step-up at /api/auth/mfa/setup, which issues the secret this confirms.
+const handler = baseApi({ auth: 'jwtOnly' })
   // No rate limiting - using server-side lockout for stronger security
   .post(
     asyncHandler(async (req, res) => {

@@ -50,18 +50,16 @@ describe('PasskeysSection', () => {
     expect(screen.queryByTestId('passkeys-section')).toBeNull();
   });
 
-  it('enrolls a passkey under the typed name, stepping up with an authenticator code', () => {
+  it('enrolls a passkey under the typed name without collecting a code', () => {
     renderSection();
     fireEvent.change(screen.getByTestId('passkey-name-input'), { target: { value: '  Phone ' } });
-    fireEvent.change(screen.getByTestId('passkey-code-input'), { target: { value: '123456' } });
     fireEvent.click(screen.getByTestId('passkey-add-btn'));
-    expect(mockRegister).toHaveBeenCalledWith({ name: 'Phone', token: '123456' }, expect.any(Object));
+    expect(mockRegister).toHaveBeenCalledWith({ name: 'Phone' }, expect.any(Object));
   });
 
-  it('keeps Add disabled until a full 6-digit code is entered', () => {
+  it('has no authenticator code field', () => {
     renderSection();
-    fireEvent.change(screen.getByTestId('passkey-code-input'), { target: { value: '12a3' } });
-    expect((screen.getByTestId('passkey-add-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByTestId('passkey-code-input')).toBeNull();
   });
 
   it('lists enrolled passkeys and removes one by id', () => {

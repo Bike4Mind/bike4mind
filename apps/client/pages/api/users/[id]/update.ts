@@ -21,6 +21,7 @@ import { respond } from '@server/utils/respond';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@server/utils/ip';
 import * as z from 'zod';
+import { requireStepUp } from '@server/auth/stepUp';
 
 const idParamSchema = z.object({ id: z.string() });
 
@@ -132,6 +133,14 @@ const handler = baseApi().put(
     // Non-admin users can only update their own profile
     if (!currentUser.isAdmin && currentUser.id !== userId) {
       return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // Changing your OWN password needs a browser session that recently re-verified, so an API key
+    // can never do it. An admin setting another user's password is not gated here.
+    const rawPassword = (req.body as Record<string, unknown> | undefined)?.password;
+    if (currentUser.id === userId && rawPassword !== undefined && rawPassword !== null) {
+      if (req.apiKeyInfo) throw new ForbiddenError('Password cannot be changed with an API key.');
+      await requireStepUp(req);
     }
 
     if (currentUser.isAdmin) {

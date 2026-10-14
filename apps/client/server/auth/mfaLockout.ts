@@ -17,16 +17,17 @@ export function sendIfLockedOut(res: Response, user: IUserDocument): boolean {
 
 /**
  * Count a rejected second factor toward the shared MFA lockout and respond: 423 once the limit
- * is reached, otherwise 400 with the attempts left.
+ * is reached, otherwise `status` (400 by default) with the attempts left.
  */
 export async function sendFailedMfaAttempt(
   res: Response,
   userId: string,
-  body: { error: string; code?: string }
+  body: { error: string; code?: string },
+  status: 400 | 401 = 400
 ): Promise<Response> {
   const updatedUser = await userRepository.atomicRecordMfaFailedAttempt(userId);
   if (updatedUser && sendIfLockedOut(res, updatedUser)) return res;
-  return res.status(400).json({
+  return res.status(status).json({
     ...body,
     attemptsRemaining: mfaService.MAX_FAILED_ATTEMPTS - (updatedUser?.mfa?.failedAttempts ?? 0),
   });

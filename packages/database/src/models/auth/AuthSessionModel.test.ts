@@ -138,6 +138,75 @@ describe('AuthSessionModel repository', () => {
     expect((await authSessionRepository.findBySid('reset'))?.replayUses).toBe(0);
   });
 
+  it('markStepUp stamps only a live session owned by the given user', async () => {
+    const at = new Date();
+    await authSessionRepository.create(base({ sid: 'su', userId: 'owner' }));
+    expect((await authSessionRepository.markStepUp('su', 'owner', at))?.stepUpAt?.getTime()).toBe(at.getTime());
+
+    expect(await authSessionRepository.markStepUp('su', 'someone-else', at)).toBeNull();
+    await authSessionRepository.create(base({ sid: 'su-revoked', userId: 'owner', revokedAt: new Date() }));
+    expect(await authSessionRepository.markStepUp('su-revoked', 'owner', at)).toBeNull();
+    await authSessionRepository.create(
+      base({ sid: 'su-expired', userId: 'owner', expiresAt: new Date(Date.now() - 1000) })
+    );
+    expect(await authSessionRepository.markStepUp('su-expired', 'owner', at)).toBeNull();
+    expect(await authSessionRepository.markStepUp('missing', 'owner', at)).toBeNull();
+  });
+
+  describe('emailed step-up challenge', () => {
+    const challenge = (o: Record<string, unknown> = {}) => ({
+      tokenHash: 'tok',
+      codeHash: 'code',
+      expiresAt: new Date(Date.now() + 60_000),
+      ...o,
+    });
+
+    it('is stored hidden, readable only by its owner, and replaced by a new send', async () => {
+      await authSessionRepository.create(base({ sid: 'ch', userId: 'owner' }));
+      expect(await authSessionRepository.setStepUpEmailChallenge('ch', 'owner', challenge())).toBe(true);
+      expect(await authSessionRepository.setStepUpEmailChallenge('ch', 'other', challenge())).toBe(false);
+
+      const plain = await AuthSessionModel.findOne({ sid: 'ch' }).lean();
+      expect(plain?.stepUpEmailChallenge).toBeUndefined();
+      expect((await authSessionRepository.findStepUpEmailChallenge('ch', 'owner'))?.tokenHash).toBe('tok');
+      expect(await authSessionRepository.findStepUpEmailChallenge('ch', 'other')).toBeNull();
+
+      await authSessionRepository.recordStepUpEmailChallengeFailure('ch', 'tok');
+      await authSessionRepository.setStepUpEmailChallenge('ch', 'owner', challenge({ tokenHash: 'tok2' }));
+      const replaced = await authSessionRepository.findStepUpEmailChallenge('ch', 'owner');
+      expect(replaced).toMatchObject({ tokenHash: 'tok2', attempts: 0 });
+    });
+
+    it('hides an expired challenge', async () => {
+      await authSessionRepository.create(base({ sid: 'ch-exp', userId: 'owner' }));
+      await authSessionRepository.setStepUpEmailChallenge(
+        'ch-exp',
+        'owner',
+        challenge({ expiresAt: new Date(Date.now() - 1000) })
+      );
+      expect(await authSessionRepository.findStepUpEmailChallenge('ch-exp', 'owner')).toBeNull();
+    });
+
+    it('counts failures only against the matching challenge', async () => {
+      await authSessionRepository.create(base({ sid: 'ch-f', userId: 'owner' }));
+      await authSessionRepository.setStepUpEmailChallenge('ch-f', 'owner', challenge());
+      expect(await authSessionRepository.recordStepUpEmailChallengeFailure('ch-f', 'tok')).toBe(1);
+      expect(await authSessionRepository.recordStepUpEmailChallengeFailure('ch-f', 'tok')).toBe(2);
+      expect(await authSessionRepository.recordStepUpEmailChallengeFailure('ch-f', 'stale')).toBeNull();
+    });
+
+    it('consume stamps stepUpAt and succeeds exactly once', async () => {
+      await authSessionRepository.create(base({ sid: 'ch-c', userId: 'owner' }));
+      await authSessionRepository.setStepUpEmailChallenge('ch-c', 'owner', challenge());
+      const at = new Date();
+      expect(await authSessionRepository.consumeStepUpEmailChallenge('ch-c', 'other', 'tok', at)).toBeNull();
+      const consumed = await authSessionRepository.consumeStepUpEmailChallenge('ch-c', 'owner', 'tok', at);
+      expect(consumed?.stepUpAt?.getTime()).toBe(at.getTime());
+      expect(await authSessionRepository.consumeStepUpEmailChallenge('ch-c', 'owner', 'tok', at)).toBeNull();
+      expect(await authSessionRepository.findStepUpEmailChallenge('ch-c', 'owner')).toBeNull();
+    });
+  });
+
   it('revokeBySid sets revokedAt exactly once', async () => {
     await authSessionRepository.create(base({ sid: 'rev' }));
     expect((await authSessionRepository.revokeBySid('rev'))?.revokedAt).toBeTruthy();
