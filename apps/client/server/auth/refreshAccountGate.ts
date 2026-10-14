@@ -22,7 +22,13 @@ export async function refuseBlockedRotatedSession(
   try {
     assertAccountStateUsable(rotated.user);
   } catch (error) {
-    await authSessionService.revokeSession(rotated.sid, { db: { authSessions: authSessionRepository }, logger });
+    try {
+      await authSessionService.revokeSession(rotated.sid, { db: { authSessions: authSessionRepository }, logger });
+    } catch (revokeError) {
+      // Keep the refusal: it carries the reason the client needs to see. A failed revoke leaves
+      // only a session the client never received, so it must not replace the typed refusal.
+      logger?.error('Failed to revoke a refused session', revokeError);
+    }
     throw error;
   }
 }
