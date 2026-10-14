@@ -187,6 +187,16 @@ describe('POST /api/auth/refreshToken — cookie vs body transport', () => {
     expect(res.getHeader('Set-Cookie')).toBeUndefined();
   });
 
+  it('strips keys that are not part of the self-view user from the response body', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, notAUserField: 'leak' });
+    const { req, res } = createMocks({ method: 'POST', body: { refresh_token: 'cli-token' } });
+
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().user).not.toHaveProperty('notAUserField');
+  });
+
   it('migrates a pre-cookie browser session onto the cookie when it opts in with cookie: true', async () => {
     // The one-shot upgrade path: the token still lives in localStorage, so it arrives in the body,
     // but the response must move it to a cookie rather than logging the user out.
