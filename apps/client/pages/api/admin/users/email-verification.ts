@@ -51,7 +51,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).get
     // Get users with verification info
     const users = await User.find(filter)
       .select(
-        'username email name emailVerified emailVerifiedAt emailVerificationSentAt emailVerificationExpires pendingEmail pendingEmailToken pendingEmailSentAt pendingEmailExpires createdAt'
+        'username email name emailVerified emailVerifiedAt emailVerificationSentAt emailVerificationExpires pendingEmail pendingEmailSentAt pendingEmailExpires createdAt'
       )
       .sort({ emailVerificationSentAt: -1, createdAt: -1 })
       .skip(skip)

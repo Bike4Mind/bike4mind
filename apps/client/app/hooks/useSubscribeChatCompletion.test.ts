@@ -26,6 +26,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 
 import { useSubscribeChatCompletion } from './useSubscribeChatCompletion';
 import useSessionLayout from './useSessionLayout';
+import { useStreamingState } from './useStreamingState';
 import {
   OPTIMISTIC_GENERATING_STATUS,
   adoptSentQuest,
@@ -157,6 +158,50 @@ describe('useSubscribeChatCompletion - stuck Stop regressions', () => {
       await latestStreamHandler()(frame('q-late', 'session-a', 'running', 'Running...'));
     });
     expect(result.current.chatCompletion.completed).toBe(true);
+  });
+});
+
+describe('useSubscribeChatCompletion - terminal frame for a session the view has left', () => {
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    useStreamingState.getState().resetStreaming('session-a');
+  });
+
+  it("clears the left session's streaming entry, so isAnyStreaming() does not stay stuck", async () => {
+    const { rerender } = mount('session-a');
+
+    await act(async () => {
+      await latestStreamHandler()(frame('q-a', 'session-a', 'running'));
+    });
+    expect(useStreamingState.getState().isStreamingSession('session-a')).toBe(true);
+
+    rerender({ sessionId: 'session-b' });
+    expect(useStreamingState.getState().isStreamingSession('session-a')).toBe(true);
+
+    await act(async () => {
+      await latestStreamHandler()(frame('q-a', 'session-a', 'done'));
+    });
+    expect(useStreamingState.getState().isAnyStreaming()).toBe(false);
+  });
+
+  it("leaves the other session's newer turn alone on a late terminal frame of an earlier quest", async () => {
+    mount('session-b');
+    useStreamingState.getState().startStreaming('session-a', 'q-new');
+
+    await act(async () => {
+      await latestStreamHandler()(frame('q-old', 'session-a', 'done'));
+    });
+    expect(useStreamingState.getState().isStreamingSession('session-a')).toBe(true);
+  });
+
+  it("leaves the other session's entry alone on a non-terminal frame", async () => {
+    mount('session-b');
+    useStreamingState.getState().startStreaming('session-a', 'q-a');
+
+    await act(async () => {
+      await latestStreamHandler()(frame('q-a', 'session-a', 'running'));
+    });
+    expect(useStreamingState.getState().isStreamingSession('session-a')).toBe(true);
   });
 });
 

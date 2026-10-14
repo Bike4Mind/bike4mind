@@ -49,7 +49,6 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
-vi.mock('@client/config/activities', () => ({ ActivityType: { NOTEBOOK_ADDED_TO_PROJECT: 'added' } }));
 vi.mock('@bike4mind/services', () => ({
   sessionService: { createSession: h.createSession, resolveLakeSessionDefaults: vi.fn() },
   dataLakeService: { assertLakeAccess: vi.fn(), resolveCanManageLake: vi.fn() },

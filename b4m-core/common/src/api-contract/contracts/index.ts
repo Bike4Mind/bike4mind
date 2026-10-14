@@ -15,9 +15,26 @@ import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
-import { createFileUploadContract, getFileContract } from './files.contract';
+import {
+  createFileUploadContract,
+  getFileContract,
+  listFilesContract,
+  updateFileContract,
+  deleteFileContract,
+} from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
-import { getQuestContract } from './quest.contract';
+import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
+import { getQuestContract, listQuestFilesContract } from './quest.contract';
+import {
+  listArtifactsContract,
+  createArtifactContract,
+  getArtifactContract,
+  updateArtifactContract,
+  deleteArtifactContract,
+  listArtifactVersionsContract,
+  getArtifactVersionContract,
+} from './artifacts.contract';
+import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
 import { listWhatsNewContract } from './whatsNew.contract';
@@ -37,7 +54,20 @@ import {
   listVideoModelsContract,
 } from './videoGeneration.contract';
 import { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './voice.contract';
-import { listProjectsContract, getProjectContract, createProjectContract } from './projects.contract';
+import {
+  listProjectsContract,
+  getProjectContract,
+  createProjectContract,
+  updateProjectContract,
+  deleteProjectContract,
+} from './projects.contract';
+import {
+  listAgentsContract,
+  getAgentContract,
+  createAgentContract,
+  updateAgentContract,
+  deleteAgentContract,
+} from './agents.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -65,8 +95,14 @@ export const CONTRACTS: readonly EndpointContract[] = [
   editImageContract,
   createFileUploadContract,
   getFileContract,
+  listFilesContract,
+  updateFileContract,
+  deleteFileContract,
   createEmbeddingsContract,
+  createDecisionContract,
+  listDecisionModelsContract,
   getQuestContract,
+  listQuestFilesContract,
   createSessionContract,
   listSessionsContract,
   listDataLakesContract,
@@ -87,4 +123,20 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listProjectsContract,
   getProjectContract,
   createProjectContract,
+  listArtifactsContract,
+  createArtifactContract,
+  getArtifactContract,
+  updateArtifactContract,
+  deleteArtifactContract,
+  listArtifactVersionsContract,
+  getArtifactVersionContract,
+  createTranscriptionUploadContract,
+  createTranscriptionContract,
+  updateProjectContract,
+  deleteProjectContract,
+  listAgentsContract,
+  getAgentContract,
+  createAgentContract,
+  updateAgentContract,
+  deleteAgentContract,
 ];

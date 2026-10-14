@@ -3,6 +3,7 @@ import { z } from 'zod';
 // completions.contract.ts, which must stay off the barrel (see the note there).
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 import type { ReasoningEffort } from '../types/common';
+import type { ApiErrorCode } from '../apiErrorCodes';
 
 /**
  * The cross-provider effort vocabulary, deliberately NOT any one provider's.
@@ -12,8 +13,8 @@ import type { ReasoningEffort } from '../types/common';
  * (toKimiEffort / toDeepSeekEffort), and Anthropic maps them onto `output_config.effort`
  * (toAnthropicEffort). Anthropic's five levels are 'low' | 'medium' | 'high' | 'xhigh' |
  * 'max', so the two vocabularies disagree at both ends: 'none' and 'minimal' have no
- * Anthropic meaning and never reach the wire (they resolve to 'low', the least effort
- * Anthropic can express - a Claude model cannot be asked not to think), and 'max' is
+ * Anthropic effort level (on Claude, 'none' turns thinking off where the model allows
+ * it, and otherwise both resolve to 'low', the least effort Anthropic can express), and 'max' is
  * absent here because adding it would also hand an invalid value to OpenAI's
  * `reasoning_effort`. Anthropic's 'max' is reached through
  * `ICompletionOptions.anthropicEffort` instead, which is typed in Anthropic's vocabulary.
@@ -98,7 +99,7 @@ export type CompletionMessage = z.infer<typeof CompletionMessageSchema>;
  * canonical `options.<field>` location before downstream consumption.
  */
 export const CompletionRequestSchema = z.object({
-  model: z.string(),
+  model: z.string().max(256),
   messages: z.array(CompletionMessageSchema),
   response_format: ResponseFormatSchema.optional(),
   stream: z.boolean().optional(),
@@ -114,12 +115,11 @@ export const CompletionRequestSchema = z.object({
       tools: z.array(CompletionToolSchema).optional(),
       response_format: ResponseFormatSchema.optional(),
       reasoningEffort: CompletionReasoningEffortSchema.optional().describe(
-        'Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only) and DeepSeek adapters, and by the Anthropic adapters (direct and Bedrock) when `thinking.enabled` is set on a Claude model that takes an effort; Kimi, DeepSeek and Anthropic map it onto their own scale. Silently ignored by every other adapter (Gemini, xAI, Ollama, non-Claude Bedrock models) and by non-reasoning models, so sending it there is a no-op.'
+        'Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. When `thinking.enabled` is also set on a Claude model, thinking stays on and this sets its effort instead, with `none` and `minimal` mapping to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.'
       ),
       /**
-       * Ask a model that can think to think on this turn. Claude reads `reasoningEffort` only
-       * inside this, so without it a Claude turn runs at the adapter's default effort.
-       * Ignored by models that cannot think.
+       * Ask a model that can think to think on this turn, whatever `reasoningEffort` says;
+       * on Claude the effort then sizes that thinking. Ignored by models that cannot think.
        */
       thinking: z.object({ enabled: z.boolean(), budget_tokens: z.number().int().positive().optional() }).optional(),
     })
@@ -197,26 +197,35 @@ const CompletionContentEventSchema = z.object({
 });
 
 /**
- * The in-band terminal failure frame. Because this endpoint flushes SSE headers
- * before it authenticates or prices anything, EVERY failure past the malformed-body
- * check arrives here under a 200 - there is no pre-stream 422 on this surface the
- * way there is on /api/chat and /api/embed/chat.
+ * Classifiers the completions `error` frame may carry: the persisted quest codes plus the two
+ * provider codes. A separate tuple because QUEST_ERROR_CODES is stored on quests and must not widen.
+ */
+export const COMPLETION_SSE_ERROR_CODES = [
+  ...QUEST_ERROR_CODES,
+  'provider_error',
+  'provider_rejected',
+  'content_blocked',
+] as const satisfies readonly ApiErrorCode[];
+export type CompletionSseErrorCode = (typeof COMPLETION_SSE_ERROR_CODES)[number];
+
+/**
+ * The in-band terminal failure frame, sent only once the stream has opened. Failures found before
+ * the provider call (auth, scope, validation, rate limit, model, credits) are JSON errors with a
+ * real status instead; see completions.contract.ts.
  *
- * `code` is the machine-readable classifier, drawn from QUEST_ERROR_CODES (itself a
- * narrowing of the platform-wide API_ERROR_CODES, so it cannot drift from the codes
- * the JSON surfaces use). It is what makes mid-generation credit exhaustion
- * detectable: the `message` is prose and callers must never match on it. Absent for
- * unclassified failures, so treat it as optional.
+ * `code` is the machine-readable classifier: a billing code when settlement runs out mid-generation,
+ * `provider_rejected` / `provider_error` when the model provider fails, `content_blocked` when the
+ * model's safety classifier declined the request. Optional; callers must never match on the prose
+ * `message`.
  *
- * The field is `code` rather than the conventions' `errorCode` because this frame
- * shipped that way and is a published wire shape; the vocabulary is what had to be
- * shared, not the key.
+ * The field is `code` rather than the conventions' `errorCode` because this frame shipped that way
+ * and is a published wire shape.
  */
 export const CompletionSseErrorEventSchema = z.object({
   type: z.literal('error'),
   message: z.string(),
   requestId: z.string().optional(),
-  code: z.enum(QUEST_ERROR_CODES).optional(),
+  code: z.enum(COMPLETION_SSE_ERROR_CODES).optional(),
 });
 
 /** One `data:` event in the `text/event-stream` completions response. */

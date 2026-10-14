@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "Pag-subscribe",
-    "description": "Magkaroon ng access sa bawat pangunahing modelo ng AI sa pamamagitan ng isang pinagsama-samang interface. Patakbuhin ang mga advanced na modelo tulad ng Deepseek R1 nang pribado.",
+    "description": "Magkaroon ng access sa bawat pangunahing modelo ng AI sa pamamagitan ng isang pinagsama-samang interface.",
     "no_free_tier": "WALANG LIBRENG ANTAS - NAKATUTOK SA MGA PROPESYONAL.",
     "credits_rollover": "Ang hindi nagamit na mga kredito ay maaring gamitin sa loob ng 3 buwan.",
     "monthly_billing": "Buwanang Pagbabayad",

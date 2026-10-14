@@ -4,7 +4,11 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { InviteType } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
+import {
+  createMongoServer,
+  MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
+} from '../../../../packages/database/src/__test__/createMongoServer';
 import {
   Group,
   Organization,
@@ -43,7 +47,10 @@ const db = {
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
-  await mongoose.connect(mongoServer.getUri());
+  // Standalone and transaction-free, so the pool deadlock in settleAutoIndexBuilds cannot happen
+  // here. No assertion depends on a schema index; skipping the builds only trims cold start.
+  await mongoose.connect(mongoServer.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();

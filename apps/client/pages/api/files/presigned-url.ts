@@ -1,21 +1,21 @@
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 import { BadRequestError } from '@server/utils/errors';
 import { z } from 'zod';
 import { Request } from 'express';
-import { Resource } from 'sst';
 import { FabFile, fabFileRepository } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
 import { isFileInAccessibleLake, resolveAccessibleLakes } from '@server/dataLakes';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
-
-const s3Client = new S3Client();
+import { getFilesStorage } from '@server/utils/storage';
 
 const GetPresignedUrlRequestInput = z.object({
   filePaths: z.array(z.string()),
-  expiresIn: z.number().optional().prefault(3600), // Default to 1 hour
+  expiresIn: z.number().prefault(3600), // Default to 1 hour
+  // `server` exists for the in-process RLM `getArticle` loopback (see server/tavern/rlm/tools.ts),
+  // whose container may not reach the browser origin. It only picks the signing client: the
+  // moderation/ACL/lake gates all run before signing, and the SigV4 signature is host-bound.
+  audience: z.enum(['browser', 'server']).prefault('browser'),
 });
 
 /** Minimal shape a FabFile lookup needs to expose for the moderation + ownership gates below. */
@@ -73,16 +73,29 @@ export async function filterServeableFilePaths(
 }
 
 const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
-  async (req: Request<unknown, unknown, unknown, { 'filePaths[]'?: string | string[]; expiresIn?: string }>, res) => {
+  async (
+    req: Request<
+      unknown,
+      unknown,
+      unknown,
+      { 'filePaths[]'?: string | string[]; expiresIn?: string; audience?: string }
+    >,
+    res
+  ) => {
     let filePathsQuery = req.query['filePaths[]'];
 
     if (typeof filePathsQuery === 'string') {
       filePathsQuery = [filePathsQuery];
     }
 
-    const { filePaths: validatedFilePaths, expiresIn } = GetPresignedUrlRequestInput.parse({
+    const {
+      filePaths: validatedFilePaths,
+      expiresIn,
+      audience,
+    } = GetPresignedUrlRequestInput.parse({
       filePaths: filePathsQuery,
       expiresIn: req.query.expiresIn ? parseInt(req.query.expiresIn as string, 10) : undefined,
+      audience: req.query.audience,
     });
 
     try {
@@ -117,11 +130,10 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       const presignedUrls = await Promise.all(
         serveableFileKeys.map(decodedFilePath => {
           if (!decodedFilePath) return null;
-          const command = new GetObjectCommand({
-            Bucket: Resource.fabFileBucket.name,
-            Key: decodedFilePath,
+          return getFilesStorage().getSignedUrl(decodedFilePath, 'get', {
+            expiresIn,
+            ...(audience === 'browser' && { audience: 'browser' as const }),
           });
-          return getSignedUrl(s3Client, command, { expiresIn });
         })
       );
 

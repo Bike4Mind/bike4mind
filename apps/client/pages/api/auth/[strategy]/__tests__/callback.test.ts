@@ -37,14 +37,29 @@ const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
 }));
+const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
+vi.mock('@server/analytics/funnel', () => ({
+  recordSignupAcquisition: (...a: any[]) => mockRecordSignupAcquisition(...a),
+}));
 
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
 }));
 
+const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/utils/auth/oauthSourceTag', () => ({
+  stampOAuthSourceTag: (...a: unknown[]) => mockStampSourceTag(...a),
+}));
+
 // Import after mocks are registered.
 import { logEvent } from '@server/utils/analyticsLog';
+import { verifyStateToken, type VerifyResult, type BaseStatePayload } from '@server/auth/jwtStateStore';
+
+const stateNaming = (clientId: string): VerifyResult<BaseStatePayload & { clientId: string }> => ({
+  valid: true,
+  payload: { handle: 'h', createdAt: 0, aud: 'google-oauth-state', iss: 'test', clientId },
+});
 import handler from '@pages/api/auth/[strategy]/callback';
 
 function makeReqRes(headers: Record<string, string> = {}) {
@@ -196,11 +211,30 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
   });
 
+  it("persists a new account's acquisition with the provider as the signup method", async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+
+    expect(mockRecordSignupAcquisition).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-new' }), method: 'github' })
+    );
+  });
+
+  it('keeps a synthetic new account out of the signup emit and the ad conversion fragment', async () => {
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: true });
+    const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: touchCookie,
+    });
+
+    expect(mockEmitSignup).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).not.toMatch(/isNewUser=1/);
+  });
+
   it('sends nothing for a returning user', async () => {
     await runCallback(null, { id: 'u-old', isBanned: false }, undefined, { cookie: touchCookie });
 
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(mockEmitSignup).not.toHaveBeenCalled();
+    expect(mockRecordSignupAcquisition).not.toHaveBeenCalled();
   });
 
   // The REGISTER log and the emit are separate statements; folding the emit into the log's
@@ -270,5 +304,26 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     // a suppressed visitor. The account is recorded in Mongo by the REGISTER log above, which
     // is a different system.
     expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
+  });
+});
+
+describe('[strategy]/callback - OAuth client source tag', () => {
+  it('stamps a new account with the clientId from the verified state token', async () => {
+    vi.mocked(verifyStateToken).mockReturnValueOnce(stateNaming('b4m_sat_0123abcd'));
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined);
+    expect(mockStampSourceTag).toHaveBeenCalledWith('u-new', 'b4m_sat_0123abcd');
+  });
+
+  it('never stamps a returning user, even when the state names a client', async () => {
+    vi.mocked(verifyStateToken).mockReturnValueOnce(stateNaming('b4m_sat_0123abcd'));
+    await runCallback(null, { id: 'u-old', isBanned: false }, undefined);
+    expect(mockStampSourceTag).not.toHaveBeenCalled();
+  });
+
+  it('passes no clientId when the state token does not verify', async () => {
+    vi.mocked(verifyStateToken).mockReturnValueOnce({ valid: false, reason: 'invalid', message: 'bad' });
+    const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined);
+    expect(mockStampSourceTag).toHaveBeenCalledWith('u-new', undefined);
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success/);
   });
 });

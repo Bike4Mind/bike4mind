@@ -162,11 +162,17 @@ describe('SessionFilePond attachment scope', () => {
     // image would never be promoted. Consuming the buffer here is the last chance.
     const add = vi.fn().mockResolvedValue(undefined);
     mockCreateFabFile.mockResolvedValue({ id: 'img1', fileName: 'shot.png', mimeType: 'image/png' });
-    mockConsumeBuffered.mockReturnValue({ moderationStatus: 'clean' });
+    mockConsumeBuffered.mockReturnValue({ moderationStatus: 'clean', fileUrl: 'https://cdn.example/shot.png' });
 
     await upload('notebook', makeFile('shot.png', 'image/png'), add);
 
     expect(add).toHaveBeenCalledOnce();
+    // The upload response still says 'pending'; the hook's scan guard needs the buffered verdict.
+    expect(add.mock.calls[0][1]).toMatchObject({
+      id: 'img1',
+      moderationStatus: 'clean',
+      fileUrl: 'https://cdn.example/shot.png',
+    });
   });
 
   it('does NOT promote when the buffered scan says blocked', async () => {
@@ -262,7 +268,34 @@ describe('SessionFilePond storage limit', () => {
     expect(mockCreateFabFile).toHaveBeenCalled();
   });
 
-  it("surfaces the server's storage-limit refusal verbatim when the client check passed", async () => {
+  it("shows the server's used, limit and requested numbers when the client check passed", async () => {
+    setUsage(0);
+    mockCreateFabFile.mockRejectedValue({
+      isAxiosError: true,
+      message: 'Request failed with status code 400',
+      response: {
+        status: 400,
+        data: {
+          error: 'File size exceeds storage limit',
+          errorCode: 'storage_limit_exceeded',
+          used_bytes: 800_000,
+          limit_bytes: 1_000_000,
+          requested_bytes: 300_000,
+          owner: 'user',
+        },
+      },
+    });
+
+    const errorFn = await uploadCapturingError(makeFile('notes.txt', 'text/plain'));
+
+    expect(toastMock.error).toHaveBeenCalledWith(
+      expect.stringMatching(/800 kB of 1 MB.*Free up at least 100 kB/),
+      expect.anything()
+    );
+    expect(errorFn).toHaveBeenCalledWith(expect.stringMatching(/Free up at least 100 kB/));
+  });
+
+  it('surfaces a legacy server refusal with no code verbatim when the client check passed', async () => {
     setUsage(0);
     mockCreateFabFile.mockRejectedValue({
       isAxiosError: true,

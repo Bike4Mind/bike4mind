@@ -16,7 +16,7 @@ The filter panel at the top of the tab provides three filter controls arranged i
 | Filter | Description |
 |--------|-------------|
 | **Date Range** | Start and end date pickers with quick-select preset buttons for common ranges (e.g., last 7 days, last 30 days). Defaults to the last 7 days. |
-| **Model** | Dropdown to filter by a specific model (All Models, GPT-4, GPT-3.5 Turbo, Claude 3 Opus, Claude 3 Sonnet) |
+| **Model** | Dropdown to filter by a specific model (for example, All Models, GPT-5.6 Sol, Claude Opus 5.5, Claude Sonnet 5.5) |
 | **Search** | Free-text search input to filter logs by content |
 
 A **Refresh** button in the header reloads the log data with the current filters applied.

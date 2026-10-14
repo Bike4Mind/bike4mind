@@ -1,23 +1,11 @@
 import {
   toPublicVideoJobErrorCode,
   type IGenerationJobDocument,
+  type IGenerationJobDocumentOf,
   type VideoGeneration,
-  type VideoJobOutput,
   type VideoJobPublicErrorCode,
-  type VideoOutputAvailability,
 } from '@bike4mind/common';
-
-// Short enough that a leaked URL dies quickly; clients re-read the job (which re-signs) for a fresh one.
-export const OUTPUT_URL_TTL_SECONDS = 900;
-
-/** A url only when the output is serveable; otherwise why not (see signOutputUrl's moderation gate). */
-export type SignedOutput =
-  { availability: 'ready'; url: string } | { availability: Exclude<VideoOutputAvailability, 'ready'> };
-
-export type SignOutputUrl = (
-  output: Pick<VideoJobOutput, 'location' | 's3Key' | 'fileId'>,
-  expiresInSeconds: number
-) => Promise<SignedOutput>;
+import { OUTPUT_URL_TTL_SECONDS, type JobMapperDeps } from '@server/generations/signedOutput';
 
 // Fixed text per public code: a stored job.error.message can carry provider wording, which never leaves the server.
 const PUBLIC_ERROR_MESSAGES: Record<VideoJobPublicErrorCode, string> = {
@@ -43,8 +31,8 @@ const toPublicError = (error: IGenerationJobDocument['error']): VideoGeneration[
 
 /** The one job -> public resource mapping, shared by every video-generations endpoint. */
 export async function toPublicVideoGeneration(
-  job: IGenerationJobDocument,
-  deps: { sign: SignOutputUrl; now: () => Date }
+  job: IGenerationJobDocumentOf<'video'>,
+  deps: JobMapperDeps
 ): Promise<VideoGeneration> {
   const { request, output } = job.payload;
   const signed = job.state === 'succeeded' && output ? await deps.sign(output, OUTPUT_URL_TTL_SECONDS) : null;

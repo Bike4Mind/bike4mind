@@ -20,6 +20,7 @@ import { brand, red } from '@client/app/utils/themes/colors';
 import AttachFileButton from '@client/app/components/Session/AttachFileButton';
 import FilesSection from '@client/app/components/Session/AISettings/FilesSection';
 import AdvancedAISettings from '@client/app/components/Session/AdvancedAISettings';
+import CreditBalanceChip from '@client/app/components/Session/CreditButton';
 import RephraseButton from '@client/app/components/Session/RephraseButton';
 import AgentModeToggleButton from '@client/app/components/Session/SessionBottom/AgentModeToggleButton';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
@@ -320,6 +321,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
                       }}
                     >
                       <IconButton
+                        aria-label={t('a11y.close_files', 'Close files')}
                         size="sm"
                         variant="plain"
                         color="neutral"
@@ -344,6 +346,8 @@ export function SessionToolbar(props: SessionToolbarProps) {
                 onRollDice={rollRandomDice}
                 currentSession={currentSession}
               />
+
+              <CreditBalanceChip compact={isMobile} />
 
               {/* Agent-mode toggle. Layer-1 gated - completely hidden
                   when the gate (`useFeatureEnabled('agentMode')`, resolved above)

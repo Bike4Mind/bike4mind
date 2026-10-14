@@ -1,4 +1,4 @@
-import { AuthStrategy, IUserDocument } from '@bike4mind/common';
+import { AuthStrategy, IUserDocument, clientIdFromAuthorizeRedirect } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
@@ -12,6 +12,7 @@ import { applyRedirect } from '@client/app/utils/authRedirect';
 interface LoginError {
   message: string;
   code?: string;
+  retryAfterSeconds?: number;
   details?: unknown;
   // Re-issued OTC pending token from a failed /api/otc/verify. The server rotates the
   // single-use nonce on every attempt and returns a fresh token, so the client MUST retry
@@ -48,6 +49,9 @@ interface VerifyOTCData {
   code: string;
   username?: string;
   pendingToken?: string;
+  // client_id of the /oauth/authorize request this signup started from; the server only uses it
+  // to attribute a newly created account.
+  sourceClientId?: string;
   // P0-B abuse gate: only sent on the new-user branch (username present). The server
   // rejects registration if the version isn't current or the age attestation isn't true.
   acceptedPolicyVersion?: string;
@@ -76,8 +80,9 @@ export function useSendOTC() {
       } catch (error) {
         if (error instanceof AxiosError && error.response) {
           throw {
-            message: error.response.data.error || `HTTP ${error.response.status}`,
+            message: error.response.data?.error || `HTTP ${error.response.status}`,
             code: `CLIENT_ERROR_${error.response.status}`,
+            retryAfterSeconds: parseRetryAfter(error.response.headers?.['retry-after']),
           };
         }
         throw {
@@ -89,11 +94,23 @@ export function useSendOTC() {
   });
 }
 
+// 0 is kept distinct from a missing header: the server sends it when a concurrent send superseded this one.
+function parseRetryAfter(header: unknown): number | undefined {
+  const text = header === undefined || header === null ? '' : String(header).trim();
+  if (text === '') return undefined;
+  const seconds = Number(text);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+}
+
 export function useVerifyOTC() {
   return useMutation<OTCVerifyResponse | OTCRegisterResponse, LoginError, VerifyOTCData>({
     mutationFn: async (data: VerifyOTCData) => {
       try {
-        const response = await api.post<OTCVerifyResponse | OTCRegisterResponse>('/api/otc/verify', data);
+        const sourceClientId = clientIdFromAuthorizeRedirect(
+          new URLSearchParams(window.location.search).get('redirectTo')
+        );
+        const body = sourceClientId ? { ...data, sourceClientId } : data;
+        const response = await api.post<OTCVerifyResponse | OTCRegisterResponse>('/api/otc/verify', body);
         return response.data;
       } catch (error) {
         if (error instanceof AxiosError && error.response) {
@@ -103,6 +120,7 @@ export function useVerifyOTC() {
             // Preserve the re-issued pending token (rotated nonce) so the caller can retry
             // with it; dropping it here strands the user on a valid code (see LoginError).
             pendingToken: error.response.data.pendingToken,
+            retryAfterSeconds: parseRetryAfter(error.response.headers?.['retry-after']),
           };
         }
         throw {

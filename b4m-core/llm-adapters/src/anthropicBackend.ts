@@ -2,6 +2,7 @@ import { Anthropic, RateLimitError } from '@anthropic-ai/sdk';
 import type {
   MessageCreateParamsBase,
   ContentBlock,
+  JSONOutputFormat,
   RawMessageStreamEvent,
   Tool,
 } from '@anthropic-ai/sdk/resources/messages';
@@ -15,6 +16,7 @@ import {
   NO_TEMPERATURE_MODELS,
   PermissionDeniedError,
   REFUSAL_FALLBACK_MODELS,
+  supportsForcedToolChoice,
   type ModelInfo,
 } from '@bike4mind/common';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
@@ -37,7 +39,7 @@ import {
   stripAllToolBlocks,
   stripToolDependentMessages,
 } from './toolPairingUtils';
-import { getCachingAdapter, logCacheStats } from './caching/adapters';
+import { capCacheControlMarkers, getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
 import { toAnthropicContent } from './anthropicContent';
 import {
@@ -50,25 +52,37 @@ import {
 } from '@bike4mind/common';
 import {
   buildThinkingParams,
+  planReasoningEffort,
   resolveAnthropicEffort,
   resolveOutputMaxTokens,
   THINKING_ANSWER_HEADROOM_TOKENS,
   type AnthropicEffort,
+  type ReasoningEffortPlan,
   type ThinkingConfig,
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
+import { logAnthropicLimitResponse, pickRateLimitHeaders } from './anthropicRateLimitLog';
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
 import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
+import {
+  appendSystemText,
+  buildStructuredOutputFormat,
+  buildToolUseInstruction,
+  downgradeForcedToolChoice,
+  hasCitationsEnabled,
+  markToolStrict,
+} from './forcedToolChoice';
+import { buildJsonSchemaInstruction } from './responseFormatHelpers';
 import {
   createDegenerateStreamGuard,
   DEGENERATE_STREAM_STOP_REASON,
   type DegenerateStreamVerdict,
 } from './degenerateStreamGuard';
 
-type ExtendedMessageCreateParams = MessageCreateParamsBase &
-  Partial<ThinkingConfig> & {
-    output_config?: { effort: AnthropicEffort };
-  };
+type ExtendedMessageCreateParams = Omit<MessageCreateParamsBase, 'thinking'> & {
+  thinking?: ThinkingConfig['thinking'] | { type: 'disabled' };
+  output_config?: { effort?: AnthropicEffort; format?: JSONOutputFormat };
+};
 
 interface ToolUseEvent {
   type: 'tool_use';
@@ -179,7 +193,9 @@ export class AnthropicBackend implements ICompletionBackend {
       const MAX_TRANSPORT_RETRIES = 2;
       for (let attempt = 0; attempt <= MAX_TRANSPORT_RETRIES; attempt++) {
         try {
-          return await fetch(input, init);
+          const response = await fetch(input, init);
+          await logAnthropicLimitResponse(this.logger, response, init);
+          return response;
         } catch (err) {
           const msg = err instanceof Error ? err.message : '';
           const isTransportError = err instanceof TypeError && (msg === 'terminated' || msg === 'fetch failed');
@@ -386,7 +402,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_OPUS,
         type: 'text',
-        name: 'Claude 4 Opus',
+        name: 'Claude Opus 4',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 32000,
@@ -412,7 +428,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_1_OPUS,
         type: 'text',
-        name: 'Claude 4.1 Opus',
+        name: 'Claude Opus 4.1',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -434,7 +450,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_SONNET,
         type: 'text',
-        name: 'Claude 4 Sonnet',
+        name: 'Claude Sonnet 4',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -463,7 +479,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_5_SONNET,
         type: 'text',
-        name: 'Claude 4.5 Sonnet',
+        name: 'Claude Sonnet 4.5',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -488,7 +504,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_5_HAIKU,
         type: 'text',
-        name: 'Claude 4.5 Haiku',
+        name: 'Claude Haiku 4.5',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 64000,
@@ -509,7 +525,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_5_OPUS,
         type: 'text',
-        name: 'Claude 4.5 Opus',
+        name: 'Claude Opus 4.5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 200000,
@@ -532,7 +548,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_6_SONNET,
         type: 'text',
-        name: 'Claude 4.6 Sonnet',
+        name: 'Claude Sonnet 4.6',
         backend: ModelBackend.Anthropic,
         contextWindow: 200000,
         max_tokens: 16384,
@@ -557,7 +573,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_SONNET,
         type: 'text',
-        name: 'Claude 5 Sonnet',
+        name: 'Claude Sonnet 5',
         backend: ModelBackend.Anthropic,
         contextWindow: 1_000_000,
         max_tokens: 128_000,
@@ -583,7 +599,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_6_OPUS,
         type: 'text',
-        name: 'Claude 4.6 Opus',
+        name: 'Claude Opus 4.6',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -606,7 +622,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_7_OPUS,
         type: 'text',
-        name: 'Claude 4.7 Opus',
+        name: 'Claude Opus 4.7',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -630,7 +646,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_4_8_OPUS,
         type: 'text',
-        name: 'Claude 4.8 Opus',
+        name: 'Claude Opus 4.8',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -683,7 +699,7 @@ export class AnthropicBackend implements ICompletionBackend {
       {
         id: ChatModels.CLAUDE_5_OPUS,
         type: 'text',
-        name: 'Claude 5 Opus',
+        name: 'Claude Opus 5',
         backend: ModelBackend.Anthropic,
         supportsImageVariation: false,
         contextWindow: 1_000_000,
@@ -700,8 +716,56 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         releaseDate: '2026-07-24',
         description:
-          "Anthropic's latest flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
+          "Anthropic's previous flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
         isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_5_5_OPUS,
+        type: 'text',
+        name: 'Claude Opus 5.5',
+        backend: ModelBackend.Anthropic,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          // Cache hits are 0.05x input on Opus 5.5, not the default 0.1x; the 5m cache write is the default 1.25x.
+          1_000_000: { input: 4 / 1_000_000, output: 20 / 1_000_000, cache_read: 0.2 / 1_000_000 }, // $4 / 1M Input tokens, $20 / 1M Output tokens
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 0,
+        supportsTools: true,
+        description:
+          "Anthropic's latest flagship model. Claude 5.5 Opus delivers adaptive extended thinking, coding, and agentic capabilities at a lower price than Claude 5 Opus.",
+        isSlowModel: true,
+      },
+      {
+        id: ChatModels.CLAUDE_5_5_HAIKU,
+        type: 'text',
+        name: 'Claude Haiku 5.5',
+        backend: ModelBackend.Anthropic,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        // Priced by prompt length: a request over 100K prompt tokens pays the higher tier. Cache reads (0.1x) and
+        // 5m cache writes (1.25x) match the default multipliers at both tiers.
+        pricing: {
+          100_000: { input: 0.1 / 1_000_000, output: 0.5 / 1_000_000 }, // $0.10 / 1M Input tokens, $0.50 / 1M Output tokens
+          1_000_000: { input: 0.5 / 1_000_000, output: 2.5 / 1_000_000 }, // $0.50 / 1M Input tokens, $2.50 / 1M Output tokens
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 3,
+        supportsTools: true,
+        releaseDate: '2026-10-07',
+        description:
+          "Anthropic's fastest model. Claude Haiku 5.5 targets high-volume, latency-sensitive work such as classification, extraction, routing and subagents, with adaptive thinking and a 1M-token context window.",
       },
     ];
   }
@@ -717,6 +781,29 @@ export class AnthropicBackend implements ICompletionBackend {
    */
   private modelRecordFor(model: string): ModelInfo | undefined {
     return this.getModelInfoList().find(m => m.id === model) ?? this._dispatch.for(model);
+  }
+
+  /** Writes a reasoningEffort plan onto the request; true when it leaves thinking on. */
+  private applyReasoningEffortPlan(apiParams: ExtendedMessageCreateParams, plan: ReasoningEffortPlan): boolean {
+    switch (plan.kind) {
+      case 'default':
+        return false;
+      case 'off':
+        // The pinned SDK types predate `between_tools` (Sonnet 5.5's off switch); the API accepts it.
+        apiParams.thinking = plan.thinking as { type: 'disabled' };
+        return false;
+      case 'adaptive':
+        apiParams.thinking = plan.thinking;
+        // Merged, not assigned: output_config may already carry the structured-output format.
+        apiParams.output_config = { ...apiParams.output_config, ...plan.output_config };
+        return true;
+      case 'budget':
+        apiParams.thinking = plan.thinking;
+        if (plan.temperature === 'delete') delete apiParams.temperature;
+        else apiParams.temperature = plan.temperature;
+        delete apiParams.top_p;
+        return true;
+    }
   }
 
   /** True when only the catalog knows this model - the adapter table does not list it. */
@@ -762,6 +849,21 @@ export class AnthropicBackend implements ICompletionBackend {
       temperature: 0.9,
       ...options,
     };
+
+    // Forced tool_choice ('any'/'tool') returns 400 on these models, so a caller's forced choice
+    // becomes auto + strict + an instruction, held fixed for every recursive turn of this request.
+    const forcedToolChoiceSupported = supportsForcedToolChoice(model);
+    const downgradedToolChoice = forcedToolChoiceSupported
+      ? undefined
+      : (options._internal?.downgradedToolChoice ??
+        (options.tools?.length ? downgradeForcedToolChoice(options.tool_choice) : undefined));
+    if (downgradedToolChoice && !options._internal?.downgradedToolChoice) {
+      this.logger.warn('[AnthropicBackend] Forced tool_choice is not supported by this model; sending auto instead', {
+        model,
+        toolName: downgradedToolChoice.toolName,
+      });
+      options = { ...options, _internal: { ...options._internal, downgradedToolChoice } };
+    }
 
     // Tool chaining safeguard: Track and limit recursive tool calls
     const toolCallCount = options._internal?.toolCallCount ?? 0;
@@ -1024,11 +1126,39 @@ export class AnthropicBackend implements ICompletionBackend {
     // Skip if the caller is already using their own tools (let those take
     // precedence; mixing forced-tool with executable tools can deadlock).
     const responseFormat = options.responseFormat;
-    const usingResponseFormatToolUse = responseFormat?.type === 'json_schema' && !options.tools?.length;
+    const wantsJsonSchema = responseFormat?.type === 'json_schema' && !options.tools?.length;
+    const usingResponseFormatToolUse = wantsJsonSchema && forcedToolChoiceSupported;
+    // A model without forced tool use gets native structured outputs instead of the synthesized tool,
+    // unless a document asks for citations (that pairing is a 400) or the schema is one structured
+    // outputs reject - then the schema goes in the prompt.
+    const citationsBlockFormat =
+      wantsJsonSchema && !forcedToolChoiceSupported && hasCitationsEnabled(apiParams.messages);
+    const nativeFormat =
+      wantsJsonSchema && !forcedToolChoiceSupported && !citationsBlockFormat && responseFormat.type === 'json_schema'
+        ? buildStructuredOutputFormat(responseFormat.json_schema.schema)
+        : null;
+    const usingResponseFormatNative = nativeFormat !== null;
+    const usingResponseFormatPrompt = wantsJsonSchema && !forcedToolChoiceSupported && !usingResponseFormatNative;
     if (responseFormat) {
       this.logger.info(
-        `[AnthropicBackend] response_format received: type=${responseFormat.type}, synthesizingToolUse=${usingResponseFormatToolUse}, callerTools=${options.tools?.length ?? 0}`
+        `[AnthropicBackend] response_format received: type=${responseFormat.type}, synthesizingToolUse=${usingResponseFormatToolUse}, nativeFormat=${usingResponseFormatNative}, callerTools=${options.tools?.length ?? 0}`
       );
+    }
+    if (usingResponseFormatPrompt && !citationsBlockFormat) {
+      this.logger.warn(
+        '[AnthropicBackend] json_schema not expressible as structured outputs; using prompt instruction',
+        {
+          model,
+        }
+      );
+    }
+    if (nativeFormat) {
+      apiParams.output_config = { format: nativeFormat };
+    }
+    const schemaInstruction =
+      usingResponseFormatPrompt && responseFormat ? buildJsonSchemaInstruction(responseFormat) : null;
+    if (schemaInstruction) {
+      apiParams.system = appendSystemText(apiParams.system, schemaInstruction);
     }
     if (usingResponseFormatToolUse && responseFormat.type === 'json_schema') {
       const schemaTool: Tool = {
@@ -1043,8 +1173,14 @@ export class AnthropicBackend implements ICompletionBackend {
     if (options.tools?.length) {
       apiParams.tools = this.formatTools(options.tools);
 
-      // Add tool_choice if specified (convert from OpenAI format to Anthropic format)
-      if (options.tool_choice) {
+      if (downgradedToolChoice) {
+        apiParams.tool_choice = { type: 'auto' };
+        if (downgradedToolChoice.toolName) {
+          apiParams.tools = markToolStrict(apiParams.tools, downgradedToolChoice.toolName);
+        }
+        apiParams.system = appendSystemText(apiParams.system, buildToolUseInstruction(downgradedToolChoice));
+      } else if (options.tool_choice) {
+        // Add tool_choice if specified (convert from OpenAI format to Anthropic format)
         if (options.tool_choice === 'auto') {
           apiParams.tool_choice = { type: 'auto' };
         } else if (options.tool_choice === 'required') {
@@ -1094,7 +1230,8 @@ export class AnthropicBackend implements ICompletionBackend {
         // Apply thinking config
         apiParams.thinking = result.thinkingConfig.thinking;
         if ('output_config' in result.thinkingConfig && result.thinkingConfig.output_config) {
-          apiParams.output_config = result.thinkingConfig.output_config;
+          // Merged, not assigned: output_config may already carry the structured-output format.
+          apiParams.output_config = { ...apiParams.output_config, ...result.thinkingConfig.output_config };
         }
         apiParams.max_tokens = result.maxTokens;
 
@@ -1110,6 +1247,24 @@ export class AnthropicBackend implements ICompletionBackend {
 
         this.logger.debug(
           `[AnthropicBackend] ${isQuestMaster ? 'QuestMaster' : 'User'} thinking enabled (${currentModelInfo.thinkingStyle ?? 'legacy'}): max_tokens=${apiParams.max_tokens}, effort=${effort}`
+        );
+      } else if (options.reasoningEffort) {
+        const requested = planReasoningEffort(
+          model,
+          currentModelInfo,
+          options.reasoningEffort,
+          apiParams.max_tokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS
+        );
+        // The synthesized response_format tool is forced via tool_choice, which the API rejects
+        // alongside thinking - so only the off switch survives there. Native structured outputs
+        // (models without forced tool use) carry the format in output_config and keep any level.
+        const plan: ReasoningEffortPlan =
+          usingResponseFormatToolUse && (requested.kind === 'adaptive' || requested.kind === 'budget')
+            ? { kind: 'default' }
+            : requested;
+        this.isThinkingEnabled = this.applyReasoningEffortPlan(apiParams, plan);
+        this.logger.debug(
+          `[AnthropicBackend] reasoningEffort=${options.reasoningEffort} -> ${plan.kind}: max_tokens=${apiParams.max_tokens}`
         );
       } else {
         this.isThinkingEnabled = false;
@@ -1136,6 +1291,7 @@ export class AnthropicBackend implements ICompletionBackend {
         cacheTTL: cacheStrategy.cacheTTL,
       });
     }
+    Object.assign(apiParams, capCacheControlMarkers(apiParams as unknown as Record<string, unknown>, this.logger));
 
     // The SDK refuses a non-streaming request whose max_tokens implies it could run
     // past its 10-minute ceiling, throwing before any HTTP call is made (see
@@ -1449,7 +1605,10 @@ export class AnthropicBackend implements ICompletionBackend {
                       streamedText[event.index] = event.delta.text;
                       streamedRoundText += event.delta.text;
                       checkDegenerate(event.delta.text);
-                      await cb(streamedText, { toolsUsed: toolsUsed });
+                      await cb(streamedText, {
+                        toolsUsed: toolsUsed,
+                        ...(usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
+                      });
                     } else if ('delta' in event && event.delta.type === 'input_json_delta') {
                       // response_format=json_schema: stream the tool's
                       // input JSON deltas directly to the caller as text. This
@@ -1732,6 +1891,8 @@ export class AnthropicBackend implements ICompletionBackend {
                     usageWithCache?.cache_creation_input_tokens
                   ),
                   ...(usingResponseFormatToolUse ? { responseFormatMode: 'tool_use' as const } : {}),
+                  ...(usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
+                  ...(usingResponseFormatPrompt ? { responseFormatMode: 'best-effort' as const } : {}),
                   ...(stopReason ? { stopReason } : {}),
                 });
               }
@@ -2286,6 +2447,8 @@ export class AnthropicBackend implements ICompletionBackend {
               }
             : {}),
           ...(isTerminalTurn && usingResponseFormatToolUse ? { responseFormatMode: 'tool_use' as const } : {}),
+          ...(isTerminalTurn && usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
+          ...(isTerminalTurn && usingResponseFormatPrompt ? { responseFormatMode: 'best-effort' as const } : {}),
         });
 
         // If there are tool calls, execute them and continue the conversation
@@ -2612,7 +2775,11 @@ export class AnthropicBackend implements ICompletionBackend {
         this.logger.error('[AnthropicBackend] Rate limit error after all retries exhausted', {
           model,
           status: error.status,
-          message: error.message,
+          // The logger reserves `message` for the log line itself, so Anthropic's text goes elsewhere
+          anthropicMessage: error.message,
+          requestID: error.requestID,
+          errorType: (error.error as { error?: { type?: string } } | undefined)?.error?.type,
+          headers: pickRateLimitHeaders(error.headers as Parameters<typeof pickRateLimitHeaders>[0]),
           // Context for ops
           featureArea,
           requestType,

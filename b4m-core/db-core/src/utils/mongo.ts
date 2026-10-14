@@ -72,7 +72,8 @@ export function isTransientTransactionError(error: unknown): boolean {
   return transientCodes.includes(mongoError.code ?? -1);
 }
 
-export const connectDB = async (url: string, logger?: Logger) => {
+/** `overrides` is merged last, e.g. `{ autoIndex: false }` for a read-only script. */
+export const connectDB = async (url: string, logger?: Logger, overrides?: ConnectOptions) => {
   logger ??= Logger.withMetadata({});
   if (mongoose.connection.readyState === 1) {
     return true;
@@ -113,6 +114,7 @@ export const connectDB = async (url: string, logger?: Logger) => {
     // DocumentDB doesn't support retryable writes, so disable for DocumentDB connections
     retryWrites: !isDocumentDBConnection(url),
     retryReads: true,
+    ...overrides,
   };
 
   // Retry configuration

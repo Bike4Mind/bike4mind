@@ -5,7 +5,7 @@ import type { ToolContext } from '../../base/types';
 // aiMusicService vendor factory; both are mocked so no network/key is needed.
 const mockGenerate = vi.fn();
 const mockGetEffectiveApiKey = vi.fn();
-const mockPersistFab = vi.fn().mockResolvedValue(undefined);
+const mockSaveAsset = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
@@ -18,7 +18,7 @@ vi.mock('../../../../apiKeyService', async importOriginal => {
 });
 
 vi.mock('../../helpers/persistGeneratedFile', () => ({
-  persistGeneratedFileAsFabFile: mockPersistFab,
+  saveGeneratedAssetFromTool: mockSaveAsset,
 }));
 
 // Imported after the mocks so the tool picks up the mocked dependencies.
@@ -56,7 +56,7 @@ describe('music_generation tool', () => {
   beforeEach(() => {
     mockGenerate.mockReset();
     mockGetEffectiveApiKey.mockReset();
-    mockPersistFab.mockClear();
+    mockSaveAsset.mockClear();
     mockGenerate.mockResolvedValue({ audio: Buffer.from('fake-mp3'), contentType: 'audio/mpeg' });
     mockGetEffectiveApiKey.mockResolvedValue('el-key');
   });
@@ -142,18 +142,24 @@ describe('music_generation tool', () => {
     expect(context.onFinish).not.toHaveBeenCalled();
   });
 
-  it('persists the KB FabFile copy when saveGeneratedAudio is unset (defaults on)', async () => {
-    const context = createFakeContext();
-    await run(context, { prompt: 'lofi' });
-    expect(mockPersistFab).toHaveBeenCalledTimes(1);
-  });
-
-  it('honors saveGeneratedAudio=false: uploads for inline playback but skips the KB FabFile copy', async () => {
+  it('always saves a copy with its generation metadata (no user preference gate)', async () => {
     const context = createFakeContext();
     (context as { user: unknown }).user = { preferences: { saveGeneratedAudio: false } };
-    const result = await run(context, { prompt: 'lofi' });
+    const result = await run(context, { prompt: 'lofi', lengthMs: 30_000 });
     expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
-    expect(mockPersistFab).not.toHaveBeenCalled();
+    expect(mockSaveAsset).toHaveBeenCalledTimes(1);
+    expect(mockSaveAsset).toHaveBeenCalledWith(context, {
+      bytes: Buffer.from('fake-mp3'),
+      contentType: 'audio/mpeg',
+      generation: {
+        generator: 'music',
+        provider: 'elevenlabs',
+        modelId: expect.any(String),
+        prompt: 'lofi',
+        durationSeconds: 30,
+      },
+      generatedCopyKey: 'stored-key.mp3',
+    });
     expect(context.statusUpdate).toHaveBeenCalledWith({ images: ['stored-key.mp3'] });
     expect(result).toBe('Successfully generated music');
   });

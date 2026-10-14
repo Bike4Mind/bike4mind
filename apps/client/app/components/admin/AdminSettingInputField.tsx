@@ -96,7 +96,8 @@ const AdminSettingInputField = ({
   subSettings,
 }: {
   setting: (typeof settingsMap)[keyof typeof settingsMap];
-  defaultValue: string | number | boolean | object | undefined;
+  // null is a clearDeletesRow setting whose platform row is absent: unset, not the declared default.
+  defaultValue: string | number | boolean | object | undefined | null;
   index: number;
   subSettings?: SubSetting[];
 }) => {
@@ -115,7 +116,9 @@ const AdminSettingInputField = ({
   // so Save stays disabled. Without this the field reads as dirty the moment it is focused
   // and an empty write becomes one click away (saveValue guards the write itself as well).
   const isUntouchedClearedSecret = setting.isSensitive === true && value === '' && !secretEdited;
-  const isDirty = value !== defaultValue && !isUntouchedClearedSecret;
+  // clearDeletesRow: an emptied field is unset, so typing into an unset field and deleting it again is no edit.
+  const comparable = setting.clearDeletesRow && value === '' ? null : value;
+  const isDirty = comparable !== defaultValue && !isUntouchedClearedSecret;
   const showsStoredSecretMask = setting.isSensitive === true && isMaskedSensitiveSettingValue(value);
   const isEmbeddingModelSetting = setting.key === 'defaultEmbeddingModel';
 
@@ -157,6 +160,9 @@ const AdminSettingInputField = ({
           // not to what was submitted - sync from the response instead of leaving the field
           // empty until the next full settings refetch.
           if (setting.type === 'number' && typeof data?.settingValue === 'number') setValue(data.settingValue);
+          // clearDeletesRow answers null for a clear (the platform row was deleted): sync to the
+          // empty state so the field does not read as dirty against the default it used to hold.
+          if (setting.clearDeletesRow && data?.settingValue === null) setValue(null);
         },
       }
     );
@@ -210,6 +216,9 @@ const AdminSettingInputField = ({
                     },
                   }}
                   type="number"
+                  // clearDeletesRow with no row: the blank field is the "unset" state, not a missing
+                  // value. Name what it resolves to so an admin can tell it from a stored default.
+                  placeholder={setting.clearDeletesRow ? setting.unsetLabel : undefined}
                   // A cleared field is kept as '' rather than coerced: Number('') is 0, which
                   // the server would store as a real zero instead of letting makeNumberSetting's
                   // empty-string preprocess fall back to the setting's own default.

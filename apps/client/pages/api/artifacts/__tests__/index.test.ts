@@ -41,6 +41,26 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+vi.mock('@server/utils/resolveActiveOrg', () => ({
+  resolveActiveOrg: async (_req: unknown, orgId?: string) => {
+    if (!orgId?.trim()) return undefined;
+    if (orgId === 'foreign-org') {
+      const { ForbiddenError } = await import('@server/utils/errors');
+      throw new ForbiddenError('You are not a member of the selected organization.');
+    }
+    return orgId;
+  },
+}));
+
+vi.mock('@server/utils/artifactSourceRefsGuards', () => {
+  const sharedGuard = vi.fn();
+  return {
+    sharedGuard,
+    createArtifactSourceRefsGuard: vi.fn(() => sharedGuard),
+    createOwnedArtifactSourceRefsGuard: vi.fn(),
+  };
+});
+
 vi.mock('@bike4mind/services', () => ({
   artifactService: {
     list: (...args: unknown[]) => {
@@ -169,5 +189,54 @@ describe('POST /api/artifacts artifact gate', () => {
 
     expect(res._getStatusCode()).toBe(201);
     expect(mockRefs.createArgs).toBeDefined();
+  });
+});
+
+describe('POST /api/artifacts organization scope', () => {
+  beforeEach(() => {
+    mockRefs.createArgs = undefined;
+    mockRefs.settings = { EnableArtifacts: true, EnableArtifactsDefault: true };
+  });
+
+  const body = (organizationId?: string) => ({ type: 'html', title: 'Page', content: '<html></html>', organizationId });
+
+  it('rejects an organizationId the caller is not a member of with 403', async () => {
+    const { req, res } = invokePost(body('foreign-org'));
+
+    await expect(Promise.resolve(mockRefs.postHandler!(req, res))).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRefs.createArgs).toBeUndefined();
+  });
+
+  it.each(['', '  '])('stores no organization for a blank organizationId (%j)', async blank => {
+    const { req, res } = invokePost(body(blank));
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockRefs.createArgs?.[1]).toMatchObject({ organizationId: undefined });
+  });
+
+  it('creates under an organization the caller belongs to', async () => {
+    const { req, res } = invokePost(body('member-org'));
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockRefs.createArgs?.[1]).toMatchObject({ organizationId: 'member-org' });
+  });
+});
+
+describe('POST /api/artifacts reference guard', () => {
+  it('hands the service the shared-access guard, not the owner-only one', async () => {
+    mockRefs.settings = { EnableArtifacts: true, EnableArtifactsDefault: true };
+    const guards = await import('@server/utils/artifactSourceRefsGuards');
+    const { req, res } = invokePost({ type: 'html', title: 'Page', content: '<html></html>' });
+
+    await mockRefs.postHandler!(req, res);
+
+    const adapters = mockRefs.createArgs?.[2] as { assertSourceRefsAccessible: unknown };
+    expect(guards.createArtifactSourceRefsGuard).toHaveBeenCalledWith((req as any).user);
+    expect(adapters.assertSourceRefsAccessible).toBe((guards as any).sharedGuard);
+    expect(guards.createOwnedArtifactSourceRefsGuard).not.toHaveBeenCalled();
   });
 });

@@ -44,6 +44,7 @@ import {
   updatePublishedDiscoverable,
   updatePublishedAccessGate,
   getPublishedEmbedState,
+  getShareTokenState,
   type PublishAccessGateInput,
   type PublishMode,
   type ArtifactPublishOpts,
@@ -102,8 +103,8 @@ type VisibilityOption = { value: PublishVisibility; label: string; hint: string;
 
 const PUBLIC_OPTION: VisibilityOption = {
   value: 'public',
-  label: 'Public',
-  hint: 'Anyone with the link',
+  label: 'Anyone with the link',
+  hint: 'Anyone you send the link to can view it',
   icon: <PublicIcon />,
 };
 const PRIVATE_OPTION: VisibilityOption = { value: 'private', label: 'Private', hint: 'Only you', icon: <LockIcon /> };
@@ -120,8 +121,8 @@ type GateKind = 'none' | 'passphrase' | 'domain';
 const GATE_OPTIONS: Array<{ value: GateKind; label: string; hint: string; icon: React.ReactNode }> = [
   {
     value: 'none',
-    label: 'Anyone with the link',
-    hint: 'No extra step for viewers',
+    label: 'No passphrase needed',
+    hint: 'Viewers just open the link',
     icon: <PublicIcon fontSize="small" />,
   },
   {
@@ -247,6 +248,23 @@ export function PublishShareModal({
       })
       .catch(() => {
         /* best-effort seed; the editor still works, the server re-validates */
+      });
+    return () => {
+      active = false;
+    };
+  }, [open, result?.publicId]);
+
+  // Seed any live /a link from a past session (read-only, never mints) so a page that is
+  // public now can still revoke a link made while it was private. A mint in flight wins.
+  useEffect(() => {
+    if (!open || !result?.publicId) return;
+    let active = true;
+    void getShareTokenState(result.publicId)
+      .then(state => {
+        if (active && state.shareToken) setShareToken(prev => prev ?? state.shareToken);
+      })
+      .catch(() => {
+        /* best-effort seed; Create still surfaces an existing link idempotently */
       });
     return () => {
       active = false;
@@ -478,7 +496,7 @@ export function PublishShareModal({
     }
   };
   const onCreateShareToken = () =>
-    runShareToken(async () => (await createOrGetShareToken(result!.publicId)).shareToken, 'No-sign-in link created');
+    runShareToken(async () => (await createOrGetShareToken(result!.publicId)).shareToken, 'Link created');
   const onRegenerateShareToken = () =>
     runShareToken(
       async () => (await regenerateShareToken(result!.publicId)).shareToken,
@@ -488,7 +506,7 @@ export function PublishShareModal({
     runShareToken(async () => {
       await revokeShareToken(result!.publicId);
       return null;
-    }, 'No-sign-in link revoked');
+    }, 'Link turned off');
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -641,9 +659,9 @@ export function PublishShareModal({
               "anyone with the link" would be a falsehood when a gate is set; the
               Access note below tells the truth instead. */}
           {isPublic && gateKind === 'none' && !existing && !gateTouched && (
-            <Typography level="body-xs" sx={{ mt: 0.75, color: AMBER }}>
-              ⚠ Public: anyone with the link will be able to view this. It stays out of search engines unless you turn
-              on &quot;List in search engines&quot; below.
+            <Typography level="body-xs" sx={{ mt: 0.75, opacity: 0.75 }}>
+              Anyone with the link can view this. It stays out of search engines unless you turn on &quot;Show in search
+              results&quot; below.
             </Typography>
           )}
         </FormControl>
@@ -764,10 +782,15 @@ export function PublishShareModal({
             orientation="horizontal"
             sx={{ mb: 2, justifyContent: 'space-between', alignItems: 'center', gap: 1 }}
           >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {/* flex: 1 + minWidth: 0 here and flexShrink: 0 on the Switch stop the long helper from squeezing
+                the switch on narrow screens. Keep in sync with DiscoverableToggle. */}
+            <Box
+              sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1, minWidth: 0 }}
+              data-testid="publish-share-discoverable-text"
+            >
               <TravelExploreIcon fontSize="small" />
               <Box>
-                <FormLabel sx={{ mb: 0 }}>List in search engines</FormLabel>
+                <FormLabel sx={{ mb: 0 }}>Show in search results</FormLabel>
                 {/* FormHelperText, not Typography: only a FormHelperText child registers itself into
                     Joy's FormControl context and lands in the switch's aria-describedby, so a screen-
                     reader user actually hears this caveat instead of just the label. */}
@@ -780,6 +803,8 @@ export function PublishShareModal({
             <Switch
               checked={discoverableOn}
               disabled={busy}
+              sx={{ flexShrink: 0 }}
+              data-testid="publish-share-discoverable-switch"
               onChange={e => void onToggleDiscoverable(e.target.checked)}
               // On the INPUT slot, not the root: Joy spreads bare props to the root span,
               // where a test can't read `.checked`.
@@ -860,79 +885,85 @@ export function PublishShareModal({
             </Box>
             <ShareActions title={title} url={url} markdown={markdown} />
 
-            <Box
-              sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}
-              data-testid="publish-share-token-section"
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                <LinkIcon fontSize="small" />
-                <FormLabel sx={{ mb: 0 }}>No-sign-in link</FormLabel>
-              </Box>
-              <Typography level="body-xs" sx={{ opacity: 0.75, mb: 1 }}>
-                A link anyone can open without an account. Regenerate to instantly revoke old links.
-              </Typography>
-              {shareToken ? (
-                <>
-                  <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-                    <Input
-                      value={toShareTokenUrl(shareToken)}
-                      readOnly
-                      slotProps={{
-                        input: { 'data-testid': 'publish-share-token-url', onFocus: e => e.currentTarget.select() },
-                      }}
-                      sx={{ flex: 1, fontFamily: 'monospace', fontSize: '13px' }}
-                    />
-                    <Tooltip title="Copy no-sign-in link">
-                      <IconButton
+            {/* The /a link only grants access the main link doesn't when the page isn't
+                public; still shown once minted so it can be rotated or revoked. */}
+            {(!isPublic || shareToken) && (
+              <Box
+                sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}
+                data-testid="publish-share-token-section"
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                  <LinkIcon fontSize="small" />
+                  <FormLabel sx={{ mb: 0 }}>Private link anyone can open, no sign-in</FormLabel>
+                </Box>
+                <Typography level="body-xs" sx={{ opacity: 0.75, mb: 1 }} data-testid="publish-share-token-hint">
+                  {isPublic
+                    ? 'This page is public, so the link above already opens for anyone. Revoke this one if you no longer need it.'
+                    : `The link above only opens for ${visibility === 'organization' ? 'your team' : 'you'}. This one opens for anyone you send it to, without signing in.`}
+                </Typography>
+                {shareToken ? (
+                  <>
+                    <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                      <Input
+                        value={toShareTokenUrl(shareToken)}
+                        readOnly
+                        slotProps={{
+                          input: { 'data-testid': 'publish-share-token-url', onFocus: e => e.currentTarget.select() },
+                        }}
+                        sx={{ flex: 1, fontFamily: 'monospace', fontSize: '13px' }}
+                      />
+                      <Tooltip title="Copy private link">
+                        <IconButton
+                          variant="outlined"
+                          color="neutral"
+                          onClick={() => void copyToClipboard(toShareTokenUrl(shareToken))}
+                          data-testid="publish-share-token-copy"
+                        >
+                          <LinkIcon />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                      <Button
+                        size="sm"
                         variant="outlined"
                         color="neutral"
-                        onClick={() => void copyToClipboard(toShareTokenUrl(shareToken))}
-                        data-testid="publish-share-token-copy"
+                        loading={shareBusy}
+                        onClick={() => void onRegenerateShareToken()}
+                        data-testid="publish-share-token-regenerate"
                       >
-                        <LinkIcon />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-                  <Box sx={{ display: 'flex', gap: 1 }}>
-                    <Button
-                      size="sm"
-                      variant="outlined"
-                      color="neutral"
-                      loading={shareBusy}
-                      onClick={() => void onRegenerateShareToken()}
-                      data-testid="publish-share-token-regenerate"
-                    >
-                      Regenerate
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outlined"
-                      color="danger"
-                      loading={shareBusy}
-                      onClick={() => void onRevokeShareToken()}
-                      data-testid="publish-share-token-revoke"
-                    >
-                      Revoke
-                    </Button>
-                  </Box>
-                  <Typography level="body-xs" sx={{ mt: 0.75, color: AMBER }}>
-                    ⚠ Anyone with this link can view without signing in.
-                  </Typography>
-                </>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  color="neutral"
-                  loading={shareBusy}
-                  startDecorator={<LinkIcon />}
-                  onClick={() => void onCreateShareToken()}
-                  data-testid="publish-share-token-create"
-                >
-                  Create no-sign-in link
-                </Button>
-              )}
-            </Box>
+                        Make a new link and stop the old ones
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outlined"
+                        color="danger"
+                        loading={shareBusy}
+                        onClick={() => void onRevokeShareToken()}
+                        data-testid="publish-share-token-revoke"
+                      >
+                        Revoke
+                      </Button>
+                    </Box>
+                    <Typography level="body-xs" sx={{ mt: 0.75, color: AMBER }}>
+                      Anyone with this link can view without signing in.
+                    </Typography>
+                  </>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    loading={shareBusy}
+                    startDecorator={<LinkIcon />}
+                    onClick={() => void onCreateShareToken()}
+                    data-testid="publish-share-token-create"
+                  >
+                    Create private link anyone can open
+                  </Button>
+                )}
+              </Box>
+            )}
 
             {result && isPublic && !embedGated && (
               <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>

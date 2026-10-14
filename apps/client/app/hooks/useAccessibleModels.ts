@@ -29,7 +29,7 @@ export function useAccessibleModels() {
   // entitlement-scoped models so a tag-less subscriber still gets accessible
   // models (and an enabled send button). A failed/empty fetch yields [] and
   // tag-only matching, so the send path never breaks on entitlement errors.
-  const { data: entitlements } = useEntitlements();
+  const { data: entitlements, isLoading: isEntitlementsLoading } = useEntitlements();
 
   // Stabilize userTags by keying on the serialized tag values, not the object reference.
   // currentUser reference changes on every setCurrentUser call even when tags haven't changed,
@@ -84,6 +84,9 @@ export function useAccessibleModels() {
     isLoading: isConfigsLoading || !currentUser,
     // Distinguishes a failed /api/models fetch (retryable) from a user with no model access.
     isModelsError,
+    // Until the first entitlements fetch settles, models gated by entitlement (including the
+    // universal 'base' key) are missing from accessibleModels, so the list is a partial one.
+    isEntitlementsLoading,
     refetchModels: refetchModelInfos,
     userTags,
     isAdmin,

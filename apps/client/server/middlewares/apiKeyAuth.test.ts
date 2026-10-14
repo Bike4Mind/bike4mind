@@ -3,6 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { ApiKeyScope, CreditHolderType, ForbiddenError } from '@bike4mind/common';
 import { SCOPE_STAGING_ENV_VAR } from './apiKeyScopeGate';
 import { ApiKeyUsageManager } from '@server/managers/apiKeyUsageManager';
+import { logEvent } from '@server/utils/analyticsLog';
 
 const { validateUserApiKeyMock, findByIdMock } = vi.hoisted(() => ({
   validateUserApiKeyMock: vi.fn(),
@@ -223,7 +224,11 @@ describe('apiKeyAuth usage log stamping', () => {
   });
 
   /** Runs the middleware, fires the response 'finish' hook, and returns what was logged. */
-  const loggedUsage = async (headers: Record<string, string>, validationExtra: Record<string, unknown> = {}) => {
+  const loggedUsage = async (
+    headers: Record<string, string>,
+    validationExtra: Record<string, unknown> = {},
+    reqExtra: Record<string, unknown> = {}
+  ) => {
     validateUserApiKeyMock.mockResolvedValue({
       isValid: true,
       keyId: 'key-1',
@@ -232,7 +237,7 @@ describe('apiKeyAuth usage log stamping', () => {
       rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
       ...validationExtra,
     });
-    const req = makeReq();
+    const req = Object.assign(makeReq(), reqExtra);
     req.headers = { ...req.headers, ...headers };
     const res = makeRes();
     await apiKeyAuth()(req, res, vi.fn() as unknown as NextFunction);
@@ -247,6 +252,18 @@ describe('apiKeyAuth usage log stamping', () => {
     expect((await loggedUsage({ 'user-agent': 'b4m-cli/1.2.3' })).source).toBe('cli');
     vi.clearAllMocks();
     expect((await loggedUsage({ 'user-agent': 'curl/8.4.0' })).source).toBe('api');
+  });
+
+  it('logs the route template, never the raw URL or its query string', async () => {
+    const logged = await loggedUsage(
+      {},
+      {},
+      { originalUrl: '/api/agents/abc?token=1', query: { id: 'abc', token: '1' } }
+    );
+    expect(logged.endpoint).toBe('/api/agents/[id]');
+    expect(vi.mocked(logEvent).mock.calls[0][0]).toMatchObject({
+      metadata: { endpoint: '/api/agents/[id]' },
+    });
   });
 
   it('stamps ownerType organization only for an org-billed key with an organization', async () => {
@@ -296,7 +313,7 @@ describe('apiKeyAuth blocked owner log', () => {
     expect(call?.[1]).toMatchObject({
       keyId: 'key-1',
       userId: 'user-1',
-      endpoint: req.originalUrl,
+      endpoint: '/api/v1/sessions',
       blockReasons: [reason],
     });
     expect(JSON.stringify(call)).not.toContain(KEY);

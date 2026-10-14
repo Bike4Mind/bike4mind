@@ -36,3 +36,4 @@ export * from './TavernQuestModel';
 export * from './TavernWorldModel';
 export * from './GearStampModel';
 export * from './GearOverrideModel';
+export * from './purgeOwnerPublishedArtifacts';

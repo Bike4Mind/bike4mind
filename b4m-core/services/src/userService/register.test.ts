@@ -72,6 +72,7 @@ describe('registerUser', () => {
         },
         creditTransactions: {
           createTransaction: vi.fn().mockResolvedValue({ id: 'transactionId', type: 'generic_add' }),
+          findOne: vi.fn().mockResolvedValue(null),
         },
       },
       logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
@@ -390,6 +391,7 @@ describe('registerViaOTC', () => {
         registrationInvites: { findByCode: vi.fn().mockResolvedValue(null), update: vi.fn() },
         creditTransactions: {
           createTransaction: vi.fn().mockResolvedValue({ id: 'transactionId', type: 'generic_add' }),
+          findOne: vi.fn().mockResolvedValue(null),
         },
       },
       logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
@@ -416,7 +418,7 @@ describe('registerViaOTC', () => {
       expect.objectContaining({
         ownerId: 'newUserId',
         credits: 100,
-        transactionId: 'otc-register-grant:newUserId',
+        transactionId: 'verify-grant:newUserId',
       }),
       expect.anything()
     );
@@ -479,7 +481,7 @@ describe('registerViaOTC', () => {
       expect.objectContaining({
         ownerId: 'newUserId',
         credits: 500,
-        transactionId: 'otc-register-grant:newUserId',
+        transactionId: 'verify-grant:newUserId',
       }),
       expect.anything()
     );
@@ -492,6 +494,54 @@ describe('registerViaOTC', () => {
       emailVerifiedAt: expect.any(Date),
       tags: ['Customer'],
       pendingCreditGrant: null,
+    });
+  });
+  describe('OAuth source tag', () => {
+    const activeClient = { clientId: 'b4m_acme_app_0a1b2c3d', isActive: true };
+    const sourceTagsOf = () =>
+      (mockAdapters.db.users.update.mock.calls[0][0].tags as string[]).filter(t => t.startsWith('source:'));
+
+    it('stamps source:<slug> for an active client and keeps it through the OTC tag rewrite', async () => {
+      mockAdapters.db.oauthClients = { findByClientId: vi.fn().mockResolvedValue(activeClient) };
+      await registerViaOTC({ ...otcParams, sourceClientId: activeClient.clientId }, mockAdapters);
+      expect(mockAdapters.db.oauthClients.findByClientId).toHaveBeenCalledWith(activeClient.clientId);
+      expect(sourceTagsOf()).toEqual(['source:acme_app']);
+      expect(mockAdapters.db.users.update.mock.calls[0][0].tags).toContain('Customer');
+    });
+
+    it('stamps nothing for an inactive client', async () => {
+      mockAdapters.db.oauthClients = {
+        findByClientId: vi.fn().mockResolvedValue({ ...activeClient, isActive: false }),
+      };
+      await registerViaOTC({ ...otcParams, sourceClientId: activeClient.clientId }, mockAdapters);
+      expect(sourceTagsOf()).toEqual([]);
+    });
+
+    it('stamps nothing for an unknown client', async () => {
+      mockAdapters.db.oauthClients = { findByClientId: vi.fn().mockResolvedValue(null) };
+      await registerViaOTC({ ...otcParams, sourceClientId: 'b4m_nope_0a1b2c3d' }, mockAdapters);
+      expect(sourceTagsOf()).toEqual([]);
+    });
+
+    it('skips the lookup when no client id is supplied', async () => {
+      mockAdapters.db.oauthClients = { findByClientId: vi.fn().mockResolvedValue(activeClient) };
+      await registerViaOTC(otcParams, mockAdapters);
+      expect(mockAdapters.db.oauthClients.findByClientId).not.toHaveBeenCalled();
+      expect(sourceTagsOf()).toEqual([]);
+    });
+
+    it('stamps nothing when the caller passes no client lookup', async () => {
+      await registerViaOTC({ ...otcParams, sourceClientId: activeClient.clientId }, mockAdapters);
+      expect(sourceTagsOf()).toEqual([]);
+    });
+
+    it('still creates the user when the client lookup throws', async () => {
+      mockAdapters.db.oauthClients = { findByClientId: vi.fn().mockRejectedValue(new Error('db down')) };
+      const result = await registerViaOTC({ ...otcParams, sourceClientId: activeClient.clientId }, mockAdapters);
+      expect(result).toBeDefined();
+      expect(mockAdapters.db.users.create).toHaveBeenCalledTimes(1);
+      expect(sourceTagsOf()).toEqual([]);
+      expect(mockAdapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining(activeClient.clientId));
     });
   });
 });

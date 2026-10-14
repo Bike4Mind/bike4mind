@@ -33,6 +33,17 @@ const base = {
 const DIGEST = 'a'.repeat(64);
 
 describe('UserApiKeyModel keyDigest', () => {
+  it('stores a doc with a keyDigest and no keyHash', async () => {
+    const { keyHash: _legacyHash, ...digestOnly } = base;
+
+    const created = await UserApiKey.create({ ...digestOnly, keyPrefix: 'b4m_live_nohash01', keyDigest: DIGEST });
+
+    const found = await userApiKeyRepository.findActiveByKeyPrefix('b4m_live_nohash01');
+    expect(found?.id).toBe(created.id);
+    expect(found?.keyDigest).toBe(DIGEST);
+    expect(found?.keyHash).toBeUndefined();
+  });
+
   it('setKeyDigest persists the digest so the prefix lookup returns it', async () => {
     const created = await UserApiKey.create({ ...base, keyPrefix: 'b4m_live_digest01' });
     expect(created.keyDigest).toBeUndefined();
@@ -82,7 +93,7 @@ describe('UserApiKeyModel keyDigest', () => {
     it('healKeyPrefix does not repoint the rotated key prefix', async () => {
       const id = await rotatedKey('px');
 
-      await userApiKeyRepository.healKeyPrefix(id, 'b4m_live_oldpx_heal', base.keyHash);
+      await userApiKeyRepository.healKeyPrefix(id, 'b4m_live_oldpx_heal', { keyHash: base.keyHash });
 
       expect((await UserApiKey.findById(id))?.keyPrefix).toBe('b4m_live_newpx');
     });
@@ -90,9 +101,46 @@ describe('UserApiKeyModel keyDigest', () => {
     it('healKeyPrefix applies while the validated hash is still stored', async () => {
       const created = await UserApiKey.create({ ...base, keyPrefix: 'b4m_live_legacy1' });
 
-      await userApiKeyRepository.healKeyPrefix(created.id, 'b4m_live_legacy1_heal', base.keyHash);
+      await userApiKeyRepository.healKeyPrefix(created.id, 'b4m_live_legacy1_heal', {
+        keyHash: base.keyHash,
+      });
 
       expect((await UserApiKey.findById(created.id))?.keyPrefix).toBe('b4m_live_legacy1_heal');
+    });
+
+    it('healKeyPrefix applies to a digest-only key while its digest is still stored', async () => {
+      const { keyHash: _legacyHash, ...digestOnly } = base;
+      const created = await UserApiKey.create({ ...digestOnly, keyPrefix: 'b4m_live_digonly1', keyDigest: DIGEST });
+
+      await userApiKeyRepository.healKeyPrefix(created.id, 'b4m_live_digonly1_heal', { keyDigest: DIGEST });
+
+      expect((await UserApiKey.findById(created.id))?.keyPrefix).toBe('b4m_live_digonly1_heal');
+    });
+
+    it('healKeyPrefix does not repoint a digest-only key once its digest rotated', async () => {
+      const { keyHash: _legacyHash, ...digestOnly } = base;
+      const created = await UserApiKey.create({ ...digestOnly, keyPrefix: 'b4m_live_digonly2', keyDigest: DIGEST });
+      await userApiKeyRepository.update({ id: created.id, keyDigest: ROTATED_DIGEST, keyPrefix: 'b4m_live_newdo2' });
+
+      await userApiKeyRepository.healKeyPrefix(created.id, 'b4m_live_digonly2_heal', { keyDigest: DIGEST });
+
+      expect((await UserApiKey.findById(created.id))?.keyPrefix).toBe('b4m_live_newdo2');
+    });
+
+    it('update with unset removes the legacy keyHash, so a heal keyed on it no longer lands', async () => {
+      const created = await UserApiKey.create({ ...base, keyPrefix: 'b4m_live_unset01' });
+      await userApiKeyRepository.update(
+        { id: created.id, keyDigest: ROTATED_DIGEST, keyPrefix: 'b4m_live_unset02' },
+        { unset: ['keyHash'] }
+      );
+
+      const rotated = await UserApiKey.findById(created.id).lean();
+      expect(rotated).not.toHaveProperty('keyHash');
+      expect(rotated?.keyDigest).toBe(ROTATED_DIGEST);
+
+      await userApiKeyRepository.healKeyPrefix(created.id, 'b4m_live_unset01_heal', { keyHash: base.keyHash });
+
+      expect((await UserApiKey.findById(created.id))?.keyPrefix).toBe('b4m_live_unset02');
     });
   });
 

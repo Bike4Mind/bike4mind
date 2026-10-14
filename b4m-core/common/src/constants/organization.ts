@@ -1,6 +1,10 @@
 /**
  * Organization seat-limit policy - the floor and ceiling every seat change is bound by.
  *
+ * These are the DEFAULTS of the admin settings `teamPlanMinSeats` / `teamPlanMaxSeats` /
+ * `teamPlanCreditsPerSeat` (Admin -> Growth & Pricing). Enforcement sites read the settings via
+ * `resolveTeamPlanSettings` (common/utils/teamPlanSettings) and fall back to these.
+ *
  * Lives in common (not the app's subscriptions constants) because the ceiling has to be
  * enforced in the persistence layer too: `OrganizationModel.addMemberRaisingSeats` clamps
  * the auto-raise against MAX, and packages/database cannot import from apps/client. The app
@@ -17,6 +21,16 @@ export const ORGANIZATION_SUBSCRIPTION_MIN_SEATS = 4;
  * `setSeats` value can satisfy (#1424).
  */
 export const ORGANIZATION_SUBSCRIPTION_MAX_SEATS = 100;
+
+/** Credits granted per paid team seat each billing cycle. */
+export const ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT = 50000;
+
+/**
+ * Absolute rail on the admin-tunable seat settings (`teamPlanMinSeats` / `teamPlanMaxSeats`): an
+ * operator can move the floor and ceiling, but not past this. The constants above are the
+ * settings' defaults and the fallback wherever no setting can be read.
+ */
+export const TEAM_PLAN_SEATS_HARD_LIMIT = 10_000;
 
 /**
  * The org `users[]` ACL permission values that CONSTITUTE membership - the single definition every
@@ -101,3 +115,33 @@ export const isOrgOwnerOrCurrentAdmin = (
  * `findById`. The budget routes enforce it; the client uses it only to decide which controls to show.
  */
 export const canManageMemberCreditBudgets = isOrgOwnerOrCurrentAdmin;
+
+/** The actor slice an administration decision needs - resolved from auth, never from the body. */
+export type OrgAuthorityActor = { id: string; isAdmin?: boolean | null };
+
+/** The organization slice an administration decision needs. */
+export type AdministrableOrg = { userId: string; managerId?: string | null };
+
+/**
+ * May this actor administer the organization's roster - remove members, or add them through the
+ * direct `addMember` path? Billing owner, appointed manager, or platform admin.
+ *
+ * Deliberately NARROWER than `shareable.findAccessibleById`, which is a MEMBERSHIP ACL: it admits
+ * anyone in `users[]` holding `read`, and `addMember` only ever grants `[Permission.read]`, so
+ * every ordinary member satisfied it and could therefore enroll arbitrary accounts.
+ *
+ * NOT the same set as `isOrgOwnerOrCurrentAdmin`: a manager passes this but not that, an appointed
+ * admin passes that but not this. Invites (and cancelling them) gate on that one, behind an
+ * `isOrgMember` check, so the client must ask each control's own server predicate rather than
+ * one "can manage" flag.
+ *
+ * `userId` and `managerId` are declared `String` on the organization schema, so a strict
+ * comparison is correct. Callers include `organizationService` `addMember` and `revokeAccess`
+ * (b4m-core/services), the addUser route (apps/client/pages/api/organizations/[id]/addUser.ts),
+ * `canManageOrg` in apps/client/server/utils/orgAccess.ts, and the client's Members tab
+ * (components/organizations/Member.tsx).
+ */
+export function canAdministerOrganization(actor: OrgAuthorityActor, organization: AdministrableOrg): boolean {
+  if (actor.isAdmin) return true;
+  return organization.userId === actor.id || (!!organization.managerId && organization.managerId === actor.id);
+}

@@ -3,11 +3,13 @@ import {
   IOrgGoogleDriveConnectionDocument,
   IOrgGoogleDriveConnectionRepository,
   IGoogleDriveConnectionHealthUpdate,
+  GoogleDriveReleaseStatus,
   IMongoDocument,
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { releaseLakeClaimBestEffort } from './LakeConnectorClaimModel';
+import { findOrphanedLakeConnections } from './orphanedLakeConnections';
 import { randomUUID } from 'crypto';
 
 const MAX_LAST_ERROR_LEN = 500;
@@ -259,6 +261,17 @@ class OrgGoogleDriveConnectionRepository
       .sort({ lastPolledAt: 1 })
       .limit(limit)
       .then(docs => docs.map(d => d.toJSON()));
+  }
+
+  async findOrphaned(limit: number): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument)[]> {
+    if (limit <= 0) return [];
+    return findOrphanedLakeConnections(limit, (afterId, pageSize) =>
+      this.model
+        .find(afterId ? { _id: { $gt: afterId } } : {})
+        .sort({ _id: 1 })
+        .limit(pageSize)
+        .then(docs => docs.map(d => d.toJSON()))
+    );
   }
 
   /**
@@ -569,7 +582,8 @@ class OrgGoogleDriveConnectionRepository
   async releaseSyncClaim(
     id: string,
     expectedToken: string,
-    lastError: string | null
+    lastError: string | null,
+    status: GoogleDriveReleaseStatus = 'connected'
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     // The chain (if any) is over once the claim goes; leaving the id/token would let an in-flight
     // continuation message adopt a claim nobody holds.
@@ -577,7 +591,7 @@ class OrgGoogleDriveConnectionRepository
       { _id: id, status: 'syncing', ingestClaimToken: expectedToken },
       {
         $set: {
-          status: 'connected',
+          status,
           lastPolledAt: new Date(),
           // Empty-string-to-null matches updateHealth: a caller whose err.message is blank has nothing
           // to report, and storing '' would read as a present error on the client.

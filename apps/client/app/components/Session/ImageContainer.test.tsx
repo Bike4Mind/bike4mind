@@ -1,9 +1,10 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '../../utils/themes';
 import ImageContainer from './ImageContainer';
+import { SessionReadOnlyProvider } from './SessionReadOnlyContext';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -66,5 +67,46 @@ describe('ImageContainer (upload moderation gating)', () => {
 
     expect(screen.queryByTestId('image-moderation-scanning')).not.toBeInTheDocument();
     expect(screen.getByTestId('ai-response-image')).toBeInTheDocument();
+  });
+});
+
+describe('ImageContainer (missing image)', () => {
+  it('shows a no-longer-available state instead of a broken image when the image fails to load', () => {
+    render(
+      <TestWrapper>
+        <ImageContainer {...baseProps} src="https://example.com/image.png" />
+      </TestWrapper>
+    );
+
+    fireEvent.error(screen.getByTestId('ai-response-image'));
+
+    expect(screen.queryByTestId('ai-response-image')).not.toBeInTheDocument();
+    expect(screen.getByTestId('ai-response-image-unavailable')).toHaveTextContent('no longer available');
+  });
+});
+
+describe('ImageContainer (read-only)', () => {
+  it('offers Edit Image normally', () => {
+    render(
+      <TestWrapper>
+        <ImageContainer {...baseProps} src="https://example.com/image.png" />
+      </TestWrapper>
+    );
+
+    expect(screen.getAllByTestId('image-edit-btn').length).toBeGreaterThan(0);
+  });
+
+  // Editing uploads a mask file before sending, so hiding only the send would still write.
+  it('hides Edit Image but keeps download when read-only', () => {
+    render(
+      <TestWrapper>
+        <SessionReadOnlyProvider readOnly>
+          <ImageContainer {...baseProps} src="https://example.com/image.png" />
+        </SessionReadOnlyProvider>
+      </TestWrapper>
+    );
+
+    expect(screen.queryByTestId('image-edit-btn')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('image-download-btn').length).toBeGreaterThan(0);
   });
 });

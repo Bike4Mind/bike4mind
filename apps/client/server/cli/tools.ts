@@ -5,7 +5,8 @@ import { executeToolWithLogging } from './toolsHandler.shared';
 import { defineLambdaRoute } from './defineLambdaRoute';
 
 /**
- * Lambda handler for CLI server-side tool execution (production & preview).
+ * Route logic for CLI server-side tool execution (production & preview). The Lambda
+ * entry is tools.handler.ts, which threads the request id in.
  *
  * Contract-driven (executeToolContract): defineLambdaRoute owns request parsing,
  * DB connect, JWT-only auth, the rate limit (via the `rateLimit` option, ordered
@@ -44,6 +45,3 @@ export const handleToolRequest = defineLambdaRoute(
   // Runs before validation so a flood of malformed bodies still counts (429 on exceed).
   { rateLimit: ({ auth }) => checkRateLimit(auth!.userId, undefined, { bucket: 'tools' }) }
 );
-
-// Export as 'handler' for Lambda (SST expects this name)
-export const handler = handleToolRequest;

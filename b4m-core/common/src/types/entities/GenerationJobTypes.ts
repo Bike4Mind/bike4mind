@@ -1,9 +1,11 @@
-import type { ProviderJobHandle, ProviderOutput, VideoGenerationRequest, VideoProviderId } from '../../video';
+import type { ProviderOutput } from '../../generation';
+import type { MusicGenerationRequest, MusicProviderId } from '../../music';
+import type { ProviderJobHandle, VideoGenerationRequest, VideoProviderId } from '../../video';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
 
-export const GENERATION_JOB_KINDS = ['video'] as const;
+export const GENERATION_JOB_KINDS = ['video', 'music'] as const;
 export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
 
 export const GENERATION_JOB_STATES = [
@@ -65,15 +67,42 @@ export type VideoJobPayload = {
   billedBlock?: boolean;
 };
 
-export interface IGenerationJob {
-  /** One kind today; becomes a union of { kind, payload } pairs when a second kind lands. */
-  kind: GenerationJobKind;
+/** The validated request as persisted: defaults resolved, without the in-memory validation brand. */
+export type StoredMusicRequest = MusicGenerationRequest & { durationSeconds: number; instrumental: boolean };
+
+/** Same storage fields as VideoJobOutput, so kind-agnostic readers (job updates, signed URLs) serve both. */
+export type MusicJobOutput = VideoJobOutput & {
+  /** What the provider sang, as plain lines; absent for instrumental output. */
+  lyrics?: string;
+};
+
+/**
+ * Music providers return the finished song from one blocking call, so the output is stored in the submit step:
+ * provider bytes never reach this payload.
+ */
+export type MusicJobPayload = {
+  request: StoredMusicRequest;
+  providerId: MusicProviderId;
+  /** The notebook the song was made in, for in-chat producers. */
+  sessionId?: string;
+  reportedDurationSeconds?: number;
+  output?: MusicJobOutput;
+  /** As VideoJobPayload.billedBlock. */
+  billedBlock?: boolean;
+};
+
+/** Each kind's payload; the job type is a union discriminated on `kind`. */
+export type GenerationJobPayloads = {
+  video: VideoJobPayload;
+  music: MusicJobPayload;
+};
+
+type GenerationJobFields = {
   ownerType: CreditHolderType.User | CreditHolderType.Organization;
   ownerId: string;
   requestedBy: string;
   source: GenerationJobSource;
   state: GenerationJobState;
-  payload: VideoJobPayload;
   progress?: number;
   pollCount: number;
   attempts: number;
@@ -92,9 +121,25 @@ export interface IGenerationJob {
   questId?: string;
   createdAt?: Date;
   updatedAt?: Date;
-}
+};
+
+type GenerationJobByKind = {
+  [K in GenerationJobKind]: GenerationJobFields & { kind: K; payload: GenerationJobPayloads[K] };
+};
+
+export type IGenerationJob = GenerationJobByKind[GenerationJobKind];
+
+/** The job of one kind (or of a union of kinds). */
+export type IGenerationJobOf<K extends GenerationJobKind> = Extract<IGenerationJob, { kind: K }>;
 
 export type IGenerationJobDocument = IGenerationJob & IMongoDocument;
+
+export type IGenerationJobDocumentOf<K extends GenerationJobKind> = Extract<IGenerationJobDocument, { kind: K }>;
+
+export const isGenerationJobOfKind = <K extends GenerationJobKind>(
+  job: IGenerationJobDocument,
+  kind: K
+): job is IGenerationJobDocumentOf<K> => job.kind === kind;
 
 export type GenerationJobCommit = Partial<
   Pick<
@@ -124,7 +169,9 @@ export type GenerationJobCommitGuard = { kind: 'lease'; leaseToken: Date } | { k
 // A lowercase 24-hex ObjectId string; exact, so the stored id equals the supplied one.
 export const GENERATION_JOB_ID_PATTERN = /^[0-9a-f]{24}$/;
 
-export type GenerationJobCreateInput = Omit<IGenerationJob, 'createdAt' | 'updatedAt'> & {
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+export type GenerationJobCreateInput = DistributiveOmit<IGenerationJob, 'createdAt' | 'updatedAt'> & {
   /**
    * Caller-generated id, so a create whose outcome is unknown (an error after the insert may have landed)
    * can be resolved by looking the job up. Must match GENERATION_JOB_ID_PATTERN; anything else throws.

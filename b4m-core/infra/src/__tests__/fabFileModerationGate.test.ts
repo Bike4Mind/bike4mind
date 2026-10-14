@@ -139,13 +139,15 @@ const ALLOWLIST: Record<string, string> = {
   // reads) and never returns the bytes/URL to a client. ---
   'apps/client/server/s3/objectCreated.ts':
     'the moderation scanner itself (objectCreated) — produces moderationStatus, does not consume it',
+  'apps/client/server/s3/moderationScan.ts':
+    'the moderation scanner wiring shared by objectCreated and the on-demand scan route - downloads bytes to RUN the scan and PRODUCE moderationStatus, never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
   'apps/client/server/s3/knowledgeModerationDeps.ts':
     'the moderation scanner wiring - downloads bytes to RUN the scan and PRODUCE moderationStatus (its closures are handed to moderateImportedKnowledgeFiles / the rescue sweep), never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
 
   // --- DI passthroughs: the file only wires a storage closure; the actual gate lives
   // in the shared service function the closure is handed to. ---
-  'apps/client/pages/api/quests/[id]/files.ts':
-    'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFilesByQuest -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts',
+  'apps/client/server/files/listQuestFiles.ts':
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.listFabFilesByQuest -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/quests/[id]/files and GET /api/v1/quests/[id]/files, the latter also gating download_url on isImageServeable in toPublicFile',
   'apps/client/pages/api/sessions/[id]/files.ts':
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFilesBySession -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/files/search.ts':
@@ -154,8 +156,8 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFiles, gated via the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/files/index.ts':
     'gated via generateSignedUrl choke (search -> get.ts) for reads; the other match is a delete-only storage.delete call',
-  'apps/client/pages/api/files/[id]/index.ts':
-    'GET/PUT route through fabFileService.getFabFile/updateFabFile (both gated: get.ts via the generateSignedUrl choke, update.ts imports isImageServeable directly); DELETE branch only calls storage.delete (delete.ts is delete-only)',
+  'apps/client/server/files/updateFileForUser.ts':
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.updateFabFile (update.ts imports isImageServeable directly); shared by PUT /api/files/[id] and PATCH /api/v1/files/[id]',
   'apps/client/server/files/loadAccessibleFabFile.ts':
     'DI passthrough - generateSignedUrl closure consumed by fabFileService.getFabFile and, on the data-lake fallback, fabFileService.generateSignedUrl directly; both return through the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/data-lakes/[id]/articles.ts':
@@ -190,11 +192,11 @@ const ALLOWLIST: Record<string, string> = {
   'apps/client/server/slack/dataLakeIngestDeps.ts':
     'DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
-  // --- Audio-only generation, never an image. ---
+  // --- Generated output: delivery and the saveGeneratedAsset passthrough. ---
   'apps/client/server/utils/generatedAudioDelivery.ts':
     'audio-only - signs a GET for oversized generated audio it just uploaded under generated-audio-offload/ (no FabFile row, audio/* only); a saved copy is served by the fileUrl the already-gated createFabFile minted, so isImageServeable is inapplicable',
-  'apps/client/server/utils/persistGeneratedAudio.ts':
-    'audio-only (type AUDIO, audio/* mime from TTS/sound-effects) — DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; audio is never image content, so isImageServeable is inapplicable',
+  'apps/client/server/utils/saveGeneratedAssetToFiles.ts':
+    'DI passthrough to saveGeneratedAsset -> the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
   // --- Synchronous pre-persist moderation, not the stored-moderationStatus gate. ---
   'apps/client/pages/api/agents/[id]/generate-avatar.ts':

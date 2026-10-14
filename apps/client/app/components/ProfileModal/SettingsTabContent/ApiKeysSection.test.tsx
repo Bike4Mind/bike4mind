@@ -53,6 +53,7 @@ const BYOK_TYPES = [
   ApiKeyType.deepseek,
   ApiKeyType.bfl,
   ApiKeyType.voyageai,
+  ApiKeyType.typesafe,
   ApiKeyType.elevenlabs,
 ];
 
@@ -67,6 +68,13 @@ describe('ApiKeysSection', () => {
 
     expect(screen.getByTestId(`api-keys-provider-${type}`)).toBeTruthy();
     expect(screen.getByTestId(`api-keys-add-${type}-btn`)).toBeTruthy();
+  });
+
+  it('labels itself as provider (BYOK) keys, not as API keys to this app', () => {
+    renderSection();
+
+    expect(screen.getByText('Provider keys (BYOK)')).toBeTruthy();
+    expect(screen.queryByText('API Keys')).toBeNull();
   });
 
   it('does not render sections for admin-configured types', () => {

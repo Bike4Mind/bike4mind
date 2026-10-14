@@ -35,7 +35,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return {
     methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
       res.status(405).end(),
-    baseApi: () => ({ use: () => undefined, get: compose, post: compose }),
+    baseApi: () => ({ use: () => undefined, get: compose, post: compose, patch: compose, delete: compose }),
   };
 });
 vi.mock('@server/middlewares/rateLimit', () => ({

@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import {
   convertCodeBlocksToArtifacts,
+  extractArtifactBlocks,
   parseArtifacts,
   isSvgGraphicallyEmpty,
   scanMermaidFences,
@@ -9,10 +11,45 @@ import {
   TOOL_OUTPUT_MARKER,
   stripToolOutputMarker,
   markToolEchoes,
+  promoteBareHtmlDocument,
   isMermaidSyntax,
   validateMermaidSyntax,
 } from './artifactParser';
 import { createToolEchoMatcher } from './toolEchoMatcher';
+
+// Records every logging channel the parser could use, so a leak cannot hide on a channel the
+// test forgot to spy on.
+function spyOnLogChannels() {
+  const logger = Logger.globalInstance;
+  const spies = [
+    vi.spyOn(logger, 'warn').mockImplementation(() => {}),
+    vi.spyOn(logger, 'error').mockImplementation(() => {}),
+    vi.spyOn(logger, 'info').mockImplementation(() => {}),
+    vi.spyOn(logger, 'debug').mockImplementation(() => {}),
+    vi.spyOn(console, 'log').mockImplementation(() => {}),
+    vi.spyOn(console, 'warn').mockImplementation(() => {}),
+    vi.spyOn(console, 'error').mockImplementation(() => {}),
+    vi.spyOn(console, 'info').mockImplementation(() => {}),
+    vi.spyOn(console, 'debug').mockImplementation(() => {}),
+  ];
+  const serialize = (arg: unknown): string => {
+    if (arg instanceof Error) return `${String(arg)}\n${arg.message}\n${arg.stack ?? ''}`;
+    try {
+      return JSON.stringify(arg) ?? String(arg);
+    } catch {
+      return String(arg);
+    }
+  };
+  return {
+    warn: spies[0],
+    logged: () =>
+      spies
+        .flatMap(spy => spy.mock.calls.flat())
+        .map(serialize)
+        .join('\n'),
+    restore: () => spies.forEach(spy => spy.mockRestore()),
+  };
+}
 
 // Scaling is judged by a ratio of two timings taken back to back in the same process, never by an
 // absolute wall-clock budget: a budget measures the host, so a loaded runner fails it with no
@@ -161,7 +198,8 @@ describe('convertCodeBlocksToArtifacts - HTML promotion', () => {
  * Small local models hallucinate a builder tool (e.g. build_html) and return the
  * artifact as tool-call JSON rather than an <artifact> tag or ```html fence. The
  * HTML in its arguments must be promoted, while ordinary JSON stays untouched.
- * Mirrors the twin suite in apps/client/app/utils/artifactParser.test.ts.
+ * The client render path converts through this same function;
+ * apps/client/app/utils/artifactParser.test.ts pins it through parseArtifactsWithFallback.
  */
 describe('convertCodeBlocksToArtifacts - tool-call JSON promotion', () => {
   const promote = (input: string) => {
@@ -248,7 +286,8 @@ describe('convertCodeBlocksToArtifacts - tool-call JSON promotion', () => {
  * Small local models sometimes stub out an image as an empty <svg> placeholder
  * (only a "goes here" comment) alongside a real generated image. parseArtifacts
  * faithfully extracts it, and it renders as a blank canvas. It must be suppressed.
- * Mirrors the twin suite in apps/client/app/utils/artifactParser.test.ts.
+ * The client's parseArtifacts applies the same predicate; apps/client/app/utils/artifactParser.test.ts
+ * pins that filter.
  */
 describe('parseArtifacts - graphically-empty SVG suppression', () => {
   // The exact stub observed from qwen2.5-coder:7b on "generate fish image please".
@@ -365,6 +404,56 @@ describe('parseArtifacts - attribute values containing quotes', () => {
   });
 });
 
+/**
+ * Both parseArtifacts (this module's, which feeds promptMeta.artifacts and DAG bubble-up, and
+ * the client's render path) keep an untyped or unknown-type block ('language-then-code');
+ * extractArtifactBlocks alone still defaults to 'none'. Pinned so a later change is deliberate.
+ */
+describe('extractArtifactBlocks - typeFallback', () => {
+  const untyped = '<artifact identifier="x" title="T">body</artifact>';
+  const unknownType = '<artifact identifier="x" type="text/x-unknown" title="T">body</artifact>';
+  const pythonByLanguage = '<artifact identifier="x" language="python" title="T">print(1)</artifact>';
+
+  it("drops untyped and unknown-type blocks under 'none' (the default)", () => {
+    expect(extractArtifactBlocks(untyped)).toHaveLength(0);
+    expect(extractArtifactBlocks(unknownType, { typeFallback: 'none' })).toHaveLength(0);
+    expect(extractArtifactBlocks(pythonByLanguage)).toHaveLength(0);
+  });
+
+  it("resolves through language, then code, under 'language-then-code'", () => {
+    const opts = { typeFallback: 'language-then-code' } as const;
+    expect(extractArtifactBlocks(pythonByLanguage, opts)[0]).toMatchObject({ type: 'python', language: 'python' });
+    expect(extractArtifactBlocks(untyped, opts)[0]).toMatchObject({ type: 'code', language: 'text' });
+    expect(extractArtifactBlocks(unknownType, opts)[0]).toMatchObject({ type: 'code', language: 'text' });
+  });
+
+  it("keeps a typed block's language raw under 'none' and defaults it under 'language-then-code'", () => {
+    const typed = '<artifact identifier="x" type="text/html" title="T"><p>hi</p></artifact>';
+    expect(extractArtifactBlocks(typed)[0].language).toBeUndefined();
+    expect(extractArtifactBlocks(typed, { typeFallback: 'language-then-code' })[0].language).toBe('text');
+  });
+
+  it('marks a repeated identifier as an update only when the earlier block was kept', () => {
+    const repeated = `${untyped}<artifact identifier="x" type="text/html" title="T2"><p>hi</p></artifact>`;
+    expect(extractArtifactBlocks(repeated).map(a => a.operation)).toEqual(['create']);
+    expect(extractArtifactBlocks(repeated, { typeFallback: 'language-then-code' }).map(a => a.operation)).toEqual([
+      'create',
+      'update',
+    ]);
+  });
+
+  it('parseArtifacts keeps an untyped block as code, like the client render path', () => {
+    const { artifacts, cleanedContent } = parseArtifacts(`Intro ${untyped}`);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({ type: 'code', language: 'text', identifier: 'x', content: 'body' });
+    expect(cleanedContent).toBe('Intro');
+  });
+
+  it('parseArtifacts resolves an untyped block through its language attribute', () => {
+    expect(parseArtifacts(pythonByLanguage).artifacts[0]).toMatchObject({ type: 'python', language: 'python' });
+  });
+});
+
 describe('parseArtifacts — multi-line and special-character opening tags', () => {
   it('parses an artifact whose opening tag spans multiple lines', () => {
     const input = [
@@ -452,9 +541,8 @@ describe('parseArtifacts — multi-line and special-character opening tags', () 
 /**
  * The fenced detectors match a fence on its own and check the promotion anchors in the
  * callback, so these cases pin the promotion decisions and the behaviour that changed
- * when the anchors moved out of the patterns. Mirrors the twin suite in apps/client/app/utils/artifactParser.test.ts,
- * except for the react-fence cases: that detector's promotion rules are not shared
- * between the two copies.
+ * when the anchors moved out of the patterns. Mirrors the client suite in
+ * apps/client/app/utils/artifactParser.test.ts, which now runs the same detectors.
  */
 describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
@@ -563,11 +651,11 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   });
 
   it('leaves an svg fence with no closing tag untouched', () => {
-    // Output equality only, not a regression guard: this copy's hasCompleteSvg was
-    // already a plain indexOf scan before the change (0.1ms at n=800, 0.9ms at n=25600),
-    // so there is no old-vs-new gap to pin. The growth-ratio version of this case lives
-    // in the twin client suite, whose pre-fix doubly-anchored <svg>...</svg> pattern
-    // takes ~0.6s at n=400.
+    // Output equality only, not a regression guard: core's hasCompleteSvg was already a
+    // plain indexOf scan before the change (0.1ms at n=800, 0.9ms at n=25600), so there is
+    // no old-vs-new gap to pin. The growth-ratio version of this case lives in the client
+    // suite, whose pre-fix svg fence pattern was doubly anchored on <svg>...</svg> and took
+    // ~0.6s at n=400.
     const input = '```svg\n' + '<svg '.repeat(800) + '\n```';
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
@@ -575,8 +663,8 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   it('leaves a single-line react fence untouched', () => {
     // Not a growth-ratio case: one line, no closing fence, and the react regex fails
     // its only anchor attempt regardless of body size - measured linear on both the
-    // pre-fix and current parser.
-    const input = '```tsx\n' + 'const '.repeat(8000) + '\n```';
+    // pre-fix and current parser. A ts label, because a tsx one is always promoted.
+    const input = '```ts\n' + 'const '.repeat(8000) + '\n```';
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 
@@ -675,7 +763,7 @@ describe('convertCodeBlocksToArtifacts - component declaration line gate', () =>
     expect(artifacts[0].type).toBe('react');
   });
 
-  it('does not promote a tsx fence whose declaration keyword and marker are on different lines', () => {
+  it('does not promote a ts fence whose declaration keyword and marker are on different lines', () => {
     const codeContent = [
       'function helper() {',
       '  return doSomething();',
@@ -683,15 +771,20 @@ describe('convertCodeBlocksToArtifacts - component declaration line gate', () =>
       '// App component below',
       'export default helper;',
     ].join('\n');
-    const input = '```tsx\n' + codeContent + '\n```';
+    const input = '```ts\n' + codeContent + '\n```';
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  it('always promotes a tsx fence, even without a component line', () => {
+    const input = '```tsx\nfunction helper() {\n  return doSomething();\n}\n```';
+    expect(parseArtifacts(convertCodeBlocksToArtifacts(input)).artifacts.map(a => a.type)).toEqual(['react']);
   });
 });
 
 /**
- * promoteBareHtmlDocument is module-private and runs last inside
- * convertCodeBlocksToArtifacts, so these cases drive it through the public entry point.
- * MUST STAY IN SYNC with the twin suite in apps/client/app/utils/artifactParser.test.ts.
+ * promoteBareHtmlDocument runs last inside convertCodeBlocksToArtifacts, so these cases
+ * drive it through that entry point; apps/client/app/utils/artifactParser.test.ts runs the same
+ * inputs through the client re-export.
  */
 describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
   const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
@@ -721,6 +814,22 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     const out = convertCodeBlocksToArtifacts('```\n' + BARE + '\n```\n\n' + BARE);
     expect(wrappers(out)).toBe(1);
     expect(out).toContain('```\n' + BARE + '\n```');
+  });
+
+  // Called directly: inside convertCodeBlocksToArtifacts every complete artifact span is already
+  // masked, so only the guard's own pairing (matchArtifactBlocks' first-closer rule) decides these.
+  it('treats a tag opened inside an unclosed one as closed by the first closer', () => {
+    const input = '<artifact identifier="a" type="text/plain" title="A">see <artifact docs</artifact>\n' + BARE;
+    const out = promoteBareHtmlDocument(input, () => false);
+    expect(out).toContain('<artifact identifier="bare" type="text/html" title="Bare">');
+    expect(out.startsWith('<artifact identifier="a" type="text/plain" title="A">see <artifact docs</artifact>\n')).toBe(
+      true
+    );
+  });
+
+  it('does not let a stray closer cancel the open artifact a document sits in', () => {
+    const input = 'stray </artifact> <artifact identifier="a" type="text/html" title="A">\n' + BARE + '\n</artifact>';
+    expect(promoteBareHtmlDocument(input, () => false)).toBe(input);
   });
 
   it('clears the artifact guard for the document after the wrapper closes', () => {
@@ -795,9 +904,9 @@ describe('convertCodeBlocksToArtifacts - linear rewrite of the fenced-code detec
     const promoted = convertCodeBlocksToArtifacts(`${F}tsx\nexport default function App() { return <i/>; }\n${F}`);
     expect(promoted).toContain('type="application/vnd.ant.react"');
 
-    // `const Widget` has a declaration but no component token after it on the line, so
-    // it is not promoted even though it uses hooks - preserving prior behavior.
-    const plain = `${F}jsx\nconst Widget = () => {\n  const [x] = useState(0);\n  return <p>{x}</p>;\n};\n${F}`;
+    // `const Widget` has a declaration but no component token after it on the line, and only
+    // one indicator (the hook), so a ts fence is not promoted. A jsx/tsx label always is.
+    const plain = `${F}ts\nconst Widget = () => {\n  const [x] = useState(0);\n  return <p>{x}</p>;\n};\n${F}`;
     expect(convertCodeBlocksToArtifacts(plain)).toBe(plain);
   });
 });
@@ -1341,6 +1450,23 @@ describe('markToolEchoes', () => {
     const once = markToolEchoes(`\`\`\`html\n${DOC}\n\`\`\``, isToolEcho);
     expect(markToolEchoes(once, isToolEcho)).toBe(once);
   });
+
+  it('does not mark an already-marked python fence again, from either entry point', () => {
+    const body = 'import os\nprint(os.getcwd())';
+    const reply = `Output:\n\n~~~python ${TOOL_OUTPUT_MARKER}\n${body}\n~~~\n`;
+    const echoes = (text: string) => text.includes('os.getcwd()');
+    expect(markToolEchoes(reply, echoes)).toBe(reply);
+    expect(convertCodeBlocksToArtifacts(reply, { isToolEcho: echoes })).toBe(reply);
+  });
+
+  it('does not mark an already-marked jsx fence again, from either entry point', () => {
+    // An unlabeled fence is never a React candidate (the fence regex needs a language), so jsx stands in.
+    const body = 'export default function App() {\n  return <div>hi</div>;\n}';
+    const reply = `Output:\n\n~~~jsx ${TOOL_OUTPUT_MARKER}\n${body}\n~~~\n`;
+    const echoes = (text: string) => text.includes('function App()');
+    expect(markToolEchoes(reply, echoes)).toBe(reply);
+    expect(convertCodeBlocksToArtifacts(reply, { isToolEcho: echoes })).toBe(reply);
+  });
 });
 
 describe('convertCodeBlocksToArtifacts - existing artifacts', () => {
@@ -1693,5 +1819,379 @@ describe('sequence diagram syntax', () => {
     const { artifacts } = parseArtifacts(convertCodeBlocksToArtifacts(`Intro\n\n\`\`\`mermaid\n${SEQ}\n\`\`\`\n`));
     expect(artifacts).toHaveLength(1);
     for (const line of SEQ_LINES) expect(artifacts[0].content).toContain(line.trim());
+  });
+});
+
+describe('convertCodeBlocksToArtifacts - detectors shared with the client render path', () => {
+  const F = '```';
+  const types = (converted: string) => parseArtifacts(converted).artifacts.map(a => a.type);
+
+  it('promotes a multi-line python fence, titled by its function, and leaves a one-line print alone', () => {
+    const script = `${F}python\nimport os\n\ndef list_files():\n    print(os.listdir('.'))\n${F}`;
+    const { artifacts } = parseArtifacts(convertCodeBlocksToArtifacts(script));
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].type).toBe('python');
+    expect(artifacts[0].title).toBe('list_files');
+
+    const oneLiner = `${F}python\nprint("hi")\n${F}`;
+    expect(convertCodeBlocksToArtifacts(oneLiner)).toBe(oneLiner);
+  });
+
+  it('strips < and > from a python docstring title so [^>] attribute matchers read the whole tag', () => {
+    const script = `${F}python\n\"\"\"Keep rows where a > b\"\"\"\nimport pandas\n${F}`;
+    const out = convertCodeBlocksToArtifacts(script);
+    expect(out).toContain('title="Keep rows where a  b"');
+    expect(/<artifact [^>]*>/.exec(out)?.[0]).toMatch(/title="Keep rows where a {2}b"/);
+  });
+
+  it('marks python and React fences quoted verbatim from a tool result instead of promoting them', () => {
+    const py =
+      'import os\n\ndef main():\n    for name in sorted(os.listdir(".")):\n        print(name, os.path.getsize(name))';
+    const tsx =
+      "import React, { useState } from 'react';\nexport default function App() { const [n] = useState(0); return <div>{n}</div>; }";
+    const isToolEcho = createToolEchoMatcher([{ text: `Fetched:\n${py}\n${tsx}`, truncated: false }]);
+    const reply = `${F}python\n${py}\n${F}\n\n${F}tsx\n${tsx}\n${F}`;
+    const out = convertCodeBlocksToArtifacts(reply, { isToolEcho });
+    expect(parseArtifacts(out).artifacts).toHaveLength(0);
+    expect(out).toMatch(new RegExp(`^~{3,}python ${TOOL_OUTPUT_MARKER}$`, 'm'));
+    expect(out).toMatch(new RegExp(`^~{3,}tsx ${TOOL_OUTPUT_MARKER}$`, 'm'));
+    expect(markToolEchoes(reply, isToolEcho)).toBe(out);
+  });
+
+  it('promotes a typescript fence that carries two React indicators', () => {
+    const code = `import React, { useState } from 'react';\nfunction Counter() { const [n] = useState(0); return <b>{n}</b>; }`;
+    expect(types(convertCodeBlocksToArtifacts(`${F}typescript\n${code}\n${F}`))).toEqual(['react']);
+  });
+
+  it('promotes a ts fence through the loose component rule', () => {
+    const input = `${F}ts\nexport default function App(){ return <div/> }\n${F}`;
+    expect(types(convertCodeBlocksToArtifacts(input))).toEqual(['react']);
+  });
+
+  it('leaves a typescript fence with a single React indicator alone', () => {
+    const input = `${F}typescript\nconst [n, setN] = useState(0);\n${F}`;
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  it('rewrites the inner fences of a markdown fence to ~~~ only when asked (the render path)', () => {
+    const input = `${F}markdown\nOuter\n${F}js\nlet a = 1;\n${F}\nMore\n${F}`;
+    expect(convertCodeBlocksToArtifacts(input, { rewriteNestedMarkdown: true })).toBe(
+      `${F}markdown\nOuter\n~~~js\nlet a = 1;\n~~~\nMore\n${F}`
+    );
+  });
+
+  it('leaves a closed markdown block and a later fence byte-identical by default (the persisted server path)', () => {
+    // The rewrite is greedy to the LAST fence in the reply, so on the server it would persist ~~~
+    // into fences after the markdown block closed.
+    const input = `${F}markdown\n# Readme\n${F}\n\nThen run:\n\n${F}bash\nnpm i\n${F}\n\nDone.`;
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  describe('tool-output JSON', () => {
+    const recharts = JSON.stringify({
+      type: 'recharts',
+      content: { chartType: 'BarChart', data: [{ a: 1 }] },
+      metadata: { title: 'T' },
+    });
+    const mermaid = JSON.stringify({ type: 'mermaid', content: 'graph TD; A-->B' });
+
+    it('promotes a recharts result blob with a content-derived id', () => {
+      const out = convertCodeBlocksToArtifacts(JSON.stringify({ result: recharts }));
+      expect(out).toMatch(/<artifact identifier="recharts-tool-[0-9a-z]+" type="application\/vnd\.ant\.recharts"/);
+      expect(types(out)).toEqual(['recharts']);
+    });
+
+    it('promotes a bare mermaid object with a content-derived id', () => {
+      const out = convertCodeBlocksToArtifacts(`See ${mermaid}`);
+      expect(out).toMatch(/<artifact identifier="mermaid-tool-[0-9a-z]+" type="application\/vnd\.ant\.mermaid"/);
+    });
+
+    it('logs no reply text when a tool-output object fails to parse (this runs on the server chat path)', () => {
+      const spy = spyOnLogChannels();
+      try {
+        // The unescape turns the \\n into a raw newline, so JSON.parse fails on it.
+        const input = `${F}json\n{"type":"mermaid","content":"graph TD\\nA-->leak-parse-7f3"}\n${F}`;
+        expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+        expect(spy.warn).toHaveBeenCalled();
+        expect(spy.logged()).not.toContain('leak-parse-7f3');
+        expect(spy.logged()).not.toContain('graph TD');
+      } finally {
+        spy.restore();
+      }
+    });
+
+    it('logs no diagram lines when a mermaid fence fails validation', () => {
+      const spy = spyOnLogChannels();
+      try {
+        convertCodeBlocksToArtifacts(`${F}mermaid\ngraph TD\n    A[Start] --> B(secret-line\n${F}`);
+        expect(spy.warn).toHaveBeenCalled();
+        expect(spy.logged()).not.toContain('secret-line');
+      } finally {
+        spy.restore();
+      }
+    });
+
+    it('logs no reply text when a recharts tool output has no chartType or data', () => {
+      const spy = spyOnLogChannels();
+      try {
+        // An array, not an object: the direct-object scanner only matches objects with no nested braces.
+        const input = `${F}json\n${JSON.stringify({ type: 'recharts', content: ['leak-config-4b1'] })}\n${F}`;
+        expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+        expect(spy.warn).toHaveBeenCalledWith('Invalid recharts config: missing chartType or data');
+        expect(spy.logged()).not.toContain('leak-config-4b1');
+      } finally {
+        spy.restore();
+      }
+    });
+
+    it('logs no reply text when recharts content fails to validate', () => {
+      const spy = spyOnLogChannels();
+      try {
+        const input = `${F}json\n${JSON.stringify({ type: 'recharts', content: 'leak-validate-9c2' })}\n${F}`;
+        expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+        expect(spy.warn).toHaveBeenCalledWith('Failed to validate recharts content:', expect.any(String));
+        expect(spy.logged()).not.toContain('leak-validate-9c2');
+      } finally {
+        spy.restore();
+      }
+    });
+
+    it('leaves a tool-output object inside a python fence or inline code as code', () => {
+      const script = `${F}python\nimport json\ndata = ${mermaid}\nprint(data)\n${F}`;
+      const out = convertCodeBlocksToArtifacts(script);
+      expect(out).not.toContain('mermaid-tool-');
+      expect(parseArtifacts(out).artifacts.map(a => a.content)).toEqual([
+        `import json\ndata = ${mermaid}\nprint(data)`,
+      ]);
+
+      const inline = `Pass \`${mermaid}\` to the tool.`;
+      expect(convertCodeBlocksToArtifacts(inline)).toBe(inline);
+    });
+
+    it('still promotes a tool-output object that is the whole body of a json fence, and one after it', () => {
+      const out = convertCodeBlocksToArtifacts(`${F}json\n${mermaid}\n${F}\nand ${mermaid.replace('A-->B', 'C-->D')}`);
+      expect(out.match(/identifier="mermaid-tool-/g)).toHaveLength(2);
+    });
+
+    it('does not promote a tool-output object quoted verbatim from a tool result', () => {
+      // Long enough to clear the echo matcher's minimum length.
+      const echoed = JSON.stringify({
+        type: 'mermaid',
+        content: 'graph TD; Fetch-->Parse; Parse-->Render; Render-->Done',
+      });
+      const isToolEcho = createToolEchoMatcher([{ text: `Result: ${echoed}`, truncated: false }]);
+      const input = `See ${echoed}`;
+      const marked = `See \n~~~json ${TOOL_OUTPUT_MARKER}\n${echoed}\n~~~`;
+      const server = convertCodeBlocksToArtifacts(input, { isToolEcho });
+      expect(server).toBe(marked);
+      // The client render pass has no matcher; the mark alone must keep it from promoting.
+      expect(convertCodeBlocksToArtifacts(server)).toBe(marked);
+      expect(parseArtifacts(convertCodeBlocksToArtifacts(server)).artifacts).toEqual([]);
+
+      expect(markToolEchoes(input, isToolEcho)).toBe(marked);
+      expect(convertCodeBlocksToArtifacts(markToolEchoes(input, isToolEcho))).toBe(marked);
+    });
+
+    it('mints the same id for the same body on every call, and a different one for another body', () => {
+      vi.useFakeTimers();
+      try {
+        const id = (text: string) => /identifier="([^"]+)"/.exec(convertCodeBlocksToArtifacts(text))?.[1];
+        for (const body of [mermaid, JSON.stringify({ result: recharts })]) {
+          const first = id(`See ${body}`);
+          // A clock-derived id would differ across this gap.
+          vi.advanceTimersByTime(5_000);
+          expect(first).toBeDefined();
+          expect(id(`See ${body}`)).toBe(first);
+        }
+        expect(id(`See ${mermaid}`)).not.toBe(id(`See ${mermaid.replace('A-->B', 'C-->D')}`));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it('markToolEchoes leaves python, nested markdown, mermaid, tool-output JSON and ts fences untouched', () => {
+    const reply = [
+      `${F}python\nimport os\n\ndef main():\n    print(1)\n${F}`,
+      `${F}markdown\nOuter\n${F}js\nlet a = 1;\n${F}\nMore\n${F}`,
+      `${F}mermaid\nflowchart TD\n    A[Start] --> B[End]\n${F}`,
+      JSON.stringify({ result: JSON.stringify({ type: 'mermaid', content: 'graph TD\nA-->B' }) }),
+      `${F}ts\nexport default function App(){ return <div/> }\n${F}`,
+    ].join('\n\n');
+    expect(markToolEchoes(reply, () => false)).toBe(reply);
+  });
+});
+
+describe('convertCodeBlocksToArtifacts - tool-output JSON and code fences', () => {
+  const F = '```';
+  const mermaid = JSON.stringify({ type: 'mermaid', content: 'graph TD; A-->B' });
+  const promoted = (converted: string) =>
+    parseArtifacts(converted).artifacts.map(a => ({ type: a.type, identifier: a.identifier, content: a.content }));
+  const mermaidArtifact = [
+    { type: 'mermaid', identifier: expect.stringMatching(/^mermaid-tool-[0-9a-z]+$/), content: 'graph TD; A-->B' },
+  ];
+
+  it.each(['', 'text', 'json'])('promotes a tool-output object in a %j fence', info => {
+    expect(promoted(convertCodeBlocksToArtifacts(`Here:\n${F}${info}\n${mermaid}\n${F}`))).toEqual(mermaidArtifact);
+  });
+
+  it('pairs fences by line, so a ``` mentioned in prose does not invert the pairing', () => {
+    const input = `Type ${F} to open a fence.\n\n${F}js\nconst a=1\n${F}\n\nResult: ${mermaid}\n\n${F}bash\nls\n${F}`;
+    expect(promoted(convertCodeBlocksToArtifacts(input))).toEqual(mermaidArtifact);
+  });
+
+  it('leaves a tool-output dict in a ~~~python fence as code', () => {
+    const input = `~~~python\nimport json\ndata = ${mermaid}\nprint(data)\n~~~`;
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  it('reads a 4-backtick fence with a ``` line inside as one block of code', () => {
+    const input = `${F}\`python\n${F}\ndata = ${mermaid}\n${F}\n${F}\``;
+    expect(convertCodeBlocksToArtifacts(input)).not.toContain('mermaid-tool-');
+  });
+
+  it('runs an unclosed labeled fence to the end of the reply, as the renderer does', () => {
+    const input = `${F}python\ndata = ${mermaid}`;
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  it('closes a fence at a ``` run with text after it, as the other detectors do, so a second convert agrees', () => {
+    const input = `${F}python\nimport os\n\ndef main():\n    print(os.getcwd())\n${F} Result: ${mermaid}`;
+    const once = convertCodeBlocksToArtifacts(input);
+    expect(promoted(once).map(a => a.type)).toEqual(['mermaid', 'python']);
+    expect(convertCodeBlocksToArtifacts(once)).toBe(once);
+  });
+
+  it('reads a bash fence indented 4+ spaces under a list item as code', () => {
+    const bash = `- Call it:\n    ${F}bash\n    curl -d '${mermaid}' http://x\n    ${F}\n- Done`;
+    expect(convertCodeBlocksToArtifacts(bash)).toBe(bash);
+  });
+
+  it('reads a python fence indented 4+ spaces under a list item as code', () => {
+    const python = `1. Build the payload:\n\n    ${F}python\n    import json\n    data = ${mermaid}\n    print(json.dumps(data))\n    ${F}`;
+    const out = convertCodeBlocksToArtifacts(python);
+    expect(out).not.toContain('mermaid-tool-');
+    expect(promoted(out)).toEqual([
+      {
+        type: 'python',
+        identifier: expect.any(String),
+        content: `import json\n    data = ${mermaid}\n    print(json.dumps(data))`,
+      },
+    ]);
+  });
+
+  it('scans fences in linear time when no closer is long enough, or with many short fences', () => {
+    assertLinearGrowth(n => `mermaid\n~~~~~\n${'~~~ x\n`a `b\n'.repeat(n)}`, 20000);
+    assertLinearGrowth(n => `mermaid\n${'```\n`a`\n```\n`b\n'.repeat(n)}`, 20000);
+  });
+
+  describe('echoed tool output', () => {
+    const echoed = JSON.stringify({
+      type: 'mermaid',
+      content: 'graph TD; Fetch-->Parse; Parse-->Render; Render-->Done',
+    });
+    const isToolEcho = createToolEchoMatcher([{ text: `Result: ${echoed}`, truncated: false }]);
+    const open = `~~~json ${TOOL_OUTPUT_MARKER}`;
+
+    // Server convert (with the matcher), then the client render convert (without one).
+    const roundTrip = (input: string) =>
+      convertCodeBlocksToArtifacts(convertCodeBlocksToArtifacts(input, { isToolEcho }));
+
+    it('marks a whole json fence holding an echo, and the client leaves it alone', () => {
+      const input = `Got:\n${F}json\n${echoed}\n${F}\nDone.`;
+      const marked = `Got:\n${open}\n${echoed}\n~~~\nDone.`;
+      expect(convertCodeBlocksToArtifacts(input, { isToolEcho })).toBe(marked);
+      expect(roundTrip(input)).toBe(marked);
+      expect(markToolEchoes(input, isToolEcho)).toBe(marked);
+    });
+
+    it('puts the marked fence on its own line next to inline code, using the neighbors outside the piece', () => {
+      const input = `Use \`a\`${echoed}\`b\` next.`;
+      const marked = `Use \`a\`\n${open}\n${echoed}\n~~~\n\`b\` next.`;
+      expect(convertCodeBlocksToArtifacts(input, { isToolEcho })).toBe(marked);
+      expect(roundTrip(input)).toBe(marked);
+    });
+
+    it('fences an echoed "result" chunk as matched so the client cannot promote it', () => {
+      const input = `Log: ${JSON.stringify({ result: echoed })}`;
+      const server = convertCodeBlocksToArtifacts(input, { isToolEcho });
+      expect(server).toMatch(new RegExp(`^Log: \\{\\n${open}\\n"result":"\\{.*\\}"\\n~~~\\n\\}$`));
+      expect(parseArtifacts(convertCodeBlocksToArtifacts(server)).artifacts).toEqual([]);
+      expect(markToolEchoes(input, isToolEcho)).toBe(server);
+    });
+
+    it('markToolEchoes marks only the echo and leaves a non-echo tool object byte-identical', () => {
+      const input = `First ${mermaid}\n\nThen ${echoed}\n\n${F}\n${mermaid}\n${F}`;
+      expect(markToolEchoes(input, isToolEcho)).toBe(
+        `First ${mermaid}\n\nThen \n${open}\n${echoed}\n~~~\n\n${F}\n${mermaid}\n${F}`
+      );
+      expect(markToolEchoes(input.replace(`Then ${echoed}`, 'Then nothing'), isToolEcho)).toBe(
+        input.replace(`Then ${echoed}`, 'Then nothing')
+      );
+    });
+  });
+});
+
+describe('convertCodeBlocksToArtifacts body and ordering guards', () => {
+  const F = '```';
+  const count = (text: string) => parseArtifacts(convertCodeBlocksToArtifacts(text)).artifacts.length;
+
+  it('leaves a fence whose body carries a stray artifact tag as code instead of splitting it', () => {
+    const evil = '<artifact identifier="evil" type="text/html" title="Evil">X';
+    const html = `${F}html\n<div>a</artifact>${evil}</div>\n${F}`;
+    const python = `${F}python\nimport os\nprint("</artifact>${evil.replace(/"/g, '\\"')}")\nprint(1)\n${F}`;
+    const tsx = `${F}tsx\nconst CLOSE = '</artifact>${evil}';\n${F}`;
+    const component = `${F}tsx\nexport default function App() {\n  const CLOSE = '</artifact>';\n  return <div>{CLOSE}</div>;\n}\n${F}`;
+    for (const input of [html, python, tsx, component]) {
+      expect(count(input)).toBe(0);
+      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+    }
+  });
+
+  it('keeps a bare HTML document with a stray closer as text', () => {
+    const doc = '<!DOCTYPE html>\n<html><body>a</artifact><artifact identifier="evil" type="text/html">X</body></html>';
+    expect(count(doc)).toBe(0);
+  });
+
+  it('promotes TSX and JSX labels the same as their lowercase forms', () => {
+    const body = '\nconst x = 1;\n';
+    expect(count(`${F}TSX${body}${F}`)).toBe(count(`${F}tsx${body}${F}`));
+    expect(count(`${F}JSX${body}${F}`)).toBe(1);
+  });
+
+  it('skipClientOnlyPromotions leaves label-only tsx/jsx and python fences as code', () => {
+    const edit = `${F}tsx\n// ... existing code\nconst x = useMemo(() => compute(a), [a]);\n// ... rest unchanged\n${F}`;
+    const py = `${F}python\ndef process(x):\n    # ... rest unchanged\n    return x\n${F}`;
+    const component = `${F}tsx\nimport { useState } from 'react';\nexport default function App() {\n  const [n] = useState(0);\n  return <div>{n}</div>;\n}\n${F}`;
+    expect(count(edit)).toBe(1);
+    expect(count(py)).toBe(1);
+    const skip = (text: string) =>
+      parseArtifacts(convertCodeBlocksToArtifacts(text, { skipClientOnlyPromotions: true })).artifacts;
+    expect(skip(edit)).toEqual([]);
+    expect(skip(py)).toEqual([]);
+    // The loose React rule main's server pass already ran still promotes.
+    expect(skip(component).map(a => a.type)).toEqual(['react']);
+  });
+
+  it('does not let a prose fence opener swallow a tool-output artifact minted mid-pass', () => {
+    const mermaid = JSON.stringify({ type: 'mermaid', content: 'graph TD; A-->B' });
+    const reply = `Wrap code in ${F}tsx like this.\n\n${mermaid}\n\nThen close with ${F} on its own.`;
+    const out = convertCodeBlocksToArtifacts(reply);
+    const artifacts = parseArtifacts(out).artifacts;
+    expect(artifacts.map(a => a.type)).toEqual(['mermaid']);
+    expect(out.match(/<\/artifact>/g)).toHaveLength(1);
+  });
+});
+
+describe('maskToolOutputRegions sentinel', () => {
+  it('still masks and restores when the reply uses every BMP private-use char', () => {
+    let pua = '';
+    for (let code = 0xe000; code <= 0xf8ff; code++) pua += String.fromCharCode(code);
+    const fence = '~~~json b4m-tool-output\n{"a":1}\n~~~';
+    const content = `${pua}\n${fence}\n`;
+    const mask = maskToolOutputRegions(content);
+    expect(mask.masked).not.toContain('b4m-tool-output');
+    expect(mask.masked.startsWith(pua)).toBe(true);
+    expect(mask.restore(mask.masked)).toBe(content);
   });
 });

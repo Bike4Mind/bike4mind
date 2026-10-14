@@ -1,22 +1,31 @@
 import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
   CompletionRequestSchema,
+  HTTPError,
   LEGACY_REQUEST_ID_HEADER,
   REQUEST_ID_HEADER,
+  TooManyRequestsError,
+  UnauthorizedError,
+  UnprocessableEntityError,
   buildMetaEvent,
   buildSSEEvent,
+  createCompletionContract,
   formatSSEError,
   normalizeCompletionRequest,
   resolveApiCompletionSource,
+  resolveRequestClient,
   resolveRequestId,
   serializeSSEEvent,
   SSE_DONE_SIGNAL,
   SSE_KEEPALIVE,
   type CompletionSource,
+  type CompletionSseErrorCode,
+  type SSEErrorEvent,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { resolveQuestErrorCode } from '@bike4mind/services/llm';
+import { getHttpStatus, isSafetyRefusalError } from '@bike4mind/utils';
 import {
   connectDB,
   mongoose,
@@ -30,11 +39,14 @@ import {
 } from '@bike4mind/database';
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
-import { createCompletionContract, resolveRequestClient } from '@bike4mind/common';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@server/utils/config';
-import { emitProcessingFailed } from '../processingFailedMetric';
+import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { serializeError } from '@server/utils/serializeError';
 import { createMethodGuard } from '@server/utils/allowedMethods';
+import { buildErrorBody, httpErrorToResponse } from '@server/middlewares/errorHandler';
+import { emitProcessingFailed } from '../processingFailedMetric';
+import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
 import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from './completionTiming';
 
@@ -50,6 +62,9 @@ import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from
  * Trade-off: a deploy/scale-in SIGTERM drains for up to DRAIN_TIMEOUT_MS (server.ts) before
  * SIGKILL, so a completion still streaming across a deploy is cut off - the old Lambda
  * allowed up to 15 minutes regardless.
+ *
+ * Every failure found before the provider call is a JSON error with its own status; the 200 and
+ * the SSE stream are committed only in executeCompletion's onReady.
  */
 
 const COMPLETIONS_ENDPOINT = '/api/ai/v1/completions';
@@ -59,16 +74,73 @@ const checkCompletionsMethod = createMethodGuard([createCompletionContract.metho
 // connection during a token-less gap (e.g. extended thinking). Matches the v1 cadence.
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
-/**
- * Express headers are `string | string[] | undefined`; the auth/source helpers want a flat
- * `Record<string, string | undefined>`. Lowercase keys and take the first value of any array.
- */
-function flattenHeaders(headers: Request['headers']): Record<string, string | undefined> {
-  const flat: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    flat[key.toLowerCase()] = Array.isArray(value) ? value[0] : value;
+function requestIdFrom(headers: Record<string, string | undefined>): string {
+  return resolveRequestId(headers[REQUEST_ID_HEADER.toLowerCase()], headers[LEGACY_REQUEST_ID_HEADER.toLowerCase()]);
+}
+
+/** A failure caught before onReady: the JSON envelope, with the status its thrower chose. */
+function toJsonError(
+  error: unknown,
+  requestId: string
+): { status: number; headers: Record<string, string>; body: Record<string, unknown> } {
+  const questCode = resolveQuestErrorCode(error);
+  if (questCode) {
+    const message = error instanceof Error ? error.message : 'Insufficient credits';
+    return httpErrorToResponse(new UnprocessableEntityError(message, { errorCode: questCode }), requestId);
   }
-  return flat;
+  if (error instanceof HTTPError) return httpErrorToResponse(error, requestId);
+  return { status: 500, headers: {}, body: buildErrorBody({ error: 'Internal error', requestId }) };
+}
+
+/** A failure after onReady: a typed in-band frame that never carries the raw upstream body. */
+function toStreamErrorFrame(error: unknown, requestId: string): SSEErrorEvent {
+  const questCode = resolveQuestErrorCode(error);
+  let frameError: unknown = error;
+  let code: CompletionSseErrorCode | undefined = questCode;
+  if (!questCode) {
+    const status = error instanceof Error ? getHttpStatus(error) : undefined;
+    // A refusal is deterministic: retrying the same prompt gets the same answer, unlike provider_error.
+    if (error instanceof Error && isSafetyRefusalError(error)) {
+      frameError = new Error('The model declined this request');
+      code = 'content_blocked';
+    } else if (status === 401 || status === 403) {
+      frameError = new Error('Model provider rejected our credentials');
+      code = 'provider_rejected';
+    } else {
+      const upstream = status === undefined ? '' : ` (upstream ${status})`;
+      frameError = new Error(`Model provider returned an error${upstream}`);
+      code = 'provider_error';
+    }
+  }
+  return formatSSEError(frameError, requestId, code);
+}
+
+/**
+ * express.json failures never reach the handler. 415 (unsupported charset or encoding) is outside
+ * the contract's status table, so every client fault but an oversized body folds into 400.
+ */
+function handleBodyParserError(err: unknown, req: Request, res: Response, next: NextFunction): void {
+  if (res.headersSent) return next(err);
+  const requestId = requestIdFrom(flattenHeaders(req.headers));
+  const parserStatus = err instanceof Error ? getHttpStatus(err) : undefined;
+  if (parserStatus === undefined || parserStatus < 400 || parserStatus >= 500) {
+    new Logger({ metadata: { service: 'chatCompletion', endpoint: COMPLETIONS_ENDPOINT, requestId } }).error(
+      '[CLI_LLM] Body parser error',
+      { requestId, error: serializeError(err) }
+    );
+    res
+      .status(500)
+      .set(REQUEST_ID_HEADER, requestId)
+      .json(buildErrorBody({ error: 'Internal error', requestId }));
+    return;
+  }
+  const type = (err as { type?: unknown }).type;
+  const status = type === 'entity.too.large' ? 413 : 400;
+  const message = err instanceof Error && err.message ? err.message : 'Invalid request body';
+  res
+    .status(status)
+    .set(REQUEST_ID_HEADER, requestId)
+    .json(buildErrorBody({ error: message, requestId }));
 }
 
 /**
@@ -91,12 +163,10 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     const headers = flattenHeaders(req.headers);
     const logger = new Logger({ metadata: { service: 'chatCompletion', endpoint: COMPLETIONS_ENDPOINT } });
 
-    // Correlation ID - accept the caller's value (sanitized) or generate one. #8439
-    const requestId = resolveRequestId(
-      headers[REQUEST_ID_HEADER.toLowerCase()],
-      headers[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
-    );
+    // Correlation ID - accept the caller's value (sanitized) or generate one.
+    const requestId = requestIdFrom(headers);
     logger.updateMetadata({ requestId });
+    res.setHeader(REQUEST_ID_HEADER, requestId);
 
     // Distinguish CLI from 3rd-party API by the `b4m-cli/<version>` UA the CLI sets.
     // Used for both the credit transaction and analytics so usage breaks down by surface.
@@ -114,16 +184,17 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       }
     };
 
-    // SSE headers, then an immediate keep-alive + meta event to establish the stream before
-    // the pre-LLM work (DB connect, auth, rate limiting) can trip an intermediary timeout.
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
-    write(SSE_KEEPALIVE);
-    write(serializeSSEEvent(buildMetaEvent(requestId)));
-
-    const heartbeat = setInterval(() => write(SSE_KEEPALIVE), HEARTBEAT_INTERVAL_MS);
+    // Headers stay unsent until the provider call, so earlier failures can still answer with a JSON status.
+    let heartbeat: NodeJS.Timeout | undefined;
+    const onReady = () => {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders();
+      write(SSE_KEEPALIVE);
+      write(serializeSSEEvent(buildMetaEvent(requestId)));
+      heartbeat = setInterval(() => write(SSE_KEEPALIVE), HEARTBEAT_INTERVAL_MS);
+    };
 
     let body: z.infer<typeof CompletionRequestSchema> | undefined;
     let userId: string | undefined;
@@ -131,63 +202,44 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     let apiKeyInfoForCompletion: { keyId: string; keyName: string } | undefined;
 
     try {
-      // 1. Ensure DB connectivity (the service connects at boot in the background, but a
-      // request can land before that resolves; connectDB is a no-op if already connected).
+      // The service connects at boot in the background; a request can land first.
       if (mongoose.connection.readyState !== 1) {
-        await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
+        try {
+          await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
+        } catch (dbError) {
+          logger.error('[CLI_LLM] Database connect failed', { requestId, error: serializeError(dbError) });
+          throw new HTTPError(503, 'Service temporarily unavailable. Retry shortly.');
+        }
       }
 
-      // 2. Validate request body (already JSON-parsed by express.json above).
-      try {
-        body = normalizeCompletionRequest(CompletionRequestSchema.parse(req.body));
-      } catch {
-        write(serializeSSEEvent(formatSSEError(new Error('Invalid request body'), requestId)));
-        end();
-        return;
-      }
+      const parsed = CompletionRequestSchema.safeParse(req.body);
+      if (!parsed.success) throw new UnprocessableEntityError(fromZodError(parsed.error).message);
+      body = normalizeCompletionRequest(parsed.data);
 
-      // 3. Authenticate per the contract (API key first, then JWT), then rate-limit.
-      // Auth failure and rate-limit failure are surfaced separately so a valid but
-      // rate-limited caller sees the real rate-limit message, not a generic auth error.
       let authResult;
       try {
         authResult = await resolveContractAuth(headers, createCompletionContract);
-      } catch {
-        write(
-          serializeSSEEvent(
-            formatSSEError(new Error('Authentication failed. Provide a valid API key or JWT token.'), requestId)
-          )
-        );
-        end();
-        return;
+      } catch (authError) {
+        logger.warn('[CLI_LLM] Authentication failed', { requestId, error: serializeError(authError) });
+        // verifyApiKey and verifyJwtToken throw plain Errors for a missing or invalid credential.
+        throw authError instanceof HTTPError
+          ? authError
+          : new UnauthorizedError('Authentication failed. Provide a valid API key or JWT token.');
       }
       userId = authResult.userId;
       timing?.phase('authed');
 
-      try {
-        if (authResult.method === 'apiKey') {
-          apiKeyInfo = authResult.apiKeyInfo;
-          logger.info('[CLI_LLM] Authenticated via API key', { keyId: apiKeyInfo.keyId });
-          await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
-            userId: apiKeyInfo.userId,
-            endpoint: COMPLETIONS_ENDPOINT,
-            method: req.method,
-          });
-        } else {
-          logger.info('[CLI_LLM] Authenticated via JWT', { userId });
-          await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
-        }
-      } catch (rateLimitError) {
-        write(
-          serializeSSEEvent(
-            formatSSEError(
-              rateLimitError instanceof Error ? rateLimitError : new Error('Rate limit exceeded'),
-              requestId
-            )
-          )
-        );
-        end();
-        return;
+      if (authResult.method === 'apiKey') {
+        apiKeyInfo = authResult.apiKeyInfo;
+        logger.info('[CLI_LLM] Authenticated via API key', { keyId: apiKeyInfo.keyId });
+        await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
+          userId: apiKeyInfo.userId,
+          endpoint: COMPLETIONS_ENDPOINT,
+          method: req.method,
+        });
+      } else {
+        logger.info('[CLI_LLM] Authenticated via JWT', { userId });
+        await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
       }
 
       timing?.phase('rateLimited');
@@ -196,7 +248,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         authMethod: apiKeyInfo ? 'api_key' : 'jwt',
       });
 
-      // 4. Resolve API key name for credit attribution.
+      // Resolve API key name for credit attribution.
       if (apiKeyInfo) {
         const userApiKey = await userApiKeyRepository.findById(apiKeyInfo.keyId);
         if (userApiKey) {
@@ -204,7 +256,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         }
       }
 
-      // 5. Stream the completion, tracking usage for analytics.
+      // Stream the completion, tracking usage for analytics.
       let finalInputTokens = 0;
       let finalOutputTokens = 0;
       let hasToolCalls = false;
@@ -235,6 +287,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         requestId,
         source,
         logger,
+        onReady,
         onChunk: async (text, info) => {
           if (info?.inputTokens) finalInputTokens = info.inputTokens;
           if (info?.outputTokens) finalOutputTokens = info.outputTokens;
@@ -244,9 +297,10 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         },
       });
 
-      // 6. Close the stream and log success analytics.
+      // Close the stream and log success analytics.
       write(SSE_DONE_SIGNAL);
       end();
+      if (heartbeat) clearInterval(heartbeat);
       logger.info('[CLI_LLM] Completion stream finished successfully');
 
       await logCompletionAnalytics({
@@ -266,10 +320,25 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         logger,
       });
     } catch (error) {
-      logger.error('[CLI_LLM] Handler error', { error: error instanceof Error ? error.message : String(error) });
+      const jsonError = toJsonError(error, requestId);
+      const level = jsonError.status < 500 ? 'warn' : 'error';
+      logger[level]('[CLI_LLM] Handler error', { requestId, error: serializeError(error) });
       track(emitProcessingFailed('cli-sse', error));
 
-      if (userId && body) {
+      try {
+        if (res.headersSent) {
+          write(serializeSSEEvent(toStreamErrorFrame(error, requestId)));
+          end();
+          if (heartbeat) clearInterval(heartbeat);
+        } else {
+          res.status(jsonError.status).set(jsonError.headers).json(jsonError.body);
+        }
+      } catch (responseError) {
+        logger.error('[CLI_LLM] Failed to write error response', { requestId, error: serializeError(responseError) });
+      }
+
+      // After the response so a slow analytics write cannot delay it.
+      if (userId && body && !(error instanceof TooManyRequestsError)) {
         await logCompletionAnalytics({
           type: 'failure',
           requestId,
@@ -283,37 +352,23 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           error,
           db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
           logger,
-        }).catch(() => {}); // analytics failure must not mask the original error
-      }
-
-      try {
-        // Classify before serializing: this endpoint has already flushed SSE headers, so a
-        // credit failure - including one raised mid-generation by executeCompletion's
-        // reservation/settlement path - can only reach the caller as an in-band frame. Without
-        // the classifier the only signal is the prose `message`, which callers were regexing.
-        write(serializeSSEEvent(formatSSEError(error, requestId, resolveQuestErrorCode(error))));
-        end();
-      } catch (streamError) {
-        logger.error('[CLI_LLM] Failed to write error to stream', {
-          error: streamError instanceof Error ? streamError.message : String(streamError),
-        });
+        }).catch(analyticsError =>
+          logger.warn('[CLI_LLM] Failure analytics write failed', { requestId, error: serializeError(analyticsError) })
+        );
       }
     } finally {
-      clearInterval(heartbeat);
+      if (heartbeat) clearInterval(heartbeat);
       if (timing) logger.info('[CLI_TIMING] completion phases', timing.summary());
     }
   });
+  app.use(COMPLETIONS_ENDPOINT, handleBodyParserError);
 
   // Express answers an unregistered verb with a bare 404, but the contract documents a 405 with
   // `Allow` (openapi/registerContract.ts) - the same one baseApi and defineLambdaRoute serve.
   app.all(COMPLETIONS_ENDPOINT, (req: Request, res: Response, next: NextFunction) => {
     const result = checkCompletionsMethod(req.method);
     if (result.allowed) return next();
-    const headers = flattenHeaders(req.headers);
-    const requestId = resolveRequestId(
-      headers[REQUEST_ID_HEADER.toLowerCase()],
-      headers[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
-    );
+    const requestId = requestIdFrom(flattenHeaders(req.headers));
     res
       .status(405)
       .set({ Allow: result.allowHeader, [REQUEST_ID_HEADER]: requestId })

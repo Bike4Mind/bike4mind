@@ -16,7 +16,7 @@ import {
 } from '@server/projects/projectScopes';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ProjectEvents, redactSessionsForClient } from '@bike4mind/common';
-import { ActivityType } from '@client/config/activities';
+import { ActivityType } from '@client/config/activityType';
 import { z } from 'zod';
 import { SessionEvents } from '@server/utils/eventBus';
 import { filterSessionIdsByOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';

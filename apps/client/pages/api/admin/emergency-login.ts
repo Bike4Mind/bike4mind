@@ -6,7 +6,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { UnauthorizedError } from '@server/utils/errors';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logEvent } from '@server/utils/analyticsLog';
-import { AuthEvents } from '@bike4mind/common';
+import { AuthEvents, redactUserSecretsForSelf } from '@bike4mind/common';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { z } from 'zod';
@@ -96,8 +96,7 @@ const handler = baseApi({ auth: false })
       });
       const tokens = { accessToken };
 
-      // Remove password from response using destructuring
-      const { password: _, ...userResponse } = user.toJSON();
+      const userResponse = redactUserSecretsForSelf(user);
 
       const response: EmergencyLoginResponse = {
         success: true,

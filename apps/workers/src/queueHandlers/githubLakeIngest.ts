@@ -26,6 +26,7 @@ import {
   gitHubErrorStatus,
   gitHubRateLimitDelaySeconds,
 } from '@server/integrations/github/dataLake/lakeAppClient';
+import { releaseGitHubLakeConnection } from '@server/integrations/github/dataLake/githubLakeConnection';
 import { runGitHubLakeSlice } from '@workers/queueHandlers/githubLakeSlice';
 import { settleLakeIngestBatch } from '@workers/queueHandlers/lakeIngestShared';
 import { Resource } from 'sst';
@@ -185,6 +186,28 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Gated after the claim so a continuation's chain claim is released rather than left to go stale.
     const featureOn = (await flagOn('EnableDataLakes')) && (await flagOn('EnableDataLakeGitHub'));
     const lake = await dataLakeRepository.findById(connection.targetDataLakeId);
+    if (featureOn && !lake) {
+      logger.warn('[githubLakeIngest] target data lake not found; retiring the connection', {
+        connectionId: id,
+        dataLakeId: connection.targetDataLakeId,
+      });
+      await settle(resumeBatchId);
+      // Same reasoning as driveLakeIngest's missing-lake exit: a soft-deleted lake keeps its document, so
+      // this one is gone for good. Tear down as the lake purge does (releaseGitHubLakeConnectionForLake)
+      // so the row's globally unique repositoryId claim does not outlive the lake.
+      const retired = await releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig()).then(
+        () => true,
+        (e: unknown) => {
+          logger.warn('[githubLakeIngest] could not release the connection of a missing lake', {
+            connectionId: id,
+            error: e instanceof Error ? e.message : String(e),
+          });
+          return false;
+        }
+      );
+      if (!retired) await releaseUnchanged();
+      return;
+    }
     const dropReason = !featureOn
       ? 'feature_disabled'
       : !enabledAtClaim

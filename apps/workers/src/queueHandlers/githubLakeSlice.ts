@@ -6,17 +6,20 @@ import {
   dataLakeBatchRepository,
   dataLakeRepository,
   fabFileRepository,
+  lakeSkippedFileRepository,
 } from '@bike4mind/database';
 import {
   BATCH_NON_TERMINAL_STATUSES,
   DATALAKE_TAG_STRENGTH,
   FabFileSourceType,
   GITHUB_LAKE_FILE_RULES,
+  isStorageLimitError,
   KnowledgeType,
   type GitHubLakeTreeCounts,
   type IFabFileDocument,
   type IOrgGitHubLakeConnectionDocument,
   type IUserDocument,
+  type LakeSkippedFileReason,
 } from '@bike4mind/common';
 import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
@@ -116,6 +119,33 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
     return [];
   });
   await recordTreeCounts({ candidateCount: candidates.length, skippedCount });
+
+  // The lake's skip list (see ILakeSkippedFile) is keyed by repo path and kept independent of the
+  // batch. A non-truncated tree is the whole repo, so it is safe to prune against.
+  const lakeSkip = (githubPath: string, reason: LakeSkippedFileReason, size?: number) => ({
+    dataLakeId: lake.id,
+    sourceKind: 'github' as const,
+    sourceId: githubPath,
+    name: path.posix.basename(githubPath),
+    relativePath: githubPath,
+    mimeType: lakeFileMimeType(githubPath),
+    size,
+    reason,
+  });
+  const recordLakeSkip = (githubPath: string, reason: LakeSkippedFileReason, size?: number) =>
+    lakeSkippedFileRepository.recordSkip(lakeSkip(githubPath, reason, size));
+  await lakeSkippedFileRepository.pruneMissing(
+    lake.id,
+    'github',
+    new Set([...candidates.map(candidate => candidate.path), ...oversized.map(entry => entry.path)])
+  );
+  // Written every sync rather than only into a batch: a no-op sync creates no batch (see below),
+  // and the upsert is idempotent. Named for whichever cap bound, matching Drive's two reasons.
+  const oversizedReason: LakeSkippedFileReason =
+    maxFileBytes < GITHUB_LAKE_FILE_RULES.maxFileBytes ? 'exceeds_max_file_size' : 'oversized';
+  await lakeSkippedFileRepository.recordSkips(
+    oversized.map(entry => lakeSkip(entry.path, oversizedReason, entry.size))
+  );
   if (candidates.length > GITHUB_LAKE_FILE_RULES.maxCandidates) {
     return {
       kind: 'refused',
@@ -189,7 +219,7 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
       // No batch this run to record them into (one isn't created for skips alone - see the loop
       // below), so a persistent oversized file doesn't churn a fresh batch on every no-op sync.
       if (newOversized.length > 0) {
-        logger.info('[githubLakeIngest] oversized files with no other sync work this run; not recorded', {
+        logger.info('[githubLakeIngest] oversized files with no other sync work this run; not batch-recorded', {
           count: newOversized.length,
           examples: newOversized.slice(0, 5),
         });
@@ -243,16 +273,17 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
     });
     let acceptedBytes = 0;
     let transientSkips = 0;
-    const skip = async (githubPath: string, reason: string, extra?: Record<string, unknown>) => {
+    const skip = async (githubPath: string, reason: LakeSkippedFileReason, size?: number) => {
       await dataLakeBatchRepository.recordSkippedDriveFile(batch.id, githubPath);
-      logger.info('[githubLakeIngest] skipping file', { githubPath, reason, ...extra });
+      logger.info('[githubLakeIngest] skipping file', { githubPath, reason, size });
     };
 
     // A tree entry over the size cap is filtered out before the diff above and so never becomes a
     // toIngest candidate; record it here (permanent, like the post-fetch skips below) or it silently
     // vanishes with no trace in the batch - mirrors driveLakeIngest.ts's own pre-fetch size skip.
+    // The lake skip-list row was already written above, so only the batch record is needed here.
     for (const { path: oversizedPath, size } of newOversized) {
-      await skip(oversizedPath, 'oversized', { size });
+      await skip(oversizedPath, oversizedReason, size);
     }
 
     for (const [index, { candidate, prior }] of toIngest.entries()) {
@@ -268,20 +299,23 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
         return { kind: 'rate_limited', batchId: batch.id, delaySeconds, remaining: toIngest.length - index };
       }
       if (bytes.length > maxFileBytes) {
-        await skip(candidate.path, 'oversized_after_fetch', { size: bytes.length });
+        await recordLakeSkip(candidate.path, 'oversized_after_fetch', bytes.length);
+        await skip(candidate.path, 'oversized_after_fetch', bytes.length);
         continue;
       }
       const content = checkLakeFileContent(bytes);
       if (content !== 'ok') {
-        await skip(candidate.path, content);
+        await recordLakeSkip(candidate.path, content, bytes.length);
+        await skip(candidate.path, content, bytes.length);
         continue;
       }
       try {
         await checkStorageLimit(user, Math.max(0, acceptedBytes + bytes.length - retirer.stagedReclaimFor(user.id)));
       } catch (error) {
-        if (!(error instanceof BadRequestError)) throw error;
+        if (!isStorageLimitError(error)) throw error;
         // Not a chain skip: freeing space makes it ingestable, so later slices and the next sync retry it.
         transientSkips++;
+        await recordLakeSkip(candidate.path, 'storage_limit', bytes.length);
         logger.info('[githubLakeIngest] storage limit reached; file left for the next sync', {
           githubPath: candidate.path,
         });
@@ -321,6 +355,8 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
         await retirer.retireSupersededCopy(prior, fabFile.id);
         membershipChanged = true;
       }
+      // After the retire, so a throw here cannot strand an edit as two live copies.
+      await lakeSkippedFileRepository.clearSources(lake.id, 'github', [candidate.path]);
     }
     return { kind: 'done', batchId: batch.id, transientSkips };
   } finally {

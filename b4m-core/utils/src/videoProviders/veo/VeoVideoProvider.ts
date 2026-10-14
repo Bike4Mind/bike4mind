@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ValidatedVideoRequest } from '@bike4mind/common';
-import { readJson } from '../http';
+import { readJson } from '../../generationProviders/http';
 import {
   classifyGeminiSubmitFailure,
   fetchGeminiOutput,
@@ -123,6 +123,7 @@ const toPollResult = (operation: Operation): ProviderPollResult => {
  * owns waiting. No cancel: the docs show no operations cancel for Veo.
  */
 export class VeoVideoProvider implements VideoProvider {
+  readonly mode = 'async' as const;
   readonly id = 'veo' as const;
   readonly models = [MODEL] as const;
 

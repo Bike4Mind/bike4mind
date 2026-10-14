@@ -51,7 +51,11 @@ const stats = (over: Record<string, unknown> = {}) => ({
   reembedded: 0,
   backfilled: 0,
   noFact: 0,
+  noProviderKey: 0,
+  embedderUnavailable: 0,
   failed: 0,
+  providerCalls: 0,
+  embedderError: null,
   stoppedAtLimit: false,
   errors: [],
   ...over,
@@ -115,6 +119,29 @@ describe('/api/admin/mementos/reembed-ledger', () => {
     expect(data).toMatchObject({ dryRun: true, backfilled: 500, hasMore: false, nextAfter: p('a') });
   });
 
+  it('surfaces a keyless principal in failedPrincipals during a dry run', async () => {
+    listPrincipals.mockResolvedValue([p('a'), p('b')]);
+    migrateMock
+      .mockResolvedValueOnce(
+        stats({ noProviderKey: 5, embedderError: 'no key', errors: ['owner o1: no key'] })
+      )
+      .mockResolvedValueOnce(stats({ backfilled: 3, providerCalls: 3 }));
+
+    const data = (await post({}))._getJSONData();
+
+    expect(migrateMock).toHaveBeenCalledWith(expect.anything(), { dryRun: true });
+    expect(data.failedPrincipals).toEqual([
+      { ...p('a'), error: 'embedding service unavailable for owner o1: no key' },
+    ]);
+    expect(data).toMatchObject({
+      dryRun: true,
+      noProviderKey: 5,
+      backfilled: 3,
+      processedPrincipals: 2,
+      hasMore: false,
+    });
+  });
+
   it('reports hasMore with the last principal as cursor on a full page', async () => {
     listPrincipals.mockResolvedValue(Array.from({ length: 25 }, (_, i) => p(`l${String(i).padStart(2, '0')}`)));
 
@@ -126,8 +153,8 @@ describe('/api/admin/mementos/reembed-ledger', () => {
   it('resumes a principal the budget cut short after progress by leaving the cursor before it', async () => {
     listPrincipals.mockResolvedValue([p('a'), p('b'), p('c')]);
     migrateMock
-      .mockResolvedValueOnce(stats({ backfilled: 40 }))
-      .mockResolvedValueOnce(stats({ backfilled: 60, stoppedAtLimit: true }));
+      .mockResolvedValueOnce(stats({ backfilled: 40, providerCalls: 40 }))
+      .mockResolvedValueOnce(stats({ backfilled: 60, providerCalls: 60, stoppedAtLimit: true }));
 
     const data = (await post({ execute: true }))._getJSONData();
 
@@ -139,22 +166,54 @@ describe('/api/admin/mementos/reembed-ledger', () => {
   it('passes over a principal that made no progress within the budget so it cannot block the rest', async () => {
     listPrincipals.mockResolvedValue([p('a'), p('b')]);
     migrateMock
-      .mockResolvedValueOnce(stats({ failed: 100, stoppedAtLimit: true, errors: ['owner o1: no key'] }))
+      .mockResolvedValueOnce(stats({ failed: 100, providerCalls: 100, stoppedAtLimit: true, errors: ['event x: 429'] }))
       .mockResolvedValueOnce(stats());
 
     const data = (await post({ execute: true }))._getJSONData();
 
-    expect(data.failedPrincipals).toEqual([
-      { ...p('a'), error: 'no progress within provider budget: owner o1: no key' },
-    ]);
+    expect(data.failedPrincipals).toEqual([{ ...p('a'), error: 'no progress within provider budget: event x: 429' }]);
     expect(data).toMatchObject({ hasMore: true, nextAfter: p('a') });
+  });
+
+  it('lists a keyless principal without spending the budget, so the rest of the page still runs', async () => {
+    listPrincipals.mockResolvedValue([p('a'), p('b')]);
+    migrateMock
+      .mockResolvedValueOnce(
+        stats({ noProviderKey: 150, truncated: 2, embedderError: 'no key', errors: ['owner o1: no key'] })
+      )
+      .mockResolvedValueOnce(stats({ backfilled: 5, providerCalls: 5 }));
+
+    const data = (await post({ execute: true }))._getJSONData();
+
+    expect(migrateMock.mock.calls[1][1]).toEqual({ limit: 100 });
+    expect(data.failedPrincipals).toEqual([{ ...p('a'), error: 'embedding service unavailable for owner o1: no key' }]);
+    expect(data).toMatchObject({
+      noProviderKey: 150,
+      failed: 0,
+      backfilled: 5,
+      processedPrincipals: 2,
+      hasMore: false,
+      nextAfter: p('b'),
+    });
+  });
+
+  it('lists a transient build failure distinctly from a missing key', async () => {
+    listPrincipals.mockResolvedValue([p('a')]);
+    migrateMock.mockResolvedValueOnce(stats({ embedderUnavailable: 3, embedderError: 'timeout' }));
+
+    const data = (await post({ execute: true }))._getJSONData();
+
+    expect(data.failedPrincipals).toEqual([
+      { ...p('a'), error: 'embedding service build failed for owner o1, retried next walk: timeout' },
+    ]);
+    expect(data).toMatchObject({ embedderUnavailable: 3, noProviderKey: 0 });
   });
 
   it('resumes rather than passes a principal that failed on only the leftover budget', async () => {
     listPrincipals.mockResolvedValue([p('a'), p('b'), p('c')]);
     migrateMock
-      .mockResolvedValueOnce(stats({ backfilled: 97 }))
-      .mockResolvedValueOnce(stats({ failed: 3, stoppedAtLimit: true, errors: ['event x: 429'] }));
+      .mockResolvedValueOnce(stats({ backfilled: 97, providerCalls: 97 }))
+      .mockResolvedValueOnce(stats({ failed: 3, providerCalls: 3, stoppedAtLimit: true, errors: ['event x: 429'] }));
 
     const data = (await post({ execute: true }))._getJSONData();
 

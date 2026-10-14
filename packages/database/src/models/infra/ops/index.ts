@@ -6,7 +6,6 @@ export * from './FallbackLakeSettingModel';
 export * from './HelpEventModel';
 export * from './LiveopsTriageConfigAuditLogModel';
 export * from './LiveopsTriageConfigModel';
-export * from './LiveOpsTriageJobModel';
 export * from './LiveopsTriageRunModel';
 export * from './MarketingReportModel';
 export * from './MarketingReportReadModel';

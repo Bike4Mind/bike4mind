@@ -6,8 +6,10 @@ import {
   getLlmWithFallback,
   findFallbackForMissingModel,
   isSafetyRefusalError,
+  getHttpStatus,
 } from './fallback';
 import { AxiosError } from 'axios';
+import { ApiError } from '@google/genai';
 import { ModelInfo, ModelBackend } from '@bike4mind/common';
 import { toProviderEndUserId } from '../llm';
 
@@ -70,6 +72,17 @@ describe('shouldTriggerFallback', () => {
       // Anthropic's 404 for an account/env lacking access to an un-gated model.
       const error = new Error('Claude Fable 5 is not available. Please use Opus 4.8');
       expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for a Google 404 for a model closed upstream', () => {
+      const error = new Error(
+        '{"error":{"code":404,"message":"models/gemini-2.5-pro is no longer available to new users","status":"NOT_FOUND"}}'
+      );
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return false for "no longer available" without "to new users"', () => {
+      expect(shouldTriggerFallback(new Error('This export link is no longer available'))).toBe(false);
     });
   });
 
@@ -467,7 +480,7 @@ describe('getLlmWithFallback - Bedrock cross-path fallback chains', () => {
   const BEDROCK_TO_DIRECT_TWIN: Array<[string, string]> = [
     ['global.anthropic.claude-fable-5-1', 'claude-fable-5'],
     ['global.anthropic.claude-fable-5', 'claude-fable-5'],
-    ['global.anthropic.claude-opus-5-5', 'claude-opus-5'],
+    ['global.anthropic.claude-opus-5-5', 'claude-opus-5-5'],
     ['global.anthropic.claude-opus-5', 'claude-opus-5'],
     ['global.anthropic.claude-opus-4-8', 'claude-opus-4-8'],
     ['global.anthropic.claude-opus-4-7', 'claude-opus-4-7'],
@@ -786,5 +799,24 @@ describe('findFallbackForMissingModel', () => {
     );
 
     expect(result!.model.id).toBe('claude-sonnet-5');
+  });
+});
+
+describe('getHttpStatus', () => {
+  it('reads the status off a real @google/genai ApiError', () => {
+    const raw = '{"error":{"code":404,"message":"no longer available to new users","status":"NOT_FOUND"}}';
+    expect(getHttpStatus(new ApiError({ message: raw, status: 404 }))).toBe(404);
+  });
+
+  it('reads an axios response status', () => {
+    expect(getHttpStatus(createAxiosError(401))).toBe(401);
+  });
+
+  it('reads an AWS SDK $metadata status', () => {
+    expect(getHttpStatus(Object.assign(new Error('unavailable'), { $metadata: { httpStatusCode: 503 } }))).toBe(503);
+  });
+
+  it('returns undefined for an error without a status', () => {
+    expect(getHttpStatus(new Error('boom'))).toBeUndefined();
   });
 });

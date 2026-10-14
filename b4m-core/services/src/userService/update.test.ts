@@ -631,6 +631,7 @@ describe('updateUser', () => {
     const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
     expect(persisted.preferences?.showSplashCards).toBe(true);
     expect(persisted.preferences?.showFunTools).toBe(false);
-    expect(persisted.preferences?.saveGeneratedAudio).toBe(true);
+    // Retired preference: an older client still sending it is accepted and the key dropped.
+    expect((persisted.preferences as Record<string, unknown>)?.saveGeneratedAudio).toBeUndefined();
   });
 });

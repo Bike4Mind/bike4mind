@@ -30,7 +30,7 @@ import { toolRuntimeAssets } from './toolRuntimeAssets';
 // keeps the two definitions in lockstep and prevents the "asymmetric IAM" class
 // of bug (e.g., xray missing on one side) noted during review.
 const SHARED_AGENT_EXECUTOR_CONFIG = {
-  handler: 'apps/client/server/queueHandlers/agentExecutor.handler',
+  handler: 'apps/workers/src/queueHandlers/agentExecutor.handler',
   runtime: 'nodejs24.x' as const,
   timeout: '15 minutes' as const,
   memory: '2048 MB' as const,
@@ -46,7 +46,6 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     imageProcessor,
     agentContinuationQueue,
   ],
-  logging: { retention: '3 days' as const },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.

@@ -151,6 +151,10 @@ export const dataLakeKeys = {
     ['dataLakeFindings', dataLakeId, filters ?? {}] as const,
   /** Invalidation prefix covering every filter variant of one lake's findings. */
   findingsOf: (dataLakeId: string) => ['dataLakeFindings', dataLakeId] as const,
+  /** One lake's files the connected source holds but the sync refused (GET /api/data-lakes/:id/skipped-files). */
+  skippedFiles: (dataLakeId: string | null) => ['dataLakeSkippedFiles', dataLakeId] as const,
+  /** Invalidation prefix covering one lake's skipped-file pages; same key, since the list has no filters. */
+  skippedFilesOf: (dataLakeId: string) => ['dataLakeSkippedFiles', dataLakeId] as const,
   /**
    * One file's current tag names under one lake's prefix
    * (GET /api/data-lakes/:id/files/:fabFileId/tags). Seeds the retag editor: a tag write is

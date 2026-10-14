@@ -1,5 +1,6 @@
 import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
+import { GeneratedAudioPlayer } from '@client/app/components/Session/GeneratedAudioPlayer';
 import { GeneratedVideoJobs } from '@client/app/components/Session/GeneratedVideoJobs';
 import { Box, Stack, Chip, Avatar, Tooltip, Button, Alert } from '@mui/joy';
 import Typography from '@mui/joy/Typography';
@@ -15,8 +16,15 @@ import React, {
   createContext,
   ComponentProps,
 } from 'react';
-import ReactMarkdown, { ExtraProps } from 'react-markdown';
+import ReactMarkdown, { ExtraProps, Options as ReactMarkdownOptions } from 'react-markdown';
 import { createMarkdownComponents } from './markdown/markdownComponents';
+import {
+  CITATION_MARKER_TAG,
+  CitationMarker,
+  shouldLinkCitationMarkers,
+  ReplyCitablesContext,
+  remarkCitationMarkers,
+} from './markdown/inlineCitations';
 import './markdown/observatory.css';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
@@ -38,8 +46,7 @@ import ImageDisplay from './ImageDisplay';
 import { InsufficientCreditsNotice } from './InsufficientCreditsNotice';
 import MementoIndicator from './MementoIndicator';
 import { agentAvatarFallbackSx } from '@client/app/components/Agent/AgentAvatar';
-import { remarkGfmNoSingleTilde, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
-import remarkMath from 'remark-math';
+import { assistantReplyRemarkPlugins, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import rehypeKatex from 'rehype-katex';
 import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
@@ -59,7 +66,6 @@ import { isAxiosError } from 'axios';
 import { z } from 'zod';
 import { useConfig } from '@client/app/hooks/data/settings';
 import {
-  hasCompleteOpeningTag,
   parseArtifactsWithFallback,
   shouldWarnElidedArtifact,
   validateMermaidSyntax,
@@ -76,17 +82,18 @@ import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/a
 import NavigationButtons from './NavigationButtons';
 import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';
+import EnableWebSearchAction from './EnableWebSearchAction';
 import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
-import { getReplyTruncationState } from '@client/app/utils/replyTruncation';
+import { getReplyTruncationState, repairTruncatedArtifact } from '@client/app/utils/replyTruncation';
 
 import SearchResultCards from './SearchResultCards';
 import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
 import LocationMap from './LocationMap';
 import { LOCATION_MAP_LANGUAGE, placesFromCitables } from './parseLocationMap';
-import type { WebSearchPlace } from '@bike4mind/common';
+import type { CitableSource, WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
@@ -134,6 +141,8 @@ const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
   const replyComplete = useContext(ReplyCompleteContext);
   return <SearchResultCards content={content} replyComplete={replyComplete} />;
 };
+
+const NO_CITABLES: readonly CitableSource[] = [];
 
 // The web_search places of the reply being rendered, keyed by place id - the only source of map
 // pins. Context for the same identity-stability reason as ReplyCompleteContext above.
@@ -1304,6 +1313,16 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
+  // Off until the reply is done and the markers can link, so any other reply keeps its `[N]` as ordinary text (search
+  // highlighting matches across it) rather than one element per marker.
+  const linksCitationMarkers = shouldLinkCitationMarkers(promptMeta?.citables ?? NO_CITABLES, !!completed);
+  const replyRemarkPlugins = useMemo(
+    (): ReactMarkdownOptions['remarkPlugins'] => [
+      ...assistantReplyRemarkPlugins,
+      ...(linksCitationMarkers ? [remarkCitationMarkers] : []),
+    ],
+    [linksCitationMarkers]
+  );
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1342,23 +1361,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
         preprocessedContent = preprocessedContent.substring(0, artifactIndex).trim();
       }
     } else if (isTruncatedArtifact) {
-      // Completed but truncated mid-artifact. Target the LAST opening tag - that's the
-      // dangling one; any earlier artifacts are already closed and must be left intact.
-      // If that opening tag is complete (has a closing `>`), best-effort close the
-      // artifact so the partial parses into a previewable/downloadable card (a truncation
-      // banner is rendered above it). If the opening tag itself was cut off mid-attribute,
-      // drop the partial from that tag onward so no raw HTML leaks into the bubble.
-      const artifactIndex = preprocessedContent.lastIndexOf('<artifact');
-      const tail = artifactIndex !== -1 ? preprocessedContent.substring(artifactIndex) : '';
-      if (hasCompleteOpeningTag(tail)) {
-        preprocessedContent = `${preprocessedContent.trimEnd()}\n</artifact>`;
-      } else {
-        // Opening tag truncated mid-attribute - nothing renderable. Log the dropped
-        // length so mid-attribute truncations are observable if they occur in prod.
-        console.warn(`[Artifacts] Dropping truncated artifact with incomplete opening tag (${tail.length} chars)`);
-        preprocessedContent =
-          artifactIndex === -1 ? preprocessedContent : preprocessedContent.substring(0, artifactIndex).trim();
-      }
+      preprocessedContent = repairTruncatedArtifact(preprocessedContent);
     }
 
     // Parse explicit <artifact> tags, then promote any bare/fenced HTML document left in the
@@ -1724,15 +1727,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                         {audio.length > 0 && (
                           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, width: '100%', mt: 1 }}>
                             {audio.map((src, index) => (
-                              <Box
-                                key={index}
-                                component="audio"
-                                controls
-                                preload="metadata"
-                                src={src}
-                                data-testid="generated-audio-player"
-                                sx={{ width: '100%', maxWidth: 480 }}
-                              />
+                              <GeneratedAudioPlayer key={index} src={src} />
                             ))}
                           </Box>
                         )}
@@ -1812,47 +1807,47 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           <div className="b4m-md">
                             <ReplyCompleteContext.Provider value={!!completed}>
                               <ReplyPlacesContext.Provider value={placesById}>
-                                <ReactMarkdown
-                                  components={{
-                                    ...markdownComponents,
-                                    code: codeComponent,
-                                    img: ({ alt, src, title }) => {
-                                      if (!src) {
-                                        return null;
-                                      }
+                                <ReplyCitablesContext.Provider value={promptMeta?.citables ?? NO_CITABLES}>
+                                  <ReactMarkdown
+                                    components={{
+                                      ...markdownComponents,
+                                      code: codeComponent,
+                                      img: ({ alt, src, title }) => {
+                                        if (!src) {
+                                          return null;
+                                        }
 
-                                      const srcStr = typeof src === 'string' ? src : '';
-                                      if (
-                                        srcStr.startsWith('/mnt/') ||
-                                        srcStr.startsWith('/tmp/') ||
-                                        srcStr.startsWith('file://') ||
-                                        srcStr.startsWith('sandbox:') ||
-                                        srcStr.includes('/mnt/data/')
-                                      ) {
-                                        return null;
-                                      }
+                                        const srcStr = typeof src === 'string' ? src : '';
+                                        if (
+                                          srcStr.startsWith('/mnt/') ||
+                                          srcStr.startsWith('/tmp/') ||
+                                          srcStr.startsWith('file://') ||
+                                          srcStr.startsWith('sandbox:') ||
+                                          srcStr.includes('/mnt/data/')
+                                        ) {
+                                          return null;
+                                        }
 
-                                      return (
-                                        <ImageContainer
-                                          src={srcStr}
-                                          index={0}
-                                          totalImages={1}
-                                          images={[srcStr]}
-                                          onSendMessage={onSendMessage}
-                                        />
-                                      );
-                                    },
-                                    a: link,
-                                  }}
-                                  remarkPlugins={[
-                                    remarkGfmNoSingleTilde,
-                                    [remarkMath, { singleDollarTextMath: false }],
-                                  ]}
-                                  rehypePlugins={[rehypeKatex]}
-                                  remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                                >
-                                  {mathReadyContent}
-                                </ReactMarkdown>
+                                        return (
+                                          <ImageContainer
+                                            src={srcStr}
+                                            index={0}
+                                            totalImages={1}
+                                            images={[srcStr]}
+                                            onSendMessage={onSendMessage}
+                                          />
+                                        );
+                                      },
+                                      a: link,
+                                      [CITATION_MARKER_TAG]: CitationMarker,
+                                    }}
+                                    remarkPlugins={replyRemarkPlugins}
+                                    rehypePlugins={[rehypeKatex]}
+                                    remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
+                                  >
+                                    {mathReadyContent}
+                                  </ReactMarkdown>
+                                </ReplyCitablesContext.Provider>
                               </ReplyPlacesContext.Provider>
                             </ReplyCompleteContext.Provider>
                           </div>
@@ -1861,6 +1856,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                     )}
 
                     {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
+                    {completed && <EnableWebSearchAction reply={cleanReply} />}
                     {replyActions}
                   </Typography>
                 </Box>
@@ -1872,9 +1868,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       <ExpandCollapseButton needsTruncation={needsTruncation} isExpanded={isExpanded} onToggle={toggleExpanded} />
 
-      {/* Below the reply, not above it. The [N] markers are plain text in the body, so a list
-          above it means reading forward to the marker and then scrolling BACK past the answer
-          to resolve it - and citables merge in mid-stream (useStreamingMessageMerge), so a card
+      {/* Below the reply, not above it. A reader who does not click an inline [N] marker resolves
+          it here, so a list above it means reading forward to the marker and then scrolling BACK
+          past the answer to resolve it - and citables merge in mid-stream (useStreamingMessageMerge), so a card
           above pushed text the reader had already started reading down the page.
 
           After the expand control, which belongs to the reply body it truncates, and before

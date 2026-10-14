@@ -35,6 +35,12 @@ export type ConsentState = 'granted' | 'denied' | 'unset';
 /** 90 days: outlives b4m_app_first_touch, the longest-lived thing this gate guards. */
 const APP_DECISION_TTL_SECONDS = 90 * 24 * 60 * 60;
 
+/** Secure only on https: a Secure write from a plain-http origin is dropped, which would also
+ * leave an earlier non-Secure copy of the cookie impossible to overwrite. */
+function secureAttr(): string {
+  return window.location.protocol === 'https:' ? '; Secure' : '';
+}
+
 /**
  * Publish the resolved decision where the server can read it, or withdraw it when the visitor
  * has no decision to publish.
@@ -58,11 +64,11 @@ const APP_DECISION_TTL_SECONDS = 90 * 24 * 60 * 60;
 export function publishResolvedConsent(value: ConsentState): void {
   if (typeof document === 'undefined') return;
   if (value === 'unset') {
-    document.cookie = `${APP_DECISION_COOKIE}=; path=/; SameSite=Lax; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+    document.cookie = `${APP_DECISION_COOKIE}=; path=/; SameSite=Lax${secureAttr()}; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
     return;
   }
   const expires = new Date(Date.now() + APP_DECISION_TTL_SECONDS * 1000).toUTCString();
-  document.cookie = `${APP_DECISION_COOKIE}=${value}; path=/; SameSite=Lax; expires=${expires}`;
+  document.cookie = `${APP_DECISION_COOKIE}=${value}; path=/; SameSite=Lax${secureAttr()}; expires=${expires}`;
 }
 
 /** Where this origin records the visitor's own decision. */

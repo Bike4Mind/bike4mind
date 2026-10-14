@@ -45,7 +45,8 @@ export const sessionUpdateContract = defineEndpoint({
   pathParams: SessionIdParamSchema,
   request: SessionUpdateRequestSchema,
   // Served by baseApi (via nextRouteForContract), so the apiKeyRateLimit middleware
-  // sets the windowed X-RateLimit-* headers on every API-key-authenticated response.
+  // sets the windowed X-RateLimit-* headers on API-key responses (not the injected
+  // 401/403; CONVENTIONS.md section 6).
   emitsRateLimitHeaders: true,
   requestExample: { knowledgeIds: ['<fabFileId>'], forceKnowledgeRetrieval: true },
   responses: {

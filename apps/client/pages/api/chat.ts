@@ -48,6 +48,7 @@ import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.gener
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
+import { requestTurnAuth } from '@server/auth/turnAuth';
 
 // How many distinct unrecognized tool ids are named in the warn log and echoed on the response.
 // Both are bounded by the same number so the response is no less bounded than the log; the cap is
@@ -186,13 +187,14 @@ const handler = nextRouteForContract(chatContract, {
   // Create the quest (this is immediate)
   apiTimer.phase('invoke');
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
+  const turnAuth = requestTurnAuth(req);
   let quest: Awaited<ReturnType<ChatCompletionInvoke['invoke']>>;
   try {
     quest = await invokeService.invoke({
       body: internalRequest,
       userId: req.user.id,
-      // Attributes a lake write a tool drives this turn to the key rather than its owner.
-      apiKeyId: req.apiKeyInfo?.keyId,
+      // The key (when one authenticated the turn) also attributes a lake write a tool drives.
+      ...turnAuth,
     });
   } catch (error) {
     // invoke validates a caller-supplied model (unknown, disabled, no longer accessible) before it
@@ -225,9 +227,8 @@ const handler = nextRouteForContract(chatContract, {
         ...internalRequest,
         questId: quest.id,
         userId: req.user.id,
-        // Mirrors the apiKeyId handed to invoke() above: process() reads the tool context's key
-        // from this body only, so without it a key turn reaches tools as a signed-in session.
-        apiKeyId: req.apiKeyInfo?.keyId,
+        // Mirrors invoke() above: process() reads the tool context's auth from this body only.
+        ...turnAuth,
         embeddingModel: currentEmbeddingModel,
         queryComplexity: 'simple',
         // Optional schema fields - declared for QuestStartBodySchema type conformance

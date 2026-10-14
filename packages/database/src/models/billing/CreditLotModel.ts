@@ -18,6 +18,7 @@ const CreditLotSchema = new Schema<ICreditLotDocument>(
     amount: { type: Number, required: true },
     expiresAt: { type: Date, required: true },
     consumedAssigned: { type: Number, required: true, default: 0 },
+    settledAt: { type: Date, required: false },
     stripeRef: { type: String, required: false },
   },
   {

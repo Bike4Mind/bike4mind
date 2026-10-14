@@ -37,6 +37,7 @@ import {
   type FormattedJiraIssueType,
 } from './format';
 import { AgileApi } from './agile/api';
+import { apiPath, assertSafeApiPath } from '../atlassian/apiPath';
 
 // --- Types & Interfaces ---
 
@@ -288,10 +289,10 @@ export function isValidProjectKey(key: string): boolean {
 
 /**
  * Validates that a string is a valid Jira issue key format.
- * Issue keys must be: PROJECT-NUMBER (e.g., PROJ-123, ABC-1, A1-999)
+ * Issue keys must be: PROJECT-NUMBER (e.g., PROJ-123, ABC-1, A1-999, MY_PROJ-7)
  */
 export function isValidIssueKey(key: string): boolean {
-  return /^[A-Z][A-Z0-9]*-\d+$/.test(key);
+  return /^[A-Z][A-Z0-9_]*-\d+$/.test(key);
 }
 
 // --- Wiki Markup to ADF Conversion ---
@@ -446,6 +447,7 @@ export class JiraApi {
    * Build URL with query parameters
    */
   private buildUrl(path: string, query: QueryParams = {}): string {
+    assertSafeApiPath(path);
     const base = `${this.config.apiBaseUrl}${path}`;
     const url = new URL(base);
     Object.entries(query).forEach(([key, value]) => {
@@ -542,7 +544,7 @@ export class JiraApi {
    */
   async getIssue(params: { issueKey: string; expand?: string[] }): Promise<FormattedJiraIssue> {
     const { issueKey, expand } = params;
-    const issue = await this.request<JiraIssue>('GET', `/issue/${issueKey}`, {
+    const issue = await this.request<JiraIssue>('GET', apiPath`/issue/${issueKey}`, {
       query: {
         expand: expand?.join(','),
       },
@@ -653,7 +655,7 @@ export class JiraApi {
 
     // Only send request if there are fields to update
     if (Object.keys(fields).length > 0) {
-      await this.request<void>('PUT', `/issue/${issueKey}`, {
+      await this.request<void>('PUT', apiPath`/issue/${issueKey}`, {
         body: { fields },
       });
     }
@@ -732,7 +734,7 @@ export class JiraApi {
    */
   async getProject(params: { projectKey: string; expand?: string[] }): Promise<FormattedJiraProject> {
     const { projectKey, expand } = params;
-    const project = await this.request<JiraProject>('GET', `/project/${projectKey}`, {
+    const project = await this.request<JiraProject>('GET', apiPath`/project/${projectKey}`, {
       query: {
         expand: expand?.join(','),
       },
@@ -756,7 +758,7 @@ export class JiraApi {
   async addComment(params: { issueKey: string; body: string }): Promise<FormattedJiraComment> {
     const { issueKey, body } = params;
 
-    const comment = await this.request<JiraComment>('POST', `/issue/${issueKey}/comment`, {
+    const comment = await this.request<JiraComment>('POST', apiPath`/issue/${issueKey}/comment`, {
       body: {
         body: {
           type: 'doc',
@@ -782,7 +784,7 @@ export class JiraApi {
     const { projectKey } = params;
     const result = await this.request<Array<{ statuses: Array<{ name: string; id: string }> }>>(
       'GET',
-      `/project/${projectKey}/statuses`
+      apiPath`/project/${projectKey}/statuses`
     );
 
     // Flatten and deduplicate status names across all issue types
@@ -800,7 +802,10 @@ export class JiraApi {
    */
   async getTransitions(params: { issueKey: string }): Promise<FormattedJiraTransitions> {
     const { issueKey } = params;
-    const result = await this.request<{ transitions: JiraTransition[] }>('GET', `/issue/${issueKey}/transitions`);
+    const result = await this.request<{ transitions: JiraTransition[] }>(
+      'GET',
+      apiPath`/issue/${issueKey}/transitions`
+    );
     return formatTransitions(result);
   }
 
@@ -813,7 +818,7 @@ export class JiraApi {
   }): Promise<{ issueKey: string; transitionId: string; link: string }> {
     const { issueKey, transitionId } = params;
 
-    await this.request<void>('POST', `/issue/${issueKey}/transitions`, {
+    await this.request<void>('POST', apiPath`/issue/${issueKey}/transitions`, {
       body: {
         transition: { id: transitionId },
       },
@@ -829,7 +834,7 @@ export class JiraApi {
    */
   async assignIssue(params: { issueKey: string; accountId: string }): Promise<void> {
     const { issueKey, accountId } = params;
-    await this.request<void>('PUT', `/issue/${issueKey}/assignee`, {
+    await this.request<void>('PUT', apiPath`/issue/${issueKey}/assignee`, {
       body: { accountId },
     });
   }
@@ -844,7 +849,7 @@ export class JiraApi {
       throw new Error('issueKey is required to delete an issue.');
     }
 
-    await this.request<void>('DELETE', `/issue/${issueKey}`);
+    await this.request<void>('DELETE', apiPath`/issue/${issueKey}`);
   }
 
   /**
@@ -1141,7 +1146,7 @@ export class JiraApi {
    */
   async getWatchers(params: { issueKey: string }): Promise<any> {
     const { issueKey } = params;
-    const result = await this.request<JiraWatchersResponse>('GET', `/issue/${issueKey}/watchers`);
+    const result = await this.request<JiraWatchersResponse>('GET', apiPath`/issue/${issueKey}/watchers`);
     return formatWatchers(result);
   }
 
@@ -1152,7 +1157,7 @@ export class JiraApi {
     const { issueKey, accountId } = params;
     // Jira expects the account ID as a bare JSON string, not an object.
     // request() runs JSON.stringify on the body, so the raw string becomes the quoted string Jira wants.
-    await this.request<void>('POST', `/issue/${issueKey}/watchers`, {
+    await this.request<void>('POST', apiPath`/issue/${issueKey}/watchers`, {
       body: accountId,
     });
   }
@@ -1162,7 +1167,7 @@ export class JiraApi {
    */
   async removeWatcher(params: { issueKey: string; accountId: string }): Promise<void> {
     const { issueKey, accountId } = params;
-    await this.request<void>('DELETE', `/issue/${issueKey}/watchers`, {
+    await this.request<void>('DELETE', apiPath`/issue/${issueKey}/watchers`, {
       query: { accountId },
     });
   }
@@ -1188,7 +1193,7 @@ export class JiraApi {
     }
 
     // Fetch issue with only issuelinks field to minimize response size
-    const issue = await this.request<{ fields: { issuelinks: JiraIssueLink[] } }>('GET', `/issue/${issueKey}`, {
+    const issue = await this.request<{ fields: { issuelinks: JiraIssueLink[] } }>('GET', apiPath`/issue/${issueKey}`, {
       query: { fields: 'issuelinks' },
     });
 
@@ -1241,7 +1246,7 @@ export class JiraApi {
    */
   async deleteIssueLink(params: { linkId: string }): Promise<void> {
     const { linkId } = params;
-    await this.request<void>('DELETE', `/issueLink/${linkId}`);
+    await this.request<void>('DELETE', apiPath`/issueLink/${linkId}`);
   }
 
   /**
@@ -1292,7 +1297,7 @@ export class JiraApi {
    */
   async getProjectRoles(params: { projectKey: string }): Promise<Array<{ name: string; id: number }>> {
     const { projectKey } = params;
-    const rolesMap = await this.request<Record<string, string>>('GET', `/project/${projectKey}/role`);
+    const rolesMap = await this.request<Record<string, string>>('GET', apiPath`/project/${projectKey}/role`);
     return formatProjectRoles(rolesMap);
   }
 
@@ -1307,7 +1312,7 @@ export class JiraApi {
     members: FormattedRoleMember[];
   }> {
     const { projectKey, roleId } = params;
-    const role = await this.request<JiraProjectRole>('GET', `/project/${projectKey}/role/${roleId}`);
+    const role = await this.request<JiraProjectRole>('GET', apiPath`/project/${projectKey}/role/${roleId}`);
     return formatProjectRoleMembers(role);
   }
 
@@ -1371,7 +1376,7 @@ export class JiraApi {
     }
 
     // Fetch issue with only attachment field to minimize response size
-    const issue = await this.request<{ fields: { attachment: JiraAttachment[] } }>('GET', `/issue/${issueKey}`, {
+    const issue = await this.request<{ fields: { attachment: JiraAttachment[] } }>('GET', apiPath`/issue/${issueKey}`, {
       query: { fields: 'attachment' },
     });
 
@@ -1429,7 +1434,7 @@ export class JiraApi {
     const blob = new Blob([binaryContent], { type: detectedMimeType });
     formData.append('file', blob, filename);
 
-    const url = `${this.config.apiBaseUrl}/issue/${issueKey}/attachments`;
+    const url = this.buildUrl(apiPath`/issue/${issueKey}/attachments`);
 
     // Make request with special headers for attachment upload
     const response = await fetch(url, {
@@ -1467,7 +1472,7 @@ export class JiraApi {
     const { attachmentId } = params;
 
     // First, get attachment metadata to get the download URL
-    const metadata = await this.request<JiraAttachment>('GET', `/attachment/${attachmentId}`);
+    const metadata = await this.request<JiraAttachment>('GET', apiPath`/attachment/${attachmentId}`);
 
     if (!metadata.content) {
       throw new Error(`Attachment ${attachmentId} has no download URL`);
@@ -1501,7 +1506,7 @@ export class JiraApi {
    */
   async deleteAttachment(params: { attachmentId: string }): Promise<void> {
     const { attachmentId } = params;
-    await this.request<void>('DELETE', `/attachment/${attachmentId}`);
+    await this.request<void>('DELETE', apiPath`/attachment/${attachmentId}`);
   }
 
   // --- Agile API Access (Jira Software - Boards, Sprints) ---

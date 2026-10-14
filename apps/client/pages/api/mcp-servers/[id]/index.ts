@@ -2,6 +2,7 @@ import { McpServer } from '@bike4mind/database/ai';
 import { NotFoundError } from '@bike4mind/utils';
 import { MCPClient } from '@bike4mind/mcp';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { encryptEnvVariables, decryptEnvVariables } from '@server/security/tokenEncryption';
@@ -27,6 +28,7 @@ const handler = baseApi()
     return res.status(204).end();
   })
   .put(async (req, res) => {
+    await assertMcpServerEnabled();
     const { id } = req.query;
 
     const parsedBody = mcpServerUpdateBodySchema.safeParse(req.body);
@@ -50,13 +52,17 @@ const handler = baseApi()
     // Config changed, so clear cached tool schemas
     const updatedServer = await McpServer.findOneAndUpdate(
       { _id: id, userId: req.user.id }, // Ensure user owns the server
-      { $set: { name, envVariables: encryptEnvVariables(envVariables), enabled }, $unset: { toolSchemas: '' } },
+      {
+        $set: { name, envVariables: encryptEnvVariables(envVariables), enabled },
+        $unset: { toolSchemas: '', toolSchemasFetchedAt: '' },
+      },
       { new: true, runValidators: true }
     );
 
     return res.status(200).json(updatedServer);
   })
   .get(async (req, res) => {
+    await assertMcpServerEnabled();
     const { id } = req.query;
     const server = isValidObjectId(id) ? await McpServer.findOne({ _id: id, userId: req.user.id }) : null;
     if (!server) {

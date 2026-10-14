@@ -2,7 +2,7 @@ import { adminSettingsRepository, userRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 
 // A billing state, not a bug. Each caller maps it onto its own established
-// response (422 `insufficient_credits`, 402, or 400) so this change does not
+// response (422 `insufficient_credits` or 400) so this change does not
 // move any route's contract.
 export class InsufficientCreditsPreflightError extends Error {
   constructor(message: string) {

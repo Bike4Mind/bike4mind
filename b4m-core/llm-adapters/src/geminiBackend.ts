@@ -28,6 +28,7 @@ import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifa
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { withAbortListener } from './withAbortListener';
+import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
 
 type ToolCall = {
@@ -66,10 +67,16 @@ export class GeminiBackend implements ICompletionBackend {
   private _api: GoogleGenAI;
   private logger: Logger;
   public currentModel: string = '';
+  /** Catalog view of the model being completed; see DispatchModel. */
+  private readonly _dispatch = new DispatchModel();
 
   constructor(apiKey: string, logger?: Logger) {
     this._api = new GoogleGenAI({ apiKey });
     this.logger = logger ?? new Logger();
+  }
+
+  setDispatchModel(info: ModelInfo): void {
+    this._dispatch.set(info);
   }
 
   /**
@@ -557,9 +564,11 @@ export class GeminiBackend implements ICompletionBackend {
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = modelName;
-    const modelInfo = (await this.getModelInfo()).find(model => model.id === modelName);
+    // A catalog-only id (one model discovery promoted) is absent from the literal list,
+    // so fall back to the record getLlmByModel handed over.
+    const modelInfo =
+      (await this.getModelInfo()).find(model => model.id === modelName) ?? this._dispatch.for(modelName);
     if (!modelInfo) {
-      // Unlikely:
       throw new Error(`Model ${modelName} not found`);
     }
 

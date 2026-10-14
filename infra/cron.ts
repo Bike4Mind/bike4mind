@@ -14,6 +14,7 @@ import {
   fabFileChunkQueue,
   driveLakeIngestQueue,
   githubLakeIngestQueue,
+  githubLakeRevokeQueue,
   dataLakeResearchQueue,
   generationCallbackQueue,
   generationJobQueue,
@@ -30,9 +31,6 @@ const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
     runtime: 'nodejs24.x',
     link: [...allSecrets, researchEngineQueue, fabFileBucket, generatedImagesBucket],
     timeout: '10 minutes',
-    logging: {
-      retention: '3 days',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -57,9 +55,6 @@ const agentProactiveMessageCron = new sst.aws.Cron('agentProactiveMessageCron', 
     runtime: 'nodejs24.x',
     link: [...allSecrets, agentProactiveMessageQueue],
     timeout: '10 minutes',
-    logging: {
-      retention: '3 days',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -75,9 +70,6 @@ const userActivityReportFunction = new sst.aws.Function('userActivityReportFunct
   link: [...allSecrets],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  logging: {
-    retention: '3 days',
   },
   dev: false,
 });
@@ -111,9 +103,6 @@ const secretRotationNotifierCron = new sst.aws.Cron('secretRotationNotifier', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    logging: {
-      retention: '3 days',
-    },
   },
   enabled: ['production', 'dev'].includes($app.stage),
 });
@@ -134,9 +123,6 @@ const apiKeyBaselineCalculation = new sst.aws.Cron('apiKeyBaselineCalculation', 
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    logging: {
-      retention: '1 week', // Keep logs longer for debugging baseline calculations
-    },
   },
   enabled: ['production', 'dev'].includes($app.stage),
 });
@@ -150,9 +136,6 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
     runtime: 'nodejs24.x',
     link: [...allSecrets, emailJobQueue],
     timeout: '2 minutes',
-    logging: {
-      retention: '1 week',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -180,9 +163,6 @@ const whatsNewSyncCron = new sst.aws.Cron('whatsNewSyncCron', {
     runtime: 'nodejs24.x',
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: '3 days',
     },
     permissions: [
       {
@@ -216,9 +196,6 @@ const liveopsTriageDispatcherCron = new sst.aws.Cron('liveopsTriageDispatcherCro
     runtime: 'nodejs24.x',
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: '1 week',
     },
     permissions: [
       {
@@ -258,9 +235,6 @@ const whatsNewHighlightsCron = new sst.aws.Cron('whatsNewHighlightsCron', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    logging: {
-      retention: '1 week',
-    },
     permissions: [
       {
         actions: ['cloudwatch:PutMetricData'],
@@ -284,9 +258,6 @@ const telemetryCleanupCron = new sst.aws.Cron('telemetryCleanup', {
     timeout: '10 minutes',
     link: [...allSecrets],
     environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-    logging: {
-      retention: '1 week',
-    },
   },
   enabled: ['production', 'dev'].includes($app.stage),
 });
@@ -303,6 +274,26 @@ const creditLotSweepCron = new sst.aws.Cron('creditLotSweep', {
     timeout: '10 minutes',
     link: [...allSecrets],
     environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+// Voice Hold Sweep - settles voice credit holds no client ever ended (closed tab, crashed browser,
+// failed connect) on connected time. Self-host twin: apps/workers/src/selfhost/voiceHoldSweep.ts;
+// keep the schedules in step. Settlement is DB-only and capped at VOICE_HOLD_SWEEP_LIMIT holds per
+// run. Overlapping runs (at-least-once delivery, async retry after a timeout) are safe because
+// settleVoiceHold claims each hold atomically, so a losing settler moves no credit.
+const voiceHoldSweepCron = new sst.aws.Cron('voiceHoldSweep', {
+  schedule: 'rate(5 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/voiceHoldSweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '4 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
     logging: {
       retention: '1 week',
     },
@@ -322,9 +313,6 @@ const integrationHealthCheckCron = new sst.aws.Cron('integrationHealthCheck', {
     link: [...allSecrets],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: '1 day',
     },
     permissions: [
       {
@@ -347,9 +335,6 @@ const cloudSecurityScanCron = new sst.aws.Cron('CloudSecurityScan', {
     link: [...allSecrets],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: '3 days',
     },
     permissions: [
       {
@@ -387,36 +372,6 @@ const cloudSecurityScanCron = new sst.aws.Cron('CloudSecurityScan', {
 });
 
 /**
- * LiveOps Triage Job Cleanup Cron
- * Detects and fails stuck jobs (processing > 13 minutes).
- *
- * Schedule: Every 10 minutes
- * Enabled: All stages (jobs can get stuck on any stage)
- */
-const liveOpsTriageJobCleanupCron = new sst.aws.Cron('liveOpsTriageJobCleanup', {
-  schedule: 'rate(10 minutes)',
-  function: {
-    handler: 'apps/workers/src/cron/liveOpsTriageJobCleanup.handler',
-    vpc: lambdaVpc,
-    link: [...allSecrets],
-    timeout: '1 minute',
-    runtime: 'nodejs24.x',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: '3 days',
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
-      },
-    ],
-  },
-});
-
-/**
  * Security Scan Scheduler
  * Checks for scheduled security scans and triggers them via GitHub Actions.
  *
@@ -435,9 +390,6 @@ const securityScanSchedulerCron = new sst.aws.Cron('securityScanScheduler', {
     link: [...allSecrets],
     timeout: '5 minutes',
     memory: '512 MB',
-    logging: {
-      retention: '1 week',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -461,9 +413,6 @@ const deepAgentWakeCron = new sst.aws.Cron('deepAgentWakeCron', {
     runtime: 'nodejs24.x',
     link: [...allSecrets, deepAgentWakeQueue],
     timeout: '2 minutes',
-    logging: {
-      retention: '3 days',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -482,9 +431,6 @@ const dataLakeResearchScheduleCron = new sst.aws.Cron('dataLakeResearchScheduleC
     runtime: 'nodejs24.x',
     link: [...allSecrets, dataLakeResearchQueue],
     timeout: '2 minutes',
-    logging: {
-      retention: '3 days',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -507,9 +453,6 @@ const sreStaleDispatchCron = new sst.aws.Cron('SreStaleDispatchCron', {
     runtime: 'nodejs24.x',
     link: [...allSecrets],
     timeout: '2 minutes',
-    logging: {
-      retention: '3 days',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -529,7 +472,7 @@ const sreStaleDispatchCron = new sst.aws.Cron('SreStaleDispatchCron', {
  * with no brand fallback (#9310/#9306).
  */
 const attackSimulationFunction = new sst.aws.Function('attackSimulationFunction', {
-  handler: 'apps/client/server/security/attackSimulation/runner.handler',
+  handler: 'apps/workers/src/security/attackSimulation/runner.handler',
   vpc: lambdaVpc,
   link: [...allSecrets],
   timeout: '14 minutes',
@@ -537,9 +480,6 @@ const attackSimulationFunction = new sst.aws.Function('attackSimulationFunction'
   runtime: 'nodejs24.x',
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  logging: {
-    retention: '1 week',
   },
 });
 
@@ -574,9 +514,6 @@ const modelDiscoveryFunction = new sst.aws.Function('modelDiscoveryFunction', {
   link: [...allSecrets],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  logging: {
-    retention: '1 week',
   },
   permissions: [
     {
@@ -631,9 +568,6 @@ const modelDiscoveryStalenessFunction = new sst.aws.Function('modelDiscoveryStal
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
-  logging: {
-    retention: '1 week',
-  },
   permissions: [
     {
       actions: ['cloudwatch:PutMetricData'],
@@ -674,9 +608,6 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    logging: {
-      retention: '1 week',
-    },
     permissions: [
       {
         actions: ['cloudwatch:PutMetricData'],
@@ -713,9 +644,6 @@ const questTimeoutSweepCron = new sst.aws.Cron('questTimeoutSweep', {
     // completion callback, so the sweep enqueues one when it recovers a stuck quest.
     link: [...allSecrets, generationCallbackQueue],
     timeout: '2 minutes',
-    logging: {
-      retention: '3 days',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -746,9 +674,6 @@ const generationJobSweepCron = new sst.aws.Cron('generationJobSweep', {
     runtime: 'nodejs24.x',
     link: [...allSecrets, generationJobQueue],
     timeout: '2 minutes',
-    logging: {
-      retention: '3 days',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -773,9 +698,6 @@ const agentExecutionAbandonedSweepCron = new sst.aws.Cron('agentExecutionAbandon
     runtime: 'nodejs24.x',
     link: [...allSecrets],
     timeout: '2 minutes',
-    logging: {
-      retention: '3 days',
-    },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -802,9 +724,32 @@ const spendReconciliationCron = new sst.aws.Cron('spendReconciliation', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+// Credit Purchase Reconciliation -- alerts on Stripe credit purchases that
+// succeeded with no credit grant.
+const creditPurchaseReconciliationCron = new sst.aws.Cron('creditPurchaseReconciliation', {
+  schedule: 'cron(0 7 * * ? *)', // Daily at 7am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/creditPurchaseReconciliation.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
     logging: {
       retention: '1 week',
     },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
   },
   enabled: ['production', 'dev'].includes($app.stage),
 });
@@ -815,7 +760,8 @@ const spendReconciliationCron = new sst.aws.Cron('spendReconciliation', {
  * against its data lake and applies adds/edits/removals. Dark until both EnableDataLakes and
  * EnableDataLakeDrivePoll admin flags are on (the handler enforces the gate).
  *
- * Schedule: hourly (connections are re-polled at most every ~6h; see POLL_INTERVAL_MS in the handler)
+ * Schedule: hourly (connections are re-polled at most every ~6h; see DRIVE_LAKE_POLL_INTERVAL_MS in
+ * apps/client/server/integrations/google/drive/drivePollSchedule.ts)
  * Enabled: production + dev
  */
 const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
@@ -830,9 +776,6 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
     link: [...allSecrets, driveLakeIngestQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: '3 days',
     },
   },
   enabled: ['production', 'dev'].includes($app.stage),
@@ -861,8 +804,32 @@ const githubLakeReconcileCron = new sst.aws.Cron('githubLakeReconcile', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    logging: {
-      retention: '3 days',
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+/**
+ * Data-Lake Connector Orphan Reap
+ * Releases Drive connections and GitHub bindings whose data lake document no longer exists, so their
+ * globally unique folder / repository claims do not outlive the lake. Gated on EnableDataLakes only
+ * (cleanup runs even with polling off); the GitHub leg also needs EnableDataLakeGitHub (the handler
+ * enforces both).
+ *
+ * Schedule: daily (a bounded batch per connector; see MAX_REAPS_PER_CONNECTOR in the handler)
+ * Enabled: production + dev
+ */
+const lakeConnectorOrphanReapCron = new sst.aws.Cron('lakeConnectorOrphanReap', {
+  schedule: 'rate(1 day)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/lakeConnectorOrphanReap.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    // githubLakeRevokeQueue: releasing a GitHub binding hands a failed post-release uninstall to it
+    // (releaseGitHubLakeConnection, githubLakeConnection.ts).
+    link: [...allSecrets, githubLakeRevokeQueue],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
   },
   enabled: ['production', 'dev'].includes($app.stage),
@@ -944,9 +911,6 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
         resources: ['*'],
       },
     ],
-    logging: {
-      retention: '1 week',
-    },
   },
   enabled: ['production', 'dev'].includes($app.stage),
 });
@@ -969,9 +933,6 @@ const lakeHealthSweepCron = new sst.aws.Cron('lakeHealthSweep', {
     link: [...allSecrets],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: '1 week',
     },
     permissions: [
       {
@@ -1011,9 +972,6 @@ const lakeInconsistencySweepCron = new sst.aws.Cron('lakeInconsistencySweep', {
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    logging: {
-      retention: '1 week',
-    },
     permissions: [
       {
         actions: ['cloudwatch:PutMetricData'],
@@ -1038,12 +996,12 @@ export {
   whatsNewHighlightsCron,
   cloudSecurityScanCron,
   integrationHealthCheckCron,
-  liveOpsTriageJobCleanupCron,
   securityScanSchedulerCron,
   deepAgentWakeCron,
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   creditLotSweepCron,
+  voiceHoldSweepCron,
   sreStaleDispatchCron,
   attackSimulationFunction,
   attackSimulationCron,
@@ -1056,8 +1014,10 @@ export {
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
+  creditPurchaseReconciliationCron,
   driveLakeResyncPollCron,
   githubLakeReconcileCron,
+  lakeConnectorOrphanReapCron,
   helpDatalakeIngestCron,
   lakeHealthSweepCron,
   lakeInconsistencySweepCron,

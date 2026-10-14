@@ -36,7 +36,7 @@ import {
 import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { projectService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { ActivityType } from '@client/config/activities';
+import { ActivityType } from '@client/config/activityType';
 import { CreateSessionRequestBody } from '../../../../types/api';
 
 /** See the cap check in the handler - bounds a sequential, two-reads-per-id authorization loop. */
@@ -184,10 +184,7 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
         (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
       // The attachment door's lake arms, so a supplied lake file passes the access check.
       resolveAttachmentLakeAccess: async () =>
-        (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
-          req.user,
-          req.logger
-        )(),
+        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user, req.logger)(),
     },
     { origin: resolveSessionOrigin(req) }
   );

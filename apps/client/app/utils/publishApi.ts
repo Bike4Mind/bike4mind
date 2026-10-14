@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import type {
   ArtifactType,
@@ -12,6 +13,7 @@ import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX } from '@bike4mind/common';
 import { detectElidedSafe } from '@client/app/utils/artifactParser';
 import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
 import { exportHref, type PublishExportFormat } from '@client/app/utils/publishExport';
+import { SLUG_OWNED_BY_OTHER } from '@server/services/publish/slugOwnership';
 
 /** Summary row for the published-artifacts management list. */
 export interface ManagedArtifact {
@@ -533,17 +535,28 @@ export async function publishArtifactBundle(input: {
   }
 
   // Step 1 - request a presigned PUT for index.html.
-  const { data: draft } = await api.post<UploadUrlResponse>('/api/publish/artifact/upload-url', {
-    tier: input.tier ?? 'user',
-    scopeId,
-    slug,
-    title: input.title || 'Shared artifact',
-    visibility: input.visibility ?? DEFAULT_SHARE_VISIBILITY,
-    ...(input.commentPolicy ? { commentPolicy: input.commentPolicy } : {}),
-    ...(input.description ? { description: input.description } : {}),
-    source: { kind: 'bundle', artifactId: input.artifactId, ...(isReact ? { artifactType: 'react' as const } : {}) },
-    files: [{ path: 'index.html', size, mimeType: 'text/html' }],
-  });
+  const requestDraft = (draftSlug: string) =>
+    api.post<UploadUrlResponse>('/api/publish/artifact/upload-url', {
+      tier: input.tier ?? 'user',
+      scopeId,
+      slug: draftSlug,
+      title: input.title || 'Shared artifact',
+      visibility: input.visibility ?? DEFAULT_SHARE_VISIBILITY,
+      ...(input.commentPolicy ? { commentPolicy: input.commentPolicy } : {}),
+      ...(input.description ? { description: input.description } : {}),
+      source: { kind: 'bundle', artifactId: input.artifactId, ...(isReact ? { artifactType: 'react' as const } : {}) },
+      files: [{ path: 'index.html', size, mimeType: 'text/html' }],
+    });
+  let draft: UploadUrlResponse;
+  try {
+    ({ data: draft } = await requestDraft(slug));
+  } catch (err) {
+    // A derived slug can match a page another member of a shared scope already published (same
+    // shared artifact, same title), which the server refuses to overwrite. Publish as a new page
+    // instead. A pinned slug is an explicit "update", so its refusal surfaces as-is.
+    if (input.slug || !isSlugOwnedByOther(err)) throw err;
+    ({ data: draft } = await requestDraft(`${slug}-${uniqueSlugDiscriminator()}`));
+  }
 
   // Step 2 - PUT the bytes directly to S3 (plain fetch; no app auth header).
   const put = draft.uploadUrls.find(u => u.path === 'index.html');
@@ -665,6 +678,10 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
+function isSlugOwnedByOther(err: unknown): boolean {
+  return isAxiosError<{ code?: string }>(err) && err.response?.data?.code === SLUG_OWNED_BY_OTHER;
+}
+
 function slugify(s: string): string {
   return s
     .toLowerCase()
@@ -736,10 +753,11 @@ export function toShareTokenUrl(shareToken: string): string {
 }
 
 /** One live no-sign-in share link, as the owner's link list renders it (#3255 step 3).
- *  `id` is the handle `revokeShareLink` revokes by; it is null only for a link minted before
- *  the `shareTokens[]` backfill, which can still be revoked with `revokeShareToken`. */
+ *  `id` is the handle `revokeShareLink` revokes by. Non-nullable since #3523: it was null only
+ *  for a link minted before the `shareTokens[]` backfill, and retiring the legacy scalar
+ *  mirrored every such link into the array, so no link without an entry can exist. */
 export interface ShareLink {
-  id: string | null;
+  id: string;
   shareToken: string;
   shareUrl: string;
   createdAt: string | null;
@@ -752,6 +770,8 @@ export interface ShareTokenState {
   /** The NEWEST live link. Kept beside `shareLinks` for single-link callers. */
   shareToken: string | null;
   shareUrl: string | null;
+  /** When the newest live link was created. Still sent, but DERIVED from that link rather than
+   *  stored since #3523 - it is the same value the retired `shareTokenUpdatedAt` scalar held. */
   shareTokenUpdatedAt: string | null;
   /** Every live link with its own view count. Empty when nothing is shared. */
   shareLinks: ShareLink[];
@@ -759,7 +779,7 @@ export interface ShareTokenState {
 
 /** What every mint path returns: the link it just produced, plus the resulting list. */
 export interface MintedShareLink {
-  id: string | null;
+  id: string;
   shareToken: string;
   shareUrl: string;
   shareLinks: ShareLink[];

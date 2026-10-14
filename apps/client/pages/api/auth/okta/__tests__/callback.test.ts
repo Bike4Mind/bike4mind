@@ -40,6 +40,11 @@ vi.mock('@server/auth/oktaOidcClient', () => ({
   fetchUserInfo: (...a: any[]) => mockFetchUserInfo(...a),
 }));
 
+const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/utils/auth/oauthSourceTag', () => ({
+  stampOAuthSourceTag: (...a: unknown[]) => mockStampSourceTag(...a),
+}));
+
 // State token verification.
 const mockVerifyState = vi.fn();
 vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: (...a: any[]) => mockVerifyState(...a) }));
@@ -69,6 +74,13 @@ vi.mock('@server/security/secretEncryption', () => ({ encryptSecret: (v: string)
 vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+// Signup/link grants are unit-tested in oauthSignupGrants.test.ts; assert the callback's wiring here.
+const mockApplyOAuthSignupDomainGrant = vi.fn();
+const mockReleaseOAuthPendingFreeCredits = vi.fn();
+vi.mock('@server/utils/auth/oauthSignupGrants', () => ({
+  applyOAuthSignupDomainGrant: (...a: unknown[]) => mockApplyOAuthSignupDomainGrant(...a),
+  releaseOAuthPendingFreeCredits: (...a: unknown[]) => mockReleaseOAuthPendingFreeCredits(...a),
 }));
 
 // Import after mocks are registered.
@@ -229,6 +241,29 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(updateArg.$set.emailVerified).toBe(true);
     expect(updateArg.$set.emailVerifiedAt).toBeInstanceOf(Date);
     expect(updateArg.$inc).toEqual({ tokenVersion: 1 });
+    expect(mockReleaseOAuthPendingFreeCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'u5' }),
+      'Okta account link (email verified)'
+    );
+  });
+
+  it('releases a pending free-credit tag only when the link promotes emailVerified', async () => {
+    await runCallback({
+      user: {
+        id: 'u7',
+        _id: 'u7',
+        email: 'user@example.com',
+        emailVerified: true,
+        hasUsablePassword: false,
+        tags: ['pending-free-credits'],
+        authProviders: [],
+        tokenVersion: 0,
+      },
+      userInfo: { sub: 'okta-7', email: 'user@example.com', email_verified: true },
+    });
+
+    expect(mockUpdateOne).toHaveBeenCalled();
+    expect(mockReleaseOAuthPendingFreeCredits).not.toHaveBeenCalled();
   });
 
   it('refuses to promote/link on a username-only match with a null local email (takeover guard)', async () => {
@@ -269,6 +304,20 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'new@example.com' }));
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
+    // The new account never visits /api/email/verify, so its domain grant runs here.
+    expect(mockApplyOAuthSignupDomainGrant).toHaveBeenCalledWith('new-user', 'new@example.com');
+    // Okta gets no flat grant: the account is not created pending-free-credits.
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
+  });
+
+  it('skips the domain grant for a new account created without a verified email', async () => {
+    await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-unverified', email: 'new@example.com', email_verified: false, name: 'New Bie' },
+    });
+
+    expect(mockCreate).toHaveBeenCalled();
+    expect(mockApplyOAuthSignupDomainGrant).not.toHaveBeenCalled();
   });
 });
 
@@ -561,5 +610,31 @@ describe('/api/auth/okta/callback - IDP email-domain bind', () => {
     expect(mockFindOne).toHaveBeenCalledWith({
       authProviders: { $elemMatch: { strategy: AuthStrategy.Okta, id: 'okta-sst' } },
     });
+  });
+});
+
+describe('/api/auth/okta/callback - OAuth client source tag', () => {
+  it('stamps a newly created account with the clientId from the verified state', async () => {
+    mockVerifyState.mockReturnValue({ valid: true, payload: { idpId: 'idp-1', clientId: 'b4m_sat_0123abcd' } });
+    await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-new', email: 'new@example.com', email_verified: true, name: 'New User' },
+    });
+    expect(mockStampSourceTag).toHaveBeenCalledWith('new-user', 'b4m_sat_0123abcd');
+  });
+
+  it('never stamps an existing account that signs in through a client', async () => {
+    mockVerifyState.mockReturnValue({ valid: true, payload: { idpId: 'idp-1', clientId: 'b4m_sat_0123abcd' } });
+    await runCallback({
+      user: {
+        id: 'old-user',
+        _id: 'old-user',
+        tokenVersion: 0,
+        isBanned: false,
+        authProviders: [{ strategy: AuthStrategy.Okta, id: 'okta-sub-default', oktaIdentityProviderId: 'idp-1' }],
+      },
+      userInfo: { sub: 'okta-sub-default', email: 'old@example.com', email_verified: true, name: 'Old User' },
+    });
+    expect(mockStampSourceTag).not.toHaveBeenCalled();
   });
 });

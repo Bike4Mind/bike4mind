@@ -16,7 +16,12 @@
  */
 import type { DomainGrantRow, EntitlementKey, ImpliedEntitlementRow, PriceEntitlementRow, TagGrantRow } from './types';
 import { isTestMode } from '@client/lib/subscriptions/constants';
-import { parseInternalStaffDomains, DATA_LAKE_SLUG_REGEX, MAX_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
+import {
+  parseInternalStaffDomains,
+  DATA_LAKE_SLUG_REGEX,
+  MAX_DATA_LAKE_SLUG_LENGTH,
+  isOAuthSourceTag,
+} from '@bike4mind/common';
 
 /**
  * Canonical tag/key normalization - the ONE comparison rule for the
@@ -444,7 +449,7 @@ export function entitlementsForTags(tags: readonly string[]): Set<EntitlementKey
   const keys = new Set<EntitlementKey>();
   for (const tag of tags) {
     const normalized = normalizeTag(tag);
-    if (!normalized) continue;
+    if (!normalized || isOAuthSourceTag(normalized)) continue;
     keys.add(normalized);
     for (const key of TAG_GRANTS.get(normalized) ?? []) {
       keys.add(key);

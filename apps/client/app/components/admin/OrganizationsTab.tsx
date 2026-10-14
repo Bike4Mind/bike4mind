@@ -26,8 +26,8 @@ import {
   Typography,
 } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import { IOrganizationDocument, Permission, WithId } from '@bike4mind/common';
-import { ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@client/lib/subscriptions/constants';
+import { IOrganizationDocument, WithId } from '@bike4mind/common';
+import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import { toast } from 'sonner';
 import OrganizationProfileUpdated from './OrganizationProfileUpdated';
 import OrganizationMembers from '@client/app/components/organizations/Member';
@@ -48,7 +48,6 @@ import {
   useTopUpOrganization,
 } from '@client/app/hooks/data/adminOrganizations';
 import { useGetPendingOrganizationUsers } from '@client/app/hooks/data/user';
-import { useUser } from '@client/app/contexts/UserContext';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { create } from 'zustand';
@@ -111,13 +110,14 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
   isPending,
 }) => {
   const { data: pendingUsers } = useGetPendingOrganizationUsers(org.id);
+  const { maxSeats } = useTeamSeatLimits();
   const pendingCount = pendingUsers?.length ?? 0;
   const acceptedTeamSize = (org.users?.length ?? 0) + 1; // +1 for owner
   const teamSize = acceptedTeamSize + pendingCount;
   // Clamp the floor at the ceiling so an over-cap org can be set back down to the max (#1424) -
   // mirrors the server validateSeatChange clamp. Without it, min > max here and the input forces
-  // an unsubmittable value (>= teamSize) that the server then rejects as over the 100-seat cap.
-  const minAllowed = Math.min(teamSize, ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
+  // an unsubmittable value (>= teamSize) that the server then rejects as over the teamPlanMaxSeats cap.
+  const minAllowed = Math.min(teamSize, maxSeats);
   const pendingHint = pendingCount > 0 ? ` (${pendingCount} pending invite${pendingCount === 1 ? '' : 's'})` : '';
 
   return (
@@ -134,7 +134,7 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
           <FormLabel>New seat count</FormLabel>
           <Input
             type="number"
-            slotProps={{ input: { min: minAllowed, max: ORGANIZATION_SUBSCRIPTION_MAX_SEATS } }}
+            slotProps={{ input: { min: minAllowed, max: maxSeats } }}
             value={seatsValue}
             onChange={e => setSeatsValue(Math.max(minAllowed, Number(e.target.value || minAllowed)))}
             data-testid="seats-input"
@@ -155,7 +155,6 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
 
 const OrganizationsTab: React.FC = () => {
   const isMobile = useIsMobile();
-  const { currentUser } = useUser();
   const [selectedOrg, setSelectedOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [membersOrg, setMembersOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -735,12 +734,7 @@ const OrganizationsTab: React.FC = () => {
             <Typography level="h4" sx={{ mb: 2 }}>
               {membersOrg.name} - Members
             </Typography>
-            <OrganizationMembers
-              organization={liveMembersOrg ?? membersOrg}
-              userPermissions={
-                currentUser?.isAdmin ? [Permission.read, Permission.update, Permission.share] : [Permission.read]
-              }
-            />
+            <OrganizationMembers organization={liveMembersOrg ?? membersOrg} />
           </ModalDialog>
         </Modal>
       )}

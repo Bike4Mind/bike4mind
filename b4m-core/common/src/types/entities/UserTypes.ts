@@ -166,8 +166,6 @@ export interface IUserPreferences {
   agentModeDefault?: 'off' | 'auto' | 'on';
   /** Whether to show fun/novelty tools (chess, dice, ISS tracker, etc.) in the tools catalog. Default: false. */
   showFunTools?: boolean;
-  /** Whether generated audio (TTS, sound-effect, music) is saved to storage as a browsable FabFile. Default: true. */
-  saveGeneratedAudio?: boolean;
   /** Whether to show the prompt suggestion cards on the splash screen. Default: false. */
   showSplashCards?: boolean;
 }
@@ -244,8 +242,10 @@ export interface IUser extends ICreditHolder {
   /**
    * Invite-resolved credit amount awaiting proof of email ownership. Set at
    * registration alongside PENDING_FREE_CREDITS_TAG; released (and nulled) by
-   * registerViaOTC or the email-verify route. Null when nothing is pending - the
-   * open-registration path leaves it null and grants `defaultFreeCredits` instead.
+   * userService.releasePendingFreeCredits on OTC registration, email-link verify, first
+   * OTC login, OAuth signup/link, or the backfillPendingFreeCredits script. Null when
+   * nothing is pending - the open-registration path leaves it null and grants
+   * `defaultFreeCredits` instead.
    */
   pendingCreditGrant?: number | null;
   level: UserLevelType;
@@ -613,6 +613,36 @@ export interface IUser extends ICreditHolder {
    * Used to enforce a 72-hour cooldown against cancel-and-resubscribe credit farming.
    */
   lastCreditGrantAt?: Date | null;
+
+  /**
+   * Campaign touches the browser carried at signup, written once and only with attribution consent
+   * (apps/client server/analytics/funnel.ts). Absent when there was no consented touch.
+   */
+  acquisition?: IUserAcquisition | null;
+
+  /**
+   * A test persona or test-domain account, decided at signup. Funnel analytics skip or tag these so
+   * synthetic traffic never reaches conversion metrics.
+   */
+  isSynthetic?: boolean;
+
+  /** When the user first got a completed chat answer; set once, drives the first_value event. */
+  firstValueAt?: Date | null;
+}
+
+export interface IUserAcquisitionTouch {
+  source: string;
+  medium?: string;
+  campaign?: string;
+  content?: string;
+}
+
+export interface IUserAcquisition {
+  firstTouch?: IUserAcquisitionTouch;
+  lastTouch?: IUserAcquisitionTouch;
+  /** How the account was created (`otc`, `google`, `github`, ...). */
+  signupMethod: string;
+  capturedAt: Date;
 }
 
 export interface IOAuthCredentials {

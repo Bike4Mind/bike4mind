@@ -19,10 +19,10 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
-import imageLogger from '@client/app/utils/imageLogger';
+import imageLogger from '@server/utils/imageLogger';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { SessionEvents } from '@server/utils/eventBus';
-import { createAttachmentLakeAccess } from '@server/queueHandlers/agentExecutor.attachmentLakeAccess';
+import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import type { IUserDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
 

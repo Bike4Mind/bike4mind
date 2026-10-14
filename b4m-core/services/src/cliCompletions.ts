@@ -20,7 +20,9 @@ import {
   IUserRepository,
   normalizeMultimodalMessages,
   BadRequestError,
+  HTTPError,
   type CompletionSource,
+  UNKNOWN_MODEL_ERROR_CODE,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -39,7 +41,7 @@ import {
   resolveOutputMaxTokens,
   type ICompletionOptions,
   type ICompletionOptionTools,
-  type ApiKeyTable,
+  isModelProviderConfigured,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
@@ -68,9 +70,10 @@ export interface CompletionParams {
      */
     response_format?: import('@bike4mind/common').ResponseFormat;
     /**
-     * Forwarded to the adapter, which the OpenAI (reasoning models), Kimi (K3 only) and
-     * DeepSeek backends read, and Claude (direct or Bedrock) reads only when `thinking.enabled`
-     * is set. Every other backend (Gemini, xAI, Ollama) drops it, so it is a silent no-op there.
+     * Forwarded to the adapter, which the OpenAI (reasoning models), Kimi (K3 only),
+     * DeepSeek and Anthropic (direct and Bedrock) backends read. Gemini, xAI and
+     * Ollama drop it, so it is a silent no-op there. With `thinking.enabled`, Claude
+     * keeps thinking on and uses this as its effort.
      */
     reasoningEffort?: import('@bike4mind/common').ReasoningEffort;
     /** See the `thinking` field of CompletionRequestSchema. */
@@ -150,6 +153,12 @@ export interface CompletionParams {
   alwaysRecordUsage?: boolean;
   logger?: Logger;
   onChunk: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>;
+  /**
+   * Called once, after model resolution and the credit hold, immediately before the provider call.
+   * The SSE route commits its 200 here, so anything thrown earlier can still be a real HTTP status.
+   * A throw from it refunds the hold.
+   */
+  onReady?: () => void | Promise<void>;
 }
 
 /**
@@ -288,8 +297,7 @@ export function resolveOpenAiBareModelAlias(modelId: string): string {
 }
 
 /**
- * Shared LLM completion logic
- * Used by Next.js API route, Lambda function, and available for 3rd party integrations
+ * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, options, db, logger, onChunk, apiKeyInfo } = params;
@@ -341,8 +349,12 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (!isCurrentOrgMember(organization, userId)) {
       const actor = await db.users.findById(userId);
       if (!actor?.isAdmin) {
+        logger?.warn?.('[CLI_CREDITS] API key minter is no longer a member of the billing organization', {
+          userId,
+          organizationId: organization.id,
+        });
         throw new BadRequestError(
-          `[CLI_CREDITS] User ${userId} is no longer a member of billing organization ${organization.id}`
+          'This API key bills an organization you are no longer a member of. Re-mint the key to continue.'
         );
       }
     }
@@ -359,18 +371,32 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   const models = await getAvailableModels(apiKeys);
   const modelInfo = models.find(m => m.id === (model as ChatModels));
+  const catalogued = CHAT_MODELS.includes(model as ChatModels);
 
-  const llm = getLlmByModel(apiKeys as ApiKeyTable, {
+  const llm = getLlmByModel(apiKeys, {
     modelInfo,
     logger: logger ?? new Logger(),
     endUserId: userId,
   });
 
   if (!llm) {
-    // Only an id outside the static catalog is caller input. A catalogued model with no backend
-    // means the platform key is missing or its model listing failed: an operator fault that must stay counted.
-    const message = `Failed to create LLM backend for model: ${model}`;
-    throw CHAT_MODELS.includes(model as ChatModels) ? new Error(message) : new BadRequestError(message);
+    const unknownModel = new BadRequestError(
+      `Unknown model '${params.model}'. List the models you can call with GET /api/v1/models.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+    if (!catalogued) throw unknownModel;
+    const providerConfigured = await isModelProviderConfigured(model, apiKeys).catch((cause: unknown) => {
+      logger?.error?.('[cliCompletions] provider check failed; answering 503', { model, cause });
+      return false;
+    });
+    if (!providerConfigured)
+      throw new HTTPError(503, `Failed to create LLM backend for model: ${params.model}`, {
+        errorCode: 'provider_not_configured',
+      });
+    // A retired or unlisted model on a configured provider must be changed by the caller; a retryable status
+    // would loop clients forever. Static listings cannot time out, so absence here is not transient.
+    logger?.warn?.('[cliCompletions] catalogued model unavailable on a configured provider', { model });
+    throw unknownModel;
   }
 
   llm.currentModel = model;
@@ -563,38 +589,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       );
     }
 
-    // Calculate credit usage for display purposes (always, regardless of enforcement)
-    // Calculate even when tokens are 0 (some models have minimum charges)
-    if (modelInfo && (info?.inputTokens || info?.outputTokens)) {
-      const currentInputTokens = info.inputTokens || 0;
-      const currentOutputTokens = info.outputTokens || 0;
-      const currentCacheReadTokens = info.cacheReadInputTokens || 0;
-      const currentCacheCreationTokens = info.cacheCreationInputTokens || 0;
-      const currentUsdCost = getTextModelCost(
-        modelInfo,
-        currentInputTokens,
-        currentOutputTokens,
-        currentCacheReadTokens,
-        currentCacheCreationTokens
-      );
-      const currentCredits = usdToCredits(currentUsdCost);
-
-      logger?.debug?.(
-        `[CLI_CREDITS] Calculated ${currentCredits} credits during streaming ($${currentUsdCost.toFixed(6)} USD)`
-      );
-
-      // Pass credit info to client via CompletionInfo
-      await onChunk(text, {
-        ...info,
-        creditsUsed: currentCredits,
-        usdCost: currentUsdCost,
-      });
-    } else {
-      await onChunk(text, info);
-    }
+    // Streaming frames carry token usage but never credits: the settlement event below is the
+    // only frame with `credits`, so a client reading credits sees exactly one number, and it is
+    // the one the ledger charged. A provisional round-up here (usdToCredits, minimum 1) used to
+    // precede a stochastic settlement of 0 on cheap calls, which read as a double charge.
+    await onChunk(text, info);
   };
 
   try {
+    await params.onReady?.();
     await llm.complete(model, messages, completionOptions, wrappedOnChunk);
   } catch (error) {
     // If completion fails, refund the reserved credits to whichever pool paid

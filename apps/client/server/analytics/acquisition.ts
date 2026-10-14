@@ -50,6 +50,23 @@ export function acquisitionToStripeMetadata(touches: AcquisitionTouches): Record
 }
 
 /**
+ * A checkout session's attribution metadata: the touches this browser carries, else the ones stored
+ * on the buyer at signup (an org admin often checks out on another device, with no cookies). Empty
+ * unless the client sent `attributionConsent: true` - the same flag individual checkout has always
+ * gated on. The stored touches were themselves written only with consent (funnel.ts).
+ */
+export function checkoutAcquisitionMetadata(
+  req: Pick<Request, 'headers'>,
+  attributionConsent: boolean | undefined,
+  stored?: AcquisitionTouches | null
+): Record<string, string> {
+  if (attributionConsent !== true) return {};
+  const touches = readAcquisitionTouches(req);
+  if (touches.firstTouch || touches.lastTouch) return acquisitionToStripeMetadata(touches);
+  return stored ? acquisitionToStripeMetadata({ firstTouch: stored.firstTouch, lastTouch: stored.lastTouch }) : {};
+}
+
+/**
  * The inverse, from a Stripe subscription's metadata, in the shape the subscription row stores.
  * Undefined when neither touch was recorded.
  */

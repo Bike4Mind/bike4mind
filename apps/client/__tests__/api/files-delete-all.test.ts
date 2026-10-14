@@ -12,7 +12,17 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: vi.fn(async (fn: (s: unknown) => Promise<unknown>) => fn('txn')),
 }));
 
-vi.mock('@bike4mind/services', () => ({ fabFilesService: {} }));
+// The real stored-object delete, so the legal-hold and generated-copy rules run against this route's projection.
+vi.mock('@bike4mind/services', async importOriginal => {
+  const { fabFilesService } = await importOriginal<typeof import('@bike4mind/services')>();
+  return { fabFilesService: { deleteStoredObjects: fabFilesService.deleteStoredObjects } };
+});
+vi.mock('@server/files/generatedCopyStore', () => ({
+  getGeneratedCopyStore: () => ({
+    storage: { delete: generatedDelete },
+    quests: { findSessionIdsByImage: async () => [] },
+  }),
+}));
 
 // The caller holds delete on their own file and on a file shared in from another owner - the
 // scope the endpoint used to hard-delete wholesale.
@@ -21,6 +31,9 @@ vi.mock('@casl/mongoose', () => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: vi.fn().mockResolvedValue({ artifacts: [] }),
+}));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ delete: storageDelete }),
 }));
@@ -37,7 +50,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-const { storageDelete } = vi.hoisted(() => ({ storageDelete: vi.fn() }));
+let ownedFiles: Record<string, unknown>[] = [];
+
+const { storageDelete, generatedDelete, selectProjections } = vi.hoisted(() => ({
+  storageDelete: vi.fn(),
+  generatedDelete: vi.fn(),
+  selectProjections: [] as unknown[],
+}));
 
 import '../../pages/api/files/index';
 import { FabFile, User } from '@bike4mind/database';
@@ -61,6 +80,9 @@ const makeRes = () => {
 describe('DELETE /api/files scoping', () => {
   beforeEach(() => {
     storageDelete.mockReset().mockResolvedValue(undefined);
+    generatedDelete.mockReset().mockResolvedValue(undefined);
+    selectProjections.length = 0;
+    ownedFiles = [{ filePath: 'owned/mine.txt' }];
     vi.mocked(FabFile.deleteMany)
       .mockReset()
       .mockResolvedValue({ deletedCount: 1 } as never);
@@ -72,7 +94,10 @@ describe('DELETE /api/files scoping', () => {
     vi.mocked(FabFile.find)
       .mockReset()
       .mockReturnValue({
-        select: () => ({ session: async () => [{ filePath: 'owned/mine.txt' }] }),
+        select: (projection: unknown) => ({
+          session: async () => (selectProjections.push(projection), ownedFiles),
+          lean: async () => [{ _id: 'mine' }],
+        }),
       } as never);
     vi.mocked(User.findById)
       .mockReset()
@@ -84,7 +109,7 @@ describe('DELETE /api/files scoping', () => {
   const run = async () => {
     const res = makeRes();
     await captured.handlers.delete(
-      { user: { id: CALLER }, ability: { __ability: true }, logger: { error: vi.fn() } },
+      { user: { id: CALLER }, ability: { __ability: true }, logger: { error: vi.fn(), warn: vi.fn() } },
       res
     );
     return res;
@@ -105,6 +130,28 @@ describe('DELETE /api/files scoping', () => {
     // Only the owned file's path is destroyed in storage.
     expect(storageDelete).toHaveBeenCalledTimes(1);
     expect(storageDelete).toHaveBeenCalledWith('owned/mine.txt');
+  });
+
+  it("removes an owned generated file's inline chat copy too", async () => {
+    ownedFiles = [{ filePath: 'generated-audio/a.mp3', sourceMetadata: { generatedCopyKey: 'a.mp3' } }];
+
+    await run();
+
+    expect(storageDelete).toHaveBeenCalledWith('generated-audio/a.mp3');
+    expect(generatedDelete).toHaveBeenCalledWith('a.mp3');
+  });
+
+  // The legal-hold skip only works if the owned lookup projects the fields it reads.
+  it('keeps the bytes of a blocked file and projects what the stored-object delete reads', async () => {
+    ownedFiles = [{ filePath: 'owned/evidence.png', moderationStatus: 'blocked' }];
+
+    await run();
+
+    expect(storageDelete).not.toHaveBeenCalled();
+    const projection = String(selectProjections[0]).split(' ');
+    expect(projection).toEqual(
+      expect.arrayContaining(['filePath', 'moderationStatus', 'sourceMetadata.generatedCopyKey'])
+    );
   });
 
   it('scopes the document delete to files the caller owns', async () => {

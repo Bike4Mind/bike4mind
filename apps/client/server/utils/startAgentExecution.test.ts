@@ -282,6 +282,26 @@ describe('startAgentExecution', () => {
     });
   });
 
+  it('forwards per-send systemContext on the start payload only, never on the doc or the Quest', async () => {
+    await startAgentExecution(
+      input({ userId: 'system-context-run', systemContext: 'Extra instructions for this send.' }),
+      logger
+    );
+
+    expect(dispatchedPayload()).toMatchObject({ systemContext: 'Extra instructions for this send.' });
+    // Run-scoped: the executor bakes it into the checkpointed system message, so no
+    // durable copy is kept on the execution doc or shown via the persisted prompt Quest.
+    expect(mockCreateExecution.mock.calls[0][0]).not.toHaveProperty('systemContext');
+    expect(mockQuestCreate.mock.calls[0][0]).not.toHaveProperty('systemContext');
+    expect(mockQuestCreate.mock.calls[0][0].prompt).not.toContain('Extra instructions');
+  });
+
+  it('omits systemContext from the start payload when the caller sends none', async () => {
+    await startAgentExecution(input({ userId: 'no-system-context-run' }), logger);
+
+    expect(dispatchedPayload()).not.toHaveProperty('systemContext');
+  });
+
   it('never lets the ambient marker widen approvedTools on a headless run', async () => {
     // A headless caller's explicit tool list IS its permission approval, so the public REST
     // contract has no ambient field at all. Belt: even if one were forged onto the input,
@@ -323,6 +343,17 @@ describe('startAgentExecution', () => {
 
     expect(mockCreateExecution.mock.calls[0][0].apiKeyId).toBe('key-1');
     expect(mockCreateExecution.mock.calls[1][0]).not.toHaveProperty('apiKeyId');
+  });
+
+  it('persists how the run was authenticated, so its tools and child runs see it', async () => {
+    await startAgentExecution(
+      input({ userId: 'keyed', apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      logger
+    );
+    await startAgentExecution(input({ userId: 'session', apiKeyInfo: undefined }), logger);
+
+    expect(mockCreateExecution.mock.calls[0][0].authOrigin).toBe('apiKey');
+    expect(mockCreateExecution.mock.calls[1][0].authOrigin).toBe('session');
   });
 
   it('ignores the dispatch payload on an interactive run, which can approve per-tool instead', async () => {

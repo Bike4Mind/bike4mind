@@ -287,10 +287,14 @@ The **Dependency Audit Gate** check runs `pnpm audit` on your PR and on the comm
 
 To fix a failing gate (or the tracking issue):
 
-1. Raise the floor in `pnpm.overrides` in the root `package.json` to the patched version, keyed by the vulnerable range (e.g. `"shell-quote@<1.11.0": "^1.11.0"`).
+1. Raise the floor in `overrides` in the root `pnpm-workspace.yaml` to the patched version, keyed by the vulnerable range (e.g. `"shell-quote@<1.11.0": "^1.11.0"`).
 2. Update the lockfile with `pnpm install --lockfile-only`, then confirm it is consistent with `pnpm install --frozen-lockfile --lockfile-only`. Run `node scripts/check-pnpm-overrides.mjs` after an install that changed overrides (the Lockfile Integrity check runs it too).
 3. Run the gate locally: `pnpm audit --json > r.json; PACKAGES_JSON_REPORT_PATH=r.json node scripts/audit-gate.mjs`.
 4. Only if no patched version exists, or the vulnerable code path is not reachable, add the GHSA id to `scripts/audit-allowlist.json` instead, and explain why in the PR.
+
+When the scheduled audit finds advisories on `main`, it also opens an auto-fix PR from the `ci/dependency-audit-autofix` branch that applies steps 1 and 2. A human reviews its lockfile diff and merges it; prefer that PR over writing the same bump by hand.
+
+The auto-fix only raises a floor within the installed major. Anything else (a major bump, no patched release, a range or line override) is listed in the tracking issue between `<!-- dependency-audit-skipped -->` markers, one `GHSA | package | severity | reason` line each (the reason is everything after the third ` | `). An empty block means nothing was skipped; a missing block means the run could not tell.
 
 ### Preview deploys
 

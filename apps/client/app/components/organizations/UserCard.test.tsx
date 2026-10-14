@@ -17,7 +17,9 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 }));
 vi.mock('@client/app/hooks/data/invites', () => ({ useCancelInvite: () => ({ mutateAsync: vi.fn() }) }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => vi.fn() }));
-vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: viewer.id } }) }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { id: viewer.id, isAdmin: false } }),
+}));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@client/app/utils/s3', () => ({ getAppFileUrl: () => '' }));
@@ -32,10 +34,11 @@ const member = (id: string, creditUsage: MemberCreditUsage | null, status: 'acce
     creditUsage: MemberCreditUsage | null;
   };
 
+type Roster = { invite: boolean; revoke: boolean };
 const renderCard = (
   user: ReturnType<typeof member>,
   canManageCreditBudgets: boolean,
-  userPermissions: Permission[] = [Permission.read]
+  roster: boolean | Roster = false
 ) =>
   render(
     ((children: ReactNode) => (
@@ -46,7 +49,8 @@ const renderCard = (
       <OrganizationUserCard
         organization={org}
         user={user}
-        userPermissions={userPermissions}
+        canInviteMembers={typeof roster === 'boolean' ? roster : roster.invite}
+        canRevokeMembers={typeof roster === 'boolean' ? roster : roster.revoke}
         canManageCreditBudgets={canManageCreditBudgets}
       />
     )
@@ -87,22 +91,22 @@ describe('OrganizationUserCard monthly limit control', () => {
 
   // The owner row hides every roster action, but the owner's own spend is capped like anyone's.
   it('is offered on the owner row, which has no roster actions', async () => {
-    renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, [Permission.share]);
+    renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, true);
     openMenu();
     expect(await screen.findByText('Set monthly limit')).toBeTruthy();
-    expect(screen.queryByText('Revoke Access')).toBeNull();
-    expect(screen.queryByText('Cancel Invite')).toBeNull();
+    expect(screen.queryByTestId('organization-user-card-revoke-access')).toBeNull();
+    expect(screen.queryByTestId('organization-user-card-cancel-invite')).toBeNull();
     fireEvent.click(screen.getByTestId('organization-user-card-set-limit'));
     expect(screen.getByTestId('credit-limit-modal')).toBeTruthy();
   });
 
   // The billing owner viewing their own row would satisfy canLeave, so this pins the `!isOwner` guard on it.
-  it('offers the owner no Leave Organization on their own row', async () => {
+  it('offers the owner no Leave Team on their own row', async () => {
     viewer.id = 'owner1';
-    renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, [Permission.share]);
+    renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, true);
     openMenu();
     expect(await screen.findByText('Set monthly limit')).toBeTruthy();
-    expect(screen.queryByText('Leave Organization')).toBeNull();
+    expect(screen.queryByText('Leave Team')).toBeNull();
   });
 
   it('saves an override of 0 and can clear back to the org default', async () => {
@@ -122,5 +126,43 @@ describe('OrganizationUserCard monthly limit control', () => {
     await waitFor(() =>
       expect(setOverride).toHaveBeenLastCalledWith({ organizationId: 'org1', userId: 'a', maxCredits: null })
     );
+  });
+});
+
+// Revoke Access and Cancel Invite hit endpoints with different server gates, so each follows its own flag.
+describe('OrganizationUserCard roster actions', () => {
+  beforeEach(() => {
+    viewer.id = 'viewer';
+  });
+
+  const accepted = () => member('a', { tracked: true, used: 0, cap: 500, isOverride: false });
+
+  it('offers Revoke Access on the revoke flag alone', async () => {
+    renderCard(accepted(), false, { invite: false, revoke: true });
+    openMenu();
+    expect(await screen.findByTestId('organization-user-card-revoke-access')).toBeTruthy();
+  });
+
+  it('withholds Revoke Access from a viewer who may only invite', () => {
+    renderCard(accepted(), false, { invite: true, revoke: false });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+  });
+
+  it('offers Cancel Invite on the invite flag alone', async () => {
+    renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
+    openMenu();
+    expect(await screen.findByTestId('organization-user-card-cancel-invite')).toBeTruthy();
+  });
+
+  it('withholds Cancel Invite from a viewer who may only revoke', () => {
+    renderCard(member('p', null, 'pending'), false, { invite: false, revoke: true });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+  });
+
+  it('shows no menu when both invite and revoke are withheld', () => {
+    renderCard(accepted(), false, { invite: false, revoke: false });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+    renderCard(member('p', null, 'pending'), false, { invite: false, revoke: false });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
   });
 });

@@ -63,9 +63,12 @@ export enum FabFileSourceType {
   PROPOSAL_APPROVAL = 'proposal_approval',
   GITHUB = 'github',
   /**
-   * Produced by an in-chat tool (image/audio/music/Excel generation). `sourceMetadata.sessionId`
-   * links it to the notebook it was made in - see persistGeneratedFileAsFabFile for why that link
-   * is not the top-level `sessionId`.
+   * Produced by a generator: an in-chat tool, a generation route or a generation job. Media saved
+   * through saveGeneratedAsset carries `sourceMetadata.generation` (GeneratedAssetMetadata).
+   * `sourceMetadata.sessionId`, when set, links it to the notebook it was made in - see
+   * persistGeneratedFileAsFabFile for why that link is not the top-level `sessionId`.
+   * `sourceMetadata.generatedCopyKey` names a second, generated-bucket copy that deletes also
+   * remove (see generatedCopyKeyOf).
    */
   TOOL_GENERATED = 'tool_generated',
 }
@@ -1117,6 +1120,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @returns A promise that resolves to an array of files.
    */
   findByUserId(userId: string): Promise<IFabFileDocument[]>;
+
+  /** One newest-first page of the user's own live, unarchived files; see FabFileRepository. */
+  listOwnedBeforeId(
+    userId: string,
+    options: { beforeId?: string; limit: number; search?: string }
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
 
   /**
    * Sum the `fileSize` of every non-deleted file a user owns, via an aggregate

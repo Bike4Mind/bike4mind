@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   runGitHubLakeSlice: vi.fn(),
   settle: vi.fn(),
   sendToQueue: vi.fn(),
+  releaseGitHubLakeConnection: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -51,6 +52,9 @@ vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOrigin
   getInstallationOctokit: h.getInstallationOctokit,
   getRepository: h.getRepository,
   getBranchHeadSha: h.getBranchHeadSha,
+}));
+vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+  releaseGitHubLakeConnection: h.releaseGitHubLakeConnection,
 }));
 vi.mock('@workers/queueHandlers/githubLakeSlice', () => ({ runGitHubLakeSlice: h.runGitHubLakeSlice }));
 vi.mock('@workers/queueHandlers/lakeIngestShared', () => ({ settleLakeIngestBatch: h.settle }));
@@ -120,6 +124,7 @@ beforeEach(() => {
   h.getBranchHeadSha.mockResolvedValue('head-sha');
   h.runGitHubLakeSlice.mockResolvedValue({ kind: 'done', batchId: 'batch1', transientSkips: 0 });
   h.sendToQueue.mockImplementation(async () => void h.order.push('enqueue'));
+  h.releaseGitHubLakeConnection.mockResolvedValue({ installationRetained: false });
 });
 
 describe('githubLakeIngest - claim', () => {
@@ -207,6 +212,32 @@ describe('githubLakeIngest - gates', () => {
     await run(continuation());
     expect(h.runGitHubLakeSlice).not.toHaveBeenCalled();
     expect(h.settle).toHaveBeenCalledWith('batch1', logger);
+    // A soft-deleted or archived lake can come back, so its connection must survive.
+    expect(h.releaseGitHubLakeConnection).not.toHaveBeenCalled();
+  });
+
+  it('retires the connection and frees its repository claim when the target data lake is gone', async () => {
+    h.lakeFindById.mockResolvedValue(null);
+    await run(continuation());
+    expect(h.settle).toHaveBeenCalledWith('batch1', logger);
+    expect(h.releaseGitHubLakeConnection).toHaveBeenCalledWith(CONNECTION, expect.objectContaining({ appId: 'a' }));
+    // Releasing the claim would leave the row for the reconcile to enqueue again on every run.
+    expect(h.releaseSyncClaim).not.toHaveBeenCalled();
+    expect(h.runGitHubLakeSlice).not.toHaveBeenCalled();
+  });
+
+  it('hands the claim back unchanged for a retry when retiring a lakeless connection throws', async () => {
+    h.lakeFindById.mockResolvedValue(null);
+    h.releaseGitHubLakeConnection.mockRejectedValueOnce(new Error('github down'));
+    await expect(run()).resolves.toBeUndefined();
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-claim', null, 'connected');
+  });
+
+  it('does not retire a lakeless connection while the GitHub source flag is off', async () => {
+    h.getSettingByName.mockImplementation(async (key: string) => key !== 'EnableDataLakeGitHub');
+    h.lakeFindById.mockResolvedValue(null);
+    await run();
+    expect(h.releaseGitHubLakeConnection).not.toHaveBeenCalled();
   });
 
   it('drops a malformed payload without claiming', async () => {

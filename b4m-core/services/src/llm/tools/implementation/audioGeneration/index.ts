@@ -2,8 +2,7 @@ import {
   ApiKeyType,
   AudioGenerationToolCall,
   extensionFromMimeType,
-  KnowledgeType,
-  shouldPersistGeneratedAudio,
+  type GeneratedAssetMetadata,
   SOUND_EFFECTS_MAX_INPUT_CHARS,
   SoundGenerationVendor,
   TTS_MAX_INPUT_CHARS,
@@ -15,7 +14,7 @@ import { aiSoundService, aiVoiceService } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
-import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
+import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
 import { ToolContext, ToolDefinition } from '../../base/types';
 
 const DEFAULT_TTS_PROVIDER: VoiceGenerationVendor = 'openai';
@@ -130,7 +129,12 @@ export const audioGenerationTool: ToolDefinition = {
           return `Error: sound-effect request rejected by the ${SFX_PROVIDER} provider.`;
         }
 
-        const storedPath = await persistAndUpload(context, audio, contentType, 'sound-effect');
+        const storedPath = await persistAndUpload(context, audio, contentType, {
+          generator: 'sound_effect',
+          provider: SFX_PROVIDER,
+          prompt: text,
+          ...(durationSeconds !== undefined && { durationSeconds }),
+        });
 
         await context.onFinish?.('audio_generation', {
           kind: 'sound_effect',
@@ -218,7 +222,12 @@ export const audioGenerationTool: ToolDefinition = {
         return `Error: TTS request rejected by the ${provider} provider.`;
       }
 
-      const storedPath = await persistAndUpload(context, audio, contentType, 'speech');
+      const storedPath = await persistAndUpload(context, audio, contentType, {
+        generator: 'speech',
+        provider,
+        modelId: resolvedModel,
+        prompt: text,
+      });
 
       // Settle on the ACTUAL billed model + character count so the tool charge matches
       // the direct /api/ai/tts endpoint exactly (deductTtsCredits).
@@ -266,14 +275,14 @@ export const audioGenerationTool: ToolDefinition = {
 
 /**
  * Upload the clip to the generated-content bucket (CDN-served, rides quest.images for
- * inline playback) and keep a browsable AUDIO copy in the Knowledge Base (best-effort).
+ * inline playback) and keep a browsable AUDIO copy in the user's files (best-effort).
  * Returns the generated-content storage path.
  */
 async function persistAndUpload(
   context: ToolContext,
   audio: Buffer,
   contentType: string,
-  source: 'speech' | 'sound-effect'
+  generation: GeneratedAssetMetadata
 ): Promise<string> {
   const ext = extensionFromMimeType(contentType) || 'mp3';
   const filename = `${uuidv4()}.${ext}`;
@@ -282,27 +291,7 @@ async function persistAndUpload(
   // Always kept - this is what the inline player streams.
   const storedPath = await context.imageGenerateStorage.upload(audio, filename, { ContentType: contentType });
 
-  // Keep a browsable AUDIO copy in the Knowledge Base, honoring the user's
-  // saveGeneratedAudio preference - the same gate the direct /api/ai/tts and
-  // sound-effects endpoints apply (defaults on). AUDIO type so the file is never
-  // chunked/vectorized/attached to a completion.
-  if (
-    shouldPersistGeneratedAudio({
-      userId: context.userId,
-      saveGeneratedAudio: context.user?.preferences?.saveGeneratedAudio,
-    })
-  ) {
-    await persistGeneratedFileAsFabFile(context, {
-      fileName: `generated-${source}-${filename.slice(0, 8)}.${ext}`,
-      mimeType: contentType,
-      content: audio,
-      type: KnowledgeType.AUDIO,
-      tags: [
-        { name: 'generated', strength: 1 },
-        { name: source, strength: 1 },
-      ],
-    });
-  }
+  await saveGeneratedAssetFromTool(context, { bytes: audio, contentType, generation, generatedCopyKey: storedPath });
 
   return storedPath;
 }

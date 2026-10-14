@@ -1,5 +1,6 @@
 import { User } from '@bike4mind/database';
 import { isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
+import { assertAccountStateUsable } from './assertAccountStateUsable';
 
 export interface JwtPayloadClaims {
   id: string;
@@ -51,6 +52,7 @@ export async function verifyJwtPayload(
       if (!isTokenVersionCurrent(jwt_payload.tokenVersion, user.tokenVersion)) {
         return done(null, false);
       }
+      assertAccountStateUsable(user);
       (user as any).mfaPending = !!jwt_payload.mfaPending;
       // Propagate the impersonation marker (set by loginAs) so request handlers
       // can distinguish an admin-driven session from the real customer's - see logout.ts.

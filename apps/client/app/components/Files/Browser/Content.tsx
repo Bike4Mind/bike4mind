@@ -1,9 +1,11 @@
 import {
+  DEFAULT_STORAGE_LIMIT_MB,
   IFabFileDocument,
   InviteType,
   isFabFileTypeFilter,
   isMediaOnlyMimeType,
   KnowledgeType,
+  storageLimitToBytes,
 } from '@bike4mind/common';
 import { useSessions, useWorkBenchFiles, useWorkBenchStore } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -698,7 +700,7 @@ const FileBrowserContent = () => {
             >
               <FileStorageBar
                 currentStorageInBytes={currentUser?.currentStorageSize ?? 0}
-                storageLimitInBytes={(currentUser?.storageLimit ?? 1000) * 1000000}
+                storageLimitInBytes={storageLimitToBytes(currentUser?.storageLimit ?? DEFAULT_STORAGE_LIMIT_MB)}
               />
             </Box>
           </Stack>
@@ -953,6 +955,7 @@ const FileBrowserContent = () => {
             name={fileToShare.fileName}
             type={InviteType.FabFile}
             users={fileToShare.users}
+            ownerId={fileToShare.userId}
           />
         )}
 

@@ -649,3 +649,15 @@ it.each([
     expect.objectContaining({ status: 'failed' })
   );
 });
+
+describe('quest export browser URL audience', () => {
+  it.each([false, true])('opts into browser signing for existing artifact %s', async existing => {
+    if (existing) h.metadata.mockResolvedValue({});
+    await runExport(h.OWNER_ID);
+    expect(h.signedUrl).toHaveBeenCalledWith(
+      expect.stringContaining('exports/quest/'),
+      'get',
+      expect.objectContaining({ audience: 'browser', expiresIn: 3600 })
+    );
+  });
+});

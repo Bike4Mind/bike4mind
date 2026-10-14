@@ -16,9 +16,11 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
+import { recordSignupAcquisition } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
+import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 
 const handler = baseApi({ auth: false })
   .use(async (req, res, next) => {
@@ -114,10 +116,30 @@ const handler = baseApi({ auth: false })
           return res.redirect('/login?error=account_suspended');
         }
 
+        // Resume the originally requested path, round-tripped via the signed
+        // state JWT (embedded by PassportOAuthStateStore.store). /auth/success
+        // applies sanitizeRedirectTo before navigating, so pass it through as an
+        // opaque, URL-encoded query value (kept out of the token fragment).
+        //
+        // The state store already verified this token (CSRF) inside
+        // passport.authenticate above; we re-decode here only to read the
+        // embedded redirectTo and clientId. The extra HS256 verify is cheap and avoids
+        // threading the payload out through passport-oauth2's internals.
+        const stateResult =
+          typeof req.query.state === 'string'
+            ? verifyStateToken<BaseStatePayload & { redirectTo?: string; clientId?: string }>(req.query.state, {
+                audience: `${strategy}-oauth-state`,
+              })
+            : undefined;
+        const redirectTo = stateResult?.valid ? stateResult.payload.redirectTo : undefined;
+
         // A brand-new account (flagged by verifyCallback's User.create branch)
         // also logs REGISTER, matching the OTC signup path (pages/api/otc/verify.ts)
         // - OAuth signups used to be indistinguishable from logins in the event log.
         const isNewUser = Boolean((user as { isNewUser?: boolean }).isNewUser);
+        // Detected before any signup conversion so synthetic accounts stay out of the ad pixel
+        // (fragment below) and the product signup emit, not just the funnel events.
+        let isSyntheticSignup = false;
         if (isNewUser) {
           try {
             await logEvent({
@@ -128,6 +150,7 @@ const handler = baseApi({ auth: false })
           } catch (logError) {
             console.error('Failed to log OAuth registration:', logError);
           }
+          await stampOAuthSourceTag(user.id, stateResult?.valid ? stateResult.payload.clientId : undefined);
           // Credit the signup to the product the visitor came through, if any, and only with
           // consent - see readConsentedAcquisitionTouches. Before the session is minted, as in
           // OTC: a mint failure after the account exists would otherwise lose the signup for
@@ -146,11 +169,14 @@ const handler = baseApi({ auth: false })
           // - a Lambda freeze after the redirect would drop it for good. The cost is bounded
           // and narrow: emitProductEvent has its own 2s timeout and per-emit catch, and a
           // signup naming no product resolves here immediately, which is most of them.
-          await emitSignupForSourceProducts({
-            userId: user.id,
-            touches: readConsentedAcquisitionTouches(req),
-            method: strategy,
-          });
+          ({ isSynthetic: isSyntheticSignup } = await recordSignupAcquisition({ req, user, method: strategy }));
+          if (!isSyntheticSignup) {
+            await emitSignupForSourceProducts({
+              userId: user.id,
+              touches: readConsentedAcquisitionTouches(req),
+              method: strategy,
+            });
+          }
         }
 
         const { accessToken } = await issueBrowserSession(req, res, user.id, {
@@ -176,22 +202,6 @@ const handler = baseApi({ auth: false })
           await logAuthAudit(req, { userId: user.id, event: 'oauth_link', strategy });
         }
 
-        // Resume the originally requested path, round-tripped via the signed
-        // state JWT (embedded by PassportOAuthStateStore.store). /auth/success
-        // applies sanitizeRedirectTo before navigating, so pass it through as an
-        // opaque, URL-encoded query value (kept out of the token fragment).
-        //
-        // The state store already verified this token (CSRF) inside
-        // passport.authenticate above; we re-decode here only to read the
-        // embedded redirectTo. The extra HS256 verify is cheap and avoids
-        // threading the payload out through passport-oauth2's internals.
-        const stateResult =
-          typeof req.query.state === 'string'
-            ? verifyStateToken<BaseStatePayload & { redirectTo?: string }>(req.query.state, {
-                audience: `${strategy}-oauth-state`,
-              })
-            : undefined;
-        const redirectTo = stateResult?.valid ? stateResult.payload.redirectTo : undefined;
         const successQuery = authSuccessRedirectQuery(redirectTo);
 
         // Redirect with tokens in URL fragment (not query string)
@@ -199,7 +209,8 @@ const handler = baseApi({ auth: false })
         // sent in Referer headers, or stored in browser history as query params.
         // isNewUser/signupMethod ride the same fragment: /auth/success reads and
         // clears it exactly once, firing the signup ad conversion for new accounts.
-        const signupFragment = isNewUser ? `&isNewUser=1&signupMethod=${encodeURIComponent(strategy)}` : '';
+        const signupFragment =
+          isNewUser && !isSyntheticSignup ? `&isNewUser=1&signupMethod=${encodeURIComponent(strategy)}` : '';
         const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
         return res.redirect(redirectUrl);
       } catch (callbackError) {

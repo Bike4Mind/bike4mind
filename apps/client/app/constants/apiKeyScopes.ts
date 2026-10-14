@@ -27,25 +27,45 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.READ_NOTEBOOKS,
     label: 'Read Notebooks',
     description: 'View notebooks and sessions',
-    endpoints: ['GET /api/sessions', 'GET /api/sessions/:id', 'GET /api/v1/quests/:id'],
+    endpoints: [
+      'GET /api/sessions',
+      'GET /api/sessions/:id',
+      'GET /api/v1/quests/:id',
+      'GET /api/v1/quests/:id/files',
+      'GET /api/v1/artifacts',
+      'GET /api/v1/artifacts/:id',
+      'GET /api/v1/artifacts/:id/versions',
+      'GET /api/v1/artifacts/:id/versions/:version',
+    ],
   },
   {
     value: ApiKeyScope.WRITE_NOTEBOOKS,
     label: 'Write Notebooks',
     description: 'Create and modify notebooks',
-    endpoints: ['POST /api/v1/sessions', 'GET /api/sessions/:id', 'PUT /api/sessions/:id', 'DELETE /api/sessions/:id'],
+    endpoints: [
+      'POST /api/v1/sessions',
+      'GET /api/sessions/:id',
+      'PUT /api/sessions/:id',
+      'DELETE /api/sessions/:id',
+      'POST /api/v1/artifacts',
+      'GET /api/v1/artifacts',
+      'GET /api/v1/artifacts/:id',
+      'PATCH|DELETE /api/v1/artifacts/:id',
+      'GET /api/v1/artifacts/:id/versions',
+      'GET /api/v1/artifacts/:id/versions/:version',
+    ],
   },
   {
     value: ApiKeyScope.READ_FILES,
     label: 'Read Files',
     description: 'Download and view files',
-    endpoints: ['GET /api/v1/files/:id'],
+    endpoints: ['GET /api/v1/files', 'GET /api/v1/files/:id'],
   },
   {
     value: ApiKeyScope.WRITE_FILES,
     label: 'Write Files',
     description: 'Upload and modify files',
-    endpoints: ['POST /api/v1/files'],
+    endpoints: ['POST /api/v1/files', 'PATCH|DELETE /api/v1/files/:id'],
   },
   {
     value: ApiKeyScope.AI_GENERATE,
@@ -60,19 +80,37 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/v1/video-generations/:id/cancel',
       'GET /api/v1/video-models',
       'POST /api/v1/embeddings',
+      'POST /api/v1/decisions',
+      'GET /api/v1/decision-models',
       'GET /api/v1/voice/voices',
       'POST /api/v1/voice/sessions',
       'POST /api/v1/voice/sessions/:id/end',
+      'POST /api/v1/transcriptions/uploads',
+      'POST /api/v1/transcriptions',
+      'POST /api/ai/refineText',
       'GET /api/v1/quests/:id',
+      'GET /api/v1/quests/:id/files',
       'GET /api/v1/credits',
       'GET /api/v1/models',
     ],
   },
   {
+    value: ApiKeyScope.AI_DECIDE,
+    label: 'AI Decide',
+    description: 'Answer yes/no, pick-one and rating questions with probabilities',
+    endpoints: ['POST /api/v1/decisions', 'GET /api/v1/decision-models', 'GET /api/v1/credits'],
+  },
+  {
     value: ApiKeyScope.AI_CHAT,
     label: 'AI Chat',
     description: 'Use AI chat features',
-    endpoints: ['POST /api/ai/llm', 'GET /api/v1/quests/:id', 'GET /api/v1/credits', 'GET /api/v1/models'],
+    endpoints: [
+      'POST /api/ai/llm',
+      'GET /api/v1/quests/:id',
+      'GET /api/v1/quests/:id/files',
+      'GET /api/v1/credits',
+      'GET /api/v1/models',
+    ],
   },
   {
     value: ApiKeyScope.READ_PROJECTS,
@@ -106,13 +144,20 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/v1/projects',
       'GET /api/v1/projects',
       'GET /api/v1/projects/:id',
+      'PATCH|DELETE /api/v1/projects/:id',
     ],
   },
   {
     value: ApiKeyScope.READ_AGENTS,
     label: 'Read Agents',
     description: 'View agents',
-    endpoints: ['GET /api/agents', 'GET /api/agents/:id', 'GET /api/agents/:id/missions'],
+    endpoints: [
+      'GET /api/agents',
+      'GET /api/agents/:id',
+      'GET /api/agents/:id/missions',
+      'GET /api/v1/agents',
+      'GET /api/v1/agents/:id',
+    ],
   },
   {
     value: ApiKeyScope.WRITE_AGENTS,
@@ -130,6 +175,10 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/agents/:id/generate-description',
       'POST /api/agents/:id/generate-system-prompt',
       'POST /api/agents/:id/enhance-field',
+      'POST /api/v1/agents',
+      'GET /api/v1/agents',
+      'GET /api/v1/agents/:id',
+      'PATCH|DELETE /api/v1/agents/:id',
     ],
   },
   {
@@ -262,20 +311,53 @@ export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SC
 );
 
 /**
- * Premium scopes, only usable when the OptiHashi overlay is mounted. Every surface that
- * lists GENERIC_MODAL_API_KEY_SCOPES must go through genericApiKeyScopesFor (or the
- * useGenericApiKeyScopes hook) so they stay hidden from users without OptiHashi access.
+ * What a viewer may reach, for gating product scopes. Each flag mirrors the gate the scope's
+ * routes enforce on the key's owner:
+ * - `hasOptiAccess`: admin || developer || `optihashi:pro` (useOptiAccess; requestHasOptiAccess
+ *   in the OptiHashi overlay).
+ * - `hasOverwatchAccess`: admin || developer || `overwatch:pro` (requestHasOverwatchAccess in the
+ *   Overwatch overlay, which also serves the marketing-reports routes).
+ * - `hearthEnabled`: the `EnableHearth` admin setting (requireFeatureEnabled on pages/api/hearth/*).
+ * Resolved by useApiKeyScopeAccess on the client and resolveApiKeyScopeAccess on the mint route.
  */
-export const OPTI_API_KEY_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
-  ApiKeyScope.OPTIHASHI_READ,
-  ApiKeyScope.OPTIHASHI_COMPUTE,
-]);
+export interface ApiKeyScopeAccess {
+  hasOptiAccess: boolean;
+  hasOverwatchAccess: boolean;
+  hearthEnabled: boolean;
+}
 
-const GENERIC_SCOPES_WITHOUT_OPTI = GENERIC_MODAL_API_KEY_SCOPES.filter(s => !OPTI_API_KEY_SCOPES.has(s.value));
+/** Product scopes offered only when the matching ApiKeyScopeAccess flag holds; every other scope is ungated. */
+export const GATED_API_KEY_SCOPES: Readonly<Partial<Record<ApiKeyScope, keyof ApiKeyScopeAccess>>> = {
+  [ApiKeyScope.OPTIHASHI_READ]: 'hasOptiAccess',
+  [ApiKeyScope.OPTIHASHI_COMPUTE]: 'hasOptiAccess',
+  [ApiKeyScope.OVERWATCH_READ]: 'hasOverwatchAccess',
+  [ApiKeyScope.MARKETING_REPORTS_READ]: 'hasOverwatchAccess',
+  [ApiKeyScope.MARKETING_REPORTS_WRITE]: 'hasOverwatchAccess',
+  [ApiKeyScope.HEARTH_READ]: 'hearthEnabled',
+  [ApiKeyScope.HEARTH_WRITE]: 'hearthEnabled',
+};
 
-/** The generic scopes a viewer may see; `hasOptiAccess` is the useOptiAccess verdict. Returns a stable reference. */
-export const genericApiKeyScopesFor = (hasOptiAccess: boolean): ApiKeyScopeOption[] =>
-  hasOptiAccess ? GENERIC_MODAL_API_KEY_SCOPES : GENERIC_SCOPES_WITHOUT_OPTI;
+/** Whether a viewer with `access` may be offered (and mint) `scope`. */
+export const isApiKeyScopeOffered = (scope: ApiKeyScope, access: ApiKeyScopeAccess): boolean => {
+  const gate = GATED_API_KEY_SCOPES[scope];
+  return !gate || access[gate];
+};
+
+// One list per access combination, so callers get a stable reference (NewKeyModal re-seeds its
+// selection when the identity changes).
+const genericScopesCache = new Map<string, ApiKeyScopeOption[]>();
+
+/** The generic scopes a viewer with `access` may see. Returns a stable reference per access combination. */
+export const genericApiKeyScopesFor = (access: ApiKeyScopeAccess): ApiKeyScopeOption[] => {
+  const cacheKey = `${access.hasOptiAccess}:${access.hasOverwatchAccess}:${access.hearthEnabled}`;
+  let scopes = genericScopesCache.get(cacheKey);
+  if (!scopes) {
+    const offered = GENERIC_MODAL_API_KEY_SCOPES.filter(s => isApiKeyScopeOffered(s.value, access));
+    scopes = offered.length === GENERIC_MODAL_API_KEY_SCOPES.length ? GENERIC_MODAL_API_KEY_SCOPES : offered;
+    genericScopesCache.set(cacheKey, scopes);
+  }
+  return scopes;
+};
 
 /**
  * Scopes no mint route may ever issue: they are granted by a flow of their own

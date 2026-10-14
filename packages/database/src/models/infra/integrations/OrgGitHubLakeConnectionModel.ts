@@ -10,6 +10,7 @@ import {
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { releaseLakeClaimBestEffort } from './LakeConnectorClaimModel';
+import { findOrphanedLakeConnections } from './orphanedLakeConnections';
 import { randomUUID } from 'crypto';
 import { redactLastError } from './OrgGoogleDriveConnectionModel';
 
@@ -324,6 +325,16 @@ class OrgGitHubLakeConnectionRepository
       })
       .sort({ reconcileCheckedAt: 1, _id: 1 })
       .limit(limit);
+  }
+
+  async findOrphaned(limit: number): Promise<(IOrgGitHubLakeConnectionDocument & IMongoDocument)[]> {
+    if (limit <= 0) return [];
+    return findOrphanedLakeConnections(limit, (afterId, pageSize) =>
+      this.model
+        .find(afterId ? { _id: { $gt: afterId } } : {})
+        .sort({ _id: 1 })
+        .limit(pageSize)
+    );
   }
 
   async markReconcileChecked(ids: readonly string[], at: Date): Promise<void> {

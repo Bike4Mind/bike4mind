@@ -49,7 +49,7 @@ vi.mock('@server/utils/refreshAgentAvatarUrls', () => ({ refreshAgentAvatarUrls 
 
 import '@pages/api/agents/[id]/index';
 import { ApiKeyScope } from '@bike4mind/common';
-import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 
 const AGENT = { id: 'a1', userId: 'owner', users: [{ userId: 'u1' }] };
 
@@ -113,6 +113,17 @@ describe('/api/agents/[id] access levels', () => {
       await run();
       expect(agentRepositoryMock.update).toHaveBeenCalledWith({ name: 'renamed', id: 'a1' }, { new: true });
       expect(res._getJSONData()).toMatchObject({ name: 'renamed' });
+    });
+
+    it.each<[string, Record<string, unknown>, RegExp]>([
+      ['temperature', { temperature: 3 }, /Temperature/],
+      ['allowedTools', { allowedTools: Array.from({ length: 101 }, (_, i) => `t${i}`) }, /^allowedTools /],
+    ])('rejects an invalid %s with a 400 and does not update', async (_, body, message) => {
+      const { run } = invoke('PUT', 'owner', { body });
+      await expect(run()).rejects.toSatisfy(
+        (error: unknown) => error instanceof BadRequestError && message.test(error.message)
+      );
+      expectNoMutation();
     });
 
     it('deletes the agent', async () => {

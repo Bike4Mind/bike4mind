@@ -25,7 +25,6 @@ export interface MFAVerifyResponse {
 
 export interface RegenerateBackupCodesResponse {
   backupCodes: string[];
-  user: any;
 }
 
 /**

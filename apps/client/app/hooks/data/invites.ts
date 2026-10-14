@@ -27,8 +27,8 @@ export function useGetUserInvites(userId: string) {
   return useQuery({
     queryKey: ['invites', 'inbox'],
     queryFn: () => fetchUserInvites(userId),
-    // The `invites` websocket subscription (InboxContext) writes into this cache unfiltered, so
-    // expired invites must be dropped here as well as in the REST query.
+    // A cached list can outlive an invite's expiry between refetches, so expired invites are
+    // dropped here as well as in the REST query.
     select: invites => invites.filter(i => !i.expiresAt || new Date(i.expiresAt).getTime() > Date.now()),
     enabled: !!userId,
     staleTime: 1000 * 60 * 2, // 2 minutes - shorter cache for more responsive UX
@@ -184,11 +184,13 @@ export const useCancelInvite = (callbacks: {
   onSettled?: () => void;
 }) => {
   return useMutation({
-    mutationFn: async (params: { id: string; type: InviteType; email?: string }) => {
+    mutationFn: async (params: { id: string; type: InviteType; email?: string; userId?: string }) => {
       // Deliberately the raw InviteType, not the lowercase alias GET/POST use: static routes such
       // as pages/api/projects/[id]/invites.ts shadow the [type] catch-all and register no DELETE,
       // so an aliased path would 404. The catch-all accepts either form.
-      await api.delete(`/api/${params.type}/${params.id}/invites`, { data: { email: params.email } });
+      await api.delete(`/api/${params.type}/${params.id}/invites`, {
+        data: { email: params.email, userId: params.userId },
+      });
     },
     onSuccess: () => {
       if (callbacks.onSuccess) callbacks.onSuccess();

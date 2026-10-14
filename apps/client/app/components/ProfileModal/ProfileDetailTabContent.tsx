@@ -1,7 +1,7 @@
 import ProfileDetailSection from '@client/app/components/profile/ProfileDetailSection';
 import ChangeEmailCard from '@client/app/components/profile/ChangeEmailCard';
 import SectionContainer from '@client/app/components/ProfileModal/SectionContainer';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import SubscriptionModal from '@client/app/components/subscription/SubscriptionModal';
 import CreditsModal from '@client/app/components/subscription/CreditsModal';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -11,6 +11,7 @@ import ShoppingCartOutlinedIcon from '@mui/icons-material/ShoppingCartOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import dynamic from 'next/dynamic';
 import prettyBytes from 'pretty-bytes';
+import { storageLimitToBytes } from '@bike4mind/common';
 import { useMemo, useState, useEffect } from 'react';
 
 const ProfileCollectionSection = dynamic(() => import('@client/app/components/profile/ProfileCollectionSection'));
@@ -19,14 +20,11 @@ import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import { AdminPanelSettings, Storage } from '@mui/icons-material';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
-import { useGetSubscriptionPlans, useStripePortal } from '@client/app/hooks/data/stripe';
+import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
+import { useOpenUserStripePortal } from '@client/app/components/subscription/useOpenUserStripePortal';
 import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy';
-import {
-  isDelinquentSubscriptionStatus,
-  pickDisplayedSubscription,
-  SubscriptionOwnerType,
-} from '@client/lib/subscriptions/types';
+import { isDelinquentSubscriptionStatus, pickDisplayedSubscription } from '@client/lib/subscriptions/types';
 import { useToggleShowCreditsUsed } from '@client/app/hooks/data/user';
 
 function centsToDollars(cents: number | undefined) {
@@ -76,7 +74,7 @@ const AboutTabContent = () => {
             }}
           >
             <Box className="profile-detail-tab-icon-container" sx={{ flexShrink: 1 }}>
-              <Bike4MindIcon size="38" fill={theme.palette.fileBrowser.fileSizeColor} />
+              <CreditIcon sx={{ fontSize: 38, color: theme.palette.fileBrowser.fileSizeColor }} />
             </Box>
 
             <Box
@@ -102,7 +100,7 @@ const AboutTabContent = () => {
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <SquareSlideToggle
-                  checked={currentUser?.showCreditsUsed ?? false}
+                  checked={currentUser?.showCreditsUsed ?? true}
                   onChange={event => {
                     toggleShowCreditsUsed.mutate(event.target.checked);
                   }}
@@ -115,6 +113,7 @@ const AboutTabContent = () => {
 
             <Tooltip title={t('profile.buy_credits')} placement="top">
               <IconButton
+                aria-label={t('profile.buy_credits')}
                 className="profile-detail-tab-action-button"
                 size="sm"
                 variant="outlined"
@@ -159,7 +158,7 @@ const AboutTabContent = () => {
                   sx={{ fontWeight: '500', fontSize: '20px', lineHeight: '20px', mb: '20px' }}
                 >
                   {prettyBytes(currentUser?.currentStorageSize ?? 0)} /{' '}
-                  {prettyBytes((currentUser?.storageLimit ?? 0) * 1000000)}
+                  {prettyBytes(storageLimitToBytes(currentUser?.storageLimit ?? 0))}
                 </Typography>
               </Box>
             </Box>
@@ -179,8 +178,7 @@ const SubscriptionCard = () => {
   const [subscriptionModalOpen, setSubscriptionModalOpen] = useState(false);
   const { t } = useTranslation();
   const theme = useTheme();
-  const stripePortal = useStripePortal();
-  const { currentUser } = useUser();
+  const stripePortal = useOpenUserStripePortal();
   const subscriptions = useGetSubscriptions({ enabled: true });
   // Non-terminal, not just active: a past_due user still holds this plan, and this
   // is the gate that decides whether the corner button opens Stripe's portal (where
@@ -288,17 +286,8 @@ const SubscriptionCard = () => {
             }}
             onClick={() => {
               // If user has an active subscription, open the stripe portal
-              if (subscription && currentUser) {
-                stripePortal.mutate(
-                  { ownerType: SubscriptionOwnerType.User, ownerId: currentUser.id },
-                  {
-                    // Store the return path only on success so a failed mutation doesn't leave an
-                    // orphaned key that causes a spurious redirect on the next "/" load.
-                    onSuccess: () => {
-                      sessionStorage.setItem('__stripe_return', window.location.pathname);
-                    },
-                  }
-                );
+              if (subscription && stripePortal.isAvailable) {
+                stripePortal.open();
                 return;
               }
 
