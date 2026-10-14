@@ -48,6 +48,7 @@ const h = vi.hoisted(() => ({
   upload: vi.fn(),
   walkFolder: vi.fn(),
   disableDriveConnectionForLake: vi.fn(),
+  releaseDriveConnection: vi.fn(),
   getValidConnectionDriveAccessToken: vi.fn(async () => 'access-token'),
   fetchDriveFileContent: vi.fn(),
   listChanges: vi.fn(),
@@ -154,6 +155,7 @@ vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.up
 vi.mock('@server/integrations/google/drive/common', () => ({
   getValidConnectionDriveAccessToken: h.getValidConnectionDriveAccessToken,
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
+  releaseDriveConnection: h.releaseDriveConnection,
 }));
 // isFolder/isValidDriveFolderId etc. stay real (classifyDriveChanges depends on the real isFolder),
 // and so does isDriveRateLimitError - the throttle deferrals below are exactly the behaviour a
@@ -1816,10 +1818,11 @@ describe('driveLakeIngest consumer', () => {
     });
 
     it.each([
-      // The connection exit runs BEFORE the claim is taken, so it has nothing to release; the other two
-      // sit after it and must hand the claim back or the connection stays 'syncing' with no owner.
+      // The connection exit runs BEFORE the claim is taken, so it has nothing to release; the user exit
+      // sits after it and must hand the claim back or the connection stays 'syncing' with no owner. The
+      // lake exit deletes the connection outright instead (see the missing-lake tests below).
       ['the connection', () => h.connFindById.mockResolvedValue(null), false],
-      ['the target data lake', () => h.lakeFindById.mockResolvedValue(null), true],
+      ['the target data lake', () => h.lakeFindById.mockResolvedValue(null), false],
       ['the connecting user', () => h.userFindById.mockResolvedValue(null), true],
     ])('settles an adopted batch even when %s cannot be resolved', async (_label, breakLookup, releases) => {
       // These exits sit ABOVE where adoptedBatch is normally resolved, so a continuation reaching one
@@ -1956,6 +1959,28 @@ describe('driveLakeIngest consumer', () => {
       expect(h.disableDriveConnectionForLake).toHaveBeenCalledWith('lake1');
     }
   );
+
+  it('retires the connection and frees its folder claim when the target data lake is gone', async () => {
+    h.lakeFindById.mockResolvedValue(null);
+
+    await run();
+
+    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', { kind: 'organization', organizationId: 'org1' });
+    // Releasing the claim would set the row back to 'connected', and the 6h poll would enqueue it forever.
+    expect(h.releaseSyncClaim).not.toHaveBeenCalled();
+    expect(h.walkFolder).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('hands the claim back for the next poll to retry when retiring a lakeless connection throws', async () => {
+    h.lakeFindById.mockResolvedValue(null);
+    h.releaseDriveConnection.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+    expect(h.walkFolder).not.toHaveBeenCalled();
+  });
 
   it('does not fail the drop when healing the enabled flag throws', async () => {
     h.lakeFindById.mockResolvedValue({
