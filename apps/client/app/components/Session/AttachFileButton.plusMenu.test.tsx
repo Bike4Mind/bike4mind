@@ -12,7 +12,13 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 const hoisted = vi.hoisted(() => ({
   features: new Set<string>(),
-  llm: { tools: [] as string[], agentMode: { enabled: false, source: 'toggle' }, model: 'gpt-4.1-2025-04-14' },
+  researchModeFeature: false,
+  llm: {
+    tools: [] as string[],
+    agentMode: { enabled: false, source: 'toggle' },
+    researchMode: { enabled: false, configurations: [] as unknown[] },
+    model: 'gpt-4.1-2025-04-14',
+  },
   setState: vi.fn(),
 }));
 
@@ -48,7 +54,7 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: (feature: string) => hoisted.features.has(feature) }),
 }));
 vi.mock('@client/app/contexts/UserSettingsContext', () => ({
-  useUserSettings: () => ({ settings: {} }),
+  useUserSettings: () => ({ settings: { experimentalFeatures: { enableResearchMode: hoisted.researchModeFeature } } }),
 }));
 vi.mock('@client/app/utils/commands', () => ({ isImageModel: (model: string) => model.startsWith('gpt-image') }));
 vi.mock('@client/app/components/commands/RollCommand', () => ({ handleRollCommand: vi.fn() }));
@@ -85,6 +91,8 @@ describe('AttachFileButton plus menu (desktop)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hoisted.features.clear();
+    hoisted.researchModeFeature = false;
+    hoisted.llm.researchMode = { enabled: false, configurations: [] };
     hoisted.llm.tools = [];
     hoisted.llm.agentMode = { enabled: false, source: 'toggle' };
     hoisted.llm.model = 'gpt-4.1-2025-04-14';
@@ -128,6 +136,14 @@ describe('AttachFileButton plus menu (desktop)', () => {
     openMenu();
     fireEvent.click(screen.getByTestId('attach-menu-image-options-btn'));
     expect(screen.getByTestId('attach-menu-flyout')).toContainElement(screen.getByTestId('image-options-panel'));
+  });
+
+  it('turns Research Mode on from its switch, without leaving the menu', () => {
+    hoisted.researchModeFeature = true;
+    openMenu();
+    fireEvent.click(screen.getByTestId('attach-menu-research-mode-switch'));
+    expect(hoisted.setState).toHaveBeenCalledWith({ researchMode: { enabled: true, configurations: [] } });
+    expect(screen.getByTestId('attach-menu-research-mode-btn')).toBeInTheDocument();
   });
 
   it('offers Roll Dice on desktop when the dice tool is on', () => {

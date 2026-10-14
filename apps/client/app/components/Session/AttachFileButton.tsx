@@ -280,11 +280,13 @@ const AttachFileButton = ({
   const isAgentModeFeatureEnabled = isFeatureEnabled('agentMode');
   const isBriefcaseEnabled = isFeatureEnabled('enableBriefcase');
   const agentMode = useLLM(state => state.agentMode);
+  const researchMode = useLLM(state => state.researchMode);
   const model = useLLM(state => state.model);
   const { setState: setLLM } = useLLM;
   const showDice = tools.includes('dice_roll') && !isToolDenied('dice_roll', currentSession?.disabledTools);
   const showImageOptions = isImageModel(model);
 
+  const toggleAgentMode = () => setLLM({ agentMode: { enabled: !agentMode.enabled, source: 'toggle' } });
   const closeMenu = () => {
     setIsOpen(false);
     setCurrentView('main');
@@ -727,35 +729,56 @@ const AttachFileButton = ({
 
                 {(isAgentModeFeatureEnabled || isResearchModeFeatureEnabled) && <ListDivider />}
 
-                {/* Agent mode moved here from the composer row; the menu stays open so the switch
-                    can be read back. */}
+                {/* Agent mode moved here from the composer row. Row and switch both toggle it, and
+                    the menu stays open so the new state can be read back. */}
                 {isAgentModeFeatureEnabled && (
-                  <ListItem sx={{ p: 0 }}>
+                  <ListItem
+                    sx={{ p: 0 }}
+                    endAction={
+                      <Switch
+                        size="sm"
+                        checked={agentMode.enabled}
+                        disabled={agentModeDisabled}
+                        onChange={toggleAgentMode}
+                        slotProps={{
+                          input: { 'aria-label': 'Agent mode', 'data-testid': 'attach-menu-agent-mode-switch' },
+                        }}
+                      />
+                    }
+                  >
                     <ListItemButton
                       data-testid="attach-menu-agent-mode-btn"
-                      aria-pressed={agentMode.enabled}
                       disabled={agentModeDisabled}
-                      onClick={() => setLLM({ agentMode: { enabled: !agentMode.enabled, source: 'toggle' } })}
+                      onClick={toggleAgentMode}
                       sx={{ color: 'text.primary', m: 0 }}
                     >
                       <ListItemDecorator>
                         <BoltIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
                       </ListItemDecorator>
                       Agent mode
-                      <Switch
-                        size="sm"
-                        checked={agentMode.enabled}
-                        sx={{ ml: 'auto', pointerEvents: 'none' }}
-                        slotProps={{ input: { tabIndex: -1, 'aria-hidden': true } }}
-                      />
                     </ListItemButton>
                   </ListItem>
                 )}
 
-                {/* Research Mode (opens Research Mode tab in Advanced Settings) */}
+                {/* Research Mode: the row opens its settings tab, the switch turns it on and off. The
+                    switch is the row's endAction, not inside the button, so the two stay separate
+                    controls. */}
                 {isResearchModeFeatureEnabled && (
-                  <ListItem sx={{ p: 0 }}>
+                  <ListItem
+                    sx={{ p: 0 }}
+                    endAction={
+                      <Switch
+                        size="sm"
+                        checked={researchMode.enabled}
+                        onChange={event => setLLM({ researchMode: { ...researchMode, enabled: event.target.checked } })}
+                        slotProps={{
+                          input: { 'aria-label': 'Research mode', 'data-testid': 'attach-menu-research-mode-switch' },
+                        }}
+                      />
+                    }
+                  >
                     <ListItemButton
+                      data-testid="attach-menu-research-mode-btn"
                       onClick={() => {
                         setIsOpen(false);
                         setCurrentView('main');
