@@ -48,7 +48,7 @@ async function verifySetupAs(user: Record<string, unknown>) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.findByIdWithMfaSecrets.mockResolvedValue({ id: 'u1', mfa: { totpEnabled: true } });
-  mocks.verifyMFASetup.mockResolvedValue({ user: { id: 'u1' }, backupCodes: ['aaaa-bbbb'] });
+  mocks.verifyMFASetup.mockResolvedValue({ success: true, user: { id: 'u1' }, backupCodes: ['aaaa-bbbb'] });
   mocks.revokeUserSessions.mockResolvedValue(4);
   mocks.issueBrowserSession.mockResolvedValue({ accessToken: 'full-access' });
   mocks.logAuthAudit.mockResolvedValue(undefined);
