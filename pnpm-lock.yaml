@@ -2237,6 +2237,9 @@ importers:
       '@bike4mind/database':
         specifier: workspace:*
         version: link:../database
+      '@bike4mind/db-core':
+        specifier: workspace:*
+        version: link:../../b4m-core/db-core
       '@bike4mind/fab-pipeline':
         specifier: workspace:*
         version: link:../../b4m-core/fab-pipeline
