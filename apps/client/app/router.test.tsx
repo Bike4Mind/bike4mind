@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { isNotFound } from '@tanstack/react-router';
+import { render, screen } from '@testing-library/react';
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  isNotFound,
+  Outlet,
+  RouterProvider,
+} from '@tanstack/react-router';
 import {
   billingRoute,
   feedbackRollupRoute,
@@ -9,6 +18,7 @@ import {
   router,
   subscriptionsIndexRoute,
 } from './router';
+import { parseStudioModality } from './components/Studio/studioModality';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 
 // validateSearch is what makes a bare /feedback/rollup URL load at all (see the route's own
@@ -100,6 +110,33 @@ describe('Studio route', () => {
 
   it('treats an unknown modality as not found', () => {
     expect(isNotFound(studioMatch('/studio/hologram')?.paramsError)).toBe(true);
+  });
+
+  // The assertion above only sees the match's paramsError. This renders the route with its parser to pin what the
+  // user gets: the not-found page, not the error boundary. The route is rebuilt here rather than through the app
+  // tree because the notebook layout's auth guard redirects to /login before the 404 is reached.
+  it('renders the not-found page, not the error boundary, for an unknown modality', async () => {
+    const root = createRootRoute({
+      component: () => <Outlet />,
+      notFoundComponent: () => <div data-testid="probe-not-found" />,
+      errorComponent: () => <div data-testid="probe-error" />,
+    });
+    const route = createRoute({
+      getParentRoute: () => root,
+      path: '/studio/$modality',
+      params: { parse: ({ modality }) => ({ modality: parseStudioModality(modality) }) },
+      component: () => <div data-testid="probe-studio" />,
+    });
+    const probe = createRouter({
+      routeTree: root.addChildren([route]),
+      history: createMemoryHistory({ initialEntries: ['/studio/hologram'] }),
+    });
+
+    render(<RouterProvider router={probe} />);
+
+    expect(await screen.findByTestId('probe-not-found')).toBeInTheDocument();
+    expect(screen.queryByTestId('probe-error')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('probe-studio')).not.toBeInTheDocument();
   });
 });
 
