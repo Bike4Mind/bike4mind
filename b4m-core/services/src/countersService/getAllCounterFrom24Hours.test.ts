@@ -1,14 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ICounterLogRepository } from '@bike4mind/common';
+import type { Logger } from '@bike4mind/observability';
 import { getCounterTotalsForLast24Hours } from './getAllCounterFrom24Hours';
 
-const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), log: vi.fn() };
+const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), log: vi.fn() } as unknown as Logger;
 
 function run(facet: Record<string, unknown>) {
   const counterLogs = { metricsByDate: vi.fn().mockResolvedValue([facet]) } as unknown as ICounterLogRepository;
-  // any: partial Logger stub - only the methods the service calls are provided
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return getCounterTotalsForLast24Hours({ date: '2026-06-01' }, { db: { counterLogs }, logger: logger as any });
+  return getCounterTotalsForLast24Hours({ date: '2026-06-01' }, { db: { counterLogs }, logger });
 }
 
 describe('getCounterTotalsForLast24Hours - activeUsers24h', () => {
