@@ -210,6 +210,8 @@ const BLOCKED_REDACTION = '<redacted:blocked-prompt>';
 
 // Everything echoed back from a blocked request is replaced, so the fixture never carries the prompt text.
 const redactBlocked = (value: unknown, prompt: string): unknown => {
+  // An empty prompt is a substring of every string, which would splice the marker between every character.
+  if (!prompt) return value;
   if (Array.isArray(value)) return value.map(item => redactBlocked(item, prompt));
   if (typeof value === 'string') return value.includes(prompt) ? value.split(prompt).join(BLOCKED_REDACTION) : value;
   if (!isRecord(value)) return value;
