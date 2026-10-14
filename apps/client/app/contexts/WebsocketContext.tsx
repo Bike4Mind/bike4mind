@@ -154,6 +154,13 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   const listeners = useRef(new Map<string, ((message: IMessageDataToClient) => Promise<void>)[]>());
 
   const [activeSubscriptions, setActiveSubscriptions] = useState<ReadonlySet<string>>(() => new Set());
+  // Last subscribe_query frame per subscriptionId, replayed when the server answers a reauth with
+  // resubscribe_required (the socket stays open, so the hooks' own on-open resubscribe never runs).
+  const subscribePayloadsRef = useRef(new Map<string, IMessageDataToServer>());
+  const accessTokenRef = useRef(accessToken);
+  useEffect(() => {
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
   const [clientId] = useState(() => crypto.randomUUID().slice(0, 8));
 
   // Pulsed true-then-false to force react-use-websocket to tear down and reconnect with a
@@ -436,13 +443,19 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // That's the focused-tab gap: nothing ever blurs, so the visibilitychange pulse above never
   // fires. Treat a post-exhaustion token change as the second trigger for the same pulse.
   // prevAccessTokenRef skips the mount's own token (nothing has exhausted yet at mount).
+  //
+  // An open socket also re-authenticates with every refreshed token: the server extends the
+  // connection's lifetime to the new token's expiry and answers resubscribe_required.
   const prevAccessTokenRef = useRef(accessToken);
   useEffect(() => {
-    const changed = prevAccessTokenRef.current !== accessToken;
+    const previous = prevAccessTokenRef.current;
     prevAccessTokenRef.current = accessToken;
-    if (!changed) return;
+    if (previous === accessToken) return;
     pulseReconnect();
-  }, [accessToken, pulseReconnect]);
+    if (previous && accessToken && readyStateRef.current === ReadyState.OPEN) {
+      sendJsonMessage({ action: 'reauth_connection', accessToken });
+    }
+  }, [accessToken, pulseReconnect, sendJsonMessage]);
 
   // Third trigger, and the only self-armed one. Both triggers above are external events, and a
   // tab that stays focused while its access token is still valid produces neither: no
@@ -486,9 +499,23 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     []
   );
 
+  // A reauth dropped this connection's subscriptions server-side: re-send each tracked one with
+  // the current token, and refetch what may have changed while it was unsubscribed.
+  useEffect(
+    () =>
+      subscribeToAction('resubscribe_required', async () => {
+        for (const payload of subscribePayloadsRef.current.values()) {
+          sendJsonMessage({ ...payload, accessToken: accessTokenRef.current } as IMessageDataToServer);
+        }
+        refetchAfterLostFrames(queryClient);
+      }),
+    [subscribeToAction, sendJsonMessage, queryClient]
+  );
+
   const trackedSendJsonMessage = useCallback(
     (action: IMessageDataToServer) => {
       if (action.action === 'subscribe_query') {
+        subscribePayloadsRef.current.set(action.subscriptionId, action);
         setActiveSubscriptions(prev => {
           if (prev.has(action.subscriptionId)) return prev;
           const next = new Set(prev);
@@ -496,6 +523,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
           return next;
         });
       } else if (action.action === 'unsubscribe_query') {
+        subscribePayloadsRef.current.delete(action.subscriptionId);
         setActiveSubscriptions(prev => {
           if (!prev.has(action.subscriptionId)) return prev;
           const next = new Set(prev);

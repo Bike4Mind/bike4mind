@@ -12,7 +12,7 @@
  * @see https://datatracker.ietf.org/doc/rfc7636/
  */
 import { Request, Response } from 'express';
-import { authFailLogRepository, User, authSessionRepository } from '@bike4mind/database';
+import { authFailLogRepository, User, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IAuthProviders } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -436,6 +436,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       // ALL: this login's session is minted below, after the revoke, so it is created fresh.
       if (isNewProviderLink) {
         await authSessionRepository.revokeAllByUserId(user.id);
+        await realtimeConnectionRepository.endConnections({ userId: user.id, sessionsOnly: true });
       }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);
     } else {

@@ -35,7 +35,15 @@ const expectedQuestExclusions = {
 
 const mockFindModelByCollectionName = vi.fn();
 const mockQuerySubscriptionFindOneAndUpdate = vi.fn();
+// The registered Connection row the handler requires; a test overrides it to null or another user.
+let connectionRow: { userId: string } | null = { userId: 'caller-1' };
+const mockConnectionFindOne = vi.fn(() => ({ lean: async () => connectionRow }));
+const mockCloseConnection = vi.fn(async () => undefined);
+vi.mock('@server/websocket/closeConnection', () => ({
+  closeConnection: (...args: unknown[]) => mockCloseConnection(...(args as [])),
+}));
 vi.mock('@bike4mind/database', () => ({
+  Connection: { findOne: (...args: unknown[]) => mockConnectionFindOne(...(args as [])) },
   AdminSettings: {},
   ApiKey: {},
   AppFile: {},
@@ -332,5 +340,31 @@ describe('dataSubscribeRequest WS handler - filters on withheld fields', () => {
 
     expect(find).toHaveBeenCalled();
     expect(mockQuerySubscriptionFindOneAndUpdate).toHaveBeenCalled();
+  });
+});
+
+describe('dataSubscribeRequest - registered connection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', tokenVersion: undefined });
+  });
+
+  it('refuses to subscribe on a connection whose row was removed, and closes the socket', async () => {
+    connectionRow = null;
+
+    await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(mockCloseConnection).toHaveBeenCalledWith('conn-1', expect.any(String));
+    expect(mockQuerySubscriptionFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it("refuses to subscribe on another user's connection", async () => {
+    connectionRow = { userId: 'someone-else' };
+
+    await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(mockQuerySubscriptionFindOneAndUpdate).not.toHaveBeenCalled();
   });
 });

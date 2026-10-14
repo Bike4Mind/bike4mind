@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   probeIdentity: vi.fn(),
   queryClient: { invalidateQueries: vi.fn() },
   sendMessage: vi.fn(),
+  sendJsonMessage: vi.fn(),
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   accessTokenState: { accessToken: 'tok' as string | null, mfaPending: false },
@@ -30,7 +31,12 @@ vi.mock('react-use-websocket', () => ({
     h.capturedUrl.current = url;
     h.capturedOptions.current = options;
     h.capturedUrls.push(url);
-    return { sendJsonMessage: vi.fn(), sendMessage: h.sendMessage, readyState: h.readyState, lastJsonMessage: null };
+    return {
+      sendJsonMessage: h.sendJsonMessage,
+      sendMessage: h.sendMessage,
+      readyState: h.readyState,
+      lastJsonMessage: null,
+    };
   },
 }));
 
@@ -726,5 +732,79 @@ describe('WebsocketProvider - reassembles fanout-chunked frames before dispatch'
       warn.mockRestore();
       vi.useRealTimers();
     }
+  });
+});
+
+describe('WebsocketProvider - reauth after a token refresh', () => {
+  let send: ReturnType<typeof useWebsocket>['sendJsonMessage'] = () => {};
+
+  const Sender = () => {
+    send = useWebsocket().sendJsonMessage;
+    return null;
+  };
+  const element = () =>
+    React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement(Sender));
+
+  beforeEach(() => {
+    h.sendJsonMessage.mockReset();
+    h.queryClient.invalidateQueries.mockReset();
+    h.readyState = 1;
+    h.accessTokenState.accessToken = 'tok';
+    h.accessTokenState.mfaPending = false;
+    stubVisibility('visible');
+  });
+
+  const refreshTo = async (rendered: ReturnType<typeof render>, token: string | null) => {
+    h.accessTokenState.accessToken = token;
+    await act(async () => {
+      rendered.rerender(element());
+    });
+  };
+
+  it('sends reauth_connection with the new token on an open socket', async () => {
+    const rendered = render(element());
+    expect(h.sendJsonMessage).not.toHaveBeenCalled();
+
+    await refreshTo(rendered, 'tok-2');
+
+    expect(h.sendJsonMessage).toHaveBeenCalledWith({ action: 'reauth_connection', accessToken: 'tok-2' });
+  });
+
+  it('does not send reauth while the socket is not open, or when the token is cleared', async () => {
+    h.readyState = 0;
+    const rendered = render(element());
+    await refreshTo(rendered, 'tok-2');
+    h.readyState = 1;
+    await act(async () => {
+      rendered.rerender(element());
+    });
+    await refreshTo(rendered, null);
+
+    expect(h.sendJsonMessage).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'reauth_connection' }));
+  });
+
+  it('re-sends tracked subscriptions with the current token on resubscribe_required', async () => {
+    const rendered = render(element());
+    const subscribe = (subscriptionId: string) =>
+      ({ action: 'subscribe_query', subscriptionId, collectionName: 'quests', query: {} }) as unknown as Parameters<
+        typeof send
+      >[0];
+    act(() => {
+      send(subscribe('s1'));
+      send(subscribe('s2'));
+      send({ action: 'unsubscribe_query', subscriptionId: 's2' } as unknown as Parameters<typeof send>[0]);
+    });
+    await refreshTo(rendered, 'tok-2');
+    h.sendJsonMessage.mockClear();
+
+    act(() => {
+      h.capturedOptions.current.onMessage({ data: JSON.stringify({ action: 'resubscribe_required' }) });
+    });
+
+    expect(h.sendJsonMessage).toHaveBeenCalledTimes(1);
+    expect(h.sendJsonMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'subscribe_query', subscriptionId: 's1', accessToken: 'tok-2' })
+    );
+    expect(h.queryClient.invalidateQueries).toHaveBeenCalled();
   });
 });

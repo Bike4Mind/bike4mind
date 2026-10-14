@@ -43,7 +43,10 @@ vi.mock('@server/utils/apiKeyRotationNotifier', () => ({ notifyApiKeyRotationReo
 const userApiKeyRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
 const organizationRepository = vi.hoisted(() => ({ findIdsAdministeredBy: vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ organizationRepository }));
+vi.mock('@bike4mind/database', () => ({
+  organizationRepository,
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
+}));
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
@@ -138,8 +141,11 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
 
   it('returns 200 with the credential when the notifier does not settle within 5s', async () => {
     rotateUserApiKey.mockResolvedValueOnce({
-      id: 'key-1', name: 'k', keyPrefix: 'b4m_live_x',
-      key: 'b4m_live_secret', previousOwnerUserId: 'minter',
+      id: 'key-1',
+      name: 'k',
+      keyPrefix: 'b4m_live_x',
+      key: 'b4m_live_secret',
+      previousOwnerUserId: 'minter',
     });
     // Never-settling notifier simulates a stalled SMTP host.
     notifyApiKeyRotationReown.mockReturnValueOnce(new Promise(() => {}));

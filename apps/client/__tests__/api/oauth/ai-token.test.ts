@@ -32,6 +32,7 @@ vi.mock('@bike4mind/common', () => ({
 
 const mockTryIncrement = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: (...args: any[]) => mockTryIncrement(...args),
   },

@@ -14,6 +14,7 @@ import {
   ICreditTransactionRepository,
   ICreditTransactionDocument,
   IAuthSessionRepository,
+  IRealtimeConnectionRepository,
   IAuthSessionDocument,
   ISessionAgentConfigRepository,
   ISessionAgentConfigDocument,
@@ -243,6 +244,11 @@ export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepo
     consumeStepUpEmailChallenge: vi.fn(),
     revokeBySid: vi.fn(),
     revokeAllByUserId: vi.fn(),
+  });
+
+export const createMockRealtimeConnectionRepository = (): MockedObject<IRealtimeConnectionRepository> =>
+  vi.mocked({
+    endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }),
   });
 
 export const createMockUserRepository = (): MockedObject<IUserRepository> =>

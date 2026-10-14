@@ -681,6 +681,37 @@ const generationJobSweepCron = new sst.aws.Cron('generationJobSweep', {
 });
 
 /**
+ * Realtime Connection Sweep
+ * Ends WebSocket connections whose credential no longer holds (token expired past grace, session
+ * revoked, tokenVersion bumped, account blocked, API key inactive) and removes query subscribers
+ * whose connection row is gone. Revoke paths prune directly; this is the backstop.
+ *
+ * Schedule: every 5 minutes
+ * Enabled: every stage; a no-op when nothing has lapsed.
+ * Self-host: apps/workers/src/selfhost/realtimeConnectionSweep.ts
+ */
+const realtimeConnectionSweepCron = new sst.aws.Cron('realtimeConnectionSweep', {
+  schedule: 'rate(5 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/realtimeConnectionSweep.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, websocketApi],
+    timeout: '2 minutes',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    // DeleteConnection on the sockets it ends.
+    permissions: [
+      {
+        actions: ['execute-api:ManageConnections'],
+        resources: ['*'],
+      },
+    ],
+  },
+});
+
+/**
  * Agent Execution Abandoned Sweep
  * Releases agent-execution slots that the reactive in-Lambda sweep cannot
  * reach because the owning user never returns to start another execution.
@@ -1011,6 +1042,7 @@ export {
   modelDiscoveryStalenessCron,
   questTimeoutSweepCron,
   generationJobSweepCron,
+  realtimeConnectionSweepCron,
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
   spendReconciliationCron,

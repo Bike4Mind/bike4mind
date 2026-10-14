@@ -37,8 +37,10 @@ vi.mock('@bike4mind/services', () => ({
 
 const mockRevokeBySid = vi.fn();
 const mockFindBySid = vi.fn();
+const mockEndConnections = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
+  realtimeConnectionRepository: { endConnections: (...args: any[]) => mockEndConnections(...args) },
   authSessionRepository: {
     revokeBySid: (...args: any[]) => mockRevokeBySid(...args),
     findBySid: (...args: any[]) => mockFindBySid(...args),
@@ -58,6 +60,7 @@ describe('POST /api/auth/returnToAdmin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRevokeBySid.mockResolvedValue(undefined);
+    mockEndConnections.mockResolvedValue({ connectionIds: [] });
     mockRotateSession.mockResolvedValue({
       status: 'rotated',
       user: { id: 'admin-1' },
@@ -92,6 +95,7 @@ describe('POST /api/auth/returnToAdmin', () => {
     await handler(req as any, res as any);
 
     expect(mockRevokeBySid).toHaveBeenCalledWith('cust-sid');
+    expect(mockEndConnections).toHaveBeenCalledWith({ sid: 'cust-sid' });
   });
 
   it('still returns the admin to safety when revoking the impersonation session fails', async () => {

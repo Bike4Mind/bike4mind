@@ -1,5 +1,6 @@
 import { ApiKeyStatus } from '@bike4mind/common';
 import mongoose, { Model, Schema, model } from 'mongoose';
+import { realtimeConnectionRepository } from '../social/realtimeConnectionRepository';
 import { UserApiKey } from './UserApiKeyModel';
 
 const ModelName = 'CcBridgeDevice';
@@ -134,6 +135,7 @@ export const ccBridgeDeviceRepository = {
         // disabled but device row not yet updated) stays visible in logs.
         console.info(`[CC_BRIDGE] Disabled apiKey ${device.apiKeyId} for user ${userId}, device ${deviceId}`);
       }
+      await realtimeConnectionRepository.endConnections({ apiKeyId: String(device.apiKeyId) });
     }
 
     const res = await CcBridgeDevice.updateOne(

@@ -1,4 +1,4 @@
-import { userRepository, authSessionRepository } from '@bike4mind/database';
+import { userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { UnauthorizedError } from '@server/utils/errors';
@@ -43,7 +43,11 @@ const handler = baseApi({ auth: false })
     const impersonatedSid = impersonatedToken ? authSessionService.parseRefreshToken(impersonatedToken)?.sid : null;
 
     const restored = await authSessionService.rotateSession(adminRefreshToken, {
-      db: { authSessions: authSessionRepository, users: userRepository },
+      db: {
+        authSessions: authSessionRepository,
+        users: userRepository,
+        realtimeConnections: realtimeConnectionRepository,
+      },
       signAccessToken: (id, tokenVersion, extra) => authTokenGenerator.signAccessToken(id, tokenVersion, extra),
       audit: event =>
         logAuthAudit(req, { userId: event.userId, event: event.type, metadata: { ...event.metadata, sid: event.sid } }),
@@ -65,6 +69,9 @@ const handler = baseApi({ auth: false })
         await authSessionRepository
           .revokeBySid(impersonatedSid)
           .catch(err => req.logger.error('Failed to revoke impersonation session on return to admin', err));
+        await realtimeConnectionRepository
+          .endConnections({ sid: impersonatedSid })
+          .catch(err => req.logger.error('Failed to end impersonation realtime connections on return to admin', err));
       }
     }
 

@@ -7,6 +7,7 @@ import {
   AppFile,
   Artifact,
   ArtifactVersion,
+  Connection,
   FabFile,
   findModelByCollectionName,
   Inbox,
@@ -25,6 +26,8 @@ import { Subscription } from '@server/models/Subscription';
 import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
 import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
+import { closeConnection } from '@server/websocket/closeConnection';
+import { UnauthorizedError } from '@server/utils/errors';
 import crypto from 'crypto';
 import { pickBy } from 'lodash';
 import pLimit from 'p-limit';
@@ -103,6 +106,18 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   } = parsedRequest;
 
   const user = await verifyWsAccessToken(accessToken);
+
+  // A subscriber must hang off a live Connection row of the same user: a revoke deletes the row
+  // (realtimeConnectionRepository.endConnections), and that must not be undone by re-subscribing
+  // on the still-open socket. Close it so the client reconnects through $connect instead.
+  const connection = await Connection.findOne({ connectionId }, { userId: 1 }).lean();
+  if (!connection || connection.userId !== user.id) {
+    await closeConnection(connectionId, endpoint).catch(error =>
+      logger.warn(`[dataSubscribeRequest] Failed to close unregistered connection ${connectionId}`, error)
+    );
+    throw new UnauthorizedError('Connection is not registered to this user');
+  }
+
   const userAbility = ability(user);
 
   // 'scope' limits the scope of the query, to only things you're allowed to see.

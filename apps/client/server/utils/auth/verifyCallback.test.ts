@@ -8,6 +8,7 @@ const mockUpdateOne = vi.fn();
 const mockCreate = vi.fn();
 const mockRevokeAllByUserId = vi.fn();
 const mockUserRepositoryUpdate = vi.fn();
+const mockEndConnections = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   User: {
@@ -16,6 +17,7 @@ vi.mock('@bike4mind/database', () => ({
     create: (...args: unknown[]) => mockCreate(...args),
   },
   authSessionRepository: { revokeAllByUserId: (...args: unknown[]) => mockRevokeAllByUserId(...args) },
+  realtimeConnectionRepository: { endConnections: (...args: unknown[]) => mockEndConnections(...args) },
   adminSettingsRepository: {},
   creditTransactionRepository: {},
   creditLotRepository: {},
@@ -257,6 +259,7 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     // The tokenVersion bump must be paired with a session revoke, else an opaque refresh token
     // (never checked against tokenVersion) would rotate past the bump and survive.
     expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u1');
+    expect(mockEndConnections).toHaveBeenCalledWith({ userId: 'u1', sessionsOnly: true });
   });
 
   it('refuses when existing provider entry has DIFFERENT sub (impersonation via takeover of same strategy)', async () => {

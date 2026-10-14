@@ -20,6 +20,7 @@ const mockUpdateOne = vi.fn();
 const mockCreate = vi.fn();
 const mockAuthFailCreate = vi.fn();
 const mockRevokeAllByUserId = vi.fn();
+const mockEndConnections = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: {
     findOne: (...a: any[]) => mockFindOne(...a),
@@ -28,6 +29,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   authFailLogRepository: { create: (...a: any[]) => mockAuthFailCreate(...a) },
   authSessionRepository: { revokeAllByUserId: (...a: any[]) => mockRevokeAllByUserId(...a) },
+  realtimeConnectionRepository: { endConnections: (...a: any[]) => mockEndConnections(...a) },
 }));
 
 // Okta OIDC client: token exchange + userinfo are network calls, fully stubbed.
@@ -189,6 +191,7 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(mockUpdateOne).toHaveBeenCalledWith({ _id: 'u2' }, expect.objectContaining({ $inc: { tokenVersion: 1 } }));
     // ...and the paired AuthSession revoke fires, or opaque refresh tokens would survive the bump.
     expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2');
+    expect(mockEndConnections).toHaveBeenCalledWith({ userId: 'u2', sessionsOnly: true });
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
   });
 

@@ -2,7 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { TooManyRequestsError, UnauthorizedError } from '@bike4mind/utils';
 import { rotateSession, type RotateSessionResult } from './rotateSession';
 import { buildRefreshToken, generateRefreshSecret, hashRefreshSecret, parseRefreshToken } from './refreshTokenFormat';
-import { createMockAuthSessionRepository, createMockUserRepository } from '../__tests__/utils/testUtils';
+import {
+  createMockAuthSessionRepository,
+  createMockRealtimeConnectionRepository,
+  createMockUserRepository,
+} from '../__tests__/utils/testUtils';
 import { ABSOLUTE_SESSION_MAX_MS, DEFAULT_REFRESH_TTL_MS, MAX_SESSION_RECOVERIES } from './constants';
 
 const SID = 'sid-1';
@@ -36,7 +40,14 @@ const setup = () => {
   authSessions.registerReplayUse.mockImplementation(async () => makeSession());
   authSessions.revokeBySid.mockResolvedValue(makeSession({ revokedAt: new Date() }));
   const signAccessToken = vi.fn().mockReturnValue('ACCESS');
-  return { authSessions, users, signAccessToken, db: { authSessions, users } };
+  const realtimeConnections = createMockRealtimeConnectionRepository();
+  return {
+    authSessions,
+    users,
+    realtimeConnections,
+    signAccessToken,
+    db: { authSessions, users, realtimeConnections },
+  };
 };
 
 const refreshTokenOf = (result: RotateSessionResult): string => {
@@ -104,7 +115,15 @@ const setupStateful = (initialSecret: string) => {
     return { ...state } as never;
   });
   const signAccessToken = vi.fn().mockReturnValue('ACCESS');
-  return { state, authSessions, users, signAccessToken, db: { authSessions, users } };
+  const realtimeConnections = createMockRealtimeConnectionRepository();
+  return {
+    state,
+    authSessions,
+    users,
+    realtimeConnections,
+    signAccessToken,
+    db: { authSessions, users, realtimeConnections },
+  };
 };
 
 describe('rotateSession', () => {
@@ -199,13 +218,14 @@ describe('rotateSession', () => {
   });
 
   it('rejects + revokes on an unknown secret (theft/replay)', async () => {
-    const { authSessions, db, signAccessToken } = setup();
+    const { authSessions, realtimeConnections, db, signAccessToken } = setup();
     authSessions.findBySid.mockResolvedValue(makeSession({ refreshTokenHash: hashRefreshSecret('the-real-one') }));
 
     await expect(
       rotateSession(buildRefreshToken(SID, generateRefreshSecret()), { db, signAccessToken })
     ).rejects.toBeInstanceOf(UnauthorizedError);
     expect(authSessions.revokeBySid).toHaveBeenCalledWith(SID);
+    expect(realtimeConnections.endConnections).toHaveBeenCalledWith({ sid: SID });
   });
 
   it('rejects a revoked session without rotating or re-revoking', async () => {
@@ -412,7 +432,12 @@ describe('rotateSession', () => {
       );
       // Revoking here would kill a healthy session AND stamp the theft event on a benign stall.
       expect(authSessions.revokeBySid).not.toHaveBeenCalled();
-      expect(audit).toHaveBeenCalledWith({ type: 'refresh_recovery_capped', sid: SID, userId: 'user-1', metadata: { terminal: true } });
+      expect(audit).toHaveBeenCalledWith({
+        type: 'refresh_recovery_capped',
+        sid: SID,
+        userId: 'user-1',
+        metadata: { terminal: true },
+      });
       expect(audit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'session_reuse_revoked' }));
     });
 
@@ -431,7 +456,12 @@ describe('rotateSession', () => {
         TooManyRequestsError
       );
       expect(authSessions.revokeBySid).not.toHaveBeenCalled();
-      expect(audit).toHaveBeenCalledWith({ type: 'refresh_recovery_capped', sid: SID, userId: 'user-1', metadata: { terminal: false } });
+      expect(audit).toHaveBeenCalledWith({
+        type: 'refresh_recovery_capped',
+        sid: SID,
+        userId: 'user-1',
+        metadata: { terminal: false },
+      });
     });
 
     it('still revokes when the previous hash has genuinely moved on', async () => {

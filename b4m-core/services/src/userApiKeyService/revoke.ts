@@ -1,7 +1,8 @@
-import { IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
+import { IOrganizationRepository, IRealtimeConnectionRepository, IUserApiKeyRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { resolveOwnedApiKey } from './resolveOwnedApiKey';
+import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
 
 const revokeUserApiKeySchema = z.object({
   keyId: z.string(),
@@ -14,6 +15,9 @@ interface RevokeUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository & Pick<Required<IUserApiKeyRepository>, 'revokeIfNotDisabled'>;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
+    // Optional only so existing overlay callers keep compiling; when omitted, the realtime sweep
+    // ends the key's connections on its next run instead. In-repo callers always pass it.
+    realtimeConnections?: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
 }
 
@@ -42,6 +46,9 @@ export const revokeUserApiKey = async (
   }
 
   await db.userApiKeys.revokeIfNotDisabled(apiKey.id, userId, params.reason);
+  if (db.realtimeConnections) {
+    await endRealtimeConnections({ apiKeyId: apiKey.id }, { db: { realtimeConnections: db.realtimeConnections } });
+  }
 
   return { name: apiKey.name };
 };

@@ -1,5 +1,5 @@
 import { AuthStrategy, IAuthProviders } from '@bike4mind/common';
-import { User, authSessionRepository } from '@bike4mind/database';
+import { User, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { omit } from 'lodash';
@@ -169,6 +169,7 @@ const authenticateUser = async (
       // login is minted later, in the callback handler, so it is created fresh and unaffected.
       if (isNewProvider) {
         await authSessionRepository.revokeAllByUserId(String(user._id));
+        await realtimeConnectionRepository.endConnections({ userId: String(user._id), sessionsOnly: true });
       }
 
       const linkedUser = omit(user, ['password']) as typeof user & {

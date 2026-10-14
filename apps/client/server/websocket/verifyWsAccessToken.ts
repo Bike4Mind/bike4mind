@@ -23,6 +23,14 @@ import jwt from 'jsonwebtoken';
  * removes its subscribers when the socket closes.
  */
 export async function verifyWsAccessToken(accessToken: string | undefined) {
+  return (await verifyWsAccessTokenClaims(accessToken)).user;
+}
+
+/**
+ * verifyWsAccessToken plus the claims a Connection row records: the session id, the verified
+ * tokenVersion and the token's expiry. Used by reauth_connection to re-stamp a live socket.
+ */
+export async function verifyWsAccessTokenClaims(accessToken: string | undefined) {
   const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
   let previousSecret = undefined;
   // Accept the previous key only within the shared rotation grace window. `previousKey`
@@ -59,5 +67,10 @@ export async function verifyWsAccessToken(accessToken: string | undefined) {
   }
   assertAccountStateUsable(user);
 
-  return user;
+  return {
+    user,
+    sid: typeof decoded.sid === 'string' ? decoded.sid : undefined,
+    tokenVersion: typeof decoded.tokenVersion === 'number' ? decoded.tokenVersion : 0,
+    expiresAt: typeof decoded.exp === 'number' ? new Date(decoded.exp * 1000) : undefined,
+  };
 }
