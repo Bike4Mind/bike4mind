@@ -308,6 +308,42 @@ async function runStream(backend: DeepSeekBackend, model: string, options = {}) 
 }
 
 describe('DeepSeekBackend streaming reasoning', () => {
+  it('reports each streamed tool round-trip as its own turn, summing to the aggregates', async () => {
+    const toolFn = vi.fn().mockResolvedValue('tool output');
+    const { backend } = streamingBackend([
+      [
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [{ index: 0, id: 't1', type: 'function', function: { name: 'search', arguments: '{}' } }],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: { prompt_tokens: 100, completion_tokens: 20, prompt_cache_hit_tokens: 40 },
+        },
+      ],
+      [
+        {
+          choices: [{ index: 0, delta: { content: 'final' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 300, completion_tokens: 30, prompt_cache_hit_tokens: 100 },
+        },
+      ],
+    ]);
+
+    const info = (await runStream(backend, ChatModels.DEEPSEEK_FLASH, { tools: searchTool(toolFn) })).at(-1)!.info;
+
+    expect(info.turnUsage).toEqual([
+      { inputTokens: 60, cacheReadInputTokens: 40, outputTokens: 20 },
+      { inputTokens: 200, cacheReadInputTokens: 100, outputTokens: 30 },
+    ]);
+    expect(info.inputTokens).toBe(260);
+    expect(info.cacheReadInputTokens).toBe(140);
+    expect(info.outputTokens).toBe(50);
+  });
+
   it('asks for usage on the stream, without which a turn settles at zero', async () => {
     const { backend, create } = streamingBackend([
       [

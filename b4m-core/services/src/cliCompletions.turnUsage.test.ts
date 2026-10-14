@@ -16,7 +16,7 @@ const tieredModel = {
   },
 };
 
-const emitted: { info: CompletionInfo } = { info: {} };
+const emitted: { info: CompletionInfo; fail?: boolean } = { info: {} };
 
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
@@ -33,6 +33,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
     currentModel: '',
     complete: vi.fn(async (_model, _messages, _options, onChunk) => {
       await onChunk(['done'], emitted.info);
+      if (emitted.fail) throw new Error('client disconnected');
     }),
   })),
 }));
@@ -91,6 +92,27 @@ describe('executeCompletion - long-context tier per request', () => {
       turnUsage: turns,
     });
     expect(usd).toBeCloseTo(20_000 * perM(4) + 190_000 * perM(4) * 0.1 + 1_000 * perM(18), 10);
+  });
+
+  it('prices the errored-run usage event request by request too', async () => {
+    const turn = { inputTokens: 80_000, outputTokens: 1_000 };
+    emitted.info = { inputTokens: 240_000, outputTokens: 3_000, turnUsage: [turn, turn, turn] };
+    emitted.fail = true;
+    const db = buildDb();
+    await expect(
+      executeCompletion({
+        userId: 'user1',
+        model: 'tiered-model',
+        messages: [{ role: 'user', content: 'hi' }],
+        db,
+        onChunk: vi.fn().mockResolvedValue(undefined),
+        alwaysRecordUsage: true,
+      })
+    ).rejects.toThrow('client disconnected');
+    emitted.fail = false;
+    expect(db.usageEvents.record).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'error', costUsd: expect.closeTo(0.516, 10) })
+    );
   });
 
   it('falls back to the aggregates when the adapter reports no turns', async () => {
