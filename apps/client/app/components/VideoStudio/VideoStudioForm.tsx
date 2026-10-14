@@ -13,7 +13,7 @@ import {
   type VideoFormState,
 } from './videoForm';
 
-// Module scope so the form state hook sees a stable reference.
+// Module scope: an inline object would re-run the hook's fallback effect on every render.
 const VIDEO_FORM_RULES: StudioFormRules<VideoModel, VideoFormState> = { initialFor: initialFormFor, clampToModel };
 
 type VideoStudioFormProps = {
