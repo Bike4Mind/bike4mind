@@ -674,7 +674,7 @@ export class XAIBackend implements ICompletionBackend {
       const streamedText: string[] = [];
       if (chunk.usage) {
         inputTokens = Math.max(inputTokens, chunk.usage?.prompt_tokens || 0);
-        outputTokens += xaiOutputTokens(chunk.usage);
+        outputTokens = Math.max(outputTokens, xaiOutputTokens(chunk.usage));
         // xAI reports cache hits under prompt_tokens_details.cached_tokens (OpenAI's shape).
         cachedTokensFromStream = Math.max(cachedTokensFromStream, cachedTokensFromUsage(chunk.usage));
       }
