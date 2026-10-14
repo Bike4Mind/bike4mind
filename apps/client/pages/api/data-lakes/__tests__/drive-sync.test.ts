@@ -45,12 +45,14 @@ vi.mock('@server/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => (h.gatedFlags.push(flag), () => {}),
 }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+// common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: mirror BOTH arms of
+// the real isTerminalDriveGrantError (BadRequestError, or Google's invalid_grant) instead.
 vi.mock('@server/integrations/google/drive/common', async () => {
   const { BadRequestError } = await import('@server/utils/errors');
   return {
     getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
-    // Mirrors the real predicate: every reconnect-class failure is a BadRequestError.
-    isTerminalDriveGrantError: (e: unknown) => e instanceof BadRequestError,
+    isTerminalDriveGrantError: (e: unknown) =>
+      e instanceof BadRequestError || (e instanceof Error && e.message === 'invalid_grant'),
   };
 });
 // Keep isValidDriveFolderId real (the folder-id validation runs for real); mock only the Drive calls.
@@ -267,6 +269,47 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
       expect(h.connUpdateHealth).toHaveBeenCalledWith('conn1', { status: 'credential_error', lastError: REVOKED });
       expect(h.sendToQueue).not.toHaveBeenCalled();
       expect(h.connCreate).not.toHaveBeenCalled();
+    });
+
+    it('rethrows a transient forced-refresh failure as-is and does not mark the connection', async () => {
+      const blip = new Error('Backend Error');
+      h.getFolderAccess.mockResolvedValue({ ok: false, reason: 'unauthorized' });
+      h.getValidUserDriveAccessToken.mockResolvedValueOnce('stale-token').mockRejectedValueOnce(blip);
+      const { res } = makeRes();
+
+      const failure = await run(makeReq(body), res).catch((e: unknown) => e);
+
+      expect(failure).toBe(blip);
+      expect(h.connUpdateHealth).not.toHaveBeenCalled();
+    });
+
+    it('still answers the revoked 400 and warns when marking the connection fails', async () => {
+      h.getFolderAccess.mockResolvedValue({ ok: false, reason: 'unauthorized' });
+      h.getValidUserDriveAccessToken
+        .mockResolvedValueOnce('stale-token')
+        .mockRejectedValueOnce(new BadRequestError(REVOKED));
+      h.connUpdateHealth.mockRejectedValueOnce(new Error('mongo down'));
+      const req = makeReq(body);
+      const { res } = makeRes();
+
+      const failure = await run(req, res).catch((e: unknown) => e);
+
+      expect(failure).toBeInstanceOf(BadRequestError);
+      expect(failure).toHaveProperty('message', REVOKED);
+      expect((req as { logger: { warn: unknown } }).logger.warn).toHaveBeenCalled();
+    });
+
+    it('marks credential_error when the first, non-forced token fetch is already unusable', async () => {
+      h.getValidUserDriveAccessToken.mockRejectedValueOnce(
+        new BadRequestError('Google Drive refresh token unreadable - reconnect required')
+      );
+      const { res } = makeRes();
+
+      const failure = await run(makeReq(body), res).catch((e: unknown) => e);
+
+      expect(failure).toBeInstanceOf(BadRequestError);
+      expect(h.connUpdateHealth).toHaveBeenCalledWith('conn1', expect.objectContaining({ status: 'credential_error' }));
+      expect(h.getFolderAccess).not.toHaveBeenCalled();
     });
 
     it('proceeds normally when the forced refresh mints a token Drive accepts', async () => {

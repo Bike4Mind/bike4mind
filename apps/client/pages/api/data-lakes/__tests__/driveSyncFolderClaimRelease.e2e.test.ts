@@ -48,9 +48,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
-vi.mock('@server/integrations/google/drive/common', () => ({
-  getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
-}));
+// common.ts reads Config at import, so importOriginal crashes here: mirror both arms of the real predicate.
+vi.mock('@server/integrations/google/drive/common', async () => {
+  const { BadRequestError } = await import('@server/utils/errors');
+  return {
+    getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
+    isTerminalDriveGrantError: (e: unknown) =>
+      e instanceof BadRequestError || (e instanceof Error && e.message === 'invalid_grant'),
+  };
+});
 // Keep isValidDriveFolderId real; mock only the Drive network calls.
 vi.mock('@server/integrations/google/drive/driveClient', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>();

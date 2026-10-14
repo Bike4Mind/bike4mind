@@ -664,8 +664,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
 
     // An org connection's own token, else (every personal connection) the connecting user's live grant.
-    // A credential failure marks the connection credential_error and throws so SQS retries -> DLQ.
-    const accessToken = await getValidConnectionDriveAccessToken(connectionId, connectionOwner);
+    // A terminal grant failure has already marked the connection credential_error (which ends the claim),
+    // so the run stops here like the probe's revoked-grant exit below; only a transient one throws for SQS.
+    let accessToken: string;
+    try {
+      accessToken = await getValidConnectionDriveAccessToken(connectionId, connectionOwner);
+    } catch (e) {
+      if (!isTerminalDriveGrantError(e)) throw e;
+      logger.warn('[driveLakeIngest] Drive grant was revoked; connection marked credential_error', { connectionId });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      return;
+    }
     let drive = createDriveClient(accessToken);
 
     // 1) Resolve this run's Drive-side signal: an incremental `changes.list` pull (scoped to what
@@ -753,20 +762,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // user token's expiresAt. One retry through a forced refresh lets Google's invalid_grant decide: that
     // marks the connection credential_error (and ends the claim) inside getValidConnectionDriveAccessToken,
     // so the run stops here rather than retrying through SQS to the DLQ.
-    const probeFolder = async (id: string): Promise<ConnectedFolderReachability> => {
+    const probeFolder = async (): Promise<ConnectedFolderReachability> => {
       try {
         return await probeConnectedFolder(drive, connection.driveFolderId);
       } catch (e) {
         if (!isDriveUnauthorizedError(e)) throw e;
         drive = createDriveClient(
-          await getValidConnectionDriveAccessToken(id, connectionOwner, { forceRefresh: true })
+          await getValidConnectionDriveAccessToken(connection.id, connectionOwner, { forceRefresh: true })
         );
         return probeConnectedFolder(drive, connection.driveFolderId);
       }
     };
     let folderReachability: ConnectedFolderReachability;
     try {
-      folderReachability = await probeFolder(connectionId);
+      folderReachability = await probeFolder();
     } catch (e) {
       if (isTerminalDriveGrantError(e)) {
         logger.warn('[driveLakeIngest] Drive grant was revoked; connection marked credential_error', { connectionId });
