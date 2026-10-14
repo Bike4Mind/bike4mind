@@ -277,8 +277,10 @@ export type DriveFolderEstimate = {
  * Pre-flight size estimate of a Drive folder tree for the Create Data Lake wizard. Walks like
  * walkFolder (BFS, cycle guard, de-dup by file id as the worker does) but never throws on a bound:
  * past `deadlineMs`, `maxFolders`, a throttle, a folder over the listing page cap, or the candidate
- * cap it returns what it has so far with `truncated` set. Only the candidate cap blocks: it is judged
- * on files actually counted, the same `walked.length` the worker gates on. Any other Drive error (a revoked grant, a 404) is rethrown.
+ * cap it returns what it has so far with `truncated` set. Two bounds block (set `overCandidateCap`):
+ * the candidate cap, judged on files actually counted - the same `walked.length` the worker gates on -
+ * and the per-folder page cap, which makes the worker's own walk fail. Any other Drive error (a
+ * revoked grant, a 404) is rethrown.
  *
  * Classifies in the worker's order (driveLakeIngest skips oversized before fetching, and
  * fetchDriveFileContent then rejects unsupported types), so must stay in sync with it.
@@ -300,7 +302,10 @@ export async function estimateFolder(
   const stop = (reason: NonNullable<DriveFolderEstimate['truncatedReason']>) => {
     estimate.truncated = true;
     estimate.truncatedReason = reason;
-    if (reason === 'candidate_cap') estimate.overCandidateCap = true;
+    // A folder past the listing page cap is one the worker's own walk refuses outright (it
+    // rethrows the same DriveListingIncompleteError), so it blocks here too rather than letting a
+    // lake be created for a sync that can only fail.
+    if (reason === 'candidate_cap' || reason === 'page_cap') estimate.overCandidateCap = true;
     return estimate;
   };
   const visited = new Set<string>();

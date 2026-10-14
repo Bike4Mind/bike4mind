@@ -421,11 +421,13 @@ describe('estimateFolder', () => {
     expect(list).toHaveBeenCalledTimes(pages);
   });
 
-  it('maps a folder past the listing page cap to a non-blocking page_cap truncation', async () => {
+  // One folder too big to list is one the worker's walk also gives up on, so the estimate blocks it
+  // rather than letting the lake be created for a sync that cannot run.
+  it('blocks on a folder past the listing page cap', async () => {
     const list = vi.fn(async () => ({ data: { files: [file('x', 'x.txt', 'text/plain')], nextPageToken: 'more' } }));
     const drive = { files: { list } } as unknown as drive_v3.Drive;
     const e = await estimateFolder(drive, 'root', opts());
-    expect(e).toMatchObject({ truncated: true, truncatedReason: 'page_cap', overCandidateCap: false });
+    expect(e).toMatchObject({ truncated: true, truncatedReason: 'page_cap', overCandidateCap: true });
     expect(list).toHaveBeenCalledTimes(MAX_LIST_PAGES);
   });
 
