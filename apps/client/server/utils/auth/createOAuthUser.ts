@@ -34,7 +34,7 @@ function isUsernameDuplicateKeyError(err: unknown): boolean {
  * (usernameSchema) and kept short enough that any retry suffix still fits.
  */
 export function deriveOAuthUsername(rawUsername: string | null, name: string, email: string | null): string {
-  const candidates = [rawUsername ?? '', name, email?.split('@')[0] ?? ''];
+  const candidates = [(rawUsername ?? '').split('@')[0], name, email?.split('@')[0] ?? ''];
   for (const candidate of candidates) {
     const sanitized = sanitizeUsername(candidate, MAX_OAUTH_USERNAME_BASE_LENGTH);
     if (sanitized) return sanitized;

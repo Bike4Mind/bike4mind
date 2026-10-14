@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { verifyEmailChange, VerifyEmailChangeParameters } from './verifyEmailChange';
 import { BadRequestError } from '@bike4mind/utils';
-import { ConflictError } from '@bike4mind/common';
 
 const baseParams: VerifyEmailChangeParameters = {
   token: 'valid-token-123',
@@ -157,29 +156,29 @@ describe('verifyEmailChange', () => {
 
     it('stores the new address trimmed and lowercased', async () => {
       mockUser.pendingEmail = '  New.Email@Example.COM ';
-      await verifyEmailChange(baseParams, mockAdapters);
+      await expect(verifyEmailChange(baseParams, mockAdapters)).resolves.toBe('changed');
 
       expect(mockAdapters.db.users.existsOtherUserWithEmail).toHaveBeenCalledWith('new.email@example.com', 'userId123');
       expect(mockAdapters.db.users.update.mock.calls[0][0].email).toBe('new.email@example.com');
     });
 
-    it('burns the token and throws a conflict when another user holds the address', async () => {
+    it('burns the token and reports unavailable when another user holds the address', async () => {
       mockAdapters.db.users.existsOtherUserWithEmail.mockResolvedValue(true);
 
-      await expect(verifyEmailChange(baseParams, mockAdapters)).rejects.toThrow(ConflictError);
+      await expect(verifyEmailChange(baseParams, mockAdapters)).resolves.toBe('unavailable');
       expect(mockAdapters.db.users.update).toHaveBeenCalledTimes(1);
       expect(mockAdapters.db.users.update).toHaveBeenCalledWith(burnedToken);
     });
 
-    it('maps a duplicate-key error on email to the same conflict and burns the token', async () => {
-      mockAdapters.db.users.update
-        .mockRejectedValueOnce(Object.assign(new Error('E11000'), { code: 11000, keyPattern: { email: 1 } }))
-        .mockResolvedValueOnce(undefined);
+    it('maps a duplicate-key error on email to the same conflict without a burn write', async () => {
+      mockAdapters.db.users.update.mockRejectedValueOnce(
+        Object.assign(new Error('E11000'), { code: 11000, keyPattern: { email: 1 } })
+      );
 
       await expect(verifyEmailChange(baseParams, mockAdapters)).rejects.toThrow(
         'This email address is no longer available.'
       );
-      expect(mockAdapters.db.users.update).toHaveBeenLastCalledWith(burnedToken);
+      expect(mockAdapters.db.users.update).toHaveBeenCalledTimes(1);
     });
 
     it('rethrows a duplicate-key error on another field unchanged', async () => {

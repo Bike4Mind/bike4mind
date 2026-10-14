@@ -25,7 +25,7 @@ interface VerifyEmailChangeAdapters {
 export const verifyEmailChange = async (
   params: VerifyEmailChangeParameters,
   { db }: VerifyEmailChangeAdapters
-): Promise<void> => {
+): Promise<'changed' | 'unavailable'> => {
   const { token } = secureParameters(params, verifyEmailChangeSchema);
 
   const user = await db.users.findByPendingEmailToken(token);
@@ -60,10 +60,11 @@ export const verifyEmailChange = async (
   };
 
   // Another account can claim the address between request and verify; the request-time check
-  // alone cannot see that. The token is burned so the same link cannot be retried.
+  // alone cannot see that. The token is burned so the same link cannot be retried. The caller
+  // turns 'unavailable' into a 409 after the transaction commits, so the burn is not rolled back.
   if (await db.users.existsOtherUserWithEmail(newEmail, user.id)) {
     await db.users.update({ id: user.id, pendingEmailUsed: true, ...clearPending });
-    throw new ConflictError(EMAIL_NO_LONGER_AVAILABLE_MESSAGE);
+    return 'unavailable';
   }
 
   try {
@@ -77,10 +78,12 @@ export const verifyEmailChange = async (
       emailVerified: true,
       emailVerifiedAt: new Date(),
     });
+    return 'changed';
   } catch (error) {
     // Lost a race with a concurrent claim of the same exact address after the check above.
+    // The server has aborted the transaction, so a burn write cannot land: the token is not
+    // burned on this rare race.
     if (isDuplicateKeyErrorOn(error, 'email')) {
-      await db.users.update({ id: user.id, pendingEmailUsed: true, ...clearPending });
       throw new ConflictError(EMAIL_NO_LONGER_AVAILABLE_MESSAGE);
     }
     throw error;

@@ -62,6 +62,7 @@ describe('deriveOAuthUsername', () => {
     expect(deriveOAuthUsername('handle', 'Pat Doe', 'pat@example.com')).toBe('handle');
     expect(deriveOAuthUsername(null, 'Pat Doe', 'pat@example.com')).toBe('Pat Doe');
     expect(deriveOAuthUsername(null, '', 'pat.doe@example.com')).toBe('pat.doe');
+    expect(deriveOAuthUsername('alice@corp.com', '', null)).toBe('alice');
   });
 
   it('strips characters outside the username rules and collapses whitespace', () => {
