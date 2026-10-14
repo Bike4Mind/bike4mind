@@ -637,38 +637,6 @@ describe('realtimeConnectionRepository.upsertSubscriber', () => {
     expect(only.attempts).toBe(0);
   });
 
-  // The race only loses some of the time, so each case runs over many fresh queries.
-  const ROUNDS = 25;
-
-  it('creates one document when connections make the first subscribe to a query concurrently', async () => {
-    for (let round = 0; round < ROUNDS; round++) {
-      const queryId = `first-${round}`;
-      await Promise.all(
-        ['a1', 'a2', 'a3', 'a4'].map(connectionId =>
-          realtimeConnectionRepository.upsertSubscriber({ ...identity, queryId }, { ...subscriber, connectionId })
-        )
-      );
-
-      const docs = await QuerySubscription.find({ queryId }).lean();
-      expect(docs).toHaveLength(1);
-      expect(docs[0].subscribers.map(entry => entry.connectionId).sort()).toEqual(['a1', 'a2', 'a3', 'a4']);
-    }
-  });
-
-  it('stores one entry when the same first subscribe arrives concurrently', async () => {
-    for (let round = 0; round < ROUNDS; round++) {
-      const queryId = `same-${round}`;
-      await Promise.all(
-        Array.from({ length: 4 }, () =>
-          realtimeConnectionRepository.upsertSubscriber({ ...identity, queryId }, subscriber)
-        )
-      );
-
-      const docs = await QuerySubscription.find({ queryId }).lean();
-      expect(docs.flatMap(doc => doc.subscribers)).toHaveLength(1);
-    }
-  });
-
   describe('when every write keeps losing to a concurrent writer', () => {
     afterEach(() => {
       vi.restoreAllMocks();

@@ -64,4 +64,15 @@ describe('$disconnect', () => {
     expect(mockUserUpdateOne).not.toHaveBeenCalled();
     expect(mockRemoveByConnectionId).not.toHaveBeenCalled();
   });
+
+  it('logs and carries on when pulling the subscribers fails', async () => {
+    mockRemoveConnectionSubscribers.mockRejectedValue(new Error('mongo down'));
+    mockRemoveByConnectionId.mockResolvedValue([{ instanceId: 'i1', workspaceName: 'w', source: 's', deviceId: 'd' }]);
+
+    await expect(run()).resolves.toEqual({ statusCode: 200 });
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('connection subscribers'), expect.any(Error));
+    expect(mockRemoveByConnectionId).toHaveBeenCalledWith('conn-1');
+    expect(mockUpdateLogoutTime).toHaveBeenCalledWith('user-1', expect.anything());
+  });
 });

@@ -10,10 +10,10 @@ export interface EndRealtimeConnectionsAdapters {
  * End the realtime connections a revoke makes stale: their QuerySubscription entries are pulled
  * (so they stop receiving pushes) and their Connection rows are marked ended, not deleted. An ended
  * row no longer authorizes the connection-only WS actions, and it stays so the realtime sweep can
- * close the socket and then delete the row. DB-only; needs no WebSocket permission. Called from
- * inside every revoke primitive (revokeSession, revokeAllUserSessions, revokeUserSessions, account
- * block, user delete, API key revoke/rotate) so a caller cannot revoke a credential and leave its
- * socket live.
+ * close the socket and then delete the row. DB-only; needs no WebSocket permission. The service
+ * revoke primitives (revokeSession, revokeAllUserSessions, revokeUserSessions, account block, user
+ * delete, API key revoke/rotate) call this themselves; a caller that revokes through the repository
+ * directly must call it too (returnToAdmin does).
  *
  * Never throws: the revoke it rides on has already happened and must keep its outcome, so a
  * failure here is logged and the sweep (which also ends connections whose credential lapsed)

@@ -376,12 +376,15 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(mockRevokeUserApiKey).toHaveBeenCalledWith(
       'b4m-user-1',
       expect.objectContaining({ keyId: 'old-key' }),
-      expect.objectContaining({
-        db: expect.objectContaining({
-          realtimeConnections: realtimeConnectionRepository,
-        }),
-      })
+      expect.anything()
     );
+    // Identity, not equality: a shallow copy of the repository must fail.
+    const [, , adapters] = mockRevokeUserApiKey.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      { db: { realtimeConnections: unknown } },
+    ];
+    expect(adapters.db.realtimeConnections).toBe(realtimeConnectionRepository);
     // revoke happens before mint
     expect(mockRevokeUserApiKey.mock.invocationCallOrder[0]).toBeLessThan(
       mockCreateUserApiKey.mock.invocationCallOrder[0]

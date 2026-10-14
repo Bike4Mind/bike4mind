@@ -31,8 +31,11 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
   }
 
-  // Pull this connection's subscribers, deleting any QuerySubscription it leaves empty.
-  await realtimeConnectionRepository.removeConnectionSubscribers(connectionId);
+  // Pull this connection's subscribers, deleting any QuerySubscription it leaves empty. Best-effort:
+  // the orphan pass removes whatever a failure leaves, and the rest of the cleanup must still run.
+  await realtimeConnectionRepository.removeConnectionSubscribers(connectionId).catch((error: unknown) => {
+    logger.warn('[DISCONNECT] Failed to pull connection subscribers (non-fatal):', error as Error);
+  });
 
   // Sweep any Claude Code agent sprites owned by this connection and
   // broadcast their despawn to every other tab the user has open.

@@ -439,7 +439,10 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         await authSessionService.revokeAllUserSessions(
           user.id,
           {},
-          { db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository } }
+          {
+            db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository },
+            logger: req.logger,
+          }
         );
       }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);

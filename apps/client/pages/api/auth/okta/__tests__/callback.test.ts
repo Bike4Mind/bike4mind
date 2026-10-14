@@ -32,35 +32,19 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: { endConnections: (...a: any[]) => mockEndConnections(...a) },
 }));
 
-// Stand-in for the services barrel (see the issueSession note below) carrying the revoke primitive's
-// contract: the session revoke throws through, ending the realtime connections never does.
-const mockRevokeAllUserSessions = vi.fn(
-  async (
-    userId: string,
-    options: { exceptSid?: string },
-    {
-      db,
-    }: {
-      db: {
-        authSessions: { revokeAllByUserId: (userId: string, options: { exceptSid?: string }) => Promise<number> };
-        realtimeConnections: { endConnections: (filter: unknown) => Promise<{ connectionIds: string[] }> };
-      };
-    }
-  ) => {
-    const count = await db.authSessions.revokeAllByUserId(userId, options);
-    try {
-      await db.realtimeConnections.endConnections({ userId, sessionsOnly: true });
-    } catch {
-      // Best-effort, as in the real primitive.
-    }
-    return count;
-  }
-);
-vi.mock('@bike4mind/services', () => ({
-  authSessionService: {
-    revokeAllUserSessions: (...a: Parameters<typeof mockRevokeAllUserSessions>) => mockRevokeAllUserSessions(...a),
-  },
-}));
+// The real revoke primitive runs against the repository mocks above, so ending the realtime
+// connections is exercised for real; the spy only records the adapters it was given.
+const mockRevokeAllUserSessions = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  mockRevokeAllUserSessions.mockImplementation(actual.authSessionService.revokeAllUserSessions);
+  return {
+    authSessionService: {
+      revokeAllUserSessions: (...args: Parameters<typeof actual.authSessionService.revokeAllUserSessions>) =>
+        mockRevokeAllUserSessions(...args),
+    },
+  };
+});
 
 // Okta OIDC client: token exchange + userinfo are network calls, fully stubbed.
 const mockGetConfig = vi.fn();
@@ -110,10 +94,12 @@ vi.mock('@server/utils/validators', () => ({
 }));
 vi.mock('@server/security/secretEncryption', () => ({ encryptSecret: (v: string) => `enc:${v}` }));
 vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
-vi.mock('@bike4mind/observability', () => {
-  const instance = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+// A class, not a bare object: the real services barrel constructs Loggers at import time.
+vi.mock('@bike4mind/observability', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/observability')>();
   return {
-    Logger: { ...instance, globalInstance: instance },
+    ...actual,
+    Logger: Object.assign(actual.Logger, { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
   };
 });
 // Signup/link grants are unit-tested in emailVerifiedGrants.test.ts; assert the callback's wiring here.

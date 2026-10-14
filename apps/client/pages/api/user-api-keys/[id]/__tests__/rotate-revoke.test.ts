@@ -82,15 +82,13 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
   it('wires the realtime connection repository so a rotation ends the key sockets', async () => {
     const { req, res } = post('key-1');
     await mockRefs.rotateHandler!(req, res);
-    expect(rotateUserApiKey).toHaveBeenCalledWith(
-      'admin-user',
-      { keyId: 'key-1' },
-      expect.objectContaining({
-        db: expect.objectContaining({
-          realtimeConnections: realtimeConnectionRepository,
-        }),
-      })
-    );
+    expect(rotateUserApiKey).toHaveBeenCalledWith('admin-user', { keyId: 'key-1' }, expect.anything());
+    const [, , adapters] = rotateUserApiKey.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      { db: { realtimeConnections: unknown } },
+    ];
+    expect(adapters.db.realtimeConnections).toBe(realtimeConnectionRepository);
   });
 
   it('propagates a service NotFoundError', async () => {
@@ -185,13 +183,15 @@ describe('POST /api/user-api-keys/[id]/revoke', () => {
     expect(revokeUserApiKey).toHaveBeenCalledWith(
       'admin-user',
       { keyId: 'key-1', reason: 'rotated out' },
-      expect.objectContaining({
-        db: expect.objectContaining({
-          organizations: organizationRepository,
-          realtimeConnections: realtimeConnectionRepository,
-        }),
-      })
+      expect.anything()
     );
+    const [, , adapters] = revokeUserApiKey.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      { db: { organizations: unknown; realtimeConnections: unknown } },
+    ];
+    expect(adapters.db.organizations).toBe(organizationRepository);
+    expect(adapters.db.realtimeConnections).toBe(realtimeConnectionRepository);
   });
 
   it('propagates a service NotFoundError', async () => {
