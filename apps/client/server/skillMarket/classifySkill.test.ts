@@ -54,6 +54,42 @@ describe('classifySkill', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('tolerates cosmetic drift: long free-form rule names, severity case, unknown severity, null mismatchNote', async () => {
+    const drifted = {
+      ...valid,
+      findings: [
+        {
+          rule: 'exfiltrating conversation content, files, memory, keys or personal data',
+          severity: 'Critical',
+          message: 'x',
+        },
+        { rule: 'odd', severity: 'info', message: 'y' },
+      ],
+      honestSummary: { ...valid.honestSummary, descriptionMatches: false, mismatchNote: null },
+    };
+    const result = await classifySkill(
+      snapshot,
+      llm(async () => JSON.stringify(drifted))
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.findings.map(f => f.severity)).toEqual(['critical', 'high']);
+      expect(result.findings[0].rule).toHaveLength(60);
+      expect(result.honestSummary).toMatchObject({ descriptionMatches: false });
+      expect(result.honestSummary.mismatchNote).toBeUndefined();
+    }
+  });
+
+  it('still fails closed on a non-boolean descriptionMatches and names the field', async () => {
+    const bad = { ...valid, honestSummary: { ...valid.honestSummary, descriptionMatches: 'mostly' } };
+    const result = await classifySkill(
+      snapshot,
+      llm(async () => JSON.stringify(bad))
+    );
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) expect(result.error).toContain('honestSummary.descriptionMatches');
+  });
+
   it('fails closed when the model call throws', async () => {
     const result = await classifySkill(
       snapshot,

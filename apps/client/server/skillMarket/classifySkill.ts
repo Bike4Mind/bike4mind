@@ -15,25 +15,31 @@ import { tryParseJsonObject } from '@server/utils/resolveImagePrompt';
 
 const CLASSIFIER_TIMEOUT_MS = 25_000;
 
+// The model writes free-form rule names and prose, so over-long text is clipped and an unknown
+// severity is read as `high` (held for a human) instead of failing the whole verdict. Structure
+// stays strict: a missing verdict, summary or descriptionMatches still fails closed.
+const clipped = (max: number) => z.string().transform(s => s.slice(0, max));
+const SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;
+const severity = z
+  .string()
+  .transform(s => s.trim().toLowerCase())
+  .transform(s => ((SEVERITIES as readonly string[]).includes(s) ? (s as (typeof SEVERITIES)[number]) : 'high'));
+
 const ClassifierSchema = z.object({
   verdict: z.enum(['pass', 'fail']),
   confidence: z.number().min(0).max(1),
   findings: z
-    .array(
-      z.object({
-        rule: z.string().min(1).max(60),
-        severity: z.enum(['critical', 'high', 'medium', 'low']),
-        message: z.string().min(1).max(500),
-      })
-    )
-    .max(20),
+    .array(z.object({ rule: clipped(60).pipe(z.string().min(1)), severity, message: clipped(500) }))
+    .transform(f => f.slice(0, 20)),
   honestSummary: z.object({
-    whatItDoes: z.string().min(1).max(1000),
-    toolsUsed: z.array(z.string().max(100)).max(50),
-    dataItTouches: z.string().max(500),
-    riskNotes: z.array(z.string().max(300)).max(10),
+    whatItDoes: clipped(1000).pipe(z.string().min(1)),
+    toolsUsed: z.array(clipped(100)).transform(t => t.slice(0, 50)),
+    dataItTouches: clipped(500),
+    riskNotes: z.array(clipped(300)).transform(r => r.slice(0, 10)),
     descriptionMatches: z.boolean(),
-    mismatchNote: z.string().max(500).optional(),
+    mismatchNote: clipped(500)
+      .nullish()
+      .transform(n => n ?? undefined),
   }),
 });
 
@@ -103,7 +109,12 @@ export async function classifySkill(snapshot: ISkillSnapshot, llm: ClassifierLlm
     ]).finally(() => clearTimeout(timer));
 
     const parsed = ClassifierSchema.safeParse(tryParseJsonObject(raw));
-    if (!parsed.success) return { ok: false, error: 'Classifier returned unparseable output', model: llm.model };
+    if (!parsed.success) {
+      // Field paths only (never the raw output, which can echo the adversarial body) so a recurring
+      // schema miss is diagnosable from the version's scanError.
+      const paths = [...new Set(parsed.error.issues.map(i => i.path.join('.') || '(root)'))].slice(0, 5).join(', ');
+      return { ok: false, error: `Classifier returned unparseable output (${paths})`, model: llm.model };
+    }
 
     const { verdict, confidence, findings, honestSummary } = parsed.data;
     return {
