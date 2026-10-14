@@ -99,7 +99,7 @@ const ChangeEmailModal = ({ open, onClose, currentEmail }: ChangeEmailModalProps
     }
 
     try {
-      await requestChange.mutateAsync({ newEmail });
+      await requestChange.mutateAsync({ newEmail: newEmail.trim() });
       setSuccess(
         isAddingEmail
           ? 'Verification email sent! Please check your inbox.'

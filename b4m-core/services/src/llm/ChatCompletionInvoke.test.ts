@@ -267,4 +267,21 @@ describe('ChatCompletionInvoke.invoke - model modality', () => {
     expect(mockDb.quests.create).toHaveBeenCalled();
     expect((invoke as any).questStartParams?.promptMeta?.model?.type).toBeUndefined();
   });
+
+  // The tool-calling scorecard (evals/toolCalling) splits stored turns by this field.
+  it('records the public API toolMode on promptMeta, and nothing when the request named none', async () => {
+    mockedGetAvailableModels.mockResolvedValue([modelInfo('some-model', 'text')] as any);
+
+    const withMode = makeInvoke();
+    await withMode.invoke({
+      body: { ...bodyFor('some-model'), toolMode: 'smart' },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+    expect((withMode as any).questStartParams?.promptMeta?.toolMode).toBe('smart');
+
+    const withoutMode = makeInvoke();
+    await withoutMode.invoke({ body: bodyFor('some-model'), userId: OWNER_ID, authOrigin: 'session' });
+    expect((withoutMode as any).questStartParams?.promptMeta).not.toHaveProperty('toolMode');
+  });
 });

@@ -7,8 +7,11 @@ import {
   isUnderRoot,
   driveDocumentVintage,
   DriveWalkTimeBudgetExceededError,
+  estimateFolder,
+  driveIngestMimeType,
 } from './driveContent';
-import { FOLDER_MIME_TYPE, isDriveRateLimitError } from './driveClient';
+import { MAX_INGEST_CANDIDATES, MAX_INGEST_FILE_BYTES } from './driveIngestLimits';
+import { FOLDER_MIME_TYPE, MAX_LIST_PAGES, isDriveRateLimitError } from './driveClient';
 
 const folder = (id: string, name: string) => ({ id, name, mimeType: FOLDER_MIME_TYPE });
 const file = (id: string, name: string, mimeType: string) => ({ id, name, mimeType });
@@ -327,5 +330,183 @@ describe('driveDocumentVintage', () => {
   // read as an authored type and pick up a vintage it has no claim to.
   it.each(['constructor', 'toString'])('refuses the inherited Object property %s as a mime type', mimeType => {
     expect(driveDocumentVintage(driveFile(mimeType, '2019-03-04T09:15:00.000Z'))).toEqual({});
+  });
+});
+
+describe('driveIngestMimeType', () => {
+  it.each([
+    ['a Google Doc as its export target', file('d', 'Doc', 'application/vnd.google-apps.document'), 'text/plain'],
+    ['a supported native file', file('n', 'n.txt', 'text/plain'), 'text/plain'],
+    ['a Google Form as unsupported', file('f', 'Form', 'application/vnd.google-apps.form'), null],
+    ['an unsupported native file', file('x', 'setup.exe', 'application/x-msdownload'), null],
+  ])('resolves %s', (_label, f, expected) => {
+    expect(driveIngestMimeType(f)).toBe(expected);
+  });
+});
+
+describe('estimateFolder', () => {
+  afterEach(() => vi.useRealTimers());
+
+  const MAX_FILE_SIZE = 10 * 1024 * 1024;
+  const opts = (over: Partial<Parameters<typeof estimateFolder>[2]> = {}) => ({
+    deadlineMs: Date.now() + 60_000,
+    maxFolders: 2000,
+    maxFileSize: MAX_FILE_SIZE,
+    ...over,
+  });
+  const sized = (id: string, name: string, mimeType: string, size: number) => ({ id, name, mimeType, size });
+
+  it('walks nested folders through a cycle, counts a multi-parented file once, and classifies like the worker', async () => {
+    const { drive } = mockTreeDrive({
+      root: [
+        sized('a', 'a.txt', 'text/plain', 100),
+        file('doc', 'Doc', 'application/vnd.google-apps.document'),
+        folder('sub', 'sub'),
+      ],
+      sub: [
+        sized('a', 'a.txt', 'text/plain', 100), // same file, second parent
+        folder('root', 'root'), // cycle back to the root
+        file('nosize', 'n.txt', 'text/plain'),
+        sized('atmax', 'max.txt', 'text/plain', MAX_FILE_SIZE), // >= MaxFileSize is skipped
+        sized('justunder', 'under.txt', 'text/plain', MAX_FILE_SIZE - 1),
+        file('form', 'Form', 'application/vnd.google-apps.form'),
+        sized('exe', 'setup.exe', 'application/x-msdownload', 5),
+      ],
+    });
+
+    expect(await estimateFolder(drive, 'root', opts())).toEqual({
+      fileCount: 7,
+      knownBytes: 100 + MAX_FILE_SIZE - 1,
+      unknownSizeCount: 2,
+      overSizeLimitCount: 1,
+      unsupportedCount: 2,
+      truncated: false,
+      overCandidateCap: false,
+    });
+  });
+
+  it('counts a file over the 50 MiB ingest cap as over-size even when MaxFileSize is higher, and before its type', async () => {
+    const { drive } = mockTreeDrive({
+      root: [sized('big', 'big.exe', 'application/x-msdownload', MAX_INGEST_FILE_BYTES + 1)],
+    });
+    const e = await estimateFolder(drive, 'root', opts({ maxFileSize: 10 * MAX_INGEST_FILE_BYTES }));
+    expect(e).toMatchObject({ overSizeLimitCount: 1, unsupportedCount: 0, knownBytes: 0 });
+  });
+
+  it('flags a tree over the candidate cap and stops walking', async () => {
+    const many = Array.from({ length: MAX_INGEST_CANDIDATES + 1 }, (_, i) => file(`f${i}`, `${i}.txt`, 'text/plain'));
+    const { drive, list } = mockTreeDrive({ root: [...many, folder('sub', 'sub')], sub: [] });
+    const e = await estimateFolder(drive, 'root', opts());
+    expect(e).toMatchObject({ truncated: true, truncatedReason: 'candidate_cap', overCandidateCap: true });
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  // A page counts every child (subfolders too), so a page count says nothing about the file count the
+  // worker gates on: many small pages below the candidate cap must not block.
+  it('does not flag a folder with many pages but fewer files than the candidate cap', async () => {
+    const pages = Math.ceil(MAX_INGEST_CANDIDATES / 1000) + 5;
+    let page = 0;
+    const list = vi.fn(async () => {
+      page++;
+      return {
+        data: {
+          files: [file(`f${page}`, `${page}.txt`, 'text/plain')],
+          nextPageToken: page < pages ? 'more' : undefined,
+        },
+      };
+    });
+    const drive = { files: { list } } as unknown as drive_v3.Drive;
+    const e = await estimateFolder(drive, 'root', opts());
+    expect(e).toMatchObject({ fileCount: pages, truncated: false, overCandidateCap: false });
+    expect(list).toHaveBeenCalledTimes(pages);
+  });
+
+  // One folder too big to list is one the worker's walk also gives up on, so the estimate blocks it
+  // rather than letting the lake be created for a sync that cannot run.
+  it('blocks on a folder past the listing page cap', async () => {
+    const list = vi.fn(async () => ({ data: { files: [file('x', 'x.txt', 'text/plain')], nextPageToken: 'more' } }));
+    const drive = { files: { list } } as unknown as drive_v3.Drive;
+    const e = await estimateFolder(drive, 'root', opts());
+    expect(e).toMatchObject({ truncated: true, truncatedReason: 'page_cap', overCandidateCap: true });
+    expect(list).toHaveBeenCalledTimes(MAX_LIST_PAGES);
+  });
+
+  it('returns a truncated partial result past the deadline instead of throwing', async () => {
+    const { drive, list } = mockTreeDrive({ root: [file('a', 'a.txt', 'text/plain')] });
+    const e = await estimateFolder(drive, 'root', opts({ deadlineMs: Date.now() - 1 }));
+    expect(e).toMatchObject({ truncated: true, truncatedReason: 'deadline', fileCount: 0 });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('keeps the pages already listed when a deadline stops a folder mid-listing', async () => {
+    vi.useFakeTimers();
+    const deadlineMs = Date.now() + 1000;
+    const list = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(deadlineMs + 1);
+        return {
+          data: {
+            files: [sized('a', 'a.txt', 'text/plain', 10), sized('b', 'b.txt', 'text/plain', 20)],
+            nextPageToken: 'more',
+          },
+        };
+      })
+      .mockResolvedValueOnce({ data: { files: [sized('c', 'c.txt', 'text/plain', 30)] } });
+    const drive = { files: { list } } as unknown as drive_v3.Drive;
+    const e = await estimateFolder(drive, 'root', opts({ deadlineMs }));
+    expect(e).toMatchObject({ truncated: true, truncatedReason: 'deadline', fileCount: 2, knownBytes: 30 });
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it('flags a single folder that crosses the candidate cap mid-listing and stops listing it', async () => {
+    const pageSize = 1000;
+    const pages = Math.ceil((MAX_INGEST_CANDIDATES + 1) / pageSize) + 3;
+    let page = 0;
+    const list = vi.fn(async () => {
+      const start = page * pageSize;
+      page++;
+      return {
+        data: {
+          files: Array.from({ length: pageSize }, (_, i) => file(`f${start + i}`, `${start + i}.txt`, 'text/plain')),
+          nextPageToken: page < pages ? 'more' : undefined,
+        },
+      };
+    });
+    const drive = { files: { list } } as unknown as drive_v3.Drive;
+    const e = await estimateFolder(drive, 'root', opts());
+    expect(e).toMatchObject({ truncated: true, truncatedReason: 'candidate_cap', overCandidateCap: true });
+    expect(list).toHaveBeenCalledTimes(Math.ceil((MAX_INGEST_CANDIDATES + 1) / pageSize));
+  });
+
+  it('stops at maxFolders with what it has so far', async () => {
+    const { drive } = mockTreeDrive({
+      root: [sized('a', 'a.txt', 'text/plain', 7), folder('sub', 'sub')],
+      sub: [sized('b', 'b.txt', 'text/plain', 9)],
+    });
+    const e = await estimateFolder(drive, 'root', opts({ maxFolders: 1 }));
+    expect(e).toMatchObject({ truncated: true, truncatedReason: 'folder_cap', fileCount: 1, knownBytes: 7 });
+  });
+
+  it('returns truncated rate_limited when a listing stays throttled past the retries', async () => {
+    vi.useFakeTimers();
+    const list = vi.fn(async () => {
+      throw Object.assign(new Error('Rate Limit Exceeded'), {
+        code: 429,
+        response: { status: 429, data: { error: { errors: [{ reason: 'userRateLimitExceeded' }] } } },
+      });
+    });
+    const drive = { files: { list } } as unknown as drive_v3.Drive;
+    const pending = estimateFolder(drive, 'root', opts());
+    await vi.runAllTimersAsync();
+    expect(await pending).toMatchObject({ truncated: true, truncatedReason: 'rate_limited' });
+  });
+
+  it('rethrows any other Drive error', async () => {
+    const list = vi.fn(async () => {
+      throw Object.assign(new Error('Invalid Credentials'), { code: 401, response: { status: 401 } });
+    });
+    const drive = { files: { list } } as unknown as drive_v3.Drive;
+    await expect(estimateFolder(drive, 'root', opts())).rejects.toThrow(/Invalid Credentials/);
   });
 });

@@ -261,7 +261,7 @@ const appFilesBucketNotification = appFilesBucket.notify({
     {
       name: 'uploadComplete',
       function: {
-        handler: 'apps/client/server/s3/appFileUploadComplete.func',
+        handler: 'apps/workers/src/s3/appFileUploadComplete.func',
         runtime: 'nodejs24.x',
         link: [...allSecrets, websocketApi],
         vpc: lambdaVpc,

@@ -537,3 +537,43 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     await expect(promise).rejects.toThrow('db down');
   });
 });
+
+describe('PUT /api/users/:id/update - respond() boundary', () => {
+  const profile = {
+    id: 'u1',
+    name: 'Existing Name',
+    securityQuestions: [{ question: 'Pet name?', answer: 'Fluffy' }],
+    userNotes: [{ note: 'admin note', timestamp: '2026-01-01', userName: 'admin' }],
+    notInSchema: 'x',
+  };
+
+  it('admin branch keeps ignoredFields, securityQuestions and userNotes and strips an undeclared key', async () => {
+    mockUserFindById.mockReturnValue(profile);
+    const { res, promise } = run({ user: ADMIN, userId: 'u1', body: { name: 'New Name', adminNote: 'x' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const json = res._getJSONData();
+    expect(json.ignoredFields).toEqual(['adminNote']);
+    expect(json.securityQuestions).toEqual(profile.securityQuestions);
+    expect(json.userNotes).toEqual(profile.userNotes);
+    expect(json).not.toHaveProperty('notInSchema');
+  });
+
+  it('self branch keeps ignoredFields and securityQuestions, drops userNotes, and strips an undeclared key', async () => {
+    mockUserFindById.mockReturnValue(profile);
+    const { res, promise } = run({
+      user: { id: 'u1', isAdmin: false },
+      userId: 'u1',
+      body: { name: 'N', tags: ['x'] },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const json = res._getJSONData();
+    expect(json.ignoredFields).toEqual(['tags']);
+    expect(json.securityQuestions).toEqual(profile.securityQuestions);
+    expect(json).not.toHaveProperty('userNotes');
+    expect(json).not.toHaveProperty('notInSchema');
+  });
+});

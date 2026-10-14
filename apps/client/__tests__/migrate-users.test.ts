@@ -68,13 +68,16 @@ vi.mock('@server/utils/eventBus', () => ({
 // Mutable logo URL so a test can exercise the empty-LOGO_URL (fork) path, where
 // getLogoUrl() returns '' and buildEmailLogoImg() therefore omits the <img> entirely.
 const { mockLogo } = vi.hoisted(() => ({ mockLogo: { url: 'https://example.com/logo.png' } }));
-vi.mock('@server/utils/mailer/emailHelpers', () => ({
+vi.mock('@server/utils/mailer/emailHelpers', async () => ({
+  escapeHtml: (
+    await vi.importActual<typeof import('@server/utils/mailer/emailHelpers')>('@server/utils/mailer/emailHelpers')
+  ).escapeHtml,
   getLogoUrl: () => mockLogo.url,
   buildEmailLogoImg: (brand: string, logoUrl = mockLogo.url) =>
     logoUrl ? `<img src="${logoUrl}" alt="${brand} Logo" class="logo" />` : '',
 }));
 
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async () => ({
   RegInviteEvents: {
     MIGRATE_REGINVITE: 'Migration Email Sent',
   },
@@ -82,6 +85,7 @@ vi.mock('@bike4mind/common', () => ({
   // must export it or the handler throws before sending the email. Value is irrelevant
   // to these assertions (no link/host is asserted).
   requireEnv: (_name: string, value?: string) => value ?? 'https://app.example.com',
+  sanitizeUsername: (await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common')).sanitizeUsername,
 }));
 
 describe('/api/reg-invites/migrate', () => {
@@ -134,7 +138,7 @@ describe('/api/reg-invites/migrate', () => {
     expect(mockFindByEmail).toHaveBeenCalledWith('john@example.com');
     expect(mockCreateUser).toHaveBeenCalledWith(
       expect.objectContaining({
-        username: 'JohnDoe',
+        username: 'John Doe',
         email: 'john@example.com',
         name: 'John Doe',
         // Passwordless shell account: null password (not a fake hash) + flag false.

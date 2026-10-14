@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ConflictError } from '@bike4mind/common';
 
 // Middleware is stripped so the handler body runs directly (same pattern as verify.test.ts).
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
@@ -31,24 +32,33 @@ vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation:
 // revoke are covered in server/auth/endUserSessions.test.ts); a decided end is recorded.
 const mockSessionEnded = vi.fn();
 vi.mock('@server/auth/endUserSessions', () => ({
-  commitWithSessionEnd: async (_req: unknown, change: () => Promise<unknown>, sessionEndFor: () => unknown) => {
+  commitWithSessionEnd: async (
+    _req: unknown,
+    change: () => Promise<unknown>,
+    sessionEndFor: (r: unknown) => unknown
+  ) => {
     const result = await change();
-    await mockSessionEnded(sessionEndFor());
+    await mockSessionEnded(sessionEndFor(result));
     return result;
   },
 }));
 
 const mockFindByPendingToken = vi.fn();
+const mockExistsOtherUserWithEmail = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   userRepository: {
     findByPendingEmailToken: (...a: unknown[]) => mockFindByPendingToken(...a),
+    existsOtherUserWithEmail: (...a: unknown[]) => mockExistsOtherUserWithEmail(...a),
     update: vi.fn(),
   },
 }));
 
 const mockVerifyEmailChange = vi.fn();
 vi.mock('@bike4mind/services', () => ({
-  userService: { verifyEmailChange: (...a: unknown[]) => mockVerifyEmailChange(...a) },
+  userService: {
+    EMAIL_NO_LONGER_AVAILABLE_MESSAGE: 'This email address is no longer available.',
+    verifyEmailChange: (...a: unknown[]) => mockVerifyEmailChange(...a),
+  },
 }));
 
 import handler from '@pages/api/email/verify-change';
@@ -66,7 +76,7 @@ describe('POST /api/email/verify-change', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindByPendingToken.mockResolvedValue(USER);
-    mockVerifyEmailChange.mockResolvedValue(undefined);
+    mockVerifyEmailChange.mockResolvedValue('changed');
     mockSessionEnded.mockResolvedValue(undefined);
   });
 
@@ -103,5 +113,49 @@ describe('POST /api/email/verify-change', () => {
 
     expect(res._getStatusCode()).toBe(400);
     expect(mockSessionEnded).not.toHaveBeenCalled();
+  });
+
+  it('wires the availability lookup through to the repository', async () => {
+    mockVerifyEmailChange.mockImplementation(
+      async (
+        _params: unknown,
+        { db }: { db: { users: { existsOtherUserWithEmail: (email: string, id?: string) => unknown } } }
+      ) => {
+        await db.users.existsOtherUserWithEmail('new@example.com', 'user-1');
+        return 'changed';
+      }
+    );
+    const { req, res } = fire();
+    await handler(req, res);
+
+    expect(mockExistsOtherUserWithEmail).toHaveBeenCalledWith('new@example.com', 'user-1');
+  });
+
+  it('audits and surfaces an unavailable address as a 409 with the service message', async () => {
+    mockVerifyEmailChange.mockResolvedValue('unavailable');
+    const { req, res } = fire();
+
+    const error = await handler(req, res).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ConflictError);
+    expect((error as ConflictError).statusCode).toBe(409);
+    expect((error as ConflictError).message).toBe('This email address is no longer available.');
+    expect(mockSessionEnded).toHaveBeenCalledWith(undefined);
+    expect(mockLogAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'failed', error: 'This email address is no longer available.' }),
+      req.logger
+    );
+  });
+
+  it('audits the normalized pending address', async () => {
+    mockFindByPendingToken.mockResolvedValue({ ...USER, pendingEmail: ' New@B.test ' });
+    const { req, res } = fire();
+
+    await handler(req, res);
+
+    expect(mockLogAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'success', newEmail: 'new@b.test' }),
+      req.logger
+    );
   });
 });

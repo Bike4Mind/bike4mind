@@ -501,6 +501,27 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     });
   });
 
+  // Persisted on promptMeta by ChatCompletionInvoke so the tool-calling scorecard can split by it.
+  describe('toolMode forwarding', () => {
+    const invokedToolMode = () => (mockInvoke.mock.calls[0][0] as { body: { toolMode?: unknown } }).body.toolMode;
+
+    it.each(['fast', 'smart'] as const)('forwards a request toolMode of %s to the invoke body', async toolMode => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', toolMode } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedToolMode()).toBe(toolMode);
+    });
+
+    it('leaves toolMode unset when the request names none', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedToolMode()).toBeUndefined();
+    });
+  });
+
   // Billing target is an explicit, opt-in choice: a request-supplied `organizationId` bills
   // that org (after membership validation), and its absence bills the caller personally - even
   // for a caller whose account has a home org. The org id flows into the internal request at

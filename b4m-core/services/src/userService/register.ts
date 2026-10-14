@@ -11,7 +11,13 @@ import { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { CURRENT_POLICY_VERSION, PENDING_FREE_CREDITS_TAG, settingsMap } from '@bike4mind/common';
+import {
+  CURRENT_POLICY_VERSION,
+  PENDING_FREE_CREDITS_TAG,
+  settingsMap,
+  USERNAME_RULES_MESSAGE,
+  usernameSchema,
+} from '@bike4mind/common';
 import { releasePendingFreeCredits } from './freeCredits';
 import { shouldBlockDisposableEmail } from './disposableEmail';
 import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
@@ -87,17 +93,8 @@ export const registerUser = async (
   params: RegisterUserParameters,
   { db, logger, skipInviteCheck }: RegisterUserAdapters
 ) => {
-  const {
-    username,
-    email,
-    name,
-    inviteCode,
-    password,
-    metadata,
-    acceptedPolicyVersion,
-    ageAttestation,
-    sourceClientId,
-  } = params;
+  const { email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation, sourceClientId } =
+    params;
 
   // P0-B abuse gate: reject creation unless a current, versioned AUP/ToS acceptance
   // and an 18+ attestation are present. This is the server-side enforcement - the UI checkboxes
@@ -109,6 +106,12 @@ export const registerUser = async (
   if (ageAttestation !== true) {
     throw new BadRequestError('You must confirm you are 18 or older to register');
   }
+
+  const parsedUsername = usernameSchema.safeParse(params.username);
+  if (!parsedUsername.success) {
+    throw new BadRequestError(USERNAME_RULES_MESSAGE);
+  }
+  const username = parsedUsername.data;
 
   // shape-check the email before any DB work. Ownership is proven by OTC, so
   // this only rejects junk input - same light regex as /api/otc/send. Normalization is

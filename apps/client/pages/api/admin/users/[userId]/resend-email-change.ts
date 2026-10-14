@@ -6,7 +6,7 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { EmailEvents } from '@server/utils/eventBus';
-import { generateVerificationLink, getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
+import { generateVerificationLink, getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
 import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
 import { userService } from '@bike4mind/services';
 
@@ -125,11 +125,11 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
             <div class="content">
               ${buildEmailLogoImg(brand, logoUrl)}
               <h2>Verify Your New Email Address</h2>
-              <p>Hello ${user.username},</p>
+              <p>Hello ${escapeHtml(user.username)},</p>
               <div class="admin-note">
                 <strong>Note:</strong> An administrator has resent your email change verification link.
               </div>
-              <p>You requested to change your email address from <strong>${user.email}</strong> to <strong>${user.pendingEmail}</strong>.</p>
+              <p>You requested to change your email address from <strong>${escapeHtml(user.email ?? '')}</strong> to <strong>${escapeHtml(user.pendingEmail)}</strong>.</p>
               <p>Please verify your new email address by clicking the button below:</p>
               <p><a href="${verificationLink}" class="button" style="display: inline-block; padding: 12px 24px; background-color: #1a82e2; color: #ffffff; text-decoration: none; border-radius: 4px; margin: 20px 0;">Verify New Email Address</a></p>
               <p>Or copy and paste this link into your browser:</p>
