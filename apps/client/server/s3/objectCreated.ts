@@ -136,7 +136,8 @@ export const func = withContext(async (event, context, logger) => {
           moderationStatus = current.moderationStatus;
         }
         // The winner may have persisted a byte-sniffed type; carry it so the lake stats and the
-        // media-only check below do not run on the stale client-declared one.
+        // media-only check below do not run on the stale client-declared one. If the winner has claimed
+        // but not yet written its sniffed type, this still reads the declared one.
         if (current?.mimeType) metadata.mimeType = current.mimeType;
         logger.info(
           `[Q2b] moderationStatus claim lost for ${objectKey} (current=${current?.moderationStatus ?? 'unset'}); skipping re-scan (owned by another invocation)`

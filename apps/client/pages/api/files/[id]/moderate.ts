@@ -38,7 +38,8 @@ const OWNER_VERDICT_POLL_MS = 300;
  * failure hands the claim back, is retried once, and otherwise reports 'pending', never 'blocked'.
  * If the S3 event has already fired it lost the claim to this call and will not be retried, so only
  * the rescue sweep recovers the file after that: it runs daily, only picks up rows idle 30+ minutes,
- * and backs off 60 minutes between attempts.
+ * and backs off 60 minutes between attempts. Only call it for files used immediately and discarded
+ * (like edit masks), never for durable uploads that would sit unscanned until the sweep.
  */
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
   asyncHandler(async (req: Request, res: Response) => {
