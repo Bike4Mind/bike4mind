@@ -273,6 +273,18 @@ describe('AuthSuccessPage', () => {
       expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { error } });
     });
 
+    it('returns a still-signed-in user to their destination when the challenge is abandoned', async () => {
+      mockGetState.mockReturnValue({ accessToken: null, hasSession: true });
+      mockParseAuthParams.mockReturnValue(MFA_PARAMS);
+      render(<AuthSuccessPage />);
+      await waitFor(() => expect(mockBeginMfa).toHaveBeenCalled());
+
+      mfaOptions.current?.onCancel('verify');
+
+      expect(mockApplyRedirect).toHaveBeenCalledWith(mockRouterHistory, '/new');
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
     it('runs the challenge for the same user, since it mints a fresh session', async () => {
       mockCurrentUser = { id: 'u1' };
       mockParseAuthParams.mockReturnValue(MFA_PARAMS);

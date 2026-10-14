@@ -74,19 +74,29 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     setSetupData(null);
   };
 
-  // A same-user handoff can arrive while this browser already holds a verified session.
-  // begin() overwrites the in-memory token with the pending one, so keep the old one to
-  // restore on cancel: resetTokens() would persist hasSession:false and sign out every tab.
+  // A handoff can arrive while this browser already holds a verified session. begin() overwrites
+  // the in-memory token with the pending one, so keep the old one to restore on cancel:
+  // resetTokens() would persist hasSession:false and sign out every tab.
   const previousVerifiedToken = useRef<string | null>(null);
+  // Whether a session existed when the challenge began. A handoff that lands on a fresh document
+  // load (the /auth/success redirect) has no in-memory token to restore even though the refresh
+  // cookie is still valid, so the flag is what distinguishes "cancel this sign-in" from "sign me
+  // out everywhere".
+  const hadSession = useRef(false);
 
   const endWithoutSession = (mode: MfaChallengeMode) => {
     const { setVerifiedSession, resetTokens } = useAccessToken.getState();
     if (previousVerifiedToken.current) {
       setVerifiedSession(previousVerifiedToken.current);
+    } else if (hadSession.current) {
+      // Only the pending token is dropped. resetTokens() would persist hasSession:false, which
+      // the cross-tab listener (crossTabLogout.ts) reads as "the other tab logged out".
+      useAccessToken.setState({ accessToken: null, mfaPending: false });
     } else {
       resetTokens();
     }
     previousVerifiedToken.current = null;
+    hadSession.current = false;
     reset();
     onCancel?.(mode);
   };
@@ -104,8 +114,9 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
   };
 
   const begin = async ({ userId, mfaToken, mode, passkeyAvailable = false }: MfaChallengeStart) => {
-    const { accessToken, mfaPending, setMfaPendingTokens } = useAccessToken.getState();
+    const { accessToken, mfaPending, hasSession, setMfaPendingTokens } = useAccessToken.getState();
     previousVerifiedToken.current = accessToken && !mfaPending ? accessToken : null;
+    hadSession.current = hasSession;
     setMfaPendingTokens(mfaToken);
     setChallenge({ userId, mode, passkeyAvailable: mode === 'verify' && passkeyAvailable });
     setError(null);

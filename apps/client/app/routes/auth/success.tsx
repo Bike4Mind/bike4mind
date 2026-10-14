@@ -31,8 +31,16 @@ const AuthSuccessPage = () => {
       if (pendingSignupMethod.current) trackSignupConversion(pendingSignupMethod.current);
       applyRedirect(router.history, redirectTo);
     },
-    onCancel: mode =>
-      navigate({ to: '/login', search: { error: mode === 'setup' ? 'mfa_setup_required' : 'mfa_required' } }),
+    onCancel: mode => {
+      // A handoff that lands while this browser already holds a session (the challenge left it
+      // intact): /login would clear its caches and reset the model choice, so send the user back
+      // where they were. Otherwise the sign-in never completed and /login is where it resumes.
+      if (useAccessToken.getState().hasSession) {
+        applyRedirect(router.history, redirectTo);
+        return;
+      }
+      navigate({ to: '/login', search: { error: mode === 'setup' ? 'mfa_setup_required' : 'mfa_required' } });
+    },
   });
 
   useEffect(() => {

@@ -9,11 +9,12 @@ const mocks = vi.hoisted(() => ({
   verifyPasskeyMutateAsync: vi.fn(),
   setMfaPendingTokens: vi.fn(),
   setVerifiedSession: vi.fn(),
+  setState: vi.fn(),
   resetTokens: vi.fn(),
   resetRefreshCoordinator: vi.fn(),
   resetSessionBootstrap: vi.fn(),
   toastError: vi.fn(),
-  tokenState: { accessToken: null as string | null, mfaPending: false },
+  tokenState: { accessToken: null as string | null, mfaPending: false, hasSession: false },
 }));
 
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError } }));
@@ -32,10 +33,12 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
     getState: () => ({
       accessToken: mocks.tokenState.accessToken,
       mfaPending: mocks.tokenState.mfaPending,
+      hasSession: mocks.tokenState.hasSession,
       setMfaPendingTokens: mocks.setMfaPendingTokens,
       setVerifiedSession: mocks.setVerifiedSession,
       resetTokens: mocks.resetTokens,
     }),
+    setState: mocks.setState,
   },
 }));
 vi.mock('@client/app/utils/refreshCoordinator', () => ({ resetRefreshCoordinator: mocks.resetRefreshCoordinator }));
@@ -57,6 +60,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.tokenState.accessToken = null;
   mocks.tokenState.mfaPending = false;
+  mocks.tokenState.hasSession = false;
   mocks.verifyMutateAsync.mockResolvedValue(session);
   mocks.verifySetupMutateAsync.mockResolvedValue(session);
   mocks.setupMutateAsync.mockResolvedValue({ qrCodeUrl: 'qr', manualEntryKey: 'KEY', backupCodes: ['b1'] });
@@ -246,5 +250,23 @@ describe('useMfaChallenge cancel with a prior verified session', () => {
 
     expect(mocks.resetTokens).toHaveBeenCalledTimes(1);
     expect(mocks.setVerifiedSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps a session that survives only in the persisted flag across a fresh document load', async () => {
+    // /auth/success is reached by a cross-site redirect, so this document holds no in-memory
+    // token even though the browser is still signed in behind the refresh cookie. Dropping to
+    // resetTokens() here would persist hasSession:false and sign out every other tab.
+    mocks.tokenState.accessToken = null;
+    mocks.tokenState.mfaPending = false;
+    mocks.tokenState.hasSession = true;
+    const { result, onCancel } = setup();
+    await act(() => result.current.begin(verifyStart));
+
+    act(() => result.current.modalProps.onCancel?.());
+
+    expect(mocks.setState).toHaveBeenCalledWith({ accessToken: null, mfaPending: false });
+    expect(mocks.resetTokens).not.toHaveBeenCalled();
+    expect(mocks.setVerifiedSession).not.toHaveBeenCalled();
+    expect(onCancel).toHaveBeenCalledWith('verify');
   });
 });
