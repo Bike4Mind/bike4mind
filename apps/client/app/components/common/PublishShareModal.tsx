@@ -44,6 +44,7 @@ import {
   updatePublishedDiscoverable,
   updatePublishedAccessGate,
   getPublishedEmbedState,
+  getShareTokenState,
   type PublishAccessGateInput,
   type PublishMode,
   type ArtifactPublishOpts,
@@ -247,6 +248,23 @@ export function PublishShareModal({
       })
       .catch(() => {
         /* best-effort seed; the editor still works, the server re-validates */
+      });
+    return () => {
+      active = false;
+    };
+  }, [open, result?.publicId]);
+
+  // Seed any live /a link from a past session (read-only, never mints) so a page that is
+  // public now can still revoke a link made while it was private. A mint in flight wins.
+  useEffect(() => {
+    if (!open || !result?.publicId) return;
+    let active = true;
+    void getShareTokenState(result.publicId)
+      .then(state => {
+        if (active && state.shareToken) setShareToken(prev => prev ?? state.shareToken);
+      })
+      .catch(() => {
+        /* best-effort seed; Create still surfaces an existing link idempotently */
       });
     return () => {
       active = false;

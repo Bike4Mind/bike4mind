@@ -323,7 +323,15 @@ describe('PublishShareModal - no-sign-in (/a) share link', () => {
     publishedAt: '2026-01-01T00:00:00.000Z',
   };
 
-  const renderShared = async (visibility: PublishVisibility = 'private') => {
+  const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
+
+  const renderShared = async (visibility: PublishVisibility = 'private', liveToken: string | null = null) => {
+    apiGet.mockClear().mockImplementation((url: string) =>
+      Promise.resolve({
+        data: url.endsWith('/share-token') ? { shareToken: liveToken, shareLinks: [] } : { artifact: {} },
+      })
+    );
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
     apiPost.mockClear().mockResolvedValue({ data: { shareToken: 'TOK', shareUrl: '/a/TOK' } });
     apiDelete.mockClear().mockResolvedValue({ data: {} });
     const publish = vi.fn().mockResolvedValue({ ...publishResult, visibility });
@@ -345,6 +353,28 @@ describe('PublishShareModal - no-sign-in (/a) share link', () => {
   it('hides the section for a public page, whose main link already opens without sign-in', async () => {
     await renderShared('public');
     expect(screen.queryByTestId('publish-share-token-section')).toBeNull();
+  });
+
+  it('shows a live link left from a past session on a public page so it can still be revoked', async () => {
+    await renderShared('public', 'OLD');
+    const input = (await screen.findByTestId('publish-share-token-url')) as HTMLInputElement;
+    expect(input.value).toContain('/a/OLD');
+    expect(apiGet).toHaveBeenCalledWith('/api/publish/pub-1/share-token');
+    expect(apiPost).not.toHaveBeenCalledWith('/api/publish/pub-1/share-token', expect.anything());
+    expect(screen.getByTestId('publish-share-token-revoke')).not.toBeNull();
+  });
+
+  it('keeps a link minted while private after switching to public, then hides it on revoke', async () => {
+    await renderShared();
+    fireEvent.click(screen.getByTestId('publish-share-token-create'));
+    await screen.findByTestId('publish-share-token-url');
+
+    fireEvent.click(radio('public')!);
+    await waitFor(() => expect(apiPatch).toHaveBeenCalled());
+    expect(screen.getByTestId('publish-share-token-hint').textContent).toContain('already opens for anyone');
+
+    fireEvent.click(screen.getByTestId('publish-share-token-revoke'));
+    await waitFor(() => expect(screen.queryByTestId('publish-share-token-section')).toBeNull());
   });
 
   it('says the main link of a private page only opens for the owner', async () => {
