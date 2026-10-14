@@ -903,23 +903,32 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
     users: sharerPermissions ? [{ userId: sharerId, permissions: sharerPermissions }] : [],
     groups: [],
     knowledgeIds: [],
+    fileIds: [],
+    systemPrompts: [],
+    sessionIds: [],
   });
 
-  const makeAdapters = (type: InviteType, invitePermissions: Permission[], doc: unknown, inviterId?: string) => ({
+  const makeAdapters = (
+    type: InviteType,
+    invitePermissions: Permission[],
+    doc: unknown,
+    inviterId?: string,
+    inviterGroups: string[] = []
+  ) => ({
     db: {
       invites: {
         findById: vi.fn(async () => makeInvite(type, invitePermissions, inviterId)),
         findByToken: vi.fn(async () => null),
         update: vi.fn(),
       },
-      fabFiles: { findById: vi.fn(async () => doc), update: vi.fn() },
-      sessions: { findById: vi.fn(async () => doc), update: vi.fn() },
-      projects: { findById: vi.fn(), update: vi.fn() },
+      fabFiles: { findById: vi.fn(async () => doc), findAllByIds: vi.fn(async () => []), update: vi.fn() },
+      sessions: { findById: vi.fn(async () => doc), findAllByIds: vi.fn(async () => []), update: vi.fn() },
+      projects: { findById: vi.fn(async () => doc), update: vi.fn() },
       groups: { findById: vi.fn() },
       organization: { findById: vi.fn(), update: vi.fn(), ensureUserDetails: vi.fn() },
       users: {
         findById: vi.fn(async (id: string) =>
-          id === userId ? { id: userId, email: 'a@x.com', username: 'a' } : { id, groups: [] }
+          id === userId ? { id: userId, email: 'a@x.com', username: 'a' } : { id, groups: inviterGroups }
         ),
         update: vi.fn(),
       },
@@ -928,7 +937,7 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
 
   const shareLink = [Permission.read, Permission.share];
 
-  it.each([InviteType.Session, InviteType.FabFile])(
+  it.each([InviteType.Session, InviteType.FabFile, InviteType.Project])(
     'refuses a %s link whose minter has since been revoked, and grants nothing',
     async type => {
       const adapters = makeAdapters(type, shareLink, makeDoc(null), sharerId);
@@ -936,8 +945,35 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
       await expect(acceptInvite(userId, { id: inviteId }, adapters as never)).rejects.toThrow(ForbiddenError);
       expect(adapters.db.sessions.update).not.toHaveBeenCalled();
       expect(adapters.db.fabFiles.update).not.toHaveBeenCalled();
+      expect(adapters.db.projects.update).not.toHaveBeenCalled();
     }
   );
+
+  it('refuses a link whose minter account no longer exists', async () => {
+    const adapters = makeAdapters(
+      InviteType.Session,
+      shareLink,
+      makeDoc([Permission.read, Permission.share]),
+      sharerId
+    );
+    adapters.db.users.findById.mockImplementation(async (id: string) =>
+      id === userId ? { id: userId, email: 'a@x.com', username: 'a' } : (null as never)
+    );
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as never)).rejects.toThrow(ForbiddenError);
+    expect(adapters.db.sessions.update).not.toHaveBeenCalled();
+  });
+
+  it('honors a link whose minter still holds share through a group', async () => {
+    const doc = { ...makeDoc(null), groups: [{ groupId: 'group-1', permissions: shareLink }] };
+    const adapters = makeAdapters(InviteType.Session, shareLink, doc, sharerId, ['group-1']);
+
+    await acceptInvite(userId, { id: inviteId }, adapters as never);
+
+    expect(adapters.db.sessions.update.mock.calls[0][0].users).toStrictEqual([
+      { userId, permissions: shareLink, projectId: undefined, sessionId: undefined },
+    ]);
+  });
 
   it('refuses a link whose minter was narrowed to read-only', async () => {
     const adapters = makeAdapters(InviteType.Session, shareLink, makeDoc([Permission.read]), sharerId);
