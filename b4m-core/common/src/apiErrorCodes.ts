@@ -63,6 +63,13 @@ export const API_ERROR_CODES = [
   'limit_exceeded',
   /** The model cannot accept this input type (e.g. an image on a text-only model). */
   'unsupported_input',
+  // Storage refusals on an upload; see STORAGE_ERROR_CODES.
+  /** The upload would take the user's total storage past their limit; remediation is freeing space. */
+  'storage_limit_exceeded',
+  /** The upload is larger than the organization's storage limit. */
+  'org_storage_limit_exceeded',
+  /** The file is larger than the platform's per-file size limit. */
+  'file_too_large',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
