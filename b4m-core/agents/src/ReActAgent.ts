@@ -78,18 +78,23 @@ export type CompletionFoldBaselines = {
  * which carried the original `+=` bug in both places - share one implementation.
  */
 export function foldCompletionInfo(
-  info: Pick<CompletionInfo, 'inputTokens' | 'outputTokens' | 'creditsUsed' | 'cacheStats'>,
+  info: Pick<
+    CompletionInfo,
+    'inputTokens' | 'outputTokens' | 'creditsUsed' | 'cacheStats' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'
+  >,
   baselines: CompletionFoldBaselines,
   current: CompletionFoldBaselines
 ): CompletionFoldBaselines & { totalTokens: number } {
   const inputTokens = info.inputTokens ? baselines.inputTokens + info.inputTokens : current.inputTokens;
   const outputTokens = info.outputTokens ? baselines.outputTokens + info.outputTokens : current.outputTokens;
-  const cacheReadTokens = info.cacheStats?.cacheReadTokens
-    ? baselines.cacheReadTokens + info.cacheStats.cacheReadTokens
-    : current.cacheReadTokens;
-  const cacheWriteTokens = info.cacheStats?.cacheWriteTokens
-    ? baselines.cacheWriteTokens + info.cacheStats.cacheWriteTokens
-    : current.cacheWriteTokens;
+  // OpenAI-family adapters report cache only on the top-level fields (already split off
+  // inputTokens, see cacheInclusiveUsage.ts), never cacheStats. Without the fallback their cache
+  // reads were dropped from the totals - billed at $0 and left out of the long-context tier -
+  // while turnUsage carried them.
+  const frameCacheRead = info.cacheStats?.cacheReadTokens || info.cacheReadInputTokens;
+  const frameCacheWrite = info.cacheStats?.cacheWriteTokens || info.cacheCreationInputTokens;
+  const cacheReadTokens = frameCacheRead ? baselines.cacheReadTokens + frameCacheRead : current.cacheReadTokens;
+  const cacheWriteTokens = frameCacheWrite ? baselines.cacheWriteTokens + frameCacheWrite : current.cacheWriteTokens;
   const credits = info.creditsUsed ? baselines.credits + info.creditsUsed : current.credits;
   return {
     inputTokens,

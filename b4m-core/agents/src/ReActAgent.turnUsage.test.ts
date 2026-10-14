@@ -35,6 +35,21 @@ function scriptedLlm(script: Array<Frame | Error>): ICompletionBackend {
   };
 }
 
+/** Each `complete()` call streams its scripted frames in order. */
+function framedLlm(calls: Frame[][]): ICompletionBackend {
+  let call = 0;
+  return {
+    currentModel: 'test-model',
+    getModelInfo: async () => [],
+    complete: async (_model, _messages, _options, callback) => {
+      for (const { text, ...info } of calls[Math.min(call++, calls.length - 1)]) {
+        await callback([text], info);
+      }
+    },
+    pushToolMessages: vi.fn(),
+  };
+}
+
 const searchTool = {
   toolFn: vi.fn(async () => 'result'),
   toolSchema: {
@@ -135,5 +150,106 @@ describe('ReActAgent per-request usage', () => {
     expect(resumed.toCheckpoint().turnUsage).toEqual([
       { inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 150_000 },
     ]);
+  });
+
+  it('runIteration(): a later frame of the same request replaces its turn instead of adding one', async () => {
+    const early: Frame = { ...toolIteration, outputTokens: 5, turnUsage: [{ inputTokens: 1000, outputTokens: 5 }] };
+    const agent = new ReActAgent(context(framedLlm([[early, toolIteration]])));
+
+    const { checkpoint } = await agent.runIteration('find it');
+
+    expect(checkpoint.turnUsage).toEqual(toolIteration.turnUsage);
+  });
+
+  it('runIteration(): a trailing frame without turnUsage keeps the breakdown an earlier frame reported', async () => {
+    // Two reported entries so a fallback to the iteration totals (one entry) is distinguishable.
+    const reported = [
+      { inputTokens: 400, outputTokens: 10 },
+      { inputTokens: 600, outputTokens: 10, cacheReadInputTokens: 150_000 },
+    ];
+    const trailing: Frame = { text: '', stopReason: 'tool_use' };
+    const agent = new ReActAgent(context(framedLlm([[{ ...toolIteration, turnUsage: reported }, trailing]])));
+
+    const { checkpoint } = await agent.runIteration('find it');
+
+    expect(checkpoint.turnUsage).toEqual(reported);
+  });
+
+  it('runIteration(): an OpenAI-shaped frame (top-level cache fields, no cacheStats) keeps turns and totals in step', async () => {
+    const openAiFrame: Frame = {
+      text: 'Searching.',
+      inputTokens: 1000,
+      outputTokens: 20,
+      cacheReadInputTokens: 150_000,
+      cacheCreationInputTokens: 2_000,
+      toolsUsed: [{ name: 'search', arguments: '{}' }],
+      turnUsage: [
+        { inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 150_000, cacheCreationInputTokens: 2_000 },
+      ],
+    };
+    const agent = new ReActAgent(context(scriptedLlm([openAiFrame])));
+
+    const { checkpoint } = await agent.runIteration('find it');
+
+    expect(checkpoint.totalCacheReadTokens).toBe(150_000);
+    expect(checkpoint.totalCacheWriteTokens).toBe(2_000);
+    expect(checkpoint.turnUsage).toEqual(openAiFrame.turnUsage);
+  });
+
+  it('run(): synthesizes cache writes into the turn, and records no turn for an iteration with no usage', async () => {
+    const withWrite: Frame = {
+      ...toolIteration,
+      cacheStats: { cacheReadTokens: 0, cacheWriteTokens: 3_000 } as CompletionInfo['cacheStats'],
+      turnUsage: undefined,
+    };
+    const noUsage: Frame = { text: 'Done.', toolsUsed: [], stopReason: 'end_turn' };
+    const agent = new ReActAgent(context(scriptedLlm([withWrite, noUsage])));
+
+    const result = await agent.run('find it');
+
+    expect(result.completionInfo.turnUsage).toEqual([
+      { inputTokens: 1000, outputTokens: 20, cacheCreationInputTokens: 3_000 },
+    ]);
+  });
+
+  it('a reused agent starts each run with no turns from the previous one', async () => {
+    const agent = new ReActAgent(context(scriptedLlm([finalIteration])));
+    await agent.run('first');
+
+    const second = await agent.run('second');
+    expect(second.completionInfo.turnUsage).toHaveLength(1);
+
+    const { checkpoint } = await agent.runIteration('third');
+    expect(checkpoint.turnUsage).toHaveLength(1);
+  });
+
+  it('run(): a trailing frame without turnUsage keeps the breakdown an earlier frame reported', async () => {
+    const reported = [
+      { inputTokens: 400, outputTokens: 10 },
+      { inputTokens: 600, outputTokens: 20, cacheReadInputTokens: 151_000 },
+    ];
+    const trailing: Frame = { text: '', stopReason: 'end_turn' };
+    const agent = new ReActAgent(context(framedLlm([[{ ...finalIteration, turnUsage: reported }, trailing]])));
+
+    const result = await agent.run('find it');
+
+    expect(result.completionInfo.turnUsage).toEqual(reported);
+  });
+
+  it('run(): an aborted run still reports the turns it spent', async () => {
+    const controller = new AbortController();
+    const abortingTool = {
+      ...searchTool,
+      toolFn: vi.fn(async () => {
+        controller.abort();
+        return 'result';
+      }),
+    };
+    const agent = new ReActAgent({ ...context(scriptedLlm([toolIteration])), tools: [abortingTool] });
+
+    const result = await agent.run('find it', { signal: controller.signal });
+
+    expect(result.finalAnswer).toBe('Interrupted');
+    expect(result.completionInfo.turnUsage).toEqual(toolIteration.turnUsage);
   });
 });

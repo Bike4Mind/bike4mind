@@ -259,4 +259,24 @@ describe('foldCompletionInfo (#657 assign-not-add contract)', () => {
     expect(folded.cacheReadTokens).toBe(900); // 100 + 800
     expect(folded.cacheWriteTokens).toBe(250); // 50 + 200
   });
+
+  it('folds the top-level cache fields when the frame has no cacheStats (OpenAI-family adapters)', () => {
+    const folded = foldCompletionInfo(
+      { inputTokens: 500, cacheReadInputTokens: 800, cacheCreationInputTokens: 200 },
+      baselines,
+      { ...baselines }
+    );
+    expect(folded.cacheReadTokens).toBe(900); // 100 + 800
+    expect(folded.cacheWriteTokens).toBe(250); // 50 + 200
+  });
+
+  it('prefers cacheStats over the top-level cache fields when a frame carries both', () => {
+    const folded = foldCompletionInfo(
+      { cacheStats: cacheStats(800, 200), cacheReadInputTokens: 5, cacheCreationInputTokens: 5 },
+      baselines,
+      { ...baselines }
+    );
+    expect(folded.cacheReadTokens).toBe(900);
+    expect(folded.cacheWriteTokens).toBe(250);
+  });
 });
