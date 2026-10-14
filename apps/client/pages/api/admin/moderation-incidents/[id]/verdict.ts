@@ -47,6 +47,8 @@ function isNcmecConfigured(creds: ReturnType<typeof resolveNcmecCredentials>): b
  *   mark_reported   -> move to 'reported' with an operator-supplied ncmecReportId.
  *   requeue         -> move back to 'pending_review' after confirming with NCMEC that
  *                      no tip was filed. Refused when an ncmecReportId is stored.
+ *   retry_finish    -> re-call /finish for a stored ncmecReportId (NCMEC deletes an
+ *                      unfinished report 24h after /submit); no stale wait.
  *
  * Concurrency safety: `confirmed_csam` first atomically claims the incident by
  * transitioning it to 'confirmed_csam' (the intermediate state). Only one concurrent
@@ -62,7 +64,16 @@ const bodySchema = z.union([
   z.object({ verdict: z.literal('mark_reported'), ncmecReportId: z.string().min(1) }),
   z.object({ verdict: z.literal('requeue') }),
   z.object({ verdict: z.literal('retry_finish') }),
-  z.object({ verdict: z.literal('record_manual_report'), ncmecReportId: z.string().trim().min(1).max(64) }),
+  z.object({
+    verdict: z.literal('record_manual_report'),
+    // Also keeps CR/LF out of the [NCMEC] log lines the id is interpolated into.
+    ncmecReportId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9-]+$/),
+  }),
 ]);
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req: Request, res) => {
@@ -126,15 +137,24 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     }
     const credentials = resolveNcmecCredentials();
     if (!isNcmecConfigured(credentials)) {
-      return res.status(503).json({ error: 'NCMEC credentials not configured -- set NCMEC_ESP_ID, NCMEC_API_KEY and NCMEC_ESP_EMAIL via sst secret set' });
+      return res
+        .status(503)
+        .json({
+          error:
+            'NCMEC credentials not configured -- set NCMEC_ESP_ID, NCMEC_API_KEY and NCMEC_ESP_EMAIL via sst secret set',
+        });
     }
     try {
       await ncmecService.finishNcmecReport(credentials, incident.ncmecReportId);
     } catch (err) {
-      req.logger.error(`[NCMEC] retry_finish failed for incident ${incidentId}, reportId=${incident.ncmecReportId}: ${(err as Error).message}`);
+      req.logger.error(
+        `[NCMEC] retry_finish failed for incident ${incidentId}, reportId=${incident.ncmecReportId}: ${(err as Error).message}`
+      );
       return res.status(502).json({ error: `NCMEC /finish retry failed: ${(err as Error).message}` });
     }
-    req.logger.info(`[NCMEC] retry_finish succeeded for incident ${incidentId}, reportId=${incident.ncmecReportId}; marking reported`);
+    req.logger.info(
+      `[NCMEC] retry_finish succeeded for incident ${incidentId}, reportId=${incident.ncmecReportId}; marking reported`
+    );
     // Pass staleAfterMs=0: /finish just succeeded so the outcome is known; the stale filter
     // is not appropriate here (it exists to prevent mark_reported/requeue from racing a live
     // in-flight submission, not to gate a retry we just confirmed succeeded).
@@ -146,7 +166,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     if (!updated) {
       // Concurrent mark_reported or requeue resolved the incident between our /finish call
       // and this DB write. The reportId is in the log above; the incident is already closed.
-      req.logger.warn(`[NCMEC] retry_finish: /finish succeeded but DB update found no matching document (concurrent resolution?) for incident ${incidentId}`);
+      req.logger.warn(
+        `[NCMEC] retry_finish: /finish succeeded but DB update found no matching document (concurrent resolution?) for incident ${incidentId}`
+      );
     }
     return res.status(200).json({ ok: true, ncmecReportId: incident.ncmecReportId });
   }
@@ -158,11 +180,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     });
     if (!updated) {
       const incident = await imageModerationIncidentRepository.findById(incidentId);
+      // The admin already filed this tip with NCMEC; log its id so a refusal never loses it.
+      req.logger.warn(
+        `[NCMEC] record_manual_report refused for incident ${incidentId} (state=${incident?.reviewStatus ?? 'missing'}); admin-supplied reportId=${body.ncmecReportId}, by admin=${req.user.id}`
+      );
       if (!incident) return res.status(404).json({ error: 'Incident not found' });
       if (incident.reviewStatus === 'confirmed_csam') {
         return res.status(409).json({
-          error:
-            'Incident has an API submission in flight or with an unknown outcome -- use mark_reported once it is stale',
+          error: incident.ncmecReportId
+            ? `Incident has an unfinished API report (reportId=${incident.ncmecReportId}) -- use retry_finish within NCMEC's 24-hour window`
+            : 'Incident has an API submission in flight or with an unknown outcome -- once it is stale, use mark_reported if NCMEC has a tip, or requeue then record_manual_report if it does not',
         });
       }
       return res.status(409).json({ error: `Incident is already ${incident.reviewStatus}` });

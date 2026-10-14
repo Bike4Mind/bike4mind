@@ -358,7 +358,11 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
 
       expect(mockFinishNcmecReport).toHaveBeenCalledOnce();
       // staleAfterMs=0 bypasses the stale guard -- outcome is known after /finish succeeds
-      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith('inc-1', { status: 'reported', ncmecReportId: 'RPT-STORED' }, 0);
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith(
+        'inc-1',
+        { status: 'reported', ncmecReportId: 'RPT-STORED' },
+        0
+      );
       expect(res.status).toHaveBeenCalledWith(200);
       const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { ok: boolean; ncmecReportId: string };
       expect(body.ncmecReportId).toBe('RPT-STORED');
@@ -385,7 +389,11 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
     });
 
     it('returns 502 when /finish fails', async () => {
-      mockFindById.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'confirmed_csam', ncmecReportId: 'RPT-STORED' });
+      mockFindById.mockResolvedValue({
+        ...CLAIMED_INCIDENT,
+        reviewStatus: 'confirmed_csam',
+        ncmecReportId: 'RPT-STORED',
+      });
       mockFinishNcmecReport.mockRejectedValue(new Error('NCMEC /finish error 500: Internal Error'));
 
       const res = makeRes();
@@ -450,7 +458,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
-    it('returns 409 pointing at mark_reported when an API submission holds the claim', async () => {
+    it('returns 409 pointing at mark_reported or requeue when an API submission holds the claim', async () => {
       mockRecordManualReport.mockResolvedValue(null);
       mockFindById.mockResolvedValue({ reviewStatus: 'confirmed_csam' });
 
@@ -460,6 +468,32 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(res.status).toHaveBeenCalledWith(409);
       const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { error: string };
       expect(body.error).toContain('mark_reported');
+      expect(body.error).toContain('requeue');
+    });
+
+    it('returns 409 pointing at retry_finish when the API claim holds an unfinished reportId', async () => {
+      mockRecordManualReport.mockResolvedValue(null);
+      mockFindById.mockResolvedValue({ reviewStatus: 'confirmed_csam', ncmecReportId: 'RPT-STORED' });
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(409);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { error: string };
+      expect(body.error).toContain('retry_finish');
+      expect(body.error).not.toContain('mark_reported');
+    });
+
+    it('logs the admin-supplied reportId when the verdict is refused', async () => {
+      for (const incident of [null, { reviewStatus: 'false_positive' }]) {
+        mockRecordManualReport.mockResolvedValue(null);
+        mockFindById.mockResolvedValue(incident);
+
+        const req = makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' });
+        await runHandler(req, makeRes());
+
+        expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('reportId=123456'));
+      }
     });
 
     it('returns 409 when the incident is already reported or false_positive', async () => {
@@ -474,8 +508,8 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       }
     });
 
-    it('returns 400 when ncmecReportId is missing, blank, or too long', async () => {
-      for (const ncmecReportId of [undefined, '   ', 'x'.repeat(65)]) {
+    it('returns 400 when ncmecReportId is missing, blank, too long, or has disallowed characters', async () => {
+      for (const ncmecReportId of [undefined, '   ', 'x'.repeat(65), '123\n456', '123 456', '12/34']) {
         const res = makeRes();
         await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId }), res);
         expect(res.status).toHaveBeenCalledWith(400);

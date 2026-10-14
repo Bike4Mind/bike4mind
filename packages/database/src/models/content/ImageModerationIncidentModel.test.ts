@@ -109,6 +109,13 @@ describe('ImageModerationIncidentRepository', () => {
       const updated = await imageModerationIncidentRepository.updateReviewStatus(String(inc._id), 'reported', 'rpt-42');
       expect(updated?.reviewStatus).toBe('reported');
       expect(updated?.ncmecReportId).toBe('rpt-42');
+      expect(updated?.reportedAt).toBeInstanceOf(Date);
+    });
+
+    it('does not set reportedAt for a non-reported status', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const updated = await imageModerationIncidentRepository.updateReviewStatus(String(inc._id), 'false_positive');
+      expect(updated?.reportedAt).toBeUndefined();
     });
 
     it('returns null when incident is already reported (idempotency guard)', async () => {
@@ -178,6 +185,7 @@ describe('ImageModerationIncidentRepository', () => {
       });
       expect(out?.reviewStatus).toBe('reported');
       expect(out?.ncmecReportId).toBe('RPT-M');
+      expect(out?.reportedAt).toBeInstanceOf(Date);
     });
 
     it('requeues a stale confirmed_csam claim with no stored reportId', async () => {
@@ -225,6 +233,7 @@ describe('ImageModerationIncidentRepository', () => {
       expect(out?.ncmecReportId).toBe('123456');
       expect(out?.reportChannel).toBe('manual');
       expect(out?.reportedBy).toBe('admin-1');
+      expect(out?.reportedAt).toBeInstanceOf(Date);
     });
 
     it('accepts pending_review', async () => {

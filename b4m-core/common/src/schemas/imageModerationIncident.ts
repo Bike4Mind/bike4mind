@@ -10,8 +10,9 @@ import { z } from 'zod';
 export const INCIDENT_REVIEW_STATUSES = ['pending_review', 'confirmed_csam', 'false_positive', 'reported'] as const;
 export type IncidentReviewStatus = (typeof INCIDENT_REVIEW_STATUSES)[number];
 
-// How a 'reported' incident reached NCMEC: 'manual' = filed by an admin on the CyberTipline
-// web form and recorded via the record_manual_report verdict. Absent = submitted via the API.
+// 'manual' = an admin filed the CyberTip on the CyberTipline web form and recorded it via the
+// record_manual_report verdict. Absent = recorded by the API path or by the mark_reported /
+// retry_finish recovery verdicts, whose report id may come from either channel.
 export const INCIDENT_REPORT_CHANNELS = ['manual'] as const;
 export type IncidentReportChannel = (typeof INCIDENT_REPORT_CHANNELS)[number];
 
@@ -45,6 +46,8 @@ export const ImageModerationIncidentSchema = z.object({
   reportChannel: z.enum(INCIDENT_REPORT_CHANNELS).optional(),
   // Admin user id that recorded a manual report.
   reportedBy: z.string().optional(),
+  // When the incident moved to 'reported'; unlike updatedAt, later writes do not move it.
+  reportedAt: z.union([z.string(), z.date()]).optional(),
   createdAt: z.union([z.string(), z.date()]).optional(),
   updatedAt: z.union([z.string(), z.date()]).optional(),
 });

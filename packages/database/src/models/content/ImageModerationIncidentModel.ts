@@ -45,6 +45,7 @@ const ImageModerationIncidentSchema = new Schema(
     ncmecReportId: { type: String, required: false },
     reportChannel: { type: String, enum: INCIDENT_REPORT_CHANNELS, required: false },
     reportedBy: { type: String, required: false },
+    reportedAt: { type: Date, required: false },
   },
   {
     timestamps: true,
@@ -149,6 +150,7 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
           ncmecReportId: report.ncmecReportId,
           reportChannel: 'manual',
           reportedBy: report.reportedBy,
+          reportedAt: new Date(),
         },
       },
       { new: true }
@@ -169,6 +171,7 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   ): Promise<IImageModerationIncidentDocument | null> {
     const update: Record<string, unknown> = { reviewStatus: status };
     if (ncmecReportId) update.ncmecReportId = ncmecReportId;
+    if (status === 'reported') update.reportedAt = new Date();
     const excluded = status === 'false_positive' ? ['reported', 'confirmed_csam'] : ['reported'];
     return this.model.findOneAndUpdate({ _id: id, reviewStatus: { $nin: excluded } }, { $set: update }, { new: true });
   }
@@ -191,7 +194,10 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
     staleAfterMs = STALE_CONFIRMED_CSAM_MS
   ): Promise<IImageModerationIncidentDocument | null> {
     const update: Record<string, unknown> = { reviewStatus: target.status };
-    if (target.status === 'reported') update.ncmecReportId = target.ncmecReportId;
+    if (target.status === 'reported') {
+      update.ncmecReportId = target.ncmecReportId;
+      update.reportedAt = new Date();
+    }
     const filter: Record<string, unknown> = {
       _id: id,
       reviewStatus: 'confirmed_csam',
