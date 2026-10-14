@@ -94,6 +94,12 @@ interface UseSendMessageParams {
 interface SendClickOptions {
   forceEnableQuestMaster?: boolean;
   toolsOverride?: B4MLLMTools[];
+  /**
+   * Extra system context for this one send (a programmatic launch's `systemContext`).
+   * Delivered as a system message on whichever route the send takes; never part of the
+   * prompt, so it is neither shown in the bubble nor persisted on the turn.
+   */
+  systemContext?: string;
   /** Called when the send is refused before dispatch (one already in flight, validation, setup). */
   onRefused?: () => void;
 }
@@ -730,6 +736,8 @@ export function useSendMessage({
     }
     // Tool-directed send: see LLMCommandArgs.skipRapidReply.
     const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0;
+    // Spread into each route's payload only when set, so a send without it is unchanged.
+    const systemContextField = options?.systemContext ? { systemContext: options.systemContext } : {};
 
     // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
     // models: for image models "vision" is irrelevant - image-input capability is handled by
@@ -819,6 +827,7 @@ export function useSendMessage({
           prompt_upsampling,
           seed,
           output_format,
+          ...systemContextField,
         });
       };
     } else {
@@ -861,6 +870,7 @@ export function useSendMessage({
           // path - but we still surface the source so per-decision logs can
           // attribute the choice.
           agentMode: effectiveAgentMode,
+          ...systemContextField,
         });
       };
     }
@@ -1077,6 +1087,9 @@ export function useSendMessage({
           // Propagate provenance so persisted IChatHistoryItem carries the
           // tag the AutoRouteBadge reads.
           routingSource,
+          // Per-send system context: the executor folds it into the run's system
+          // message, and it is kept off the stored execution and Quest.
+          ...systemContextField,
         });
         setChatInputValue('');
         clearDraft(dispatchSessionId);

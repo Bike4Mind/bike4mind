@@ -67,3 +67,31 @@ describe('useSendMessage - briefcase toolsOverride on the orchestration path (#9
     expect(refusedIdx).toBeLessThan(branchIdx);
   });
 });
+
+/**
+ * Per-send system context (a programmatic launch's `systemContext`). Same source-level approach
+ * as above. The behaviour on each wire is covered where it is built: `LLMCommand.payload.test.ts`
+ * (chat route) and `agentExecute.test.ts` / `startAgentExecution.test.ts` (agent route).
+ */
+describe('useSendMessage - per-send systemContext reaches both routes', () => {
+  const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
+
+  it('builds the field only when the send carries one, so an absent value adds nothing', () => {
+    expect(source).toMatch(
+      /const systemContextField = options\?\.systemContext \? \{ systemContext: options\.systemContext \} : \{\};/
+    );
+  });
+
+  it('spreads it into the command-map dispatch and the direct LLM dispatch', () => {
+    expect(source).toMatch(/handleCommand\(commandHandlers, \{[\s\S]*?\.\.\.systemContextField,\s*\}\);/);
+    expect(source).toMatch(/handleLLMCommand\(\{[\s\S]*?\.\.\.systemContextField,\s*\}\);/);
+  });
+
+  it('spreads it into the agent-executor start payload', () => {
+    expect(source).toMatch(/agentExecution\.start\(\{[\s\S]*?\.\.\.systemContextField,\s*\}\);/);
+  });
+
+  it('never folds it into the prompt text the bubble shows', () => {
+    expect(source).not.toMatch(/prompt\s*[+=].*systemContext/);
+  });
+});

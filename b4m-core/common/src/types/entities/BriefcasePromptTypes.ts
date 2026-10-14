@@ -129,6 +129,12 @@ export interface IResolvedPromptDispatch {
   requiredTools?: BriefcasePromptToolFlag[] | null;
   /** The session this dispatch targets, so only the matching surface consumes it. */
   sessionId?: string | null;
+  /**
+   * System context delivered with the send this launch starts, as one extra system
+   * message on that request only. It is never shown in the transcript and never
+   * persisted on the stored turn. Absent leaves the request exactly as it was.
+   */
+  systemContext?: string;
 }
 
 /**

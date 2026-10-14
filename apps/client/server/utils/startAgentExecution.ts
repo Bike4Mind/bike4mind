@@ -123,6 +123,12 @@ export type StartAgentExecutionInput = {
   imageConfig?: Partial<GenerateImageToolCall>;
   audioConfig?: Partial<AudioGenerationToolCall>;
   routingSource?: AgentExecutionRoutingSource;
+  /**
+   * Extra system context for this run only. Forwarded on the executor start payload and
+   * deliberately NOT snapshotted on the execution doc or the Quest: the executor folds it
+   * into the system message it checkpoints, so continuations carry it without a copy here.
+   */
+  systemContext?: string;
 };
 
 /** Why a start was refused. Callers map these onto their own transport's errors. */
@@ -397,6 +403,9 @@ export async function startAgentExecution(
         // resolves `startPayload?.enableArtifacts ?? execution.enableArtifacts`, so the
         // first iteration never depends on the doc write having landed first.
         enableArtifacts: input.enableArtifacts,
+        // Start-payload only (see `systemContext` on the input type). Spread so a run
+        // without it dispatches the same payload as before.
+        ...(input.systemContext ? { systemContext: input.systemContext } : {}),
       },
       executorTarget
     );

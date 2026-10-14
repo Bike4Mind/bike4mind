@@ -142,6 +142,31 @@ describe('useProgrammaticSubmit › programmaticLaunch', () => {
     expect(h.store.state.programmaticLaunch).toBeNull();
   });
 
+  it('passes a launch systemContext to the send as an option, leaving the prompt text alone', () => {
+    h.store.state.programmaticLaunch = launch({ systemContext: 'Extra instructions for this send.' });
+    const props = baseProps();
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    expect(props.handleSendClick).toHaveBeenCalledTimes(1);
+    expect(props.handleSendClick).toHaveBeenCalledWith('go', {
+      toolsOverride: ['web_search'],
+      systemContext: 'Extra instructions for this send.',
+    });
+  });
+
+  it('adds no systemContext key to the send options when the launch has none', () => {
+    h.store.state.programmaticLaunch = launch({ systemContext: '' });
+    const props = baseProps();
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    const options = props.handleSendClick.mock.calls[0][1] as Record<string, unknown>;
+    expect(options).not.toHaveProperty('systemContext');
+  });
+
   it('drops a stale-nonce launch without sending', () => {
     h.store.isFresh = false;
     h.store.state.programmaticLaunch = launch();

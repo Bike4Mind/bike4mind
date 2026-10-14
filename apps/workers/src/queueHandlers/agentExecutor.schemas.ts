@@ -8,6 +8,7 @@
  * load-time side effects.
  */
 
+import { PROMPT_TEXT_MAX } from '@bike4mind/common';
 import { z } from 'zod';
 
 /** Payload for direct Lambda invocation (new execution). */
@@ -54,6 +55,11 @@ export const StartExecutionSchema = z.object({
   // admin setting is the only gate. Forwarded from the WS `start` payload and also persisted on the
   // AgentExecution doc so it survives Lambda handoffs.
   enableArtifacts: z.boolean().optional(),
+  // Per-send system context from the caller, for this run only. Passed to the first
+  // `runIteration` as `context`, which ReActAgent appends to the system message it then
+  // checkpoints - so continuations replay it without it being persisted on the doc. Same
+  // cap as the WS `start` schema (agentExecute.ts).
+  systemContext: z.string().max(PROMPT_TEXT_MAX).optional(),
 });
 
 /** Payload for continuation (SQS or direct re-invocation after permission response). */
