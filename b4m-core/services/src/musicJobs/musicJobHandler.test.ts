@@ -228,6 +228,31 @@ describe('music job end to end with the test provider', () => {
     expect(error).not.toHaveBeenCalledWith('generation_job_orphaned_submit', expect.anything());
   });
 
+  it('retries a failure before the provider call instead of failing it as orphaned_submit', async () => {
+    const generate = vi.spyOn(TestMusicProvider.prototype, 'generate');
+    const resolveApiKey = vi.fn(async () => 'key');
+    const t = setup({ resolveApiKey });
+    const error = vi.spyOn(t.deps.logger, 'error');
+    const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    resolveApiKey.mockRejectedValueOnce(new Error('db blip'));
+    await t.runToCompletion();
+    expect(t.jobOf(created).state).toBe('succeeded');
+    expect(resolveApiKey).toHaveBeenCalledTimes(3);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalledWith('generation_job_orphaned_submit', expect.anything());
+    generate.mockRestore();
+  });
+
+  it('fails a job whose provider is not registered after MAX_STEP_ATTEMPTS and releases the hold', async () => {
+    const t = setup();
+    const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    vi.spyOn(t.deps.providers, 'get').mockReturnValue(undefined);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' }, settledCredits: 0 });
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+
   it('fails a non-retryable failure without retrying and releases the hold', async () => {
     const generate = vi.spyOn(TestMusicProvider.prototype, 'generate');
     const t = setup();
