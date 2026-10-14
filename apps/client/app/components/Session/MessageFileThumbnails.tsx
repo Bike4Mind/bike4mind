@@ -46,10 +46,7 @@ export const MessageFileThumbnails: React.FC<MessageFileThumbnailsProps> = ({ fi
   if (files.length === 0) return null;
 
   return (
-    <Box
-      sx={{ display: 'flex', flexWrap: 'wrap', gap: '8px', pt: '4px', mb: '16px' }}
-      data-testid="message-file-thumbnails"
-    >
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: '8px', mb: '12px' }} data-testid="message-file-thumbnails">
       {files.map(item => {
         const { fabFile, status } = item;
         const isImage = !!fabFile.mimeType?.startsWith('image/');

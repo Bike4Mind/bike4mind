@@ -158,7 +158,6 @@ const AISettings: FC<AISettingsProps> = ({
           flexGrow: 1,
           overflowX: 'auto',
           overflowY: 'visible',
-          py: isMobile ? '0px' : '10px',
         }}
       >
         {/* AI Model Picker */}

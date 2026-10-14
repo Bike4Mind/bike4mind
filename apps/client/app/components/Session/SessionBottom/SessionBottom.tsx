@@ -630,8 +630,12 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                 }),
           backgroundColor: theme.palette.background.panel,
           boxShadow: theme.palette.session.boxShadow,
-          paddingX: isPWA ? '24px' : '16px',
-          pb: isPWA ? '20px' : isMobile ? '10px' : '0px',
+          // 12px to every edge of the box. The pieces inside add nothing at the edges (editor wrapper
+          // and Lexical have no top/left padding, the toolbar no bottom one) - keep it that way.
+          // The installed app keeps wider sides and bottom for the device's safe areas.
+          pt: '12px',
+          paddingX: isPWA ? '24px' : '12px',
+          pb: isPWA ? '20px' : '12px',
           // Bottom corners at 8px to sit inside the chat pane's own 8px frame; the top pair
           // is free-standing and keeps its looser .625rem.
           borderRadius:
@@ -701,7 +705,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         display: 'flex',
                         flexDirection: 'column',
                         width: '100%',
-                        padding: '8px 0px',
+                        // The one gap between the text and the toolbar.
+                        padding: '0 0 20px',
                         flex: 1,
                         overflow: 'visible',
                         position: 'relative',

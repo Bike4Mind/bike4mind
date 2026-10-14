@@ -150,7 +150,8 @@ export function SessionToolbar(props: SessionToolbarProps) {
           maxHeight: isSettingsExiting ? '0px' : '500px',
           opacity: isSettingsExiting ? 0 : 1,
           transition: 'max-height 300ms ease-out, opacity 280ms ease-out',
-          py: '8px',
+          // No padding: the composer box owns the 12px to its edges (SessionBottom), and the gap
+          // above comes from the editor's own bottom padding.
         }}
       >
         <Box className="session-bottom-actions-row" sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
