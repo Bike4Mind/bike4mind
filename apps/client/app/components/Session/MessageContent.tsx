@@ -69,7 +69,8 @@ import { Article as ArticleIcon } from '@mui/icons-material';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import EditIcon from '@mui/icons-material/Edit';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
-import { formatAnswerCost } from '@client/app/utils/formatCredits';
+import { answerCostUnit, formatAnswerCost, formatAnswerCostAmount } from '@client/app/utils/formatCredits';
+import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { answerCostBreakdown, formatCostParts } from '@client/app/utils/answerCostBreakdown';
 import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { APP_NAME } from '@client/config/general';
@@ -93,29 +94,27 @@ import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 const ModelChip: React.FC<{ displayName: string }> = ({ displayName }) => (
   // The only item in the footer with no natural width limit: model names run from "GPT-4.1"
   // to a long vendor string, and on a phone one of those pushes the row onto a second line
-  // or crowds out the actions opposite it. Capped and ellipsized, with the full name on the
-  // tooltip so nothing is lost.
-  <Tooltip title={displayName}>
-    <Chip
-      className="model-chip-web"
-      size="sm"
-      variant="soft"
-      sx={theme => ({
-        ...messageMetaChipSx(theme),
+  // or crowds out the actions opposite it. Capped and ellipsized; no tooltip, since real
+  // names fit the desktop cap and a phone has no hover to show one.
+  <Chip
+    className="model-chip-web"
+    size="sm"
+    variant="soft"
+    sx={theme => ({
+      ...messageMetaChipSx(theme),
+      minWidth: 0,
+      maxWidth: { xs: '110px', sm: '220px' },
+      '& .MuiChip-label': {
+        display: 'block',
         minWidth: 0,
-        maxWidth: { xs: '110px', sm: '220px' },
-        '& .MuiChip-label': {
-          display: 'block',
-          minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        },
-      })}
-    >
-      {displayName}
-    </Chip>
-  </Tooltip>
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      },
+    })}
+  >
+    {displayName}
+  </Chip>
 );
 
 const DeleteMessageModal = ({
@@ -1428,7 +1427,12 @@ const MessageContent: React.FC<ContentProps> = memo(
                   sx={messageMetaChipSx}
                   startDecorator={<CreditIcon sx={{ fontSize: 12 }} />}
                 >
-                  {formatAnswerCost(messageData.creditsUsed)}
+                  {/* The balance line above the composer already says these are credits, so the
+                      row shows the bare number; screen readers still get the unit. */}
+                  {formatAnswerCostAmount(messageData.creditsUsed)}
+                  <Box component="span" sx={visuallyHidden}>
+                    {` ${answerCostUnit(messageData.creditsUsed)}`}
+                  </Box>
                   {costParts.length > 0 && ` (${formatCostParts(costParts)})`}
                 </Chip>
               </Tooltip>

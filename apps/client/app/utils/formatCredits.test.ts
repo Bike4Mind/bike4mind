@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { formatAnswerCost, formatCreditAmount, formatCreditBalance, purchaseCreditsAriaLabel } from './formatCredits';
+import {
+  answerCostUnit,
+  formatAnswerCost,
+  formatAnswerCostAmount,
+  formatCreditAmount,
+  formatCreditBalance,
+  purchaseCreditsAriaLabel,
+} from './formatCredits';
 
 describe('purchaseCreditsAriaLabel', () => {
   it('names the pack by its grouped credit count and dollar price', () => {
@@ -28,6 +35,22 @@ describe('formatCreditBalance', () => {
     expect(formatCreditBalance(1)).toBe('1 credit');
     expect(formatCreditBalance(0)).toBe('0 credits');
     expect(formatCreditBalance(-12)).toBe('0 credits');
+  });
+});
+
+describe('formatAnswerCostAmount', () => {
+  it('is the bare number, with "<1" for a fractional cost', () => {
+    expect(formatAnswerCostAmount(1234.4)).toBe('1,234');
+    expect(formatAnswerCostAmount(0.04)).toBe('<1');
+    expect(formatAnswerCostAmount(0)).toBe('0');
+    expect(formatAnswerCostAmount(-3)).toBe('0');
+  });
+
+  it('pairs with a singular unit for "<1" and 1', () => {
+    expect(answerCostUnit(0.4)).toBe('credit');
+    expect(answerCostUnit(1.2)).toBe('credit');
+    expect(answerCostUnit(2)).toBe('credits');
+    expect(answerCostUnit(0)).toBe('credits');
   });
 });
 

@@ -17,11 +17,20 @@ export function formatCreditBalance(credits: number): string {
 }
 
 /**
- * What one answer cost: "15 credits". Pricing has no 1-credit minimum (b4m-core pricing.ts), so a
- * cheap answer can cost a fraction - shown as "<1 credit" rather than rounded down to a false 0.
+ * An answer's cost as a bare number: "15", "1,234". Pricing has no 1-credit minimum (b4m-core
+ * pricing.ts), so a cheap answer can cost a fraction - shown as "<1" rather than a false 0.
  */
+export function formatAnswerCostAmount(credits: number): string {
+  if (credits > 0 && credits < 1) return '<1';
+  return Math.max(0, Math.round(credits)).toLocaleString('en-US');
+}
+
+/** The unit that reads after formatAnswerCostAmount: "credit" for "<1" and 1, else "credits". */
+export function answerCostUnit(credits: number): string {
+  return credits > 0 && credits < 1 ? 'credit' : plural(Math.max(0, Math.round(credits)));
+}
+
+/** What one answer cost, labelled: "15 credits", "<1 credit". */
 export function formatAnswerCost(credits: number): string {
-  if (credits > 0 && credits < 1) return '<1 credit';
-  const whole = Math.max(0, Math.round(credits));
-  return `${whole.toLocaleString('en-US')} ${plural(whole)}`;
+  return `${formatAnswerCostAmount(credits)} ${answerCostUnit(credits)}`;
 }
