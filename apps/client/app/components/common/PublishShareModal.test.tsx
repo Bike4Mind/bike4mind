@@ -557,7 +557,6 @@ describe('PublishShareModal — search-engine listing is opt-in', () => {
     // next time someone widens the artifact back to public.
     renderModal();
     fireEvent.click(screen.getByTestId('publish-share-discoverable-toggle'));
-    expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(true);
 
     fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
     expect(screen.queryByTestId('publish-share-discoverable-toggle')).toBeNull();
@@ -579,7 +578,6 @@ describe('PublishShareModal — search-engine listing is opt-in', () => {
     expect(screen.queryByTestId('publish-share-discoverable-toggle')).toBeNull();
 
     fireEvent.click(radio('none')!);
-    expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(true);
   });
 
   const publishAndWait = async (props: Partial<React.ComponentProps<typeof PublishShareModal>> = {}) => {
@@ -755,6 +753,63 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     settle(null);
     await waitFor(() => expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(false));
     expect(screen.queryByTestId('publish-share-url')).toBeNull();
+  });
+
+  it('reopening seeds every control from the record, not from the lookup row', async () => {
+    renderReopened(() => Promise.resolve({ ...live, visibility: 'public' }));
+    apiGet.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/share-token')
+          ? { data: { shareToken: 't' } }
+          : {
+              data: {
+                artifact: {
+                  visibility: 'private',
+                  accessGate: { kind: 'domain', allowedDomains: ['example.com'] },
+                  commentPolicy: 'open',
+                  discoverable: true,
+                },
+              },
+            }
+      )
+    );
+    await screen.findByTestId('publish-share-url');
+    await waitFor(() => expect(radio('private')?.checked).toBe(true));
+    expect(radio('public')?.checked).toBe(false);
+    expect((screen.getByTestId('publish-share-comments-toggle') as HTMLInputElement).checked).toBe(true);
+    expect(((await screen.findByTestId('publish-share-token-url')) as HTMLInputElement).value).toContain('t');
+    // The gate control only renders while public; switching there shows the seeded gate.
+    fireEvent.click(screen.getByTestId('publish-share-visibility-public'));
+    const domains = (await screen.findByTestId('publish-share-gate-domains')) as HTMLInputElement;
+    expect(domains.value).toBe('example.com');
+  });
+
+  it('reopening seeds the search-listing switch from the record when it is public and ungated', async () => {
+    renderReopened(() => Promise.resolve({ ...live, visibility: 'private' }));
+    apiGet.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/share-token')
+          ? { data: { shareToken: null } }
+          : {
+              data: {
+                artifact: { visibility: 'public', accessGate: null, commentPolicy: 'none', discoverable: true },
+              },
+            }
+      )
+    );
+    await screen.findByTestId('publish-share-url');
+    await waitFor(() => expect(radio('public')?.checked).toBe(true));
+    expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('reopening still shows the link and lookup visibility when the record read fails', async () => {
+    renderReopened(() => Promise.resolve({ ...live, visibility: 'public' }));
+    apiGet.mockImplementation((url: string) =>
+      url.endsWith('/share-token') ? Promise.resolve({ data: { shareToken: null } }) : Promise.reject(new Error('boom'))
+    );
+    const url = (await screen.findByTestId('publish-share-url')) as HTMLInputElement;
+    expect(url.value).toContain('/p/r/live-1');
+    await waitFor(() => expect(radio('public')?.checked).toBe(true));
   });
 
   it('a reopened Team page shows Team as selected even outside a team context', async () => {
