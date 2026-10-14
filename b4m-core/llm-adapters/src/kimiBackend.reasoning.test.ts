@@ -150,6 +150,39 @@ describe('KimiBackend reasoning capture', () => {
     expect((info.inputTokens ?? 0) + (info.cacheReadInputTokens ?? 0)).toBe(1220);
   });
 
+  it('reports each tool round-trip as its own turn, summing to the aggregates', async () => {
+    const toolFn = vi.fn().mockResolvedValue('tool output');
+    const { backend, create } = backendReturning([]);
+    create.mockResolvedValueOnce({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content: '',
+            tool_calls: [{ id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"x"}' } }],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 100, completion_tokens: 20, cached_tokens: 40 },
+    });
+    create.mockResolvedValue({
+      choices: [{ index: 0, message: { content: 'final' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 300, completion_tokens: 30, cached_tokens: 100 },
+    });
+    const tools = [{ toolSchema: { name: 'search', description: 'search', parameters: { type: 'object' } }, toolFn }];
+
+    const info = (await runTurn(backend, ChatModels.KIMI_K2_6, { tools })).at(-1)!.info;
+
+    expect(info.turnUsage).toEqual([
+      { inputTokens: 60, cacheReadInputTokens: 40, outputTokens: 20 },
+      { inputTokens: 200, cacheReadInputTokens: 100, outputTokens: 30 },
+    ]);
+    expect(info.inputTokens).toBe(260);
+    expect(info.cacheReadInputTokens).toBe(140);
+    expect(info.outputTokens).toBe(50);
+  });
+
   it('reads the nested OpenAI cached_tokens spelling too, since Moonshot sends both', async () => {
     const { backend } = backendReturning([{ index: 0, message: { content: 'OK' }, finish_reason: 'stop' }], {
       prompt_tokens: 100,

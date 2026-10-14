@@ -244,6 +244,11 @@ describe('DeepSeekBackend reasoning capture', () => {
     expect(info.cacheReadInputTokens).toBe(140);
     expect(info.inputTokens).toBe(260);
     expect(info.outputTokens).toBe(50);
+    // Each request is tiered on its own prompt, so the per-request split survives too.
+    expect(info.turnUsage).toEqual([
+      { inputTokens: 60, cacheReadInputTokens: 40, outputTokens: 20 },
+      { inputTokens: 200, cacheReadInputTokens: 100, outputTokens: 30 },
+    ]);
   });
 
   it('does not fire the empty guard for a turn that legitimately only called a tool', async () => {

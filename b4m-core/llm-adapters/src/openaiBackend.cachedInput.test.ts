@@ -184,6 +184,11 @@ describe('OpenAI streaming: cached prompt tokens', () => {
 
     expect(info.cacheReadInputTokens).toBe(800 + 900);
     expect(info.inputTokens).toBe(1000 + 1500 - (800 + 900));
+    // Each request is tiered on its own prompt, so the breakdown keeps the turns apart.
+    expect(info.turnUsage).toEqual([
+      { inputTokens: 200, cacheReadInputTokens: 800, outputTokens: 20 },
+      { inputTokens: 600, cacheReadInputTokens: 900, outputTokens: 30 },
+    ]);
   });
 });
 
@@ -200,6 +205,7 @@ describe('OpenAI non-streaming: cached prompt tokens', () => {
 
     expect(info.cacheReadInputTokens).toBe(1600);
     expect(info.inputTokens).toBe(400);
+    expect(info.turnUsage).toEqual([{ inputTokens: 400, cacheReadInputTokens: 1600, outputTokens: 50 }]);
   });
 
   it('carries cache reads through executeTools:false without losing the discount', async () => {
@@ -225,6 +231,40 @@ describe('OpenAI non-streaming: cached prompt tokens', () => {
 
     expect(info.cacheReadInputTokens).toBe(700);
     expect(info.inputTokens).toBe(200);
+    expect(info.turnUsage).toEqual([{ inputTokens: 200, cacheReadInputTokens: 700, outputTokens: 10 }]);
+  });
+
+  it('reports one turnUsage entry per request across tool recursion', async () => {
+    const { backend } = nonStreamingBackend([
+      {
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              tool_calls: [{ id: 't1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+        usage: { prompt_tokens: 300_000, completion_tokens: 10, prompt_tokens_details: { cached_tokens: 280_000 } },
+      },
+      {
+        choices: [{ index: 0, message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1000, completion_tokens: 40 },
+      },
+    ]);
+
+    const info = settled(await run(backend, ChatModels.GPT4o, { stream: false, tools: [sampleTool] }));
+
+    expect(info.turnUsage).toEqual([
+      { inputTokens: 20_000, cacheReadInputTokens: 280_000, outputTokens: 10 },
+      { inputTokens: 1000, outputTokens: 40 },
+    ]);
+    // The breakdown sums to the aggregates.
+    expect(info.inputTokens).toBe(21_000);
+    expect(info.cacheReadInputTokens).toBe(280_000);
+    expect(info.outputTokens).toBe(50);
   });
 });
 
@@ -241,6 +281,7 @@ describe('OpenAI Responses API: cached prompt tokens', () => {
 
     expect(info.cacheReadInputTokens).toBe(4200);
     expect(info.inputTokens).toBe(800);
+    expect(info.turnUsage).toEqual([{ inputTokens: 800, cacheReadInputTokens: 4200, outputTokens: 200 }]);
   });
 
   it('accumulates the Responses turn cache read into the chat synthesis turn', async () => {
@@ -263,6 +304,10 @@ describe('OpenAI Responses API: cached prompt tokens', () => {
 
     expect(info.cacheReadInputTokens).toBe(600 + 500);
     expect(info.inputTokens).toBe(1000 + 1200 - (600 + 500));
+    expect(info.turnUsage).toEqual([
+      { inputTokens: 400, cacheReadInputTokens: 600, outputTokens: 20 },
+      { inputTokens: 700, cacheReadInputTokens: 500, outputTokens: 30 },
+    ]);
   });
 });
 
