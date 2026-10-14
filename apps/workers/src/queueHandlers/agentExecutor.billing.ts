@@ -14,7 +14,7 @@
  * the caller across iterations (mirrors the in-place-mutation contract the call
  * site relies on).
  */
-import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import { getTurnsCost, type ModelInfo, type TurnUsage } from '@bike4mind/common';
 import type { IIterationBilling } from '@bike4mind/database';
 import type { UsageEventStatus } from '@bike4mind/common';
 import { buildEarlyStopStamp } from '@bike4mind/services/llm';
@@ -225,9 +225,25 @@ type IterationTokenRecord = Pick<
 >;
 
 /**
+ * One iteration's agent usage as a single provider request: ReActAgent calls the model with
+ * executeTools: false, so an iteration is exactly one request, and that request's own prompt
+ * picks its long-context tier. Pricing the run's cumulative totals instead tiers every iteration
+ * on the whole run (and on cache-exclusive input).
+ */
+function iterationTurn(tokens: IterationTokenRecord): TurnUsage {
+  return {
+    inputTokens: tokens.inputTokens,
+    outputTokens: tokens.outputTokens,
+    cacheReadInputTokens: tokens.cacheReadTokens,
+    cacheCreationInputTokens: tokens.cacheWriteTokens,
+  };
+}
+
+/**
  * Rebuild `counters` on resume from the persisted per-iteration token deltas. `cumulativeCost`
- * is re-priced with this invocation's `modelInfo` (the rate `billIteration` will use), never
- * carried over, so a price change between invocations cannot make the next delta negative.
+ * is re-priced iteration by iteration with this invocation's `modelInfo` (the rate and tiering
+ * `billIteration` uses), never carried over. Billing reads only the token counters; the cost is
+ * the reference the negative-delta warning reports against.
  */
 export function reseedCounters(
   iterationBilling: readonly IterationTokenRecord[],
@@ -247,13 +263,7 @@ export function reseedCounters(
     counters.cacheWriteTokens += billing.cacheWriteTokens;
   }
   if (iterationBilling.length > 0 && modelInfo) {
-    counters.cumulativeCost = getTextModelCost(
-      modelInfo,
-      counters.inputTokens,
-      counters.outputTokens,
-      counters.cacheReadTokens,
-      counters.cacheWriteTokens
-    );
+    counters.cumulativeCost = getTurnsCost(modelInfo, iterationBilling.map(iterationTurn));
   }
   return counters;
 }
@@ -267,35 +277,6 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
   const { iterationIndex, checkpoint, counters, modelInfo, model, startTime, effects } = params;
   const toolUsage = params.toolUsage ?? ZERO_TOOL_USAGE;
 
-  // Price cache tokens explicitly: totalInputTokens EXCLUDES cache-read/write (they're
-  // tracked as separate counters), so passing them here bills cache-read at ~0.1x and
-  // cache-write at ~1.25x rather than pricing them at zero. Mirrors the chat path.
-  const cumulativeCost = getTextModelCost(
-    modelInfo,
-    checkpoint.totalInputTokens,
-    checkpoint.totalOutputTokens,
-    checkpoint.totalCacheReadTokens,
-    checkpoint.totalCacheWriteTokens
-  );
-  // Settle the agent's own cost growth plus any tool-internal spend (#630). Tool spend is
-  // already priced per-tool, so it adds directly as USD. Both terms are >= 0, so an
-  // iteration with tool usage is always billable (never hits the no-op return below).
-  const agentCostDelta = cumulativeCost - counters.cumulativeCost;
-  const costDelta = agentCostDelta + toolUsage.costUsd;
-  // Should be unreachable: the rate is fixed per invocation and resume re-prices `counters` at
-  // that same rate (`reseedCounters`), so a negative agent delta means counters and checkpoint
-  // have diverged. Checked on the agent term alone so positive tool spend cannot mask it; the
-  // settle below is unchanged (net <= 0 skips with counters left put, net > 0 charges the net).
-  if (agentCostDelta < 0) {
-    effects.logNegativeDelta({
-      costDelta: agentCostDelta,
-      toolCostUsd: toolUsage.costUsd,
-      cumulativeCost,
-      previousCumulativeCost: counters.cumulativeCost,
-    });
-  }
-  if (costDelta <= 0) return;
-
   // Agent-only per-iteration token deltas (checkpoint totals are agent-loop only). These
   // are the resume-critical values summed to rebuild cumulative agent cost, so tool tokens
   // (a different model) must never enter them.
@@ -305,6 +286,28 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
     cacheReadTokens: checkpoint.totalCacheReadTokens - counters.cacheReadTokens,
     cacheWriteTokens: checkpoint.totalCacheWriteTokens - counters.cacheWriteTokens,
   };
+
+  // Price this iteration on its own (see iterationTurn), cache tokens at their own rates:
+  // totalInputTokens EXCLUDES cache-read/write. Mirrors the chat path.
+  const agentCostDelta = getTurnsCost(modelInfo, [iterationTurn(deltas)]);
+  const cumulativeCost = counters.cumulativeCost + agentCostDelta;
+  // Settle the agent's own cost growth plus any tool-internal spend (#630). Tool spend is
+  // already priced per-tool, so it adds directly as USD. Both terms are >= 0, so an
+  // iteration with tool usage is always billable (never hits the no-op return below).
+  const costDelta = agentCostDelta + toolUsage.costUsd;
+  // Should be unreachable: a negative agent delta means the checkpoint totals fell behind
+  // `counters` (resume reseeds them from the persisted deltas), i.e. the two have diverged.
+  // Checked on the agent term alone so positive tool spend cannot mask it; the settle below is
+  // unchanged (net <= 0 skips with counters left put, net > 0 charges the net).
+  if (agentCostDelta < 0) {
+    effects.logNegativeDelta({
+      costDelta: agentCostDelta,
+      toolCostUsd: toolUsage.costUsd,
+      cumulativeCost,
+      previousCumulativeCost: counters.cumulativeCost,
+    });
+  }
+  if (costDelta <= 0) return;
 
   // Sanity backstop (#657): one iteration is one completion call, so its input
   // tokens can never exceed the model's context window (totalInputTokens excludes

@@ -558,7 +558,8 @@ describe('billIteration (negative cost delta)', () => {
   });
 
   it('negative delta: warns once and charges, records, and persists nothing', async () => {
-    const counters = makeCounters({ cumulativeCost: 2000, inputTokens: 1000 });
+    // Counters ahead of the checkpoint: the two have diverged.
+    const counters = makeCounters({ cumulativeCost: 2000, inputTokens: 2000 });
     const { effects, spies } = makeEffects();
 
     await billIteration({
@@ -582,11 +583,11 @@ describe('billIteration (negative cost delta)', () => {
     expect(spies.addIterationBilling).not.toHaveBeenCalled();
     expect(spies.recordUsageEvent).not.toHaveBeenCalled();
     expect(spies.sendProgress).not.toHaveBeenCalled();
-    expect(counters).toEqual(makeCounters({ cumulativeCost: 2000, inputTokens: 1000 }));
+    expect(counters).toEqual(makeCounters({ cumulativeCost: 2000, inputTokens: 2000 }));
   });
 
   it('negative agent delta is warned even when tool spend nets the iteration positive', async () => {
-    const counters = makeCounters({ cumulativeCost: 2000, inputTokens: 1000 });
+    const counters = makeCounters({ cumulativeCost: 2000, inputTokens: 2000 });
     const { effects, spies } = makeEffects();
 
     await billIteration({
@@ -625,6 +626,73 @@ describe('billIteration (negative cost delta)', () => {
     });
 
     for (const spy of Object.values(spies)) expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('billIteration (long-context tiers)', () => {
+  const perM = (usd: number) => usd / 1_000_000;
+  // Two tiers shaped like a 200K long-context ladder.
+  const tiered = {
+    ...makeModelInfo(1_048_576),
+    pricing: {
+      200_000: { input: perM(2), output: perM(12) },
+      1_048_576: { input: perM(4), output: perM(18) },
+    },
+  } as ModelInfo;
+
+  const runIterations = async (
+    totals: Array<{ input: number; output: number; cacheRead?: number }>,
+    counters: BillingCounters = makeCounters(),
+    startIndex = 1
+  ) => {
+    const { effects, spies } = makeEffects();
+    for (const [i, t] of totals.entries()) {
+      await billIteration({
+        iterationIndex: startIndex + i,
+        checkpoint: checkpoint(t.input, { output: t.output, cacheRead: t.cacheRead }),
+        counters,
+        modelInfo: tiered,
+        model: 'test-model',
+        startTime: 0,
+        effects,
+      });
+    }
+    const charged = spies.recordUsageEvent.mock.calls.map(([e]) => e.costUsd as number);
+    const recorded = spies.addIterationBilling.mock.calls.map(([b]) => b);
+    return { counters, charged, recorded };
+  };
+
+  // Cumulative checkpoint totals for three iterations of 150K, 190K and 230K prompts.
+  const growingRun = [
+    { input: 150_000, output: 1_000 },
+    { input: 340_000, output: 2_000 },
+    { input: 570_000, output: 3_000 },
+  ];
+
+  it('bills each iteration on its own tier; only the iteration that crosses it pays the long rate', async () => {
+    const { charged } = await runIterations(growingRun);
+
+    expect(charged[0]).toBeCloseTo(150_000 * perM(2) + 1_000 * perM(12), 10);
+    // Pricing cumulative totals would put iteration 2 (340K cumulative) on the long tier.
+    expect(charged[1]).toBeCloseTo(190_000 * perM(2) + 1_000 * perM(12), 10);
+    expect(charged[2]).toBeCloseTo(230_000 * perM(4) + 1_000 * perM(18), 10);
+  });
+
+  it('tiers an iteration on its whole prompt, cache reads included', async () => {
+    const { charged } = await runIterations([{ input: 20_000, output: 0, cacheRead: 190_000 }]);
+    expect(charged[0]).toBeCloseTo(20_000 * perM(4) + 190_000 * perM(4) * 0.1, 10);
+  });
+
+  it('a resume reseeded from the persisted records bills the rest of the run identically', async () => {
+    const straight = await runIterations(growingRun);
+
+    const firstLeg = await runIterations(growingRun.slice(0, 2));
+    const resumed = reseedCounters(firstLeg.recorded, tiered);
+    expect(resumed.cumulativeCost).toBeCloseTo(firstLeg.counters.cumulativeCost, 10);
+    const secondLeg = await runIterations(growingRun.slice(2), resumed, 3);
+
+    expect([...firstLeg.charged, ...secondLeg.charged]).toEqual(straight.charged);
+    expect(secondLeg.counters.cumulativeCost).toBeCloseTo(straight.counters.cumulativeCost, 10);
   });
 });
 

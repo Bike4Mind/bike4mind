@@ -5,10 +5,10 @@ vi.mock('../../../billing', () => ({
   recordOperationalUsage: (...args: unknown[]) => recordOperationalUsageMock(...args),
 }));
 
-// getTextModelCost is pure; pin it so the cost assertion is deterministic.
+// The cost functions are pure; pin them so the cost assertion is deterministic.
 vi.mock('@bike4mind/common', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/common')>();
-  return { ...actual, getTextModelCost: () => 0.0042 };
+  return { ...actual, getTextModelCost: () => 0.0042, getTurnsCost: () => 0.0099 };
 });
 
 import { recordToolOperationalUsage } from './recordToolOperationalUsage';
@@ -55,6 +55,23 @@ describe('recordToolOperationalUsage', () => {
       costUsd: 0.0042,
       source: 'system',
     });
+  });
+
+  it('prices the per-request usage when the backend reported it (each request on its own tier)', async () => {
+    await recordToolOperationalUsage(makeContext(), {
+      model: 'gpt-4o-mini',
+      completionInfo: {
+        inputTokens: 100,
+        outputTokens: 20,
+        turnUsage: [
+          { inputTokens: 40, outputTokens: 5 },
+          { inputTokens: 60, outputTokens: 15 },
+        ],
+      } as never,
+      startTime: Date.now(),
+    });
+
+    expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({ inputTokens: 100, costUsd: 0.0099 });
   });
 
   it('skips recording when the backend reported no token usage', async () => {

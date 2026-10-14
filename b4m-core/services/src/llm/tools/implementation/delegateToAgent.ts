@@ -2,7 +2,7 @@ import type { ApiKeyTable, ICompletionBackend, ICompletionOptionTools } from '@b
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { ThoroughnessLevel } from '@bike4mind/agents';
-import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import { getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
 import { ServerSubagentOrchestrator } from '../../agents/ServerSubagentOrchestrator';
 import type { ServerSubagentTracker, SubagentHandoffSignal } from '../../agents/ServerSubagentOrchestrator';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
@@ -355,6 +355,7 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
           // delegation, inflating the margins the dashboard reports above reality.
           const cacheReadTokens = result.completionInfo.totalCacheReadTokens ?? 0;
           const cacheWriteTokens = result.completionInfo.totalCacheWriteTokens ?? 0;
+          const turnUsage = result.completionInfo.turnUsage;
           // When the model can't be resolved the usage event is dropped rather than
           // fabricated from zeros (see #121/#132). Warn so the drop rate is observable
           // in logs (#152) - the credit is still charged, only cost attribution is lost.
@@ -368,7 +369,9 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
             result.completionInfo.totalCredits,
             modelInfo
               ? {
-                  usdCost: getTextModelCost(modelInfo, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens),
+                  usdCost: turnUsage?.length
+                    ? getTurnsCost(modelInfo, turnUsage)
+                    : getTextModelCost(modelInfo, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens),
                   provider: modelInfo.backend,
                   model: result.model,
                   inputTokens,

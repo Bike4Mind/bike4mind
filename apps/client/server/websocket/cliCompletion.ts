@@ -1,4 +1,10 @@
-import { CliCompletionRequestAction, buildSSEEvent, IMessage, type CompletionSource } from '@bike4mind/common';
+import {
+  CliCompletionRequestAction,
+  buildSSEEvent,
+  IMessage,
+  type CompletionSource,
+  type TurnUsage,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import {
@@ -128,6 +134,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // Track token counts for analytics
   let finalInputTokens = 0;
   let finalOutputTokens = 0;
+  let finalTurnUsage: TurnUsage[] | undefined;
   let hasToolCalls = false;
 
   // Resolve API key name for analytics logging
@@ -164,6 +171,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         // Track token counts and tool usage
         if (info?.inputTokens) finalInputTokens = info.inputTokens;
         if (info?.outputTokens) finalOutputTokens = info.outputTokens;
+        if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
         if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
         const chunk = buildSSEEvent(text, info);
@@ -197,6 +205,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       method: 'WS',
       finalInputTokens,
       finalOutputTokens,
+      finalTurnUsage,
       hasToolCalls,
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
       logger: logger as unknown as Logger,

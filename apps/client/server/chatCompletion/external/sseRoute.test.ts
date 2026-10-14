@@ -313,6 +313,24 @@ describe('POST /api/ai/v1/completions - stream', () => {
     expect(afterReady).toBe(1);
   });
 
+  it('passes the per-request usage from the final frame to analytics, so each request is priced on its own tier', async () => {
+    const turnUsage = [
+      { inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 150_000 },
+      { inputTokens: 2000, outputTokens: 30, cacheReadInputTokens: 151_000 },
+    ];
+    mockExecuteCompletion.mockImplementationOnce(async (params: ExecuteParams) => {
+      await params.onReady?.();
+      await params.onChunk(['', 'partial'], { inputTokens: 1000, outputTokens: 20, turnUsage: turnUsage.slice(0, 1) });
+      await params.onChunk(['', 'done'], { inputTokens: 3000, outputTokens: 50, turnUsage });
+    });
+
+    await (await post()).text();
+
+    expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'success', finalInputTokens: 3000, finalTurnUsage: turnUsage })
+    );
+  });
+
   // Tokens already streamed, so neither a status code nor a pre-flight check can carry the signal.
   it('terminates a partially streamed completion with insufficient_credits', async () => {
     mockExecuteCompletion.mockImplementationOnce(async (params: ExecuteParams) => {

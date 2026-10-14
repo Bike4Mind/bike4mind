@@ -3,6 +3,8 @@ import {
   UserApiKeyEvents,
   AiEvents,
   getTextModelCost,
+  getTurnsCost,
+  type TurnUsage,
   ChatModels,
   IApiKeyRepository,
   IAdminSettingsRepository,
@@ -39,6 +41,8 @@ interface SuccessAnalyticsParams extends BaseAnalyticsParams {
   type: 'success';
   finalInputTokens: number;
   finalOutputTokens: number;
+  /** Per-request usage from the completion frames, when the adapter reports it (see getTurnsCost). */
+  finalTurnUsage?: TurnUsage[];
   hasToolCalls: boolean;
   error?: never;
 }
@@ -48,6 +52,7 @@ interface FailureAnalyticsParams extends BaseAnalyticsParams {
   error: unknown;
   finalInputTokens?: never;
   finalOutputTokens?: never;
+  finalTurnUsage?: never;
   hasToolCalls?: never;
   modelInfo?: never;
 }
@@ -69,7 +74,7 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
   const authMethod = apiKeyInfo ? ('api_key' as const) : ('jwt' as const);
 
   if (type === 'success') {
-    const { finalInputTokens, finalOutputTokens, hasToolCalls, db } = params;
+    const { finalInputTokens, finalOutputTokens, finalTurnUsage, hasToolCalls, db } = params;
 
     let creditsUsed = 0;
     try {
@@ -84,7 +89,9 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
       const modelInfo = models.find(m => m.id === (resolvedModelId as ChatModels));
 
       if (modelInfo && finalInputTokens > 0 && finalOutputTokens > 0) {
-        const costInUsd = getTextModelCost(modelInfo, finalInputTokens, finalOutputTokens);
+        const costInUsd = finalTurnUsage?.length
+          ? getTurnsCost(modelInfo, finalTurnUsage)
+          : getTextModelCost(modelInfo, finalInputTokens, finalOutputTokens);
         creditsUsed = usdToCredits(costInUsd); // markup applied here
       } else if (!modelInfo) {
         // Model not found - log warning but don't fail analytics

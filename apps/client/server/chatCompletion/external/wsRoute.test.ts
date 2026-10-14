@@ -3,6 +3,9 @@ import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
 import { checkRateLimit } from '@server/cli/auth';
+import { executeCompletion } from '@bike4mind/services/cliCompletions';
+import { Connection } from '@bike4mind/database/social';
+import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
@@ -48,10 +51,11 @@ import { registerWsCompletionRoutes } from './wsRoute';
 
 let server: Server;
 let baseUrl: string;
+const tracked: Promise<void>[] = [];
 
 beforeAll(async () => {
   const app = express();
-  registerWsCompletionRoutes(app, () => {});
+  registerWsCompletionRoutes(app, p => void tracked.push(p));
   await new Promise<void>(resolve => {
     server = app.listen(0, () => {
       baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -96,5 +100,26 @@ describe('JWT rate limiting', () => {
   it('answers 401 when the limiter rejects', async () => {
     vi.mocked(checkRateLimit).mockRejectedValue(new Error('Rate limit exceeded.'));
     expect((await postAs({ 'user-agent': 'b4m-cli/1.0.0' })).status).toBe(401);
+  });
+});
+
+describe('completion analytics', () => {
+  it('passes the per-request usage from the final frame, so each request is priced on its own tier', async () => {
+    const turnUsage = [
+      { inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 150_000 },
+      { inputTokens: 2000, outputTokens: 30, cacheReadInputTokens: 151_000 },
+    ];
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'c1' }] as never);
+    vi.mocked(executeCompletion).mockImplementationOnce(async ({ onChunk }) => {
+      await onChunk(['partial'], { inputTokens: 1000, outputTokens: 20, turnUsage: turnUsage.slice(0, 1) });
+      await onChunk(['done'], { inputTokens: 3000, outputTokens: 50, turnUsage });
+    });
+
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+
+    expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'success', finalInputTokens: 3000, finalTurnUsage: turnUsage })
+    );
   });
 });
