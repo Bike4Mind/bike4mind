@@ -59,6 +59,33 @@ describe('classifyToolCallError', () => {
 });
 
 describe('buildToolCallingScorecard', () => {
+  it('does not count a retry after a failed call as a repeat', () => {
+    const card = buildToolCallingScorecard([
+      {
+        offeredTools: ['web_fetch'],
+        functionCalls: [failed('web_fetch', 'Error processing web_fetch tool: timed out'), ok('web_fetch', {})],
+      },
+    ]);
+
+    expect(card.tools[0].repeatedCalls).toBe(0);
+    expect(card.wasted).toMatchObject({ count: 1, total: 2 });
+  });
+
+  it('does not count identical failed calls as repeats', () => {
+    const card = buildToolCallingScorecard([
+      {
+        offeredTools: ['web_fetch'],
+        functionCalls: [
+          failed('web_fetch', 'Error processing web_fetch tool: timed out'),
+          failed('web_fetch', 'Error processing web_fetch tool: timed out'),
+        ],
+      },
+    ]);
+
+    expect(card.tools[0].repeatedCalls).toBe(0);
+    expect(card.wasted.count).toBe(2);
+  });
+
   it('scores success, repeats, latency and offered-but-uncalled per tool', () => {
     const turns: ToolCallingTurn[] = [
       {

@@ -43,7 +43,7 @@ export type ToolScore = {
   /** Successes over calls with a recorded outcome; `unrecorded` calls are left out. */
   success: ToolCallingRate;
   errorClasses: Partial<Record<ToolCallErrorClass, number>>;
-  /** Calls repeating an earlier call in the same turn with the same arguments. */
+  /** Calls repeating an earlier successful call in the same turn with the same arguments. */
   repeatedCalls: number;
   /** Per-call wall time, ms. */
   latencyMs: ToolCallingDistribution;
@@ -171,12 +171,12 @@ function tallyCalls(calls: readonly FunctionCall[], tallyFor: (name: string) => 
     if (!call.name) continue;
     const tally = tallyFor(call.name);
     const errorClass = classifyToolCallError(call);
-    // The adapters record malformed arguments as `{}`, so a garbled call neither repeats nor seeds a
-    // key; otherwise the model's corrected zero-argument retry would read as a repeat.
+    // Only a success seeds a key: re-issuing a call that failed or went unrecorded is a retry, not a
+    // repeat, and is already counted as wasted through its own error class. Malformed calls never repeat.
     const key = `${call.name}\u0000${canonicalJson(call.parameters ?? {})}`;
     const malformed = errorClass === 'malformed_arguments';
     const repeated = !malformed && seen.has(key);
-    if (!malformed) seen.add(key);
+    if (call.success === true) seen.add(key);
     if (repeated) tally.repeatedCalls += 1;
 
     if (errorClass) tally.errorClasses[errorClass] = (tally.errorClasses[errorClass] ?? 0) + 1;
