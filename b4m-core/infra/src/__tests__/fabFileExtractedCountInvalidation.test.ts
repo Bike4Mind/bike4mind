@@ -83,9 +83,16 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
     ...REWRITE_SITES.filter(rel => rel !== 'b4m-core/services/src/fabFileService/edit.ts'),
     'b4m-core/services/src/researchTaskService/utils.ts',
   ])('%s charges its rewrite through the storage accounting helper', rel => {
-    const source = read(rel);
-    expect(source).toContain('assertRewriteFits(');
-    expect(source).toContain('commitContentRewrite(');
+    // Comments stripped (keeping `://` in strings) so a commented-out call cannot satisfy this.
+    const source = read(rel).replace(/\/\*[\s\S]*?\*\/|(^|[^:])\/\/.*$/gm, '$1');
+    const branches = source.split('commitContentRewrite(');
+    expect(branches.length).toBeGreaterThan(1);
+    // Every commit is preceded, since the previous one, by a quota check and then the upload.
+    for (const branch of branches.slice(0, -1)) {
+      const check = branch.indexOf('assertRewriteFits(');
+      expect(check).toBeGreaterThanOrEqual(0);
+      expect(branch.lastIndexOf('.upload(')).toBeGreaterThan(check);
+    }
     expect(source).not.toMatch(/FabFile\.(updateOne|findOneAndUpdate)\(/);
   });
 

@@ -15,6 +15,7 @@ import {
   IResearchData,
   IResearchTaskScrape,
   IUserDocument,
+  NotFoundError,
   ResearchTaskType,
   ResearchTaskExecutionType,
   ResearchTaskStatus,
@@ -306,6 +307,26 @@ describe('findExistingResearchData utils', () => {
         expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Storage limit'));
         expect(mockStorage.generateSignedUrl).toHaveBeenCalledWith('test/path/file.md', expect.any(Number), 'get');
         expect(mockFabFilesRepo.update).toHaveBeenCalledWith(expect.objectContaining({ id: file.id }));
+      });
+
+      it('fails the re-crawl, without uploading, when the file owner is gone', async () => {
+        const file = { ...mockFabFile, userId: 'deleted-owner', fileSize: 10 };
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockFabFilesRepo.findById.mockResolvedValue(file);
+        mockUsersRepo.findById.mockResolvedValue(null);
+
+        await expect(
+          findOrUpdateExistingResearchData(
+            'https://example.com',
+            'x'.repeat(100),
+            'text/markdown',
+            mockResearchTaskWithOrganization,
+            mockUser,
+            adapters,
+            mockLogger
+          )
+        ).rejects.toThrow(NotFoundError);
+        expect(mockStorage.upload).not.toHaveBeenCalled();
       });
     });
 
