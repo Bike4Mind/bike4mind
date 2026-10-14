@@ -378,4 +378,58 @@ describe('BaseBedrockBackend per-call cache and turn usage', () => {
       { inputTokens: 200, outputTokens: 30, cacheReadInputTokens: 5300 },
     ]);
   });
+
+  it('accumulates cache and per-call usage across a non-streaming tool round-trip', async () => {
+    const backend = new TestBedrockBackend();
+    const responses = [
+      {
+        choices: [
+          {
+            index: 0,
+            status: ChoiceStatus.END,
+            statusEndReason: ChoiceEndReason.TOOL_USE,
+            tool: { name: 'add', id: 'tool_t1', parameters: JSON.stringify({ a: 1, b: 1 }) },
+            usage: {
+              input_tokens: 100,
+              output_tokens: 20,
+              cache_read_input_tokens: 5000,
+              cache_creation_input_tokens: 300,
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            index: 0,
+            status: ChoiceStatus.END,
+            statusEndReason: ChoiceEndReason.STOP,
+            chunkText: 'Done.',
+            usage: { input_tokens: 200, output_tokens: 30, cache_read_input_tokens: 5300 },
+          },
+        ],
+      },
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => ({ body: new TextEncoder().encode(JSON.stringify(responses.shift())) }),
+    };
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      TEST_MODEL,
+      [{ role: 'user', content: 'Add.' }],
+      { stream: false, tools: [ADD_TOOL], executeTools: true } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const lastCb = finalCbInfo(calls);
+    expect(lastCb!.inputTokens).toBe(300);
+    expect(lastCb!.cacheReadInputTokens).toBe(10_300);
+    expect(lastCb!.cacheCreationInputTokens).toBe(300);
+    expect(lastCb!.turnUsage).toEqual([
+      { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 5000, cacheCreationInputTokens: 300 },
+      { inputTokens: 200, outputTokens: 30, cacheReadInputTokens: 5300 },
+    ]);
+  });
 });

@@ -149,6 +149,51 @@ describe('AnthropicBackend - stream ending before message_stop', () => {
     ]);
   });
 
+  it('forwards the prompt usage from message_start when Stop lands before message_delta', async () => {
+    // The realistic Stop: message_delta is the stream's last event, so it never arrives.
+    const backend = buildBackend([
+      [
+        {
+          type: 'message_start',
+          message: {
+            usage: {
+              input_tokens: 10,
+              output_tokens: 1,
+              cache_read_input_tokens: 5000,
+              cache_creation_input_tokens: 200,
+            },
+          },
+        },
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Partial' } },
+      ],
+    ]);
+    const { infos, cb: record } = collect();
+    const controller = new AbortController();
+    const cb: typeof record = async (chunk, info) => {
+      await record(chunk, info);
+      if (chunk.includes('Partial')) controller.abort();
+    };
+
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'hi' }],
+      { stream: true, abortSignal: controller.signal },
+      cb
+    );
+
+    const last = infos.at(-1)!;
+    expect(last.stopReason).toBe('aborted');
+    expect(last.inputTokens).toBe(10);
+    // message_start's output count is a placeholder, so it is not reported as the reply's output.
+    expect(last.outputTokens).toBe(0);
+    expect(last.cacheReadInputTokens).toBe(5000);
+    expect(last.cacheCreationInputTokens).toBe(200);
+    expect(last.turnUsage).toEqual([
+      { inputTokens: 10, outputTokens: 0, cacheReadInputTokens: 5000, cacheCreationInputTokens: 200 },
+    ]);
+  });
+
   it('does not execute a tool call collected from a stream that ended early', async () => {
     let toolRan = false;
     const backend = buildBackend([

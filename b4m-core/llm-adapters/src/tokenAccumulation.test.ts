@@ -448,4 +448,19 @@ describe.each([anthropicSpec, openaiSpec])('$name per-request usage', spec => {
     expect(lastCb!.inputTokens).toBe(450);
     expect(lastCb!.outputTokens).toBe(41);
   });
+
+  it('reports the call as a turn when tool calls are passed through (executeTools: false)', async () => {
+    const { backend, setMockSequence } = spec.build();
+    setMockSequence([spec.turnWithToolCall('add', 'tool_t1', { a: 1, b: 1 }, { input: 80, output: 15 })]);
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      spec.model,
+      [{ role: 'user', content: 'Add.' }],
+      { stream: true, tools: [ADD_TOOL], executeTools: false },
+      cb
+    );
+
+    expect(finalCbInfo(calls)!.turnUsage).toEqual([{ inputTokens: 80, outputTokens: 15 }]);
+  });
 });
