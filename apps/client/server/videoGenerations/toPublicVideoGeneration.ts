@@ -1,6 +1,7 @@
 import {
   toPublicVideoJobErrorCode,
   type IGenerationJobDocument,
+  type IGenerationJobDocumentOf,
   type VideoGeneration,
   type VideoJobPublicErrorCode,
 } from '@bike4mind/common';
@@ -30,7 +31,7 @@ const toPublicError = (error: IGenerationJobDocument['error']): VideoGeneration[
 
 /** The one job -> public resource mapping, shared by every video-generations endpoint. */
 export async function toPublicVideoGeneration(
-  job: IGenerationJobDocument,
+  job: IGenerationJobDocumentOf<'video'>,
   deps: JobMapperDeps
 ): Promise<VideoGeneration> {
   const { request, output } = job.payload;
