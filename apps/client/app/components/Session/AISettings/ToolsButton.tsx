@@ -1,11 +1,12 @@
 import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { Box, Dropdown, IconButton, Menu, MenuButton, Modal, ModalDialog, Typography } from '@mui/joy';
-import { Construction as ConstructionIcon } from '@mui/icons-material';
+import ConstructionIcon from '@mui/icons-material/ConstructionOutlined';
 import { B4MLLMTools } from '@bike4mind/common';
 import ToolsSection from './ToolsSection';
 import ToolIndicators from '../../common/ToolIndicators';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { toolbarIconSx } from '@client/app/components/Session/toolbarIconSx';
 
 const fixedHeight = {
   height: '32px !important',
@@ -74,6 +75,9 @@ const ToolsButton: FC<ToolsButtonProps> = ({
     return info ? !!info.supportsTools : true;
   }, [model, modelInfoRepo]);
 
+  // Mirrors ToolIndicators: the "+N" badge is its last item whenever it renders.
+  const showsCountBadge = toolMode !== 'fast' && modelSupportsTools && otherActiveToolsCount > 0;
+
   const toolsSectionProps = {
     tools,
     setTools,
@@ -106,11 +110,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
           }}
         >
           <ConstructionIcon
-            sx={{
-              color: 'text.primary',
-              width: '14px',
-              height: '14px',
-            }}
+            sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]}
           />
         </IconButton>
         <Modal open={open} onClose={() => !isDeepResearchModalOpen && setOpen(false)}>
@@ -171,16 +171,15 @@ const ToolsButton: FC<ToolsButtonProps> = ({
           borderRadius: '6px',
           ...fixedHeight,
           px: 1,
+          // When the count badge ends the button, give it the same 6px to the edge as above and
+          // below it (5px padding + the 1px border).
+          ...(showsCountBadge && { pr: '5px' }),
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <ConstructionIcon
-              sx={{
-                color: 'text.primary',
-                width: '14px',
-                height: '14px',
-              }}
+              sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]}
             />
             {!isTablet && (
               <Typography

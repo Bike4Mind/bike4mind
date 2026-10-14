@@ -4,6 +4,7 @@ import ScienceIcon from '@mui/icons-material/ScienceOutlined';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { isImageModel } from '@client/app/utils/commands';
+import { orange } from '@client/app/utils/themes/colors';
 
 const ResearchModeIndicator: FC = () => {
   const researchMode = useLLM(state => state.researchMode);
@@ -43,10 +44,17 @@ const ResearchModeIndicator: FC = () => {
           whiteSpace: 'nowrap',
           fontSize: '12px',
           fontWeight: 400,
-          ...(!noModels && {
-            '--variant-plainColor': 'var(--joy-palette-text-tertiary)',
-            '--variant-plainHoverColor': 'var(--joy-palette-text-secondary)',
-          }),
+          ...(noModels
+            ? {
+                // The orange the model cost indicator uses (metricIconColor), not the paler
+                // warning.plainColor.
+                '--variant-plainColor': orange[450],
+                '--variant-plainHoverColor': orange[450],
+              }
+            : {
+                '--variant-plainColor': 'var(--joy-palette-text-tertiary)',
+                '--variant-plainHoverColor': 'var(--joy-palette-text-secondary)',
+              }),
         }}
       >
         {noModels ? 'Research mode' : `Research mode (${enabledCount})`}

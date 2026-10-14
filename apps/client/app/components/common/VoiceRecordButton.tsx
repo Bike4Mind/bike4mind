@@ -13,11 +13,12 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import { Box, IconButton, Tooltip, useTheme } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
-import MicTwoToneIcon from '@mui/icons-material/MicTwoTone';
+import MicIcon from '@mui/icons-material/MicNoneOutlined';
 import { api } from '@client/app/contexts/ApiContext';
 import { useAudioAnalyzer } from '@client/app/hooks/useAudioAnalyzer';
 import { grayAlpha } from '@client/app/utils/themes/colors';
 import { AnimatedText, VoiceStatusPill, fadeIn } from './VoiceStatusPill';
+import { toolbarIconSx } from '@client/app/components/Session/toolbarIconSx';
 
 /** The shared status pill fed from the dictation's own microphone stream. */
 const RecordingPill = forwardRef<HTMLDivElement, { stream: MediaStream | null; onCancel: () => void }>(
@@ -266,7 +267,7 @@ export const VoiceRecordButton = forwardRef<VoiceRecordButtonRef, IProps>(
           data-testid="voice-record-btn"
           disabled={disabled}
         >
-          <MicTwoToneIcon sx={{ fontSize: '18px' }} />
+          <MicIcon sx={[{ fontSize: '18px' }, toolbarIconSx()]} />
         </IconButton>
       </Tooltip>
     );

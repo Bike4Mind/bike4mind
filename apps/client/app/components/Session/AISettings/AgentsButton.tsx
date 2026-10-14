@@ -1,9 +1,10 @@
 import { FC, useRef, useState } from 'react';
 import { Box, Dropdown, Menu, MenuButton, Modal, ModalDialog, Typography } from '@mui/joy';
-import { SmartToy as SmartToyIcon } from '@mui/icons-material';
+import SmartToyIcon from '@mui/icons-material/SmartToyOutlined';
 import AgentsSection from './AgentsSection';
 import AgentsCountBadge from '../../common/AgentsCountBadge';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
+import { toolbarIconSx } from '@client/app/components/Session/toolbarIconSx';
 
 const fixedHeight = {
   height: '32px !important',
@@ -66,13 +67,7 @@ const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsC
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <SmartToyIcon
-              sx={{
-                color: 'text.primary',
-                width: '14px',
-                height: '14px',
-              }}
-            />
+            <SmartToyIcon sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]} />
             {!isTablet && (
               <Typography
                 level="body-sm"

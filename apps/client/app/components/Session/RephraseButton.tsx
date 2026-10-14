@@ -4,6 +4,7 @@ import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import { useTranslation } from 'react-i18next';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
+import { toolbarIconSx } from '@client/app/components/Session/toolbarIconSx';
 
 interface RephraseButtonProps {
   currentText: string;
@@ -88,7 +89,11 @@ export const RephraseButton: React.FC<RephraseButtonProps> = ({
           borderRadius: '6px',
         }}
       >
-        {isLoading ? <CircularProgress size="sm" /> : <AutoAwesomeOutlinedIcon sx={{ fontSize: 16 }} />}
+        {isLoading ? (
+          <CircularProgress size="sm" />
+        ) : (
+          <AutoAwesomeOutlinedIcon sx={[{ fontSize: 16 }, toolbarIconSx()]} />
+        )}
       </IconButton>
     </Tooltip>
   );

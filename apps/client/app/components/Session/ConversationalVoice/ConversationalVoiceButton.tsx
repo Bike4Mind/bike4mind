@@ -17,6 +17,7 @@ import {
   useConversationalVoiceStore,
   type Phase,
 } from './useConversationalVoice';
+import { toolbarIconSx } from '@client/app/components/Session/toolbarIconSx';
 
 // Same pricing POST /api/voice/v2/sessions reserves against and /end bills pro rata per second,
 // so the hint cannot drift from what a call costs.
@@ -126,7 +127,7 @@ export const VoiceCallControls: React.FC<VoiceCallControlsProps> = ({
           ) : isActive ? (
             <CallEnd />
           ) : (
-            <GraphicEq />
+            <GraphicEq sx={toolbarIconSx()} />
           )}
           {!isActive && (
             <Box component="span" id={costHintId} sx={visuallyHidden}>

@@ -173,7 +173,7 @@ const ToolIndicators = ({
         count={otherActiveToolsCount}
         color={activeColor}
         margin={iconMargins.counter || '0px 0px 0 0px'}
-        sx={{ width: 'auto', minWidth: 'auto', px: 1 }}
+        sx={{ width: 'auto', minWidth: 'auto', px: '6px' }}
       />
     );
   }

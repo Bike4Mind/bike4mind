@@ -65,6 +65,7 @@ import { useComposerMenuOpen } from '@client/app/stores/useComposerMenuOpen';
 
 import { ATTACH_SCOPE_MODES, type AttachScopeMode } from '@bike4mind/common';
 import { brandAlpha, grayAlpha } from '@client/app/utils/themes/colors';
+import { toolbarIconSx } from '@client/app/components/Session/toolbarIconSx';
 
 ensureGoogleDrivePickerStyles();
 
@@ -530,7 +531,7 @@ const AttachFileButton = ({
           onClick={() => (isOpen ? closeMenu() : setIsOpen(true))}
           sx={{ zIndex: 100 }}
         >
-          <AddIcon sx={{ fontSize: isMobile ? 16 : 20 }} />
+          <AddIcon sx={[{ fontSize: isMobile ? 16 : 20 }, toolbarIconSx()]} />
         </IconButton>
       </Tooltip>
 

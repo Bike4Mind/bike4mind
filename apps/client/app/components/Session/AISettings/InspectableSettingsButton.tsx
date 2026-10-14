@@ -1,6 +1,7 @@
-import { Settings as SettingsIcon } from '@mui/icons-material';
+import SettingsIcon from '@mui/icons-material/SettingsOutlined';
 import { IconButton, Tooltip, Typography } from '@mui/joy';
 import { FC } from 'react';
+import { toolbarIconSx } from '@client/app/components/Session/toolbarIconSx';
 
 interface InspectableSettingsButtonProps {
   onClick: () => void;
@@ -48,11 +49,10 @@ const InspectableSettingsButton: FC<InspectableSettingsButtonProps> = ({
         }}
       >
         <SettingsIcon
-          sx={{
-            fontSize: '14px',
-            color: 'text.primary',
-            ml: { xs: 0, md: showModelName ? 0.5 : 0 },
-          }}
+          sx={[
+            { fontSize: '16px', ml: { xs: 0, md: showModelName ? 0.5 : 0 } },
+            toolbarIconSx('var(--joy-palette-text-primary)'),
+          ]}
         />
 
         {showModelName && (
