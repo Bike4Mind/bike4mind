@@ -415,9 +415,9 @@ export function useSendMessage({
       options?.onRefused?.();
       return;
     }
-    // Normalized and capped here, the boundary every caller passes through,
-    // and before any session creation or host hand-off so an over-cap value never half-sends. Spread into each
-    // route's payload only when set, so a send without it is unchanged.
+    // Normalized and capped here, the boundary every caller passes through, and before any
+    // session creation or host hand-off, so an over-cap value never half-sends.
+    // Spread into each route's payload only when set, so a send without it is unchanged.
     const resolvedSystemContext = resolveSystemContext(options?.systemContext);
     if (resolvedSystemContext.kind === 'tooLong') {
       console.error(
