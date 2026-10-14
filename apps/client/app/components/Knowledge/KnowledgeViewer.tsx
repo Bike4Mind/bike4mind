@@ -32,7 +32,7 @@ import {
   Option,
 } from '@mui/joy';
 import dynamic from 'next/dynamic';
-import { IFabFileDocument, isAudioMimeType, isVideoMimeType, ISessionDocument } from '@bike4mind/common';
+import { IFabFileDocument, isMediaOnlyMimeType, ISessionDocument } from '@bike4mind/common';
 import MediaPlayer from '@client/app/components/Media/MediaPlayer';
 import GenerationDetails from '@client/app/components/Media/GenerationDetails';
 import TextViewer from './TextViewer';
@@ -2383,11 +2383,7 @@ export const FileContent = ({
       // `content`; fetching it here would re-download the file and extract its text on the
       // main thread through the lazily-loaded unpdf (and its ~1.6 MB pdf.js bundle) for nothing.
       // Audio and video play straight off the URL too; their bytes are never text.
-      if (
-        file.mimeType === SupportedFabFileMimeTypes.PDF ||
-        isAudioMimeType(file.mimeType) ||
-        isVideoMimeType(file.mimeType)
-      ) {
+      if (file.mimeType === SupportedFabFileMimeTypes.PDF || isMediaOnlyMimeType(file.mimeType)) {
         setContent('');
         setIsLoading(false);
         return;
@@ -2432,7 +2428,7 @@ export const FileContent = ({
   }, [file?.id, file?.mimeType, file?.fileUrlExpireAt, file?.fileUrl, signedUrl, bustCache]); // specific file properties, not the whole file object
 
   // The player re-signs its own URL, so it does not wait for the signed-URL grace period below.
-  if (file && !fetching && (isAudioMimeType(file.mimeType) || isVideoMimeType(file.mimeType))) {
+  if (file && !fetching && isMediaOnlyMimeType(file.mimeType)) {
     return (
       <Stack spacing={2} sx={{ p: 2, height: '100%', overflow: 'auto' }}>
         <MediaPlayer file={{ ...file, fileUrl: signedUrl || file.fileUrl }} />

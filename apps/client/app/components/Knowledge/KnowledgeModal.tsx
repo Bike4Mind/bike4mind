@@ -12,8 +12,7 @@ import {
 import {
   IFabFileDocument,
   IFabFileListItemDocument,
-  isAudioMimeType,
-  isVideoMimeType,
+  isMediaOnlyMimeType,
   ISystemFileEntry,
   KnowledgeType,
 } from '@bike4mind/common';
@@ -55,9 +54,6 @@ import CodeIcon from '@mui/icons-material/Code';
 import { ContextHelpButton } from '@client/app/components/help';
 import MediaPlayer from '@client/app/components/Media/MediaPlayer';
 import GenerationDetails from '@client/app/components/Media/GenerationDetails';
-
-const isMediaMimeType = (mimeType: string | undefined): boolean =>
-  isAudioMimeType(mimeType) || isVideoMimeType(mimeType);
 
 // Dynamic imports to avoid SSR issues
 const MDEditor = dynamic(() => import('@uiw/react-md-editor'), { ssr: false });
@@ -188,7 +184,7 @@ const KnowledgeModal: React.FC = () => {
 
       if (fullFabFile) {
         // Audio and video have no text to edit; fetching one would download the whole file for nothing.
-        const content = isMediaMimeType(fullFabFile.mimeType)
+        const content = isMediaOnlyMimeType(fullFabFile.mimeType)
           ? ''
           : await getContentFromFabfile({
               fileUrl: fullFabFile.fileUrl,
@@ -422,7 +418,7 @@ const KnowledgeModal: React.FC = () => {
   );
 
   const isPdf = useMemo(() => fabFile?.mimeType === 'application/pdf', [fabFile?.mimeType]);
-  const isMedia = isMediaMimeType(fabFile?.mimeType);
+  const isMedia = isMediaOnlyMimeType(fabFile?.mimeType);
   // PDF and media files are shown, not edited: no text editor, format picker or system-instruction controls.
   const isNonText = isPdf || isMedia;
   const isDirty = contentDirty || titleDirty || systemDirty;
@@ -459,7 +455,7 @@ const KnowledgeModal: React.FC = () => {
         >
           <Typography level="h4" sx={{ flexGrow: 1, mr: 2 }}>
             {fabFile?.fileName
-              ? viewOnly
+              ? viewOnly || isNonText
                 ? `Viewing: ${fabFile.fileName}`
                 : `Editing: ${fabFile.fileName}`
               : 'Create New Knowledge'}

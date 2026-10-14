@@ -154,7 +154,9 @@ const FileBrowserContent = () => {
 
   const availableOptions = fileTags?.filter(tag => !filter.filters?.tags?.includes(tag.name)) || [];
 
-  const hasFilters = Boolean(filter.search || filter.filters?.tags?.length || filter.filters?.type);
+  const hasFilters = Boolean(
+    filter.search || filter.filters?.tags?.length || filter.filters?.type || filter.filters?.generated
+  );
 
   const allFiles = data?.data || [];
   const totalFiles = data?.total || 0;
@@ -409,7 +411,8 @@ const FileBrowserContent = () => {
     setSelectedIds(new Set<string>());
 
     // Auto-switch to list view when filters are applied from Home or Tags
-    const hasActiveFilters = filter.search || filter.filters?.tags?.length || filter.filters?.type;
+    const hasActiveFilters =
+      filter.search || filter.filters?.tags?.length || filter.filters?.type || filter.filters?.generated;
     if (hasActiveFilters && (viewAction.viewMode === 'home' || viewAction.viewMode === 'tags')) {
       setViewActions({ ...viewAction, viewMode: 'list' });
     }
@@ -605,8 +608,13 @@ const FileBrowserContent = () => {
               filter.filters?.shared === true ? 'shared' : filter.filters?.curated === true ? 'curated' : 'all'
             }
             onFileFilterChange={handleFileFilterChange}
-            selectedTags={filter.filters?.tags}
-            onTagsChange={tags => handleFilterChange({ ...filter, filters: { ...(filter.filters || {}), tags } })}
+            generatedOnly={filter.filters?.generated === true}
+            onGeneratedChange={generated =>
+              handleFilterChange({
+                ...filter,
+                filters: { ...(filter.filters || {}), generated: generated || undefined },
+              })
+            }
             fileTypeValue={filter.filters?.type || 'all'}
             onFileTypeChange={type => {
               handleFilterChange({

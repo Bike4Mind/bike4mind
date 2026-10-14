@@ -35,8 +35,8 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
     });
   };
 
-  const handleTagsChange = (tags: string[]) => {
-    onChange?.({ ...value, filters: { ...(value?.filters || {}), tags } });
+  const handleGeneratedChange = (generated: boolean) => {
+    onChange?.({ ...value, filters: { ...(value?.filters || {}), generated: generated || undefined } });
   };
 
   return (
@@ -119,7 +119,7 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
           </Option>
         ))}
       </Select>
-      <GeneratedFilterToggle tags={value?.filters?.tags} onTagsChange={handleTagsChange} />
+      <GeneratedFilterToggle active={value?.filters?.generated === true} onChange={handleGeneratedChange} />
     </Box>
   );
 };

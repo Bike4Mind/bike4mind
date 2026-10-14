@@ -3,6 +3,7 @@ import {
   IFileTag,
   isAudioMimeType,
   isImageServeable,
+  isMediaOnlyMimeType,
   isVideoMimeType,
   KnowledgeType,
   SupportedFabFileMimeTypes,
@@ -54,7 +55,7 @@ const ImageThumbnail: FC<{ url: string; fileName: string; size: number }> = ({ u
 };
 
 const isPlayableMedia = (file: IFabFileDocument): boolean =>
-  (isAudioMimeType(file.mimeType) || isVideoMimeType(file.mimeType)) && !!(file.fileUrl || file.presignedUrl);
+  isMediaOnlyMimeType(file.mimeType) && !!(file.fileUrl || file.presignedUrl);
 
 /** Inline player for audio and video rows. Audio loads nothing until played, so a long list stays cheap; video
  *  loads its metadata for the poster frame. Download stays in the row's actions menu. */

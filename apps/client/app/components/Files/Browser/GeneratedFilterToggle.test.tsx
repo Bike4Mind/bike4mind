@@ -4,53 +4,49 @@ import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import FileBrowserFilter from './Filter';
-import GeneratedFilterToggle, { toggleGeneratedTag } from './GeneratedFilterToggle';
+import GeneratedFilterToggle from './GeneratedFilterToggle';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-describe('toggleGeneratedTag', () => {
-  it('adds the generated tag next to the selected ones', () => {
-    expect(toggleGeneratedTag(['work'])).toEqual(['work', 'generated']);
-  });
-
-  it('removes it in any case, keeping the other tags', () => {
-    expect(toggleGeneratedTag(['work', 'Generated'])).toEqual(['work']);
-  });
-});
-
 describe('GeneratedFilterToggle', () => {
-  it('is pressed while the generated tag is selected', () => {
-    render(<GeneratedFilterToggle tags={['generated']} onTagsChange={vi.fn()} />, { wrapper: Wrapper });
-    expect(screen.getByTestId('file-browser-generated-filter-btn').getAttribute('aria-pressed')).toBe('true');
+  it('is pressed while active and turns off on click', () => {
+    const onChange = vi.fn();
+    render(<GeneratedFilterToggle active onChange={onChange} />, { wrapper: Wrapper });
+    const button = screen.getByTestId('file-browser-generated-filter-btn');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(button);
+    expect(onChange).toHaveBeenCalledWith(false);
   });
 
   it('works icon-only in the mobile row', () => {
-    const onTagsChange = vi.fn();
-    render(<GeneratedFilterToggle tags={undefined} onTagsChange={onTagsChange} compact />, { wrapper: Wrapper });
+    const onChange = vi.fn();
+    render(<GeneratedFilterToggle active={false} onChange={onChange} compact />, { wrapper: Wrapper });
     const button = screen.getByRole('button', { name: 'Generated' });
     expect(button.getAttribute('aria-pressed')).toBe('false');
     fireEvent.click(button);
-    expect(onTagsChange).toHaveBeenCalledWith(['generated']);
+    expect(onChange).toHaveBeenCalledWith(true);
   });
 });
 
 describe('FileBrowserFilter generated quick filter', () => {
-  it('selects the generated tag, keeping the type filter', () => {
+  it('sets the generated filter, keeping the type and tag filters', () => {
     const onChange = vi.fn();
-    render(<FileBrowserFilter value={{ filters: { type: 'audio' } }} onChange={onChange} />, { wrapper: Wrapper });
-    fireEvent.click(screen.getByTestId('file-browser-generated-filter-btn'));
-    expect(onChange).toHaveBeenCalledWith({ filters: { type: 'audio', tags: ['generated'] } });
-  });
-
-  it('clears only the generated tag', () => {
-    const onChange = vi.fn();
-    render(<FileBrowserFilter value={{ filters: { tags: ['work', 'generated'] } }} onChange={onChange} />, {
+    render(<FileBrowserFilter value={{ filters: { type: 'audio', tags: ['work'] } }} onChange={onChange} />, {
       wrapper: Wrapper,
     });
     fireEvent.click(screen.getByTestId('file-browser-generated-filter-btn'));
-    expect(onChange).toHaveBeenCalledWith({ filters: { tags: ['work'] } });
+    expect(onChange).toHaveBeenCalledWith({ filters: { type: 'audio', tags: ['work'], generated: true } });
+  });
+
+  it('clears the generated filter without touching the tags', () => {
+    const onChange = vi.fn();
+    render(<FileBrowserFilter value={{ filters: { tags: ['work'], generated: true } }} onChange={onChange} />, {
+      wrapper: Wrapper,
+    });
+    fireEvent.click(screen.getByTestId('file-browser-generated-filter-btn'));
+    expect(onChange).toHaveBeenCalledWith({ filters: { tags: ['work'], generated: undefined } });
   });
 });

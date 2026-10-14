@@ -23,9 +23,9 @@ interface MobileSearchFilterProps {
   // File type filter props
   fileTypeValue?: string;
   onFileTypeChange?: (type: string) => void;
-  // Generated quick filter (a shortcut for the `generated` tag)
-  selectedTags?: string[];
-  onTagsChange?: (tags: string[]) => void;
+  // Generated quick filter
+  generatedOnly?: boolean;
+  onGeneratedChange?: (generatedOnly: boolean) => void;
   // Upload props
   onUploadFiles?: (files: File[]) => void;
   onAddFromUrl?: () => void;
@@ -44,8 +44,8 @@ export const MobileSearchFilter: React.FC<MobileSearchFilterProps> = ({
   onFileFilterChange,
   fileTypeValue = 'all',
   onFileTypeChange,
-  selectedTags,
-  onTagsChange,
+  generatedOnly = false,
+  onGeneratedChange,
   onUploadFiles,
   onAddFromUrl,
   onCreateKnowledge,
@@ -394,7 +394,7 @@ export const MobileSearchFilter: React.FC<MobileSearchFilterProps> = ({
           </Select>
         )}
 
-        {onTagsChange && <GeneratedFilterToggle tags={selectedTags} onTagsChange={onTagsChange} compact />}
+        {onGeneratedChange && <GeneratedFilterToggle active={generatedOnly} onChange={onGeneratedChange} compact />}
 
         {/* Upload Select */}
         {(onUploadFiles || onAddFromUrl || onCreateKnowledge || onCreateDataLake) && (

@@ -19,131 +19,192 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const HOUR_MS = 60 * 60 * 1000;
+const OLD_URL = 'https://files.example.test/song.mp3?sig=old';
+const NEW_URL = 'https://files.example.test/song.mp3?sig=new';
+const MINUTE_MS = 60 * 1000;
+
 const makeFile = (overrides: Partial<MediaPlayerFile> = {}): MediaPlayerFile => ({
   id: 'file-1',
   fileName: 'song.mp3',
   mimeType: 'audio/mpeg',
-  fileUrl: 'https://files.example.test/song.mp3?sig=old',
-  fileUrlExpireAt: new Date(Date.now() + HOUR_MS),
+  fileUrl: OLD_URL,
+  fileUrlExpireAt: new Date(Date.now() + 60 * MINUTE_MS),
   ...overrides,
 });
 
 const renderPlayer = (file: MediaPlayerFile, props: { hideDownload?: boolean; preload?: 'none' | 'metadata' } = {}) =>
   render(<MediaPlayer file={file} {...props} />, { wrapper: Wrapper });
 
+const audio = () => screen.getByTestId('media-player-audio');
+const srcOf = (element: HTMLElement) => element.getAttribute('src');
+
 describe('MediaPlayer', () => {
   beforeEach(() => {
     getFabFileByIdFromServer.mockReset();
     downloadData.mockReset();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
-  it('renders an audio element for an audio file, with metadata preload by default', () => {
-    renderPlayer(makeFile());
-    const audio = screen.getByTestId('media-player-audio');
-    expect(audio.tagName).toBe('AUDIO');
-    expect(audio.getAttribute('src')).toBe('https://files.example.test/song.mp3?sig=old');
-    expect(audio.getAttribute('preload')).toBe('metadata');
-    expect(screen.queryByTestId('media-player-video')).toBeNull();
-  });
-
-  it('renders a video element for a video file', () => {
-    renderPlayer(makeFile({ fileName: 'clip.mp4', mimeType: 'video/mp4' }));
-    expect(screen.getByTestId('media-player-video').tagName).toBe('VIDEO');
-  });
-
-  it('honours preload none for long lists', () => {
-    renderPlayer(makeFile(), { preload: 'none' });
-    expect(screen.getByTestId('media-player-audio').getAttribute('preload')).toBe('none');
-  });
-
-  it('falls back to the presigned URL when there is no file URL', () => {
-    renderPlayer(makeFile({ fileUrl: undefined, presignedUrl: 'https://files.example.test/p' }));
-    expect(screen.getByTestId('media-player-audio').getAttribute('src')).toBe('https://files.example.test/p');
-    expect(getFabFileByIdFromServer).not.toHaveBeenCalled();
-  });
-
-  it('does not re-sign a URL that is still fresh', () => {
-    renderPlayer(makeFile());
-    expect(getFabFileByIdFromServer).not.toHaveBeenCalled();
-  });
-
-  it('re-signs a URL that expires within five minutes, on mount', async () => {
-    getFabFileByIdFromServer.mockResolvedValue({ fileUrl: 'https://files.example.test/song.mp3?sig=new' });
-    renderPlayer(makeFile({ fileUrlExpireAt: new Date(Date.now() + 60 * 1000) }));
-    await waitFor(() =>
-      expect(screen.getByTestId('media-player-audio').getAttribute('src')).toBe(
-        'https://files.example.test/song.mp3?sig=new'
-      )
-    );
-    expect(getFabFileByIdFromServer).toHaveBeenCalledWith('file-1');
-  });
-
-  it('re-signs once when the element fails to load, then plays the new URL', async () => {
-    getFabFileByIdFromServer.mockResolvedValue({ fileUrl: 'https://files.example.test/song.mp3?sig=new' });
-    renderPlayer(makeFile());
-    fireEvent.error(screen.getByTestId('media-player-audio'));
-    await waitFor(() =>
-      expect(screen.getByTestId('media-player-audio').getAttribute('src')).toBe(
-        'https://files.example.test/song.mp3?sig=new'
-      )
-    );
-    expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(1);
-  });
-
-  it('shows the error state when the re-signed URL fails too, without re-signing again', async () => {
-    getFabFileByIdFromServer.mockResolvedValue({ fileUrl: 'https://files.example.test/song.mp3?sig=new' });
-    renderPlayer(makeFile());
-    fireEvent.error(screen.getByTestId('media-player-audio'));
-    await waitFor(() => expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByTestId('media-player-audio').getAttribute('src')).toContain('sig=new'));
-    fireEvent.error(screen.getByTestId('media-player-audio'));
-    expect(await screen.findByTestId('media-player-error')).toBeTruthy();
-    expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(1);
-  });
-
-  it('re-signs again after a successful load, so a second expiry is recovered too', async () => {
-    getFabFileByIdFromServer
-      .mockResolvedValueOnce({ fileUrl: 'https://files.example.test/a' })
-      .mockResolvedValueOnce({ fileUrl: 'https://files.example.test/b' });
-    renderPlayer(makeFile());
-    fireEvent.error(screen.getByTestId('media-player-audio'));
-    await waitFor(() => expect(screen.getByTestId('media-player-audio').getAttribute('src')).toContain('/a'));
-    fireEvent.loadedMetadata(screen.getByTestId('media-player-audio'));
-    fireEvent.error(screen.getByTestId('media-player-audio'));
-    await waitFor(() => expect(screen.getByTestId('media-player-audio').getAttribute('src')).toContain('/b'));
-    expect(screen.queryByTestId('media-player-error')).toBeNull();
-  });
-
-  it('shows the error state when re-signing fails, and retries on demand', async () => {
-    getFabFileByIdFromServer.mockRejectedValueOnce(new Error('gone'));
-    renderPlayer(makeFile());
-    fireEvent.error(screen.getByTestId('media-player-audio'));
-    expect(await screen.findByTestId('media-player-error')).toBeTruthy();
-
-    getFabFileByIdFromServer.mockResolvedValueOnce({ fileUrl: 'https://files.example.test/back' });
-    fireEvent.click(screen.getByTestId('media-player-retry-btn'));
-    await waitFor(() => expect(screen.getByTestId('media-player-audio').getAttribute('src')).toContain('/back'));
-  });
-
-  it('downloads the current file as a blob under its file name', async () => {
-    const blob = new Blob(['mp3']);
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, blob: async () => blob });
-    vi.stubGlobal('fetch', fetchMock);
-    renderPlayer(makeFile());
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('media-player-download-btn'));
+  describe('rendering', () => {
+    it('renders an audio element for an audio file, with metadata preload by default', () => {
+      renderPlayer(makeFile());
+      expect(audio().tagName).toBe('AUDIO');
+      expect(srcOf(audio())).toBe(OLD_URL);
+      expect(audio().getAttribute('preload')).toBe('metadata');
+      expect(screen.queryByTestId('media-player-video')).toBeNull();
     });
-    expect(fetchMock).toHaveBeenCalledWith('https://files.example.test/song.mp3?sig=old');
-    expect(downloadData).toHaveBeenCalledWith(blob, 'song.mp3');
+
+    it('renders a video element for a video file', () => {
+      renderPlayer(makeFile({ fileName: 'clip.mp4', mimeType: 'video/mp4' }));
+      expect(screen.getByTestId('media-player-video').tagName).toBe('VIDEO');
+    });
+
+    it('honours preload none for long lists', () => {
+      renderPlayer(makeFile(), { preload: 'none' });
+      expect(audio().getAttribute('preload')).toBe('none');
+    });
+
+    it('falls back to the presigned URL when there is no file URL', () => {
+      renderPlayer(makeFile({ fileUrl: undefined, fileUrlExpireAt: undefined, presignedUrl: 'https://p.test/x' }));
+      expect(srcOf(audio())).toBe('https://p.test/x');
+      expect(getFabFileByIdFromServer).not.toHaveBeenCalled();
+    });
+
+    it('starts over for a different file', async () => {
+      getFabFileByIdFromServer.mockRejectedValue(new Error('gone'));
+      const { rerender } = renderPlayer(makeFile());
+      fireEvent.error(audio());
+      expect(await screen.findByTestId('media-player-error')).toBeTruthy();
+
+      rerender(<MediaPlayer file={makeFile({ id: 'file-2', fileUrl: 'https://files.example.test/other.mp3' })} />);
+      expect(srcOf(audio())).toBe('https://files.example.test/other.mp3');
+    });
   });
 
-  it('hides the download button when asked', () => {
-    renderPlayer(makeFile(), { hideDownload: true });
-    expect(screen.queryByTestId('media-player-download-btn')).toBeNull();
+  describe('url re-signing', () => {
+    it('leaves an unexpired URL alone, even close to expiry: the server would return the same one', () => {
+      renderPlayer(makeFile({ fileUrlExpireAt: new Date(Date.now() + MINUTE_MS) }));
+      expect(getFabFileByIdFromServer).not.toHaveBeenCalled();
+      expect(srcOf(audio())).toBe(OLD_URL);
+    });
+
+    it('re-signs an expired URL on mount without handing the expired one to the element', async () => {
+      let resolve: (value: { fileUrl: string }) => void = () => {};
+      getFabFileByIdFromServer.mockReturnValue(new Promise(r => (resolve = r)));
+      renderPlayer(makeFile({ fileUrlExpireAt: new Date(Date.now() - MINUTE_MS) }));
+
+      expect(srcOf(audio())).toBeNull();
+      // An error from the element while the re-sign is in flight must not fail the player.
+      fireEvent.error(audio());
+      await act(async () => resolve({ fileUrl: NEW_URL }));
+
+      expect(srcOf(audio())).toBe(NEW_URL);
+      expect(screen.queryByTestId('media-player-error')).toBeNull();
+      expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(1);
+      expect(getFabFileByIdFromServer).toHaveBeenCalledWith('file-1');
+    });
+
+    it('fetches a URL on mount when the file has none', async () => {
+      getFabFileByIdFromServer.mockResolvedValue({ fileUrl: NEW_URL });
+      renderPlayer(makeFile({ fileUrl: undefined, fileUrlExpireAt: undefined }));
+      await waitFor(() => expect(srcOf(audio())).toBe(NEW_URL));
+    });
+
+    it('re-signs once when the element fails to load, then plays the new URL', async () => {
+      getFabFileByIdFromServer.mockResolvedValue({ fileUrl: NEW_URL });
+      renderPlayer(makeFile());
+      fireEvent.error(audio());
+      await waitFor(() => expect(srcOf(audio())).toBe(NEW_URL));
+      expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails when the re-signed URL fails too, without re-signing again', async () => {
+      getFabFileByIdFromServer.mockResolvedValue({ fileUrl: NEW_URL });
+      renderPlayer(makeFile());
+      fireEvent.error(audio());
+      await waitFor(() => expect(srcOf(audio())).toBe(NEW_URL));
+      fireEvent.error(audio());
+      expect(await screen.findByTestId('media-player-error')).toBeTruthy();
+      expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails at once when the server returns the same URL: the file itself is unplayable', async () => {
+      getFabFileByIdFromServer.mockResolvedValue({ fileUrl: OLD_URL });
+      renderPlayer(makeFile({ mimeType: 'video/x-matroska', fileName: 'clip.mkv' }));
+      fireEvent.error(screen.getByTestId('media-player-video'));
+      expect(await screen.findByTestId('media-player-error')).toBeTruthy();
+    });
+
+    it('fails when the server has no URL for the file', async () => {
+      getFabFileByIdFromServer.mockResolvedValue({ fileUrl: undefined });
+      renderPlayer(makeFile());
+      fireEvent.error(audio());
+      expect(await screen.findByTestId('media-player-error')).toBeTruthy();
+    });
+
+    it('re-signs again after a successful load, so a second expiry is recovered too', async () => {
+      getFabFileByIdFromServer
+        .mockResolvedValueOnce({ fileUrl: 'https://files.example.test/a' })
+        .mockResolvedValueOnce({ fileUrl: 'https://files.example.test/b' });
+      renderPlayer(makeFile());
+      fireEvent.error(audio());
+      await waitFor(() => expect(srcOf(audio())).toContain('/a'));
+      fireEvent.loadedMetadata(audio());
+      fireEvent.error(audio());
+      await waitFor(() => expect(srcOf(audio())).toContain('/b'));
+      expect(screen.queryByTestId('media-player-error')).toBeNull();
+    });
+
+    it('announces the error state and retries on demand', async () => {
+      getFabFileByIdFromServer.mockRejectedValueOnce(new Error('gone'));
+      renderPlayer(makeFile());
+      fireEvent.error(audio());
+      expect((await screen.findByTestId('media-player-error')).getAttribute('role')).toBe('alert');
+
+      getFabFileByIdFromServer.mockResolvedValueOnce({ fileUrl: NEW_URL });
+      fireEvent.click(screen.getByTestId('media-player-retry-btn'));
+      await waitFor(() => expect(srcOf(audio())).toBe(NEW_URL));
+    });
+  });
+
+  describe('download', () => {
+    it('downloads the current file as a blob under its file name', async () => {
+      const blob = new Blob(['mp3']);
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, blob: async () => blob });
+      vi.stubGlobal('fetch', fetchMock);
+      renderPlayer(makeFile());
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('media-player-download-btn'));
+      });
+      expect(fetchMock).toHaveBeenCalledWith(OLD_URL);
+      expect(downloadData).toHaveBeenCalledWith(blob, 'song.mp3');
+    });
+
+    it('re-signs and retries once when the URL expired while the player was open', async () => {
+      const blob = new Blob(['mp3']);
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: false, status: 403 })
+        .mockResolvedValueOnce({ ok: true, blob: async () => blob });
+      vi.stubGlobal('fetch', fetchMock);
+      getFabFileByIdFromServer.mockResolvedValue({ fileUrl: NEW_URL });
+      renderPlayer(makeFile());
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('media-player-download-btn'));
+      });
+      expect(fetchMock).toHaveBeenLastCalledWith(NEW_URL);
+      expect(downloadData).toHaveBeenCalledWith(blob, 'song.mp3');
+      expect(srcOf(audio())).toBe(NEW_URL);
+    });
+
+    it('hides the download button when asked', () => {
+      renderPlayer(makeFile(), { hideDownload: true });
+      expect(screen.queryByTestId('media-player-download-btn')).toBeNull();
+    });
   });
 
   it('keeps clicks on the player from reaching the surrounding row', () => {
@@ -154,7 +215,7 @@ describe('MediaPlayer', () => {
       </div>,
       { wrapper: Wrapper }
     );
-    fireEvent.click(screen.getByTestId('media-player-audio'));
+    fireEvent.click(audio());
     expect(onRowClick).not.toHaveBeenCalled();
   });
 });

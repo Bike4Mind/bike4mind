@@ -4,12 +4,9 @@ import { downloadData } from '@client/app/utils/download';
 import DownloadIcon from '@mui/icons-material/Download';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { Box, Button, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
-import React, { FC, useCallback, useEffect, useRef, useState } from 'react';
+import React, { FC, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-
-// Signed file URLs last an hour; one this close to expiry is re-signed before it is handed to the element.
-const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 export type MediaPlayerFile = Pick<
   IFabFileDocument,
@@ -18,49 +15,64 @@ export type MediaPlayerFile = Pick<
 
 type MediaPlayerProps = {
   file: MediaPlayerFile;
-  /** 'none' keeps a long list from fetching every file up front; video defaults to 'metadata' for its poster frame. */
+  /** 'none' keeps a long list from fetching every file up front; 'metadata' loads the video poster frame. */
   preload?: 'none' | 'metadata';
   /** Hides the download button where the surrounding UI already offers one. */
   hideDownload?: boolean;
 };
 
-const isExpiring = (expireAt: MediaPlayerFile['fileUrlExpireAt']): boolean =>
-  !!expireAt && new Date(expireAt).getTime() - Date.now() < REFRESH_MARGIN_MS;
+type Status = 'ready' | 'refreshing' | 'failed';
+
+const hasExpired = (expireAt: MediaPlayerFile['fileUrlExpireAt']): boolean =>
+  !!expireAt && new Date(expireAt).getTime() <= Date.now();
+
+/**
+ * GET /api/files/:id re-signs the URL only once the stored one has expired (or fails), so asking any earlier
+ * returns the same URL. A same-URL answer therefore means the URL was fine and the file itself is unplayable.
+ */
+const fetchFreshUrl = async (fileId: string, currentUrl: string | undefined): Promise<string> => {
+  const fresh = await getFabFileByIdFromServer(fileId);
+  if (!fresh.fileUrl) throw new Error('the file has no signed url');
+  if (fresh.fileUrl === currentUrl) throw new Error('the signed url is still valid; the file is unplayable');
+  return fresh.fileUrl;
+};
 
 const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDownload = false }) => {
   const { t } = useTranslation();
   const isVideo = isVideoMimeType(file.mimeType);
-  const [src, setSrc] = useState(file.fileUrl || file.presignedUrl);
-  const [failed, setFailed] = useState(false);
+  const initialUrl = file.fileUrl || file.presignedUrl;
+  const needsUrl = !initialUrl || hasExpired(file.fileUrlExpireAt);
+  const [src, setSrc] = useState(initialUrl);
+  // An expired URL is never handed to the element: its instant 403 would race the re-sign below.
+  const [status, setStatus] = useState<Status>(needsUrl ? 'refreshing' : 'ready');
   const [downloading, setDownloading] = useState(false);
-  // One re-sign per failure: a URL that still fails right after re-signing is a missing or unplayable file.
-  const refreshedRef = useRef(false);
+  // One re-sign per successful load: a URL that fails right after re-signing is a missing or unplayable file.
+  const resignedSinceLoadRef = useRef(false);
 
-  const refresh = useCallback(async () => {
-    if (refreshedRef.current) {
-      setFailed(true);
+  const refresh = async () => {
+    if (resignedSinceLoadRef.current) {
+      setStatus('failed');
       return;
     }
-    refreshedRef.current = true;
+    resignedSinceLoadRef.current = true;
+    setStatus('refreshing');
     try {
-      const fresh = await getFabFileByIdFromServer(file.id);
-      if (!fresh.fileUrl) throw new Error('no signed url');
-      setSrc(fresh.fileUrl);
-    } catch {
-      setFailed(true);
+      setSrc(await fetchFreshUrl(file.id, src));
+      setStatus('ready');
+    } catch (error) {
+      console.error('Media player could not re-sign the file url:', error);
+      setStatus('failed');
     }
-  }, [file.id]);
+  };
 
   useEffect(() => {
-    if (!src || isExpiring(file.fileUrlExpireAt)) void refresh();
-    // Mount only: the element keeps its own src afterwards, so a parent re-render with a re-signed URL
-    // does not restart playback.
+    if (needsUrl) void refresh();
+    // Mount only (the component is keyed by file id); later failures arrive through onError.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const retry = () => {
-    refreshedRef.current = false;
-    setFailed(false);
+    resignedSinceLoadRef.current = false;
     void refresh();
   };
 
@@ -68,7 +80,13 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
     if (!src) return;
     setDownloading(true);
     try {
-      const response = await fetch(src);
+      let response = await fetch(src);
+      if (!response.ok) {
+        // Most likely expired while the player sat open; re-sign once and try again.
+        const freshUrl = await fetchFreshUrl(file.id, src);
+        setSrc(freshUrl);
+        response = await fetch(freshUrl);
+      }
       if (!response.ok) throw new Error(`download failed: ${response.status}`);
       downloadData(await response.blob(), file.fileName);
     } catch (error) {
@@ -79,12 +97,13 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
     }
   };
 
-  if (failed) {
+  if (status === 'failed') {
     return (
       <Stack
         direction="row"
         spacing={1}
         alignItems="center"
+        role="alert"
         data-testid="media-player-error"
         onClick={event => event.stopPropagation()}
         sx={{ py: 0.5 }}
@@ -107,10 +126,12 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
         component={isVideo ? 'video' : 'audio'}
         controls
         preload={preload}
-        src={src}
-        onError={() => void refresh()}
+        src={status === 'ready' ? src : undefined}
+        onError={() => {
+          if (status === 'ready') void refresh();
+        }}
         onLoadedMetadata={() => {
-          refreshedRef.current = false;
+          resignedSinceLoadRef.current = false;
         }}
         aria-label={file.fileName}
         data-testid={isVideo ? 'media-player-video' : 'media-player-audio'}
@@ -127,7 +148,7 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
             variant="plain"
             onClick={download}
             loading={downloading}
-            disabled={!src}
+            disabled={!src || status !== 'ready'}
             aria-label={t('file_actions.download')}
             data-testid="media-player-download-btn"
           >
@@ -140,8 +161,8 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
 };
 
 /**
- * Audio or video player for a stored file. Re-signs the file URL through `/api/files/:id` when it is about to
- * expire or the element fails to load it, so a player left open past the URL's hour still plays.
+ * Audio or video player for a stored file. Re-signs the file URL through `/api/files/:id` when it has expired or
+ * the element fails to load it, so a player left open past the URL's lifetime still plays.
  */
 export const MediaPlayer: FC<MediaPlayerProps> = props => <PlayerBody key={props.file.id} {...props} />;
 
