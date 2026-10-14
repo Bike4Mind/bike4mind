@@ -88,13 +88,13 @@ const ATTACH_SCOPE_COPY: Record<AttachScopeMode, { label: string; description: s
 
 // Rows styled like the sidebar's Quick Filters (Notebook/Search/QuickFilters.tsx): 32px rows,
 // 6px corners, 8px side padding, 12px from icon to label and the same hover fill - keep the two in
-// sync. 14px labels and 2px between rows are this menu's own. Joy paints the hover through its
+// sync. 14px labels and 4px between rows are this menu's own. Joy paints the hover through its
 // variant vars, not a plain &:hover.
 const plusMenuListSx = (mode: 'light' | 'dark') => {
   const hoverBg = mode === 'dark' ? grayAlpha[775][30] : brandAlpha[100][12];
   return {
     '--List-padding': '0px',
-    '--List-gap': '2px',
+    '--List-gap': '4px',
     '--ListItem-minHeight': '32px',
     '--ListItem-radius': '6px',
     '--ListItem-paddingX': '8px',
@@ -125,7 +125,7 @@ const UploadScopeOptions: FC<{ value: AttachScopeMode; onChange: (mode: AttachSc
   const theme = useTheme();
   const hoverBg = theme.palette.mode === 'dark' ? grayAlpha[775][30] : brandAlpha[100][12];
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
       <Typography level="body-xs" sx={{ color: 'text.tertiary', px: '8px', pt: '4px', pb: '2px' }}>
         Files uploaded from this device
       </Typography>
@@ -134,7 +134,7 @@ const UploadScopeOptions: FC<{ value: AttachScopeMode; onChange: (mode: AttachSc
         value={value}
         data-testid="attach-file-scope-radiogroup"
         onChange={event => onChange(event.target.value as AttachScopeMode)}
-        sx={{ gap: '2px', m: 0 }}
+        sx={{ gap: '4px', m: 0 }}
       >
         {ATTACH_SCOPE_MODES.map(mode => (
           // overlay makes the whole row the radio's hit target; the row is positioned for it.
@@ -520,7 +520,8 @@ const AttachFileButton = ({
             bottom: '100%',
             left: 0,
             mb: 0.5,
-            width: { xs: 'calc(100vw - 32px)', sm: '400px' },
+            // The longest row is the upload one: label, icon slot and the gear's reserved 48px fit 252px.
+            width: { xs: 'calc(100vw - 32px)', sm: '272px' },
             backgroundColor: 'background.surface',
             border: '1px solid',
             borderColor: 'divider',
