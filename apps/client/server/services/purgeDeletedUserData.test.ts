@@ -141,7 +141,7 @@ describe('purgeDeletedUserData', () => {
       expect(revokeDriveMock).toHaveBeenCalled();
     });
 
-    it('logs instead of throwing when the Drive step throws, and still revokes Atlassian', async () => {
+    it('logs instead of throwing when the Drive flagging fails', async () => {
       flagConnectionsMock.mockRejectedValue(new Error('mongo down'));
 
       await expect(
@@ -149,7 +149,28 @@ describe('purgeDeletedUserData', () => {
       ).resolves.toBeUndefined();
 
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Drive connections stopped by the revoke'));
-      expect(revokeAtlassianMock).toHaveBeenCalled();
+    });
+
+    it('still revokes Drive when the Atlassian step throws', async () => {
+      revokeAtlassianMock.mockRejectedValue(new Error('boom'));
+
+      await expect(
+        purge({
+          googleDrive: { accessToken: 'a', refreshToken: 'r', expiresAt },
+          atlassianConnect: {
+            accessToken: 'aa',
+            refreshToken: 'ar',
+            expiresAt,
+            siteName: 'site',
+            resources: [],
+            connectedAt: expiresAt,
+          },
+        })
+      ).resolves.toBeUndefined();
+
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Atlassian grant'));
+      expect(revokeDriveMock).toHaveBeenCalledWith('r', 'deleted user u1');
+      expect(flagConnectionsMock).toHaveBeenCalledWith('u1', 'plain-r');
     });
 
     it('still purges the rest when a revoke fails', async () => {
