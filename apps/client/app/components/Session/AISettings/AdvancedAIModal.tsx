@@ -63,7 +63,8 @@ import ToolsSection from './ToolsSection';
 import { AudioGenerationSettings } from './AudioGenerationSettings';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 
-import ModelSelection, { getModelBackend } from '../ModelSelection';
+import ModelSelection from '../ModelSelection';
+import { ModelDataHandlingNotice } from './ModelDataHandlingNotice';
 import {
   BEDROCK_BADGE_BG,
   CapabilityIndicators,
@@ -660,26 +661,31 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   if (!modelInfo) return null;
 
   // Provider and capability notices, rendered as one stacked block below the description.
-  const notices = [
-    // Same test the picker groups by, so the notice can never disagree with the provider
-    // section a model is filed under. A name-only check missed models whose id does not carry the provider name.
-    ...(getModelBackend(modelInfo) === 'OpenAI'
-      ? ['This model is provided by OpenAI. Your session content is processed by OpenAI under its API data policy.']
-      : []),
+  const notices: Array<{ key: string; content: React.ReactNode }> = [
+    // Every model gets this line, named for the route that serves it (see ModelDataHandlingNotice).
+    { key: 'data-handling', content: <ModelDataHandlingNotice model={modelInfo} /> },
     // The tools section is hidden outright for these models, so this line is the only
     // thing that explains the absence.
-    ...(modelInfo.supportsTools ? [] : ['Selected AI model does not support tools']),
+    ...(modelInfo.supportsTools ? [] : [{ key: 'no-tools', content: 'Selected AI model does not support tools' }]),
     // Both of these used to render inside Advanced Settings with this exact styling, which put
     // the same kind of message in two places. They are statements about the model, so they
     // belong with the others.
     ...(model === ImageModels.GPT_IMAGE_1
       ? [
-          'This model has specific parameter constraints. Some settings like Style are not available, and invalid parameters will be automatically adjusted to compatible values.',
+          {
+            key: 'gpt-image-constraints',
+            content:
+              'This model has specific parameter constraints. Some settings like Style are not available, and invalid parameters will be automatically adjusted to compatible values.',
+          },
         ]
       : []),
     ...(isKontextModel
       ? [
-          'This model transforms existing images. Either upload an image to the workbench or use a recently generated image from this conversation, then describe how you want it changed.',
+          {
+            key: 'kontext-input',
+            content:
+              'This model transforms existing images. Either upload an image to the workbench or use a recently generated image from this conversation, then describe how you want it changed.',
+          },
         ]
       : []),
   ];
@@ -789,7 +795,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
             <Stack direction="column" gap="4px" sx={{ mt: '16px' }}>
               {notices.map(notice => (
                 <Typography
-                  key={notice}
+                  key={notice.key}
                   level="body-xs"
                   sx={{
                     color: brand[800],
@@ -797,7 +803,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                     fontWeight: '500',
                   }}
                 >
-                  {notice}
+                  {notice.content}
                 </Typography>
               ))}
             </Stack>
