@@ -18,10 +18,19 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: vi.fn().mockResolvedValue({ allowed: true, headers: {} }),
 }));
-// The real limiter counts in Mongo; the route's own limit options are not what these tests pin.
-vi.mock('@server/middlewares/rateLimit', () => ({
+// The real limiter counts in Mongo, so it is stubbed - but the options the route builds it with are
+// pinned (`built`), and the middleware it returns stays swappable so the 429 path is exercised.
+const limiter = vi.hoisted(() => ({
+  built: [] as Array<{ limit: number; windowMs: number }>,
   // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
-  rateLimit: () => (_req: any, _res: any, next: any) => next(),
+  handle: (_req: any, _res: any, next: any) => next(),
+}));
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: (options: { limit: number; windowMs: number }) => {
+    limiter.built.push(options);
+    // any: as above.
+    return (req: any, res: any, next: any) => limiter.handle(req, res, next);
+  },
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
@@ -68,7 +77,7 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, TooManyRequestsError } from '@server/utils/errors';
 import handler from '../estimate-folder';
 
 const ESTIMATE = {
@@ -104,6 +113,18 @@ describe('POST /api/google-drive/estimate-folder', () => {
     mockGetToken.mockResolvedValue('drive-token');
     mockEstimate.mockResolvedValue(ESTIMATE);
     mockGetSettingsMap.mockResolvedValue({ MaxFileSize: '25' });
+    limiter.handle = (_req, _res, next) => next();
+  });
+
+  it('builds its limiter with the route limit, and a limited caller is refused without walking', async () => {
+    expect(limiter.built).toEqual([{ limit: 10, windowMs: 60_000 }]);
+
+    limiter.handle = (_req, _res, next) => next(new TooManyRequestsError('Rate limit exceeded'));
+    const { req, res } = fire({ bearer: 'live-jwt', body: { folderId: 'F1' } });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(429);
+    expect(mockEstimate).not.toHaveBeenCalled();
   });
 
   it('rejects an api-key caller without walking Drive', async () => {
