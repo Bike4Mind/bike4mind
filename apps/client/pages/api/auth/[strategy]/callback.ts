@@ -5,7 +5,8 @@ import { AuthStrategy } from '@bike4mind/common';
 import { authFailLogRepository, IUserObject } from '@bike4mind/database';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { verifyStateToken, BaseStatePayload } from '@server/auth/jwtStateStore';
-import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
+import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
+import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { BadRequestError } from '@server/utils/errors';
@@ -179,6 +180,32 @@ const handler = baseApi({ auth: false })
           }
         }
 
+        const successQuery = authSuccessRedirectQuery(redirectTo);
+
+        // isNewUser/signupMethod ride the redirect fragment: /auth/success reads and
+        // clears it exactly once, firing the signup ad conversion for new accounts.
+        const signupFragment =
+          isNewUser && !isSyntheticSignup ? `&isNewUser=1&signupMethod=${encodeURIComponent(strategy)}` : '';
+
+        // Only a genuine new provider binding (flagged by verifyCallback) is an account-link.
+        // Audited before the second-factor gate: verifyCallback has already persisted it.
+        if ((user as { isNewOAuthLink?: boolean }).isNewOAuthLink) {
+          await logAuthAudit(req, { userId: user.id, event: 'oauth_link', strategy });
+        }
+
+        // Consumer social sign-in proves the provider account, not the user's own second
+        // factor, so an enrolled factor is always challenged (and enforceMFA enrollment owed).
+        const secondFactor = await resolveSecondFactor(req, user, { origin: { strategy, createdVia: 'oauth' } });
+        if (secondFactor.kind !== 'satisfied') {
+          const handoff = mfaHandoffFragment({
+            mfaToken: secondFactor.mfaToken,
+            userId: user.id,
+            mode: secondFactor.kind === 'challenge' ? 'verify' : 'setup',
+            passkeyAvailable: secondFactor.kind === 'challenge' && secondFactor.passkeyAvailable,
+          });
+          return res.redirect(`/auth/success${successQuery}${handoff}${signupFragment}`);
+        }
+
         const { accessToken } = await issueBrowserSession(req, res, user.id, {
           createdVia: 'oauth',
           tokenVersion: user.tokenVersion ?? 0,
@@ -195,22 +222,11 @@ const handler = baseApi({ auth: false })
           console.error('Failed to log OAuth login:', logError);
         }
 
-        // Every OAuth callback is a successful authentication; only a genuine
-        // new provider binding (flagged by verifyCallback) is an account-link.
-        await logAuthAudit(req, { userId: user.id, event: 'login_success', strategy });
-        if ((user as { isNewOAuthLink?: boolean }).isNewOAuthLink) {
-          await logAuthAudit(req, { userId: user.id, event: 'oauth_link', strategy });
-        }
+        await logSignInSuccess(req, { userId: user.id, strategy, trustedDevice: secondFactor.trustedDevice });
 
-        const successQuery = authSuccessRedirectQuery(redirectTo);
-
-        // Redirect with tokens in URL fragment (not query string)
-        // Using fragments prevents tokens from being logged in server access logs,
-        // sent in Referer headers, or stored in browser history as query params.
-        // isNewUser/signupMethod ride the same fragment: /auth/success reads and
-        // clears it exactly once, firing the signup ad conversion for new accounts.
-        const signupFragment =
-          isNewUser && !isSyntheticSignup ? `&isNewUser=1&signupMethod=${encodeURIComponent(strategy)}` : '';
+        // Redirect with tokens in URL fragment (not query string): a fragment is never sent to
+        // the server, so the access token stays out of access logs, Referer headers and browser
+        // history.
         const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
         return res.redirect(redirectUrl);
       } catch (callbackError) {

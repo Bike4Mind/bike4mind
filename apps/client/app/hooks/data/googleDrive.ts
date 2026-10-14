@@ -148,7 +148,9 @@ export function useConnectDriveFolderToLake() {
       const response = await api.post<{ connectionId: string; status: string }>('/api/data-lakes/drive-sync', input);
       return response.data;
     },
-    onSuccess: async (_data, { dataLakeId }) => {
+    // Settled, not success: a refused Re-sync can park the connection server-side (needs_reconnect,
+    // credential_error), and the card must show that rather than a cached 'connected'.
+    onSettled: async (_data, _error, { dataLakeId }) => {
       await queryClient.invalidateQueries({ queryKey: dataLakeKeys.driveConnection(dataLakeId) });
     },
   });

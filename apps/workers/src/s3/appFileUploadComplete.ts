@@ -1,5 +1,6 @@
 import { AppFile } from '@bike4mind/database';
 import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
+import { TEXT_EDIT_BACKUP_PREFIX } from '@server/utils/textEditBackupPrefix';
 
 export const func = withContext(async (event, context, logger) => {
   for (const record of event.Records) {
@@ -24,8 +25,11 @@ export const func = withContext(async (event, context, logger) => {
     //   speechService; no AppFile records)
     // - app-config/: public settings config artifact written by
     //   publicSettingsArtifact.ts (M2.5); a system file served via CDN, never an AppFile
+    // - text-edit-backups/: pre-overwrite backups from a text AI edit (apply-edit.ts),
+    //   expired by lifecycle; no AppFile records
     if (
       objectKey.includes('/backups/') ||
+      objectKey.startsWith(TEXT_EDIT_BACKUP_PREFIX) ||
       objectKey.startsWith('temp/') ||
       objectKey.startsWith('tmp/') ||
       objectKey.startsWith('exports/') ||

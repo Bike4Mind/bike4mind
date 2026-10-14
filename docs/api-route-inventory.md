@@ -33,7 +33,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-891 routes: 44 contracted, 9 aliases of another route, 193 with no static caller in `apps/client/app`.
+895 routes: 48 contracted, 9 aliases of another route, 197 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -140,7 +140,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | user-api-keys | 7 | 0 | 7 | 0 | 0 | 0 | 1 |
 | users | 30 | 0 | 30 | 0 | 0 | 0 | 4 |
-| v1 | 42 | 38 | 37 | 0 | 0 | 5 | 35 |
+| v1 | 46 | 42 | 41 | 0 | 0 | 5 | 39 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -1517,6 +1517,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/image-generations` | POST | jwt+key | `ai:generate` | yes | - | 0 |
 | `/api/v1/me` | GET | jwt+key | `me:read` | yes | - | 0 |
 | `/api/v1/models` | GET | jwt+key | `ai:chat`, `ai:generate` | yes | - | 0 |
+| `/api/v1/music-generations` | GET, POST | jwt+key | `ai:generate` | yes | - | 0 |
+| `/api/v1/music-generations/[id]` | GET | jwt+key | `ai:generate` | yes | - | 0 |
+| `/api/v1/music-generations/[id]/cancel` | POST | jwt+key | `ai:generate` | yes | - | 0 |
+| `/api/v1/music-models` | GET | jwt+key | `ai:generate` | yes | - | 0 |
 | `/api/v1/openapi.deployment.json` | ? | handler | - | no | - | 0 |
 | `/api/v1/openapi.json` | ? | handler | - | no | - | 1: `utils/externalLinks.ts` |
 | `/api/v1/projects` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | yes | - | 0 |

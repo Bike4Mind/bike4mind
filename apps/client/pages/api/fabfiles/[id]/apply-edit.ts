@@ -6,6 +6,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
+import { deleteDroppedVersions, getAiEditVersionRetention } from '@server/utils/aiEditVersionRetention';
+import { TEXT_EDIT_BACKUP_PREFIX } from '@server/utils/textEditBackupPrefix';
 import { isAiEditableOfficeMime, applyEditedText, appendEditedVersion, MAX_OFFICE_EDIT_BYTES } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -83,7 +85,8 @@ const handler = baseApi()
           const newBuffer = await applyEditedText(originalBuffer, newContent, file.mimeType || '');
 
           const now = new Date();
-          const { newFilePath, versions } = appendEditedVersion({
+          const maxEditedVersions = await getAiEditVersionRetention();
+          const { newFilePath, versions, droppedVersions } = appendEditedVersion({
             userId: user.id,
             fabFileId: String(file._id),
             fileName: file.fileName,
@@ -94,6 +97,7 @@ const handler = baseApi()
             newFileSize: newBuffer.length,
             now,
             nonce: uuidv4(),
+            maxEditedVersions,
           });
 
           await fabFilesService.assertRewriteFits(file, newBuffer.length, rewriteStorageDb, user);
@@ -116,6 +120,8 @@ const handler = baseApi()
           if (!claimed) {
             throw new BadRequestError('File was modified by another edit. Please reload and try again.');
           }
+          // Only once the trimmed history is committed: a lost claim must leave history intact.
+          await deleteDroppedVersions(droppedVersions);
 
           return res.json({
             success: true,
@@ -130,7 +136,7 @@ const handler = baseApi()
         // first so a refused edit writes nothing, not even the backup.
         await fabFilesService.assertRewriteFits(file, contentSize, rewriteStorageDb, user);
         const backupId = uuidv4();
-        const backupPath = `files/${user.id}/backups/${backupId}_${file.fileName}`;
+        const backupPath = `${TEXT_EDIT_BACKUP_PREFIX}${user.id}/${backupId}_${file.fileName}`;
 
         const signedUrl = await getFilesStorage().getSignedUrl(s3Key, 'get', {
           expiresIn: 60,

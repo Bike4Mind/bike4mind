@@ -8,8 +8,10 @@ import {
   isDriveRateLimitError,
   withDriveRetry,
   getFileParents,
+  DriveListingIncompleteError,
   type DriveFile,
 } from './driveClient';
+import { MAX_INGEST_CANDIDATES, driveIngestSkipReason } from './driveIngestLimits';
 
 const GOOGLE_DOC = 'application/vnd.google-apps.document';
 const GOOGLE_SHEET = 'application/vnd.google-apps.spreadsheet';
@@ -186,6 +188,23 @@ export async function isUnderRoot(
 }
 
 /**
+ * The mime type a Drive file is ingested as, or null when ingest does not support it. Google
+ * Editors files map to their export target; other google-apps types (Forms, Drawings, ...) are
+ * unsupported. Shared by fetchDriveFileContent and estimateFolder so the pre-flight estimate
+ * cannot count a file the worker would skip.
+ */
+export function driveIngestMimeType(file: DriveFile): string | null {
+  if (file.mimeType.startsWith(GOOGLE_APPS_PREFIX)) return EDITOR_EXPORTS[file.mimeType] ?? null;
+  // Native file: only ingest types the chunker can actually process. Claim-first:
+  // Drive's mimeType is metadata the uploader declares (Drive only auto-detects it when
+  // none is supplied), and it survives a rename - so it outranks the title's extension.
+  const { mimeType, supported } = resolveSupportedMimeType(file.name, file.mimeType, {
+    precedence: 'claim-first',
+  });
+  return supported ? mimeType : null;
+}
+
+/**
  * `rate_limited` is the one RETRYABLE failure: Drive throttled us, so the file is fine and the
  * caller must defer it rather than record it skipped. `unsupported`, `export_too_large` and
  * `error` are all permanent for this file's current content.
@@ -205,27 +224,18 @@ export type FetchedContent =
  * own `rate_limited` reason - see FetchedContent for why the caller must not conflate the two.
  */
 export async function fetchDriveFileContent(drive: drive_v3.Drive, file: DriveFile): Promise<FetchedContent> {
+  const mimeType = driveIngestMimeType(file);
+  if (!mimeType) {
+    return { ok: false, reason: 'unsupported', detail: file.mimeType };
+  }
   try {
     if (file.mimeType.startsWith(GOOGLE_APPS_PREFIX)) {
-      const exportMime = EDITOR_EXPORTS[file.mimeType];
-      if (!exportMime) {
-        return { ok: false, reason: 'unsupported', detail: file.mimeType };
-      }
       const res = await withDriveRetry('files.export', () =>
-        drive.files.export({ fileId: file.id, mimeType: exportMime }, { responseType: 'arraybuffer' })
+        drive.files.export({ fileId: file.id, mimeType }, { responseType: 'arraybuffer' })
       );
-      return { ok: true, bytes: Buffer.from(res.data as ArrayBuffer), mimeType: exportMime };
+      return { ok: true, bytes: Buffer.from(res.data as ArrayBuffer), mimeType };
     }
 
-    // Native file: only ingest types the chunker can actually process. Claim-first:
-    // Drive's mimeType is metadata the uploader declares (Drive only auto-detects it when
-    // none is supplied), and it survives a rename - so it outranks the title's extension.
-    const { mimeType, supported } = resolveSupportedMimeType(file.name, file.mimeType, {
-      precedence: 'claim-first',
-    });
-    if (!supported) {
-      return { ok: false, reason: 'unsupported', detail: file.mimeType };
-    }
     const res = await withDriveRetry('files.get(media)', () =>
       drive.files.get({ fileId: file.id, alt: 'media', supportsAllDrives: true }, { responseType: 'arraybuffer' })
     );
@@ -245,4 +255,101 @@ export async function fetchDriveFileContent(drive: drive_v3.Drive, file: DriveFi
     }
     return { ok: false, reason: 'error', detail };
   }
+}
+
+export type DriveFolderEstimate = {
+  /** Every distinct non-folder file found, skipped ones included. */
+  fileCount: number;
+  /** Sum of `size` over files the worker would ingest. A floor: unknown-size files add more. */
+  knownBytes: number;
+  /** Ingestible files with no `size` (Google Editors files, some native files). */
+  unknownSizeCount: number;
+  overSizeLimitCount: number;
+  unsupportedCount: number;
+  /** The walk stopped early, so every count above is a lower bound. */
+  truncated: boolean;
+  truncatedReason?: 'deadline' | 'folder_cap' | 'rate_limited' | 'candidate_cap' | 'page_cap';
+  /** More files than one sync accepts (MAX_INGEST_CANDIDATES); the worker refuses the folder. */
+  overCandidateCap: boolean;
+};
+
+/**
+ * Pre-flight size estimate of a Drive folder tree for the Create Data Lake wizard. Walks like
+ * walkFolder (BFS, cycle guard, de-dup by file id as the worker does) but never throws on a bound:
+ * past `deadlineMs`, `maxFolders`, a throttle, a folder over the listing page cap, or the candidate
+ * cap it returns what it has so far with `truncated` set. Two bounds block (set `overCandidateCap`):
+ * the candidate cap, judged on files actually counted - the same `walked.length` the worker gates on -
+ * and the per-folder page cap, which makes the worker's own walk fail. Any other Drive error (a
+ * revoked grant, a 404) is rethrown.
+ *
+ * Classifies in the worker's order (driveLakeIngest skips oversized before fetching, and
+ * fetchDriveFileContent then rejects unsupported types), so must stay in sync with it.
+ */
+export async function estimateFolder(
+  drive: drive_v3.Drive,
+  rootFolderId: string,
+  { deadlineMs, maxFolders, maxFileSize }: { deadlineMs: number; maxFolders: number; maxFileSize: number }
+): Promise<DriveFolderEstimate> {
+  const estimate: DriveFolderEstimate = {
+    fileCount: 0,
+    knownBytes: 0,
+    unknownSizeCount: 0,
+    overSizeLimitCount: 0,
+    unsupportedCount: 0,
+    truncated: false,
+    overCandidateCap: false,
+  };
+  const stop = (reason: NonNullable<DriveFolderEstimate['truncatedReason']>) => {
+    estimate.truncated = true;
+    estimate.truncatedReason = reason;
+    // A folder past the listing page cap is one the worker's own walk refuses outright (it
+    // rethrows the same DriveListingIncompleteError), so it blocks here too rather than letting a
+    // lake be created for a sync that can only fail.
+    if (reason === 'candidate_cap' || reason === 'page_cap') estimate.overCandidateCap = true;
+    return estimate;
+  };
+  const visited = new Set<string>();
+  const seen = new Set<string>();
+  const queue = [rootFolderId];
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    if (Date.now() >= deadlineMs) return stop('deadline');
+    if (visited.size >= maxFolders) return stop('folder_cap');
+    visited.add(id);
+
+    let overCap = false;
+    try {
+      await listFolderChildren(drive, id, {
+        deadlineMs,
+        onPage: page => {
+          for (const child of page) {
+            if (isFolder(child)) {
+              queue.push(child.id);
+              continue;
+            }
+            if (seen.has(child.id)) continue;
+            seen.add(child.id);
+            estimate.fileCount++;
+            if (driveIngestSkipReason(child.size, maxFileSize)) estimate.overSizeLimitCount++;
+            else if (!driveIngestMimeType(child)) estimate.unsupportedCount++;
+            else if (child.size != null) estimate.knownBytes += child.size;
+            else estimate.unknownSizeCount++;
+          }
+          if (estimate.fileCount > MAX_INGEST_CANDIDATES) {
+            overCap = true;
+            return false;
+          }
+        },
+      });
+    } catch (e) {
+      if (e instanceof DriveListingIncompleteError) return stop(e.reason);
+      if (isDriveRateLimitError(e)) return stop('rate_limited');
+      throw e;
+    }
+    if (overCap) return stop('candidate_cap');
+  }
+
+  return estimate;
 }

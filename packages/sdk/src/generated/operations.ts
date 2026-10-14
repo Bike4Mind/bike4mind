@@ -5,6 +5,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
   },
+  cancelMusicGeneration: {
+    method: 'POST',
+    path: '/api/v1/music-generations/{id}/cancel',
+  },
   cancelVideoGeneration: {
     method: 'POST',
     path: '/api/v1/video-generations/{id}/cancel',
@@ -36,6 +40,10 @@ export const operations = {
   createFileUpload: {
     method: 'POST',
     path: '/api/v1/files',
+  },
+  createMusicGeneration: {
+    method: 'POST',
+    path: '/api/v1/music-generations',
   },
   createProject: {
     method: 'POST',
@@ -141,6 +149,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/me',
   },
+  getMusicGeneration: {
+    method: 'GET',
+    path: '/api/v1/music-generations/{id}',
+  },
   getProject: {
     method: 'GET',
     path: '/api/v1/projects/{id}',
@@ -184,6 +196,14 @@ export const operations = {
   listModels: {
     method: 'GET',
     path: '/api/v1/models',
+  },
+  listMusicGenerations: {
+    method: 'GET',
+    path: '/api/v1/music-generations',
+  },
+  listMusicModels: {
+    method: 'GET',
+    path: '/api/v1/music-models',
   },
   listProjects: {
     method: 'GET',

@@ -45,7 +45,7 @@ const setup = (overrides: Partial<CreateMusicJobDeps> = {}) => {
     providers: createMusicProviderRegistry([new TestMusicProvider()]),
     getSettings: async () => ({ enforceCredits: true, musicGeneration: undefined }),
     resolveApiKey: async () => 'key',
-    hasStorageFor: async () => true,
+    checkStorageFor: async () => undefined,
     saveToFiles: vi.fn(async ({ generation: { jobId } }: { generation: { jobId: string } }) => ({
       saved: true as const,
       fileId: `file-${jobId}`,

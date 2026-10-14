@@ -1,3 +1,4 @@
+import { DELEGATION_TOOLS } from '@bike4mind/common';
 import { CONTENT_READ_TOOL } from './agentExecutor.firstIterationQuery';
 
 /**
@@ -32,7 +33,7 @@ import { CONTENT_READ_TOOL } from './agentExecutor.firstIterationQuery';
  * `delegationOffer` below. The name entries here remain as defense in depth for anything that
  * does arrive by name, and as the canonical spelling of the two tool names.
  */
-export const DELEGATION_TOOLS = ['delegate_to_agent', 'coordinate_task'] as const;
+export { DELEGATION_TOOLS };
 
 interface PolicyLogger {
   info: (message: string, meta?: Record<string, unknown>) => void;

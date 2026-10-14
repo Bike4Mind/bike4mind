@@ -20,6 +20,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { getFilesStorage } from '@server/utils/storage';
+import { deleteDroppedVersions, getAiEditVersionRetention } from '@server/utils/aiEditVersionRetention';
 import { getSettingsByNames } from '@bike4mind/utils';
 import {
   isAiEditableOfficeMime,
@@ -353,7 +354,8 @@ Return only the edited content without any markdown code blocks or explanations.
             // original bytes are never overwritten.
             const newBuffer = await applyEditedText(originalBuffer, editedContent, file.mimeType || '');
             const now = new Date();
-            const { newFilePath, versions } = appendEditedVersion({
+            const maxEditedVersions = await getAiEditVersionRetention();
+            const { newFilePath, versions, droppedVersions } = appendEditedVersion({
               userId: user.id,
               fabFileId: String(file._id),
               fileName: file.fileName,
@@ -364,6 +366,7 @@ Return only the edited content without any markdown code blocks or explanations.
               newFileSize: newBuffer.length,
               now,
               nonce: uuidv4(),
+              maxEditedVersions,
             });
             await fabFilesService.assertRewriteFits(file, newBuffer.length, rewriteStorageDb, user);
             // The nonce-keyed upload can never collide with a concurrent edit's bytes.
@@ -384,6 +387,8 @@ Return only the edited content without any markdown code blocks or explanations.
             if (!claimed) {
               throw new BadRequestError('File was modified by another edit. Please reload and try again.');
             }
+            // Only once the trimmed history is committed: a lost claim must leave history intact.
+            await deleteDroppedVersions(droppedVersions);
           } else {
             const newSize = Buffer.byteLength(editedContent, 'utf8');
             await fabFilesService.assertRewriteFits(file, newSize, rewriteStorageDb, user);

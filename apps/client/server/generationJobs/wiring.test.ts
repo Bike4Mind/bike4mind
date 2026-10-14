@@ -1,10 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { IGenerationJobDocument, MusicProviderId, VideoProviderId } from '@bike4mind/common';
+import {
+  StorageLimitError,
+  type IGenerationJobDocument,
+  type MusicProviderId,
+  type StorageLimitErrorInfo,
+  type VideoProviderId,
+} from '@bike4mind/common';
 
-const { queueLink, getSourceQueueUrl, sendToQueue } = vi.hoisted(() => ({
+const { queueLink, getSourceQueueUrl, sendToQueue, userFindById, checkStorageLimit } = vi.hoisted(() => ({
   queueLink: { mode: 'direct' as 'direct' | 'throws' },
   getSourceQueueUrl: vi.fn(),
   sendToQueue: vi.fn(),
+  userFindById: vi.fn(),
+  checkStorageLimit: vi.fn(),
 }));
 
 // A getter mirrors sst's Resource proxy, which throws when a key is not linked to the Lambda.
@@ -35,12 +43,21 @@ vi.mock('@bike4mind/auth', async importOriginal => {
   };
 });
 vi.mock('@server/utils/sqs', () => ({ sendToQueue }));
+vi.mock('@bike4mind/database', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/database')>();
+  return { ...actual, userRepository: { ...actual.userRepository, findById: userFindById } };
+});
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
+  return { ...actual, checkStorageLimit };
+});
 
 import { createMusicProviderRegistry } from '@bike4mind/utils/musicProviders';
 import { createVideoProviderRegistry } from '@bike4mind/utils/videoProviders';
 import {
   buildMusicProviders,
   buildProviders,
+  checkStorageFor,
   enqueueGenerationJob,
   getMusicJobDeps,
   getVideoJobDeps,
@@ -140,6 +157,44 @@ describe('music provider key selection', () => {
 
   it('resolves the ElevenLabs key through the deps', async () => {
     expect(await getMusicJobDeps().resolveApiKey('elevenlabs', 'user1')).toBe('e-key');
+  });
+});
+
+describe('checkStorageFor', () => {
+  const info: StorageLimitErrorInfo = {
+    errorCode: 'storage_limit_exceeded',
+    used_bytes: 900,
+    limit_bytes: 1_000,
+    requested_bytes: 2_000,
+    owner: 'user',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    userFindById.mockResolvedValue({ id: 'u1' });
+  });
+
+  it('answers undefined when the quota has room', async () => {
+    checkStorageLimit.mockResolvedValue(undefined);
+    await expect(checkStorageFor('u1', 2_000)).resolves.toBeUndefined();
+    expect(userFindById).toHaveBeenCalledWith('u1');
+    expect(checkStorageLimit).toHaveBeenCalledWith({ id: 'u1' }, 2_000);
+  });
+
+  it('returns the quota detail for a storage refusal', async () => {
+    checkStorageLimit.mockRejectedValue(new StorageLimitError('full', info));
+    await expect(checkStorageFor('u1', 2_000)).resolves.toEqual(info);
+  });
+
+  it('rethrows any other failure rather than reporting room', async () => {
+    checkStorageLimit.mockRejectedValue(new Error('db down'));
+    await expect(checkStorageFor('u1', 2_000)).rejects.toThrow('db down');
+  });
+
+  it('throws for a missing user', async () => {
+    userFindById.mockResolvedValue(null);
+    await expect(checkStorageFor('u1', 2_000)).rejects.toThrow('user u1 not found');
+    expect(checkStorageLimit).not.toHaveBeenCalled();
   });
 });
 
