@@ -59,6 +59,13 @@ export function makeDagDispatcher(args: {
     apiKeyId?: string;
     /** The parent's credential-scope tool denials, inherited so a node cannot regain a tool the key was denied. */
     scopeDeniedTools?: string[];
+    /**
+     * The parent's live permission lists (mutated in place as the user remembers decisions),
+     * copied onto each node at creation: a node cannot pause for approval, so
+     * `processSubagentDispatch` refuses any tool call these lists do not allow.
+     */
+    approvedTools: readonly string[];
+    deniedTools: readonly string[];
     /** Pulled from the parent execution doc - used for audit lineage. */
     spawnedByExecutionId?: string;
     /**
@@ -103,8 +110,8 @@ export function makeDagDispatcher(args: {
         model,
         query: node.description,
         status: 'pending' as AgentExecutionStatus,
-        approvedTools: [],
-        deniedTools: [],
+        approvedTools: [...nodeDefaults.approvedTools],
+        deniedTools: [...nodeDefaults.deniedTools],
         iterationBilling: [],
         totalCreditsUsed: 0,
         lambdaInvocationCount: 1,

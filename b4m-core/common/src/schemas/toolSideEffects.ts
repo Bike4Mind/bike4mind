@@ -151,3 +151,49 @@ export function getToolSideEffects(toolName: string): ToolSideEffects | undefine
 export function listDeclaredToolSideEffects(): Readonly<Record<string, ToolSideEffects>> {
   return TOOL_SIDE_EFFECTS;
 }
+
+export type ToolPermissionResult = 'allowed' | 'denied' | 'needs_approval';
+
+/**
+ * Classify whether a tool can be executed, needs approval, or is denied.
+ *
+ * Priority:
+ * 1. Explicitly denied tools -> denied
+ * 2. Explicitly approved tools -> allowed
+ * 3. MCP tools (prefixed with mcp__) -> needs_approval regardless of any declaration:
+ *    they are third-party and their risk is not knowable locally, so a declaration
+ *    shipped alongside one would not be evidence of anything.
+ * 4. Tools declaring `none` / `local` side effects -> allowed
+ * 5. Everything else, including every undeclared tool -> needs_approval (safe default)
+ *
+ * Rule 4 is the inversion that matters: the classification lives next to the tool-name
+ * enum and is exhaustive over it, so a read-only tool is correct the day it is added
+ * rather than the day someone notices it prompting in production.
+ *
+ * Shared by the agent executor's interactive gate (apps/workers/.../toolPermissions.ts)
+ * and the non-interactive subagent gate (ServerSubagentOrchestrator) - the two must agree.
+ */
+export function classifyToolPermission(
+  toolName: string,
+  approvedTools: readonly string[],
+  deniedTools: readonly string[]
+): ToolPermissionResult {
+  if (deniedTools.includes(toolName)) {
+    return 'denied';
+  }
+
+  if (approvedTools.includes(toolName)) {
+    return 'allowed';
+  }
+
+  if (toolName.startsWith('mcp__')) {
+    return 'needs_approval';
+  }
+
+  const sideEffects = getToolSideEffects(toolName);
+  if (sideEffects === 'none' || sideEffects === 'local') {
+    return 'allowed';
+  }
+
+  return 'needs_approval';
+}
