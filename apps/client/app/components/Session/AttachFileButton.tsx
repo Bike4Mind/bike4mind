@@ -521,7 +521,7 @@ const AttachFileButton = ({
             left: 0,
             mb: 0.5,
             // The longest row is the upload one: label, icon slot and the gear's reserved 48px fit 252px.
-            width: { xs: 'calc(100vw - 32px)', sm: '272px' },
+            width: { xs: 'calc(100vw - 32px)', sm: '320px' },
             backgroundColor: 'background.surface',
             border: '1px solid',
             borderColor: 'divider',
