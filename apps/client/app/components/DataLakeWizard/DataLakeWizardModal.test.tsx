@@ -567,7 +567,7 @@ describe('DataLakeWizardModal - Drive-only create', () => {
   // sync stays the boundary.
   it('is not blocked by a storage limit while the folder estimate is pending', () => {
     driveEstimate.current = { data: undefined, isLoading: true, isError: false };
-    userUsing(1_000_000);
+    userUsing(2_000_000);
     seedDriveOnly({ step: 'config' });
 
     renderModal();

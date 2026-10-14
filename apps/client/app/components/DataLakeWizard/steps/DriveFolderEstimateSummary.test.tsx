@@ -107,6 +107,13 @@ describe('DriveFolderEstimateSummary', () => {
     expect(screen.getByTestId('drive-estimate-worst-case-warning')).toBeInTheDocument();
   });
 
+  it('does not warn a user already over quota whose folder brings no importable files', () => {
+    useUser.setState({ currentUser: { currentStorageSize: 20_000_000, storageLimit: 10 } as IUserDocument });
+    query.current = loaded({ knownBytes: 0, unknownSizeCount: 0, unsupportedCount: 3 });
+    renderSummary();
+    expect(screen.queryByTestId('drive-estimate-worst-case-warning')).toBeNull();
+  });
+
   it('does not warn when the known bytes already exceed (the modal blocks instead)', () => {
     useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 1 } as IUserDocument });
     query.current = loaded({ unknownSizeCount: 1 });
