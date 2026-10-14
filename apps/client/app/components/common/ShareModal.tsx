@@ -691,8 +691,16 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
 
               {tabIndex === 1 && (
                 <Typography level="body-xs" data-testid="share-modal-link-access-note" sx={{ mt: '10px' }}>
-                  Anyone with the link can open {isBulkSharing ? 'these items' : `this ${itemType}`} after signing in,
-                  and can share it on. Links don&apos;t expire.
+                  {!isBulkSharing && type === InviteType.Session ? (
+                    // Accepting a notebook link also grants its attached files, but only the ones the
+                    // inviter holds `share` on (sharingService/accept.ts), hence "allowed to share".
+                    "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share. They can share it on. Nothing is shared until you tap Generate, and links don't expire until you turn them off."
+                  ) : (
+                    <>
+                      Anyone with the link can open {isBulkSharing ? 'these items' : `this ${itemType}`} after signing
+                      in, and can share it on. Links don&apos;t expire.
+                    </>
+                  )}
                 </Typography>
               )}
 
