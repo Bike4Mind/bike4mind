@@ -61,7 +61,8 @@ export const createFileUploadContract = defineEndpoint({
     400: {
       description:
         'Unsupported file type, file larger than the upload limit, or storage quota exceeded. A size or quota ' +
-        'refusal carries a stable `errorCode` plus `used_bytes`, `limit_bytes` and `requested_bytes`.',
+        'refusal carries a stable `errorCode` plus `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, ' +
+        'always together; an unsupported type carries none of them.',
       schema: StorageLimitErrorSchema,
     },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
