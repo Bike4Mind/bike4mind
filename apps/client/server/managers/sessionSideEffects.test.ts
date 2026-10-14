@@ -40,10 +40,6 @@ vi.mock('@bike4mind/observability', () => ({
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
 
-vi.mock('@client/config/activities', () => ({
-  ActivityType: { NOTEBOOK_ADDED_TO_PROJECT: 'notebook.addedToProject' },
-}));
-
 vi.mock('sst', () => ({
   Resource: { websocket: { managementEndpoint: 'wss://mgmt' } },
 }));
@@ -64,6 +60,7 @@ import {
   publishContextSummarizeSession,
 } from './sessionSideEffects';
 import { ClientMessageSender } from '@bike4mind/utils';
+import { ActivityType } from '@client/config/activityType';
 import type { ISessionDocument } from '@bike4mind/common';
 import type { Ability } from '@server/auth/ability';
 import type { Logger } from '@bike4mind/observability';
@@ -155,7 +152,7 @@ describe('sessionSideEffects', () => {
     it('creates the NOTEBOOK_ADDED_TO_PROJECT activity linking project and user', async () => {
       await recordNotebookAddedToProjectActivity('proj-1', 'user-1');
       expect(createActivity).toHaveBeenCalledWith(
-        'notebook.addedToProject',
+        ActivityType.NOTEBOOK_ADDED_TO_PROJECT,
         { type: 'Project', id: 'proj-1' },
         { type: 'User', id: 'user-1' }
       );

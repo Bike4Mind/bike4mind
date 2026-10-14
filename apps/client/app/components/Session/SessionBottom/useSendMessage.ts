@@ -17,6 +17,7 @@ import {
   IChatHistoryItemDocument,
   ISessionDocument,
   ModelName,
+  PROMPT_TEXT_MAX,
   requiresImageInput,
 } from '@bike4mind/common';
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
@@ -32,6 +33,7 @@ import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
 import { pickerAttachedAgents, resolveDispatchAgent, resolveDispatchMaxIterations } from './resolveDispatchAgent';
 import { resolveDispatchTools } from './resolveDispatchTools';
+import { resolveSystemContext } from './resolveSystemContext';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
 import { useRecordImageTemplateUse, isTemplateUseEligiblePrompt } from '../ImageTemplates/useRecordImageTemplateUse';
@@ -94,6 +96,13 @@ interface UseSendMessageParams {
 interface SendClickOptions {
   forceEnableQuestMaster?: boolean;
   toolsOverride?: B4MLLMTools[];
+  /**
+   * Extra system context for this one send (a programmatic launch's `systemContext`).
+   * Delivered as a system message on whichever route the send takes; never part of the
+   * prompt, so it is neither shown in the bubble nor persisted on the turn. A host-managed
+   * first send (`hostCreateSession`) re-dispatches only the prompt, so it does not carry this.
+   */
+  systemContext?: string;
   /** Called when the send is refused before dispatch (one already in flight, validation, setup). */
   onRefused?: () => void;
 }
@@ -406,6 +415,21 @@ export function useSendMessage({
       options?.onRefused?.();
       return;
     }
+    // Normalized and capped here, the boundary every caller passes through, and before any
+    // session creation or host hand-off, so an over-cap value never half-sends.
+    // Spread into each route's payload only when set, so a send without it is unchanged.
+    const resolvedSystemContext = resolveSystemContext(options?.systemContext);
+    if (resolvedSystemContext.kind === 'tooLong') {
+      console.error(
+        `[useSendMessage] Refused send: systemContext is ${resolvedSystemContext.length} characters (max ${PROMPT_TEXT_MAX}).`
+      );
+      toast.error('This prompt could not be sent: its extra instructions are too long.');
+      setSubmitting(false);
+      options?.onRefused?.();
+      return;
+    }
+    const systemContext = resolvedSystemContext.kind === 'ok' ? resolvedSystemContext.systemContext : undefined;
+    const systemContextField = systemContext ? { systemContext } : {};
     if (currentSession && newestTurn?.suggestedChoices && choiceKey?.pickedIndex != null) {
       void recordReplyChoice(queryClient, {
         sessionId: currentSession.id,
@@ -728,8 +752,10 @@ export function useSendMessage({
       options?.onRefused?.();
       return;
     }
-    // Tool-directed send: see LLMCommandArgs.skipRapidReply.
-    const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0;
+    // Tool-directed or context-carrying send: see LLMCommandArgs.skipRapidReply. The ack
+    // model sees neither the tools nor the hidden system context, so with either present an
+    // instant ack could contradict what the real reply is told to do.
+    const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0 || systemContext !== undefined;
 
     // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
     // models: for image models "vision" is irrelevant - image-input capability is handled by
@@ -819,6 +845,7 @@ export function useSendMessage({
           prompt_upsampling,
           seed,
           output_format,
+          ...systemContextField,
         });
       };
     } else {
@@ -861,6 +888,7 @@ export function useSendMessage({
           // path - but we still surface the source so per-decision logs can
           // attribute the choice.
           agentMode: effectiveAgentMode,
+          ...systemContextField,
         });
       };
     }
@@ -1077,6 +1105,9 @@ export function useSendMessage({
           // Propagate provenance so persisted IChatHistoryItem carries the
           // tag the AutoRouteBadge reads.
           routingSource,
+          // Per-send system context: the executor folds it into the run's system
+          // message, and it is kept off the stored execution and Quest.
+          ...systemContextField,
         });
         setChatInputValue('');
         clearDraft(dispatchSessionId);

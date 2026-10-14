@@ -168,9 +168,7 @@ const UNMAPPED_LEGACY: ReadonlySet<string> = new Set<string>([
   'gemini-1.5-flash-8b',
   'gemini-1.5-pro',
   'gemini-2.0-flash-exp',
-  'gemini-2.5-flash-lite',
   'gemini-2.5-flash-preview-09-25',
-  'gemini-2.5-pro',
   'gemini-2.5-pro-preview-05-06',
   'gemini-3-pro-preview',
   'flux-pro',
@@ -237,6 +235,13 @@ describe('DEPRECATED_MODEL_MAP invariants', () => {
 
     expect(dangling, `mappings whose target is not in any adapter table: ${dangling.join(', ')}`).toEqual([]);
   });
+});
+
+it.each([
+  ['gemini-2.5-pro', 'gemini-3.5-flash'],
+  ['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite'],
+])('maps retired %s to %s', (retired, successor) => {
+  expect(DEPRECATED_MODEL_MAP[retired]).toBe(successor);
 });
 
 describe('Gemini 2.5 Flash retirement', () => {

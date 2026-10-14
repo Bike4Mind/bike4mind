@@ -860,6 +860,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
+      generated?: boolean;
       fileIds?: string[];
       restrictToFileIds?: string[];
     },

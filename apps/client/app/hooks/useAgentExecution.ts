@@ -112,6 +112,13 @@ interface AgentExecuteStart {
    * (classifier- or rule-based complexity-routed).
    */
   routingSource?: 'mention' | 'agent_literal' | 'toggle' | 'classifier' | 'user-default' | 'complexity';
+  /**
+   * Extra system context for this run only (a programmatic launch's `systemContext`). The
+   * executor appends it to the run's system message. Kept off the execution doc's own fields
+   * and the Quest; carried in the server-only checkpoint so continuations keep it.
+   * Server-capped at `PROMPT_TEXT_MAX`.
+   */
+  systemContext?: string;
 }
 
 interface AgentExecuteAbort {

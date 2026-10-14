@@ -3,7 +3,7 @@ import {
   DEFAULT_LAMBDA_ENVIRONMENT,
   PRODUCTION_STAGES,
   SINGLE_RECORD_BATCH,
-  TEST_VIDEO_PROVIDER_ENVIRONMENT,
+  TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
 import { imageProcessor } from './imageProcessor';
 import { allSecrets } from './secrets';
@@ -248,7 +248,7 @@ const fabFileBucketNotification = fabFileBucket.notify({
     {
       name: 'uploadComplete',
       function: {
-        handler: 'apps/client/server/s3/objectCreated.func',
+        handler: 'apps/workers/src/s3/objectCreated.func',
         runtime: 'nodejs24.x',
         link: [...allSecrets, websocketApi, fabFileChunkQueue, fabFileBucket],
         permissions: [
@@ -1040,7 +1040,7 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-      ...TEST_VIDEO_PROVIDER_ENVIRONMENT,
+      ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     },
     concurrency: {
       // Store steps hold up to 256MB of output and providers rate-limit.

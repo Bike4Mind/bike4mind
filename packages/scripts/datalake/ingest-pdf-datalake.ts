@@ -67,9 +67,11 @@ import {
   CONVERGENCE_ORIGIN,
   DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
   DATA_LAKES,
+  DEFAULT_STORAGE_LIMIT_MB,
   KnowledgeType,
   isChunkStalled,
   shouldHaltConvergence,
+  storageLimitToBytes,
 } from '@bike4mind/common';
 import {
   filterPdfCandidates,
@@ -431,7 +433,7 @@ async function ingest(lake: LakeTarget, opts: Options): Promise<number> {
   // Advisory quota check; the service re-checks per file. Org-scoped ingest is governed
   // by the org's limit instead, so only warn when no organizationId is given.
   const currentBytes = user.currentStorageSize ?? 0;
-  const limitBytes = (user.storageLimit ?? 1000) * 1_000_000;
+  const limitBytes = storageLimitToBytes(user.storageLimit ?? DEFAULT_STORAGE_LIMIT_MB);
   console.log(`\nOwner storage: ${mb(currentBytes)} used of ${mb(limitBytes)} limit; plan adds ${mb(plannedBytes)}`);
   if (!opts.organizationId && currentBytes + plannedBytes > limitBytes) {
     console.log('  !! plan exceeds the owner storageLimit - raise it (units: MB) before --execute');

@@ -5,9 +5,9 @@ import { MigrationManager } from '@bike4mind/scripts';
 import { connectDB, getDB } from '@bike4mind/database';
 import { ensureAtlasVectorSearchIndexes } from '@bike4mind/fab-pipeline';
 import { Context } from 'aws-lambda';
-import { Config } from './config';
+import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
-import { contextToLogs } from './logger';
+import { contextToLogs } from '@server/utils/logger';
 
 export const createDatabase = async (_event: unknown, context: Context) => {
   const logger = new Logger().withMetadata(contextToLogs(context));

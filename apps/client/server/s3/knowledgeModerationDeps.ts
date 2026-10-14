@@ -15,7 +15,7 @@ import type { Types } from 'mongoose';
  * identically - the claim is the single mutual-exclusion point between them - so the wiring lives
  * here once. The claim is an atomic pending|null -> scanning CAS, so only one runner can ever flip a
  * given row out of 'pending' - the callers here (and any concurrent hosted upload-path scan) cannot
- * double-process it. The hosted upload-time scan (server/s3/objectCreated.ts) guards differently (it
+ * double-process it. The hosted upload-time scan (apps/workers/src/s3/objectCreated.ts) guards differently (it
  * never writes the interim 'scanning' state), so this is a parallel guarantee, not the identical
  * mechanism.
  */
@@ -59,7 +59,7 @@ export function buildKnowledgeModerationDeps(
           // The attempt bookkeeping the rescue sweep's fairness sort and backoff read - see
           // moderationRescueSweep.ts. Written here because this is the single point every
           // transient failure on THIS door (the import path, the self-host webhook and the sweep's
-          // re-scan) funnels through. The hosted S3 handler (server/s3/objectCreated.ts) has no
+          // re-scan) funnels through. The hosted S3 handler (apps/workers/src/s3/objectCreated.ts) has no
           // release - a crashed hosted scan is only ever recovered by the sweep's own stale-claim
           // reclaim, so its attempt count is undercounted. The on-demand route releases through
           // moderationScan.releaseModerationClaim, which writes the same bookkeeping.

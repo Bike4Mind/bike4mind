@@ -2,13 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
  * POST /api/oauth/refresh gates on the same first-party client allowlist as the
- * device routes. Only that gate is exercised here; rotation itself has its own
- * coverage in the auth-session service.
+ * device routes, and on account state like the browser refresh. Rotation itself has
+ * its own coverage in the auth-session service.
  */
+
+const USABLE_USER = { id: 'user-1', isBanned: false, disputePending: false };
 
 const h = vi.hoisted(() => ({
   isOpaqueRefreshToken: vi.fn(() => true),
-  rotateSession: vi.fn(async () => ({ status: 'rotated', accessToken: 'a.jwt', refreshToken: 'r2.jwt' })),
+  rotateSession: vi.fn(),
+  issueSession: vi.fn(),
+  revokeSession: vi.fn(),
+  findById: vi.fn(),
+  verifyRefreshToken: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -23,19 +29,26 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   ACCESS_TOKEN_TTL_SECONDS: 1800,
-  authTokenGenerator: { signAccessToken: vi.fn(() => 'a.jwt'), verifyRefreshToken: vi.fn() },
+  authTokenGenerator: { signAccessToken: vi.fn(() => 'a.jwt'), verifyRefreshToken: h.verifyRefreshToken },
 }));
 vi.mock('@server/auth/sessionDevice', () => ({ buildSessionDevice: () => ({}) }));
-vi.mock('@bike4mind/services', () => ({
-  isTokenVersionCurrent: () => true,
-  authSessionService: {
-    isOpaqueRefreshToken: h.isOpaqueRefreshToken,
-    rotateSession: h.rotateSession,
-    issueSession: vi.fn(),
-  },
-}));
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return {
+    isTokenVersionCurrent: () => true,
+    authSessionService: {
+      isOpaqueRefreshToken: h.isOpaqueRefreshToken,
+      rotateSession: h.rotateSession,
+      issueSession: h.issueSession,
+      revokeSession: h.revokeSession,
+    },
+    // The real account-state rule, so a state a stand-in copy could not express (a suspension)
+    // is actually exercised instead of silently passing.
+    userService: { accountBlockReasons: actual.userService.accountBlockReasons },
+  };
+});
 vi.mock('@bike4mind/database', () => ({
-  User: { findById: vi.fn() },
+  User: { findById: h.findById },
   userRepository: {},
   authSessionRepository: {},
 }));
@@ -71,9 +84,22 @@ const call = (clientId: unknown) => {
   return (handler as unknown as (req: unknown, res: Res) => Promise<unknown>)(req, res).then(() => res);
 };
 
-describe('POST /api/oauth/refresh client allowlist', () => {
-  beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.isOpaqueRefreshToken.mockReturnValue(true);
+  h.rotateSession.mockResolvedValue({
+    status: 'rotated',
+    sid: 'sid-1',
+    user: USABLE_USER,
+    accessToken: 'a.jwt',
+    refreshToken: 'r2.jwt',
+  });
+  h.issueSession.mockResolvedValue({ accessToken: 'migrated.jwt', refreshToken: 'migrated-r' });
+  h.verifyRefreshToken.mockReturnValue({ userId: 'user-1', tokenVersion: 0 });
+  h.findById.mockResolvedValue(USABLE_USER);
+});
 
+describe('POST /api/oauth/refresh client allowlist', () => {
   it('still refreshes for b4m-cli', async () => {
     const res = await call('b4m-cli');
 
@@ -91,5 +117,46 @@ describe('POST /api/oauth/refresh client allowlist', () => {
   it('rejects a client_id that is not on the allowlist', async () => {
     await expect(call('b4m-rogue')).rejects.toThrow();
     expect(h.rotateSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/oauth/refresh account state', () => {
+  it.each([
+    ['banned', { isBanned: true }, 401],
+    ['dispute-suspended', { disputePending: true }, 403],
+    ['content-suspended', { moderation: { status: 'suspended' } }, 403],
+  ])('refuses a %s account, revokes the rotated session and returns no tokens', async (_label, state, status) => {
+    h.rotateSession.mockResolvedValue({
+      status: 'rotated',
+      sid: 'sid-1',
+      user: { ...USABLE_USER, ...state },
+      accessToken: 'a.jwt',
+      refreshToken: 'r2.jwt',
+    });
+
+    const res = await call('b4m-cli');
+
+    expect(res.statusCode).toBe(status);
+    expect(res.body?.access_token).toBeUndefined();
+    expect(h.revokeSession).toHaveBeenCalledWith('sid-1', expect.anything());
+  });
+
+  it('refuses a banned account on a legacy token before minting a session', async () => {
+    h.isOpaqueRefreshToken.mockReturnValue(false);
+    h.findById.mockResolvedValue({ ...USABLE_USER, isBanned: true });
+
+    const res = await call('b4m-cli');
+
+    expect(res.statusCode).toBe(401);
+    expect(h.issueSession).not.toHaveBeenCalled();
+  });
+
+  it('still migrates a usable account on a legacy token', async () => {
+    h.isOpaqueRefreshToken.mockReturnValue(false);
+
+    const res = await call('b4m-cli');
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.access_token).toBe('migrated.jwt');
   });
 });

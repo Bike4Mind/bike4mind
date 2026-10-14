@@ -6,7 +6,7 @@ import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import imageLogger from '@client/app/utils/imageLogger';
+import imageLogger from '@server/utils/imageLogger';
 import axios from 'axios';
 
 interface GenerateFeaturedImageRequest {
