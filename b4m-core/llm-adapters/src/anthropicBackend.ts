@@ -1703,8 +1703,9 @@ export class AnthropicBackend implements ICompletionBackend {
                   } else if (event.type === 'message_start') {
                     // Seed the prompt's usage: message_delta is the last event, so a stream cut
                     // short (Stop, degeneration abort) never sees it, yet the provider still bills
-                    // the prompt. output_tokens is left out: it is a placeholder here, and settlement
-                    // would trust a near-zero output over its estimate of the partial reply.
+                    // the prompt. output_tokens is left out because it is a placeholder here. On a first
+                    // call settlement then falls back to its estimate of the partial reply; on a later
+                    // call the provider basis applies and this call's partial output goes unbilled (known gap).
                     const startUsage = event.message?.usage;
                     if (startUsage) {
                       usageInfo = {
