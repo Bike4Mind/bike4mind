@@ -1,10 +1,9 @@
 import React, { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { registerSendPrompt, type SendPromptOptions } from '@client/app/hooks/useChatActions';
 
-import { Box, Typography } from '@mui/joy';
+import { Box } from '@mui/joy';
 import Grid from '@mui/joy/Grid';
 import Stack from '@mui/joy/Stack';
-import Tooltip from '@mui/joy/Tooltip';
 
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
@@ -28,6 +27,7 @@ import { SessionFilePond } from './SessionFilePond';
 import { SessionToolbar } from './SessionToolbar';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { MessageFileThumbnails } from '@client/app/components/Session/MessageFileThumbnails';
+import ContextUsageChip from './ContextUsageChip';
 import { useNotebookFilepond } from '@client/app/components/Session/NotebookFilepondProvider';
 import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
 import { useGetAgents, useGetSessionAgents } from '@client/app/hooks/data/agents';
@@ -50,14 +50,8 @@ import { useChatCompletionContext } from '@client/app/contexts/ChatCompletionCon
 import { useAutoFocus } from '@client/app/hooks/useAutoFocus';
 import { useChatPaste } from '@client/app/hooks/useChatPaste';
 import { useTokenLimits } from '@client/app/hooks/useTokenLimits';
-import {
-  useSessionContextUsage,
-  formatTokenCount,
-  type ContextUsageBand,
-} from '@client/app/hooks/useSessionContextUsage';
-import { ContextUsageWarning } from '../ContextUsageWarning';
+import { useSessionContextUsage } from '@client/app/hooks/useSessionContextUsage';
 import { useAttachmentFitWarning } from '@client/app/hooks/useAttachmentFitWarning';
-import { ContextCompactionNote } from '../ContextCompactionNote';
 import { MemberCreditBudgetNote } from '../MemberCreditBudgetNote';
 import { CreditPayerNote } from '../CreditPayerNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
@@ -146,7 +140,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const lowCreditsWarningDismissed =
     !!currentUserId && (lowCreditsDismissedFor === currentUserId || isCreditNudgeDismissed(currentUserId));
   // Band at which the user dismissed the context warning; re-shows on escalation.
-  const [contextWarningDismissedBand, setContextWarningDismissedBand] = useState<ContextUsageBand | null>(null);
 
   // Modal state: triggered modal, admin preview, format dialog, modal list
   const {
@@ -195,7 +188,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // Keeps enabledMcpServers in sync with the database (init + stale-server cleanup)
   useMcpServerSync();
 
-  const { contextWindowLimit, effectiveMaxOutputTokens, maxInputTokens, isOverContextWindow } = useTokenLimits({
+  const { isOverContextWindow } = useTokenLimits({
     model,
     modelInfo,
     max_tokens,
@@ -212,50 +205,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     // Notebook-context files ride EVERY turn on this session, so they spend the budget too.
     useMemo(() => workBenchFiles.map(f => String(f.id)).filter(Boolean), [workBenchFiles])
   );
-  // Dismissal is per attachment set: changing the files or the model asks a new question, so the
-  // previous dismissal should not silence the new answer.
-  const [attachmentWarningDismissed, setAttachmentWarningDismissed] = useState(false);
-  const attachmentFitKey = attachmentFit ? `${attachmentFit.fileName}:${attachmentFit.deliveredPercent}` : '';
-  useEffect(() => {
-    setAttachmentWarningDismissed(false);
-  }, [attachmentFitKey]);
-  // Show the warning once usage is elevated, until dismissed at that band; a
-  // jump from warning -> danger re-surfaces it.
-  const showContextWarning =
-    !!contextUsage && contextUsage.band !== 'normal' && contextUsage.band !== contextWarningDismissedBand;
-
-  // Compaction note: show when the latest turn folded older history into working
-  // memory, until dismissed. Re-surfaces when a later turn compacts again.
-  const compactedTurns = contextUsage?.compactedTurns ?? 0;
-  const [compactionNoteDismissed, setCompactionNoteDismissed] = useState(false);
-  const showCompactionNote = compactedTurns > 0 && !compactionNoteDismissed;
-  useEffect(() => {
-    setCompactionNoteDismissed(false);
-  }, [compactedTurns]);
-
-  // Reset both dismissals when switching notebooks so a heavy session doesn't
-  // inherit a prior notebook's dismissed state.
-  useEffect(() => {
-    setContextWarningDismissedBand(null);
-    setCompactionNoteDismissed(false);
-  }, [currentSessionId]);
-
-  // Corner readout for the composer. Prefer the real assembled-context size from
-  // the last turn; before any turn completes, fall back to the current-input
-  // guard (which measures the input box against the budget, not the history).
-  const contextMeter = contextUsage
-    ? {
-        show: contextUsage.band !== 'normal',
-        danger: contextUsage.band === 'danger',
-        primary: `${formatTokenCount(contextUsage.actualInputTokens)}/${formatTokenCount(contextUsage.safeMaxInputTokens)}`,
-        secondary: `${Math.round(contextUsage.utilizationPercentage)}% of ${modelName} context`,
-      }
-    : {
-        show: isOverContextWindow,
-        danger: isOverContextWindow,
-        primary: `${chatInputValue.length}/${maxInputTokens}`,
-        secondary: `Context: ${contextWindowLimit} - Output: ${effectiveMaxOutputTokens}`,
-      };
 
   const pond = useNotebookFilepond();
   // Number(...) first so a stored '0' string (truthy) still falls through to the default -
@@ -598,7 +547,18 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
             <ResearchModeIndicator />
           </>
         }
-        right={<CreditBalanceChip />}
+        right={
+          <>
+            {/* Left of the balance, so its changing width never shifts the balance in the corner. */}
+            <ContextUsageChip
+              usage={contextUsage}
+              modelName={modelName}
+              inputOverLimit={isOverContextWindow}
+              attachment={attachmentFit}
+            />
+            <CreditBalanceChip />
+          </>
+        }
         sx={{
           width: '100%',
           maxWidth: promptBarMaxWidth,
@@ -661,29 +621,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   position: 'relative',
                 }}
               >
-                {contextUsage && (
-                  <ContextUsageWarning
-                    show={showContextWarning}
-                    usage={contextUsage}
-                    modelName={modelName}
-                    onDismiss={() => setContextWarningDismissedBand(contextUsage.band)}
-                  />
-                )}
-                {/* Answers a different question than the meter above: not how full the session is, but
-                    whether the file attached to THIS turn survives the budget. Null whenever it fits. */}
-                {attachmentFit && !attachmentWarningDismissed && (
-                  <ContextUsageWarning
-                    show
-                    attachment={attachmentFit}
-                    modelName={modelName}
-                    onDismiss={() => setAttachmentWarningDismissed(true)}
-                  />
-                )}
-                <ContextCompactionNote
-                  show={showCompactionNote}
-                  turns={compactedTurns}
-                  onDismiss={() => setCompactionNoteDismissed(true)}
-                />
                 {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
                 {!creditUi.replaceComposer && <CreditPayerNote session={currentSession} />}
                 {creditUi.replaceComposer ? (
@@ -810,49 +747,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         }
                         agents={lexicalAgents}
                       />
-
-                      {contextMeter.show ? (
-                        <Box
-                          sx={{
-                            position: 'absolute',
-                            mr: 20,
-                            // Passive readout: must stay below composer popovers (attach
-                            // menu zIndex 1000 in AttachFileButton.tsx, slash/mention
-                            // suggestions), or it intercepts their clicks.
-                            zIndex: 1,
-                            backgroundColor: 'background.surface',
-                            borderRadius: '6px',
-                            padding: '4px 8px',
-                          }}
-                        >
-                          <Tooltip title="Assembled context size for this notebook (last turn)">
-                            <Typography
-                              sx={theme => ({
-                                color: contextMeter.danger ? 'red' : theme.palette.text.primary,
-                                textAlign: 'right',
-                                leadingTrim: 'both',
-                                textEdge: 'cap',
-                                fontSize: '14px',
-                                fontStyle: 'normal',
-                                fontWeight: '400',
-                                lineHeight: '100%',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: 'flex-end',
-                              })}
-                              variant="plain"
-                              level="body-xs"
-                            >
-                              <Box component="span" sx={{ fontWeight: '500' }}>
-                                {contextMeter.primary}
-                              </Box>
-                              <Box component="span" sx={{ opacity: 0.7, fontSize: '12px', mt: 0.5 }}>
-                                {contextMeter.secondary}
-                              </Box>
-                            </Typography>
-                          </Tooltip>
-                        </Box>
-                      ) : null}
                     </Box>
                   </Stack>
                 )}

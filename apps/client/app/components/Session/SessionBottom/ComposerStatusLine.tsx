@@ -8,6 +8,8 @@ interface ComposerStatusLineProps {
   sx?: SxProps;
 }
 
+const ITEM_GAP = '8px';
+
 /**
  * Quiet line above the composer box for notebook and account state (the balance, and next the
  * notebook's files). What travels with the message stays inside the box. The caller sizes it to
@@ -31,8 +33,9 @@ const ComposerStatusLine: FC<ComposerStatusLineProps> = ({ left, right, sx }) =>
       ...(Array.isArray(sx) ? sx : [sx]),
     ]}
   >
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0 }}>{left}</Box>
-    <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>{right}</Box>
+    {/* One gap between items on both sides; each item adds its own ~6px padding on top. */}
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: ITEM_GAP, minWidth: 0 }}>{left}</Box>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: ITEM_GAP, flexShrink: 0 }}>{right}</Box>
   </Box>
 );
 
