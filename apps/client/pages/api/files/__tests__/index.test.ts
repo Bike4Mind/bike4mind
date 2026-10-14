@@ -281,7 +281,8 @@ describe('DELETE /api/files', () => {
 
   // The fork guard compares a reply's notebook with the file's own; a projection without sessionId makes the
   // file's own notebook look like another's, so every notebook-linked chat copy would be kept.
-  it('selects the notebook link the generated-copy fork guard needs', async () => {
+  // `versions` carries the retained AI-edit keys, which would otherwise be orphaned.
+  it('selects the notebook link the generated-copy fork guard needs, and the retained versions', async () => {
     const { req, res } = invokeDelete();
 
     await mockRefs.deleteHandler!(req, res);
@@ -290,6 +291,7 @@ describe('DELETE /api/files', () => {
     expect(storedObjectProjection).toEqual(
       expect.arrayContaining([
         'filePath',
+        'versions',
         'moderationStatus',
         'sourceMetadata.generatedCopyKey',
         'sourceMetadata.sessionId',
