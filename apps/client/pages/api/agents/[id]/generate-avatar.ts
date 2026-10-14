@@ -21,7 +21,7 @@ import { OperationsModelService } from '@client/services/operationsModelService'
 import { KnowledgeType } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
 import axios from 'axios';
-import imageLogger from '@client/app/utils/imageLogger';
+import imageLogger from '@server/utils/imageLogger';
 
 // System prompt for creating visual prompts from agent descriptions
 const AGENT_AVATAR_PROMPT_SYSTEM = `You are an expert at translating rich personality descriptions and agent metadata into detailed visual prompts for AI image generation.

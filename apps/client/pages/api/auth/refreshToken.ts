@@ -4,6 +4,8 @@ import { UnauthorizedError } from '@server/utils/errors';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
+import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { refuseBlockedRotatedSession } from '@server/auth/refreshAccountGate';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -61,10 +63,16 @@ const handler = baseApi({ auth: false })
         // valid UserAuthAuditEvent names by construction. The promise is RETURNED rather than
         // dropped so the service can await the write on the paths that throw immediately after
         // emitting; logAuthAudit swallows its own failures, so it can never reject or fail auth.
-        audit: event => logAuthAudit(req, { userId: event.userId, event: event.type, metadata: { ...event.metadata, sid: event.sid } }),
+        audit: event =>
+          logAuthAudit(req, {
+            userId: event.userId,
+            event: event.type,
+            metadata: { ...event.metadata, sid: event.sid },
+          }),
         logger: req.logger,
       });
       requireNonSystemUser(rotated.user);
+      await refuseBlockedRotatedSession(rotated, req.logger);
       return respond(
         {
           // Redact before returning: the bootstrap refresh feeds this straight into the client's
@@ -98,6 +106,8 @@ const handler = baseApi({ auth: false })
     if (!user) throw new UnauthorizedError('Unauthorized');
 
     requireNonSystemUser(user);
+    // Refused before a session is minted, so nothing is left to revoke.
+    assertAccountStateUsable(user);
 
     // Kill switch: a stale refresh token must not be exchangeable for fresh
     // access tokens, otherwise revocation could be bypassed via refresh.
