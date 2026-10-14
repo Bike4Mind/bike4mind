@@ -55,6 +55,12 @@ vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: (...a: any[]) =
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' }),
 }));
+const mockResolveSecondFactor = vi.fn();
+const mockLogSignInSuccess = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/signInSecondFactor', () => ({
+  resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
+  logSignInSuccess: (...a: any[]) => mockLogSignInSuccess(...a),
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/auth/requireNonSystemUser', () => ({ requireNonSystemUser: vi.fn() }));
@@ -84,6 +90,8 @@ vi.mock('@server/utils/auth/oauthSignupGrants', () => ({
 }));
 
 // Import after mocks are registered.
+import { issueBrowserSession } from '@server/auth/issueSession';
+import { logAuthAudit } from '@server/utils/authAudit';
 import handler from '@pages/api/auth/okta/callback';
 
 const STATE = 'state-token';
@@ -111,6 +119,7 @@ async function runCallback(opts: { user: any; userInfo: Record<string, unknown> 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice: null });
   process.env.APP_URL = 'http://localhost:3000';
 
   mockVerifyState.mockReturnValue({
@@ -636,5 +645,120 @@ describe('/api/auth/okta/callback - OAuth client source tag', () => {
       userInfo: { sub: 'okta-sub-default', email: 'old@example.com', email_verified: true, name: 'Old User' },
     });
     expect(mockStampSourceTag).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/auth/okta/callback - second factor', () => {
+  const sstFallbackConfig = {
+    config: { issuer: 'https://okta.example.com' },
+    source: 'sst',
+    idp: undefined,
+  };
+  const existingUser = {
+    id: 'u-mfa',
+    _id: 'u-mfa',
+    email: 'user@example.com',
+    emailVerified: true,
+    authProviders: [{ strategy: AuthStrategy.Okta, id: 'okta-mfa' }],
+    tokenVersion: 0,
+  };
+  const userInfo = { sub: 'okta-mfa', email: 'user@example.com', email_verified: true, preferred_username: 'user' };
+
+  it('leaves MFA to the IdP for a login bound to an IdP record', async () => {
+    const res = await runCallback({
+      user: {
+        ...existingUser,
+        authProviders: [{ strategy: AuthStrategy.Okta, id: 'okta-mfa', oktaIdentityProviderId: 'idp-1' }],
+      },
+      userInfo,
+    });
+
+    expect(mockResolveSecondFactor).not.toHaveBeenCalled();
+    expect(issueBrowserSession).toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockLogSignInSuccess).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'u-mfa',
+      strategy: AuthStrategy.Okta,
+      trustedDevice: null,
+    });
+  });
+
+  it('hands the unbound SST fallback to the MFA challenge without a session', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: true });
+
+    const res = await runCallback({ user: existingUser, userInfo });
+
+    expect(mockResolveSecondFactor).toHaveBeenCalledTimes(1);
+    expect(mockResolveSecondFactor).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      origin: { strategy: 'okta', createdVia: 'okta' },
+    });
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success/);
+    expect(res._getRedirectUrl()).toContain('#mfaToken=pending-tok&userId=u-mfa&mfa=verify&passkey=1');
+    expect(res._getRedirectUrl()).not.toContain('#token=');
+    expect(issueBrowserSession).not.toHaveBeenCalled();
+    expect(mockLogSignInSuccess).not.toHaveBeenCalled();
+  });
+
+  it('audits a brand-new provider link even when the second factor ends the request', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    const res = await runCallback({ user: { ...existingUser, authProviders: [] }, userInfo });
+
+    expect(res._getRedirectUrl()).toContain('#mfaToken=pending-tok');
+    expect(issueBrowserSession).not.toHaveBeenCalled();
+    expect(logAuthAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId: 'u-mfa', event: 'oauth_link', strategy: 'okta' })
+    );
+  });
+
+  it('does not audit a link on a routine re-login that is handed to the challenge', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    await runCallback({ user: existingUser, userInfo });
+
+    expect(logAuthAudit).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ event: 'oauth_link' }));
+  });
+
+  it('keeps the requested redirectTo ahead of the MFA handoff fragment', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockVerifyState.mockReturnValue({ valid: true, payload: { redirectTo: '/projects/p1?tab=files' } });
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    const res = await runCallback({ user: existingUser, userInfo });
+
+    const location = res._getRedirectUrl();
+    const expectedQuery = `/auth/success?redirectTo=${encodeURIComponent('/projects/p1?tab=files')}`;
+    expect(location.startsWith(expectedQuery)).toBe(true);
+    expect(location.indexOf(expectedQuery)).toBeLessThan(location.indexOf('#mfaToken='));
+  });
+
+  it('sends the unbound SST fallback to MFA setup when enrollment is owed', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'enroll', mfaToken: 'pending-tok' });
+
+    const res = await runCallback({ user: existingUser, userInfo });
+
+    expect(res._getRedirectUrl()).toContain('#mfaToken=pending-tok&userId=u-mfa&mfa=setup');
+    expect(issueBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it('mints the session for the unbound fallback once the second factor is satisfied', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    const trustedDevice = { id: 'td-1', label: 'Laptop' };
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice });
+
+    const res = await runCallback({ user: existingUser, userInfo });
+
+    expect(issueBrowserSession).toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockLogSignInSuccess).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'u-mfa',
+      strategy: AuthStrategy.Okta,
+      trustedDevice,
+    });
   });
 });
