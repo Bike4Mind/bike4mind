@@ -128,6 +128,18 @@ describe('ShareModal - By Link tab', () => {
     expect(note).not.toHaveTextContent('attached files');
   });
 
+  it('does not promise an off switch to a file sharer who is not the owner', () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal id="file-1" name="a.pdf" type={InviteType.FabFile} ownerId="u2" open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
+      "Anyone with the link can open this item after signing in, and can share it on. Links don't expire."
+    );
+    expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
+  });
+
   it('describes a bulk link as covering these items, without the attached-files wording', () => {
     renderModal([{ id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument]);
     const note = screen.getByTestId('share-modal-link-access-note');

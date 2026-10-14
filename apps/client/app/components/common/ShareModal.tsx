@@ -701,9 +701,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                     <>
                       Anyone with the link can open {isBulkSharing ? 'these items' : `this ${itemType}`} after signing
                       in, and can share it on.{' '}
-                      {!isBulkSharing && type === InviteType.FabFile
-                        ? 'Links keep working until you turn them off.'
-                        : "Links don't expire."}
+                      {canTurnOffLinks ? 'Links keep working until you turn them off.' : "Links don't expire."}
                     </>
                   )}
                 </Typography>
