@@ -12,7 +12,7 @@
  *
  * `blocked` needs a prompt Veo actually refuses; the gory default was NOT blocked live (Veo made a normal video).
  * Set BLOCKED_PROMPT to override it, and BLOCKED_IMAGE=<local png/jpg/webp> to submit image-to-video instead (the
- * likeness filter fires only on an input image).
+ * likeness filter fires only on an input image). One of the two must be set.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { extname } from 'node:path';
@@ -169,12 +169,12 @@ const write = (scenario: string, exchanges: Exchange[]) => {
   process.stdout.write(`wrote ${scenario}.json\n`);
 };
 
-const recordGeneration = async (
-  scenario: string,
-  instance: Record<string, unknown>,
-  parameters: Record<string, unknown> = {}
-) => {
-  const submit = await call('POST', SUBMIT_PATH, submitBody(instance, parameters));
+// The docs allow only this value for image-to-video.
+const imageToVideoBody = (prompt: string, image: Record<string, unknown>) =>
+  submitBody({ prompt, image }, { personGeneration: 'allow_adult' });
+
+const recordGeneration = async (scenario: string, body: Record<string, unknown>) => {
+  const submit = await call('POST', SUBMIT_PATH, body);
   process.stdout.write(`${scenario}: submit ${submit.exchange.response.status}\n`);
   if (submit.exchange.response.status >= 400) {
     throw new Error(
@@ -220,34 +220,35 @@ const redactBlocked = (value: unknown, prompt: string): unknown => {
 
 const scenarios: Record<string, () => Promise<void>> = {
   'text-to-video': () =>
-    recordGeneration('text-to-video', {
-      prompt: 'A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking.',
-    }),
+    recordGeneration(
+      'text-to-video',
+      submitBody({ prompt: 'A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking.' })
+    ),
 
   'image-to-video': () =>
     recordGeneration(
       'image-to-video',
-      {
-        prompt: 'The color slowly ripples like water, camera static.',
-        image: { bytesBase64Encoded: solidPng(), mimeType: 'image/png' },
-      },
-      // The docs allow only this value for image-to-video.
-      { personGeneration: 'allow_adult' }
+      imageToVideoBody('The color slowly ripples like water, camera static.', {
+        bytesBase64Encoded: solidPng(),
+        mimeType: 'image/png',
+      })
     ),
 
   blocked: async () => {
-    // Redacted in the fixture either way. This default did not trigger a block live; see the header.
+    // The default prompt below was not blocked live, and an input image is what triggers the likeness filter:
+    // require an explicit input so a bare run cannot pay for a video the guard then discards.
+    const imagePath = process.env.BLOCKED_IMAGE;
+    if (imagePath === '') throw new Error('BLOCKED_IMAGE is empty');
+    if (imagePath === undefined && process.env.BLOCKED_PROMPT === undefined) {
+      throw new Error('blocked: set BLOCKED_IMAGE or BLOCKED_PROMPT (the default prompt is not blocked)');
+    }
     const blockedPrompt =
       process.env.BLOCKED_PROMPT ?? 'Extremely graphic, gory footage of a person being violently injured.';
-    const imagePath = process.env.BLOCKED_IMAGE;
     const body = imagePath
-      ? submitBody(
-          {
-            prompt: blockedPrompt,
-            image: { bytesBase64Encoded: readFileSync(imagePath).toString('base64'), mimeType: imageMimeOf(imagePath) },
-          },
-          { personGeneration: 'allow_adult' }
-        )
+      ? imageToVideoBody(blockedPrompt, {
+          bytesBase64Encoded: readFileSync(imagePath).toString('base64'),
+          mimeType: imageMimeOf(imagePath),
+        })
       : submitBody({ prompt: blockedPrompt });
     const blocked = await call('POST', SUBMIT_PATH, body);
     const { status } = blocked.exchange.response;
