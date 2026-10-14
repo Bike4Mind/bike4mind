@@ -23,7 +23,10 @@ const ComposerStatusLine: FC<ComposerStatusLineProps> = ({ left, right, sx }) =>
         justifyContent: 'space-between',
         gap: 1,
         px: '8px',
-        py: '4px',
+        // 36px tall with the 24px items. SessionMiddle's scroll-to-bottom button hangs into this
+        // line by its height minus 16px - keep in sync.
+        pt: '8px',
+        pb: '4px',
       },
       ...(Array.isArray(sx) ? sx : [sx]),
     ]}

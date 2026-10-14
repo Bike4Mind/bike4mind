@@ -71,8 +71,8 @@ const ScrollToBottomButton = memo(
         sx={{
           position: 'absolute',
           // Hangs down into the composer's status line (its empty middle) and stops 16px above the
-          // composer box. That line is 32px tall (ComposerStatusLine) - keep in sync.
-          bottom: '-16px',
+          // composer box. That line is 36px tall (ComposerStatusLine) - keep in sync.
+          bottom: '-20px',
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 1100,

@@ -50,6 +50,9 @@ const ResearchModeIndicator: FC = () => {
                 // warning.plainColor.
                 '--variant-plainColor': orange[450],
                 '--variant-plainHoverColor': orange[450],
+                // Hover and press on the same neutral wash as the other status-line items, not orange.
+                '--variant-plainHoverBg': 'var(--joy-palette-neutral-plainHoverBg)',
+                '--variant-plainActiveBg': 'var(--joy-palette-neutral-plainActiveBg)',
               }
             : {
                 '--variant-plainColor': 'var(--joy-palette-text-tertiary)',
