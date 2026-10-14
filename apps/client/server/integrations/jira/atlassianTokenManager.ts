@@ -88,10 +88,13 @@ export class AtlassianTokenManager {
     }
 
     const tokenData = (await response.json()) as {
-      access_token: string;
+      access_token?: string;
       refresh_token?: string;
-      expires_in: number;
+      expires_in?: number;
     };
+    if (!tokenData.access_token || typeof tokenData.expires_in !== 'number') {
+      throw new Error('Access token or expiry missing from Atlassian response');
+    }
     const nextRefreshToken = tokenData.refresh_token ?? user.atlassianConnect.refreshToken;
     if (!nextRefreshToken) {
       throw new Error('Refresh token missing from Atlassian response');
