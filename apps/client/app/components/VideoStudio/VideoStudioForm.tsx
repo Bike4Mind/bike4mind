@@ -1,7 +1,7 @@
 import type { CreateVideoGenerationBody, VideoModel } from '@bike4mind/common';
 import ImageBrowserModal from '@client/app/components/Agent/ImageBrowserModal';
 import CapabilityForm from '@client/app/components/Studio/CapabilityForm';
-import { useCapabilityFormState, type StudioFormRules } from '@client/app/components/Studio/useCapabilityFormState';
+import { useCapabilityFormState, type NonEmptyList, type StudioFormRules } from '@client/app/components/Studio/useCapabilityFormState';
 import { useImageBrowser } from '@client/app/hooks/agent/useImageBrowser';
 import { videoCapabilityFields } from './videoFields';
 import {
@@ -17,7 +17,7 @@ import {
 const VIDEO_FORM_RULES: StudioFormRules<VideoModel, VideoFormState> = { initialFor: initialFormFor, clampToModel };
 
 type VideoStudioFormProps = {
-  models: readonly [VideoModel, ...VideoModel[]];
+  models: NonEmptyList<VideoModel>;
   isSubmitting: boolean;
   onSubmit: (body: CreateVideoGenerationBody) => void;
 };

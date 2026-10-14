@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { CircularProgress, Typography } from '@mui/joy';
+import type { NonEmptyList } from './useCapabilityFormState';
 
 type StudioModelsGateProps<TModel> = {
   // `<testId>-loading`, `-error` and `-empty`.
@@ -7,11 +8,10 @@ type StudioModelsGateProps<TModel> = {
   // Lower case, as it reads mid-sentence: "video", "music".
   noun: string;
   models: { isPending: boolean; data: TModel[] | undefined };
-  children: (models: readonly [TModel, ...TModel[]]) => ReactNode;
+  children: (models: NonEmptyList<TModel>) => ReactNode;
 };
 
-/** The form state needs a model to start from; this is also what narrows the gate's list to a non-empty tuple. */
-const isNonEmpty = <TModel,>(models: TModel[]): models is [TModel, ...TModel[]] => models.length > 0;
+const isNonEmpty = <TModel,>(models: readonly TModel[]): models is NonEmptyList<TModel> => models.length > 0;
 
 /** Renders a modality's form only once it has at least one usable model, and says why when it does not. */
 const StudioModelsGate = <TModel,>({ testId, noun, models, children }: StudioModelsGateProps<TModel>) => {

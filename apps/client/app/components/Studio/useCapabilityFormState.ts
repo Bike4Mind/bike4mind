@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 
 export type StudioModel = { id: string; display_name: string };
 
+/** A list known to hold at least one item, so its first element needs no undefined check. */
+export type NonEmptyList<T> = readonly [T, ...T[]];
+
 /**
  * A modality's form rules, kept free of React. The server never rounds a request, so clampToModel is where values
  * are moved onto what a newly selected model supports, and it reports every move for the form to show.
@@ -16,7 +19,7 @@ export type StudioFormRules<TModel extends StudioModel, TState extends { modelId
  * The model list is a non-empty tuple so the initial state always has a model to describe.
  */
 export function useCapabilityFormState<TModel extends StudioModel, TState extends { modelId: string }>(
-  models: readonly [TModel, ...TModel[]],
+  models: NonEmptyList<TModel>,
   rules: StudioFormRules<TModel, TState>
 ) {
   const [form, setForm] = useState<TState>(() => rules.initialFor(models[0]));
