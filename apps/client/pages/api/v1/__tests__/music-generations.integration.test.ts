@@ -14,39 +14,37 @@ import {
   musicJob,
   resetHarness,
   validateWithScopes,
-} from '@server/videoGenerations/__test__/routeHarness';
+} from '@server/generations/__test__/routeHarness';
 
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
 vi.mock('@server/middlewares/rateLimit', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).rateLimitMiddlewareMock()
+  (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
 vi.mock('@server/utils/userRateTier', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).userRateTierMock()
+  (await import('@server/generations/__test__/routeHarness')).userRateTierMock()
 );
 vi.mock('@server/utils/orgAccess', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).orgAccessMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/services', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).servicesMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).servicesMock(orig)
 );
 vi.mock('@bike4mind/services/musicJobs', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).musicJobsServiceMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).musicJobsServiceMock(orig)
 );
 vi.mock('@bike4mind/database', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).databaseMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).databaseMock(orig)
 );
 vi.mock('@server/generationJobs/wiring', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).wiringMock()
+  (await import('@server/generations/__test__/routeHarness')).wiringMock()
 );
 vi.mock('@server/generations/signOutputUrl', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).signOutputUrlMock()
+  (await import('@server/generations/__test__/routeHarness')).signOutputUrlMock()
 );
-vi.mock('@server/auth/auth', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).authMock(orig)
-);
+vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));
 
 import handler from '../music-generations/index';
 
@@ -178,7 +176,7 @@ describe('POST /api/v1/music-generations', () => {
     expect(h.createMusicJob).not.toHaveBeenCalled();
   });
 
-  // CONVENTIONS allow no 400 or 402 on a public route, so every service refusal is a 422.
+  // Every service refusal but storage is a 422 (no 402); storage is a 400 like Files, tested below.
   it.each([
     [{ status: 422, code: 'unsupported_duration' }, 'unsupported_duration'],
     [{ status: 422, code: 'unsupported_lyrics' }, 'unsupported_lyrics'],
@@ -190,7 +188,6 @@ describe('POST /api/v1/music-generations', () => {
     [{ status: 402, code: 'insufficient_credits' }, 'insufficient_credits'],
     [{ status: 403, code: 'model_disabled' }, 'model_disabled'],
     [{ status: 400, code: 'invalid_request' }, 'invalid_request'],
-    [{ status: 422, code: 'storage_quota_exceeded' }, 'storage_limit_exceeded'],
   ])('maps a %o refusal to 422 with errorCode %s', async (refusal, errorCode) => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     h.createMusicJob.mockResolvedValue({ ok: false, message: 'refused', ...refusal });
@@ -198,6 +195,28 @@ describe('POST /api/v1/music-generations', () => {
     await handler(req, res);
     expect(res._getStatusCode()).toBe(422);
     expect(res._getJSONData()).toMatchObject({ errorCode });
+  });
+
+  it('maps a storage refusal to 400 storage_limit_exceeded with the quota detail, as the Files routes do', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const storage = {
+      errorCode: 'storage_limit_exceeded',
+      used_bytes: 900,
+      limit_bytes: 1000,
+      requested_bytes: 200_000,
+      owner: 'user',
+    };
+    h.createMusicJob.mockResolvedValue({
+      ok: false,
+      status: 400,
+      code: 'storage_quota_exceeded',
+      message: 'full',
+      storage,
+    });
+    const { req, res } = post({ model: 'test-music', prompt: 'p' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toMatchObject(storage);
   });
 
   it('refuses an unknown model as model_unavailable before the domain', async () => {
@@ -241,6 +260,14 @@ describe('GET /api/v1/music-generations', () => {
   const list = (query: Record<string, string> = {}) => fire({ url: '/api/v1/music-generations', query });
   const forgeCursor = (after: string, scope = 'v1.music-generations') =>
     Buffer.from(JSON.stringify({ v: 1, s: scope, after }), 'utf8').toString('base64url');
+
+  it('rejects a key lacking ai:generate (403) before listing', async () => {
+    validateWithScopes([ApiKeyScope.READ_FILES]);
+    const { req, res } = list();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(h.listByRequester).not.toHaveBeenCalled();
+  });
 
   it('pages newest first across two pages with an opaque cursor, asking only for music jobs', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);

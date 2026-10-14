@@ -2,7 +2,7 @@ import { defineEndpoint } from '../defineEndpoint';
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
-import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, ScopeForbiddenErrorSchema, StorageLimitErrorSchema } from '../../schemas/chat';
 import {
   CreateMusicGenerationBodySchema,
   ListMusicGenerationsQuerySchema,
@@ -96,6 +96,13 @@ export const createMusicGenerationContract = defineEndpoint({
       schema: MusicGenerationSchema,
       example: exampleJob,
     },
+    400: {
+      description:
+        'Your Files storage has no room for the song (`storage_limit_exceeded`, as on the Files upload routes). ' +
+        'The body carries `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together. This ' +
+        'endpoint checks only the user quota, so `org_storage_limit_exceeded` is never returned here.',
+      schema: StorageLimitErrorSchema,
+    },
     403: {
       description:
         'The API key lacks the `ai:generate` scope, or `organization_id` names an organization you do not ' +
@@ -110,8 +117,8 @@ export const createMusicGenerationContract = defineEndpoint({
       description:
         'The request cannot run: a malformed body, a capability violation (`errorCode` names it, e.g. ' +
         '`unsupported_duration` or `lyrics_too_long`), an unknown or unavailable model (`model_unavailable`), a ' +
-        'model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), no room ' +
-        'in your Files storage for the song (`storage_limit_exceeded`), or an Idempotency-Key problem ' +
+        'model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an ' +
+        'Idempotency-Key problem ' +
         '(`invalid_idempotency_key`, `idempotency_key_reused`).',
       schema: MusicGenerationErrorResponseSchema,
     },

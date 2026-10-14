@@ -84,12 +84,17 @@ export async function createMusicJob(
   }
 
   // Before the hold, so a full quota is refused up front rather than the song landing outside Files.
-  if (!(await deps.hasStorageFor(input.user.id, storageSecondsFor(caps, request) * MAX_MUSIC_BYTES_PER_SECOND))) {
+  const storage = await deps.checkStorageFor(
+    input.user.id,
+    storageSecondsFor(caps, request) * MAX_MUSIC_BYTES_PER_SECOND
+  );
+  if (storage) {
     return {
       ok: false,
-      status: 422,
+      status: 400,
       code: 'storage_quota_exceeded',
       message: 'Your file storage is full; free up space to generate music',
+      storage,
     };
   }
 

@@ -20,7 +20,6 @@ export const MUSIC_GENERATION_API_ERROR_CODES = [
   'model_disabled',
   'model_unavailable',
   'insufficient_credits',
-  'storage_limit_exceeded',
   'idempotency_key_reused',
   'invalid_idempotency_key',
 ] as const satisfies readonly ApiErrorCode[];

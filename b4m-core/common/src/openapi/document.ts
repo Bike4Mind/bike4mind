@@ -360,7 +360,12 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     { name: 'AI', description: 'Chat, completions, embeddings, and server-side tool execution.' },
     { name: 'Sessions', description: 'Sessions (called "notebooks" in the product UI) and their attached knowledge.' },
     { name: 'Release notes', description: 'Customer-facing notes on what changed in each release. Public.' },
-    { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
+    {
+      name: 'Audio',
+      description:
+        'Speech, music, and sound-effect generation. For music, prefer `POST /api/v1/music-generations` over ' +
+        '`/api/ai/music`.',
+    },
     {
       name: 'Music',
       description: 'Song generation, queued with `202` and polled at `GET /api/v1/music-generations/{id}`.',

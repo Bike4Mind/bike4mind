@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, MusicGenerationSchema, type IGenerationJobDocumentOf } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  MUSIC_JOB_PUBLIC_ERROR_CODES,
+  MusicGenerationSchema,
+  type IGenerationJobDocumentOf,
+} from '@bike4mind/common';
 import { OUTPUT_URL_TTL_SECONDS } from '@server/generations/signedOutput';
 import { toPublicMusicGeneration } from './toPublicMusicGeneration';
 
@@ -99,6 +104,7 @@ describe('toPublicMusicGeneration', () => {
       OUTPUT_URL_TTL_SECONDS
     );
     expect(OUTPUT_URL_TTL_SECONDS).toBe(900);
+    expect(first.credits).toEqual({ reserved: 80, settled: 80 });
     expect(first.output?.url).not.toBe(second.output?.url);
     expect(first.output).toMatchObject({
       availability: 'ready',
@@ -158,6 +164,16 @@ describe('toPublicMusicGeneration', () => {
     );
     expect(resource.error).toEqual({ code: 'provider_error', message: 'The provider failed to generate the song.' });
     expect(JSON.stringify(resource)).not.toContain('raw upstream text');
+  });
+
+  it.each(MUSIC_JOB_PUBLIC_ERROR_CODES)('passes the public code %s through with a fixed message', async code => {
+    const resource = await toPublicMusicGeneration(
+      job({ state: 'failed', error: { code, message: 'raw upstream text' } }),
+      { sign: vi.fn(), now }
+    );
+    expect(resource.error).toEqual({ code, message: expect.any(String) });
+    expect(JSON.stringify(resource)).not.toContain('raw upstream text');
+    expect(MusicGenerationSchema.parse(resource)).toEqual(resource);
   });
 
   it.each(['orphaned_submit', 'enqueue_failed', 'input_image_not_found'] as const)(

@@ -82,8 +82,8 @@ describe('music generation wire schemas', () => {
       }
     );
 
-    it('passes a public code through unchanged', () => {
-      expect(toPublicMusicJobErrorCode('content_blocked')).toBe('content_blocked');
+    it.each(MUSIC_JOB_PUBLIC_ERROR_CODES)('passes the public code %s through unchanged', code => {
+      expect(toPublicMusicJobErrorCode(code)).toBe(code);
     });
   });
 

@@ -5,39 +5,37 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
-import { fire, h, resetHarness, validateWithScopes } from '@server/videoGenerations/__test__/routeHarness';
+import { fire, h, resetHarness, validateWithScopes } from '@server/generations/__test__/routeHarness';
 
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
 vi.mock('@server/middlewares/rateLimit', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).rateLimitMiddlewareMock()
+  (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
 vi.mock('@server/utils/userRateTier', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).userRateTierMock()
+  (await import('@server/generations/__test__/routeHarness')).userRateTierMock()
 );
 vi.mock('@server/utils/orgAccess', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).orgAccessMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/services', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).servicesMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).servicesMock(orig)
 );
 vi.mock('@bike4mind/database', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).databaseMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).databaseMock(orig)
 );
 vi.mock('@server/generationJobs/wiring', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).wiringMock()
+  (await import('@server/generations/__test__/routeHarness')).wiringMock()
 );
 vi.mock('@server/generations/signOutputUrl', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).signOutputUrlMock()
+  (await import('@server/generations/__test__/routeHarness')).signOutputUrlMock()
 );
 vi.mock('@server/musicGenerations/listUsableMusicModels', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).listUsableMusicModelsMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).listUsableMusicModelsMock(orig)
 );
-vi.mock('@server/auth/auth', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).authMock(orig)
-);
+vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));
 
 import handler from '../music-models';
 

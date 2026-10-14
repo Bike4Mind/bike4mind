@@ -3969,6 +3969,31 @@ export interface components {
       created_at: string;
       updated_at: string;
     };
+    createMusicGenerationResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /**
+       * @description Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit), or `file_too_large` (the per-file size limit). Branch on this, not on the message.
+       * @enum {string}
+       */
+      errorCode?: 'storage_limit_exceeded' | 'org_storage_limit_exceeded' | 'file_too_large';
+      /** @description Bytes already stored against the limit. 0 for `org_storage_limit_exceeded` and `file_too_large`. */
+      used_bytes?: number;
+      /** @description The limit, in bytes, that the request ran into. */
+      limit_bytes?: number;
+      /** @description Size of the refused upload, in bytes. */
+      requested_bytes?: number;
+      /**
+       * @description Whose limit was hit: `user` or `org`. Always `user` for `file_too_large`, a platform-wide cap.
+       * @enum {string}
+       */
+      owner?: 'user' | 'org';
+    };
     createMusicGenerationResponse422: {
       error: string;
       request_id?: string;
@@ -3988,7 +4013,6 @@ export interface components {
         | 'model_disabled'
         | 'model_unavailable'
         | 'insufficient_credits'
-        | 'storage_limit_exceeded'
         | 'idempotency_key_reused'
         | 'invalid_idempotency_key';
     };
@@ -11427,6 +11451,29 @@ export interface operations {
           'application/json': components['schemas']['createMusicGenerationResponse202'];
         };
       };
+      /** @description Your Files storage has no room for the song (`storage_limit_exceeded`, as on the Files upload routes). The body carries `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together. This endpoint checks only the user quota, so `org_storage_limit_exceeded` is never returned here. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createMusicGenerationResponse400'];
+        };
+      };
       /** @description Missing or invalid credentials. */
       401: {
         headers: {
@@ -11497,7 +11544,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The request cannot run: a malformed body, a capability violation (`errorCode` names it, e.g. `unsupported_duration` or `lyrics_too_long`), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), no room in your Files storage for the song (`storage_limit_exceeded`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      /** @description The request cannot run: a malformed body, a capability violation (`errorCode` names it, e.g. `unsupported_duration` or `lyrics_too_long`), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

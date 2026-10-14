@@ -14,42 +14,40 @@ import {
   resetHarness,
   validateWithScopes,
   videoJob,
-} from '@server/videoGenerations/__test__/routeHarness';
+} from '@server/generations/__test__/routeHarness';
 
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
 vi.mock('@server/middlewares/rateLimit', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).rateLimitMiddlewareMock()
+  (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
 vi.mock('@server/utils/userRateTier', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).userRateTierMock()
+  (await import('@server/generations/__test__/routeHarness')).userRateTierMock()
 );
 vi.mock('@server/utils/orgAccess', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).orgAccessMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/services', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).servicesMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).servicesMock(orig)
 );
 vi.mock('@bike4mind/services/videoJobs', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).videoJobsServiceMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).videoJobsServiceMock(orig)
 );
 vi.mock('@bike4mind/database', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).databaseMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).databaseMock(orig)
 );
 vi.mock('@server/generationJobs/wiring', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).wiringMock()
+  (await import('@server/generations/__test__/routeHarness')).wiringMock()
 );
 vi.mock('@server/generations/signOutputUrl', async () =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).signOutputUrlMock()
+  (await import('@server/generations/__test__/routeHarness')).signOutputUrlMock()
 );
 vi.mock('@server/videoGenerations/listUsableVideoModels', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).listUsableVideoModelsMock(orig)
+  (await import('@server/generations/__test__/routeHarness')).listUsableVideoModelsMock(orig)
 );
-vi.mock('@server/auth/auth', async orig =>
-  (await import('@server/videoGenerations/__test__/routeHarness')).authMock(orig)
-);
+vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));
 
 import handler from '../video-generations/index';
 
@@ -335,6 +333,14 @@ describe('GET /api/v1/video-generations', () => {
   const list = (query: Record<string, string> = {}) => fire({ url: '/api/v1/video-generations', query });
   const forgeCursor = (after: string) =>
     Buffer.from(JSON.stringify({ v: 1, s: 'v1.video-generations', after }), 'utf8').toString('base64url');
+
+  it('rejects a key lacking ai:generate (403) before listing', async () => {
+    validateWithScopes([ApiKeyScope.READ_FILES]);
+    const { req, res } = list();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(h.listByRequester).not.toHaveBeenCalled();
+  });
 
   it('pages newest first across two pages with an opaque cursor', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
