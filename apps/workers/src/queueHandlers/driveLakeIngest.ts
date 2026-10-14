@@ -49,6 +49,7 @@ import {
   isDriveInvalidCursorError,
   isFolder,
   probeConnectedFolder,
+  REJECTED_DRIVE_TOKEN_MESSAGE,
   UNREACHABLE_FOLDER_MESSAGES,
   type ConnectedFolderReachability,
   type DriveChange,
@@ -770,6 +771,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       if (isTerminalDriveGrantError(e)) {
         logger.warn('[driveLakeIngest] Drive grant was revoked; connection marked credential_error', { connectionId });
         if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+        return;
+      }
+      // probeFolder already retried a 401 on a fresh token, so this one is Drive refusing the grant itself.
+      if (isDriveUnauthorizedError(e)) {
+        logger.warn('[driveLakeIngest] Drive rejected a freshly refreshed token; needs reconnect', { connectionId });
+        if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+        await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
+          status: 'credential_error',
+          lastError: REJECTED_DRIVE_TOKEN_MESSAGE,
+        });
         return;
       }
       if (!isDriveRateLimitError(e)) throw e;

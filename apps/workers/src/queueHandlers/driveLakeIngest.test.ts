@@ -20,6 +20,7 @@ vi.mock('@server/queueHandlers/utils', () => ({
 const h = vi.hoisted(() => ({
   // repos + collaborators
   connFindById: vi.fn(),
+  updateHealth: vi.fn(),
   claimForSync: vi.fn(),
   releaseSyncClaim: vi.fn(),
   probeConnectedFolder: vi.fn(),
@@ -122,6 +123,7 @@ vi.mock('@bike4mind/database', () => ({
     renewSyncClaim: h.renewSyncClaim,
     releaseSyncClaim: h.releaseSyncClaim,
     updateSyncCursor: h.updateSyncCursor,
+    updateHealth: h.updateHealth,
   },
 }));
 // Only the two settings/quota reads this door gates on are stubbed; BadRequestError stays the
@@ -214,6 +216,7 @@ import {
   MAX_INGEST_SLICES,
 } from './driveLakeIngest';
 import { DriveWalkTimeBudgetExceededError } from '@server/integrations/google/drive/driveContent';
+import { REJECTED_DRIVE_TOKEN_MESSAGE } from '@server/integrations/google/drive/driveClient';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -2650,6 +2653,26 @@ describe('driveLakeIngest consumer', () => {
 
         expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
         expect(h.walkFolder).not.toHaveBeenCalled();
+      });
+
+      it('flags credential_error and stops quietly when the forced refresh succeeds but Drive 401s again', async () => {
+        h.probeConnectedFolder.mockRejectedValueOnce(unauthorized()).mockRejectedValueOnce(unauthorized());
+
+        await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+        expect(h.probeConnectedFolder).toHaveBeenCalledTimes(2);
+        expect(h.updateHealth).toHaveBeenCalledWith('conn1', {
+          status: 'credential_error',
+          lastError: REJECTED_DRIVE_TOKEN_MESSAGE,
+        });
+        expect(h.walkFolder).not.toHaveBeenCalled();
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+        expect(h.releaseSyncClaim).not.toHaveBeenCalledWith(
+          'conn1',
+          expect.anything(),
+          expect.anything(),
+          'needs_reconnect'
+        );
       });
 
       it('rethrows a non-terminal failure of the forced refresh so SQS retries', async () => {

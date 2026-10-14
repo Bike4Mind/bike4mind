@@ -18,7 +18,8 @@ import { getServerErrorField } from '@client/app/utils/error';
  * - `resync`: re-sync the folder the lake is already bound to - no picker. The grant is checked first,
  *   and one that no longer refreshes goes through consent and syncs on return (DriveLakeResyncResume).
  *   A grant revoked while its cached access token is still in date passes the check; drive-sync then
- *   reports the folder unreadable.
+ *   finds it revoked, parks the connection in credential_error and expires the cached token, so the
+ *   card turns to Reconnect and the next check goes through consent.
  * - `reconnect`: always through consent, then the same re-sync. For a connection in credential_error,
  *   where only a fresh grant helps: drive-sync copies it onto the connection and clears the error.
  */

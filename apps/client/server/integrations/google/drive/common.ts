@@ -296,10 +296,16 @@ export async function getValidUserDriveAccessToken(
   }
   if (!refreshToken) throw new BadRequestError('Google Drive refresh token unreadable - reconnect required');
 
-  const credentials = await refreshAccessToken(refreshToken).catch((e: unknown) => {
+  const credentials = await refreshAccessToken(refreshToken).catch(async (e: unknown) => {
+    if (!isInvalidGrantError(e)) throw e;
+    // The cached access token died with the grant. Left in date, pages/api/google-drive/token.ts keeps
+    // handing it to the browser, whose grant check then never sends the user to consent. Best-effort:
+    // a write failure must not mask the reconnect verdict below.
+    await User.updateOne({ _id: userId }, { 'googleDrive.expiresAt': new Date(0) }).catch((writeError: unknown) =>
+      console.warn('[googleDrive] could not expire a revoked access token', writeError)
+    );
     // A revoked/expired grant is a reconnect (400), not a server fault: left raw, drive-sync 500s on it.
-    if (isInvalidGrantError(e)) throw new BadRequestError('Google Drive access was revoked - reconnect required');
-    throw e;
+    throw new BadRequestError('Google Drive access was revoked - reconnect required');
   });
   if (!credentials.access_token) throw new BadRequestError('Google Drive token refresh returned no access token');
 

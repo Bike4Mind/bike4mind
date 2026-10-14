@@ -11,6 +11,7 @@ import {
   getFolderAccess,
   probeConnectedFolder,
   UNREACHABLE_FOLDER_MESSAGES,
+  REJECTED_DRIVE_TOKEN_MESSAGE,
   type FolderAccess,
 } from '@server/integrations/google/drive/driveClient';
 import { getValidUserDriveAccessToken, isTerminalDriveGrantError } from '@server/integrations/google/drive/common';
@@ -68,9 +69,6 @@ async function readUserDriveCredential(userId: string): Promise<string> {
 
 type DriveClient = ReturnType<typeof createDriveClient>;
 
-const REJECTED_TOKEN_MESSAGE =
-  'Google Drive rejected the access your account granted Bike4Mind. Reconnect Google Drive, then re-sync.';
-
 /**
  * The caller's own idle `connected` connection for this folder + lake, or null. A failed Re-sync parks
  * only this one: another manager's failure proves nothing about the stored grant, and a sync in flight
@@ -120,7 +118,7 @@ async function getFolderAccessAsUser(
     if (folderAccess.ok || folderAccess.reason !== 'unauthorized') return { userDrive, folderAccess };
   }
   // Even a token minted a moment ago is refused: only fresh consent fixes that.
-  return failOnTerminalGrant(new BadRequestError(REJECTED_TOKEN_MESSAGE));
+  return failOnTerminalGrant(new BadRequestError(REJECTED_DRIVE_TOKEN_MESSAGE));
 }
 
 async function markOwnConnectionCredentialError(

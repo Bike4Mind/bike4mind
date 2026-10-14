@@ -289,6 +289,10 @@ export async function getFolderAccess(drive: drive_v3.Drive, folderId: string): 
   }
 }
 
+// The lastError for a token Drive still refuses right after a refresh: only fresh consent fixes that.
+export const REJECTED_DRIVE_TOKEN_MESSAGE =
+  'Google Drive rejected the access your account granted Bike4Mind. Reconnect Google Drive, then re-sync.';
+
 export type UnreachableFolderReason = 'not_found' | 'forbidden' | 'trashed';
 
 export type ConnectedFolderReachability = { reachable: true } | { reachable: false; reason: UnreachableFolderReason };
