@@ -1158,7 +1158,9 @@ ${codeContent.trim()}
   );
 
   // Again for the tool-output artifacts just minted, so a fence opener in earlier prose cannot
-  // stretch across one below and swallow it.
+  // stretch across one below and swallow it. The fence detectors below already reject such a fence
+  // through the artifact-tag guard in `holds`; this also keeps the minted spans out of the greedy
+  // ```markdown rewrite further down, which consults no guard of its own.
   content = protectArtifactSpans(content, mask).masked;
 
   const skipClientOnly = options.skipClientOnlyPromotions === true && !echoOnly;
