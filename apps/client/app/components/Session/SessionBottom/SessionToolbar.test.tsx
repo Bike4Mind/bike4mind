@@ -13,6 +13,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 const mocks = vi.hoisted(() => ({
   // onRecordingEnd from each VoiceRecordButton render, oldest first.
   voiceRecordingEnds: [] as ((prompt: string) => Promise<void>)[],
+  voiceRecordingStart: undefined as (() => void) | undefined,
 }));
 
 // SessionToolbar imports `api` at module load (used inside onOptimizePrompt).
@@ -32,12 +33,14 @@ vi.mock('@client/app/components/Session/AISettings/FilesSection', () => ({ defau
 vi.mock('@client/app/components/Session/AdvancedAISettings', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/RephraseButton', () => ({ default: () => null }));
 vi.mock('@client/app/components/common/VoiceRecordButton', () => {
-  const VoiceRecordButtonStub = React.forwardRef<HTMLDivElement, { onRecordingEnd: (prompt: string) => Promise<void> }>(
-    props => {
-      mocks.voiceRecordingEnds.push(props.onRecordingEnd);
-      return null;
-    }
-  );
+  const VoiceRecordButtonStub = React.forwardRef<
+    HTMLDivElement,
+    { onRecordingEnd: (prompt: string) => Promise<void>; onRecordingStart: () => void }
+  >(props => {
+    mocks.voiceRecordingEnds.push(props.onRecordingEnd);
+    mocks.voiceRecordingStart = props.onRecordingStart;
+    return null;
+  });
   VoiceRecordButtonStub.displayName = 'VoiceRecordButtonStub';
   return { default: VoiceRecordButtonStub };
 });
@@ -47,7 +50,7 @@ vi.mock('@client/app/components/Session/VoiceSessionModal/VoiceInlineIndicator',
   VOICE_DEBUG_STATE: false,
 }));
 vi.mock('@client/app/components/Session/ConversationalVoice/ConversationalVoiceButton', () => ({
-  default: () => null,
+  default: () => <div data-testid="conversational-voice-btn" />,
 }));
 
 import { SessionToolbar, appendTranscript } from './SessionToolbar';
@@ -119,6 +122,16 @@ describe('SessionToolbar - Send button blocked reason', () => {
     render(<SessionToolbar {...baseProps} chatInputValue="hello" />, { wrapper: Wrapper });
     expect(screen.getByTestId('send-message-btn')).not.toBeDisabled();
     expect(screen.getByTestId('send-message-btn-wrapper')).not.toHaveAttribute('data-blocked-reason');
+  });
+});
+
+describe('SessionToolbar - dictation', () => {
+  it('hides the voice session while a prompt is being dictated, leaving the recording and its confirm', () => {
+    render(<SessionToolbar {...baseProps} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('conversational-voice-btn')).toBeInTheDocument();
+    act(() => mocks.voiceRecordingStart?.());
+    expect(screen.queryByTestId('conversational-voice-btn')).toBeNull();
+    expect(screen.getByTestId('voice-record-confirm-btn')).toBeInTheDocument();
   });
 });
 

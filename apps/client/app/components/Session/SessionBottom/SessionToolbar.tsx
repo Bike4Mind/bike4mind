@@ -261,8 +261,9 @@ export function SessionToolbar(props: SessionToolbarProps) {
                 )}
               {/* Voice v2 - model-agnostic conversational voice (ElevenLabs CAI).
                   Gated by voiceV2Enabled admin setting; renders nothing otherwise.
-                  Hidden once the composer has text so only the send button shows. */}
-              {(!chatInputValue || chatInputValue.trim() === '') && (
+                  Hidden once the composer has text so only the send button shows, and while a
+                  prompt is being dictated so only the recording and its confirm button show. */}
+              {!recording && (!chatInputValue || chatInputValue.trim() === '') && (
                 <ConversationalVoiceButton currentSessionId={currentSessionId} reasoningModelId={model} />
               )}
               {shouldShowStopButton ? (
