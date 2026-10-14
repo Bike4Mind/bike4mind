@@ -49,6 +49,13 @@ const FORWARDERS = new Map<string, string>([
   ],
 ]);
 
+/**
+ * Trees with their own, unrelated `ToolContext` that never reach the server's tool context.
+ * apps/desktop runs its tools in the Electron main process as the signed-in user; the server
+ * turns it starts go through the completions endpoint, whose auth middleware sets authOrigin.
+ */
+const SEPARATE_TOOL_RUNTIMES = ['apps/desktop/'];
+
 /** Drops comments so a door named only in prose (or a doc example) is neither a match nor a pass. */
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
@@ -68,6 +75,7 @@ describe('every door that runs tools states its authOrigin', () => {
     const doors = out
       .split('\n')
       .filter(Boolean)
+      .filter(file => !SEPARATE_TOOL_RUNTIMES.some(prefix => file.startsWith(prefix)))
       .map(file => ({ file, code: stripComments(readFileSync(path.join(REPO_ROOT, file), 'utf8')) }))
       .filter(({ code }) => isDoor(code));
     // Fail loudly rather than vacuously passing if the patterns ever stop matching the tree.
