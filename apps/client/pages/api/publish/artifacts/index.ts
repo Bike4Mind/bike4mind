@@ -10,6 +10,7 @@ import { displayReplyTitle } from '@server/services/publish/plainTitle';
  *
  * Query params (all optional):
  *   mine, sourceArtifactId  - scoping, as before
+ *   sourceMessageId         - owner-scoped lookup of the caller's publication of one chat reply
  *   q                       - substring match on title + description (the STORED title; see
  *                             replyTitleBody below for how a reply row's displayed title can differ)
  *   kind, visibility, gate, comments, tag - facet filters
@@ -43,6 +44,9 @@ const handler = baseApi().get(async (req, res) => {
   // inherently owner-scoped (you can only update your own publication) and matches the
   // bundle source linkage written at publish time.
   const sourceArtifactId = typeof req.query.sourceArtifactId === 'string' ? req.query.sourceArtifactId : undefined;
+  // `?sourceMessageId=<questId>` is the same owner-scoped lookup for a published chat reply, so
+  // reopening Publish & Share on an answer lands on the live page instead of a blank form.
+  const sourceMessageId = typeof req.query.sourceMessageId === 'string' ? req.query.sourceMessageId : undefined;
 
   // `?mine=true` scopes to the caller's OWN artifacts - the set they can manage
   // (PATCH/restore/delete are owner-only). Otherwise apply the visibility filter.
@@ -52,6 +56,10 @@ const handler = baseApi().get(async (req, res) => {
   if (sourceArtifactId) {
     scope.ownerId = userId;
     scope['source.artifactId'] = sourceArtifactId;
+  } else if (sourceMessageId) {
+    scope.ownerId = userId;
+    scope['source.kind'] = 'reply';
+    scope['source.messageId'] = sourceMessageId;
   } else if (mine) {
     scope.ownerId = userId;
   } else {

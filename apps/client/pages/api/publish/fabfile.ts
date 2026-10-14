@@ -1,25 +1,21 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { randomUUID } from 'node:crypto';
-import { FabFile, PublishedArtifact } from '@bike4mind/database';
+import { FabFile } from '@bike4mind/database';
 import {
   PublishFabFileRequestSchema,
   SupportedFabFileMimeTypes,
   isImageServeable,
   type PublishResult,
 } from '@bike4mind/common';
-import { resolveVisibility, checkScopePermission, checkPublishQuota, type PublishUser } from '@server/services/publish';
+import { resolveVisibility, checkScopePermission, type PublishUser } from '@server/services/publish';
+import { settlePublication } from '@server/services/publish/settlePublication';
 import { getFilesStorage } from '@server/utils/storage';
 
 /**
  * POST /api/publish/fabfile - publish a FabFile as a public viewer page at
  * /p/f/{publicId}. Snapshots the file's text body into the record so the serve
  * handler can render it without exposing the private FabFile. Re-publishing the
- * same file returns the existing publicId.
+ * same file updates the owner's existing record in place (same publicId).
  */
-
-function publicId(): string {
-  return randomUUID().replace(/-/g, '').slice(0, 12);
-}
 
 // Mime types whose stored bytes ARE text-representable, so they can back a text viewer page. This
 // is an allowlist (fail-closed): anything not listed - Office/PDF (need extraction), raster images
@@ -154,63 +150,31 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
 
-  // Scope the reuse lookup to tier+scopeId so re-publishing the same file into a
-  // different scope creates a new row (new publicId) rather than colliding.
-  const existing = await PublishedArtifact.findOne({
-    tier,
-    scopeId,
-    'source.kind': 'fabfile',
-    'source.fabFileId': body.fabFileId,
-    deletedAt: null,
-  }).lean<{ publicId: string; slug: string } | null>();
-
-  const id = existing?.publicId ?? publicId();
-  const slug = existing?.slug ?? `f-${id}`;
-  // Sourcing runs before the quota check because quota needs the sourced byte length
-  // (Buffer.byteLength below). The whole object is read into memory here; acceptable since the
-  // caller can only publish a file they own (checked above) - revisit if publish ever accepts
-  // files not owned by the caller.
+  // Sourcing runs before the quota check (inside settlePublication) because quota needs the
+  // sourced byte length. The whole object is read into memory here; acceptable since the caller
+  // can only publish a file they own (checked above) - revisit if publish ever accepts files not
+  // owned by the caller.
   const sourced = await sourceFabFileBody(file);
   if (!sourced.ok) {
     return res.status(sourced.status).json({ error: sourced.error });
   }
-  const body_ = sourced.body;
 
-  // Cumulative per-owner quota. Re-publishing the same file (existing) overwrites
-  // in place, so exclude that key from usage; a fresh publish counts as a new row.
-  const quota = await checkPublishQuota({
+  // One publication per owner+file, rewritten in place on re-publish - see settlePublication.
+  const settled = await settlePublication({
     ownerId: userId,
-    orgScopeId: tier === 'organization' ? scopeId : null,
     isAdmin: req.user.isAdmin,
-    incoming: { bytes: Buffer.byteLength(body_), fileCount: 0 },
-    replacing: existing ? { tier, scopeId, slug } : null,
+    source: { kind: 'fabfile', fabFileId: body.fabFileId },
+    tier,
+    scopeId,
+    visibility: viz.visibility,
+    title: body.title?.trim() || file.fileName || 'Shared file',
+    renderedBody: sourced.body,
+    logger: req.logger,
   });
-  if (!quota.ok) {
-    return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
+  if (!settled.ok) {
+    return res.status(settled.status).json(settled.body);
   }
-
-  const title = body.title?.trim() || file.fileName || 'Shared file';
-  const now = new Date();
-
-  const saved = await PublishedArtifact.findOneAndUpdate(
-    { tier, scopeId, slug, deletedAt: null },
-    {
-      $set: {
-        publicId: id,
-        title,
-        visibility: viz.visibility,
-        lastPublishedBy: userId,
-        source: { kind: 'fabfile', fabFileId: body.fabFileId },
-        storageKeyPrefix: '',
-        size: { totalBytes: Buffer.byteLength(body_), fileCount: 0 },
-        manifest: [],
-        renderedBody: body_,
-        publishedAt: now,
-      },
-      $setOnInsert: { ownerId: userId },
-    },
-    { upsert: true, new: true }
-  );
+  const { saved, slug, publishedAt } = settled;
 
   req.logger.info(`[PUBLISH] fabfile ${body.fabFileId} → /p/f/${saved.publicId}`);
 
@@ -221,7 +185,7 @@ const handler = baseApi().post(async (req, res) => {
     scopeId,
     slug,
     visibility: viz.visibility,
-    publishedAt: now.toISOString(),
+    publishedAt: publishedAt.toISOString(),
   };
   return res.status(200).json(response);
 });

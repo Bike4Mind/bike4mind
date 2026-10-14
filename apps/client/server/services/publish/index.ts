@@ -22,6 +22,7 @@ export {
   toCacheTarget,
   type PublishCacheTarget,
 } from './invalidatePublishCdn';
+export { restrictDuplicatePublications, type DuplicateKeeper } from './restrictDuplicatePublications';
 export {
   renderSandboxedBundle,
   type RenderSandboxedBundleInput,
