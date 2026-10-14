@@ -187,7 +187,6 @@ describe('supportsForcedToolChoice', () => {
     ...FORCED_MODELS,
     ChatModels.CLAUDE_5_SONNET_BEDROCK,
     ChatModels.CLAUDE_FABLE_5_BEDROCK,
-    ChatModels.CLAUDE_5_5_HAIKU,
     ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
     'anthropic.claude-haiku-5-5',
     'gpt-5',
