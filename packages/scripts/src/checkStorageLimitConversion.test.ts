@@ -23,7 +23,8 @@ const SELF_PATH = path.relative(REPO_ROOT, fileURLToPath(import.meta.url)).repla
 const ALLOWLIST = new Set(['b4m-core/common/src/constants/storage.ts', SELF_PATH]);
 
 const FACTOR = String.raw`(?:1024|1_?048_?576|1_?000_?000|1e\+?6|1000\s*\*\s*1000|2\s*\*\*\s*20)\b`;
-const LIMIT = String.raw`storageLimit(?!ToBytes)`;
+// Skips identifiers that already hold bytes (storageLimitToBytes, storageLimitBytes, storageLimitInBytes).
+const LIMIT = String.raw`storageLimit(?!ToBytes|(?:In)?Bytes)`;
 const GAP = String.raw`[^;,{}]{0,80}?`;
 const INLINE_CONVERSION = [
   new RegExp(String.raw`${LIMIT}${GAP}\*\s*${FACTOR}`, 'gi'),
@@ -60,6 +61,8 @@ describe('storageLimit converts to bytes only through storageLimitToBytes', () =
       `{ ${SL}: 1, currentStorageSize: 5 * 1024 * 1024 }`,
       `<Bar limit={storageLimitToBytes(x)} max={MAX * 1024} />`,
       `user.${SL} * 10240`,
+      `${SL}Bytes / (1024 * 1024)`,
+      `const mb = ${SL}InBytes / 1024 / 1024;`,
     ];
     expect(bad.filter(l => !hasInlineConversion(l))).toEqual([]);
     expect(good.filter(hasInlineConversion)).toEqual([]);

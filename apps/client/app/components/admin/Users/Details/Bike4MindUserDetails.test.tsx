@@ -89,6 +89,15 @@ describe('Bike4MindUserDetails - storage usage', () => {
     expect(screen.getByTestId('admin-user-storage-progress').className).toContain(`MuiLinearProgress-color${color}`);
   });
 
+  it('reads danger when usage is over the limit', () => {
+    renderDetails({ user: { ...(user as object), storageLimit: 1000, currentStorageSize: 2_000_000_000 } as never });
+    const progress = screen.getByTestId('admin-user-storage-progress');
+    expect(progress).toHaveAttribute('aria-valuenow', '200');
+    expect(progress.className).toContain('MuiLinearProgress-colorDanger');
+    expect(screen.getByTestId('admin-user-storage-label')).toHaveTextContent('2 GB / 1 GB');
+  });
+
+  // Same fixture as the SlimUsersView zero-limit case, so the list and detail screens are pinned to agree.
   it.each([0, 500_000_000])('reads a zero limit as full with %i bytes used, since every upload is refused', used => {
     renderDetails({ user: { ...(user as object), storageLimit: 0, currentStorageSize: used } as never });
     const progress = screen.getByTestId('admin-user-storage-progress');

@@ -6,12 +6,13 @@ import { getStorageQuota } from '@client/app/utils/storageQuota';
 import { computeStoragePercent } from '../storageUtils';
 
 describe('computeStoragePercent', () => {
-  it('returns 0 when storageLimit is 0 (prevents NaN from 0/0)', () => {
-    expect(computeStoragePercent(0, 0)).toBe(0);
-  });
-
-  it('returns 0 when storageLimit is negative', () => {
-    expect(computeStoragePercent(100, -1)).toBe(0);
+  // checkStorageLimit refuses every non-empty upload at a zero limit, so the account reads as full.
+  it.each([
+    [0, 0],
+    [500_000_000, 0],
+    [100, -1],
+  ])('returns 100 for %i bytes against a %i MB limit', (used, limitMb) => {
+    expect(computeStoragePercent(used, limitMb)).toBe(100);
   });
 
   it('returns 0 when currentStorageSize is 0 and limit is non-zero', () => {

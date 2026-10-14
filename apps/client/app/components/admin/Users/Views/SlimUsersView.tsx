@@ -49,15 +49,26 @@ const StorageCell: React.FC<{ user: AdminUserListItem }> = ({ user }) => {
 
   return (
     <Tooltip title={`${prettyBytes(user.currentStorageSize || 0)} / ${prettyBytes(storageLimitBytes)}`} placement="top">
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ cursor: 'help' }}>
+      <Stack
+        direction="row"
+        spacing={1}
+        alignItems="center"
+        sx={{ cursor: 'help' }}
+        data-testid="admin-user-storage-cell"
+      >
         <LinearProgress
+          data-testid="admin-user-storage-cell-progress"
           determinate
           thickness={6}
           value={storagePercent}
           color={storagePercent >= 90 ? 'danger' : storagePercent >= 75 ? 'warning' : 'primary'}
           sx={{ flex: 1, minWidth: 0 }}
         />
-        <Typography level="body-xs" sx={{ color: 'text.secondary', flexShrink: 0 }}>
+        <Typography
+          level="body-xs"
+          sx={{ color: 'text.secondary', flexShrink: 0 }}
+          data-testid="admin-user-storage-cell-label"
+        >
           {label}
         </Typography>
       </Stack>
