@@ -134,14 +134,14 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
   delete), \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
 - Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
-  \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`
+  \`/api/v1/music-*\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`
 - Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
 - Completions, embeddings and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`
 - Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
 - Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`
 - Release notes: \`/api/v1/whats-new\` (public, no key needed)
 
-Image, video and chat work is asynchronous; the Async jobs section of the
+Image, video, music and chat work is asynchronous; the Async jobs section of the
 [generated API docs](/api/v1/docs) says what to poll for each kind of job and when it is terminal.
 
 ---

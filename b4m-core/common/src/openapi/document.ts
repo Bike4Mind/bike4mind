@@ -79,8 +79,9 @@ function infoDescription(): string {
     'Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait ' +
       'that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it ' +
       'opens its event stream. ' +
-      '`GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, the `GET` list ' +
-      'endpoints for `/api/v1/sessions` and `/api/v1/video-generations`, and the poll endpoints listed under ' +
+      '`GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, ' +
+      '`GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` ' +
+      'and `/api/v1/music-generations`, and the poll endpoints listed under ' +
       'Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute ' +
       'limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches ' +
       'the limiter and carries no rate-limit headers.',
@@ -122,6 +123,8 @@ function infoDescription(): string {
       '`GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.',
     '- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll ' +
       '`GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
+    '- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll ' +
+      '`GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
     '- **Audio** endpoints are synchronous and return the result directly.',
@@ -358,6 +361,10 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     { name: 'Sessions', description: 'Sessions (called "notebooks" in the product UI) and their attached knowledge.' },
     { name: 'Release notes', description: 'Customer-facing notes on what changed in each release. Public.' },
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
+    {
+      name: 'Music',
+      description: 'Song generation, queued with `202` and polled at `GET /api/v1/music-generations/{id}`.',
+    },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
     {
       name: 'Transcriptions',
