@@ -86,6 +86,9 @@ describe('MFAEnforcementWrapper - auto-setup does not loop on persistent failure
 
     // The isError guard stops the re-fire: exactly one attempt, not an unbounded storm.
     expect(mfaSetupCalls()).toBe(1);
+
+    // A real (non-cancelled) failure must still surface; only a dismissed prompt stays silent.
+    expect(toastError).toHaveBeenCalledWith('setup failed');
   });
 
   it('renders a retry button on failure, and clicking it fires a new setup attempt', async () => {
