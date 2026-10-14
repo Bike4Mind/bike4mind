@@ -37,12 +37,22 @@ export const ConnectionSchema = new mongoose.Schema<IConnectionDocument, IConnec
   },
 });
 
+declare module 'mongoose' {
+  // Declaration merging needs mongoose's exact type parameters, used or not.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  interface QueryOptions<DocType = unknown> {
+    /** Connection reads: include ended rows, which are otherwise hidden (see excludeEndedConnections). */
+    includeEnded?: boolean;
+  }
+}
+
 // A row with endedAt set is an ended connection awaiting its socket close (see
 // realtimeConnectionRepository), not a live one. Reads that mean "live connections" therefore
-// skip it here, once, rather than in every handler. A query that names endedAt itself (the
-// sweep's ended-row scan) opts out. Writes (updateOne/deleteOne) are not filtered.
+// skip it here, once, rather than in every handler. The sweep's ended-row scan opts out with
+// `.setOptions({ includeEnded: true })`; a filter that merely names endedAt does not.
+// Writes (updateOne/deleteOne) are not filtered.
 function excludeEndedConnections(this: mongoose.Query<unknown, unknown>) {
-  if ('endedAt' in this.getFilter()) return;
+  if (this.getOptions().includeEnded) return;
   this.where({ endedAt: { $exists: false } });
 }
 ConnectionSchema.pre(['find', 'findOne', 'countDocuments', 'distinct'], excludeEndedConnections);

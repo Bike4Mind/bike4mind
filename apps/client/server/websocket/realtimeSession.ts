@@ -12,7 +12,7 @@ export const gatewayCapExpiry = (now = new Date()): Date =>
  * Refuse a socket credential whose AuthSession is revoked or expired. The access token alone stays
  * valid for its TTL after a revoke, so $connect and reauth_connection check the session as well.
  * A sid-less (legacy) token has no session to check. The realtime sweep applies the same rule
- * (isAuthSessionActive, used by realtimeConnectionRepository.findSweepTargets).
+ * (isAuthSessionActive, used by realtimeConnectionRepository.classifySweepRows).
  */
 export async function assertRealtimeSessionActive(sid: string | undefined): Promise<void> {
   if (!sid) return;

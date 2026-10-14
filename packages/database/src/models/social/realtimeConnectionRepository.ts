@@ -18,6 +18,15 @@ const ID_CHUNK_SIZE = 500;
 /** API Gateway closes every WebSocket after 2 hours, whatever the credential behind it. */
 export const REALTIME_CONNECTION_MAX_LIFETIME_MS = 2 * 60 * 60 * 1000;
 
+/**
+ * removeStaleSubscribers only scans rows reauthed this recently: the fanout write-back race it
+ * guards lasts seconds, so older rows need no scan.
+ */
+export const REALTIME_STALE_SCAN_WINDOW_MS = 15 * 60 * 1000;
+
+/** Clock skew allowed between Lambdas: a subscriber made right after a reauth is never pulled. */
+export const REALTIME_REAUTH_SKEW_MS = 60 * 1000;
+
 export type RealtimeSweepReason =
   | 'expired'
   | 'userMissing'
@@ -128,6 +137,33 @@ async function endConnections(filter: RealtimeConnectionFilter): Promise<EndReal
 }
 
 /**
+ * End live connections whose auth had lapsed when they were classified, unless a reauth moved
+ * authExpiresAt past `expiredBefore` since (a row without authExpiresAt counts as lapsed, as in the
+ * sweep's classification). The guard is part of the update filter, so a row reauthed in between is
+ * left alone. Returns the ids that are now ended: those are the sockets the caller may close.
+ */
+async function endExpiredConnections(connectionIds: readonly string[], expiredBefore: Date): Promise<string[]> {
+  const stillLapsed = { $or: [{ authExpiresAt: null }, { authExpiresAt: { $lte: expiredBefore } }] };
+  const ended: string[] = [];
+  for (const ids of chunk([...new Set(connectionIds)])) {
+    const candidates = (await Connection.find({ connectionId: { $in: ids }, ...stillLapsed }).distinct(
+      'connectionId'
+    )) as string[];
+    if (candidates.length === 0) continue;
+    await pullSubscribers(candidates);
+    await Connection.updateMany(
+      { connectionId: { $in: candidates }, endedAt: { $exists: false }, ...stillLapsed },
+      { $set: { endedAt: new Date() } }
+    );
+    const nowEnded = (await Connection.find({ connectionId: { $in: candidates }, endedAt: { $exists: true } })
+      .setOptions({ includeEnded: true })
+      .distinct('connectionId')) as string[];
+    ended.push(...nowEnded);
+  }
+  return ended;
+}
+
+/**
  * Delete rows that were ended, once their socket is confirmed closed (or gone). Never touches a
  * live row.
  */
@@ -226,14 +262,18 @@ export interface RealtimeSweepPage {
 /**
  * One page of Connection rows for the sweep, paged by _id so a failure in one page does not lose
  * the position. The 'live' phase relies on the model's default exclusion of ended rows; the
- * 'ended' phase names endedAt, which opts out of it.
+ * 'ended' phase opts out with the includeEnded query option.
  */
 async function readSweepPage(cursor: RealtimeSweepCursor, batchSize = ID_CHUNK_SIZE): Promise<RealtimeSweepPage> {
   const filter: FilterQuery<unknown> = {
     ...(cursor.phase === 'ended' && { endedAt: { $exists: true } }),
     ...(cursor.afterId ? { _id: { $gt: cursor.afterId } } : {}),
   };
-  const rows = (await Connection.find(filter).sort({ _id: 1 }).limit(batchSize).lean()) as RealtimeSweepRow[];
+  const rows = (await Connection.find(filter)
+    .setOptions({ includeEnded: cursor.phase === 'ended' })
+    .sort({ _id: 1 })
+    .limit(batchSize)
+    .lean()) as RealtimeSweepRow[];
   const next =
     rows.length < batchSize || rows.length === 0 ? null : { phase: cursor.phase, afterId: rows[rows.length - 1]._id };
   return { rows, next };
@@ -317,15 +357,22 @@ async function removeOrphanSubscribers(batchSize = ID_CHUNK_SIZE): Promise<numbe
 }
 
 /**
- * Subscriber entries on a live connection that were made before its last reauth_connection, i.e.
- * under the previous token. reauth pulls them itself; this catches one written back after that.
- * Returns how many entries were pulled.
+ * Subscriber entries on a recently reauthed live connection that were made before its last
+ * reauth_connection, i.e. under the previous token. reauth pulls them itself; this catches one
+ * written back after that. Only rows reauthed within REALTIME_STALE_SCAN_WINDOW_MS are scanned, and
+ * only entries older than reauthAt minus REALTIME_REAUTH_SKEW_MS are pulled; an entry without a
+ * createdAt is never pulled. A failure on one connection is logged and skipped.
+ * Returns how many QuerySubscription docs had entries pulled (not how many entries).
  */
-async function removeStaleSubscribers(batchSize = ID_CHUNK_SIZE): Promise<number> {
+async function removeStaleSubscribers({
+  batchSize = ID_CHUNK_SIZE,
+  now = new Date(),
+}: { batchSize?: number; now?: Date } = {}): Promise<number> {
+  const scanFrom = new Date(now.getTime() - REALTIME_STALE_SCAN_WINDOW_MS);
   let removed = 0;
   let afterId: unknown = null;
   for (;;) {
-    const rows = await Connection.find({ reauthAt: { $exists: true }, ...(afterId ? { _id: { $gt: afterId } } : {}) })
+    const rows = await Connection.find({ reauthAt: { $gte: scanFrom }, ...(afterId ? { _id: { $gt: afterId } } : {}) })
       .select({ connectionId: 1, reauthAt: 1 })
       .sort({ _id: 1 })
       .limit(batchSize)
@@ -334,13 +381,17 @@ async function removeStaleSubscribers(batchSize = ID_CHUNK_SIZE): Promise<number
     afterId = rows[rows.length - 1]._id;
     for (const { connectionId, reauthAt } of rows) {
       if (!reauthAt) continue;
-      const stale = { connectionId, createdAt: { $lt: reauthAt } };
-      const affected = await QuerySubscription.find({ subscribers: { $elemMatch: stale } }, { _id: 1 }).lean();
-      if (affected.length === 0) continue;
-      const affectedIds = affected.map(doc => doc._id);
-      await QuerySubscription.updateMany({ _id: { $in: affectedIds } }, { $pull: { subscribers: stale } });
-      await QuerySubscription.deleteMany({ _id: { $in: affectedIds }, subscribers: { $size: 0 } });
-      removed += affected.length;
+      try {
+        const stale = { connectionId, createdAt: { $lt: new Date(reauthAt.getTime() - REALTIME_REAUTH_SKEW_MS) } };
+        const affected = await QuerySubscription.find({ subscribers: { $elemMatch: stale } }, { _id: 1 }).lean();
+        if (affected.length === 0) continue;
+        const affectedIds = affected.map(doc => doc._id);
+        await QuerySubscription.updateMany({ _id: { $in: affectedIds } }, { $pull: { subscribers: stale } });
+        await QuerySubscription.deleteMany({ _id: { $in: affectedIds }, subscribers: { $size: 0 } });
+        removed += affected.length;
+      } catch (error) {
+        console.warn(`[realtimeConnectionRepository] Failed to remove stale subscribers of ${connectionId}`, error);
+      }
     }
     if (rows.length < batchSize) break;
   }
@@ -349,6 +400,7 @@ async function removeStaleSubscribers(batchSize = ID_CHUNK_SIZE): Promise<number
 
 export const realtimeConnectionRepository = {
   endConnections,
+  endExpiredConnections,
   deleteEndedConnections,
   reauthenticate,
   readSweepPage,

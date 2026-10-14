@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   readSweepPage: vi.fn(),
   classifySweepRows: vi.fn(),
   endConnections: vi.fn(),
+  endExpiredConnections: vi.fn(),
   deleteEndedConnections: vi.fn(),
   removeOrphanSubscribers: vi.fn(),
   removeStaleSubscribers: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock('@bike4mind/database', () => ({
     readSweepPage: mocks.readSweepPage,
     classifySweepRows: mocks.classifySweepRows,
     endConnections: mocks.endConnections,
+    endExpiredConnections: mocks.endExpiredConnections,
     deleteEndedConnections: mocks.deleteEndedConnections,
     removeOrphanSubscribers: mocks.removeOrphanSubscribers,
     removeStaleSubscribers: mocks.removeStaleSubscribers,
@@ -66,6 +68,7 @@ beforeEach(() => {
   mocks.endConnections.mockImplementation(async ({ connectionIds }: { connectionIds: string[] }) => ({
     connectionIds,
   }));
+  mocks.endExpiredConnections.mockImplementation(async (connectionIds: string[]) => connectionIds);
   mocks.deleteEndedConnections.mockResolvedValue(0);
   mocks.removeOrphanSubscribers.mockResolvedValue(3);
   mocks.removeStaleSubscribers.mockResolvedValue(1);
@@ -80,7 +83,11 @@ describe('realtimeConnectionSweep cron', () => {
     const result = await runRealtimeConnectionSweep({ now: NOW, close });
 
     expect(mocks.connectDB).toHaveBeenCalledWith('mongodb://host/test');
-    expect(mocks.endConnections).toHaveBeenCalledWith({ connectionIds: ['c-expired', 'c-stale'] });
+    expect(mocks.endExpiredConnections).toHaveBeenCalledWith(
+      ['c-expired'],
+      new Date(NOW.getTime() - REALTIME_SWEEP_GRACE_MS)
+    );
+    expect(mocks.endConnections).toHaveBeenCalledWith({ connectionIds: ['c-stale'] });
     expect(close.mock.calls.map(([id]) => id).sort()).toEqual(['c-ended', 'c-expired', 'c-stale']);
     expect(close).toHaveBeenCalledWith('c-ended', ENDPOINT);
     // The lapsed row is deleted without a close.
@@ -129,6 +136,42 @@ describe('realtimeConnectionSweep cron', () => {
     expect(close).not.toHaveBeenCalled();
     expect(mocks.deleteEndedConnections).toHaveBeenCalledWith(['c-lapsed']);
     expect(result.lapsedDeleted).toBe(1);
+  });
+
+  it('does not end or close an expired row that was reauthed after classification', async () => {
+    givenTargets({ live: [{ connectionId: 'c-reauthed', reason: 'expired' }] });
+    mocks.endExpiredConnections.mockResolvedValue([]);
+    const close = vi.fn(async () => undefined);
+
+    const result = await runRealtimeConnectionSweep({ now: NOW, close });
+
+    expect(close).not.toHaveBeenCalled();
+    expect(deletedIds()).not.toContain('c-reauthed');
+    expect(result).toMatchObject({ ended: 0, closed: 0, closeFailures: 0 });
+  });
+
+  it('does not close again, or count again, a live-phase target whose close failed earlier in the run', async () => {
+    givenTargets({
+      live: [{ connectionId: 'c-flaky', reason: 'expired' }],
+      ended: [{ connectionId: 'c-flaky', reason: 'ended' }],
+    });
+    const close = vi.fn(async () => {
+      throw new Error('network');
+    });
+
+    const result = await runRealtimeConnectionSweep({ now: NOW, close });
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ closed: 0, closeFailures: 1 });
+  });
+
+  it('still runs the stale pass when the orphan pass throws', async () => {
+    mocks.removeOrphanSubscribers.mockRejectedValue(new Error('mongo down'));
+
+    const result = await runRealtimeConnectionSweep({ now: NOW, close: vi.fn(async () => undefined) });
+
+    expect(mocks.removeStaleSubscribers).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ failedChunks: 1, staleSubscribers: 1, orphanedSubscribers: 0 });
   });
 
   it('closes at most the concurrency cap at a time', async () => {

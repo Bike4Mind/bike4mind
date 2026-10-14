@@ -7,7 +7,11 @@ import { UserApiKey } from '../auth/UserApiKeyModel';
 import User from '../auth/UserModel';
 import { Connection } from './ConnectionModel';
 import { QuerySubscription } from './QuerySubscriptionModel';
-import { REALTIME_CONNECTION_MAX_LIFETIME_MS, realtimeConnectionRepository } from './realtimeConnectionRepository';
+import {
+  REALTIME_CONNECTION_MAX_LIFETIME_MS,
+  REALTIME_REAUTH_SKEW_MS,
+  realtimeConnectionRepository,
+} from './realtimeConnectionRepository';
 
 setupMongoTest();
 
@@ -387,6 +391,24 @@ describe('realtimeConnectionRepository.removeOrphanSubscribers', () => {
 });
 
 describe('realtimeConnectionRepository.removeStaleSubscribers', () => {
+  const entry = (clientId: string, createdAt?: Date) => ({
+    endpoint: 'e',
+    connectionId: 'a1',
+    clientId,
+    attempts: 0,
+    ...(createdAt && { createdAt }),
+  });
+  const insertEntries = (subscribers: ReturnType<typeof entry>[]) =>
+    QuerySubscription.collection.insertOne({
+      collectionName: 'quests',
+      queryId: 'q',
+      query: {},
+      fields: {},
+      subscribers,
+    });
+  const remainingClients = async () =>
+    ((await QuerySubscription.findOne({ queryId: 'q' }).lean())?.subscribers ?? []).map(sub => sub.clientId).sort();
+
   it('pulls entries made before the connection last reauthenticated, and keeps newer ones', async () => {
     await insertConnection('a1', { reauthAt: at(-minutes(5)) });
     await insertConnection('a2');
@@ -402,10 +424,88 @@ describe('realtimeConnectionRepository.removeStaleSubscribers', () => {
       ],
     });
 
-    const removed = await realtimeConnectionRepository.removeStaleSubscribers();
+    const removed = await realtimeConnectionRepository.removeStaleSubscribers({ now: NOW });
 
     expect(removed).toBe(1);
-    const doc = await QuerySubscription.findOne({ queryId: 'q' }).lean();
-    expect(doc?.subscribers.map(subscriber => subscriber.clientId).sort()).toEqual(['new', 'other']);
+    expect(await remainingClients()).toEqual(['new', 'other']);
+  });
+
+  it('pulls an entry older than reauthAt minus the skew and keeps one 10s newer than that boundary', async () => {
+    const reauthAt = at(-minutes(5));
+    const boundary = reauthAt.getTime() - REALTIME_REAUTH_SKEW_MS;
+    await insertConnection('a1', { reauthAt });
+    await insertEntries([
+      entry('older', new Date(boundary - 10_000)),
+      entry('within-skew', new Date(boundary + 10_000)),
+    ]);
+
+    await realtimeConnectionRepository.removeStaleSubscribers({ now: NOW });
+
+    expect(await remainingClients()).toEqual(['within-skew']);
+  });
+
+  it('does not scan a row reauthed more than 15 minutes ago', async () => {
+    await insertConnection('a1', { reauthAt: at(-minutes(20)) });
+    await insertEntries([entry('old', at(-minutes(30)))]);
+
+    const removed = await realtimeConnectionRepository.removeStaleSubscribers({ now: NOW });
+
+    expect(removed).toBe(0);
+    expect(await remainingClients()).toEqual(['old']);
+  });
+
+  it('never pulls a subscriber entry that has no createdAt', async () => {
+    await insertConnection('a1', { reauthAt: at(-minutes(5)) });
+    await insertEntries([entry('undated')]);
+
+    const removed = await realtimeConnectionRepository.removeStaleSubscribers({ now: NOW });
+
+    expect(removed).toBe(0);
+    expect(await remainingClients()).toEqual(['undated']);
+  });
+});
+
+describe('realtimeConnectionRepository.endExpiredConnections', () => {
+  const expiredBefore = at(-GRACE_MS);
+
+  it('ends a lapsed row, pulls its subscribers and reports it as ended', async () => {
+    await insertConnection('lapsed', { authExpiresAt: at(-minutes(3)) });
+    await insertSubscription('q', ['lapsed']);
+
+    const ended = await realtimeConnectionRepository.endExpiredConnections(['lapsed'], expiredBefore);
+
+    expect(ended).toEqual(['lapsed']);
+    expect(await endedIds()).toEqual(['lapsed']);
+    expect(await subscriberIds('q')).toBeNull();
+  });
+
+  it('leaves a row reauthed after classification live and unreported', async () => {
+    await insertConnection('reauthed', { authExpiresAt: at(minutes(30)), reauthAt: NOW });
+    await insertSubscription('q', ['reauthed']);
+
+    const ended = await realtimeConnectionRepository.endExpiredConnections(['reauthed'], expiredBefore);
+
+    expect(ended).toEqual([]);
+    expect(await endedIds()).toEqual([]);
+    expect(await connectionIds()).toEqual(['reauthed']);
+    expect(await subscriberIds('q')).toEqual(['reauthed']);
+  });
+});
+
+describe('Connection ended-row filtering', () => {
+  it('still hides ended rows when a filter names endedAt as undefined', async () => {
+    await insertConnection('live');
+    await insertConnection('ended', { endedAt: at(-minutes(1)) });
+
+    const rows = await Connection.find({ endedAt: undefined }).lean();
+
+    expect(rows.map(row => row.connectionId)).toEqual(['live']);
+  });
+
+  it('returns ended rows only with the includeEnded option', async () => {
+    await insertConnection('ended', { endedAt: at(-minutes(1)) });
+
+    expect(await Connection.find({ endedAt: { $exists: true } }).lean()).toEqual([]);
+    expect(await Connection.find({}).setOptions({ includeEnded: true }).lean()).toHaveLength(1);
   });
 });

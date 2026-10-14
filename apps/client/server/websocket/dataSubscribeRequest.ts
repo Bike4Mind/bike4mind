@@ -107,7 +107,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   const user = await verifyWsAccessToken(accessToken);
 
-  // A subscriber must hang off a live Connection row of the same user: a revoke deletes the row
+  // A subscriber must hang off a live Connection row of the same user: a revoke marks the row ended
   // (realtimeConnectionRepository.endConnections), and that must not be undone by re-subscribing
   // on the still-open socket. Close it so the client reconnects through $connect instead.
   const connection = await Connection.findOne({ connectionId }, { userId: 1 }).lean();
