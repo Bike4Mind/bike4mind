@@ -381,9 +381,11 @@ const JWT_RATE_WINDOW_MS = 60 * 60_000; // 1 hour
  * A counter kept apart from the shared per-user one. Callers without a bucket
  * share a single counter across every surface, so a CLI/agent session running
  * at its 1000 cap would exhaust a 100-cap endpoint on the same account. A public
- * endpoint that documents its own budget needs its own bucket.
+ * endpoint that documents its own budget needs its own bucket. `ws` holds the 100-cap WebSocket
+ * handlers (tool execution, agent execute, keep relay, cc-agent auth), so a completions session
+ * driven to its 1000 cap cannot lock them out.
  */
-export type JwtRateLimitBucket = 'tools' | 'desktop';
+export type JwtRateLimitBucket = 'tools' | 'desktop' | 'ws';
 
 /**
  * Per-client caps for first-party clients that run a client-side tool loop against the
