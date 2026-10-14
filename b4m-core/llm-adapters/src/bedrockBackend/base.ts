@@ -9,6 +9,7 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   bedrockClientConfig,
   type ModelInfo,
+  type TurnUsage,
 } from '@bike4mind/common';
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
 import { executeToolsBatch, shouldEndTurnAfterTools } from '../executeToolsBatch';
@@ -244,6 +245,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // keeps the running total across recursive turns.
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
+    // Cache reads/writes are billed per InvokeModel call too, so they accumulate like input/output.
+    const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
+    const accumCacheWriteTokens = options._internal?.accumCacheWriteTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute)
     if (toolCallCount >= maxToolCalls && options.tools?.length) {
@@ -373,7 +378,21 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // reply on the client's truncation heuristic instead.
     let stopReason: string | undefined;
 
+    // This call's own usage appended to the chain's (see CompletionInfo.turnUsage). Anthropic-native
+    // fields: input already excludes cache, so no split.
+    const turnUsageSoFar = (): TurnUsage[] => [
+      ...(accumTurnUsage ?? []),
+      {
+        inputTokens,
+        outputTokens,
+        ...(cacheReadTokens > 0 ? { cacheReadInputTokens: cacheReadTokens } : {}),
+        ...(cacheWriteTokens > 0 ? { cacheCreationInputTokens: cacheWriteTokens } : {}),
+      },
+    ];
+
     const buildCompletionInfo = (): CompletionInfo => {
+      const totalCacheReadTokens = accumCacheReadTokens + cacheReadTokens;
+      const totalCacheWriteTokens = accumCacheWriteTokens + cacheWriteTokens;
       // Emit accum + this turn's running tokens. wrappedOnChunk's assign-not-add
       // means the last cb's tokens win; emitting accum+thisTurn at every site
       // keeps the running cross-turn total correct across recursive turns.
@@ -386,8 +405,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // with cache-INCLUSIVE input must not forward without subtracting (see the
         // warnings in openaiBackend/geminiBackend). This is one of the two adapters
         // covered by the disjoint-fields assumption in ChatCompletionProcess.ts.
-        ...(cacheReadTokens > 0 ? { cacheReadInputTokens: cacheReadTokens } : {}),
-        ...(cacheWriteTokens > 0 ? { cacheCreationInputTokens: cacheWriteTokens } : {}),
+        ...(totalCacheReadTokens > 0 ? { cacheReadInputTokens: totalCacheReadTokens } : {}),
+        ...(totalCacheWriteTokens > 0 ? { cacheCreationInputTokens: totalCacheWriteTokens } : {}),
+        turnUsage: turnUsageSoFar(),
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
         ...(stopReason ? { stopReason } : {}),
       };
@@ -754,6 +774,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + inputTokens,
                   accumOutputTokens: accumOutputTokens + outputTokens,
+                  accumCacheReadTokens: accumCacheReadTokens + cacheReadTokens,
+                  accumCacheWriteTokens: accumCacheWriteTokens + cacheWriteTokens,
+                  accumTurnUsage: turnUsageSoFar(),
                   artifactGuard,
                 },
               },
@@ -907,6 +930,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                     toolCallCount: toolCallCount + 1,
                     accumInputTokens: accumInputTokens + inputTokens,
                     accumOutputTokens: accumOutputTokens + outputTokens,
+                    accumCacheReadTokens: accumCacheReadTokens + cacheReadTokens,
+                    accumCacheWriteTokens: accumCacheWriteTokens + cacheWriteTokens,
+                    accumTurnUsage: turnUsageSoFar(),
                     artifactGuard,
                   },
                 },
