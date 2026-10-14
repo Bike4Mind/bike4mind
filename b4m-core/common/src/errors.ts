@@ -95,7 +95,7 @@ export type StorageErrorCode = z.infer<typeof StorageErrorCodeSchema>;
  */
 export const StorageLimitErrorInfoSchema = z.object({
   errorCode: StorageErrorCodeSchema.describe(
-    'Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit), or `file_too_large` (the per-file size limit). Branch on this, not on the message.'
+    'Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit; never returned by `POST /api/v1/files`, which checks only the user quota), or `file_too_large` (the per-file size limit). Branch on this, not on the message.'
   ),
   used_bytes: z
     .number()
