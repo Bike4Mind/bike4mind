@@ -75,7 +75,10 @@ describe('POST /api/admin/bulk-create-users', () => {
   it('escapes the user name in the welcome email body', async () => {
     h.createUser.mockResolvedValue({ id: 'new-1', email: 'a@b.test', name: '<b>x</b>', storageLimit: 1000 });
 
-    await h.handler!(makeReq([{ email: 'a@b.test', first: '<b>x</b>' }]), { json: vi.fn() });
+    await h.handler!(makeReq([{ email: 'a@b.test', first: '<b>x</b>' }]), {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    });
 
     const { body } = h.publish.mock.calls[0][0] as { body: string };
     expect(body).toContain('Hello &lt;b&gt;x&lt;/b&gt;,');
@@ -83,13 +86,16 @@ describe('POST /api/admin/bulk-create-users', () => {
   });
 
   it('derives a username that satisfies the username rules from the address', async () => {
-    await h.handler!(makeReq([{ email: 'first.last+tag@b.test' }]), { json: vi.fn() });
+    await h.handler!(makeReq([{ email: 'first.last+tag@b.test' }]), {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    });
 
     expect(h.createUser.mock.calls[0][0].username).toBe('first.lasttag');
   });
 
   it('falls back to a generated username when the local part has no usable characters', async () => {
-    await h.handler!(makeReq([{ email: '+++@b.test' }]), { json: vi.fn() });
+    await h.handler!(makeReq([{ email: '+++@b.test' }]), { status: vi.fn().mockReturnThis(), json: vi.fn() });
 
     expect(h.createUser.mock.calls[0][0].username).toMatch(/^user-[0-9a-f]{8}$/);
   });
