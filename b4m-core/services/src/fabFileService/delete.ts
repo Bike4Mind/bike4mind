@@ -15,6 +15,7 @@ import { satisfiesMembershipScope, type MembershipLake } from '../dataLakeServic
 import { registryMembershipScope } from '../dataLakeService/lakeMembershipScope';
 import type { ManageActor } from '../dataLakeService/manageRule';
 import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
+import { deleteStoredObjects, type GeneratedCopyStore, type ObjectStorage } from './deleteStoredObjects';
 import {
   recordLakeMembershipChange,
   type LakeMembershipAuditAdapters,
@@ -58,9 +59,12 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
     // below is skipped entirely rather than failing to compile (see LakeMembershipAuditAdapters).
     dataLakes?: Pick<IDataLakeRepository, 'find' | 'findByDatalakeTag'>;
   };
-  storage: {
-    delete: (path: string) => Promise<unknown>;
-  };
+  storage: ObjectStorage;
+  /**
+   * Where an in-chat generated asset's inline-playback copy lives. Optional so the doors that never delete
+   * generated files need not wire it; a door that can must, or the copy outlives the file.
+   */
+  generatedCopies?: GeneratedCopyStore;
   onDeleteComplete?: (fabFile: IFabFileDocument, sizeToDeduct: number) => Promise<void>;
   /**
    * Self-host OpenSearch only (undefined elsewhere) - without this, a deleted file's chunks
@@ -85,7 +89,16 @@ export const deleteFabFile = async (
   parameters: DeleteFabFileParameters,
   adapter: DeleteFabFileAdapter
 ): Promise<DeleteFabFileResult> => {
-  const { db, storage, onDeleteComplete, searchIndex, origin = 'person', auditPrincipal, logger } = adapter;
+  const {
+    db,
+    storage,
+    generatedCopies,
+    onDeleteComplete,
+    searchIndex,
+    origin = 'person',
+    auditPrincipal,
+    logger,
+  } = adapter;
   const { id } = secureParameters(parameters, deleteFabFileSchema);
 
   const user = await db.users.findById(userId);
@@ -134,23 +147,9 @@ export const deleteFabFile = async (
       );
     }
 
-    // Delete the main file in S3 and calculate size
     let sizeToDeduct = 0;
-    // Every stored key, not just the current one: an AI-edited file keeps its retained revisions in
-    // `versions[]` under their own keys (see appendEditedVersion). Listed versions first, `filePath`
-    // last, as purgeDataLakeDocument.ts does; unlike that sweep every key is attempted regardless of
-    // earlier failures (below), so the order carries no failure semantics here. Only `fileSize`
-    // counts toward quota, so it alone is deducted.
-    const isStorageKey = (path: unknown): path is string => typeof path === 'string' && path.length > 0;
-    const storagePathsToDelete: string[] = Array.from(
-      new Set((ownedFile.versions ?? []).map(version => version?.filePath).filter(isStorageKey))
-    ).filter(path => path !== ownedFile.filePath);
-    if (ownedFile.filePath) {
-      Logger.globalInstance.log(`[deleteFabFile] Deleting S3 object — path: ${ownedFile.filePath}`);
-      storagePathsToDelete.push(ownedFile.filePath);
-      if (typeof ownedFile.fileSize === 'number') {
-        sizeToDeduct += ownedFile.fileSize;
-      }
+    if (ownedFile.filePath && typeof ownedFile.fileSize === 'number') {
+      sizeToDeduct += ownedFile.fileSize;
     }
 
     // Resolve BEFORE the Mongo chunks are deleted below - the chunk rows are the only place this
@@ -174,20 +173,7 @@ export const deleteFabFile = async (
       await db.sessions.update({ id: notebook.id, knowledgeIds: updatedKnowledgeIds });
     }
 
-    // Delete the file in S3. Best-effort per key: the row is already soft-deleted and its chunks gone,
-    // so a throw here would be unretryable and would skip the quota refund below. A failed key is
-    // logged and orphaned; the rest (including `filePath`) are still attempted.
-    for (const path of storagePathsToDelete) {
-      try {
-        await storage.delete(path);
-      } catch (error) {
-        Logger.globalInstance.error('[deleteFabFile] failed to delete stored object', {
-          fileId: ownedFile.id,
-          filePath: path,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
-    }
+    await deleteStoredObjects([ownedFile], { files: storage, generated: generatedCopies });
 
     // sizeToDeduct is always a positive number, representing the amount to deduct from the user's storage
     if (onDeleteComplete) {

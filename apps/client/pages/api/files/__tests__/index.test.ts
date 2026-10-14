@@ -14,7 +14,9 @@ const mockRefs = vi.hoisted(() => ({
   deleteHandler: null as null | ((req: any, res: any) => unknown),
   searchArgs: undefined as unknown[] | undefined,
   deleteManyArgs: undefined as unknown[] | undefined,
+  storedObjectArgs: undefined as unknown[] | undefined,
   findFilters: [] as unknown[],
+  selectProjections: [] as unknown[],
   unpublishArgs: undefined as unknown[] | undefined,
   updateManyArgs: undefined as unknown[] | undefined,
   updateManyOptions: undefined as unknown,
@@ -38,23 +40,21 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const fabFileDocs = vi.hoisted(() => [
   { filePath: 'a/one.png' },
-  // An AI-edited file: v1 and a retained edit under their own keys, the latest repeating filePath.
-  {
-    filePath: 'b/v3.docx',
-    versions: [{ filePath: 'b/v1.docx' }, { filePath: 'b/v2.docx' }, { filePath: 'b/v3.docx' }],
-  },
+  { filePath: 'b/two.mp3', sourceMetadata: { generatedCopyKey: 'two.mp3' } },
 ]);
-const storageDelete = vi.hoisted(() => vi.fn());
 
 vi.mock('@bike4mind/database', () => {
   class FabFile {
     static find = (filter: unknown) => {
       mockRefs.findFilters.push(filter);
       return {
-        select: () => ({
-          session: async () => fabFileDocs,
-          lean: async () => fabFileDocs.map((doc, i) => ({ ...doc, _id: `file-${i}` })),
-        }),
+        select: (projection: unknown) => {
+          mockRefs.selectProjections.push(projection);
+          return {
+            session: async () => fabFileDocs,
+            lean: async () => fabFileDocs.map((doc, i) => ({ ...doc, _id: `file-${i}` })),
+          };
+        },
       };
     };
     // Mirrors the real soft-delete plugin static: it settles to a plain Promise, not a
@@ -101,10 +101,17 @@ vi.mock('@bike4mind/services', () => ({
       mockRefs.searchArgs = args;
       return Promise.resolve({ data: [], total: 0, hasMore: false });
     },
+    deleteStoredObjects: (...args: unknown[]) => {
+      mockRefs.storedObjectArgs = args;
+      return Promise.resolve();
+    },
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn(), delete: storageDelete }) }));
+vi.mock('@server/utils/storage', () => ({
+  getFilesStorage: () => ({ bucket: 'files', getSignedUrl: vi.fn(), delete: vi.fn() }),
+  getGeneratedImageStorage: () => ({ bucket: 'generated', delete: vi.fn() }),
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: (...args: unknown[]) => {
@@ -207,7 +214,9 @@ function invokeDelete() {
 describe('DELETE /api/files', () => {
   beforeEach(() => {
     mockRefs.deleteManyArgs = undefined;
+    mockRefs.storedObjectArgs = undefined;
     mockRefs.findFilters = [];
+    mockRefs.selectProjections = [];
     mockRefs.unpublishArgs = undefined;
     mockRefs.updateManyArgs = undefined;
     mockRefs.updateManyOptions = undefined;
@@ -259,15 +268,35 @@ describe('DELETE /api/files', () => {
     expect(mockRefs.updateManyOptions).toEqual({ includeDeleted: true });
   });
 
-  it('deletes every retained version object of an owned file, each key once', async () => {
-    storageDelete.mockClear();
+  it("removes every owned file's stored objects, generated-bucket copies included", async () => {
     const { req, res } = invokeDelete();
 
     await mockRefs.deleteHandler!(req, res);
 
-    const deleted = storageDelete.mock.calls.map(([key]) => key);
-    expect(deleted).toHaveLength(4);
-    expect(new Set(deleted)).toEqual(new Set(['a/one.png', 'b/v1.docx', 'b/v2.docx', 'b/v3.docx']));
+    const [files, buckets] = mockRefs.storedObjectArgs as [unknown, { files: unknown; generated: unknown }];
+    expect(files).toBe(fabFileDocs);
+    expect(buckets.files).toMatchObject({ bucket: 'files' });
+    expect(buckets.generated).toMatchObject({ storage: { bucket: 'generated' } });
+  });
+
+  // The fork guard compares a reply's notebook with the file's own; a projection without sessionId makes the
+  // file's own notebook look like another's, so every notebook-linked chat copy would be kept.
+  // `versions` carries the retained AI-edit keys, which would otherwise be orphaned.
+  it('selects the notebook link the generated-copy fork guard needs, and the retained versions', async () => {
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    const storedObjectProjection = String(mockRefs.selectProjections.at(-1)).split(' ');
+    expect(storedObjectProjection).toEqual(
+      expect.arrayContaining([
+        'filePath',
+        'versions',
+        'moderationStatus',
+        'sourceMetadata.generatedCopyKey',
+        'sourceMetadata.sessionId',
+      ])
+    );
   });
 
   it('completes the request without throwing', async () => {

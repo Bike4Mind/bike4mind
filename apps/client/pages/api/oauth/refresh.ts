@@ -7,6 +7,8 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { HTTPError, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { refuseBlockedRotatedSession } from '@server/auth/refreshAccountGate';
 import { OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
 
 const RefreshRequestSchema = z.object({
@@ -42,6 +44,7 @@ const handler = baseApi({ auth: false })
             }),
           logger: req.logger,
         });
+        await refuseBlockedRotatedSession(rotated, req.logger);
         return res.json({
           access_token: rotated.accessToken,
           // Omitted when a concurrent sibling already advanced the chain. RFC 6749 s6 makes
@@ -65,6 +68,8 @@ const handler = baseApi({ auth: false })
       if (!user || !isTokenVersionCurrent(payload.tokenVersion, user.tokenVersion)) {
         throw new UnauthorizedError('Invalid refresh token');
       }
+      // Refused before a session is minted, so nothing is left to revoke.
+      assertAccountStateUsable(user);
 
       // Legacy JWT refresh token: lazily migrate onto a session. impersonatedBy is re-stamped so
       // an impersonated session keeps the marker across refresh (logout.ts's guard depends on it).

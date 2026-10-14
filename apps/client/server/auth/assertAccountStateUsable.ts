@@ -1,8 +1,7 @@
-import type { IUserDocument } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
 import { ForbiddenError, UnauthorizedError } from '@server/utils/errors';
 
-export function assertAccountStateUsable(user: IUserDocument): void {
+export function assertAccountStateUsable(user: Parameters<typeof userService.accountBlockReasons>[0]): void {
   switch (userService.accountBlockReasons(user)[0]) {
     case 'banned':
       throw new UnauthorizedError('User not found or banned');

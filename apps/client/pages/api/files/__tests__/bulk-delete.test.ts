@@ -39,6 +39,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ delete: h.storageDelete, upload: vi.fn(), getSignedUrl: vi.fn() }),
+  getGeneratedImageStorage: () => ({ delete: vi.fn() }),
 }));
 
 vi.mock('@bike4mind/database', async importOriginal => ({
@@ -262,10 +263,8 @@ describe('bulk-delete - not-found reporting', () => {
     h.findById.mockImplementation(async (id: string) =>
       id === DELETED_ID ? deletedFile : id === FAILING_ID ? failingFile : null
     );
-    // A storage failure no longer fails a delete (deleteFabFile logs it, the row is already gone),
-    // so fail this file at the soft-delete write instead.
-    h.update.mockImplementation(async ({ id }: { id: string }) => {
-      if (id === FAILING_ID) throw new Error('DB unavailable');
+    h.storageDelete.mockImplementation(async (path: string) => {
+      if (path === 'uploads/b.txt') throw new Error('S3 unavailable');
     });
 
     const { res, json } = makeRes();
@@ -275,7 +274,7 @@ describe('bulk-delete - not-found reporting', () => {
     const body = json.mock.calls[0][0];
     expect(body.results.deleted).toEqual([DELETED_ID]);
     expect(body.results.notFound).toEqual([MISSING_ID]);
-    expect(body.results.failed).toEqual([{ id: FAILING_ID, error: 'DB unavailable' }]);
+    expect(body.results.failed).toEqual([{ id: FAILING_ID, error: 'S3 unavailable' }]);
     expect(body.message).toBe('Deleted 1 file(s), 1 file(s) not found, Failed to process 1 file(s)');
   });
 });

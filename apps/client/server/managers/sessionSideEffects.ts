@@ -9,7 +9,7 @@ import {
 import { ClientMessageSender } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
-import { ActivityType } from '@client/config/activities';
+import { ActivityType } from '@client/config/activityType';
 import { Ability } from '@server/auth/ability';
 import { Resource } from 'sst';
 
