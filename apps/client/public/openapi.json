@@ -18751,7 +18751,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The served models.",
+            "description": "The models you can call.",
             "content": {
               "application/json": {
                 "schema": {

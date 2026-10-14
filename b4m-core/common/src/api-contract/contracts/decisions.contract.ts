@@ -175,7 +175,7 @@ export const listDecisionModelsContract = defineEndpoint({
   auth: 'apiKeyOrJwt',
   scopes: DECISION_SCOPES,
   responses: {
-    200: { description: 'The served models.', schema: ListDecisionModelsResponseSchema },
+    200: { description: 'The models you can call.', schema: ListDecisionModelsResponseSchema },
     403: scopeForbidden,
     429: rateLimited,
   },

@@ -8293,7 +8293,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description The served models. */
+      /** @description The models you can call. */
       200: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
