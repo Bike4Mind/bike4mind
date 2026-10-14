@@ -151,8 +151,9 @@ import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { resolveToolAvailability } from './toolAvailability';
-import { resolveVideoToolConfigSafely } from './resolveVideoToolConfigSafely';
+import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
+import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
@@ -1725,6 +1726,7 @@ export class ChatCompletionProcess {
     prefetchedOrganization,
     externalTools,
     videoToolConfigResolver,
+    musicToolConfigResolver,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
     logger: Logger;
@@ -1739,6 +1741,8 @@ export class ChatCompletionProcess {
     externalTools?: Record<string, ToolDefinition>;
     /** Resolves the video tool's capability; only invoked when video_generation is enabled. */
     videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
+    /** Resolves the music tool's capability; only invoked when music_generation is enabled. */
+    musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
   }) {
     const processStartTime = Date.now();
     const timer = new PipelineTimer();
@@ -3084,7 +3088,10 @@ export class ChatCompletionProcess {
       }
 
       const videoToolConfig = enabledTools.includes('video_generation')
-        ? await resolveVideoToolConfigSafely(videoToolConfigResolver, logger)
+        ? await resolveToolConfigSafely('video_generation', videoToolConfigResolver, logger)
+        : null;
+      const musicToolConfig = enabledTools.includes('music_generation')
+        ? await resolveToolConfigSafely('music_generation', musicToolConfigResolver, logger)
         : null;
 
       let allTools = toolBuilder.buildTools({
@@ -3113,6 +3120,7 @@ export class ChatCompletionProcess {
           audio_generation: audioConfig,
           web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
           video_generation: videoToolConfig ?? undefined,
+          music_generation: musicToolConfig ?? undefined,
         },
         model,
         organization,

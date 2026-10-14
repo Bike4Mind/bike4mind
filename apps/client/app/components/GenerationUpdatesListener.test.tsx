@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { IGenerationJobUpdatedAction, VideoGeneration } from '@bike4mind/common';
+import type { IGenerationJobUpdatedAction, MusicGeneration, VideoGeneration } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   readyState: 1,
@@ -22,15 +22,17 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 }));
 
 import { listOf, readyOutput, videoJob } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
+import { musicJob, musicOutput } from '@client/app/hooks/data/__test__/musicGenerationFixtures';
+import { musicGenerationKeys } from '@client/app/hooks/data/musicGenerationKeys';
 import { videoGenerationKeys } from '@client/app/hooks/data/videoGenerationKeys';
-import VideoGenerationUpdatesListener from './VideoGenerationUpdatesListener';
+import GenerationUpdatesListener from './GenerationUpdatesListener';
 
 let queryClient: QueryClient;
 
 const renderListener = () =>
   render(
     <QueryClientProvider client={queryClient}>
-      <VideoGenerationUpdatesListener />
+      <GenerationUpdatesListener />
     </QueryClientProvider>
   );
 
@@ -45,6 +47,7 @@ const send = async (message: IGenerationJobUpdatedAction) => {
   });
 };
 
+const musicDetail = (id: string) => queryClient.getQueryData<MusicGeneration>(musicGenerationKeys.detail(id));
 const detail = (id: string) => queryClient.getQueryData<VideoGeneration>(videoGenerationKeys.detail(id));
 
 beforeEach(() => {
@@ -53,7 +56,7 @@ beforeEach(() => {
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
 
-describe('VideoGenerationUpdatesListener', () => {
+describe('GenerationUpdatesListener', () => {
   it('patches a running frame into the job', async () => {
     queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'pending' }));
     renderListener();
@@ -86,11 +89,11 @@ describe('VideoGenerationUpdatesListener', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
   });
 
-  it('ignores a frame for another kind of job', async () => {
+  it('ignores a frame for an unknown kind of job', async () => {
     queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'pending' }));
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     renderListener();
-    await send(frame({ id: 'job-1', kind: 'image', state: 'running' } as never));
+    await send(frame({ id: 'job-1', kind: 'hologram', state: 'running' } as never));
     expect(detail('job-1')?.state).toBe('pending');
     expect(invalidate).not.toHaveBeenCalled();
   });
@@ -119,7 +122,7 @@ describe('VideoGenerationUpdatesListener', () => {
     // A fresh element each time: re-rendering the same element reference bails out before the mock is re-read.
     const tree = () => (
       <QueryClientProvider client={queryClient}>
-        <VideoGenerationUpdatesListener />
+        <GenerationUpdatesListener />
       </QueryClientProvider>
     );
 
@@ -139,5 +142,54 @@ describe('VideoGenerationUpdatesListener', () => {
 
     rerender(tree());
     expect(invalidate).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('GenerationUpdatesListener music jobs', () => {
+  it('patches a running frame into the music job and leaves video alone', async () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('song-1'), musicJob({ id: 'song-1', state: 'pending' }));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'song-1', kind: 'music', state: 'running' }));
+    expect(musicDetail('song-1')?.state).toBe('running');
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('refetches a finished song and the credit balance', async () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('song-1'), musicJob({ id: 'song-1', state: 'storing' }));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'song-1', kind: 'music', state: 'succeeded' }));
+    expect(musicDetail('song-1')?.state).toBe('succeeded');
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: musicGenerationKeys.detail('song-1') });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
+  });
+
+  it('on reconnect refreshes the unfinished and awaiting-output songs only', async () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('live'), musicJob({ id: 'live', state: 'running' }));
+    queryClient.setQueryData(
+      musicGenerationKeys.detail('done'),
+      musicJob({ id: 'done', state: 'succeeded', output: musicOutput() })
+    );
+    queryClient.setQueryData(
+      musicGenerationKeys.detail('no-output'),
+      musicJob({ id: 'no-output', state: 'succeeded', output: null })
+    );
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { rerender } = renderListener();
+    const tree = () => (
+      <QueryClientProvider client={queryClient}>
+        <GenerationUpdatesListener />
+      </QueryClientProvider>
+    );
+    h.readyState = 3;
+    rerender(tree());
+    h.readyState = 1;
+    rerender(tree());
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: musicGenerationKeys.detail('live'), exact: true });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: musicGenerationKeys.detail('no-output'), exact: true });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: musicGenerationKeys.detail('done'), exact: true });
   });
 });

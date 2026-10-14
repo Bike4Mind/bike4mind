@@ -141,7 +141,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(repo, 'markFailed').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'markAborted').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'checkAbortFlag').mockResolvedValue(false as never);
-  vi.spyOn(actual.questRepository, 'addVideoJobIds').mockResolvedValue(undefined as never);
+  vi.spyOn(actual.questRepository, 'addGenerationJobs').mockResolvedValue(undefined as never);
   vi.spyOn(actual.usageEventRepository, 'record').mockResolvedValue(undefined as never);
   vi.spyOn(actual.User, 'findById').mockResolvedValue({ id: 'user-1', currentCredits: 100 } as never);
   vi.spyOn(actual.sessionRepository, 'findById').mockResolvedValue(baseSession as never);
@@ -222,16 +222,16 @@ describe('processExecution tool deps', () => {
       expect(vi.mocked(buildSubagentToolConfig).mock.calls[0][0].videoConfig).toBeNull();
     });
 
-    it('attaches new video job ids to the run quest from onStatusUpdate', async () => {
+    it('attaches new generation jobs to the run quest from onStatusUpdate', async () => {
       const { questRepository } = await import('@bike4mind/database');
       await runWithExecDoc(videoExecDoc);
 
       const toolCallbacks = buildSharedToolsMock.mock.calls[0][1] as {
         onStatusUpdate: (changes: Record<string, unknown>) => Promise<void>;
       };
-      await toolCallbacks.onStatusUpdate({ videoJobIds: ['job-1'] });
+      await toolCallbacks.onStatusUpdate({ generationJobs: [{ id: 'job-1', kind: 'music' }] });
 
-      expect(questRepository.addVideoJobIds).toHaveBeenCalledWith('q-run', ['job-1']);
+      expect(questRepository.addGenerationJobs).toHaveBeenCalledWith('q-run', [{ id: 'job-1', kind: 'music' }]);
     });
   });
 

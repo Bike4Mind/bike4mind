@@ -52,6 +52,14 @@ describe('resolveQuestTimeoutRecovery', () => {
     expect(recovery).toEqual({ status: 'done', finishReason: 'timeout', fallbackInfo: null });
   });
 
+  it('preserves a song job on a stale running quest and adds no "try again" notice', () => {
+    const recovery = resolveQuestTimeoutRecovery(
+      quest({ replies: [], generationJobs: [{ id: 'job-1', kind: 'music' }] }),
+      NOW
+    );
+    expect(recovery).toEqual({ status: 'done', finishReason: 'timeout', fallbackInfo: null });
+  });
+
   it('drops fallbackInfo when only media survived, since the failed primary may have produced it', () => {
     const recovery = resolveQuestTimeoutRecovery(quest({ replies: [], images: ['primary.png'] }), NOW);
     expect(recovery).toEqual({ status: 'done', finishReason: 'timeout', fallbackInfo: null });

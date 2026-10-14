@@ -194,13 +194,13 @@ let remainingMs = 600_000;
 const lambdaContext = { getRemainingTimeInMillis: () => remainingMs } as never;
 const imagePayload = { model: IMAGE_MODEL_ID, n: 1, prompt: 'a bicycle' };
 const EXPECTED_IMAGE_CREDITS = 55;
-const musicPayload = { provider: 'elevenlabs', lengthMs: 30_000 };
+const audioPayload = { kind: 'sound_effect', provider: 'elevenlabs', durationSeconds: 20 };
 
 // Imported lazily: a static import would load the mocked modules before the fixtures above exist.
-async function expectedMusicCredits() {
+async function expectedAudioCredits() {
   const { estimateGeneratedMediaUsd } = await import('@bike4mind/services');
   // Same converter as the `@bike4mind/utils` mock above, over the real estimator.
-  return Math.ceil(estimateGeneratedMediaUsd('music_generation', musicPayload, []) * 1000);
+  return Math.ceil(estimateGeneratedMediaUsd('audio_generation', audioPayload, []) * 1000);
 }
 
 async function dagHookMock() {
@@ -280,26 +280,26 @@ describe('processSubagentDispatch generated-media billing', () => {
     expect(settledAt).toBeLessThan((await dagHookMock()).mock.invocationCallOrder[0]);
   });
 
-  it('bills music priced from the onToolFinish payload', async () => {
+  it('bills audio priced from the onToolFinish payload', async () => {
     delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('music_generation', musicPayload);
-      await callbacks.onToolFinish('music_generation', musicPayload);
+      await callbacks.onToolStart('audio_generation', audioPayload);
+      await callbacks.onToolFinish('audio_generation', audioPayload);
       return completedResult;
     };
     const { handler } = await import('./agentExecutor');
 
     await handler(dagNodeDispatchEvent(), lambdaContext);
 
-    const musicCredits = await expectedMusicCredits();
-    expect(musicCredits).toBeGreaterThan(0);
+    const audioCredits = await expectedAudioCredits();
+    expect(audioCredits).toBeGreaterThan(0);
     expect(deductCreditsWithOrgSupportMock).toHaveBeenCalledTimes(1);
-    expect(deductCreditsWithOrgSupportMock.mock.calls[0][0]).toMatchObject({ credits: musicCredits });
-    expect(mockIncrementCreditsUsed).toHaveBeenCalledWith('child-1', musicCredits);
+    expect(deductCreditsWithOrgSupportMock.mock.calls[0][0]).toMatchObject({ credits: audioCredits });
+    expect(mockIncrementCreditsUsed).toHaveBeenCalledWith('child-1', audioCredits);
   });
 
-  it('does not bill music from the onToolStart payload alone', async () => {
+  it('does not bill audio from the onToolStart payload alone', async () => {
     delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('music_generation', musicPayload);
+      await callbacks.onToolStart('audio_generation', audioPayload);
       return completedResult;
     };
     const { handler } = await import('./agentExecutor');

@@ -171,11 +171,9 @@ import {
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
-import {
-  attachVideoJobsToRunQuest,
-  buildAgentVideoToolConfig,
-  getAgentVideoToolConfigDeps,
-} from './agentExecutor.videoToolConfig';
+import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
+import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
+import { attachGenerationJobsToRunQuest } from './agentExecutor.generationJobs';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
@@ -1773,8 +1771,8 @@ async function processExecution(
             if (!generatedImages.includes(img)) generatedImages.push(img);
           }
         }
-        // In-process subagents share these callbacks, so their clips land here too.
-        await attachVideoJobsToRunQuest(changes?.videoJobIds, runQuestId, questRepository, logger);
+        // In-process subagents share these callbacks, so their clips and songs land here too.
+        await attachGenerationJobsToRunQuest(changes?.generationJobs, runQuestId, questRepository, logger);
         if (changes?.promptMeta?.retrieval) {
           retrievalSummary = mergeRetrievalSummary(retrievalSummary, changes.promptMeta.retrieval);
         }
@@ -1893,6 +1891,15 @@ async function processExecution(
           toolEnabled: profileEnabledTools.includes('video_generation'),
         },
         getAgentVideoToolConfigDeps(logger)
+      ),
+      musicConfig: await buildAgentMusicToolConfig(
+        {
+          userId: execution.userId,
+          apiKeyId: execution.apiKeyId,
+          questId: runQuestId,
+          toolEnabled: profileEnabledTools.includes('music_generation'),
+        },
+        getAgentMusicToolConfigDeps(logger)
       ),
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });

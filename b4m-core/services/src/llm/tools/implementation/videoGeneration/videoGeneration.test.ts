@@ -19,7 +19,7 @@ describe('video_generation tool', () => {
     const result = JSON.parse(await tool.toolFn({ model: 'test-video', prompt: 'a cat' }));
     expect(result).toEqual({ jobId: 'job1', estimatedSeconds: 8 });
     expect(createJob.mock.calls[0][0]).toMatchObject({ source: 'agent', questId: 'q1', user: { id: 'u1' } });
-    expect(statusUpdate).toHaveBeenCalledWith({ videoJobIds: ['job1'] });
+    expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'video' }] });
   });
 
   it('sends image-to-video when an input image id is given', async () => {

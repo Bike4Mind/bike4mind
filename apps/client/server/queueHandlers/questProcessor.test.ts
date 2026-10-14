@@ -87,6 +87,26 @@ describe('questProcessor getVideoToolConfigResolver', () => {
   }, 120_000);
 });
 
+vi.mock('@server/musicGenerations/buildMusicToolConfig', () => ({
+  buildMusicToolConfig: vi.fn(async () => ({ usableModels: ['test-music'], createJob: vi.fn() })),
+}));
+
+describe('questProcessor getMusicToolConfigResolver', () => {
+  it('offers no music resolver on an API-key turn', async () => {
+    const { getMusicToolConfigResolver } = await import('./questProcessor');
+    expect(getMusicToolConfigResolver('key-1', 'u1')).toBeUndefined();
+  }, 120_000);
+
+  it('offers a music resolver on a session turn', async () => {
+    const { getMusicToolConfigResolver } = await import('./questProcessor');
+    const { buildMusicToolConfig } = await import('@server/musicGenerations/buildMusicToolConfig');
+    const resolver = getMusicToolConfigResolver(undefined, 'u1');
+    expect(resolver).toBeTypeOf('function');
+    await resolver?.();
+    expect(buildMusicToolConfig).toHaveBeenCalledWith('u1', expect.anything());
+  }, 120_000);
+});
+
 describe('questProcessor getStaticOptions', () => {
   it('wires the save_content_to_data_lake audit adapters', async () => {
     // The handler's transitive import graph (services + database + slack) is heavy enough
