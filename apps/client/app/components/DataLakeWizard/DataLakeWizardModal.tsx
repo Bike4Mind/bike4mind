@@ -75,7 +75,7 @@ export default function DataLakeWizardModal() {
   const { data: driveEstimate } = useDriveFolderEstimate(pendingDriveFolder?.driveFolderId);
   // Known bytes are a floor even when the estimate was truncated, so they can always block; a
   // pending or failed estimate counts as 0 and never locks the user out - the sync stays the boundary.
-  const driveKnownBytes = pendingDriveFolder ? (driveEstimate?.knownBytes ?? 0) : 0;
+  const driveKnownBytes = driveEstimate?.knownBytes ?? 0;
   const commitBytes = uploadBytes + driveKnownBytes;
   // Drive bytes are debited to the connecting user, not the org: must stay in sync with the
   // checkStorageLimit call in the Drive lake worker (driveLakeIngest). Only a commit that carries
@@ -83,7 +83,7 @@ export default function DataLakeWizardModal() {
   const exceedsStorage =
     commitBytes > 0 && checkStorageForUpload(getStorageQuota(currentUser), commitBytes).status === 'exceeds';
   // The sync refuses the whole folder past its file cap, so creating would leave an empty lake.
-  const driveOverCandidateCap = !!pendingDriveFolder && !!driveEstimate?.overCandidateCap;
+  const driveOverCandidateCap = !!driveEstimate?.overCandidateCap;
   // The cached usage is not refreshed when files are deleted, so re-read it before holding the
   // user to a block - e.g. on returning from "Manage files".
   useEffect(() => {

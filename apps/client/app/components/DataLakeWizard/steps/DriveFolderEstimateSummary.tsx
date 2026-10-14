@@ -49,8 +49,12 @@ export default function DriveFolderEstimateSummary({ driveFolderId }: { driveFol
   ].filter(Boolean);
   const quota = getStorageQuota(currentUser);
   const uploadBytes = plannedUploadBytes(allFiles, conflictResolution);
+  const knownBytes = uploadBytes + estimate.knownBytes;
+  // Mirrors the modal's gate: known bytes only block when there are some, so a user already over
+  // quota with an all-unknown-size folder is warned here rather than blocked there.
   const worstCaseExceeds =
-    checkStorageForUpload(quota, uploadBytes + estimate.knownBytes).status !== 'exceeds' &&
+    estimate.unknownSizeCount > 0 &&
+    !(knownBytes > 0 && checkStorageForUpload(quota, knownBytes).status === 'exceeds') &&
     checkStorageForUpload(quota, uploadBytes + driveWorstCaseBytes(estimate)).status === 'exceeds';
 
   return (

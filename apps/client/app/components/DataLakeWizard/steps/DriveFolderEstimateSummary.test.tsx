@@ -99,6 +99,21 @@ describe('DriveFolderEstimateSummary', () => {
     expect(screen.getByTestId('drive-estimate-worst-case-warning')).toBeInTheDocument();
   });
 
+  it('warns a user already over quota whose folder has only unknown-size files', () => {
+    // The modal does not block a commit with no known bytes, so this warning is the only signal.
+    useUser.setState({ currentUser: { currentStorageSize: 20_000_000, storageLimit: 10 } as IUserDocument });
+    query.current = loaded({ knownBytes: 0, unknownSizeCount: 3 });
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-worst-case-warning')).toBeInTheDocument();
+  });
+
+  it('does not warn when the known bytes already exceed (the modal blocks instead)', () => {
+    useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 1 } as IUserDocument });
+    query.current = loaded({ unknownSizeCount: 1 });
+    renderSummary();
+    expect(screen.queryByTestId('drive-estimate-worst-case-warning')).toBeNull();
+  });
+
   it('does not warn when the worst case fits', () => {
     useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 100 } as IUserDocument });
     query.current = loaded({ unknownSizeCount: 1 });

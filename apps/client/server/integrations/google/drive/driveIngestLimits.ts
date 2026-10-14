@@ -11,10 +11,10 @@ export const MAX_INGEST_FILE_BYTES = 50 * 1024 * 1024;
 // Cap on the un-sliceable part of a sync: the folder walk and the diff against this connection's
 // stored set, both of which hold a full listing in memory in EVERY slice and must complete inside one
 // invocation before any file is touched - a folder-wide constant regardless of how small any one
-// slice's delta is. This is NO LONGER a throughput bound on the ingestable count - the deadline guard
-// above yields to a continuation slice rather than timing out mid-loop, so that count is bounded by
+// slice's delta is. This is NO LONGER a throughput bound on the ingestable count - the worker's deadline
+// guard yields to a continuation slice rather than timing out mid-loop, so that count is bounded by
 // MAX_INGEST_SLICES x a slice's throughput (tens of thousands of files) and not by one invocation.
-// Checked against walked.length and existingDocs.length (see the enforcement below), not the delta
+// Checked against walked.length and existingDocs.length (see the enforcement in driveLakeIngest), not the delta
 // between them - gating on the delta would let a folder with a huge stable listing and a tiny delta
 // pay the walk+diff cost on every slice with the cap never tripping. Enforced up front, before any
 // membership write, so an over-cap folder is refused with nothing changed. Beyond it the folder should
