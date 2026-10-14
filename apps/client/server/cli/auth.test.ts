@@ -65,6 +65,7 @@ import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 const userId = 'user-abc';
 const key = `rate-limit:ws-auth:${userId}`;
 const desktopKey = `rate-limit:ws-auth:desktop:${userId}`;
+const completionsKey = `rate-limit:ws-auth:completions:${userId}`;
 const HOUR_MS = 60 * 60_000;
 
 describe('checkRateLimit (JWT per-user rate limiter)', () => {
@@ -167,8 +168,9 @@ describe('checkRateLimit (JWT per-user rate limiter)', () => {
       // The raised ceiling must not be spent on the counter the CLI and every other JWT surface
       // read, or a desktop session past 1000 would exhaust that user's CLI budget.
       expect(cacheStore.get(key)).toBeUndefined();
+      expect(cacheStore.get(completionsKey)).toBeUndefined();
       await expect(checkRateLimit(userId, 'cli')).resolves.toBeUndefined();
-      expect(cacheStore.get(key)!.value).toBe(1);
+      expect(cacheStore.get(completionsKey)!.value).toBe(1);
     });
 
     it('keeps the 100 cap for any other API client', async () => {
@@ -186,9 +188,34 @@ describe('checkRateLimit (JWT per-user rate limiter)', () => {
         await checkRateLimit(userId, 'cli');
       }
       await expect(checkRateLimit(userId, undefined, { bucket: 'tools' })).resolves.toBeUndefined();
-      expect(cacheStore.get(key)!.value).toBe(1000);
+      expect(cacheStore.get(completionsKey)!.value).toBe(1000);
       expect(cacheStore.get(`rate-limit:ws-auth:tools:${userId}`)!.value).toBe(1);
     });
+
+    it('keeps the ws bucket apart from a completions session at its cap', async () => {
+      for (let i = 0; i < 1000; i++) {
+        await checkRateLimit(userId, 'cli');
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'ws' })).resolves.toBeUndefined();
+      expect(cacheStore.get(completionsKey)!.value).toBe(1000);
+      expect(cacheStore.get(`rate-limit:ws-auth:ws:${userId}`)!.value).toBe(1);
+    });
+
+    it.each(['cli', 'agent'] as const)(
+      'keeps a %s session above 100 off the counter that 100-cap sources read',
+      async source => {
+        for (let i = 0; i < 150; i++) {
+          await checkRateLimit(userId, source);
+        }
+
+        expect(cacheStore.get(key)).toBeUndefined();
+        expect(cacheStore.get(completionsKey)!.value).toBe(150);
+        await expect(checkRateLimit(userId, 'api')).resolves.toBeUndefined();
+        await expect(checkRateLimit(userId, 'web')).resolves.toBeUndefined();
+        await expect(checkRateLimit(userId)).resolves.toBeUndefined();
+        expect(cacheStore.get(key)!.value).toBe(3);
+      }
+    );
 
     it('applies the source cap to the bucketed counter', async () => {
       for (let i = 0; i < 100; i++) {

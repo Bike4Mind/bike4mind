@@ -6,6 +6,8 @@ import {
   dataLakeRepository,
   dataLakeResearchConfigRepository,
   dataLakeResearchRunRepository,
+  organizationRepository,
+  userRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { InternalServerError } from '@bike4mind/utils';
@@ -78,6 +80,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           db: {
             dataLakeResearchConfigs: dataLakeResearchConfigRepository,
             dataLakeResearchRuns: dataLakeResearchRunRepository,
+            users: userRepository,
+            organizations: organizationRepository,
             ...lakeConfigAuditDb,
           },
           logger: req.logger,

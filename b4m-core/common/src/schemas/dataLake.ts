@@ -18,6 +18,7 @@ import {
 } from '../constants/dataLakes';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
 import { DATA_LAKE_ORIGINS } from '../types/entities/DataLakeTypes';
+import { OAUTH_SOURCE_TAG_PREFIX, isOAuthSourceTag } from '../constants/oauthClients';
 import type { LakeConfigAuditCoversEveryUpdatableField } from '../types/entities/LakeConfigChangeEventTypes';
 
 // Hash validation
@@ -38,7 +39,8 @@ const requiredUserTagValue = z
   .refine(
     s => !/[,;]/.test(s),
     'User tag must be a single tag with no commas or semicolons (e.g. "vip" or "Sales Team")'
-  );
+  )
+  .refine(s => !isOAuthSourceTag(s), `User tag cannot use the self-assignable "${OAUTH_SOURCE_TAG_PREFIX}" namespace`);
 
 export const CreateDataLakeRequestInput = z.object({
   name: z.string().min(1).max(200),
@@ -78,6 +80,10 @@ export const CreateDataLakeRequestInput = z.object({
     .refine(
       s => s.includes(':') && s.split(':').every(part => part.length > 0),
       'Entitlement key must be namespaced with non-empty parts (e.g. "product:pro")'
+    )
+    .refine(
+      s => !isOAuthSourceTag(s),
+      `Entitlement key cannot use the self-assignable "${OAUTH_SOURCE_TAG_PREFIX}" namespace`
     )
     .optional(),
   // The caller's active account-switcher org, if any. It is NOT trusted as-is: the route
@@ -126,6 +132,10 @@ export const UpdateDataLakeRequestInput = z.object({
         .refine(
           s => s.includes(':') && s.split(':').every(part => part.length > 0),
           'Entitlement key must be namespaced with non-empty parts (e.g. "product:pro")'
+        )
+        .refine(
+          s => !isOAuthSourceTag(s),
+          `Entitlement key cannot use the self-assignable "${OAUTH_SOURCE_TAG_PREFIX}" namespace`
         ),
     ])
     .optional(),

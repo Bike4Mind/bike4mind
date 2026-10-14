@@ -14,6 +14,7 @@ import {
   fabFileChunkQueue,
   driveLakeIngestQueue,
   githubLakeIngestQueue,
+  githubLakeRevokeQueue,
   dataLakeResearchQueue,
   generationCallbackQueue,
   generationJobQueue,
@@ -808,6 +809,33 @@ const githubLakeReconcileCron = new sst.aws.Cron('githubLakeReconcile', {
 });
 
 /**
+ * Data-Lake Connector Orphan Reap
+ * Releases Drive connections and GitHub bindings whose data lake document no longer exists, so their
+ * globally unique folder / repository claims do not outlive the lake. Gated on EnableDataLakes only
+ * (cleanup runs even with polling off); the GitHub leg also needs EnableDataLakeGitHub (the handler
+ * enforces both).
+ *
+ * Schedule: daily (a bounded batch per connector; see MAX_REAPS_PER_CONNECTOR in the handler)
+ * Enabled: production + dev
+ */
+const lakeConnectorOrphanReapCron = new sst.aws.Cron('lakeConnectorOrphanReap', {
+  schedule: 'rate(1 day)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/lakeConnectorOrphanReap.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    // githubLakeRevokeQueue: releasing a GitHub binding hands a failed post-release uninstall to it
+    // (releaseGitHubLakeConnection, githubLakeConnection.ts).
+    link: [...allSecrets, githubLakeRevokeQueue],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+/**
  * system-help data-lake re-sync
  * Mirrors the public help corpus into the `system-help` lake - the corpus behind in-chat
  * `search_knowledge_base`. Previously this only ever ran when someone remembered to invoke
@@ -989,6 +1017,7 @@ export {
   creditPurchaseReconciliationCron,
   driveLakeResyncPollCron,
   githubLakeReconcileCron,
+  lakeConnectorOrphanReapCron,
   helpDatalakeIngestCron,
   lakeHealthSweepCron,
   lakeInconsistencySweepCron,

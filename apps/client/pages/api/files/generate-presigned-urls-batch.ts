@@ -7,6 +7,7 @@ import {
   DATALAKE_TAG_STRENGTH,
   FabFileSourceType,
   KnowledgeType,
+  StorageLimitError,
   type IDataLakeBatchFile,
   type IDataLakeDocument,
   isLakeIngestable,
@@ -165,8 +166,15 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
 
   for (const { item: fileItem, supported } of resolvedFiles) {
     if (!fileItem.fileSize) throw new BadRequestError('No file size provided');
-    if (fileItem.fileSize >= maxFileSize)
-      throw new BadRequestError(`File "${fileItem.fileName}" exceeds maximum file size`);
+    if (fileItem.fileSize >= maxFileSize) {
+      throw new StorageLimitError(`File "${fileItem.fileName}" exceeds maximum file size`, {
+        errorCode: 'file_too_large',
+        used_bytes: 0,
+        limit_bytes: maxFileSize,
+        requested_bytes: fileItem.fileSize,
+        owner: 'user',
+      });
+    }
     // Reject unsupported/binary types (e.g. .exe) at the ingest door - the
     // chunker can't vectorize them, so accepting them yields corrupt lake
     // state (a FabFile with 0 chunks).

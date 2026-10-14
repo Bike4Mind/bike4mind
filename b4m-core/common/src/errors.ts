@@ -1,4 +1,5 @@
-import { ZodError } from 'zod';
+import { z, ZodError } from 'zod';
+import type { ApiErrorCode } from './apiErrorCodes';
 import type { IFabFileDocument } from './types/entities/FabFileTypes';
 
 // ---------- HTTP errors (canonical location) ----------
@@ -74,6 +75,85 @@ export class BadRequestError extends HTTPError {
   ) {
     super(HttpStatus.BadRequest, message, additionalInfo);
     this.name = 'BadRequestError';
+  }
+}
+
+/** Narrows API_ERROR_CODES to the storage refusals (CONVENTIONS.md section 1). */
+export const STORAGE_ERROR_CODES = [
+  'storage_limit_exceeded',
+  'org_storage_limit_exceeded',
+  'file_too_large',
+] as const satisfies readonly ApiErrorCode[];
+export const StorageErrorCodeSchema = z.enum(STORAGE_ERROR_CODES);
+export type StorageErrorCode = z.infer<typeof StorageErrorCodeSchema>;
+
+/**
+ * Machine-readable detail of a storage refusal, spread into the error body by errorHandler. Branch on
+ * `errorCode`, never on the human message. `used_bytes` is the user's cumulative usage for a user quota
+ * refusal and 0 for the per-file ceilings (organizations track no cumulative usage, and the file-size
+ * cap has none), so `limit_bytes` is the cap that `requested_bytes` ran into in every case.
+ */
+export const StorageLimitErrorInfoSchema = z.object({
+  errorCode: StorageErrorCodeSchema.describe(
+    'Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit), or `file_too_large` (the per-file size limit). Branch on this, not on the message.'
+  ),
+  used_bytes: z
+    .number()
+    .nonnegative()
+    .describe('Bytes already stored against the limit. 0 for `org_storage_limit_exceeded` and `file_too_large`.'),
+  limit_bytes: z.number().nonnegative().describe('The limit, in bytes, that the request ran into.'),
+  requested_bytes: z.number().nonnegative().describe('Size of the refused upload, in bytes.'),
+  owner: z
+    .enum(['user', 'org'])
+    .describe('Whose limit was hit: `user` or `org`. Always `user` for `file_too_large`, a platform-wide cap.'),
+});
+export type StorageLimitErrorInfo = z.infer<typeof StorageLimitErrorInfoSchema>;
+
+/** 400 for a quota or per-file size refusal; the status stays 400 so existing clients keep working. */
+export class StorageLimitError extends BadRequestError {
+  constructor(
+    message: string,
+    public readonly info: StorageLimitErrorInfo
+  ) {
+    super(message, info);
+    this.name = 'StorageLimitError';
+  }
+}
+
+/** Name fallback for the same cross-module-realm reason as `isConcurrencyConflictError`. */
+export function isStorageLimitError(err: unknown): err is StorageLimitError {
+  return Boolean(
+    err instanceof StorageLimitError ||
+    (err instanceof Error &&
+      err.name === 'StorageLimitError' &&
+      StorageLimitErrorInfoSchema.safeParse((err as { info?: unknown }).info).success)
+  );
+}
+
+/** The storage detail on an error response body, or undefined when the body carries none. */
+export function parseStorageLimitErrorInfo(body: unknown): StorageLimitErrorInfo | undefined {
+  const parsed = StorageLimitErrorInfoSchema.safeParse(body);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * The one user-facing wording for a storage refusal, built from the numbers so rewording the thrown message
+ * cannot change it. The caller supplies the byte formatter so the app's own units stay the single source.
+ */
+export function describeStorageLimitError(info: StorageLimitErrorInfo, formatBytes: (bytes: number) => string): string {
+  const { errorCode, used_bytes, limit_bytes, requested_bytes } = info;
+  switch (errorCode) {
+    case 'storage_limit_exceeded': {
+      const bytesToFree = used_bytes + requested_bytes - limit_bytes;
+      return (
+        `Not enough storage: you are using ${formatBytes(used_bytes)} of ${formatBytes(limit_bytes)}, ` +
+        `and this upload needs ${formatBytes(requested_bytes)}. Free up at least ${formatBytes(bytesToFree)} to continue.`
+      );
+    }
+    case 'org_storage_limit_exceeded':
+      return `This upload (${formatBytes(requested_bytes)}) is larger than your organization's storage limit of ${formatBytes(limit_bytes)}.`;
+    case 'file_too_large':
+      return `This file (${formatBytes(requested_bytes)}) is larger than the maximum file size of ${formatBytes(limit_bytes)}.`;
   }
 }
 

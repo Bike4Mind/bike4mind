@@ -37,6 +37,7 @@ import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerGenerationJobSweep } from './generationJobSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
 import { registerGitHubLakeReconcile } from './githubLakeReconcile';
+import { registerLakeConnectorOrphanReap } from './lakeConnectorOrphanReap';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@server/s3/chunkRescueSweep';
 import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
@@ -105,6 +106,7 @@ async function main() {
   registerGenerationJobSweep(worker);
   registerLakeHealthSweep(worker);
   registerGitHubLakeReconcile(worker);
+  registerLakeConnectorOrphanReap(worker);
   registerTelemetryCleanup(worker);
   registerApiKeyBaselineCalculation(worker);
   registerLakeInconsistencySweep(worker);

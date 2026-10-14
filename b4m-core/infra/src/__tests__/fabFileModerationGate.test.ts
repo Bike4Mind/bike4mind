@@ -139,6 +139,8 @@ const ALLOWLIST: Record<string, string> = {
   // reads) and never returns the bytes/URL to a client. ---
   'apps/client/server/s3/objectCreated.ts':
     'the moderation scanner itself (objectCreated) — produces moderationStatus, does not consume it',
+  'apps/client/server/s3/moderationScan.ts':
+    'the moderation scanner wiring shared by objectCreated and the on-demand scan route - downloads bytes to RUN the scan and PRODUCE moderationStatus, never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
   'apps/client/server/s3/knowledgeModerationDeps.ts':
     'the moderation scanner wiring - downloads bytes to RUN the scan and PRODUCE moderationStatus (its closures are handed to moderateImportedKnowledgeFiles / the rescue sweep), never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
 

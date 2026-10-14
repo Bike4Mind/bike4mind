@@ -494,7 +494,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
     });
 
     // Let the shared error handler render this with its real status and message
-    // (400, "File size exceeds storage limit"), same as every other upload door.
+    // (400 with a storage `code` and byte counts), same as every other upload door.
     if (error instanceof BadRequestError) {
       throw error;
     }

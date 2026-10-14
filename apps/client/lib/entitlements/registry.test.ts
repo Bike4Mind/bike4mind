@@ -247,6 +247,10 @@ describe('implied-entitlement graph safety', () => {
 });
 
 describe('questmaster-pro grant tag', () => {
+  it('never passes a self-assignable source: tag through as an entitlement key', () => {
+    expect([...entitlementsForTags(['source:acme', ' Source:Acme ', 'vip'])]).toEqual(['vip']);
+  });
+
   it('keeps its hyphen through normalization and grants questmaster:pro', () => {
     expect(normalizeTag('questmaster-pro')).toBe('questmaster-pro');
     expect(grantTagForEntitlement('questmaster:pro')).toBe('questmaster-pro');

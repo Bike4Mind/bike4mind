@@ -155,6 +155,16 @@ describe('DataLakeSpendPanel', () => {
     expect(copy).toHaveTextContent(/research run has its own cost ceiling/i);
   });
 
+  // The panel used to tell every viewer that none of this lake's cost was charged to anyone. Research
+  // judge spend is now debited from the lake owner's credits, so a blanket denial became false and
+  // had to name which of the two streams is charged.
+  it('says research spend is credit-charged and ingestion spend is recorded only', () => {
+    renderPanel();
+    const note = screen.getByTestId('datalake-spend-credit-note');
+    expect(note).toHaveTextContent(/research judge spend is charged/i);
+    expect(note).toHaveTextContent(/ingestion spend is recorded but not charged/i);
+  });
+
   it('shows the halted-indexing alert (not an "off = unconstrained" reading) when spendEnabled is false', () => {
     renderPanel({ summary: baseSummary({ spendEnabled: false }) });
     const alert = screen.getByTestId('datalake-spend-disabled-alert');

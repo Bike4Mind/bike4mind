@@ -80,16 +80,35 @@ export const selectDecisionProviderKey = (
   }
 };
 
+const loadEffectiveKeys = (userId: string, logger: Logger): Promise<EffectiveKeys> =>
+  apiKeyService.getEffectiveLLMApiKeys(
+    userId,
+    { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
+    { logger }
+  );
+
+// The one key rule both resolvers below share, so the model list and a decision request cannot disagree.
+const usableDecisionProviderKey = (provider: DecisionProviderId, keys: EffectiveKeys): string | null =>
+  provider === 'test'
+    ? (selectDecisionProviderKey(provider, keys) ?? null)
+    : usableApiKey(selectDecisionProviderKey(provider, keys));
+
 export const resolveDecisionProviderKey = async (
   userId: string,
   provider: DecisionProviderId,
   logger: Logger
 ): Promise<string | null> => {
-  if (provider === 'test') return selectDecisionProviderKey(provider, {} as EffectiveKeys) ?? null;
-  const keys = await apiKeyService.getEffectiveLLMApiKeys(
-    userId,
-    { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
-    { logger }
-  );
-  return usableApiKey(selectDecisionProviderKey(provider, keys));
+  const keys = provider === 'test' ? ({} as EffectiveKeys) : await loadEffectiveKeys(userId, logger);
+  return usableDecisionProviderKey(provider, keys);
+};
+
+/** The providers this caller has a usable key for, read with one key lookup. A failed lookup rejects. */
+export const resolveCallableDecisionProviders = async (
+  userId: string,
+  providers: readonly DecisionProviderId[],
+  logger: Logger
+): Promise<ReadonlySet<DecisionProviderId>> => {
+  const needsKeys = providers.some(provider => provider !== 'test');
+  const keys = needsKeys ? await loadEffectiveKeys(userId, logger) : ({} as EffectiveKeys);
+  return new Set(providers.filter(provider => usableDecisionProviderKey(provider, keys) !== null));
 };
