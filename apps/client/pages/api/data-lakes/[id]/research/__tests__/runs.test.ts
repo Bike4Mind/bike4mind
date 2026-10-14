@@ -26,6 +26,9 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/database', () => ({
   dataLakeResearchConfigRepository: {},
   dataLakeResearchRunRepository: { listByLake: h.listByLake },
+  // The balance pre-flight's holder reads (see StartResearchRunAdapters).
+  userRepository: { name: 'users' },
+  organizationRepository: { name: 'organizations' },
   lakeConfigChangeEventRepository: {},
   adminSettingsRepository: {},
 }));

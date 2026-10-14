@@ -2,7 +2,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
-import { dataLakeResearchConfigRepository, dataLakeResearchRunRepository } from '@bike4mind/database';
+import {
+  dataLakeResearchConfigRepository,
+  dataLakeResearchRunRepository,
+  organizationRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { InternalServerError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { Resource } from 'sst';
@@ -64,6 +69,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         db: {
           dataLakeResearchConfigs: dataLakeResearchConfigRepository,
           dataLakeResearchRuns: dataLakeResearchRunRepository,
+          users: userRepository,
+          organizations: organizationRepository,
           ...lakeConfigAuditDb,
         },
         logger: req.logger,

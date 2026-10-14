@@ -14,7 +14,7 @@ import {
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { deductCreditsWithOrgSupport } from '../creditService';
-import { isOperationalBillingEnabled } from './isOperationalBillingEnabled';
+import { isOperationalBillingEnabled, areCreditsEnforced } from './isOperationalBillingEnabled';
 import { buildEarlyStopStamp } from '../llm/earlyStopStamp';
 
 /** The non-chat AI spend this helper records: operational-model calls and query embeddings. */
@@ -56,6 +56,18 @@ export interface RecordOperationalUsageParams {
    * rather than an incidental side effect of which repos it happened to wire up.
    */
   bypassCreditBilling?: boolean;
+  /**
+   * Debit credits even when the `billOperationalUsage` policy is off, as long as this deployment
+   * meters credits at all (`enforceCredits`). The counterpart of `bypassCreditBilling`, for spend
+   * that carries its OWN credit economics rather than the deployment's operational-billing policy:
+   * a data-lake research run is charged to the lake owner on every deployment that meters credits,
+   * matching the `enforceCredits`-keyed pre-flight in `startResearchRun` that refuses to start one.
+   * Without this the two would disagree - the pre-flight would refuse work this settlement never
+   * charged, because `billOperationalUsage` defaults off.
+   *
+   * `bypassCreditBilling` wins if both are set: an explicit skip is never overridden.
+   */
+  forceCreditBilling?: boolean;
 }
 
 export interface RecordOperationalUsageAdapters {
@@ -77,7 +89,10 @@ export interface RecordOperationalUsageAdapters {
  * Route non-chat AI spend (operational-model calls, query embeddings) through the usage
  * infrastructure so it stops being invisible. Always writes a UsageEvent (analytics COGS);
  * only debits credits when the admin has opted in via `billOperationalUsage` AND credits are
- * enforced. Default is recorded-only, so shipping this changes no user-facing pricing.
+ * enforced - or when the caller passes `forceCreditBilling`, which substitutes `enforceCredits`
+ * alone for callers whose spend has its own credit economics (see that flag).
+ * Default is recorded-only, so shipping this changes no user-facing pricing for callers that
+ * do not opt in.
  *
  * Never throws: a billing or analytics failure here must not break the operational call it
  * is measuring. The billing (deduct) path reuses the `text_generation_usage` ledger machinery
@@ -113,7 +128,11 @@ export async function recordOperationalUsage(
 
   let creditsCharged = 0;
   try {
-    const shouldBill = !params.bypassCreditBilling && (await isOperationalBillingEnabled(db, logger));
+    const shouldBill =
+      !params.bypassCreditBilling &&
+      (params.forceCreditBilling
+        ? await areCreditsEnforced(db, logger)
+        : await isOperationalBillingEnabled(db, logger));
 
     if (shouldBill && db.creditTransactions && db.users && db.organizations) {
       const credits = usdToCreditsStochastic(params.costUsd);

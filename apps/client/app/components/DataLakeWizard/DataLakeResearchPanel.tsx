@@ -321,6 +321,7 @@ const configReviewBacklogLimit = (config: IDataLakeResearchConfigDocument): numb
 const SCHEDULE_SKIP_LABEL: Partial<Record<ResearchScheduleSkipReason, string>> = {
   run_in_progress: 'another run was in progress',
   daily_cap: 'the lake reached its daily run limit',
+  insufficient_credits: 'the lake owner did not have enough credits',
   lake_inactive: 'the data lake is not active',
 };
 

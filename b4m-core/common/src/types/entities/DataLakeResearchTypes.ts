@@ -228,6 +228,8 @@ export const RESEARCH_SCHEDULE_SKIP_REASONS = [
   'run_in_progress',
   /** The lake had already started its daily allowance of runs. */
   'daily_cap',
+  /** The lake's owner (or their org) could not cover the run's cost ceiling. Clears when they top up. */
+  'insufficient_credits',
   /** The lake is not active (archived, deleted or missing). */
   'lake_inactive',
 ] as const;

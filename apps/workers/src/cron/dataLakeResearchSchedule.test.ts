@@ -19,6 +19,8 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeProposalRepository: { name: 'proposals' },
   dataLakeResearchConfigRepository: { name: 'configs' },
   dataLakeResearchRunRepository: { name: 'runs' },
+  userRepository: { name: 'users' },
+  organizationRepository: { name: 'organizations' },
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeResearchService: { runDueResearchSchedules: h.runDueResearchSchedules },
@@ -52,6 +54,8 @@ describe('runResearchScheduleTick', () => {
       dataLakeProposals: { name: 'proposals' },
       lakeConfigChangeEvents: {},
       adminSettings: {},
+      users: { name: 'users' },
+      organizations: { name: 'organizations' },
     });
     const run = { id: 'run-1' };
     const lake = { id: 'lake-1' };

@@ -130,8 +130,9 @@ export function DataLakeSpendPanel({
         </IconButton>
       </Stack>
 
-      <Alert size="sm" variant="soft" color="neutral">
-        This is recorded cost attributed to this lake, not credits charged to you.
+      <Alert size="sm" variant="soft" color="neutral" data-testid="datalake-spend-credit-note">
+        This is recorded cost attributed to this lake. Research judge spend is charged to the lake owner&apos;s credits;
+        file-ingestion spend is recorded but not charged.
       </Alert>
 
       <Stack direction="row" gap={1} flexWrap="wrap">
@@ -168,7 +169,7 @@ export function DataLakeSpendPanel({
           )}
           <Typography level="body-sm" data-testid="datalake-spend-perrun-cap">
             Ingestion per-run budget: {formatUsd(runBudgetUsd)} (applies per upload batch; a research run has its own
-            cost ceiling, set per saved configuration)
+            cost ceiling, set per saved configuration, and is charged against the lake owner&apos;s credits)
           </Typography>
           <Typography level="body-sm">
             Platform-wide budget: {formatUsd(periodBudgetUsd)} per {summary.periodHours}h (shared across every lake)
