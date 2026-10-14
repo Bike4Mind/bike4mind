@@ -37,6 +37,7 @@ import {
   filterKnownTools,
   questReplyText,
   toToolPayloads,
+  type ChatToolMode,
   type SimplifiedChatRequest,
 } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
@@ -344,7 +345,7 @@ function buildToolMeta({
   autoSelectedTools,
   unrecognizedTools,
 }: {
-  toolMode: 'fast' | 'smart' | undefined;
+  toolMode: ChatToolMode | undefined;
   effectiveTools: B4MLLMTools[] | undefined;
   autoSelectedTools: B4MLLMTools[];
   unrecognizedTools: string[];

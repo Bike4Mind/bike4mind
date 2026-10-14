@@ -4,12 +4,13 @@
  *
  *   MONGODB_URI=... pnpm --filter @bike4mind/scripts eval:tool-calling --days 7 --limit 5000 --json out.json
  *
- * Read-only. Only turns that recorded `promptMeta.offeredTools` are scored, since offered-but-uncalled
- * cannot be measured without it.
+ * Only reads quests, but `connectDB` seeds the model catalog like every script here does, so run it
+ * from a checkout matching the target deployment. Scores turns that offered or called a tool;
+ * Mongoose defaults `offeredTools` to [], so a bare $exists would admit every quest.
  */
 import { writeFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { connectDB, Quest } from '@bike4mind/database';
+import { connectDB, Quest, whenCatalogSeeded } from '@bike4mind/database';
 import {
   buildToolCallingReport,
   formatToolCallingReport,
@@ -49,7 +50,10 @@ async function main(): Promise<void> {
   // Bounding on _id rides the primary index instead of scanning every quest.
   const since = mongoose.Types.ObjectId.createFromTime(Math.floor((Date.now() - days * MS_PER_DAY) / 1000));
   const quests = await Quest.find(
-    { _id: { $gte: since }, 'promptMeta.offeredTools': { $exists: true } },
+    {
+      _id: { $gte: since },
+      $or: [{ 'promptMeta.offeredTools.0': { $exists: true } }, { 'promptMeta.functionCalls.0': { $exists: true } }],
+    },
     { 'promptMeta.offeredTools': 1, 'promptMeta.functionCalls': 1, 'promptMeta.toolMode': 1 }
   )
     .sort({ _id: -1 })
@@ -76,4 +80,8 @@ main()
     console.error(error);
     process.exitCode = 1;
   })
-  .finally(() => mongoose.disconnect());
+  // Let the fire-and-forget catalog seed settle so disconnect does not cut it off mid-write.
+  .finally(async () => {
+    await whenCatalogSeeded();
+    await mongoose.disconnect();
+  });

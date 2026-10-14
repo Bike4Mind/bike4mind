@@ -380,7 +380,9 @@ export const ChatCompletionInvokeParamsSchema = z.object({
 });
 export type ChatCompletionInvokeParams = z.infer<typeof ChatCompletionInvokeParamsSchema>;
 
-export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.extend({
+// toolMode is omitted so an in-app request cannot stamp a mode no tool selection ran under; only
+// /api/chat sets it, after its own toolMode handling.
+export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.omit({ toolMode: true }).extend({
   /** Notebook session ID */
   sessionId: z.string().optional(),
   /** Notebook session name */

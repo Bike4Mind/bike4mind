@@ -30,7 +30,7 @@ These numbers are reported overall and split by `promptMeta.toolMode`. `unset` i
 MONGODB_URI=... pnpm --filter @bike4mind/scripts eval:tool-calling --days 7 --limit 5000 --json report.json
 ```
 
-The runner is `packages/scripts/toolCallingScorecard.ts`. It is read-only. It only scores turns that recorded `offeredTools`, and it splits by `toolMode` only from turns stored after that field was added.
+The runner is `packages/scripts/toolCallingScorecard.ts`. It only reads quests, but `connectDB` seeds the model catalog as every script does, so run it from a checkout that matches the target deployment. It scores turns that offered or called at least one tool, and it splits by `toolMode` only from turns stored after that field was added.
 
 ## Layout
 

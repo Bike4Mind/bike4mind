@@ -42,6 +42,8 @@ describe('classifyToolCallError', () => {
     expect(classifyToolCallError(failed('oauth_lookup', 'Error processing oauth_lookup tool: boom'))).toBe(
       'internal_error'
     );
+    expect(classifyToolCallError(failed('oauth_lookup', 'Error running oauth_lookup: boom'))).toBe('internal_error');
+    expect(classifyToolCallError(failed('web_fetch', '{"error":"request timed out"}'))).toBe('timeout');
   });
 });
 
@@ -78,6 +80,17 @@ describe('buildToolCallingScorecard', () => {
       latencyMs: { samples: 2, p50: 100, p95: 300, max: 300 },
     });
     expect(fetch).toMatchObject({ success: { count: 0, total: 1 }, errorClasses: { timeout: 1 } });
+  });
+
+  it('does not count two malformed calls as a repeat, since both are recorded with {} arguments', () => {
+    const malformed = 'Error: Tool arguments were malformed and could not be parsed.';
+    const card = buildToolCallingScorecard([
+      {
+        offeredTools: ['web_search'],
+        functionCalls: [failed('web_search', malformed), failed('web_search', malformed)],
+      },
+    ]);
+    expect(card.tools[0]).toMatchObject({ repeatedCalls: 0, errorClasses: { malformed_arguments: 2 } });
   });
 
   it('counts a call to a tool the turn did not offer', () => {

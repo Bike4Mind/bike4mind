@@ -3,7 +3,7 @@
  * calls per turn, repeated calls, latency, and how often an offered tool goes uncalled - overall and
  * split by `toolMode`. Pure; reading quests is the caller's job (packages/scripts/toolCallingScorecard.ts).
  */
-import type { ChatToolMode, PromptMeta, ToolErrorCategory } from '@bike4mind/common';
+import { unwrapToolErrorText, type ChatToolMode, type PromptMeta, type ToolErrorCategory } from '@bike4mind/common';
 import { buildToolUsage } from '../../../telemetry/contextBreakdown';
 import { categorizeToolError } from '../../../telemetry/TelemetryBuilder';
 
@@ -78,17 +78,14 @@ const MALFORMED_ARGUMENT_PREFIXES = [
   'Error: Tool parameters were corrupted',
 ] as const;
 
-/** The adapters' wrapper around a thrown tool error: `Error processing <tool> tool: <message>`. */
-const TOOL_ERROR_WRAPPER = /^Error processing \S+ tool: /;
-
 export function classifyToolCallError(call: FunctionCall): ToolCallErrorClass | null {
   if (call.success === true) return null;
   if (call.success === undefined) return 'unrecorded';
   // `error` is never populated today; the adapters put the message in `returnValue`.
   const message = call.error ?? call.returnValue ?? '';
   if (MALFORMED_ARGUMENT_PREFIXES.some(prefix => message.startsWith(prefix))) return 'malformed_arguments';
-  // Stripped first so a tool name such as `oauth_lookup` cannot steer the substring match.
-  return categorizeToolError(message.replace(TOOL_ERROR_WRAPPER, ''));
+  // Unwrapped first so a tool name such as `oauth_lookup` cannot steer the substring match.
+  return categorizeToolError(unwrapToolErrorText(message));
 }
 
 /** Key-order-independent, so `{a, b}` and `{b, a}` count as the same arguments. */
@@ -173,12 +170,13 @@ function tallyCalls(calls: readonly FunctionCall[], tallyFor: (name: string) => 
   for (const call of calls) {
     if (!call.name) continue;
     const tally = tallyFor(call.name);
+    const errorClass = classifyToolCallError(call);
+    // The adapters record malformed arguments as `{}`, so two different garbled calls would match.
     const key = `${call.name}\u0000${canonicalJson(call.parameters ?? {})}`;
-    const repeated = seen.has(key);
+    const repeated = errorClass !== 'malformed_arguments' && seen.has(key);
     seen.add(key);
     if (repeated) tally.repeatedCalls += 1;
 
-    const errorClass = classifyToolCallError(call);
     if (errorClass) tally.errorClasses[errorClass] = (tally.errorClasses[errorClass] ?? 0) + 1;
     if (typeof call.executionTime === 'number') tally.latenciesMs.push(call.executionTime);
     if (repeated || errorClass) wasted += 1;
