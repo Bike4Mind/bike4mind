@@ -1,11 +1,13 @@
+import { storageLimitToBytes } from '@bike4mind/common';
+
 /**
- * Computes storage usage as a percentage (0-100).
+ * Computes storage usage as a percentage of the decimal-MB limit (can exceed 100).
  *
- * Returns 0 when storageLimit is 0 to avoid a NaN result from dividing
- * by zero (which would happen for users created with no storage allocation).
+ * A limit of 0 or below reads as 100: checkStorageLimit refuses every non-empty upload there,
+ * so the account is full whatever it holds. Shared by the admin list and detail views so they agree.
  */
 export function computeStoragePercent(currentStorageSize: number, storageLimitMb: number): number {
-  const storageLimitBytes = storageLimitMb * 1024 * 1024;
-  if (storageLimitBytes <= 0) return 0;
+  const storageLimitBytes = storageLimitToBytes(storageLimitMb);
+  if (storageLimitBytes <= 0) return 100;
   return (currentStorageSize / storageLimitBytes) * 100;
 }

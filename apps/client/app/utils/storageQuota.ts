@@ -1,13 +1,15 @@
 import axios from 'axios';
 import prettyBytes from 'pretty-bytes';
-import { describeStorageLimitError, parseStorageLimitErrorInfo, type IUserDocument } from '@bike4mind/common';
+import {
+  DEFAULT_STORAGE_LIMIT_MB,
+  describeStorageLimitError,
+  parseStorageLimitErrorInfo,
+  storageLimitToBytes,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { isImageFile } from './imageResizer';
 
-// Must stay in sync with checkStorageLimit (b4m-core/utils/src/user.ts): the limit is stored in
-// MB, converted with 1e6, and defaults to 1000 when unset.
-const DEFAULT_STORAGE_LIMIT_MB = 1000;
-const BYTES_PER_MB = 1_000_000;
 const STORAGE_WARNING_PERCENT = 90;
 
 /** @deprecated Fallback for a server that predates the `errorCode` on storage refusals (b4m-core/common
@@ -33,7 +35,7 @@ export function getStorageQuota(
   if (!user || typeof user.currentStorageSize !== 'number') return null;
   return {
     usedBytes: user.currentStorageSize,
-    limitBytes: (user.storageLimit ?? DEFAULT_STORAGE_LIMIT_MB) * BYTES_PER_MB,
+    limitBytes: storageLimitToBytes(user.storageLimit ?? DEFAULT_STORAGE_LIMIT_MB),
   };
 }
 
