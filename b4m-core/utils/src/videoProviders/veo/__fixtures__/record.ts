@@ -78,6 +78,17 @@ const findVideoUri = (value: unknown): string | undefined => {
   return findVideoUri(Object.values(value));
 };
 
+// A done operation is a filter block for the adapter only when it carries the RAI filter fields; any other
+// "done without a video" terminal is a failure there, so it must not be recorded as the blocked fixture.
+const hasFilterVerdict = (value: unknown): boolean => {
+  if (!isRecord(value) || isRecord(value.error)) return false;
+  const video = isRecord(value.response) ? value.response.generateVideoResponse : undefined;
+  if (!isRecord(video)) return false;
+  const count = video.raiMediaFilteredCount;
+  const reasons = video.raiMediaFilteredReasons;
+  return (typeof count === 'number' && count > 0) || (Array.isArray(reasons) && reasons.length > 0);
+};
+
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const pollToTerminal = async (operationName: string): Promise<{ exchanges: Exchange[]; terminal: unknown }> => {
@@ -250,7 +261,11 @@ const scenarios: Record<string, () => Promise<void>> = {
       const { exchanges: polls, terminal } = await pollToTerminal(operationNameOf(blocked.parsed));
       // The prompt did not trigger a block (a billed video was generated): a success recording must not pass as one.
       if (findVideoUri(terminal)) {
-        throw new Error(`blocked: the operation produced a video, so the prompt was not blocked; nothing written`);
+        throw new Error('blocked: the operation produced a video, so the prompt was not blocked; nothing written');
+      }
+      // Nor may a terminal the adapter reads as a failure overwrite a good blocked.json.
+      if (!hasFilterVerdict(terminal)) {
+        throw new Error('blocked: the operation finished without a RAI filter verdict; nothing written');
       }
       exchanges.push(...polls);
     }
