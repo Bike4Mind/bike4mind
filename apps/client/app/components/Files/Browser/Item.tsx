@@ -3,6 +3,7 @@ import {
   IFileTag,
   isAudioMimeType,
   isImageServeable,
+  isVideoMimeType,
   KnowledgeType,
   SupportedFabFileMimeTypes,
 } from '@bike4mind/common';
@@ -21,6 +22,8 @@ import SlideshowIcon from '@mui/icons-material/Slideshow';
 import TableChartIcon from '@mui/icons-material/TableChart';
 import TagIcon from '@mui/icons-material/Tag';
 import TextSnippetIcon from '@mui/icons-material/TextSnippet';
+import VideocamIcon from '@mui/icons-material/Videocam';
+import MediaPlayer from '@client/app/components/Media/MediaPlayer';
 import SegmentIcon from '@mui/icons-material/Segment';
 import WarningIcon from '@mui/icons-material/Warning';
 import { Box, Card, Chip, CircularProgress, Grid, IconButton, Input, Stack, Tooltip, Typography } from '@mui/joy';
@@ -50,23 +53,21 @@ const ImageThumbnail: FC<{ url: string; fileName: string; size: number }> = ({ u
   );
 };
 
-/** Inline audio player for generated audio files (TTS, sound-effect, music). Stops click
- *  propagation so using the transport controls doesn't toggle row selection. */
-const AudioPlayer: FC<{ url: string }> = ({ url }) => (
-  <Box
-    component="audio"
-    controls
-    preload="none"
-    src={url}
-    data-testid="file-browser-audio-player"
-    onClick={e => e.stopPropagation()}
-    sx={{ width: '100%', height: 34, mt: 1 }}
-  />
+const isPlayableMedia = (file: IFabFileDocument): boolean =>
+  (isAudioMimeType(file.mimeType) || isVideoMimeType(file.mimeType)) && !!(file.fileUrl || file.presignedUrl);
+
+/** Inline player for audio and video rows. Audio loads nothing until played, so a long list stays cheap; video
+ *  loads its metadata for the poster frame. Download stays in the row's actions menu. */
+const RowMediaPlayer: FC<{ file: IFabFileDocument }> = ({ file }) => (
+  <MediaPlayer file={file} preload={isVideoMimeType(file.mimeType) ? 'metadata' : 'none'} hideDownload />
 );
 
 export const getFileIcon = (file: IFabFileDocument, size: number = 48) => {
   if (isAudioMimeType(file.mimeType)) {
     return <AudiotrackIcon sx={{ fontSize: size }} />;
+  }
+  if (isVideoMimeType(file.mimeType)) {
+    return <VideocamIcon sx={{ fontSize: size }} />;
   }
 
   if (file.mimeType?.startsWith('image/')) {
@@ -453,10 +454,9 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
             </Typography>
           </Box>
 
-          {/* Inline audio player for generated audio files (TTS, sound-effect, music) */}
-          {isAudioMimeType(file.mimeType) && (file.fileUrl || file.presignedUrl) && (
-            <Box sx={{ width: '100%', maxWidth: 320 }}>
-              <AudioPlayer url={(file.fileUrl || file.presignedUrl)!} />
+          {isPlayableMedia(file) && (
+            <Box sx={{ width: '100%', maxWidth: 320, mt: 1 }}>
+              <RowMediaPlayer file={file} />
             </Box>
           )}
         </Box>
@@ -791,10 +791,9 @@ const GridItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
             })}
           </Typography>
 
-          {/* Inline audio player for generated audio files (TTS, sound-effect, music) */}
-          {isAudioMimeType(file.mimeType) && (file.fileUrl || file.presignedUrl) && (
+          {isPlayableMedia(file) && (
             <Box sx={{ width: '100%', px: 1, mt: 1 }}>
-              <AudioPlayer url={(file.fileUrl || file.presignedUrl)!} />
+              <RowMediaPlayer file={file} />
             </Box>
           )}
 

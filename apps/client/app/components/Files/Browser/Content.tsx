@@ -605,6 +605,8 @@ const FileBrowserContent = () => {
               filter.filters?.shared === true ? 'shared' : filter.filters?.curated === true ? 'curated' : 'all'
             }
             onFileFilterChange={handleFileFilterChange}
+            selectedTags={filter.filters?.tags}
+            onTagsChange={tags => handleFilterChange({ ...filter, filters: { ...(filter.filters || {}), tags } })}
             fileTypeValue={filter.filters?.type || 'all'}
             onFileTypeChange={type => {
               handleFilterChange({
