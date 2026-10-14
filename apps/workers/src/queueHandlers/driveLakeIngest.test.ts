@@ -48,7 +48,7 @@ const h = vi.hoisted(() => ({
   upload: vi.fn(),
   walkFolder: vi.fn(),
   disableDriveConnectionForLake: vi.fn(),
-  releaseDriveConnection: vi.fn(),
+  releaseDriveConnection: vi.fn(async () => true),
   getValidConnectionDriveAccessToken: vi.fn(async () => 'access-token'),
   fetchDriveFileContent: vi.fn(),
   listChanges: vi.fn(),
@@ -1957,6 +1957,8 @@ describe('driveLakeIngest consumer', () => {
       // Heals forward, so a connection whose lake was archived before the write-time disable
       // shipped (or whose best-effort disable was lost) stops being enqueued after one poll.
       expect(h.disableDriveConnectionForLake).toHaveBeenCalledWith('lake1');
+      // A soft-deleted lake can still be restored, so its connection must survive.
+      expect(h.releaseDriveConnection).not.toHaveBeenCalled();
     }
   );
 
@@ -1980,6 +1982,24 @@ describe('driveLakeIngest consumer', () => {
 
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
     expect(h.walkFolder).not.toHaveBeenCalled();
+  });
+
+  it('retires a personal connection under its connecting user when the target data lake is gone', async () => {
+    h.connFindById.mockResolvedValue({ id: 'conn1', targetDataLakeId: 'lake1', connectedBy: 'u1', driveFolderId: 'F' });
+    h.lakeFindById.mockResolvedValue(null);
+
+    await run();
+
+    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', { kind: 'user', userId: 'u1' });
+  });
+
+  it('hands the claim back when retiring a lakeless connection matches no row', async () => {
+    h.lakeFindById.mockResolvedValue(null);
+    h.releaseDriveConnection.mockResolvedValueOnce(false);
+
+    await run();
+
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
   });
 
   it('does not fail the drop when healing the enabled flag throws', async () => {

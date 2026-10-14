@@ -602,16 +602,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // is gone for good. Tear the connection down the way the lake purge does
       // (releaseDriveConnectionForLake): releasing the claim back to 'connected' would re-poll it
       // forever and keep its globally unique driveFolderId claimed by a lake nobody can reach.
-      try {
-        await releaseDriveConnection(connectionId, driveConnectionOwnerOf(connection));
-      } catch (e) {
-        // Hand the claim back so the next poll retries the teardown rather than stranding it 'syncing'.
-        logger.warn('[driveLakeIngest] could not release the connection of a missing lake', {
-          connectionId,
-          error: e instanceof Error ? e.message : String(e),
-        });
-        await releaseClaim(null);
-      }
+      const retired = await releaseDriveConnection(connectionId, driveConnectionOwnerOf(connection)).catch(
+        (e: unknown) => {
+          logger.warn('[driveLakeIngest] could not release the connection of a missing lake', {
+            connectionId,
+            error: e instanceof Error ? e.message : String(e),
+          });
+          return false;
+        }
+      );
+      // Not retired (a throw, or no row matched the owner): hand the claim back so the next poll retries
+      // the teardown rather than stranding the row 'syncing'. A no-op if a concurrent purge deleted it.
+      if (!retired) await releaseClaim(null);
       return;
     }
     // A non-ingestable lake is a no-op here, not a failure.
