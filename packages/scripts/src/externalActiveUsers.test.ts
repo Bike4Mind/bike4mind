@@ -9,7 +9,9 @@ import {
   dauSeries,
   exclusionReason,
   formatReport,
+  isApiSource,
   isOriginalQuest,
+  mergeUserDays,
   parseReportArgs,
   recordActivity,
   recordUsageSource,
@@ -263,7 +265,15 @@ describe('buildCohorts', () => {
 describe('buildReport cohorts', () => {
   const rules = buildExclusionRules('staff.example.com', /\+test/i);
   const report = (userDays: UserDayMap, users: Map<string, UserRecord>) =>
-    buildReport({ userDays, sourceCounts: new Map(), users, rules, days: DEFAULT_DAYS, now: NOW });
+    buildReport({
+      userDays,
+      apiUserDays: new Map(),
+      sourceCounts: new Map(),
+      users,
+      rules,
+      days: DEFAULT_DAYS,
+      now: NOW,
+    });
 
   it('counts a pre-window signup first active mid-window toward DAU but in no cohort', () => {
     const result = report(
@@ -295,6 +305,109 @@ describe('buildReport cohorts', () => {
         retention: { 1: 0, 7: 0, 30: 0 },
       },
     ]);
+  });
+});
+
+describe('isApiSource', () => {
+  it("is true only for 'api': an unset or empty source is app activity", () => {
+    expect(isApiSource('api')).toBe(true);
+    for (const source of [undefined, null, '', 'web', 'cli', 'chat', 'agent', 'system']) {
+      expect(isApiSource(source)).toBe(false);
+    }
+  });
+});
+
+describe('mergeUserDays', () => {
+  it('unions the days of a user present in several maps without mutating the inputs', () => {
+    const app: UserDayMap = new Map([['u1', daysOf('2026-10-10')]]);
+    const api: UserDayMap = new Map([
+      ['u1', daysOf('2026-10-11')],
+      ['u2', daysOf('2026-10-10')],
+    ]);
+
+    const merged = mergeUserDays(app, api);
+
+    expect(merged.get('u1')).toEqual(daysOf('2026-10-10', '2026-10-11'));
+    expect(merged.get('u2')).toEqual(daysOf('2026-10-10'));
+    expect(app.get('u1')).toEqual(daysOf('2026-10-10'));
+  });
+});
+
+describe('buildReport API users', () => {
+  const rules = buildExclusionRules('staff.example.com', /\+test/i);
+  const report = (
+    userDays: UserDayMap,
+    apiUserDays: UserDayMap,
+    users: Map<string, UserRecord>,
+    sourceCounts: UserSourceCounts = new Map()
+  ) => buildReport({ userDays, apiUserDays, sourceCounts, users, rules, days: DEFAULT_DAYS, now: NOW });
+  const usersByDay = (rows: { day: string; users: number }[]) => Object.fromEntries(rows.map(r => [r.day, r.users]));
+
+  it('keeps an API-only user out of DAU and externalUsers but in API users, with their source rows', () => {
+    const result = report(
+      new Map(),
+      new Map([['dev', daysOf('2026-10-10', '2026-10-11')]]),
+      new Map([['dev', { email: 'd@customer.example', createdAt: at('2026-01-05') }]]),
+      new Map([['dev', new Map([['api', 3]])]])
+    );
+
+    expect(result.externalUsers).toBe(0);
+    expect(result.externalApiUsers).toBe(1);
+    expect(result.dau.every(r => r.users === 0)).toBe(true);
+    expect(usersByDay(result.apiUsers)['2026-10-10']).toBe(1);
+    expect(usersByDay(result.apiUsers)['2026-10-11']).toBe(1);
+    expect(result.sources).toEqual([{ source: 'api', rows: 3 }]);
+  });
+
+  it('counts a user with web and API activity on one day once in DAU and once in API users', () => {
+    const result = report(
+      new Map([['u1', daysOf('2026-10-10', '2026-10-12')]]),
+      new Map([['u1', daysOf('2026-10-10', '2026-10-11')]]),
+      new Map([['u1', { email: 'a@customer.example', createdAt: at('2026-01-05') }]])
+    );
+
+    expect(result.externalUsers).toBe(1);
+    expect(result.externalApiUsers).toBe(1);
+    expect(usersByDay(result.dau)).toMatchObject({ '2026-10-10': 1, '2026-10-11': 0, '2026-10-12': 1 });
+    expect(usersByDay(result.apiUsers)).toMatchObject({ '2026-10-10': 1, '2026-10-11': 1, '2026-10-12': 0 });
+  });
+
+  it('does not activate or retain a cohort user on API activity alone', () => {
+    const result = report(
+      new Map([['app', daysOf('2026-10-11')]]),
+      new Map([
+        ['app', daysOf('2026-10-11')],
+        ['api', daysOf('2026-10-10', '2026-10-11')],
+      ]),
+      new Map([
+        ['app', { email: 'a@customer.example', createdAt: at('2026-10-10') }],
+        ['api', { email: 'b@customer.example', createdAt: at('2026-10-10') }],
+      ])
+    );
+
+    expect(result.cohorts.rows).toEqual([
+      expect.objectContaining({
+        weekStart: '2026-10-04',
+        signups: 2,
+        activated: 1,
+        retention: { 1: 50, 7: null, 30: null },
+      }),
+    ]);
+  });
+
+  it('still counts an excluded account whose only activity is API, and keeps it out of API users', () => {
+    const result = report(
+      new Map(),
+      new Map([
+        ['staff', daysOf('2026-10-10')],
+        ['ghost', daysOf('2026-10-10')],
+      ]),
+      new Map([['staff', { email: 's@staff.example.com', createdAt: at('2026-01-05') }]])
+    );
+
+    expect(result.excluded).toEqual({ noUser: 1, admin: 0, staffDomain: 1, testPattern: 0 });
+    expect(result.externalApiUsers).toBe(0);
+    expect(result.apiUsers.every(r => r.users === 0)).toBe(true);
   });
 });
 
@@ -365,10 +478,12 @@ describe('formatReport', () => {
           ['u1', daysOf('2026-09-01', '2026-09-02', '2026-10-13')],
           ['u2', daysOf('2026-10-12')],
         ]),
+        apiUserDays: new Map([['u3', daysOf('2026-10-13')]]),
         sourceCounts: new Map([['u1', new Map([['chat', 2]])]]),
         users: new Map([
           ['u1', { email: 'a@customer.example', createdAt: at('2026-09-01') }],
           ['u2', { email: 'b@customer.example', createdAt: at('2026-10-12') }],
+          ['u3', { email: 'c@customer.example', createdAt: at('2026-01-05') }],
         ]),
         rules: buildExclusionRules(staffDomains, /\+test/i),
         days,
@@ -380,7 +495,10 @@ describe('formatReport', () => {
     const text = build('staff.example.com');
 
     expect(text).toContain('DAU (UTC, last 30 days)');
-    expect(text).toMatch(/2026-10-13 {2}1 {2}\(partial day\)/);
+    expect(text).toMatch(/Day\s+DAU\s+API users/);
+    expect(text).toMatch(/2026-10-13 {2}1 +1 {2}\(partial day\)/);
+    expect(text).toMatch(/2026-10-12 {2}1 +0\n/);
+    expect(text).toContain('External users with API activity (not in DAU): 1');
     expect(text).toMatch(/chat\s+2/);
     expect(text).toContain('Weekly signup cohorts');
     expect(text).toMatch(/Cohort\s+Signups\s+Activated\s+Act %\s+D1\s+D7\s+D30/);

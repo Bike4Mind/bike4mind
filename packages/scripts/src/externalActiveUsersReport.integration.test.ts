@@ -62,7 +62,8 @@ const quest = (userId: string, iso: string, extra: Record<string, unknown> = {})
     ...extra,
   });
 
-const agent = (userId: string, iso: string) => agentExecutions().insertOne({ userId, createdAt: at(iso) });
+const agent = (userId: string, iso: string, extra: Record<string, unknown> = {}) =>
+  agentExecutions().insertOne({ userId, createdAt: at(iso), ...extra });
 
 /**
  * Three external users, plus a staff, admin, test-pattern and unknown-user account active in
@@ -238,5 +239,85 @@ describe('runExternalActivityReport', () => {
     expect(lines[0]).toContain('UsageEvent rows by source');
     expect(lines[0]).toContain('Weekly signup cohorts');
     expect(lines[0]).not.toContain('@');
+  });
+});
+
+describe('runExternalActivityReport API activity', () => {
+  /**
+   * apiOnly: API UsageEvents. both: web and API on one day, then an unset-source event.
+   * viaAgent: an API-key AgentExecution with the Quest it wrote, then a plain app Quest.
+   * All three sign up 2026-10-10 (default). A staff account active only via the API stays excluded.
+   */
+  const seedApi = async () => {
+    const apiOnly = await insertUser('api-only@customer.example');
+    const both = await insertUser('both@customer.example');
+    const viaAgent = await insertUser('agent-api@customer.example');
+    const staff = await insertUser('dev@staff.example.com');
+
+    await usage(apiOnly, '2026-10-11', { source: 'api', apiKeyId: 'key1' });
+    await usage(apiOnly, '2026-10-12', { source: 'api', apiKeyId: 'key1' });
+
+    await usage(both, '2026-10-11', { source: 'web' });
+    await usage(both, '2026-10-11', { source: 'api' });
+    await usage(both, '2026-10-12'); // unset source counts as the app
+
+    const run1 = await agent(viaAgent, '2026-10-11', { apiKeyId: 'key1' });
+    await quest(viaAgent, '2026-10-11', { agentExecutionId: String(run1.insertedId) });
+    await quest(viaAgent, '2026-10-12');
+
+    await usage(staff, '2026-10-11', { source: 'api' });
+    return { apiOnly, both, viaAgent };
+  };
+
+  it('keeps API activity out of DAU and reports it as a separate daily API users count', async () => {
+    await seedApi();
+
+    const report = await run();
+
+    const dau = Object.fromEntries(report.dau.map(row => [row.day, row.users]));
+    const api = Object.fromEntries(report.apiUsers.map(row => [row.day, row.users]));
+    expect(report.apiUsers).toHaveLength(30);
+    expect(report.externalUsers).toBe(2); // both and viaAgent; apiOnly never touches the app
+    expect(report.externalApiUsers).toBe(3);
+    expect(dau['2026-10-11']).toBe(1); // both's web event only: the API event, API agent run and its Quest are out
+    expect(dau['2026-10-12']).toBe(2); // both (unset source) and viaAgent (app Quest)
+    expect(api['2026-10-11']).toBe(3); // apiOnly, both, viaAgent (API-key run + its Quest)
+    expect(api['2026-10-12']).toBe(1); // apiOnly
+    expect(report.excluded.staffDomain).toBe(1);
+  });
+
+  it("keeps the per-source breakdown, including 'api' rows for API-only users", async () => {
+    await seedApi();
+
+    const report = await run();
+
+    expect(report.sources).toEqual([
+      { source: 'api', rows: 3 },
+      { source: 'unset', rows: 1 },
+      { source: 'web', rows: 1 },
+    ]);
+  });
+
+  it('activates and retains cohort users on app activity only', async () => {
+    await seedApi();
+
+    const { cohorts } = await run();
+
+    expect(cohorts.rows).toHaveLength(1);
+    const [row] = cohorts.rows;
+    expect(row.signups).toBe(3);
+    expect(row.activated).toBe(2); // apiOnly has no app activity
+    expect(row.retention[1]).toBeCloseTo(33.33, 1); // only both is app-active on 10-11
+  });
+
+  it('prints the API users column and the headline split', async () => {
+    await seedApi();
+    const lines: string[] = [];
+
+    await run({ log: message => lines.push(message) });
+
+    expect(lines[0]).toMatch(/Day\s+DAU\s+API users/);
+    expect(lines[0]).toMatch(/2026-10-11\s+1\s+3/);
+    expect(lines[0]).toContain('External users with API activity (not in DAU): 3');
   });
 });
