@@ -54,6 +54,28 @@ describe('move-to-server-utils', () => {
       ],
       ["vi.doMock('@server/memory/factCipher');", "vi.doMock('@bike4mind/server-utils/memory/factCipher');"],
       ["jest.mock('@server/memory/factCipher');", "jest.mock('@bike4mind/server-utils/memory/factCipher');"],
+      ["vi.unmock('@server/memory/factCipher');", "vi.unmock('@bike4mind/server-utils/memory/factCipher');"],
+      ["vi.doUnmock('@server/memory/factCipher');", "vi.doUnmock('@bike4mind/server-utils/memory/factCipher');"],
+      [
+        "const m = await vi.importMock('@server/memory/factCipher');",
+        "const m = await vi.importMock('@bike4mind/server-utils/memory/factCipher');",
+      ],
+      [
+        "const m = vi.requireActual('@server/memory/factCipher');",
+        "const m = vi.requireActual('@bike4mind/server-utils/memory/factCipher');",
+      ],
+      [
+        "const m = jest.requireActual('@server/memory/factCipher');",
+        "const m = jest.requireActual('@bike4mind/server-utils/memory/factCipher');",
+      ],
+      [
+        "const m = jest.requireMock('@server/memory/factCipher');",
+        "const m = jest.requireMock('@bike4mind/server-utils/memory/factCipher');",
+      ],
+      [
+        "import m = require('@server/memory/factCipher');",
+        "import m = require('@bike4mind/server-utils/memory/factCipher');",
+      ],
       [
         "const p = require.resolve('@server/memory/factCipher');",
         "const p = require.resolve('@bike4mind/server-utils/memory/factCipher');",
@@ -93,6 +115,13 @@ describe('move-to-server-utils', () => {
       expect(rewrite(input, 'apps/client/server/memory/recall.test.ts')).toBe(
         "vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({}));"
       );
+    });
+
+    it.each([
+      ['apps/client/server/security/x.ts', "import { s } from '.';"],
+      ['apps/client/server/security/sub/x.ts', "import { s } from '..';"],
+    ])('rewrites a bare relative directory specifier from %s', (file, input) => {
+      expect(rewrite(input, file)).toBe("import { s } from '@bike4mind/server-utils/security/index';");
     });
 
     it('leaves specifiers that do not resolve to a moved file alone', () => {
@@ -135,8 +164,9 @@ describe('move-to-server-utils', () => {
   });
 
   describe('a file inside the package', () => {
+    // Moved files keep their tails, so a relative import between two of them is unchanged: the
+    // first expectation is a no-op guard. The throw tests below are what prove old-dir resolution.
     it('rewrites to a relative path from a moved file, resolving from its old location', () => {
-      // At its old location this imported a sibling that moved with it into a different directory.
       const input = "import { a } from '../utils/sessionOperations';";
       expect(rewrite(input, 'packages/server-utils/src/memory/factCipher.ts')).toBe(
         "import { a } from '../utils/sessionOperations';"
@@ -149,6 +179,7 @@ describe('move-to-server-utils', () => {
       ).toBe("import { a } from '../utils/sessionOperations';");
     });
 
+    // No-op guard: the colocated specifier must survive untouched.
     it('keeps a colocated test pointing at its moved source', () => {
       expect(rewrite("import { a } from './factCipher';", 'packages/server-utils/src/memory/factCipher.test.ts')).toBe(
         "import { a } from './factCipher';"
@@ -251,6 +282,58 @@ describe('move-to-server-utils', () => {
         `${overlay}: '@server/memory/factCipher' points at a moved file; overlays are separate repos - update by hand`,
       ]);
       expect(read(overlay)).toBe("import { x } from '@server/memory/factCipher';\n");
+    });
+
+    it('rewrites .tsx, .mjs and .d.ts importers', () => {
+      // The backticks are JSX text; parsed as plain TS they open a template that hides the vi.mock.
+      write(
+        'apps/client/app/Thing.test.tsx',
+        "import { x } from '@server/memory/factCipher';\nconst a = <p>run `x</p>;\n" +
+          "vi.mock('@server/memory/factCipher');\nconst b = <p>`</p>;\n"
+      );
+      write('apps/client/scripts/f.mjs', "const m = await import('@server/memory/factCipher');\n");
+      write('apps/client/global.d.ts', "import type { K } from '@server/memory/factCipher';\ndeclare global {}\n");
+
+      run(root, ['apps/client/server/memory/factCipher.ts']);
+      expect(read('apps/client/app/Thing.test.tsx')).toBe(
+        "import { x } from '@bike4mind/server-utils/memory/factCipher';\nconst a = <p>run `x</p>;\n" +
+          "vi.mock('@bike4mind/server-utils/memory/factCipher');\nconst b = <p>`</p>;\n"
+      );
+      expect(read('apps/client/scripts/f.mjs')).toBe(
+        "const m = await import('@bike4mind/server-utils/memory/factCipher');\n"
+      );
+      expect(read('apps/client/global.d.ts')).toBe(
+        "import type { K } from '@bike4mind/server-utils/memory/factCipher';\ndeclare global {}\n"
+      );
+    });
+
+    it('re-runs cleanly when a moved file self-references a file moved by an earlier run', () => {
+      write('packages/server-utils/src/utils/prior.ts', 'export const p = 1;\n');
+      write('packages/server-utils/src/memory/a.ts', "import { p } from '@bike4mind/server-utils/utils/prior';\n");
+
+      const first = run(root, ['apps/client/server/memory/a.ts']);
+      expect(first.changed).toEqual(['packages/server-utils/src/memory/a.ts']);
+      expect(read('packages/server-utils/src/memory/a.ts')).toBe("import { p } from '../utils/prior';\n");
+      expect(run(root, ['apps/client/server/memory/a.ts'])).toEqual({ changed: [], warnings: [] });
+    });
+
+    it('turns an in-package directory import into a relative /index path, and re-runs cleanly', () => {
+      write('packages/server-utils/src/security/index.ts', 'export const s = 1;\n');
+      write('packages/server-utils/src/memory/factCipher.ts', "import { s } from '@server/security';\n");
+      const args = ['apps/client/server/memory/factCipher.ts', 'apps/client/server/security/index.ts'];
+
+      run(root, args);
+      expect(read('packages/server-utils/src/memory/factCipher.ts')).toBe("import { s } from '../security/index';\n");
+      expect(run(root, args)).toEqual({ changed: [], warnings: [] });
+    });
+
+    it('writes nothing when a moved file still imports a file left in apps/', () => {
+      write('packages/server-utils/src/memory/factCipher.ts', "import { h } from './helper';\n");
+      write('apps/client/server/memory/helper.ts', 'export const h = 1;\n');
+
+      expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/stays in apps\/client/);
+      expect(read('apps/workers/src/a.ts')).toBe("import { x } from '@server/memory/factCipher';\n");
+      expect(read('apps/client/server/memory/b.test.ts')).toBe("vi.mock('./factCipher');\n");
     });
 
     it('refuses to run before the file has been moved', () => {

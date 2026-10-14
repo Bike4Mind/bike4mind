@@ -7,7 +7,7 @@
  *   pnpm tsx scripts/codemods/move-to-server-utils.ts apps/client/server/memory/factCipher.ts ...
  *
  * Arguments are the files' OLD paths, and only .ts files can be moved: the package's exports map
- * resolves `./src/*.ts`. Every .ts/.tsx/.mts/.cts/.js/.mjs file (not .d.ts) under apps/client,
+ * resolves `./src/*.ts`. Every .ts/.tsx/.mts/.cts/.js/.mjs file (.d.ts included) under apps/client,
  * apps/workers, packages, b4m-core and infra is parsed with the TypeScript compiler API. A
  * specifier that resolves (through the @server/, @client/, @/, @pages/, @public/ or @workers/
  * alias, a relative path, or an `@bike4mind/server-utils/<tail>` self-reference) to a moved file
@@ -25,8 +25,9 @@
  * specifier that would change is reported as a warning instead of being rewritten.
  *
  * A moved file that still imports a file left behind in apps/ makes the run throw: the package
- * must stay below both apps (eslint.config.mjs enforces the same boundary). Idempotent: a second
- * run changes nothing.
+ * must stay below both apps (eslint.config.mjs enforces the same boundary). Every file is checked
+ * before any is written, so a throw leaves the tree untouched. Idempotent: a second run changes
+ * nothing.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -130,6 +131,10 @@ export function toMove(oldPath: string): Move {
   return { from, to: `${PACKAGE_SRC}/${from.slice(CLIENT_SERVER.length + 1)}` };
 }
 
+function isRelative(specifier: string): boolean {
+  return specifier === '.' || specifier === '..' || specifier.startsWith('./') || specifier.startsWith('../');
+}
+
 /** Repo-relative, extensionless path a specifier points at, or null for a bare package name. */
 export function resolveSpecifier(specifier: string, importerDir: string): string | null {
   let target: string;
@@ -141,7 +146,7 @@ export function resolveSpecifier(specifier: string, importerDir: string): string
   else if (specifier.startsWith('@workers/')) target = `apps/workers/src/${specifier.slice('@workers/'.length)}`;
   else if (specifier.startsWith(`${PACKAGE_NAME}/`))
     target = `${PACKAGE_SRC}/${specifier.slice(PACKAGE_NAME.length + 1)}`;
-  else if (specifier.startsWith('./') || specifier.startsWith('../')) target = path.posix.join(importerDir, specifier);
+  else if (isRelative(specifier)) target = path.posix.join(importerDir, specifier);
   else return null;
   return path.posix.normalize(target).replace(STRIP_EXT, '');
 }
@@ -161,9 +166,14 @@ interface Edit {
 /**
  * Finds the specifier edits for one file without applying them. `file` is the importer's
  * repo-relative path as it is now (after the move). Throws when a moved file imports something
- * left in apps/.
+ * left in apps/. `isPackageFile` says whether an extensionless package path exists on disk.
  */
-export function findRewrites(source: string, file: string, moves: Move[]): { edits: Edit[]; warnings: string[] } {
+export function findRewrites(
+  source: string,
+  file: string,
+  moves: Move[],
+  isPackageFile: (target: string) => boolean = () => false
+): { edits: Edit[]; warnings: string[] } {
   const byFrom = new Map(moves.map(m => [m.from, m]));
   const fileNoExt = file.replace(STRIP_EXT, '');
   const movedSelf = moves.find(m => m.to === fileNoExt);
@@ -187,7 +197,12 @@ export function findRewrites(source: string, file: string, moves: Move[]): { edi
 
     const move = byFrom.get(target) ?? byFrom.get(`${target}/index`);
     if (!move) {
-      if (movedSelf && target.startsWith('apps/')) {
+      // On a re-run, a relative import of a file moved by an earlier run was already rewritten
+      // against the new directory, so it only resolves from there. Package tails mirror the old
+      // ones, so only the file existing in the package tells that apart from a left-behind import.
+      const fromNewDir = isRelative(specifier) ? resolveSpecifier(specifier, path.posix.dirname(fileNoExt)) : null;
+      const inPackage = fromNewDir?.startsWith(`${PACKAGE_SRC}/`) && isPackageFile(fromNewDir);
+      if (movedSelf && target.startsWith('apps/') && !inPackage) {
         throw new Error(
           `${file} imports '${specifier}', which stays in ${target}. Move that file too, or keep ` +
             `this one in apps/client: ${PACKAGE_NAME} must not import from the apps.`
@@ -233,7 +248,7 @@ function* walk(dir: string): Generator<string> {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) yield* walk(path.join(dir, entry.name));
-    } else if (SOURCE_EXT.test(entry.name) && !entry.name.endsWith('.d.ts')) {
+    } else if (SOURCE_EXT.test(entry.name)) {
       yield path.join(dir, entry.name);
     }
   }
@@ -252,7 +267,10 @@ export function run(root: string, oldPaths: string[]): { changed: string[]; warn
     }
   });
 
-  const changed: string[] = [];
+  const isPackageFile = (target: string) =>
+    ['.ts', '/index.ts'].some(ext => existsSync(path.join(root, `${target}${ext}`)));
+  // Two passes: findRewrites throws on a left-behind import, and that must happen before any write.
+  const pending: { absFile: string; file: string; next: string }[] = [];
   const warnings: string[] = [];
   for (const scanRoot of SCAN_ROOTS) {
     const abs = path.join(root, scanRoot);
@@ -260,7 +278,7 @@ export function run(root: string, oldPaths: string[]): { changed: string[]; warn
     for (const absFile of walk(abs)) {
       const file = path.relative(root, absFile).split(path.sep).join('/');
       const source = readFileSync(absFile, 'utf8');
-      const found = findRewrites(source, file, moves);
+      const found = findRewrites(source, file, moves, isPackageFile);
       warnings.push(...found.warnings);
       if (file.startsWith(OVERLAY_DIR)) {
         for (const { specifier } of found.edits) {
@@ -269,13 +287,11 @@ export function run(root: string, oldPaths: string[]): { changed: string[]; warn
         continue;
       }
       const next = applyEdits(source, found.edits);
-      if (next !== source) {
-        writeFileSync(absFile, next);
-        changed.push(file);
-      }
+      if (next !== source) pending.push({ absFile, file, next });
     }
   }
-  return { changed, warnings };
+  for (const { absFile, next } of pending) writeFileSync(absFile, next);
+  return { changed: pending.map(p => p.file), warnings };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
