@@ -42,7 +42,7 @@ export type PresignedUpload = {
 /**
  * Admits a single-file upload - every size, quota, type, and data-lake gate - then creates the
  * `pending` FabFile and presigns the PUT for its bytes. The S3 ObjectCreated handler
- * (server/s3/objectCreated.ts) flips it to `complete` once the bytes land.
+ * (apps/workers/src/s3/objectCreated.ts) flips it to `complete` once the bytes land.
  *
  * Shared by the SPA-internal `POST /api/files/generate-presigned-url` and the public
  * `POST /api/v1/files`, so the two doors cannot admit different uploads. The PUT is not

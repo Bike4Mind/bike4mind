@@ -513,7 +513,7 @@ if (isMonitoredStage) {
   }
 
   // FabFile Moderation DLQ — deliberately NOT added to DLQ_DESCRIPTORS above.
-  // It backs apps/client/server/s3/objectCreated's Lambda async-invocation dead-letter
+  // It backs apps/workers/src/s3/objectCreated's Lambda async-invocation dead-letter
   // target (see infra/queues.ts), not an sst.aws.Queue `.subscribe()` consumer. Every
   // DLQ_DESCRIPTORS entry has a `sourceQueue` that DLQ_REGISTRY (apps/client/server/utils/
   // dlqRegistry.ts) resolves to a real SQS queue URL for the admin "replay" UI — but this
