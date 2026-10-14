@@ -581,8 +581,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     >
       <HighlanderFocus targetId="chatInput" />
       {/* Above the box rather than under it: the file viewer and other embedded chats leave no room
-          below, and on phones the box sits on the keyboard. Phones get a slimmer line to keep
-          the chat's height. */}
+          below, and on phones the box sits on the keyboard. */}
       <ComposerStatusLine
         right={<CreditBalanceChip />}
         sx={{
@@ -590,7 +589,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           maxWidth: promptBarMaxWidth,
           marginLeft: isCompactLayout ? '0px' : 'auto',
           marginRight: isCompactLayout ? '0px' : 'auto',
-          ...(isMobile && { py: '4px' }),
         }}
       />
       <Stack

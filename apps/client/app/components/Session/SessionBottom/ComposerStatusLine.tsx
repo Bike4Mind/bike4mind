@@ -22,7 +22,8 @@ const ComposerStatusLine: FC<ComposerStatusLineProps> = ({ left, right, sx }) =>
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 1,
-        p: '8px',
+        px: '8px',
+        py: '4px',
       },
       ...(Array.isArray(sx) ? sx : [sx]),
     ]}
