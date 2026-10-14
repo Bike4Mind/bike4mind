@@ -35,6 +35,8 @@ import { useMFAStatus, useSetupMFA, useVerifyMFASetup, useCancelMFASetup } from 
 import MFAModal from '@client/app/components/common/MFAModal';
 import { useEffect, useRef, useState } from 'react';
 import { useSearch } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { useUser } from '@client/app/contexts/UserContext';
 
 const StyledButton = styled(Button)(({ theme }) => ({
   // Common style for action buttons for this screen
@@ -63,6 +65,8 @@ const GeneralSettingsTab = () => {
   const { isLoading: serverSettingsLoading } = useSettingsFromServer();
   const { data: experimentalSettingsWithDefaults } = useExperimentalFeatureSettings();
 
+  const { refreshUser } = useUser();
+  const queryClient = useQueryClient();
   const { data: mfaStatus } = useMFAStatus();
   const setupMFA = useSetupMFA();
   const verifyMFASetup = useVerifyMFASetup();
@@ -202,6 +206,12 @@ const GeneralSettingsTab = () => {
             setShowBackupCodes(data.backupCodes);
           }
           toast.success('MFA enabled successfully');
+          // Same refresh as MFASection's enable handler: the status query drives this card and
+          // the Passkeys/Trusted Devices sections, and refetchOnWindowFocus is off.
+          queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] });
+          refreshUser();
+          queryClient.invalidateQueries({ queryKey: ['identify'] });
+          queryClient.invalidateQueries({ queryKey: ['users'] });
         },
         onError: (error: {
           response?: { data?: { error?: string; attemptsRemaining?: number } };

@@ -44,7 +44,17 @@ vi.mock('@client/app/hooks/data/sessions', () => ({
   useOwnSessionCount: () => ({ data: undefined }),
 }));
 vi.mock('@client/app/hooks/useDownload', () => ({ useDownload: () => mutation }));
-vi.mock('@client/app/components/common/MFAModal', () => ({ default: () => null }));
+const mfaModalProps: { onVerify?: (token: string) => void } = {};
+vi.mock('@client/app/components/common/MFAModal', () => ({
+  default: (props: { onVerify: (token: string) => void }) => {
+    mfaModalProps.onVerify = props.onVerify;
+    return null;
+  },
+}));
+const invalidateQueries = vi.fn();
+const refreshUser = vi.fn();
+vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries }) }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ refreshUser }) }));
 vi.mock('@client/app/components/LanguageSelector', () => ({ default: () => null }));
 vi.mock('@client/app/components/help', () => ({ ContextHelpButton: () => null }));
 vi.mock('@/app/components/ProfileModal/UploadImportHistoryModal', () => ({ default: () => null }));
@@ -91,6 +101,17 @@ describe('GeneralSettingsTab MFA sections', () => {
     mfaEnabled = true;
     renderTab();
     expect(screen.getByTestId(testId).getAttribute('data-enabled')).toBe('true');
+  });
+
+  it('refreshes MFA status after enabling MFA so the sections appear without reopening', () => {
+    // Fire onSuccess for the setup call (opens the modal) and then the verify call.
+    const succeed = (_vars: unknown, opts?: { onSuccess?: (data: object) => void }) => opts?.onSuccess?.({});
+    mutation.mutate.mockImplementationOnce(succeed).mockImplementationOnce(succeed);
+    renderTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
+    act(() => mfaModalProps.onVerify?.('123456'));
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['mfa', 'status'] });
+    expect(refreshUser).toHaveBeenCalledTimes(1);
   });
 });
 
