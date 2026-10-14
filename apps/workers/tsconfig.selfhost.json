@@ -4,7 +4,8 @@
   // files its tsconfig includes, so without the ../client glob the bridged client files would
   // transpile with no tsconfig (sloppy mode, not strict). The same holds for
   // packages/server-utils, which these services load from source. Typecheck keeps using
-  // tsconfig.json.
+  // tsconfig.json: `tsc -p` on this file is unsupported (the package files sit outside rootDir,
+  // TS6059).
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "strict": true,

@@ -108,8 +108,8 @@ describe('createKeyProvider', () => {
 
   it("threads the caller's startedAt through to the keyring, in the position the fence reads", async () => {
     // The load-bearing seam of the whole crypto-shred fence, and the one place a typecheck cannot help:
-    // apps/client/tsconfig.json excludes test files, so dropping this argument compiles cleanly and the
-    // fence silently stops applying for every production caller. Assert the exact position, not just
+    // packages/server-utils/tsconfig.json excludes test files, so dropping this argument compiles
+    // cleanly and the fence silently stops applying for every production caller. Assert the exact position, not just
     // that a refusal is possible.
     const { keyring } = makeKeyring();
     const getOrCreate = vi.fn(keyring.getOrCreate);
