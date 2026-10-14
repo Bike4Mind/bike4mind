@@ -105,4 +105,16 @@ describe('renderBundleLoaderShell', () => {
     expect(shell).toContain("note('Loading...')");
     expect(shell).toContain("frame.style.display = 'block'");
   });
+
+  // REGRESSION (#4604): only the message text switched in dark mode, leaving near-white text on
+  // the browser's default white page. The background has to switch with it, page-wide.
+  it('pairs the dark text color with a dark page background', () => {
+    expect(shell).toContain(':root{color-scheme:light dark}');
+    expect(shell).toMatch(/html,body\{[^}]*background:#fff;color:#1a1a2e\}/);
+    expect(shell).toMatch(/prefers-color-scheme: dark\)\{html,body\{background:#12121c;color:#e6e6f0\}/);
+  });
+
+  it('keeps the bundle iframe on the light scheme and a white backdrop', () => {
+    expect(shell).toMatch(/iframe\{[^}]*color-scheme:normal;background:#fff\}/);
+  });
 });

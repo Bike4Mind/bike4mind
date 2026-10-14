@@ -120,6 +120,9 @@ export function renderBundleLoaderShell(): string {
   // wrapped render. The bundle runs on an opaque origin; never add `allow-same-origin`.
   // The iframe starts hidden so a slow `?raw=1` round-trip shows "Loading..." instead of a
   // blank viewport; it's revealed once srcdoc is set. Title is a constant (see header).
+  // The dark palette is page-level (html/body, not #b4m-msg) so the noscript fallback follows it
+  // too. The iframe pins the old light scheme + white backdrop so a transparent bundle renders
+  // exactly as it did before the page went dark.
   // brand is externalized: drop the brand clause when APP_NAME is unconfigured.
   const brand = process.env.APP_NAME || '';
   const sharedTitle = `Shared${brand ? ` from ${brand}` : ''}`;
@@ -132,12 +135,12 @@ export function renderBundleLoaderShell(): string {
 <meta name="referrer" content="no-referrer">
 <title>${sharedTitle}</title>
 <style>
-  html,body{margin:0;padding:0;height:100%}
-  iframe{border:0;display:block;width:100%;height:100vh}
+  :root{color-scheme:light dark}
+  html,body{margin:0;padding:0;height:100%;background:#fff;color:#1a1a2e}
+  iframe{border:0;display:block;width:100%;height:100vh;color-scheme:normal;background:#fff}
   #b4m-msg{display:none;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;
-           max-width:540px;margin:18vh auto 0;padding:0 1.25rem;text-align:center;line-height:1.6;
-           color:#1a1a2e}
-  @media (prefers-color-scheme: dark){#b4m-msg{color:#e6e6f0}#b4m-msg a{color:#8ab4ff}}
+           max-width:540px;margin:18vh auto 0;padding:0 1.25rem;text-align:center;line-height:1.6}
+  @media (prefers-color-scheme: dark){html,body{background:#12121c;color:#e6e6f0}a{color:#8ab4ff}}
 </style>
 </head>
 <body>
