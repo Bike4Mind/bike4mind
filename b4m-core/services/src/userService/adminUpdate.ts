@@ -1,6 +1,14 @@
 import { z } from 'zod';
-import { updateUserSchema, applyBaseUserUpdates, toUserUpdatePartial } from './update';
 import {
+  updateUserSchema,
+  applyBaseUserUpdates,
+  toUserUpdatePartial,
+  validateUsernameChange,
+  writeUserUpdate,
+  EMAIL_IN_USE_MESSAGE,
+} from './update';
+import {
+  ConflictError,
   CreditHolderType,
   ICreditTransactionRepository,
   IOrganizationDocument,
@@ -19,7 +27,7 @@ import { entersBlockedState } from './accountState';
 export const adminUpdateUserSchema = updateUserSchema.extend({
   id: z.string(),
   // Admins can directly update email addresses without verification
-  email: z.email().optional(),
+  email: z.string().trim().toLowerCase().pipe(z.email()).optional(),
   role: z.string().optional().nullable(),
   isAdmin: z.boolean().optional(),
   // Admin-only: `tags` was removed from the base self-service schema because it
@@ -119,6 +127,12 @@ export async function adminUpdateUser(
   const user = await db.users.findByIdWithPassword(params.id);
   if (!user) {
     throw new Error('User not found');
+  }
+  await validateUsernameChange(user, params, db.users);
+  if (params.email !== undefined && params.email !== user.email) {
+    if (await db.users.existsOtherUserWithEmail(params.email, user.id)) {
+      throw new ConflictError(EMAIL_IN_USE_MESSAGE);
+    }
   }
 
   // Route a `currentCredits` change through the audited ledger when the adapter
@@ -261,7 +275,7 @@ export async function adminUpdateUser(
     }
   }
 
-  await db.users.update(writeData);
+  await writeUserUpdate(db.users, writeData);
 
   // Apply the moderation escalation transition last so it authoritatively sets
   // `moderation.status`, `throttledUntil`, and the `isModerated` mirror.

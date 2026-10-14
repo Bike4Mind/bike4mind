@@ -9,7 +9,13 @@ import {
   createFabFileOnServerWithUpload,
   getFabFileByIdFromServer,
 } from '@client/app/utils/filesAPICalls';
-import { IFabFileDocument, IFabFileListItemDocument, ISystemFileEntry, KnowledgeType } from '@bike4mind/common';
+import {
+  IFabFileDocument,
+  IFabFileListItemDocument,
+  isMediaOnlyMimeType,
+  ISystemFileEntry,
+  KnowledgeType,
+} from '@bike4mind/common';
 import HistoryIcon from '@mui/icons-material/History';
 import SaveIcon from '@mui/icons-material/Save';
 import {
@@ -46,6 +52,8 @@ import { whiteAlpha } from '@client/app/utils/themes/colors';
 import { COMMON_FILE_FORMATS, getFormatByMimeType, updateFileNameExtension } from '@client/app/utils/fileFormatUtils';
 import CodeIcon from '@mui/icons-material/Code';
 import { ContextHelpButton } from '@client/app/components/help';
+import MediaPlayer from '@client/app/components/Media/MediaPlayer';
+import GenerationDetails from '@client/app/components/Media/GenerationDetails';
 
 // Dynamic imports to avoid SSR issues
 const MDEditor = dynamic(() => import('@uiw/react-md-editor'), { ssr: false });
@@ -175,10 +183,13 @@ const KnowledgeModal: React.FC = () => {
       const fullFabFile = await getFabFileByIdFromServer(fabFileId);
 
       if (fullFabFile) {
-        const content = await getContentFromFabfile({
-          fileUrl: fullFabFile.fileUrl,
-          mimeType: fullFabFile.mimeType,
-        });
+        // Audio and video have no text to edit; fetching one would download the whole file for nothing.
+        const content = isMediaOnlyMimeType(fullFabFile.mimeType)
+          ? ''
+          : await getContentFromFabfile({
+              fileUrl: fullFabFile.fileUrl,
+              mimeType: fullFabFile.mimeType,
+            });
 
         setFabFile(fullFabFile);
         setFileContent(content);
@@ -407,6 +418,9 @@ const KnowledgeModal: React.FC = () => {
   );
 
   const isPdf = useMemo(() => fabFile?.mimeType === 'application/pdf', [fabFile?.mimeType]);
+  const isMedia = isMediaOnlyMimeType(fabFile?.mimeType);
+  // PDF and media files are shown, not edited: no text editor, format picker or system-instruction controls.
+  const isNonText = isPdf || isMedia;
   const isDirty = contentDirty || titleDirty || systemDirty;
 
   const canUpdate = !viewOnly && (!!fabFile?.id || userCanUpdateDoc(currentUser, fabFile));
@@ -441,7 +455,7 @@ const KnowledgeModal: React.FC = () => {
         >
           <Typography level="h4" sx={{ flexGrow: 1, mr: 2 }}>
             {fabFile?.fileName
-              ? viewOnly
+              ? viewOnly || isNonText
                 ? `Viewing: ${fabFile.fileName}`
                 : `Editing: ${fabFile.fileName}`
               : 'Create New Knowledge'}
@@ -506,7 +520,7 @@ const KnowledgeModal: React.FC = () => {
             )}
 
             {/* Action Buttons */}
-            {!isPdf && canUpdate && (
+            {!isNonText && canUpdate && (
               <Stack
                 className="knowledge-modal-action-buttons"
                 direction="row"
@@ -540,7 +554,7 @@ const KnowledgeModal: React.FC = () => {
             )}
 
             {/* Title Input */}
-            {!isPdf && canUpdate && (
+            {!isNonText && canUpdate && (
               <Box sx={{ mb: 2 }}>
                 <FormControl>
                   <FormLabel>File Name</FormLabel>
@@ -562,7 +576,7 @@ const KnowledgeModal: React.FC = () => {
             )}
 
             {/* Read-only file name display when not editable */}
-            {!isPdf && !canUpdate && fabFile?.fileName && (
+            {!isNonText && !canUpdate && fabFile?.fileName && (
               <Box sx={{ mb: 2 }}>
                 <FormControl>
                   <FormLabel>File Name</FormLabel>
@@ -576,7 +590,7 @@ const KnowledgeModal: React.FC = () => {
             )}
 
             {/* File Format Selector - Editable */}
-            {!isPdf && canUpdate && (
+            {!isNonText && canUpdate && (
               <Box sx={{ mb: 2 }}>
                 <FormControl>
                   <FormLabel>File Format</FormLabel>
@@ -624,7 +638,7 @@ const KnowledgeModal: React.FC = () => {
             )}
 
             {/* File Format Display - Read-only */}
-            {!isPdf && !canUpdate && fabFile?.mimeType && (
+            {!isNonText && !canUpdate && fabFile?.mimeType && (
               <Box sx={{ mb: 2 }}>
                 <FormControl>
                   <FormLabel>File Format</FormLabel>
@@ -638,6 +652,13 @@ const KnowledgeModal: React.FC = () => {
               </Box>
             )}
 
+            {isMedia && fabFile?.id && (
+              <Stack spacing={2} sx={{ mb: 2 }}>
+                <MediaPlayer file={{ ...fabFile, id: fabFile.id }} />
+                <GenerationDetails file={fabFile} />
+              </Stack>
+            )}
+
             {/* PDF Viewer */}
             {isPdf && fabFile?.fileUrl && (
               <Box sx={{ minHeight: '70vh', height: '100%', flexGrow: 1, overflow: 'auto' }}>
@@ -645,7 +666,7 @@ const KnowledgeModal: React.FC = () => {
               </Box>
             )}
             {/* Text Edit Area */}
-            {!isPdf && !fabFile?.mimeType.startsWith('image/') && (
+            {!isNonText && !fabFile?.mimeType.startsWith('image/') && (
               <Box
                 sx={{
                   width: '100%',
@@ -688,8 +709,9 @@ const KnowledgeModal: React.FC = () => {
                 <img src={fabFile.fileUrl} alt={fabFile.fileName} style={{ maxWidth: '100%', maxHeight: '100%' }} />
               </Box>
             )}
+            {fabFile?.mimeType.startsWith('image/') && <GenerationDetails file={fabFile} />}
 
-            {!isPdf && (
+            {!isNonText && (
               <Box sx={{ mb: 2, p: 2, backgroundColor: 'background.level2', borderRadius: 1 }}>
                 <Stack
                   direction={{ xs: 'column', sm: 'row' }}

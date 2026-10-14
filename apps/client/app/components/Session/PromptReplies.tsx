@@ -1,5 +1,6 @@
 import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
+import { GeneratedAudioPlayer } from '@client/app/components/Session/GeneratedAudioPlayer';
 import { GeneratedVideoJobs } from '@client/app/components/Session/GeneratedVideoJobs';
 import { Box, Stack, Chip, Avatar, Tooltip, Button, Alert } from '@mui/joy';
 import Typography from '@mui/joy/Typography';
@@ -1726,15 +1727,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                         {audio.length > 0 && (
                           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, width: '100%', mt: 1 }}>
                             {audio.map((src, index) => (
-                              <Box
-                                key={index}
-                                component="audio"
-                                controls
-                                preload="metadata"
-                                src={src}
-                                data-testid="generated-audio-player"
-                                sx={{ width: '100%', maxWidth: 480 }}
-                              />
+                              <GeneratedAudioPlayer key={index} src={src} />
                             ))}
                           </Box>
                         )}

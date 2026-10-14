@@ -137,7 +137,7 @@ const ALLOWLIST: Record<string, string> = {
   // moderationStatus in the first place. It cannot gate on isImageServeable (that
   // would be circular - the field it's about to set is exactly what the predicate
   // reads) and never returns the bytes/URL to a client. ---
-  'apps/client/server/s3/objectCreated.ts':
+  'apps/workers/src/s3/objectCreated.ts':
     'the moderation scanner itself (objectCreated) — produces moderationStatus, does not consume it',
   'apps/client/server/s3/moderationScan.ts':
     'the moderation scanner wiring shared by objectCreated and the on-demand scan route - downloads bytes to RUN the scan and PRODUCE moderationStatus, never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
@@ -178,7 +178,7 @@ const ALLOWLIST: Record<string, string> = {
     'text-only mime (session summary is always SupportedFabFileMimeTypes.TXT_PLAIN) — DI passthrough to already-gated fabFileService.update/create',
   'apps/workers/src/emailIngestion/emailParser.ts':
     'DI passthrough — storage adapter consumed by the email-ingestion pipeline (processAttachments/processEmailBody), which creates FabFiles via the already-gated fabFileService.create',
-  'apps/client/server/queueHandlers/slackQuestProcessor.ts':
+  'apps/workers/src/queueHandlers/slackQuestProcessor.ts':
     'DI passthrough — raw storage object handed to ChatCompletionProcess/LLM tool implementations that already gate on isImageServeable before touching it (imageEdit/editFile); the imageGenerateStorage.download call is the generated-images bucket, not fabFileBucket',
 
   // --- Never reaches an image (mime restricted or format is always text). ---

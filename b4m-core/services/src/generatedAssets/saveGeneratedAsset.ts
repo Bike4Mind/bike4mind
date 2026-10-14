@@ -1,6 +1,7 @@
 import {
   extensionFromMimeType,
   FabFileSourceType,
+  GENERATED_ASSET_TAG,
   isStorageLimitError,
   KnowledgeType,
   videoFileExtension,
@@ -61,6 +62,8 @@ export type SaveGeneratedAssetParams = {
   /** The notebook the asset was made in, for in-chat producers. */
   sessionId?: string;
   questId?: string;
+  /** Generated-bucket key of the copy the producer also keeps for inline chat playback; deletes remove it too. */
+  generatedCopyKey?: string;
   /** An abort rejects rather than reporting a skipped save, so a lease-bounded step fails and retries. */
   signal?: AbortSignal;
 };
@@ -122,7 +125,7 @@ export async function saveGeneratedAsset(
         content: bytes,
         prefix: KEY_PREFIX[modality],
         tags: [
-          { name: 'generated', strength: 1 },
+          { name: GENERATED_ASSET_TAG, strength: 1 },
           { name: LABEL[generation.generator], strength: 1 },
           ...(jobTag ? [{ name: jobTag, strength: 1 }] : []),
         ],
@@ -135,6 +138,7 @@ export async function saveGeneratedAsset(
           sourceMetadata: {
             ...(params.sessionId && { sessionId: params.sessionId }),
             ...(params.questId && { questId: params.questId }),
+            ...(params.generatedCopyKey && { generatedCopyKey: params.generatedCopyKey }),
             generation: storedGeneration(generation),
           },
         },

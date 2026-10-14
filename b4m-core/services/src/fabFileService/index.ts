@@ -3,6 +3,7 @@ export * from './get';
 export * from './authorizeFileAccess';
 export * from './update';
 export * from './delete';
+export * from './deleteStoredObjects';
 export * from './chunk';
 export * from './vectorize';
 export * from './stampChunkEmbeddingModel';

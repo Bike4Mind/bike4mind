@@ -22,7 +22,7 @@ export { imageProcessor };
  * (infra/chatCompletion.ts), not a Lambda.
  */
 export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
-  handler: 'apps/client/server/queueHandlers/slackQuestProcessor.handler',
+  handler: 'apps/workers/src/queueHandlers/slackQuestProcessor.handler',
   runtime: 'nodejs24.x',
   timeout: '15 minutes',
   memory: '2048 MB',

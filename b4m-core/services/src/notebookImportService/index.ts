@@ -725,7 +725,7 @@ export class NotebookImportService {
 
         // Decoded once, here, and reused for the write, the accounting and the row. Booking anything
         // but the stored length breaks that: the credit reads the real object size
-        // (server/s3/objectCreated.ts) while every refund reads this row's fileSize, so an
+        // (apps/workers/src/s3/objectCreated.ts) while every refund reads this row's fileSize, so an
         // import-then-delete cycle would deduct bytes that were never stored.
         const bytes = Buffer.from(file.content, 'base64');
         const storedSize = bytes.byteLength;

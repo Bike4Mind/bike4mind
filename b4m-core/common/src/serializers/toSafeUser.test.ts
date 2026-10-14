@@ -7,7 +7,12 @@ import {
   USER_SECRET_FIELDS,
   USER_SUBFIELD_REDACTED_FIELDS,
 } from './toSafeUser';
-import { safeUserResponseSchema, safeUsersResponseSchema } from '../schemas/user';
+import {
+  safeUserResponseSchema,
+  safeUsersResponseSchema,
+  selfUserProfileResponseSchema,
+  selfUserResponseSchema,
+} from '../schemas/user';
 
 // A user carrying every category of secret. Not every required nested field is
 // populated, so cast once here rather than fighting the type in a fixture.
@@ -541,9 +546,18 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
     expect(Object.keys(rebuilt).sort()).toEqual([...allowed].sort());
   });
 
-  // authProviders rebuilds an array, not an object, so it needs its own shape check
-  // rather than a CASES entry -- its per-element allowlist is otherwise covered
-  // exhaustively by the dedicated describe block above.
+  // The response schema is the second line of defense behind the redactor: fed the
+  // RAW integration object, it must strip down to the same allowlist on its own.
+  it.each(CASES)(
+    'selfUserResponseSchema strips raw $field to the same allowed subfields',
+    ({ field, input, allowed }) => {
+      const parsed = selfUserResponseSchema.parse({ [field]: input }) as Record<string, unknown>;
+      expect(Object.keys(parsed[field] as Record<string, unknown>).sort()).toEqual([...allowed].sort());
+    }
+  );
+
+  // authProviders rebuilds an array, not an object, so it needs its own shape checks rather than a CASES entry.
+  // The redactor's per-element rebuild is checked here; the schema's own strip is checked in the next test.
   it('authProviders array elements keep exactly id and strategy', () => {
     const out = redactUserSecretsForSelf({
       authProviders: [
@@ -552,5 +566,56 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
     } as never)!;
     const provider = (out.authProviders as Array<Record<string, unknown>>)[0];
     expect(Object.keys(provider).sort()).toEqual(['id', 'strategy']);
+  });
+
+  it('selfUserResponseSchema strips raw authProviders elements to id and strategy', () => {
+    const parsed = selfUserResponseSchema.parse({
+      authProviders: [
+        { id: 'p1', strategy: 'okta', accessToken: 'x', oktaIdentityProviderId: 'idp', futureField: 'x' },
+      ],
+    });
+    expect(parsed).toEqual({ authProviders: [{ id: 'p1', strategy: 'okta' }] });
+  });
+});
+
+describe('redactUserSecretsForSelf <-> selfUserResponseSchema contract', () => {
+  it('passes the full redacted self-view through unchanged', () => {
+    const redacted = redactUserSecretsForSelf(fullUser)!;
+    expect(selfUserResponseSchema.parse(redacted)).toEqual(redacted);
+  });
+
+  it('the profile schema passes the opted-in profile-edit view through unchanged', () => {
+    const redacted = redactUserSecretsForSelf(fullUser, {
+      keep: ['securityQuestions'],
+      keepAdminOnly: ['userNotes'],
+    })!;
+    expect(selfUserProfileResponseSchema.parse(redacted)).toEqual(redacted);
+  });
+
+  it('the profile schema still never admits loginRecords', () => {
+    expect(selfUserProfileResponseSchema.parse(fullUser)).not.toHaveProperty('loginRecords');
+  });
+
+  it('keeps toJSON() identity and timestamp keys, drops __v', () => {
+    const parsed = selfUserResponseSchema.parse({
+      _id: 'oid',
+      id: 'oid',
+      __v: 3,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    expect(Object.keys(parsed).sort()).toEqual(['_id', 'createdAt', 'id', 'updatedAt']);
+  });
+
+  it('strips every non-rebuilt secret field, opt-ins included, from a RAW user on its own', () => {
+    const parsed = selfUserResponseSchema.parse(fullUser) as Record<string, unknown>;
+    for (const field of USER_SECRET_FIELDS) {
+      if ((USER_SUBFIELD_REDACTED_FIELDS as readonly string[]).includes(field)) continue;
+      expect(parsed).not.toHaveProperty(field);
+    }
+  });
+
+  it('strips a field IUser does not declare', () => {
+    expect(selfUserResponseSchema.parse({ id: 'u1', notAUserField: 'x' })).toEqual({ id: 'u1' });
   });
 });

@@ -15,7 +15,7 @@ import {
   type ToolStarted,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
-import { cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
+import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources/chat/completions';
 import type {
@@ -1027,6 +1027,7 @@ export class OpenAIBackend implements ICompletionBackend {
     // Cache reads accumulate alongside the CACHE-INCLUSIVE accumInputTokens; the two
     // are only made disjoint at the emit, by splitCachedInput.
     const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set maxToolCalls); else the default.
@@ -1236,8 +1237,10 @@ export class OpenAIBackend implements ICompletionBackend {
 
     if (!(response instanceof Stream)) {
       const streamedText: string[] = [];
-      const totalCacheReadTokens =
-        accumCacheReadTokens + cachedTokensFromUsage(response.usage as unknown as Record<string, unknown> | undefined);
+      const turnCacheReadTokens = cachedTokensFromUsage(
+        response.usage as unknown as Record<string, unknown> | undefined
+      );
+      const totalCacheReadTokens = accumCacheReadTokens + turnCacheReadTokens;
 
       if (!response.choices || response.choices.length === 0) {
         throw new Error('No choices returned from OpenAI API');
@@ -1440,6 +1443,12 @@ export class OpenAIBackend implements ICompletionBackend {
                   totalCacheReadTokens
                 ),
                 outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                turnUsage: appendCacheInclusiveTurn(
+                  accumTurnUsage,
+                  response.usage?.prompt_tokens || 0,
+                  turnCacheReadTokens,
+                  response.usage?.completion_tokens || 0
+                ),
                 toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
                 stopReason: 'tool_use',
               });
@@ -1468,6 +1477,12 @@ export class OpenAIBackend implements ICompletionBackend {
                   accumInputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
                   accumOutputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
                   accumCacheReadTokens: totalCacheReadTokens,
+                  accumTurnUsage: appendCacheInclusiveTurn(
+                    accumTurnUsage,
+                    response.usage?.prompt_tokens || 0,
+                    turnCacheReadTokens,
+                    response.usage?.completion_tokens || 0
+                  ),
                   artifactGuard,
                 },
               },
@@ -1489,6 +1504,12 @@ export class OpenAIBackend implements ICompletionBackend {
                 totalCacheReadTokens
               ),
               outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+              turnUsage: appendCacheInclusiveTurn(
+                accumTurnUsage,
+                response.usage?.prompt_tokens || 0,
+                turnCacheReadTokens,
+                response.usage?.completion_tokens || 0
+              ),
               toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
             });
             return;
@@ -1517,6 +1538,12 @@ export class OpenAIBackend implements ICompletionBackend {
       const completionInfo = {
         ...splitCacheInclusiveInput(accumInputTokens + (response.usage?.prompt_tokens || 0), totalCacheReadTokens),
         outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+        turnUsage: appendCacheInclusiveTurn(
+          accumTurnUsage,
+          response.usage?.prompt_tokens || 0,
+          turnCacheReadTokens,
+          response.usage?.completion_tokens || 0
+        ),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
         ...(options.responseFormat?.type === 'json_schema' ? { responseFormatMode: 'native' as const } : {}),
@@ -1606,6 +1633,7 @@ export class OpenAIBackend implements ICompletionBackend {
       await callback(streamedText, {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
       });
@@ -1658,6 +1686,7 @@ export class OpenAIBackend implements ICompletionBackend {
       await callback([], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
         responseFormatMode: 'native',
@@ -1809,6 +1838,7 @@ export class OpenAIBackend implements ICompletionBackend {
                   accumCacheReadTokens + cachedTokensFromStream
                 ),
                 outputTokens: accumOutputTokens + outputTokens,
+                turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
                 toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
                 cacheStats,
                 ...artifactInfo,
@@ -1841,6 +1871,7 @@ export class OpenAIBackend implements ICompletionBackend {
           await (artifactGuard?.callback ?? callback)([], {
             ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
             outputTokens: accumOutputTokens + outputTokens,
+            turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
             toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
             cacheStats,
             stopReason: 'tool_use',
@@ -1867,6 +1898,12 @@ export class OpenAIBackend implements ICompletionBackend {
               accumInputTokens: accumInputTokens + inputTokens,
               accumOutputTokens: accumOutputTokens + outputTokens,
               accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
+              accumTurnUsage: appendCacheInclusiveTurn(
+                accumTurnUsage,
+                inputTokens,
+                cachedTokensFromStream,
+                outputTokens
+              ),
               artifactGuard,
             },
           },
@@ -1883,6 +1920,7 @@ export class OpenAIBackend implements ICompletionBackend {
         await callback([null], {
           ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
+          turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
           cacheStats,
         });
@@ -2100,6 +2138,7 @@ export class OpenAIBackend implements ICompletionBackend {
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
     const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
 
     // Reuse the chat-path message formatting (system consolidation + B4M->OpenAI
     // conversion), then translate to Responses input items.
@@ -2159,12 +2198,14 @@ export class OpenAIBackend implements ICompletionBackend {
         await callback([event.delta], {
           ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
+          turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         });
       } else if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
         await callback([], {
           ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
+          turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
           toolStarted: { name: event.item.name, id: event.item.call_id },
         });
@@ -2210,6 +2251,7 @@ export class OpenAIBackend implements ICompletionBackend {
       await callback([], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(stopReason ? { stopReason } : {}),
       });
@@ -2226,6 +2268,7 @@ export class OpenAIBackend implements ICompletionBackend {
       await callback([null], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
       });
       return;
@@ -2329,6 +2372,7 @@ export class OpenAIBackend implements ICompletionBackend {
       await (artifactGuard?.callback ?? callback)([], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         stopReason: 'tool_use',
       });
@@ -2352,6 +2396,7 @@ export class OpenAIBackend implements ICompletionBackend {
           accumInputTokens: accumInputTokens + inputTokens,
           accumOutputTokens: accumOutputTokens + outputTokens,
           accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
+          accumTurnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
           artifactGuard,
         },
       },

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { authSuccessRedirectQuery } from './authSuccessRedirect';
+import { parseHashParams } from '@client/app/utils/authParams';
+import { authSuccessRedirectQuery, mfaHandoffFragment } from './authSuccessRedirect';
 
 describe('authSuccessRedirectQuery', () => {
   it('returns an empty string when there is no redirect target', () => {
@@ -31,5 +32,32 @@ describe('authSuccessRedirectQuery', () => {
     expect(parsed.pathname).toBe('/auth/success');
     expect(parsed.searchParams.get('redirectTo')).toBe(authorizeUrl);
     expect(parsed.hash).toBe('#token=AAA&refreshToken=BBB&userId=123');
+  });
+});
+
+describe('mfaHandoffFragment -> parseHashParams', () => {
+  const userId = '6acf0000000000000000abcd';
+
+  it('round-trips a setup handoff with the signup fragment and never yields a session token', () => {
+    const fragment = mfaHandoffFragment({ mfaToken: 'a.b.c', userId, mode: 'setup', passkeyAvailable: true });
+
+    const parsed = parseHashParams(`${fragment}&isNewUser=1&signupMethod=google`);
+
+    expect(parsed).toEqual({
+      userId,
+      mfa: { token: 'a.b.c', mode: 'setup', passkeyAvailable: true },
+      isNewUser: true,
+      signupMethod: 'google',
+    });
+    expect(parsed).not.toHaveProperty('token');
+  });
+
+  it('round-trips a verify handoff without passkey', () => {
+    const fragment = mfaHandoffFragment({ mfaToken: 'a.b.c', userId, mode: 'verify', passkeyAvailable: false });
+
+    expect(parseHashParams(fragment)).toEqual({
+      userId,
+      mfa: { token: 'a.b.c', mode: 'verify', passkeyAvailable: false },
+    });
   });
 });

@@ -13,6 +13,7 @@ import {
   type SupportedEmbeddingModel,
   QueryComplexityType,
   getTextModelCost,
+  getTurnsCost,
   CACHE_READ_MULTIPLIER,
   ModelInfo,
   ModelBackend,
@@ -4247,12 +4248,13 @@ export class ChatCompletionProcess {
       let stopSignalSent = false;
       const actualTokenUsage: Pick<
         CompletionInfo,
-        'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'
+        'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens' | 'turnUsage'
       > & { stopReason?: string } = {
         inputTokens: undefined,
         outputTokens: undefined,
         cacheReadInputTokens: undefined,
         cacheCreationInputTokens: undefined,
+        turnUsage: undefined,
         stopReason: undefined,
       };
 
@@ -4551,6 +4553,7 @@ export class ChatCompletionProcess {
             actualTokenUsage.outputTokens = undefined;
             actualTokenUsage.cacheReadInputTokens = undefined;
             actualTokenUsage.cacheCreationInputTokens = undefined;
+            actualTokenUsage.turnUsage = undefined;
             actualTokenUsage.stopReason = undefined;
             toolCallsSeen = 0;
             visibleCharsAtLastToolCall = 0;
@@ -4830,6 +4833,7 @@ export class ChatCompletionProcess {
                   actualTokenUsage.cacheReadInputTokens = completionInfo.cacheReadInputTokens;
                 if (completionInfo?.cacheCreationInputTokens != null)
                   actualTokenUsage.cacheCreationInputTokens = completionInfo.cacheCreationInputTokens;
+                if (completionInfo?.turnUsage?.length) actualTokenUsage.turnUsage = completionInfo.turnUsage;
                 // stopReason follows the same preserve-last-non-null contract as token
                 // counts. Previously this field was overwritten by every callback (via
                 // the whole-object replace), so a tail callback emitting undefined would
@@ -5505,10 +5509,10 @@ export class ChatCompletionProcess {
         // double-bills the cached portion here; one that forwards nothing bills every
         // cache hit at the full input rate.
         //
-        // NOTE: the provider input (uncached tail) drives getTextModelCost's
-        // pricing-tier selection. Every model today publishes a single tier, so
-        // this is exact; if tiered pricing lands, a heavily-cached prompt could
-        // select a cheaper tier for its cache volume - revisit tier selection then.
+        // Long-context tiers: providers pick the tier per request on that request's
+        // whole prompt (cache included), so the provider basis prices turnUsage turn by
+        // turn when the adapter reports it. Aggregates alone are cache-exclusive and
+        // summed across tool round-trips, which picks the wrong tier in both directions.
         // Summed across all three input components, not just the uncached tail: on a
         // fully-cached prompt the provider legitimately reports 0 uncached input, and
         // reading that as "nothing reported" would drop the row onto the local estimate
@@ -5535,17 +5539,23 @@ export class ChatCompletionProcess {
         // so recording a value there would imply a charge that was not made.
         const cacheCreationInputTokens = hasProviderUsage ? (actualTokenUsage.cacheCreationInputTokens ?? 0) : 0;
         const estimatedCost = hasProviderUsage
-          ? getTextModelCost(
-              currentModel,
-              settledInputTokens,
-              settledOutputTokens,
-              cacheReadInputTokens,
-              cacheCreationInputTokens
-            )
+          ? actualTokenUsage.turnUsage?.length
+            ? getTurnsCost(currentModel, actualTokenUsage.turnUsage)
+            : getTextModelCost(
+                currentModel,
+                settledInputTokens,
+                settledOutputTokens,
+                cacheReadInputTokens,
+                cacheCreationInputTokens
+              )
           : getTextModelCost(
               currentModel,
               localInputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
-              outputTokens
+              outputTokens,
+              0,
+              0,
+              // The local estimate is one whole prompt; the cache discount above must not lower its tier.
+              localInputTokens
             );
         // Single stochastic settlement draw, shared by the quest meta, the
         // usage event, and the ledger deduction below so they can never

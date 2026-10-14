@@ -14,6 +14,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getFilesStorage } from '@server/utils/storage';
+import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
 import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
 import qs from 'qs';
 
@@ -86,7 +87,10 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
 
       await withTransaction(async session => {
         try {
-          const files = await FabFile.find(ownedFilter).select('filePath').session(session);
+          // sessionId feeds deleteStoredObjects' fork guard: without it the file's own notebook reads as another's.
+          const files = await FabFile.find(ownedFilter)
+            .select('filePath moderationStatus sourceMetadata.generatedCopyKey sourceMetadata.sessionId')
+            .session(session);
           const user = await User.findById(userId).session(session);
 
           if (!user) {
@@ -108,20 +112,18 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
             }),
           ]);
 
-          await Promise.all(
-            filePaths.map(async filePath => {
-              try {
-                await getFilesStorage().delete(filePath);
-              } catch (error) {
-                req.logger.error('Error deleting file from storage:', {
-                  error,
-                  filePath,
-                  userId,
-                });
-                throw error;
-              }
-            })
-          );
+          if (files.length > 0) {
+            try {
+              await fabFilesService.deleteStoredObjects(
+                files,
+                { files: getFilesStorage(), generated: getGeneratedCopyStore() },
+                req.logger
+              );
+            } catch (error) {
+              req.logger.error('Error deleting file from storage:', { error, userId });
+              throw error;
+            }
+          }
 
           await logEvent(
             {

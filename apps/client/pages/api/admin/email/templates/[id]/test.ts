@@ -2,6 +2,7 @@ import { emailTemplateRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import mailer from '@server/utils/mailer';
+import { escapeHtml } from '@server/utils/mailer/emailHelpers';
 import { ApiKeyScope } from '@bike4mind/common';
 
 const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
@@ -43,8 +44,9 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).pos
   // Replace variables
   Object.entries(testData).forEach(([key, value]) => {
     const regex = new RegExp(`{{${key}}}`, 'g');
-    htmlContent = htmlContent.replace(regex, value);
-    subject = subject.replace(regex, value);
+    // Function replacers so a `$` in a value is not read as a replacement pattern.
+    htmlContent = htmlContent.replace(regex, () => escapeHtml(value));
+    subject = subject.replace(regex, () => value);
   });
 
   // Add test indicator to subject

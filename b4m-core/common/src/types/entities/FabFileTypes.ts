@@ -67,6 +67,8 @@ export enum FabFileSourceType {
    * through saveGeneratedAsset carries `sourceMetadata.generation` (GeneratedAssetMetadata).
    * `sourceMetadata.sessionId`, when set, links it to the notebook it was made in - see
    * persistGeneratedFileAsFabFile for why that link is not the top-level `sessionId`.
+   * `sourceMetadata.generatedCopyKey` names a second, generated-bucket copy that deletes also
+   * remove (see generatedCopyKeyOf).
    */
   TOOL_GENERATED = 'tool_generated',
 }
@@ -1255,6 +1257,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
+      /** Only files saved by a generation tool (tagged GENERATED_ASSET_TAG); ANDed with `tags`. */
+      generated?: boolean;
       fileIds?: string[]; // EXCLUDE these ids ($nin)
       restrictToFileIds?: string[]; // ALLOW-list ($in); present (incl. []) = hard restriction, [] matches nothing
     },

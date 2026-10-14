@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', () => ({ cliTools: { executeServerTool: vi.fn() } }));
 
-vi.mock('./auth', () => ({
+vi.mock('@server/cli/auth', () => ({
   // verifyApiKey is imported by resolveContractAuth; unused on the jwtOnly tools
   // path but must exist so the mocked module doesn't throw on the missing export.
   verifyApiKey: vi.fn(),
@@ -45,14 +45,14 @@ vi.mock('./auth', () => ({
 
 // Keep the real validateToolRequest (pure), stub only executeToolWithLogging
 // so we can drive the result/handled-failure branches deterministically.
-vi.mock('./toolsHandler.shared', async importOriginal => {
-  const actual = await importOriginal<typeof import('./toolsHandler.shared')>();
+vi.mock('@server/cli/toolsHandler.shared', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/cli/toolsHandler.shared')>();
   return { ...actual, executeToolWithLogging: vi.fn() };
 });
 
 import { handleToolRequest } from './tools';
-import { executeToolWithLogging, SUPPORTED_TOOLS } from './toolsHandler.shared';
-import { verifyJwtToken, checkRateLimit } from './auth';
+import { executeToolWithLogging, SUPPORTED_TOOLS } from '@server/cli/toolsHandler.shared';
+import { verifyJwtToken, checkRateLimit } from '@server/cli/auth';
 import { REQUEST_ID_HEADER, ToolExecutionRequestSchema } from '@bike4mind/common';
 
 const VALID_BODY = JSON.stringify({ toolName: 'weather_info', input: { city: 'Tokyo' } });

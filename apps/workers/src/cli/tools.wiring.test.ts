@@ -17,7 +17,7 @@ describe('CLI tools Lambda wiring', () => {
     const filePath = spec.slice(0, dot);
     const exportName = spec.slice(dot + 1);
 
-    expect(filePath).toBe('apps/client/server/cli/tools.handler');
+    expect(filePath).toBe('apps/workers/src/cli/tools.handler');
     expect(exportName).toBe('handler');
 
     const mod = await import('./tools.handler');
