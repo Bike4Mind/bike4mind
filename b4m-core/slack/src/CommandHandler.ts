@@ -20,6 +20,7 @@ import {
   HTTPError,
   IUserDocument,
   BadRequestError,
+  isStorageLimitError,
   type IAdminSettingsRepository,
   type IOrganizationDocument,
 } from '@bike4mind/common';
@@ -654,9 +655,14 @@ export class CommandHandler {
           if (!(limitError instanceof BadRequestError)) {
             this.logger.error('[Slack Files] Storage limit check failed', { error: limitError, fileName: file.name });
           }
-          const message =
-            limitError instanceof BadRequestError ? limitError.message : 'Could not verify your storage limit';
-          const error = `\u26a0\ufe0f ${message}. Skipping "${file.name}".`;
+          // No byte counts: the reply is a normal thread message every channel member sees, and the
+          // refused size here is the running total for the message, not this file's.
+          const message = isStorageLimitError(limitError)
+            ? limitError.info.errorCode === 'org_storage_limit_exceeded'
+              ? "This file is larger than your organization's storage limit."
+              : 'Not enough storage for this file.'
+            : `${limitError instanceof BadRequestError ? limitError.message : 'Could not verify your storage limit'}.`;
+          const error = `\u26a0\ufe0f ${message} Skipping "${file.name}".`;
           this.logger.warn(error);
           errors.push(error);
           continue;
