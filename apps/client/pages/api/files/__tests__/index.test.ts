@@ -293,6 +293,8 @@ describe('DELETE /api/files', () => {
         'filePath',
         'versions',
         'moderationStatus',
+        // Without it an unscannable-format block reads as a content block and its bytes are kept forever.
+        'blockReason',
         'sourceMetadata.generatedCopyKey',
         'sourceMetadata.sessionId',
       ])

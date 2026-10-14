@@ -1,4 +1,9 @@
-import { generatedCopyKeyOf, type IChatHistoryItemRepository, type IFabFileDocument } from '@bike4mind/common';
+import {
+  generatedCopyKeyOf,
+  isModerationEvidenceHold,
+  type IChatHistoryItemRepository,
+  type IFabFileDocument,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 export type ObjectStorage = { delete: (path: string) => Promise<unknown> };
@@ -15,7 +20,10 @@ export type StoredObjectBuckets = {
   generated?: GeneratedCopyStore;
 };
 
-type StoredFile = Pick<IFabFileDocument, 'id' | 'filePath' | 'versions' | 'sourceMetadata' | 'moderationStatus'>;
+type StoredFile = Pick<
+  IFabFileDocument,
+  'id' | 'filePath' | 'versions' | 'sourceMetadata' | 'moderationStatus' | 'blockReason'
+>;
 type WarnLogger = { warn: (message: string, ...args: unknown[]) => void };
 
 /**
@@ -24,7 +32,8 @@ type WarnLogger = { warn: (message: string, ...args: unknown[]) => void };
  * the generated-bucket copy chat plays inline (`sourceMetadata.generatedCopyKey`). Revisions are deleted first and
  * best-effort; a failure on `filePath` or the generated copy still rejects.
  * Shared by the single-file delete, the notebook delete and the delete-all route so they cannot drift.
- * A moderation-blocked file keeps its objects: they are legal-hold evidence (see FabFileModel.hardDeleteByIds).
+ * A moderation-blocked file keeps its objects: they may be legal-hold evidence pending triage (see
+ * isModerationEvidenceHold and FabFileModel.hardDeleteByIds). An unscannable-format block is not held.
  */
 export async function deleteStoredObjects(
   files: ReadonlyArray<StoredFile>,
@@ -35,7 +44,7 @@ export async function deleteStoredObjects(
 }
 
 async function deleteFileObjects(file: StoredFile, buckets: StoredObjectBuckets, logger: WarnLogger) {
-  if (file.moderationStatus === 'blocked') {
+  if (isModerationEvidenceHold(file)) {
     logger.warn('[deleteStoredObjects] keeping the objects of a blocked file (legal hold)', { fileId: file.id });
     return;
   }
