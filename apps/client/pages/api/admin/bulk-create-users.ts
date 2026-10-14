@@ -1,5 +1,11 @@
 import { userRepository } from '@bike4mind/database';
-import { ApiKeyScope, AuthEvents, redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  AuthEvents,
+  redactUserSecretsForSelf,
+  sanitizeUsername,
+  selfUserResponseSchema,
+} from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { userService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -7,7 +13,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
-import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
+import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
+import { randomUUID } from 'crypto';
 import { z } from 'zod';
 
 const userImportSchema = z.object({
@@ -56,7 +63,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         try {
           const validatedData = userImportSchema.parse(userData);
 
-          const username = validatedData.email.split('@')[0];
+          // Derived from the address, so coerce it into the username rules rather than reject the row.
+          const username = sanitizeUsername(validatedData.email.split('@')[0]) || `user-${randomUUID().slice(0, 8)}`;
 
           const newUser = await userService.createUser(
             {
@@ -117,7 +125,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
               <body>
                 <div class="content">
                   ${buildEmailLogoImg(brand, logoUrl)}
-                  <p>Hello ${newUser.name},</p>
+                  <p>Hello ${escapeHtml(newUser.name)},</p>
                   <p>Welcome${brand ? ` to ${brand}` : ''}! Your account has been created.</p>
                   <p>Sign in at the link below — enter your email and we'll send you a one-time sign-in code. No password needed.</p>
                   <p><a href="${loginLink}">${loginLink}</a></p>

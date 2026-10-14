@@ -284,7 +284,7 @@
       "registrationFailed": "Registration failed. Please try again later.",
       "validation": {
         "generic": "Invalid input",
-        "invalidUsername": "Username can only contain letters, numbers, underscores, periods, and dashes",
+        "invalidUsername": "Usernames can contain letters, numbers, spaces and . _ - ' (up to 64 characters).",
         "passwordMismatch": "Passwords do not match",
         "passwordRequirements": "Password must be at least 8 characters, with upper and lower case letters, a number, and a special character"
       }

@@ -6,7 +6,7 @@ import { commitWithSessionEnd } from '@server/auth/endUserSessions';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { logEvent } from '@server/utils/analyticsLog';
-import { AuthEvents } from '@bike4mind/common';
+import { AuthEvents, ConflictError } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
 import { entitlementsForEmail } from '@client/lib/entitlements/registry';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
@@ -38,13 +38,13 @@ const handler = baseApi({ auth: false })
       }
 
       const oldEmail = user.email;
-      const newEmail = user.pendingEmail;
+      const newEmail = user.pendingEmail?.trim().toLowerCase();
 
       try {
         // Verify the token and complete the email change. The sign-in identity moved, so every
         // session minted under the old one ends in the same transaction; the response already tells
         // the user to sign in again with the new address.
-        await commitWithSessionEnd(
+        const outcome = await commitWithSessionEnd(
           req,
           () =>
             userService.verifyEmailChange(
@@ -53,13 +53,16 @@ const handler = baseApi({ auth: false })
                 db: {
                   users: {
                     findByPendingEmailToken: async (token: string) => userRepository.findByPendingEmailToken(token),
+                    existsOtherUserWithEmail: async (email: string, excludeUserId?: string) =>
+                      userRepository.existsOtherUserWithEmail(email, excludeUserId),
                     update: async user => userRepository.update(user),
                   },
                 },
               }
             ),
-          () => ({ userId: user.id, reason: 'email_changed' })
+          outcome => (outcome === 'changed' ? { userId: user.id, reason: 'email_changed' } : undefined)
         );
+        if (outcome === 'unavailable') throw new ConflictError(userService.EMAIL_NO_LONGER_AVAILABLE_MESSAGE);
 
         // Log successful email change
         await logAuditEvent(

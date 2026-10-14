@@ -19,6 +19,7 @@
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
     "migrate": "tsx migrate/index.ts",
     "datalake:check-slug-dupes": "tsx migrate/check-datalake-slug-dupes.ts",
+    "users:check-email-case-dupes": "tsx migrate/check-user-email-case-dupes.ts",
     "datalake:check-prefix-overlaps": "tsx migrate/check-datalake-prefix-overlaps.ts",
     "datalake:check-prefix-dupes": "tsx migrate/check-datalake-prefix-dupes.ts",
     "datalake:check-prefix-whitespace": "tsx migrate/check-datalake-prefix-whitespace.ts",

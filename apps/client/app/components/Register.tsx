@@ -42,14 +42,12 @@ import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect'
 import { isSubmittableOtcCode, OTC_CODE_PLACEHOLDER, sanitizeOtcInput } from '@client/app/utils/otcCode';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
-import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
+import { CURRENT_POLICY_VERSION, usernameSchema } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 
 const registerSchema = z.object({
-  username: z
-    .string()
-    .min(1, 'Username is required')
-    .regex(/^[A-Za-z0-9@_.-]+$/, 'Username can only contain letters, numbers, and @_.-'),
+  // Same rules the server enforces in registerUser.
+  username: usernameSchema,
   email: z.email('Invalid email format').min(1, 'Email is required'),
   // P0-B abuse gate: both must be checked (literal true) before the Continue button
   // is enabled. Acceptance is captured BEFORE the OTC code is requested, and the accepted policy
