@@ -65,7 +65,19 @@ describe('resolveMemoryStore', () => {
     const container = await scratch('b4m-memory-container-');
     const main = join(container, 'main');
     await run('git', ['init', '-q', main]);
-    await run('git', ['-C', main, 'commit', '-q', '--allow-empty', '-m', 'first']);
+    await run('git', [
+      '-C',
+      main,
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'first',
+    ]);
     const branch = join(container, 'feat+thing');
     await run('git', ['-C', main, 'worktree', 'add', '-q', '-b', 'feat/thing', branch]);
 

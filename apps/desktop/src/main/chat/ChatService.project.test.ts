@@ -31,6 +31,9 @@ async function repository(name: string): Promise<{ container: string; main: stri
   await git(container, ['clone', '--bare', '--quiet', source, '.bare']);
 
   const bare = join(container, '.bare');
+  // The clone does not inherit the source's identity, and CI has no global one to fall back on.
+  await git(bare, ['config', 'user.email', 'test@example.com']);
+  await git(bare, ['config', 'user.name', 'Test']);
   const main = join(container, 'main');
   await git(bare, ['worktree', 'add', '--quiet', main, 'main']);
   // The gitlink the user's `worktree` helper writes, which is what makes git answer from the
