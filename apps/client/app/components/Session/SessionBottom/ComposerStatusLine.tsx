@@ -28,7 +28,7 @@ const ComposerStatusLine: FC<ComposerStatusLineProps> = ({ left, right, sx }) =>
       ...(Array.isArray(sx) ? sx : [sx]),
     ]}
   >
-    <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>{left}</Box>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0 }}>{left}</Box>
     <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>{right}</Box>
   </Box>
 );

@@ -1,7 +1,7 @@
 import React, { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { registerSendPrompt, type SendPromptOptions } from '@client/app/hooks/useChatActions';
 
-import { Box, Typography, useTheme } from '@mui/joy';
+import { Box, Typography } from '@mui/joy';
 import Grid from '@mui/joy/Grid';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
@@ -84,6 +84,7 @@ import { useRollDice } from './useRollDice';
 import { useModalState } from './useModalState';
 import { useVoiceState } from './useVoiceState';
 import ComposerStatusLine from './ComposerStatusLine';
+import NotebookFilesChip from './NotebookFilesChip';
 import CreditBalanceChip from '@client/app/components/Session/CreditButton';
 import ResearchModeIndicator from '@client/app/components/Session/AISettings/ResearchModeIndicator';
 import { pickerAttachedAgents } from './resolveDispatchAgent';
@@ -121,8 +122,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // promote action in that panel exists to rescue.
   const totalFilesCount = workBenchFiles.length + systemFiles.length + messageFiles.length;
   const queryClient = useQueryClient();
-  const theme = useTheme();
-  const mode = theme.palette.mode;
   // Gating (exhausted/low-credit warnings) reads the live balance, not the
   // frozen display value - a genuine mid-turn exhaustion must still surface.
   const effectiveCredits = useEffectiveCredits({ live: true });
@@ -584,7 +583,19 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       {/* Above the box rather than under it: the file viewer and other embedded chats leave no room
           below, and on phones the box sits on the keyboard. */}
       <ComposerStatusLine
-        left={<ResearchModeIndicator />}
+        left={
+          <>
+            <NotebookFilesChip
+              totalFilesCount={totalFilesCount}
+              hasEmbeddingMismatches={hasEmbeddingMismatches}
+              model={model}
+              isMobile={isMobile}
+              open={filesDropdownOpen}
+              setOpen={setFilesDropdownOpen}
+            />
+            <ResearchModeIndicator />
+          </>
+        }
         right={<CreditBalanceChip />}
         sx={{
           width: '100%',
@@ -856,7 +867,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
         <SessionToolbar
           isMobile={isMobile}
-          mode={mode}
           canAttachFiles={canAttachFiles}
           workBenchFiles={workBenchFiles}
           currentSessionId={currentSessionId}
@@ -869,10 +879,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           attachScopeMode={attachScopeMode}
           setAttachScopeMode={setAttachScopeMode}
           totalFilesCount={totalFilesCount}
-          hasEmbeddingMismatches={hasEmbeddingMismatches}
           model={model}
-          filesDropdownOpen={filesDropdownOpen}
-          setFilesDropdownOpen={setFilesDropdownOpen}
           chatInputValue={chatInputValue}
           setChatInputValue={setChatInputValue}
           setRephraseGlow={setRephraseGlow}

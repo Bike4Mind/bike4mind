@@ -47,7 +47,7 @@ const CreditBalanceChip: FC = () => {
           onClick={() => setIsOpen(true)}
           data-testid="credit-balance-chip"
           aria-label={`${formatCreditBalance(credits)}. Open credits`}
-          startDecorator={<CreditIcon sx={{ fontSize: 13 }} />}
+          startDecorator={<CreditIcon sx={{ fontSize: 14 }} />}
           sx={{
             height: '24px',
             minHeight: '24px',

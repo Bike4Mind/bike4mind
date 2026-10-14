@@ -11,7 +11,6 @@ import {
   ElectricBoltOutlined as BoltIcon,
   ChevronRight as ChevronRightIcon,
   ImageOutlined as ImageOutlinedIcon,
-  InsertDriveFileOutlined,
   SettingsOutlined as SettingsOutlinedIcon,
   WorkOutline as BriefcaseIcon,
 } from '@mui/icons-material';
@@ -285,7 +284,6 @@ const AttachFileButton = ({
   // Advanced AI Settings modal control
   const openAdvancedSettings = useAdvancedAISettings(s => s.openModal);
   const setAgentsDropdownOpen = useAdvancedAISettings(s => s.setAgentsDropdownOpen);
-  const setSessionFilesOpen = useAdvancedAISettings(s => s.setSessionFilesOpen);
 
   const { isFeatureEnabled } = useFeatureEnabled();
   const isAgentsEnabled = isFeatureEnabled('enableAgents');
@@ -734,29 +732,6 @@ const AttachFileButton = ({
                       </ListItemDecorator>
                       Agents
                       <CountBadge count={activeAgentsCount} prefix="" margin={{ ml: 'auto' }} />
-                    </ListItemButton>
-                  </ListItem>
-                )}
-
-                {/* Mobile only - Session Files */}
-                {isMobile && !!totalFilesCount && totalFilesCount > 0 && (
-                  <ListItem sx={{ p: 0 }}>
-                    <ListItemButton
-                      onClick={() => {
-                        setIsOpen(false);
-                        setCurrentView('main');
-                        setSessionFilesOpen(true);
-                      }}
-                      sx={{
-                        color: 'text.primary',
-                        m: 0,
-                      }}
-                    >
-                      <ListItemDecorator>
-                        <InsertDriveFileOutlined sx={{ color: 'text.primary50', fontSize: '18px' }} />
-                      </ListItemDecorator>
-                      Session Files
-                      <CountBadge count={totalFilesCount ?? 0} prefix="" margin={{ ml: 'auto' }} />
                     </ListItemButton>
                   </ListItem>
                 )}

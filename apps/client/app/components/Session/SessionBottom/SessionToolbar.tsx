@@ -1,11 +1,11 @@
 import type { AttachScopeMode } from '@bike4mind/common';
 import React, { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { Box, CircularProgress, Dropdown, IconButton, Menu, MenuButton } from '@mui/joy';
+import { Box, CircularProgress } from '@mui/joy';
 import Button from '@mui/joy/Button';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
-import { StopCircleSharp, Close, Check } from '@mui/icons-material';
+import { StopCircleSharp, Check } from '@mui/icons-material';
 import SendIcon from '@mui/icons-material/Send';
 import { useTranslation } from 'react-i18next';
 
@@ -14,11 +14,8 @@ import { api } from '@client/app/contexts/ApiContext';
 import { fixedIconSize } from './sessionBottomConstants';
 import { getSendBlockedLabel, type SendBlockedReason } from './sendBlockedReason';
 import { useChatInput } from '@client/app/hooks/useChatInput';
-import { sessionTheme } from '@client/app/utils/themes/components/session';
-import { brand, red } from '@client/app/utils/themes/colors';
 
 import AttachFileButton from '@client/app/components/Session/AttachFileButton';
-import FilesSection from '@client/app/components/Session/AISettings/FilesSection';
 import AdvancedAISettings from '@client/app/components/Session/AdvancedAISettings';
 import RephraseButton from '@client/app/components/Session/RephraseButton';
 import VoiceRecordButton, { VoiceRecordButtonRef } from '@client/app/components/common/VoiceRecordButton';
@@ -27,12 +24,10 @@ import VoiceInlineButton, {
   VOICE_DEBUG_STATE,
 } from '@client/app/components/Session/VoiceSessionModal/VoiceInlineIndicator';
 import ConversationalVoiceButton from '@client/app/components/Session/ConversationalVoice/ConversationalVoiceButton';
-import FileViewerIcon from '../../svgs/icons/FileViewerIcon';
 
 interface SessionToolbarProps {
   // Layout
   isMobile: boolean;
-  mode: 'dark' | 'light';
 
   // File attach
   canAttachFiles: boolean;
@@ -50,12 +45,7 @@ interface SessionToolbarProps {
   attachScopeMode: AttachScopeMode;
   setAttachScopeMode: (mode: AttachScopeMode) => void;
   totalFilesCount: number;
-  hasEmbeddingMismatches: boolean;
   model: string;
-
-  // Files dropdown
-  filesDropdownOpen: boolean;
-  setFilesDropdownOpen: (open: boolean) => void;
 
   // Chat input
   chatInputValue: string;
@@ -98,7 +88,6 @@ export function SessionToolbar(props: SessionToolbarProps) {
   const { t } = useTranslation();
   const {
     isMobile,
-    mode,
     canAttachFiles,
     workBenchFiles,
     currentSessionId,
@@ -111,10 +100,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
     attachScopeMode,
     setAttachScopeMode,
     totalFilesCount,
-    hasEmbeddingMismatches,
     model,
-    filesDropdownOpen,
-    setFilesDropdownOpen,
     chatInputValue,
     setChatInputValue,
     setRephraseGlow,
@@ -137,7 +123,6 @@ export function SessionToolbar(props: SessionToolbarProps) {
   } = props;
 
   // Toolbar-local state
-  const filesMenuRef = useRef<HTMLDivElement>(null);
   const voiceRecordRef = useRef<VoiceRecordButtonRef>(null);
   const [recording, setRecording] = useState(false);
   const [isSettingsExiting] = useState(false);
@@ -216,116 +201,6 @@ export function SessionToolbar(props: SessionToolbarProps) {
                     }
                   }}
                 />
-              )}
-
-              {!isMobile && totalFilesCount > 0 && (
-                <Dropdown
-                  open={filesDropdownOpen}
-                  onOpenChange={(_, isOpen) => {
-                    setFilesDropdownOpen(isOpen);
-                    if (isOpen) {
-                      setTimeout(() => {
-                        filesMenuRef.current?.focus();
-                      }, 100);
-                    }
-                  }}
-                >
-                  <Tooltip title="Session Files" placement="top">
-                    <MenuButton
-                      variant="outlined"
-                      sx={{
-                        display: 'flex',
-                        borderRadius: '6px',
-                        p: 0,
-                        ...fixedIconSize,
-                      }}
-                      data-testid="session-files-btn"
-                    >
-                      <Box
-                        sx={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          width: '100%',
-                          height: '100%',
-                          p: 0,
-                        }}
-                      >
-                        <FileViewerIcon
-                          fill={sessionTheme[mode === 'dark' ? 'dark' : 'light'].iconFill}
-                          width={14}
-                          height={14}
-                          style={{
-                            position: 'absolute',
-                            top: '50%',
-                            left: '50%',
-                            transform: 'translate(-50%, -50%)',
-                          }}
-                        />
-                        <Box
-                          sx={{
-                            position: 'absolute',
-                            top: -6,
-                            right: -6,
-                            backgroundColor: hasEmbeddingMismatches ? red[400] : brand[800],
-                            color: 'white',
-                            borderRadius: '50%',
-                            width: '20px',
-                            height: '20px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '11px',
-                            fontWeight: 'bold',
-                            minWidth: '20px',
-                          }}
-                        >
-                          {totalFilesCount}
-                        </Box>
-                      </Box>
-                    </MenuButton>
-                  </Tooltip>
-                  <Menu
-                    ref={filesMenuRef}
-                    placement="top-end"
-                    autoFocus
-                    sx={{
-                      zIndex: 1400,
-                      minWidth: '400px',
-                      maxHeight: '400px',
-                      overflow: 'auto',
-                      '--List-padding': '0px',
-                      backgroundColor: 'background.panel',
-                      position: 'relative',
-                    }}
-                  >
-                    <Box
-                      sx={{
-                        position: 'sticky',
-                        top: 0,
-                        display: 'flex',
-                        justifyContent: 'flex-end',
-                        pt: 1,
-                        px: 1,
-                        zIndex: 10,
-                      }}
-                    >
-                      <IconButton
-                        aria-label={t('a11y.close_files', 'Close files')}
-                        size="sm"
-                        variant="plain"
-                        color="neutral"
-                        onClick={() => setFilesDropdownOpen(false)}
-                        data-testid="close-files-dropdown"
-                      >
-                        <Close sx={{ fontSize: '1rem' }} />
-                      </IconButton>
-                    </Box>
-                    <Box sx={{ p: 1 }}>
-                      <FilesSection model={model} />
-                    </Box>
-                  </Menu>
-                </Dropdown>
               )}
 
               <AdvancedAISettings
