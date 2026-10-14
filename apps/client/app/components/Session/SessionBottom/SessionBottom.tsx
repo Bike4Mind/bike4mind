@@ -69,7 +69,7 @@ import { LexicalChatInput, LexicalChatInputRef } from '../LexicalChatInput';
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
 import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import { dismissCreditNudge, isCreditNudgeDismissed } from '../creditNudgeDismissal';
-import { NoModelsWarning, CreditsWarning, LowCreditsWarning } from '../SessionWarnings';
+import { noModelsPlaceholder, NoModelsPlaceholder, CreditsWarning, LowCreditsWarning } from '../SessionWarnings';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { getComposerCreditUi } from './composerCreditUi';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
@@ -189,6 +189,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const { data: modelInfo } = useModelInfo();
   const { accessibleModels, isLoading: isModelsLoading, isModelsError, refetchModels } = useAccessibleModels();
   const hasModels = !!accessibleModels && accessibleModels.length > 0;
+  // No model to send with: the placeholder says so instead of inviting a message.
+  const noModels = !isModelsLoading && !hasModels;
 
   // Keeps enabledMcpServers in sync with the database (init + stale-server cleanup)
   useMcpServerSync();
@@ -659,11 +661,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   position: 'relative',
                 }}
               >
-                <NoModelsWarning
-                  show={!isModelsLoading && (!accessibleModels || accessibleModels.length === 0)}
-                  loadError={isModelsError}
-                  onRetry={() => void refetchModels()}
-                />
                 {contextUsage && (
                   <ContextUsageWarning
                     show={showContextWarning}
@@ -803,7 +800,14 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         onChange={handleInputChange}
                         onSubmit={handleEditorSubmit}
                         onPaste={handlePaste}
-                        placeholder={`${t('session.typeYourMessage')}...`}
+                        placeholder={
+                          noModels ? noModelsPlaceholder(isModelsError) : `${t('session.typeYourMessage')}...`
+                        }
+                        placeholderContent={
+                          noModels ? (
+                            <NoModelsPlaceholder loadError={isModelsError} onRetry={() => void refetchModels()} />
+                          ) : undefined
+                        }
                         agents={lexicalAgents}
                       />
 

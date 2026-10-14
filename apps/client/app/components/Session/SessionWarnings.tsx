@@ -1,78 +1,60 @@
-import { Box, Button, Divider, IconButton, Typography, useTheme } from '@mui/joy';
-import { keyframes } from '@mui/system';
+import { Box, Button, Divider, IconButton, Typography } from '@mui/joy';
+import type { ReactNode } from 'react';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
-import BlockRoundedIcon from '@mui/icons-material/BlockRounded';
 import { CreditOfferActions } from './CreditOfferActions';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 
-const fadeIn = keyframes`
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-`;
+const NO_MODELS_COPY = {
+  denied: {
+    title: "You don't have access to any AI models.",
+    description: 'Please contact your administrator to request the appropriate permissions.',
+  },
+  loadError: {
+    title: "Couldn't load AI models.",
+    description: 'Check your connection and try again.',
+  },
+};
 
-interface NoModelsWarningProps {
-  show: boolean;
-  /** The model list failed to load - a transient fault, not a permissions problem. */
-  loadError?: boolean;
-  onRetry?: () => void;
+/** The no-models notice as one sentence, for the editor's aria-placeholder. */
+export function noModelsPlaceholder(loadError: boolean): string {
+  const copy = loadError ? NO_MODELS_COPY.loadError : NO_MODELS_COPY.denied;
+  return `${copy.title} ${copy.description}`;
 }
 
-export function NoModelsWarning({ show, loadError = false, onRetry }: NoModelsWarningProps) {
-  const theme = useTheme();
-  const isDarkMode = theme.palette.mode === 'dark';
-
-  if (!show) return null;
-
+/**
+ * What the composer shows in place of its placeholder when there is no model to send with: a red
+ * line and a description under it, inside the box rather than a banner over it. A failed load
+ * gets Retry beside the text.
+ */
+export function NoModelsPlaceholder({ loadError, onRetry }: { loadError: boolean; onRetry?: () => void }) {
+  const copy = loadError ? NO_MODELS_COPY.loadError : NO_MODELS_COPY.denied;
   return (
-    <Box
-      data-testid="session-no-models-warning"
-      sx={{
-        top: '15px',
-        left: '0',
-        fontSize: '12px',
-        position: 'absolute',
-        width: '100%',
-        height: '100%',
-        backgroundColor: theme.palette.background.surface2,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        zIndex: 1000,
-        px: 1.5,
-        animation: `${fadeIn} 0.25s ease-in`,
-      }}
-    >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        <BlockRoundedIcon
-          sx={{
-            fontSize: '22px',
-            color: isDarkMode ? 'danger.400' : 'danger.500',
-            flexShrink: 0,
-          }}
-        />
-        <Box>
-          <Typography
-            data-testid="no-models-warning-text"
-            fontSize="12px"
-            fontWeight="bold"
-            sx={{ color: isDarkMode ? 'danger.400' : 'danger.500' }}
-          >
-            {loadError ? <>Couldn&apos;t load AI models.</> : <>You don&apos;t have access to any AI models.</>}
-          </Typography>
-          <Typography fontSize="10px" sx={{ color: 'text.secondary' }}>
-            {loadError
-              ? 'Check your connection and try again.'
-              : 'Please contact your administrator to request the appropriate permissions.'}
-          </Typography>
-        </Box>
+    <Box data-testid="session-no-models-placeholder" sx={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+      <Box>
+        <Typography
+          data-testid="no-models-warning-text"
+          sx={theme => ({
+            fontSize: '13px',
+            fontWeight: 600,
+            lineHeight: 1.4,
+            color: theme.palette.mode === 'dark' ? theme.vars.palette.danger[400] : theme.vars.palette.danger[500],
+          })}
+        >
+          {copy.title}
+        </Typography>
+        <Typography sx={{ fontSize: '12px', lineHeight: 1.4, color: 'text.tertiary' }}>{copy.description}</Typography>
       </Box>
       {loadError && onRetry && (
-        <Button size="sm" variant="soft" color="danger" onClick={onRetry} data-testid="no-models-retry-btn">
+        <Button
+          size="sm"
+          variant="soft"
+          color="danger"
+          onClick={onRetry}
+          data-testid="no-models-retry-btn"
+          // The editor placeholder this sits in ignores the pointer; the button must not.
+          sx={{ pointerEvents: 'auto', flexShrink: 0 }}
+        >
           Retry
         </Button>
       )}
@@ -82,19 +64,23 @@ export function NoModelsWarning({ show, loadError = false, onRetry }: NoModelsWa
 
 interface CreditsWarningProps {
   show: boolean;
+  /** Replaces the account-aware CreditOfferActions, e.g. to preview one kind of account. */
+  actions?: ReactNode;
 }
 
 interface LowCreditsWarningProps {
   show: boolean;
   currentCredits: number;
   onDismiss: () => void;
+  /** Replaces the account-aware CreditOfferActions, e.g. to preview one kind of account. */
+  actions?: ReactNode;
 }
 
 /**
  * Low but not out: an in-flow banner above the message box, so typing is never blocked. Dismissal
  * is the caller's to remember (see creditNudgeDismissal).
  */
-export function LowCreditsWarning({ show, currentCredits, onDismiss }: LowCreditsWarningProps) {
+export function LowCreditsWarning({ show, currentCredits, onDismiss, actions }: LowCreditsWarningProps) {
   if (!show) return null;
 
   return (
@@ -130,7 +116,7 @@ export function LowCreditsWarning({ show, currentCredits, onDismiss }: LowCredit
         </Box>
       </Box>
       <Box data-testid="low-credits-warning-actions" display="flex" gap={1.5} alignItems="center">
-        <CreditOfferActions moment="low" />
+        {actions ?? <CreditOfferActions moment="low" />}
         <IconButton
           data-testid="low-credits-warning-dismiss"
           aria-label="Dismiss low credits notice"
@@ -152,7 +138,7 @@ export function LowCreditsWarning({ show, currentCredits, onDismiss }: LowCredit
  * sits above the toolbar, divided from it, and says what happened and what to
  * do in the same calm register as the rest of the composer.
  */
-export function CreditsWarning({ show }: CreditsWarningProps) {
+export function CreditsWarning({ show, actions }: CreditsWarningProps) {
   if (!show) return null;
 
   return (
@@ -185,7 +171,7 @@ export function CreditsWarning({ show }: CreditsWarningProps) {
           </Typography>
         </Box>
         <Box data-testid="credits-warning-actions" sx={{ flexShrink: 0 }}>
-          <CreditOfferActions moment="out" />
+          {actions ?? <CreditOfferActions moment="out" />}
         </Box>
       </Box>
       <Divider />

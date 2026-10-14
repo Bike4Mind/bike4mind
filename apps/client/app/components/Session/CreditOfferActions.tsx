@@ -8,7 +8,7 @@ import { isCancellableSubscriptionStatus } from '@client/lib/subscriptions/types
 import { getBrandName } from '@client/config/general';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { SubscribeButton, SessionCreditsButton } from './SessionCreditsButtons';
-import { useProCreditOffer } from './useProCreditOffer';
+import { useProCreditOffer, type ProCreditOffer } from './useProCreditOffer';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -58,24 +58,24 @@ interface CreditOfferActionsProps {
   moment: 'low' | 'out';
 }
 
-/**
- * Remediation actions for the low-credit and out-of-credits moments. Personal accounts get the
- * Pro plan as the one primary action and a credit pack as the quieter alternative (subscribers
- * get only the pack); org members cannot self-purchase (see CreditsModal's canPurchaseCredits), so they get an Ask your admin action.
- */
-export function CreditOfferActions({ moment }: CreditOfferActionsProps) {
-  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
-  const offer = useProCreditOffer();
-  const isOrgAccount = !!selectedAccount && !selectedAccount.personal;
-  const subscriptions = useGetSubscriptions({ enabled: !isOrgAccount });
-  // Same "has a plan" test CreditsModal uses; a subscriber is offered a top-up, never the plan they hold.
-  const hasPlan = (subscriptions.data ?? []).some(sub => isCancellableSubscriptionStatus(sub.status));
+/** Which remediation the account gets; see CreditOfferActions for how it is decided. */
+export type CreditOfferKind =
+  { kind: 'org'; organizationId: string } | { kind: 'subscriber' } | { kind: 'unsubscribed' };
 
-  if (isOrgAccount) {
-    return <AskAdminButton organizationId={selectedAccount.id} />;
+/**
+ * The actions for one kind of account, with no data of its own beyond the org lookup inside Ask
+ * your admin - so a preview can render every kind side by side.
+ */
+export function CreditOfferActionsView({
+  moment,
+  account,
+  offer,
+}: CreditOfferActionsProps & { account: CreditOfferKind; offer: ProCreditOffer | null }) {
+  if (account.kind === 'org') {
+    return <AskAdminButton organizationId={account.organizationId} />;
   }
 
-  if (hasPlan) {
+  if (account.kind === 'subscriber') {
     return (
       <Box data-testid="credit-offer-actions" sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
         <SessionCreditsButton label={moment === 'low' ? 'Add Credits' : 'Buy a credit pack'} />
@@ -97,4 +97,25 @@ export function CreditOfferActions({ moment }: CreditOfferActionsProps) {
       )}
     </Box>
   );
+}
+
+/**
+ * Remediation actions for the low-credit and out-of-credits moments. Personal accounts get the
+ * Pro plan as the one primary action and a credit pack as the quieter alternative (subscribers
+ * get only the pack); org members cannot self-purchase (see CreditsModal's canPurchaseCredits), so they get an Ask your admin action.
+ */
+export function CreditOfferActions({ moment }: CreditOfferActionsProps) {
+  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
+  const offer = useProCreditOffer();
+  const isOrgAccount = !!selectedAccount && !selectedAccount.personal;
+  const subscriptions = useGetSubscriptions({ enabled: !isOrgAccount });
+  // Same "has a plan" test CreditsModal uses; a subscriber is offered a top-up, never the plan they hold.
+  const hasPlan = (subscriptions.data ?? []).some(sub => isCancellableSubscriptionStatus(sub.status));
+
+  const account: CreditOfferKind = isOrgAccount
+    ? { kind: 'org', organizationId: selectedAccount.id }
+    : hasPlan
+      ? { kind: 'subscriber' }
+      : { kind: 'unsubscribed' };
+  return <CreditOfferActionsView moment={moment} account={account} offer={offer} />;
 }

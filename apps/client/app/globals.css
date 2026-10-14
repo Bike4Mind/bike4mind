@@ -82,6 +82,18 @@ body {
   z-index: 0;  /* Ensure it stays behind content */
 }
 
+/* Custom placeholder content (e.g. NoModelsPlaceholder) brings its own colours and sizes. */
+.lexical-placeholder--custom {
+  opacity: 1;
+}
+
+/* The placeholder is absolute, so the editor would stay one line tall and the two-line
+   NoModelsPlaceholder (13px + 12px at line-height 1.4 = 35px, plus the 4px top padding) would spill
+   into the gap above the toolbar. Keep in sync with NoModelsPlaceholder in SessionWarnings. */
+.lexical-chat-input--custom-placeholder {
+  min-height: 39px;
+}
+
 /* Inline code styling - matches chat history */
 /* This class is applied via Lexical theme to text nodes with 'code' format */
 .lexical-chat-input .lexical-inline-code {
