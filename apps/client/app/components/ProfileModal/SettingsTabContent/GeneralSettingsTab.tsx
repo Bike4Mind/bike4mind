@@ -24,6 +24,8 @@ import LanguageSelector from '@client/app/components/LanguageSelector';
 import { useTranslation } from 'react-i18next';
 import VoicePreferenceSection from './VoicePreferenceSection';
 import ActiveSessionsSection from './ActiveSessionsSection';
+import PasskeysSection from './PasskeysSection';
+import TrustedDevicesSection from './TrustedDevicesSection';
 import ApprovedAppsSection from './ApprovedAppsSection';
 import DocxTemplateSection from './DocxTemplateSection';
 import { DeleteAllKnowledgeFilesConfirm, DeleteAllNotebooksConfirm } from './DeleteAllConfirmModals';
@@ -458,6 +460,8 @@ const GeneralSettingsTab = () => {
             </Grid>
           </Grid>
 
+          <PasskeysSection enabled={!!mfaStatus?.enabled} />
+          <TrustedDevicesSection enabled={!!mfaStatus?.enabled} />
           <ActiveSessionsSection />
           <ApprovedAppsSection />
         </SectionContainer>

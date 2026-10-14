@@ -21,8 +21,10 @@ vi.mock('@client/app/hooks/data/settings', () => ({
   useSettingsFromServer: () => ({ isLoading: true }),
   useExperimentalFeatureSettings: () => ({ data: undefined }),
 }));
+let mfaEnabled = false;
+
 vi.mock('@client/app/hooks/data/mfa', () => ({
-  useMFAStatus: () => ({ data: undefined }),
+  useMFAStatus: () => ({ data: mfaEnabled ? { enabled: true } : undefined }),
   useSetupMFA: () => mutation,
   useVerifyMFASetup: () => mutation,
   useCancelMFASetup: () => mutation,
@@ -52,6 +54,16 @@ vi.mock('@/app/components/ProfileModal/NotebookCurationModal', () => ({ default:
 vi.mock('@/app/components/ProfileModal/ImportHistoryJobsList', () => ({ default: () => null }));
 vi.mock('./VoicePreferenceSection', () => ({ default: () => null }));
 vi.mock('./ActiveSessionsSection', () => ({ default: () => null }));
+vi.mock('./PasskeysSection', () => ({
+  default: ({ enabled }: { enabled: boolean }) => (
+    <div data-testid="passkeys-section-stub" data-enabled={`${enabled}`} />
+  ),
+}));
+vi.mock('./TrustedDevicesSection', () => ({
+  default: ({ enabled }: { enabled: boolean }) => (
+    <div data-testid="trusted-devices-section-stub" data-enabled={`${enabled}`} />
+  ),
+}));
 vi.mock('./ApprovedAppsSection', () => ({ default: () => null }));
 vi.mock('./DocxTemplateSection', () => ({ default: () => null }));
 vi.mock('../ExperimentalFeatureToggle', () => ({ default: () => null }));
@@ -63,6 +75,24 @@ const renderTab = () =>
       <GeneralSettingsTab />
     </CssVarsProvider>
   );
+
+describe('GeneralSettingsTab MFA sections', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mfaEnabled = false;
+  });
+
+  it.each(['passkeys-section-stub', 'trusted-devices-section-stub'])('mounts %s, disabled while MFA is off', testId => {
+    renderTab();
+    expect(screen.getByTestId(testId).getAttribute('data-enabled')).toBe('false');
+  });
+
+  it.each(['passkeys-section-stub', 'trusted-devices-section-stub'])('enables %s once MFA is on', testId => {
+    mfaEnabled = true;
+    renderTab();
+    expect(screen.getByTestId(testId).getAttribute('data-enabled')).toBe('true');
+  });
+});
 
 describe('GeneralSettingsTab danger zone', () => {
   beforeEach(() => {
