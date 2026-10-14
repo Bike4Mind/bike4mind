@@ -1969,6 +1969,36 @@ export interface components {
      * @example {
      *       "data": [
      *         {
+     *           "id": "claude-sonnet-5",
+     *           "name": "Claude Sonnet 5",
+     *           "type": "text",
+     *           "backend": "anthropic",
+     *           "description": null,
+     *           "context_window": 1000000,
+     *           "max_output_tokens": 128000,
+     *           "supports_streaming": true,
+     *           "supports_thinking": true,
+     *           "reasons_within_output_budget": true,
+     *           "reasoning_efforts": [
+     *             "none",
+     *             "minimal",
+     *             "low",
+     *             "medium",
+     *             "high",
+     *             "xhigh"
+     *           ],
+     *           "supports_tools": true,
+     *           "supports_vision": true,
+     *           "deprecation_date": null,
+     *           "replaced_by": null,
+     *           "image": null,
+     *           "credits_per_1m_tokens": {
+     *             "input": 6000,
+     *             "output": 30000,
+     *             "cached_input": 600
+     *           }
+     *         },
+     *         {
      *           "id": "gpt-image-1",
      *           "name": "GPT Image 1",
      *           "type": "image",
@@ -1978,6 +2008,8 @@ export interface components {
      *           "max_output_tokens": 0,
      *           "supports_streaming": false,
      *           "supports_thinking": false,
+     *           "reasons_within_output_budget": false,
+     *           "reasoning_efforts": [],
      *           "supports_tools": false,
      *           "supports_vision": false,
      *           "deprecation_date": null,
@@ -2043,6 +2075,10 @@ export interface components {
         max_output_tokens: number;
         supports_streaming: boolean;
         supports_thinking: boolean;
+        /** @description Whether reasoning tokens are spent inside `max_output_tokens` on every turn. When true, a small `max_tokens` can be used up by reasoning alone and return an empty reply, so leave room above the answer you expect. */
+        reasons_within_output_budget: boolean;
+        /** @description The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer. */
+        reasoning_efforts: ('none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh')[];
         supports_tools: boolean;
         supports_vision: boolean;
         /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
