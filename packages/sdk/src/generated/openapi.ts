@@ -5824,7 +5824,7 @@ export interface operations {
           'text/event-stream': components['schemas']['createCompletionResponse200'];
         };
       };
-      /** @description Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`). */
+      /** @description Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), `deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` naming a tool not in `tools`, or carrying no string `tool_name`). */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

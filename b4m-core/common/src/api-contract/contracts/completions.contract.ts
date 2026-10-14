@@ -88,7 +88,7 @@ export const createCompletionContract = defineEndpoint({
         'are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model ' +
         'that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), ' +
         '`deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` ' +
-        'naming a tool not in `tools`).',
+        'naming a tool not in `tools`, or carrying no string `tool_name`).',
       schema: CompletionsBadRequestErrorSchema,
     },
     413: { description: 'Request body over 25 MB.', schema: ApiErrorSchema },
