@@ -6,17 +6,27 @@ import {
   userRepository,
   friendshipRepository,
   creditTransactionRepository,
-  withTransaction,
   TelemetryAuditLogModel,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
-import { ApiKeyScope, ForbiddenError, redactUserSecretsForSelf } from '@bike4mind/common';
+import { commitWithSessionEnd, type SessionEndReason } from '@server/auth/endUserSessions';
+import {
+  ApiKeyScope,
+  ForbiddenError,
+  redactUserSecretsForSelf,
+  selfUserProfileResponseSchema,
+} from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@server/utils/ip';
 import * as z from 'zod';
 
 const idParamSchema = z.object({ id: z.string() });
+
+const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
+  ignoredFields: z.array(z.string()).optional(),
+});
 
 async function getPreviousConsentLevel(
   userId: string,
@@ -93,6 +103,27 @@ async function handleTelemetryConsentChange(
   }
 }
 
+type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0] & {
+  isAdmin?: boolean;
+  email?: string | null;
+};
+
+/**
+ * Why an admin edit must sign the target out everywhere, if it must. Entering a blocked state wins
+ * so the audit names the strongest cause when one edit does several things.
+ */
+function adminEditSessionEndReason(
+  passwordSet: boolean,
+  before: AccountStateSnapshot | null,
+  after: AccountStateSnapshot | null
+): SessionEndReason | undefined {
+  if (!before || !after) return undefined;
+  if (userService.entersBlockedState(before, after)) return 'account_blocked';
+  if (passwordSet) return 'password_changed';
+  if (after.email !== before.email) return 'email_changed';
+  return undefined;
+}
+
 const handler = baseApi().put(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const { id: userId } = idParamSchema.parse(req.query);
@@ -152,17 +183,31 @@ const handler = baseApi().put(
         : undefined;
 
       req.logger.updateMetadata({ body: req.body });
-      await withTransaction(() =>
-        userService.adminUpdateUser(currentUser.id, body, {
-          db: {
-            users: userRepository,
-            organizations: Organization,
-            friendship: friendshipRepository,
-            userApiKeys: userApiKeyRepository,
-            // Audits admin `currentCredits` changes as CreditTransactions.
-            creditTransactions: creditTransactionRepository,
-          },
-        })
+      await commitWithSessionEnd(
+        req,
+        async () => {
+          // Read inside the transaction so the reason sees the state the write saw; an
+          // outside read can be stale by the time the write commits.
+          const snapshot = (await User.findById(userId)
+            .select('isAdmin email isBanned disputePending moderation')
+            .lean()) as AccountStateSnapshot | null;
+          const updated = await userService.adminUpdateUser(currentUser.id, body, {
+            db: {
+              users: userRepository,
+              organizations: Organization,
+              friendship: friendshipRepository,
+              userApiKeys: userApiKeyRepository,
+              // Audits admin `currentCredits` changes as CreditTransactions.
+              creditTransactions: creditTransactionRepository,
+            },
+          });
+          return { snapshot, updated };
+        },
+        // adminUpdateUser returns the user as written, read inside the same transaction.
+        ({ snapshot, updated }) => {
+          const reason = adminEditSessionEndReason(typeof body.password === 'string', snapshot, updated);
+          return reason && { userId, reason, actorUserId: currentUser.id !== userId ? currentUser.id : undefined };
+        }
       );
 
       // Log consent change only after successful update
@@ -179,7 +224,11 @@ const handler = baseApi().put(
       });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.
-      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
+      return respond(
+        res,
+        updateUserResponseSchema.nullable(),
+        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+      );
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
@@ -197,11 +246,21 @@ const handler = baseApi().put(
         ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
         : undefined;
 
-      await userService.updateUser(userId, body, {
-        db: {
-          users: userRepository,
-        },
-      });
+      const update = () =>
+        userService.updateUser(userId, body, {
+          db: {
+            users: userRepository,
+          },
+        });
+      // Only a password change needs the transaction; ordinary profile and preference saves skip it.
+      // The service treats `""` as a password to write (it only skips undefined/null), so the gate
+      // matches that rule rather than truthiness - otherwise an empty-string password changes the
+      // credential without ending the sessions minted under it.
+      if (typeof body.password === 'string') {
+        await commitWithSessionEnd(req, update, () => ({ userId, reason: 'password_changed' }));
+      } else {
+        await update();
+      }
 
       // Log consent change only after successful update
       if (incomingTelemetryLevel) {
@@ -214,7 +273,11 @@ const handler = baseApi().put(
       const safeUser = redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'] });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.
-      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
+      return respond(
+        res,
+        updateUserResponseSchema.nullable(),
+        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+      );
     }
   })
 );

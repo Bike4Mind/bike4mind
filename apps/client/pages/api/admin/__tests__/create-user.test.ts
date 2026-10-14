@@ -100,4 +100,19 @@ describe('admin/create-user', () => {
       expect.any(Object)
     );
   });
+
+  it('rejects a username outside the allowed characters with the rules message', async () => {
+    await expect(
+      runHandler(makeReq({ username: '<b>x</b>', email: 'x@example.com', name: 'X' }), makeRes())
+    ).rejects.toThrow("username: Usernames can contain letters, numbers, spaces and . _ - ' (up to 64 characters).");
+    expect(mockCreateUser).not.toHaveBeenCalled();
+  });
+
+  it('passes the username on trimmed', async () => {
+    mockCreateUser.mockResolvedValue({ id: 'u3', email: 'trim@example.com', username: 'Trim Me' });
+
+    await runHandler(makeReq({ username: '  Trim Me ', email: 'trim@example.com', name: 'Trim' }), makeRes());
+
+    expect(mockCreateUser).toHaveBeenCalledWith(expect.objectContaining({ username: 'Trim Me' }), expect.any(Object));
+  });
 });

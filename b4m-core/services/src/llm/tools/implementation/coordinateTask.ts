@@ -10,7 +10,11 @@ import type { ICompletionBackend, ICompletionOptionTools, ApiKeyTable } from '@b
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import type { ModelInfo } from '@bike4mind/common';
 import { ServerSubagentOrchestrator } from '../../agents/ServerSubagentOrchestrator';
-import type { ServerSubagentTracker, SubagentHandoffSignal } from '../../agents/ServerSubagentOrchestrator';
+import type {
+  ServerSubagentTracker,
+  SubagentHandoffSignal,
+  SubagentToolPermissions,
+} from '../../agents/ServerSubagentOrchestrator';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
 import { isMemberCreditCapError } from '../../../creditService';
 
@@ -165,6 +169,13 @@ export interface CoordinateTaskToolDeps {
    * coordinator agent in-process; see `ServerOrchestratorDeps.checkMemberCreditCap`.
    */
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
+
+  /**
+   * The parent run's tool-permission lists, forwarded to the coordinator's orchestrator;
+   * see `ServerOrchestratorDeps.toolPermissions`. DAG nodes inherit the same lists through
+   * their execution rows (`makeDagDispatcher` in apps/workers).
+   */
+  toolPermissions?: SubagentToolPermissions;
 }
 
 /**
@@ -232,6 +243,7 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         handoffSignal: deps.subagentHandoffSignal,
         optInTools: deps.optInTools,
         checkMemberCreditCap: deps.checkMemberCreditCap,
+        toolPermissions: deps.toolPermissions,
       });
 
       try {

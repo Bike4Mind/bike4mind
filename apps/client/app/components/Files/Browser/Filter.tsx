@@ -6,6 +6,7 @@ import { Box, Input, Option, Select } from '@mui/joy';
 import { debounce } from 'lodash';
 import { FC, useState } from 'react';
 import { FILE_TYPE_OPTIONS } from './constants';
+import GeneratedFilterToggle, { withGeneratedFilter } from './GeneratedFilterToggle';
 
 interface FileBrowserFilterProps {
   value?: ISearchFabFilesParams;
@@ -34,6 +35,10 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
     });
   };
 
+  const handleGeneratedChange = (generated: boolean) => {
+    onChange?.(withGeneratedFilter(value, generated));
+  };
+
   return (
     <Box className="file-browser-filter-container" sx={{ display: 'flex', gap: 1, flex: '1', alignItems: 'center' }}>
       <Input
@@ -55,6 +60,7 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
         sx={theme => ({
           flexGrow: 1,
           width: '70%',
+          minWidth: 0,
           minHeight: '32px',
           boxShadow: 'none',
           fontSize: '14px',
@@ -89,6 +95,8 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
         indicator={<KeyboardArrowDownIcon sx={{ fontSize: 10 }} />}
         sx={{
           width: '150px',
+          // The search input absorbs a narrow row; shrinking this instead cuts the selected type to its arrow.
+          flexShrink: 0,
           height: '32px',
           minHeight: '32px',
           paddingTop: 0,
@@ -114,6 +122,7 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
           </Option>
         ))}
       </Select>
+      <GeneratedFilterToggle active={value?.filters?.generated === true} onChange={handleGeneratedChange} />
     </Box>
   );
 };

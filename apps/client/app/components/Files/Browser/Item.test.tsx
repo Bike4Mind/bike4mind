@@ -15,6 +15,7 @@ import { FileBrowserInstanceProvider, FileBrowserInstanceValue } from './instanc
 // mock out the pieces that pull in unrelated context requirements
 // (react-i18next, confirmation dialogs, etc).
 vi.mock('./ItemActions', () => ({ default: () => null }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: null }),
 }));
@@ -168,5 +169,33 @@ describe('FileBrowserItem added-indicator', () => {
   it.each(['list', 'grid'] as const)('%s hides the Added badge when the file is not added', viewType => {
     renderWithInstance(viewType, new Set(['some-other-id']));
     expect(screen.queryByTestId('file-browser-item-added-badge')).toBeNull();
+  });
+});
+
+// Audio and video rows play inline through the shared MediaPlayer. Audio loads nothing until played so a long list
+// stays cheap; video loads its metadata for the poster frame. Download stays in the row's actions menu.
+describe('FileBrowserItem inline media', () => {
+  const audioFile = makeFile({ fileName: 'song.mp3', mimeType: 'audio/mpeg', fileUrl: 'https://example.com/song.mp3' });
+  const videoFile = makeFile({ fileName: 'clip.mp4', mimeType: 'video/mp4', fileUrl: 'https://example.com/clip.mp4' });
+
+  it.each(['list', 'grid'] as const)('%s plays an audio file without preloading it', viewType => {
+    renderWithProviders(<FileBrowserItem file={audioFile} viewType={viewType} />);
+    expect(screen.getByTestId('media-player-audio').getAttribute('preload')).toBe('none');
+    expect(screen.queryByTestId('media-player-download-btn')).toBeNull();
+  });
+
+  it.each(['list', 'grid'] as const)('%s plays a video file with its poster frame', viewType => {
+    renderWithProviders(<FileBrowserItem file={videoFile} viewType={viewType} />);
+    expect(screen.getByTestId('media-player-video').getAttribute('preload')).toBe('metadata');
+  });
+
+  it('renders no player for a media file with no URL', () => {
+    renderWithProviders(<FileBrowserItem file={makeFile({ mimeType: 'video/mp4' })} viewType="list" />);
+    expect(screen.queryByTestId('media-player-video')).toBeNull();
+  });
+
+  it('gives a video file its own icon', () => {
+    const { container } = render(<TestWrapper>{getFileIcon(makeFile({ mimeType: 'video/mp4' }), 48)}</TestWrapper>);
+    expect(container.querySelector('[data-testid="VideocamIcon"]')).toBeTruthy();
   });
 });

@@ -1,0 +1,190 @@
+import type { ReactNode } from 'react';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
+import { useUser } from '@client/app/contexts/UserContext';
+import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import type { IUserDocument } from '@bike4mind/common';
+import DriveFolderEstimateSummary from './DriveFolderEstimateSummary';
+
+const query = vi.hoisted(() => ({
+  current: { data: undefined, isLoading: false, isError: false } as {
+    data?: Record<string, unknown>;
+    isLoading: boolean;
+    isError: boolean;
+    error?: unknown;
+  },
+}));
+vi.mock('@client/app/hooks/data/useDriveFolderEstimate', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/hooks/data/useDriveFolderEstimate')>()),
+  useDriveFolderEstimate: () => query.current,
+}));
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+const TestWrapper = ({ children }: { children: ReactNode }) => (
+  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+);
+
+const loaded = (over: Record<string, unknown> = {}) => ({
+  data: {
+    folderId: 'F1',
+    fileCount: 12,
+    knownBytes: 3_000_000,
+    unknownSizeCount: 0,
+    overSizeLimitCount: 0,
+    unsupportedCount: 0,
+    truncated: false,
+    overCandidateCap: false,
+    maxFileSizeBytes: 100 * 1024 * 1024,
+    candidateCap: 20000,
+    ...over,
+  },
+  isLoading: false,
+  isError: false,
+});
+
+const renderSummary = () => render(<DriveFolderEstimateSummary driveFolderId="F1" />, { wrapper: TestWrapper });
+
+describe('DriveFolderEstimateSummary', () => {
+  afterEach(() => {
+    useUser.setState({ currentUser: null });
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('shows a loading line while the folder is being walked', () => {
+    query.current = { data: undefined, isLoading: true, isError: false };
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-loading')).toHaveTextContent('Estimating Drive folder...');
+  });
+
+  it('shows the file count, known bytes, unknown-size count and what will not be imported', () => {
+    query.current = loaded({ unknownSizeCount: 4, overSizeLimitCount: 2, unsupportedCount: 1 });
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-summary')).toHaveTextContent(
+      'Drive folder: 12 files, at least 3 MB (plus 4 Google files of unknown size)'
+    );
+    expect(screen.getByTestId('drive-estimate-skipped')).toHaveTextContent(
+      'Not imported: 2 over the per-file size limit, 1 of unsupported types.'
+    );
+    // No known quota: never warns.
+    expect(screen.queryByTestId('drive-estimate-worst-case-warning')).toBeNull();
+  });
+
+  it('omits the skipped line when nothing is skipped', () => {
+    query.current = loaded();
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-summary')).not.toHaveTextContent('unknown size');
+    expect(screen.queryByTestId('drive-estimate-skipped')).toBeNull();
+  });
+
+  it('flags a folder over the per-sync file cap with the worker wording', () => {
+    query.current = loaded({ fileCount: 20001, truncated: true, overCandidateCap: true });
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-over-cap')).toHaveTextContent(
+      'Split it into subfolders and connect them separately.'
+    );
+  });
+
+  it.each([
+    ['a truncated walk', loaded({ truncated: true, truncatedReason: 'deadline' })],
+    ['a failed estimate', { data: undefined, isLoading: false, isError: true }],
+  ])('says it could not estimate for %s', (_label, state) => {
+    query.current = state;
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('drive-estimate-summary')).toBeNull();
+  });
+
+  it('shows the server message when the estimate fails with a reconnect 400', () => {
+    query.current = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: {
+        isAxiosError: true,
+        response: { status: 400, data: { error: 'Google Drive access was revoked - reconnect required' } },
+      },
+    };
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-unavailable')).toHaveTextContent(
+      'Google Drive access was revoked - reconnect required'
+    );
+  });
+
+  it('asks to try again shortly when the estimate is rate limited', () => {
+    query.current = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { isAxiosError: true, response: { status: 429, data: { error: 'Too many requests' } } },
+    };
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-unavailable')).toHaveTextContent('try again shortly');
+  });
+
+  it('shows partial counts, not "could not estimate", for a truncated walk already over quota', () => {
+    // The modal blocks on these partial known bytes, so the summary must not claim it has no estimate.
+    useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 1 } as IUserDocument });
+    query.current = loaded({ truncated: true, truncatedReason: 'deadline' });
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-summary')).toHaveTextContent(
+      'Drive folder: at least 12 files, at least 3 MB'
+    );
+    expect(screen.queryByTestId('drive-estimate-unavailable')).toBeNull();
+  });
+
+  it('does not print "at least 0" for a truncated walk with no Drive bytes, even when local files are over quota', () => {
+    // The commit is over quota on the local files alone, but none of that is the folder's bytes - so
+    // there is nothing to report as "at least 0 files, at least 0 B".
+    useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 1 } as IUserDocument });
+    useDataLakeWizardStore.setState(state => ({
+      allFiles: [
+        { relativePath: 'a.txt', size: 2_000_000, type: 'text/plain', excluded: false, isDuplicate: false },
+      ] as never,
+      config: { ...state.config, conflictResolution: 'skip' },
+    }));
+    query.current = loaded({ truncated: true, truncatedReason: 'page_cap', knownBytes: 0 });
+    renderSummary();
+
+    expect(screen.getByTestId('drive-estimate-unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('drive-estimate-summary')).toBeNull();
+  });
+
+  it('warns when only the unknown-size worst case would exceed the storage limit', () => {
+    // 10 MB limit; 3 MB known fits, 3 MB + one 10 MiB export does not.
+    useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 10 } as IUserDocument });
+    query.current = loaded({ unknownSizeCount: 1 });
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-worst-case-warning')).toBeInTheDocument();
+  });
+
+  it('warns a user already over quota whose folder has only unknown-size files', () => {
+    // The modal does not block a commit with no known bytes, so this warning is the only signal.
+    useUser.setState({ currentUser: { currentStorageSize: 20_000_000, storageLimit: 10 } as IUserDocument });
+    query.current = loaded({ knownBytes: 0, unknownSizeCount: 3 });
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-worst-case-warning')).toBeInTheDocument();
+  });
+
+  it('does not warn a user already over quota whose folder brings no importable files', () => {
+    useUser.setState({ currentUser: { currentStorageSize: 20_000_000, storageLimit: 10 } as IUserDocument });
+    query.current = loaded({ knownBytes: 0, unknownSizeCount: 0, unsupportedCount: 3 });
+    renderSummary();
+    expect(screen.queryByTestId('drive-estimate-worst-case-warning')).toBeNull();
+  });
+
+  it('does not warn when the known bytes already exceed (the modal blocks instead)', () => {
+    useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 1 } as IUserDocument });
+    query.current = loaded({ unknownSizeCount: 1 });
+    renderSummary();
+    expect(screen.queryByTestId('drive-estimate-worst-case-warning')).toBeNull();
+  });
+
+  it('does not warn when the worst case fits', () => {
+    useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 100 } as IUserDocument });
+    query.current = loaded({ unknownSizeCount: 1 });
+    renderSummary();
+    expect(screen.queryByTestId('drive-estimate-worst-case-warning')).toBeNull();
+  });
+});

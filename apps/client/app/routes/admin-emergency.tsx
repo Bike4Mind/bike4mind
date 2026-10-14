@@ -6,7 +6,8 @@ import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
 import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useAccessToken } from '@client/app/hooks/useAccessToken';
+import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
+import MFAModal from '@client/app/components/common/MFAModal';
 import { api } from '@client/app/contexts/ApiContext';
 
 const AdminEmergencyPage = () => {
@@ -17,6 +18,12 @@ const AdminEmergencyPage = () => {
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
   const { currentUser, setCurrentUser } = useUser();
+  const mfaChallenge = useMfaChallenge({
+    onComplete: ({ user }) => {
+      setCurrentUser(user);
+      navigate({ to: '/admin', search: { emergency_access: 'true' } });
+    },
+  });
 
   // If already logged in as admin, redirect to admin panel
   useEffect(() => {
@@ -36,30 +43,10 @@ const AdminEmergencyPage = () => {
         password,
       });
 
-      if (response.data.success) {
-        const userData = response.data.user;
-
-        // Extract the access token from user data (embedded by the backend). The refresh token
-        // is not here - the endpoint set it as an HttpOnly cookie.
-        const { accessToken, ...userWithoutTokens } = userData;
-
-        console.log('Emergency login token extracted:', { hasAccessToken: !!accessToken });
-
-        // Store the access token in useAccessToken store (CRITICAL for API calls)
-        useAccessToken.getState().setVerifiedSession(accessToken);
-
-        // Set user context (without embedded tokens)
-        setCurrentUser(userWithoutTokens);
-
-        // Log emergency access
-        console.log('🚨 Emergency admin access used:', {
-          user: username,
-          timestamp: new Date().toISOString(),
-          userAgent: navigator.userAgent,
-        });
-
-        navigate({ to: '/admin', search: { emergency_access: 'true' } });
-      }
+      // The password is only the first factor: the session is minted once the account's
+      // own second factor is verified in the challenge below.
+      const { userId, accessToken, passkeyAvailable } = response.data;
+      await mfaChallenge.begin({ userId, mfaToken: accessToken, mode: 'verify', passkeyAvailable });
     } catch (err: any) {
       setError(err.response?.data?.message || 'Invalid credentials or not an admin user');
     } finally {
@@ -129,6 +116,7 @@ const AdminEmergencyPage = () => {
                 onChange={e => setUsername(e.target.value)}
                 placeholder="Enter admin username"
                 disabled={isLoading}
+                slotProps={{ input: { 'data-testid': 'admin-emergency-username-input' } }}
                 sx={{
                   backgroundColor: 'rgba(255, 255, 255, 0.05)',
                   border: '1px solid rgba(255, 255, 255, 0.1)',
@@ -146,6 +134,7 @@ const AdminEmergencyPage = () => {
                 onChange={e => setPassword(e.target.value)}
                 placeholder="Enter admin password"
                 disabled={isLoading}
+                slotProps={{ input: { 'data-testid': 'admin-emergency-password-input' } }}
                 endDecorator={
                   <IconButton
                     variant="plain"
@@ -179,6 +168,7 @@ const AdminEmergencyPage = () => {
               type="submit"
               loading={isLoading}
               disabled={!username || !password}
+              data-testid="admin-emergency-login-btn"
               sx={{
                 background: 'linear-gradient(45deg, #ff6b6b, #ee5a5a)',
                 '&:hover': {
@@ -206,6 +196,7 @@ const AdminEmergencyPage = () => {
           Return to normal login after resolving the emergency.
         </Typography>
       </Card>
+      <MFAModal {...mfaChallenge.modalProps} />
     </Box>
   );
 };

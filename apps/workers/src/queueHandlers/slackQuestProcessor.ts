@@ -49,7 +49,7 @@ import { getUserEntitlements } from '@server/entitlements';
 import { z } from 'zod';
 import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
-import { withLatticeTools } from './latticeChatTools';
+import { withLatticeTools } from '@server/queueHandlers/latticeChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
@@ -70,7 +70,7 @@ import {
 } from '@bike4mind/slack';
 import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { buildPendingActionButtons } from '@server/integrations/slack/pendingActionButtons';
-import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
+import { getSharedTokenizer, publishTelemetryAlertCallback } from '@server/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';

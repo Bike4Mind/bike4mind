@@ -19,6 +19,8 @@ const searchFabFilesSchema = z.object({
       type: z.enum(FAB_FILE_TYPE_FILTERS).optional(),
       shared: z.coerce.boolean().optional(), // Indicates if the user is searching for shared files
       curated: z.coerce.boolean().optional(), // Indicates if the user is searching for curated notebook files
+      // Strict, unlike the two above: z.coerce.boolean() reads the query string 'false' as true.
+      generated: z.union([z.boolean(), z.enum(['true', 'false']).transform(value => value === 'true')]).optional(),
       projectId: z.string().optional(),
       ids: z.array(z.string()).optional(),
     })
@@ -91,7 +93,7 @@ export const search = async (
   serverOptions?: SearchFabFilesServerOptions
 ) => {
   const { search = '', filters, pagination, order, options } = searchFabFilesSchema.parse(params);
-  const { tags = [], type, shared, curated } = filters || {};
+  const { tags = [], type, shared, curated, generated } = filters || {};
   const { page = 1, limit = DEFAULT_PAGE_LIMIT } = pagination || {};
   const { by = 'fileName', direction = 'asc' } = order || {};
   // Anything a client sent under a scope key was dropped by the parse above (the schema no longer
@@ -115,7 +117,7 @@ export const search = async (
   const fabFiles = await db.fabFiles.search(
     userId,
     search,
-    { tags, type, shared, curated, restrictToFileIds },
+    { tags, type, shared, curated, generated, restrictToFileIds },
     { page, limit },
     {
       by,

@@ -374,6 +374,43 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     expect(models.map(m => m.id)).toEqual(['global.anthropic.claude-sonnet-9']);
   });
 
+  it.each([
+    'deep-research-preview-04-2026',
+    'deep-research-max-preview-04-2026',
+    'gemini-2.5-computer-use-preview-10-2025',
+  ])('drops %s as needing a dedicated API, and lists its normal sibling', id => {
+    const ctx = { apiKeys: { gemini: 'gemini-key' }, isSelfHost: false, bedrockReachable: true };
+    const gemini = {
+      ...invocable,
+      vendor: 'google',
+      backend: ModelBackend.Gemini,
+      adapterFamily: 'gemini',
+      type: 'text',
+    };
+    const { models, dropped } = mergeCatalogWithDrops(
+      [],
+      [
+        catalogOnly({ ...gemini, id, name: 'Agentic' }),
+        catalogOnly({ ...gemini, id: 'gemini-9-flash', name: 'Gemini 9 Flash' }),
+      ],
+      ctx
+    );
+    expect(models.map(m => m.id)).toEqual(['gemini-9-flash']);
+    expect(dropped).toEqual([
+      {
+        modelId: id,
+        reason: 'needs a dedicated API or a mandatory tool; not callable as a plain text model',
+      },
+    ]);
+  });
+
+  it('keeps a seeded model whose id matches the dedicated-API pattern (the seeded tier skips the blocker)', () => {
+    const seed = seedModel({ id: 'o3-deep-research', name: 'o3 Deep Research' });
+    const { models, dropped } = mergeCatalogWithDrops([seed], [row({ modelId: seed.id })], NO_KEYS);
+    expect(models.map(m => m.id)).toEqual([seed.id]);
+    expect(dropped).toEqual([]);
+  });
+
   it('drops and counts a record with no adapterFamily at all', () => {
     const { adapterFamily: _omitted, ...noFamily } = invocable;
     const { models, dropped } = mergeCatalogWithDrops([], [catalogOnly(noFamily)], {

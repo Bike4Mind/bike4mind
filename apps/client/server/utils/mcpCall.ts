@@ -92,7 +92,7 @@ export const handler = async (params: any) => {
           if (!resp.ok) {
             throw new Error(`HTTP ${resp.status}: ${await resp.text().catch(() => 'no body')}`);
           }
-          const result = await resp.json();
+          const result = (await resp.json()) as { persisted?: number };
           console.log(`[RateLimit] Persisted ${result.persisted}/${rateLimitEvents.length} events for ${name}`);
         } catch (err) {
           console.error(`[RateLimit] Failed to persist events for ${name}:`, err);
