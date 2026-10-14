@@ -41,7 +41,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   // Write access, not read access. Read-accessibility admits a sharee holding only [read, share],
   // and this handler inserts and overwrites turns in the notebook - the same `Permission.update`
-  // predicate every HTTP session-write path applies (sessionCrud.ts, sessionOperations.ts).
+  // predicate every HTTP session-write path applies (sessionCrud.ts,
+  // packages/server-utils/src/utils/sessionOperations.ts).
   const writableSession = await SessionModel.findOne({
     _id: sessionId,
     ...accessibleBy(ability(user), Permission.update).ofType(SessionModel),

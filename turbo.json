@@ -126,9 +126,9 @@
         "../../packages/server-utils/src/**"
       ]
     },
-    // @bike4mind/server-utils is source-only (no build task), so ^build never hashes it and an edit
-    // there would replay a cached client result. Its source is listed as an input instead - the
-    // workers entries above carry the same glob. Package-specific config REPLACES the generic
+    // @bike4mind/server-utils is source-only (no build script), so ^build is not relied on to hash
+    // its source: an edit there must not replay a cached client result. Its source is listed as an
+    // input explicitly instead - the workers entries above carry the same glob. Package-specific config REPLACES the generic
     // entry, so dependsOn is repeated here.
     "@bike4mind/client#typecheck": {
       "dependsOn": ["codegen", "^build"],
