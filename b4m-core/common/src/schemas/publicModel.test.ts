@@ -5,6 +5,8 @@ import { CREDITS_PER_USD_COST } from '../pricing';
 import { listModelsContract } from '../api-contract/contracts/models.contract';
 import { ListModelsResponseSchema, PublicModelSchema, toPublicModel } from './publicModel';
 
+const project = (model: ModelInfo) => toPublicModel(model, { reasonsWithinOutputBudget: false, reasoningEfforts: [] });
+
 const textModel: ModelInfo = {
   id: 'gpt-4o' as ModelInfo['id'],
   type: 'text',
@@ -39,7 +41,7 @@ function imageModel(id: ImageModels): ModelInfo {
 
 describe('toPublicModel', () => {
   it('projects a text model to snake_case and drops internal catalog fields', () => {
-    const projected = toPublicModel(textModel);
+    const projected = project(textModel);
 
     expect(projected).toEqual({
       id: 'gpt-4o',
@@ -51,6 +53,8 @@ describe('toPublicModel', () => {
       max_output_tokens: 16_384,
       supports_streaming: true,
       supports_thinking: false,
+      reasons_within_output_budget: false,
+      reasoning_efforts: [],
       supports_tools: true,
       supports_vision: true,
       deprecation_date: '2027-01-01',
@@ -66,7 +70,7 @@ describe('toPublicModel', () => {
   });
 
   it('publishes the billed rate with decimals, from the base tier, honouring an explicit cache_read', () => {
-    const projected = toPublicModel({
+    const projected = project({
       ...textModel,
       pricing: {
         200_000: { input: 0.1 / 1_000_000, output: 0.4 / 1_000_000, cache_read: 0.025 / 1_000_000 },
@@ -86,7 +90,7 @@ describe('toPublicModel', () => {
     ['xAI', ModelBackend.XAI, 'grok-4.5'],
     ['a non-Claude Bedrock model', ModelBackend.Bedrock, 'moonshotai.kimi-k2-thinking'],
   ])('publishes a null cached_input on %s, whose cache reads settle at the input rate', (_label, backend, id) => {
-    const projected = toPublicModel({
+    const projected = project({
       ...textModel,
       id: id as ModelInfo['id'],
       backend,
@@ -102,7 +106,7 @@ describe('toPublicModel', () => {
   });
 
   it('publishes cached_input for Claude on Bedrock, whose cache reads settle separately', () => {
-    const projected = toPublicModel({
+    const projected = project({
       ...textModel,
       id: 'global.anthropic.claude-opus-5-5' as ModelInfo['id'],
       backend: ModelBackend.Bedrock,
@@ -116,35 +120,42 @@ describe('toPublicModel', () => {
     ['an empty pricing map', {}],
     ['an all-zero tier', { 128_000: { input: 0, output: 0 } }],
   ])('publishes null, not 0, for a text model with %s', (_label, pricing) => {
-    const projected = toPublicModel({ ...textModel, pricing });
+    const projected = project({ ...textModel, pricing });
 
     expect(projected.credits_per_1m_tokens).toBeNull();
     expect(PublicModelSchema.strict().safeParse(projected).success).toBe(true);
   });
 
   it('publishes zeros for a model that is deliberately free to run', () => {
-    const projected = toPublicModel({ ...textModel, freeToRun: true, pricing: { 0: { input: 0, output: 0 } } });
+    const projected = project({ ...textModel, freeToRun: true, pricing: { 0: { input: 0, output: 0 } } });
 
     expect(projected.credits_per_1m_tokens).toEqual({ input: 0, output: 0, cached_input: 0 });
   });
 
+  it('publishes the reasoning behaviour it is given', () => {
+    const projected = toPublicModel(textModel, { reasonsWithinOutputBudget: true, reasoningEfforts: ['low', 'high'] });
+
+    expect(projected).toMatchObject({ reasons_within_output_budget: true, reasoning_efforts: ['low', 'high'] });
+    expect(PublicModelSchema.strict().safeParse(projected).success).toBe(true);
+  });
+
   it('publishes null on image models, which are not priced per token', () => {
-    expect(toPublicModel(imageModel(ImageModels.GPT_IMAGE_1)).credits_per_1m_tokens).toBeNull();
+    expect(project(imageModel(ImageModels.GPT_IMAGE_1)).credits_per_1m_tokens).toBeNull();
   });
 
   it.each(Object.values(ImageModels))('produces a schema-valid image block for %s', id => {
-    const projected = toPublicModel(imageModel(id));
+    const projected = project(imageModel(id));
 
     expect(projected.image).not.toBeNull();
     expect(PublicModelSchema.safeParse(projected).success).toBe(true);
   });
 
   it('renames every sizing kind and its fields', () => {
-    const kinds = new Set(Object.values(ImageModels).map(id => toPublicModel(imageModel(id)).image?.sizing.kind));
+    const kinds = new Set(Object.values(ImageModels).map(id => project(imageModel(id)).image?.sizing.kind));
 
     // Guards the switch: a new ImageSizing kind must be mapped, not leak through camelCase.
     for (const kind of kinds) expect(kind).toMatch(/^[a-z_]+$/);
-    expect(toPublicModel(imageModel(ImageModels.GPT_IMAGE_2)).image?.sizing).toMatchObject({
+    expect(project(imageModel(ImageModels.GPT_IMAGE_2)).image?.sizing).toMatchObject({
       kind: 'constrained',
       auto_size: 'auto',
       constraints: { max_edge: 3840, edge_multiple: 16 },
@@ -153,13 +164,13 @@ describe('toPublicModel', () => {
 });
 
 describe('listModelsContract example', () => {
-  const example = listModelsContract.responses[200].example as { data: { image: unknown }[] };
+  const example = listModelsContract.responses[200].example as { data: { id: string; image: unknown }[] };
 
   it('matches the published response schema', () => {
     expect(ListModelsResponseSchema.safeParse(example).success).toBe(true);
   });
 
   it("advertises gpt-image-1's real image block, so the docs cannot drift from the request rules", () => {
-    expect(example.data[0].image).toEqual(toPublicModel(imageModel(ImageModels.GPT_IMAGE_1)).image);
+    expect(example.data.find(model => model.id === 'gpt-image-1')?.image).toEqual(project(imageModel(ImageModels.GPT_IMAGE_1)).image);
   });
 });
