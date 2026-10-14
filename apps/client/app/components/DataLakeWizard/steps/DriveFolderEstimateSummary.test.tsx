@@ -91,6 +91,17 @@ describe('DriveFolderEstimateSummary', () => {
     expect(screen.queryByTestId('drive-estimate-summary')).toBeNull();
   });
 
+  it('shows partial counts, not "could not estimate", for a truncated walk already over quota', () => {
+    // The modal blocks on these partial known bytes, so the summary must not claim it has no estimate.
+    useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 1 } as IUserDocument });
+    query.current = loaded({ truncated: true, truncatedReason: 'deadline' });
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-summary')).toHaveTextContent(
+      'Drive folder: at least 12 files, at least 3 MB'
+    );
+    expect(screen.queryByTestId('drive-estimate-unavailable')).toBeNull();
+  });
+
   it('warns when only the unknown-size worst case would exceed the storage limit', () => {
     // 10 MB limit; 3 MB known fits, 3 MB + one 10 MiB export does not.
     useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 10 } as IUserDocument });
