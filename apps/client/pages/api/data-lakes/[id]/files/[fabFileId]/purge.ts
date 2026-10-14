@@ -150,8 +150,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           // destruction path (single + bulk file delete, the drive-lake ingest sweep) does the
           // same; without it a purging owner's quota ratchets down with no way back but an admin
           // recalculate. The OWNER's, not the caller's - an admin may purge someone else's
-          // document. `fileSize` is already 0 unless the stored object really went, or the row was
-          // never charged (`chargedBytes`), so this can never refund bytes that are still held.
+          // document. `fileSize` is 0 unless this call removed the row and the row was charged
+          // (`chargedBytes`), so this can never refund bytes that are still held.
           if (fileSize > 0) {
             try {
               await withTransaction(async session => {
