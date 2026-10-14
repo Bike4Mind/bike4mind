@@ -3,6 +3,7 @@ import type { drive_v3 } from '@googleapis/drive';
 import {
   listFolderChildren,
   DriveListingIncompleteError,
+  MAX_LIST_PAGES,
   getFolderAccess,
   isFolder,
   isValidDriveFolderId,
@@ -132,16 +133,15 @@ describe('listFolderChildren', () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it('throws a page_cap DriveListingIncompleteError once maxPages pages still leave a nextPageToken', async () => {
-    const { drive, list } = mockDrive([
-      { files: [], nextPageToken: 'p2' },
-      { files: [], nextPageToken: 'p3' },
-    ]);
-    const err = await listFolderChildren(drive, 'FOLDER_X', { maxPages: 2 }).catch(e => e);
+  it('throws a page_cap DriveListingIncompleteError once the page cap still leaves a nextPageToken', async () => {
+    const { drive, list } = mockDrive(
+      Array.from({ length: MAX_LIST_PAGES }, (_, i) => ({ files: [], nextPageToken: `p${i + 2}` }))
+    );
+    const err = await listFolderChildren(drive, 'FOLDER_X').catch(e => e);
     expect(err).toBeInstanceOf(DriveListingIncompleteError);
     expect(err.reason).toBe('page_cap');
     expect(err.message).toMatch(/listing is not exhaustive/);
-    expect(list).toHaveBeenCalledTimes(2);
+    expect(list).toHaveBeenCalledTimes(MAX_LIST_PAGES);
   });
 
   it('throws a deadline DriveListingIncompleteError instead of fetching another page past deadlineMs', async () => {
@@ -644,9 +644,13 @@ describe('isDriveAuthError / withDriveReconnectOnAuthError', () => {
 
   it.each([
     ['a 401', gaxios(401, 'authError'), true],
+    ['a bare status field 401', { status: 401 }, true],
+    ['a stringified code 401', { code: '401' }, true],
     ['a 403 with a revoked scope', gaxios(403, 'insufficientPermissions'), true],
+    ['a 403 whose reasons sit at the top level', { code: 403, errors: [{ reason: 'insufficientPermissions' }] }, true],
     ['a per-file 403', gaxios(403, 'insufficientFilePermissions'), false],
     ['a throttle 403', gaxios(403, 'userRateLimitExceeded'), false],
+    ['a 403 with no reasons', { code: 403, errors: [] }, false],
     ['a 404', gaxios(404), false],
     ['a non-object', 'boom', false],
   ])('classifies %s', (_label, e, expected) => {

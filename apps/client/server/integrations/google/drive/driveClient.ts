@@ -152,19 +152,41 @@ export function isDriveInvalidCursorError(e: unknown): boolean {
 }
 
 /**
+ * The HTTP statuses an error could carry, from the three shapes googleapis surfaces them, as a
+ * numeric string where one was supplied. Shared by the classifiers below so they cannot disagree
+ * about what counts as a 403/404.
+ */
+function driveErrorStatuses(e: unknown): unknown[] {
+  if (typeof e !== 'object' || e === null) return [];
+  const err = e as Record<string, unknown>;
+  const response = err.response as Record<string, unknown> | undefined;
+  return [err.code, err.status, response?.status].map(raw => (typeof raw === 'string' ? Number(raw) : raw));
+}
+
+/** Does the error carry one of these `errors[].reason` values, at either shape Drive surfaces them? */
+function hasDriveErrorReason(e: unknown, reasons: Set<string>): boolean {
+  if (typeof e !== 'object' || e === null) return false;
+  const err = e as Record<string, unknown>;
+  const response = err.response as Record<string, unknown> | undefined;
+  const data = response?.data as { error?: { errors?: unknown } } | undefined;
+  return [err.errors, data?.error?.errors].some(
+    list =>
+      Array.isArray(list) &&
+      list.some(detail => {
+        const reason = (detail as { reason?: unknown } | null)?.reason;
+        return typeof reason === 'string' && reasons.has(reason);
+      })
+  );
+}
+
+/**
  * Is this error Drive confirming a file is genuinely gone (a plain 404), as opposed to a transient
  * failure (rate limit, 5xx, network blip)? getFileParents uses this to decide whether an ancestry
  * lookup failure means "this ancestor no longer exists" (safe to fold into null/no-chain) versus
  * "we couldn't tell right now" (must NOT be read the same way - see getFileParents).
  */
 export function isDriveNotFoundError(e: unknown): boolean {
-  if (typeof e !== 'object' || e === null) return false;
-  const err = e as Record<string, unknown>;
-  const response = err.response as Record<string, unknown> | undefined;
-  for (const raw of [err.code, err.status, response?.status]) {
-    if ((typeof raw === 'string' ? Number(raw) : raw) === 404) return true;
-  }
-  return false;
+  return driveErrorStatuses(e).includes(404);
 }
 
 // The 403 reasons Drive gives for a credential that may not touch one specific file. Allow-listed
@@ -175,24 +197,7 @@ const DRIVE_FILE_ACCESS_DENIED_REASONS = new Set(['insufficientFilePermissions',
 
 /** Is this error Drive refusing this credential access to one specific file (a per-file 403)? */
 export function isDriveFileAccessDeniedError(e: unknown): boolean {
-  if (typeof e !== 'object' || e === null) return false;
-  const err = e as Record<string, unknown>;
-  const response = err.response as Record<string, unknown> | undefined;
-  const data = response?.data as { error?: { errors?: unknown } } | undefined;
-
-  const is403 = [err.code, err.status, response?.status].some(
-    raw => (typeof raw === 'string' ? Number(raw) : raw) === 403
-  );
-  if (!is403) return false;
-
-  return [err.errors, data?.error?.errors].some(
-    list =>
-      Array.isArray(list) &&
-      list.some(detail => {
-        const reason = (detail as { reason?: unknown } | null)?.reason;
-        return typeof reason === 'string' && DRIVE_FILE_ACCESS_DENIED_REASONS.has(reason);
-      })
-  );
+  return driveErrorStatuses(e).includes(403) && hasDriveErrorReason(e, DRIVE_FILE_ACCESS_DENIED_REASONS);
 }
 
 // The 403 reasons Drive gives when the credential itself is no good (scopes revoked), as opposed to
@@ -201,22 +206,16 @@ const DRIVE_AUTH_403_REASONS = new Set(['authError', 'insufficientPermissions'])
 
 /** Is this error Drive rejecting the access token itself (revoked/expired grant), i.e. a reconnect? */
 export function isDriveAuthError(e: unknown): boolean {
-  if (typeof e !== 'object' || e === null) return false;
-  const err = e as Record<string, unknown>;
-  const response = err.response as Record<string, unknown> | undefined;
-  const data = response?.data as { error?: { errors?: unknown } } | undefined;
-  const statuses = [err.code, err.status, response?.status].map(raw => (typeof raw === 'string' ? Number(raw) : raw));
+  const statuses = driveErrorStatuses(e);
   if (statuses.includes(401)) return true;
-  if (!statuses.includes(403)) return false;
-  return [err.errors, data?.error?.errors].some(
-    list =>
-      Array.isArray(list) &&
-      list.some(detail => {
-        const reason = (detail as { reason?: unknown } | null)?.reason;
-        return typeof reason === 'string' && DRIVE_AUTH_403_REASONS.has(reason);
-      })
-  );
+  return statuses.includes(403) && hasDriveErrorReason(e, DRIVE_AUTH_403_REASONS);
 }
+
+/**
+ * What a revoked/expired Drive grant reads as everywhere it is surfaced. Shared with common.ts's
+ * token-refresh path (a revoked grant can surface either way) so the two cannot drift.
+ */
+export const DRIVE_RECONNECT_REQUIRED_MESSAGE = 'Google Drive access was revoked - reconnect required';
 
 /**
  * Run a user-facing Drive call, turning a token Drive rejects into a reconnect 400. Left raw, the
@@ -227,7 +226,7 @@ export async function withDriveReconnectOnAuthError<T>(call: () => Promise<T>): 
   try {
     return await call();
   } catch (e) {
-    if (isDriveAuthError(e)) throw new BadRequestError('Google Drive access was revoked - reconnect required');
+    if (isDriveAuthError(e)) throw new BadRequestError(DRIVE_RECONNECT_REQUIRED_MESSAGE);
     throw e;
   }
 }
@@ -353,7 +352,7 @@ export async function probeConnectedFolder(
 
 /**
  * Thrown by listFolderChildren when it stops before the last page: `page_cap` when the folder has
- * more than `maxPages` pages, `deadline` when the caller's `deadlineMs` passed between pages.
+ * more than MAX_LIST_PAGES pages, `deadline` when the caller's `deadlineMs` passed between pages.
  */
 export class DriveListingIncompleteError extends Error {
   constructor(
@@ -376,7 +375,7 @@ export class DriveListingIncompleteError extends Error {
 export async function listFolderChildren(
   drive: drive_v3.Drive,
   folderId: string,
-  { maxPages = MAX_LIST_PAGES, deadlineMs }: { maxPages?: number; deadlineMs?: number } = {}
+  { deadlineMs }: { deadlineMs?: number } = {}
 ): Promise<DriveFile[]> {
   // Defense-in-depth: never interpolate an unvalidated id into the query (callers should also
   // validate at their trust boundary).
@@ -427,10 +426,10 @@ export async function listFolderChildren(
     // Fail loudly rather than silently truncate: a partial answer under "the folder's children"
     // would let ingest drop files while reporting success. Throwing forces the incremental design
     // at the point it belongs (issue C).
-    if (pageToken && pages >= maxPages) {
+    if (pageToken && pages >= MAX_LIST_PAGES) {
       throw new DriveListingIncompleteError(
         'page_cap',
-        `Drive folder ${folderId} exceeded ${maxPages} pages; listing is not exhaustive`
+        `Drive folder ${folderId} exceeded ${MAX_LIST_PAGES} pages; listing is not exhaustive`
       );
     }
     if (pageToken && deadlineMs !== undefined && Date.now() >= deadlineMs) {
