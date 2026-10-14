@@ -53,6 +53,11 @@ export type RestrictionOperation = (typeof RESTRICTION_OPERATIONS)[number];
 export const RESTRICTION_SUBJECT_TYPES = ['user', 'group'] as const;
 export type RestrictionSubjectType = (typeof RESTRICTION_SUBJECT_TYPES)[number];
 
+/** Confluence page ids are numeric; anything else must never be interpolated into a request path. */
+export function isValidConfluencePageId(id: string): boolean {
+  return /^\d+$/.test(id);
+}
+
 // ============================================================================
 // Types & Interfaces
 // ============================================================================
@@ -504,6 +509,19 @@ export class ConfluenceApi {
     }
 
     return formatPageResponse(page, this.config.siteUrl);
+  }
+
+  /**
+   * Get a page's raw storage-format body with its current title and version number.
+   */
+  async getPageStorage(params: { pageId: string }): Promise<{ title: string; version: number; storage: string }> {
+    const { pageId } = params;
+    const page = await this.get<ConfluencePage>(apiPath`/pages/${pageId}`, { 'body-format': 'storage' });
+    const version = page?.version?.number;
+    if (typeof version !== 'number') {
+      throw new Error(`Unable to determine current version for page ${pageId}.`);
+    }
+    return { title: page?.title ?? '', version, storage: page?.body?.storage?.value ?? '' };
   }
 
   /**
