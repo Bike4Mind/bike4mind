@@ -3,13 +3,18 @@ import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
 import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
 
-const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount, mockSessionEnded } = vi.hoisted(() => ({
-  mockUserFindById: vi.fn(),
-  mockAdminUpdateUser: vi.fn(),
-  mockUpdateUser: vi.fn(),
-  mockCount: vi.fn(),
-  mockSessionEnded: vi.fn(),
-}));
+const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount, mockSessionEnded, txnState } = vi.hoisted(
+  () => ({
+    mockUserFindById: vi.fn(),
+    mockAdminUpdateUser: vi.fn(),
+    mockUpdateUser: vi.fn(),
+    mockCount: vi.fn(),
+    mockSessionEnded: vi.fn(),
+    // Records whether a findById read ran inside the change callback, so a test can pin the
+    // session-end snapshot to the write's own transaction instead of a stale read before it.
+    txnState: { changeRunning: false, snapshotReadInsideChange: undefined as boolean | undefined },
+  })
+);
 
 // Runs the change and the session-end decision exactly as the real helper does (its transaction
 // and revoke are covered in server/auth/endUserSessions.test.ts); a decided end is recorded.
@@ -19,7 +24,13 @@ vi.mock('@server/auth/endUserSessions', () => ({
     change: () => Promise<unknown>,
     sessionEndFor: (result: unknown) => unknown
   ) => {
-    const result = await change();
+    txnState.changeRunning = true;
+    let result: unknown;
+    try {
+      result = await change();
+    } finally {
+      txnState.changeRunning = false;
+    }
     const end = sessionEndFor(result);
     if (end) await mockSessionEnded(end);
     return result;
@@ -93,6 +104,11 @@ vi.mock('@bike4mind/database', () => ({
         // Applies the projection like Mongo would, so a field dropped from a .select() is absent.
         select: (fields: string) => {
           const keep = fields.split(' ');
+          // The session-end snapshot is the only read that asks for every block field; note
+          // whether it happened inside the change callback (the transaction) or before it.
+          if (fields === 'isAdmin email isBanned disputePending moderation') {
+            txnState.snapshotReadInsideChange = txnState.changeRunning;
+          }
           projected =
             result && typeof result === 'object'
               ? Object.fromEntries(Object.entries(result).filter(([key]) => keep.includes(key)))
@@ -147,6 +163,8 @@ beforeEach(() => {
   mockUpdateUser.mockReset().mockResolvedValue(undefined);
   mockCount.mockReset().mockResolvedValue(2);
   mockSessionEnded.mockReset().mockResolvedValue(undefined);
+  txnState.changeRunning = false;
+  txnState.snapshotReadInsideChange = undefined;
 });
 
 describe('PUT /api/users/:id/update - lockout guard', () => {
@@ -453,6 +471,16 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
 
     expect(mockSessionEnded).toHaveBeenCalledTimes(1);
     expect(mockSessionEnded).toHaveBeenCalledWith({ userId: 'target', reason, actorUserId: ADMIN.id });
+  });
+
+  it('reads the session-end snapshot inside the write, not before it', async () => {
+    // The reason has to see the state the write saw; a read before the write can be stale by the
+    // time it commits (and stays stale across a transaction retry).
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    const { promise } = run({ user: ADMIN, userId: 'target', body: { isBanned: true } });
+    await promise;
+
+    expect(txnState.snapshotReadInsideChange).toBe(true);
   });
 
   it('ends sessions once, under the account-block reason, when one admin edit does several', async () => {
