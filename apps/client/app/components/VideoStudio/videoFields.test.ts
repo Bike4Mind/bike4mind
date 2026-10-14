@@ -62,11 +62,15 @@ describe('videoCapabilityFields', () => {
   });
 
   it('offers an audio switch only where audio is optional', () => {
+    const handlers = actions();
     const optional = fieldOf(
-      videoCapabilityFields(optionalAudioModel, initialFormFor(optionalAudioModel), actions()),
+      videoCapabilityFields(optionalAudioModel, initialFormFor(optionalAudioModel), handlers),
       'audio'
     );
     expect(optional).toMatchObject({ kind: 'switch', checked: true });
+    if (optional.kind !== 'switch') throw new Error('audio is a switch');
+    optional.onChange(false);
+    expect(handlers.update).toHaveBeenCalledWith({ audio: false });
     const always = fieldOf(videoCapabilityFields(rangeModel, initialFormFor(rangeModel), actions()), 'audio');
     expect(always).toMatchObject({ kind: 'note', label: 'Audio is included.' });
   });
@@ -80,5 +84,13 @@ describe('videoCapabilityFields', () => {
     expect(handlers.update).not.toHaveBeenCalled();
     aspect.onChange('9:16');
     expect(handlers.update).toHaveBeenCalledWith({ aspectRatio: '9:16' });
+
+    handlers.update.mockClear();
+    const resolution = fieldOf(fields, 'resolution');
+    if (resolution.kind !== 'select') throw new Error('resolution is a select');
+    resolution.onChange('4k');
+    expect(handlers.update).not.toHaveBeenCalled();
+    resolution.onChange('720p');
+    expect(handlers.update).toHaveBeenCalledWith({ resolution: '720p' });
   });
 });

@@ -56,7 +56,9 @@ describe('StudioPage (video)', () => {
   it('explains that video is not enabled, and still shows past videos', () => {
     h.models = { data: [], isPending: false, isError: false };
     renderPage();
-    expect(screen.getByTestId('video-studio-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('video-studio-empty')).toHaveTextContent(
+      'Video generation is not available for your account yet.'
+    );
     expect(screen.queryByTestId('video-form-stub')).not.toBeInTheDocument();
     expect(screen.getByTestId('video-gallery-stub')).toBeInTheDocument();
   });
@@ -68,7 +70,9 @@ describe('StudioPage (video)', () => {
     unmount();
     h.models = { data: undefined, isPending: false, isError: true };
     renderPage();
-    expect(screen.getByTestId('video-studio-error')).toBeInTheDocument();
+    expect(screen.getByTestId('video-studio-error')).toHaveTextContent(
+      'Could not load the video models. Refresh to try again.'
+    );
   });
 
   it('keeps the form when a background models refetch failed', () => {
