@@ -46,9 +46,10 @@ describe('scanShell', () => {
       expect(await texts("cat <<'EOF' > out.txt\nhello\nEOF\nls")).toEqual(['cat', 'ls']);
     });
 
-    it('does not count a bare assignment, and keeps the command after one', async () => {
+    // A prefix assignment belongs to its command; a statement-level one changes every later command.
+    it('folds a prefix assignment into its command but lists a statement-level one', async () => {
       expect(await texts('FOO=1 make build')).toEqual(['make build']);
-      expect(await texts('FOO=1')).toEqual([]);
+      expect(await texts('FOO=1')).toEqual(['FOO=1']);
     });
 
     it('returns null when the script does not parse', async () => {
@@ -197,6 +198,24 @@ describe('a standing "always" on git status', () => {
   ])('does not cover %s', async command => {
     const gate = await gateAllowing('git status');
     expect(gate.coversCommands('s', await alwaysFor(command))).toBe(false);
+  });
+
+  it.each([
+    ['git status', `export GIT_CONFIG_PARAMETERS="'core.fsmonitor=/x'"; git status`],
+    ['git diff', 'export GIT_EXTERNAL_DIFF=/x; git diff'],
+    ['git diff', 'export GIT_EXTERNAL_DIFF=/x && git diff'],
+    ['git diff', 'declare -x GIT_EXTERNAL_DIFF=/x; git diff'],
+    ['git diff', 'GIT_EXTERNAL_DIFF=/x; export GIT_EXTERNAL_DIFF; git diff'],
+    ['git diff', 'set -a; GIT_EXTERNAL_DIFF=/x; git diff'],
+    ['git diff', 'A=1 B=2; git diff'],
+  ])('a standing %s does not cover an environment set earlier in the script: %s', async (allowed, command) => {
+    const gate = await gateAllowing(allowed);
+    expect(gate.coversCommands('s', await alwaysFor(command))).toBe(false);
+  });
+
+  it('still covers a chain of commands it allows', async () => {
+    const gate = await gateAllowing('git status');
+    expect(gate.coversCommands('s', await alwaysFor('git status && git status'))).toBe(true);
   });
 
   it('does not cover a package manager option off the safe list', async () => {

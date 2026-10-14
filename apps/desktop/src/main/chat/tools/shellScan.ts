@@ -106,6 +106,9 @@ function words(node: Node): string[] {
  * variable or a command substitution is skipped, as opencode does: it cannot be read off the
  * text, and a `cd` to one leaves the tracked directory where it was.
  */
+/** Nodes whose assignments are already accounted for: a command's prefix, or a flagged declaration. */
+const ASSIGNMENT_OWNERS = new Set(['command', 'declaration_command', 'variable_assignments']);
+
 export async function scanShell(
   command: string,
   startDirectory: string,
@@ -190,6 +193,18 @@ export async function scanShell(
 
     const visit = async (node: Node): Promise<void> => {
       if (node.type === 'command') return run(node);
+      // `export X=..`, `declare -x X=..` and a statement-level `X=..` set the environment every
+      // later command inherits - `GIT_CONFIG_PARAMETERS` runs code through a plain `git status` -
+      // so a script holding one is never covered by a remembered pattern.
+      if (
+        node.type === 'declaration_command' ||
+        node.type === 'variable_assignments' ||
+        (node.type === 'variable_assignment' && !ASSIGNMENT_OWNERS.has(node.parent?.type ?? ''))
+      ) {
+        commands.push({ text: node.text, always: node.text, coverable: false });
+        for (const child of node.children) if (child) await visit(child);
+        return;
+      }
       if (node.type === 'file_redirect') {
         for (const child of node.children) if (child && child.type !== 'file_descriptor') await visit(child);
         return redirect(node);
