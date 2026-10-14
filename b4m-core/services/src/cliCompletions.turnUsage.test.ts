@@ -16,7 +16,7 @@ const tieredModel = {
   },
 };
 
-const emitted: { info: CompletionInfo; fail?: boolean } = { info: {} };
+const emitted: { info: CompletionInfo; trailing?: CompletionInfo; fail?: boolean } = { info: {} };
 
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
@@ -33,6 +33,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
     currentModel: '',
     complete: vi.fn(async (_model, _messages, _options, onChunk) => {
       await onChunk(['done'], emitted.info);
+      if (emitted.trailing) await onChunk([], emitted.trailing);
       if (emitted.fail) throw new Error('client disconnected');
     }),
   })),
@@ -75,7 +76,11 @@ async function settledUsd(info: CompletionInfo): Promise<number | undefined> {
 }
 
 describe('executeCompletion - long-context tier per request', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    emitted.trailing = undefined;
+    emitted.fail = false;
+  });
 
   it('prices a tool loop request by request instead of on the summed prompt', async () => {
     const turn = { inputTokens: 80_000, outputTokens: 1_000 };
@@ -113,6 +118,14 @@ describe('executeCompletion - long-context tier per request', () => {
     expect(db.usageEvents.record).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'error', costUsd: expect.closeTo(0.516, 10) })
     );
+  });
+
+  it('keeps the latched turns when a later frame carries none', async () => {
+    // A toolStarted or artifact frame has no usage; it must not drop settlement back to the aggregates.
+    const turn = { inputTokens: 80_000, outputTokens: 1_000 };
+    emitted.trailing = { toolStarted: { name: 'search', id: 't1' } };
+    const usd = await settledUsd({ inputTokens: 240_000, outputTokens: 3_000, turnUsage: [turn, turn, turn] });
+    expect(usd).toBeCloseTo(0.516, 10);
   });
 
   it('falls back to the aggregates when the adapter reports no turns', async () => {
