@@ -39,6 +39,16 @@ import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { normalizeOpenAIFinishReason } from './stopReason';
 
+/**
+ * Billed output tokens of one xAI usage object. xAI reports reasoning tokens apart from, not inside,
+ * completion_tokens: its chat-completions reference response has 32 prompt + 9 completion + 94
+ * reasoning = 135 total_tokens. Reasoning bills at the output rate, so reading completion_tokens
+ * alone drops it. @see https://docs.x.ai/developers/rest-api-reference/inference/chat-completions
+ */
+const xaiOutputTokens = (
+  usage: { completion_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number } } | undefined | null
+): number => (usage?.completion_tokens || 0) + (usage?.completion_tokens_details?.reasoning_tokens || 0);
+
 export class XAIBackend implements ICompletionBackend {
   private _baseUrl = 'https://api.x.ai/v1';
   private _api: OpenAI;
@@ -64,11 +74,14 @@ export class XAIBackend implements ICompletionBackend {
         max_tokens: 128000,
         can_stream: true,
         pricing: {
-          // Tiered on prompt size. <= 200K: $2 / 1M in, $6 / 1M out, $0.30 / 1M cache read.
-          // > 200K: $4 / 1M in, $12 / 1M out, $0.60 / 1M cache read. Cache read is 0.15x input,
+          // Tiered on prompt size. < 200K: $2 / 1M in, $6 / 1M out, $0.30 / 1M cache read.
+          // >= 200K: $4 / 1M in, $12 / 1M out, $0.60 / 1M cache read. Cache read is 0.15x input,
           // not the 0.1x default; the docs page lists all three rates per tier.
+          // Keyed 199999, not 200000: xAI bills a prompt that REACHES 200K at the higher rate, and
+          // pricingTierForTokens picks the first key >= the prompt, so 200000 would bill exactly
+          // 200,000 tokens at the cheap tier.
           // @see https://docs.x.ai/developers/models
-          200000: { input: 2 / 1000000, output: 6 / 1000000, cache_read: 0.3 / 1000000 },
+          199999: { input: 2 / 1000000, output: 6 / 1000000, cache_read: 0.3 / 1000000 },
           500000: { input: 4 / 1000000, output: 12 / 1000000, cache_read: 0.6 / 1000000 },
         },
         can_think: true,
@@ -413,11 +426,7 @@ export class XAIBackend implements ICompletionBackend {
     if (!(response instanceof Stream)) {
       const streamedText: string[] = [];
       const responseUsage = () =>
-        usageSoFar(
-          response.usage?.prompt_tokens || 0,
-          turnCacheReads(response.usage),
-          response.usage?.completion_tokens || 0
-        );
+        usageSoFar(response.usage?.prompt_tokens || 0, turnCacheReads(response.usage), xaiOutputTokens(response.usage));
 
       // Ensure response.choices exists and has elements
       if (!response.choices || response.choices.length === 0) {
@@ -594,7 +603,7 @@ export class XAIBackend implements ICompletionBackend {
                   ...options._internal,
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
-                  accumOutputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                  accumOutputTokens: accumOutputTokens + xaiOutputTokens(response.usage),
                   accumCacheReadTokens: accumCacheReadTokens + turnCacheReads(response.usage),
                   accumTurnUsage: responseUsage().turnUsage,
                   artifactGuard,
@@ -665,7 +674,7 @@ export class XAIBackend implements ICompletionBackend {
       const streamedText: string[] = [];
       if (chunk.usage) {
         inputTokens = Math.max(inputTokens, chunk.usage?.prompt_tokens || 0);
-        outputTokens += chunk.usage?.completion_tokens || 0;
+        outputTokens += xaiOutputTokens(chunk.usage);
         // xAI reports cache hits under prompt_tokens_details.cached_tokens (OpenAI's shape).
         cachedTokensFromStream = Math.max(cachedTokensFromStream, cachedTokensFromUsage(chunk.usage));
       }
@@ -739,8 +748,7 @@ export class XAIBackend implements ICompletionBackend {
         usage: {
           prompt_tokens: inputTokens,
           completion_tokens: outputTokens,
-          // Use the cached tokens captured from streaming chunks
-          cached_prompt_tokens: cachedTokensFromStream,
+          prompt_tokens_details: { cached_tokens: cachedTokensFromStream },
         },
       };
       cacheStats = adapter.extractCacheStats(mockResponse, model);

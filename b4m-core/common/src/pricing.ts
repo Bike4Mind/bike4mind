@@ -1,4 +1,10 @@
-import { CACHE_READ_MULTIPLIER, ModelBackend, pricingTierForTokens, type ModelInfo } from './models';
+import {
+  CACHE_READ_MULTIPLIER,
+  ModelBackend,
+  PUBLISHED_CACHE_READ_BACKENDS,
+  pricingTierForTokens,
+  type ModelInfo,
+} from './models';
 import { stripBedrockRegionPrefix } from './modelCatalog';
 
 const DEFAULT_PRICE_MARGIN = 1.2;
@@ -253,13 +259,6 @@ const CACHE_READ_SETTLING_BACKENDS: ReadonlySet<string> = new Set([
   ModelBackend.Gemini,
   ModelBackend.XAI,
 ]);
-
-/**
- * Of those, the backends whose adapters forward cache reads only for a model that publishes a
- * cache_read rate (publishesCacheReadRate), since the 0.1x default is Anthropic's discount, not
- * theirs. On any other model of these backends the cached tokens stay in inputTokens.
- */
-const PUBLISHED_CACHE_READ_BACKENDS: ReadonlySet<string> = new Set([ModelBackend.Gemini, ModelBackend.XAI]);
 
 /** True when every pricing tier of `model` carries an explicit cache_read rate. */
 export const publishesCacheReadRate = (model: Pick<ModelInfo, 'pricing'> | undefined): boolean => {

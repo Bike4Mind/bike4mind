@@ -429,6 +429,8 @@ describe.each(SPECS)('$name token accumulation', spec => {
 
 interface CachedTurnUsage extends MockUsage {
   cached: number;
+  /** xAI only: completion_tokens_details.reasoning_tokens, reported apart from completion_tokens. */
+  reasoning?: number;
 }
 
 interface TurnUsageSpec {
@@ -440,6 +442,8 @@ interface TurnUsageSpec {
   build: (stream: boolean) => { backend: ICompletionBackend; setMockSequence: (s: unknown[]) => void };
   toolTurn: (stream: boolean, id: string, args: Record<string, unknown>, usage: CachedTurnUsage) => unknown;
   textTurn: (stream: boolean, text: string, usage: CachedTurnUsage) => unknown;
+  /** Visible text plus a call to an end-of-turn tool, so the loop ends without another request. */
+  endTurn: (stream: boolean, id: string, text: string, usage: CachedTurnUsage) => unknown;
 }
 
 const geminiUsage = (u: CachedTurnUsage) => ({
@@ -486,13 +490,21 @@ const geminiTurnUsageSpec: TurnUsageSpec = {
     const chunk = { candidates: [{ content: { parts: [{ text }] } }], usageMetadata: geminiUsage(usage) };
     return stream ? [chunk] : chunk;
   },
+  endTurn: (stream, _id, text, usage) => {
+    const chunk = {
+      candidates: [{ content: { parts: [{ text }, { functionCall: { name: 'finish', args: {} } }] } }],
+      usageMetadata: geminiUsage(usage),
+    };
+    return stream ? [chunk] : chunk;
+  },
 };
 
 const xaiUsage = (u: CachedTurnUsage) => ({
   prompt_tokens: u.input,
   completion_tokens: u.output,
-  total_tokens: u.input + u.output,
+  total_tokens: u.input + u.output + (u.reasoning ?? 0),
   prompt_tokens_details: { cached_tokens: u.cached },
+  completion_tokens_details: { reasoning_tokens: u.reasoning ?? 0 },
 });
 
 const xaiTurnUsageSpec: TurnUsageSpec = {
@@ -552,7 +564,52 @@ const xaiTurnUsageSpec: TurnUsageSpec = {
     const [first, last] = openaiSpec.turnWithText(text, usage) as Record<string, unknown>[];
     return [first, { ...last, usage: xaiUsage(usage) }];
   },
+  endTurn: (stream, id, text, usage) => {
+    const toolCall = { id, type: 'function', function: { name: 'finish', arguments: '{}' } };
+    if (!stream) {
+      return {
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: text, tool_calls: [toolCall] },
+            finish_reason: 'tool_calls',
+          },
+        ],
+        usage: xaiUsage(usage),
+      };
+    }
+    return [
+      { choices: [{ index: 0, delta: { content: text }, finish_reason: null }], usage: null },
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, ...toolCall }] }, finish_reason: null }], usage: null },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: xaiUsage(usage) },
+    ];
+  },
 };
+
+const FINISH_TOOL: ICompletionOptionTools = {
+  toolSchema: {
+    name: 'finish',
+    description: 'End the turn',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  toolFn: async () => 'ok',
+  endsTurnAfterText: true,
+};
+
+/**
+ * What settlement sees: cliCompletions' wrappedOnChunk keeps each field from the last emit that
+ * carries it, so a terminal emit that drops turnUsage leaves an earlier, shorter breakdown in force.
+ */
+function latchedUsage(calls: CapturedCb[]): CompletionInfo {
+  const latched: CompletionInfo = {} as CompletionInfo;
+  for (const { info } of calls) {
+    if (info?.inputTokens) latched.inputTokens = info.inputTokens;
+    if (info?.outputTokens) latched.outputTokens = info.outputTokens;
+    if (info?.cacheReadInputTokens) latched.cacheReadInputTokens = info.cacheReadInputTokens;
+    if (info?.turnUsage?.length) latched.turnUsage = info.turnUsage;
+  }
+  return latched;
+}
 
 describe.each([geminiTurnUsageSpec, xaiTurnUsageSpec])('$name per-request usage', spec => {
   const runChain = async (stream: boolean, model: string) => {
@@ -623,6 +680,107 @@ describe.each([geminiTurnUsageSpec, xaiTurnUsageSpec])('$name per-request usage'
       expect(final.turnUsage).toEqual([{ inputTokens: 50, cacheReadInputTokens: 30, outputTokens: 15 }]);
       expect(final.inputTokens).toBe(50);
       expect(final.cacheReadInputTokens).toBe(30);
+    }
+  );
+});
+
+describe.each([geminiTurnUsageSpec, xaiTurnUsageSpec])('$name per-request usage on an end-of-turn tool round', spec => {
+  it.each([true, false])('lands the ending request as its own entry (stream: %s)', async stream => {
+    const { backend, setMockSequence } = spec.build(stream);
+    setMockSequence([
+      spec.toolTurn(stream, 'tool_t1', { a: 1, b: 1 }, { input: 80, output: 15, cached: 0 }),
+      spec.endTurn(stream, 'tool_t2', 'Saved.', { input: 150, output: 18, cached: 60 }),
+    ]);
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      spec.cachedModel,
+      [{ role: 'user', content: 'Add, then finish.' }],
+      { stream, tools: [ADD_TOOL, FINISH_TOOL], executeTools: true },
+      cb
+    );
+
+    const expected = [
+      { inputTokens: 80, outputTokens: 15 },
+      { inputTokens: 90, cacheReadInputTokens: 60, outputTokens: 18 },
+    ];
+    const settled = latchedUsage(calls);
+    expect(settled.turnUsage).toEqual(expected);
+    expect(settled.inputTokens).toBe(170);
+    expect(settled.cacheReadInputTokens).toBe(60);
+    expect(settled.outputTokens).toBe(33);
+    // The terminal emit carries the totals itself, as on every other terminal path.
+    expect(finalCbInfo(calls)!.turnUsage).toEqual(expected);
+  });
+});
+
+describe('XAIBackend per-request usage on its other terminal stream emits', () => {
+  const runStream = async (chunks: unknown[], options: Record<string, unknown>) => {
+    const { backend, setMockSequence } = xaiTurnUsageSpec.build(true);
+    setMockSequence([chunks]);
+    const { calls, cb } = captureCb();
+    await backend.complete(
+      xaiTurnUsageSpec.cachedModel,
+      [{ role: 'user', content: 'Hi.' }],
+      { stream: true, ...options },
+      cb
+    );
+    return finalCbInfo(calls)!;
+  };
+  const usage = { input: 150, output: 18, cached: 60 };
+  const expected = [{ inputTokens: 90, cacheReadInputTokens: 60, outputTokens: 18 }];
+
+  it('carries turnUsage on the best-effort response_format frame', async () => {
+    const final = await runStream(xaiTurnUsageSpec.textTurn(true, '{}', usage) as unknown[], {
+      responseFormat: { type: 'json_schema', json_schema: { name: 'x', schema: { type: 'object' } } },
+    });
+
+    expect(final.responseFormatMode).toBe('best-effort');
+    expect(final.turnUsage).toEqual(expected);
+  });
+
+  it('carries turnUsage on the frame that closes a reasoning-only reply', async () => {
+    const final = await runStream(
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'thinking' }, finish_reason: null }], usage: null },
+        { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: xaiUsage(usage) },
+      ],
+      { thinking: { enabled: true } }
+    );
+
+    expect(final.turnUsage).toEqual(expected);
+  });
+});
+
+describe('XAIBackend reasoning tokens', () => {
+  it.each([true, false])(
+    'bills completion_tokens_details.reasoning_tokens as output on every request (stream: %s)',
+    async stream => {
+      const { backend, setMockSequence } = xaiTurnUsageSpec.build(stream);
+      setMockSequence([
+        xaiTurnUsageSpec.toolTurn(
+          stream,
+          'tool_t1',
+          { a: 1, b: 1 },
+          { input: 80, output: 15, cached: 0, reasoning: 100 }
+        ),
+        xaiTurnUsageSpec.textTurn(stream, 'Done.', { input: 150, output: 8, cached: 60, reasoning: 50 }),
+      ]);
+      const { calls, cb } = captureCb();
+
+      await backend.complete(
+        xaiTurnUsageSpec.cachedModel,
+        [{ role: 'user', content: 'Add.' }],
+        { stream, tools: [ADD_TOOL], executeTools: true },
+        cb
+      );
+
+      const final = finalCbInfo(calls)!;
+      expect(final.turnUsage).toEqual([
+        { inputTokens: 80, outputTokens: 115 },
+        { inputTokens: 90, cacheReadInputTokens: 60, outputTokens: 58 },
+      ]);
+      expect(final.outputTokens).toBe(173);
     }
   );
 });
