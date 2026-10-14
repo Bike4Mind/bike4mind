@@ -200,14 +200,15 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // retries on its own backoff if the mint throws - which is why it needs a timeout: a
   // mint that never settles holds readyState at CONNECTING with no retry ever scheduled.
   const getWebsocketUrl = useCallback(async () => {
-    const { data } = await api.post<{ ticket: string }>('/api/websocket/ticket', undefined, {
+    const response = await api.post<{ ticket: string }>('/api/websocket/ticket', undefined, {
       timeout: WEBSOCKET_TICKET_TIMEOUT_MS,
     });
-    // Read after the POST: its 401 handling may refresh the token, and the ticket carries the
-    // token the request ended up using. Recording the pre-request token would make onOpen send a
-    // needless reauth after every reconnect that follows an expiry.
-    ticketTokenRef.current = useAccessToken.getState().accessToken ?? accessTokenRef.current;
-    return `${url}?ticket=${encodeURIComponent(data.ticket)}`;
+    // The ticket is bound to the token the successful request carried. ApiContext's 401 retry
+    // re-sends through the token-attach interceptor, so after a refresh this is the new token;
+    // the store itself may have moved on again while the POST was in flight, so it is not used.
+    const sentToken = String(response.config?.headers?.Authorization ?? '').replace(/^Bearer /, '');
+    ticketTokenRef.current = sentToken || null;
+    return `${url}?ticket=${encodeURIComponent(response.data.ticket)}`;
   }, [url]);
 
   const { sendJsonMessage, sendMessage, readyState } = useBaseWebsocket(shouldConnect ? getWebsocketUrl : null, {

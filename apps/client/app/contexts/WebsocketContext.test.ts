@@ -835,6 +835,30 @@ describe('WebsocketProvider - reauth after a token refresh', () => {
       expect(subscribeSends('s2')).toHaveLength(1);
     });
 
+    it('replays each subscription exactly once on a resubscribe_required after a reconnect and the hooks re-send', async () => {
+      render(element());
+      act(() => {
+        send(subscribe('s1'));
+        send(subscribe('s2'));
+      });
+      act(() => {
+        h.capturedOptions.current.onClose({ code: 1006, reason: '' });
+        h.capturedOptions.current.onOpen({});
+      });
+      act(() => {
+        send(subscribe('s1'));
+        send(subscribe('s2'));
+      });
+      h.sendJsonMessage.mockClear();
+
+      act(() => {
+        h.capturedOptions.current.onMessage({ data: JSON.stringify({ action: 'resubscribe_required' }) });
+      });
+
+      expect(subscribeSends('s1')).toHaveLength(1);
+      expect(subscribeSends('s2')).toHaveLength(1);
+    });
+
     it('leaves the re-send after a reconnect to the hooks, so a resubscribe_required then replays nothing stale', async () => {
       render(element());
       act(() => {
@@ -886,9 +910,15 @@ describe('WebsocketProvider - reauth after a token refresh', () => {
   });
 
   describe('a token refreshed while the socket is connecting', () => {
+    // The ticket POST as the token-attach interceptor sent it.
+    const ticketResponse = (sentToken: string) => ({
+      data: { ticket: 'ticket-abc' },
+      config: { headers: { Authorization: `Bearer ${sentToken}` } },
+    });
+
     beforeEach(() => {
       h.apiPost.mockReset();
-      h.apiPost.mockResolvedValue({ data: { ticket: 'ticket-abc' } });
+      h.apiPost.mockResolvedValue(ticketResponse('tok'));
     });
 
     it('sends reauth_connection on open when the token changed after the ticket was minted', async () => {
@@ -914,7 +944,7 @@ describe('WebsocketProvider - reauth after a token refresh', () => {
       h.readyState = 0;
       h.apiPost.mockImplementation(async () => {
         h.accessTokenState.accessToken = 'tok-2';
-        return { data: { ticket: 'ticket-abc' } };
+        return ticketResponse('tok-2');
       });
       const rendered = render(element());
       await act(async () => {
@@ -929,6 +959,28 @@ describe('WebsocketProvider - reauth after a token refresh', () => {
       });
 
       expect(h.sendJsonMessage).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'reauth_connection' }));
+    });
+
+    it('sends reauth_connection on open when the store moved on while the POST carried the older token', async () => {
+      h.readyState = 0;
+      h.apiPost.mockImplementation(async () => {
+        h.accessTokenState.accessToken = 'tok-2';
+        return ticketResponse('tok');
+      });
+      const rendered = render(element());
+      await act(async () => {
+        await (h.capturedUrl.current as () => Promise<string>)();
+      });
+      await act(async () => {
+        rendered.rerender(element());
+      });
+
+      act(() => {
+        h.capturedOptions.current.onOpen({});
+      });
+
+      expect(h.sendJsonMessage).toHaveBeenCalledTimes(1);
+      expect(h.sendJsonMessage).toHaveBeenCalledWith({ action: 'reauth_connection', accessToken: 'tok-2' });
     });
 
     it('does not send reauth on open when the token is unchanged since the ticket was minted', async () => {

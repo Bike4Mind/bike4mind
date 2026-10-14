@@ -436,11 +436,10 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       // into a fresh access token stamped with the new version and survives the bump. Safe to revoke
       // ALL: this login's session is minted below, after the revoke, so it is created fresh.
       if (isNewProviderLink) {
-        await authSessionRepository.revokeAllByUserId(user.id);
-        // The revoke above already holds; endRealtimeConnections never throws (the sweep backstops it).
-        await authSessionService.endRealtimeConnections(
-          { userId: user.id, sessionsOnly: true },
-          { db: { realtimeConnections: realtimeConnectionRepository } }
+        await authSessionService.revokeAllUserSessions(
+          user.id,
+          {},
+          { db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository } }
         );
       }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);

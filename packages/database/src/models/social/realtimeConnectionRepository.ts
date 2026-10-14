@@ -6,7 +6,8 @@ import {
   type RealtimeConnectionFilter,
   type UserModerationStatus,
 } from '@bike4mind/common';
-import { isValidObjectId, type FilterQuery } from 'mongoose';
+import { createHash } from 'crypto';
+import { isValidObjectId, Types, type FilterQuery } from 'mongoose';
 import { AuthSessionModel } from '../auth/AuthSessionModel';
 import { UserApiKey } from '../auth/UserApiKeyModel';
 import User from '../auth/UserModel';
@@ -212,6 +213,19 @@ export interface QuerySubscriberIdentity {
 const UPSERT_SUBSCRIBER_MAX_PASSES = 3;
 
 /**
+ * The _id a query's document is created with. queryId has no unique index (the collection is shared
+ * with the fanout service), so an upsert keyed on it alone lets two concurrent first subscribes each
+ * insert a document; deriving _id from it lets the _id index admit only one of them.
+ */
+function querySubscriptionDocId(queryId: string): Types.ObjectId {
+  return new Types.ObjectId(createHash('sha256').update(queryId).digest().subarray(0, 12));
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
+}
+
+/**
  * Register a subscriber on a query, idempotently per (connectionId, clientId): a repeat subscribe
  * refreshes the existing entry's createdAt and resets its attempts instead of adding a second entry,
  * so a live re-subscription is never mistaken for a stale one (removeStaleSubscribers) and a change
@@ -228,7 +242,12 @@ async function upsertSubscriber(
   for (let pass = 0; pass < UPSERT_SUBSCRIBER_MAX_PASSES; pass++) {
     const refreshed = await QuerySubscription.updateOne(
       { queryId, subscribers: sameSubscriber },
-      { $set: { 'subscribers.$.createdAt': new Date(), 'subscribers.$.attempts': 0 } }
+      {
+        $set: { 'subscribers.$.createdAt': new Date(), 'subscribers.$.attempts': 0 },
+        // A live re-subscription supersedes a recorded delivery failure; clear-resume-tokens.ts
+        // pulls every entry still carrying one.
+        $unset: { 'subscribers.$.errorReason': '' },
+      }
     );
     if (refreshed.matchedCount > 0) return;
 
@@ -239,13 +258,26 @@ async function upsertSubscriber(
     if (pushed.matchedCount > 0) return;
 
     // Neither matched: the doc is missing, or another writer added this entry since the refresh.
-    // Creating only when absent (an existing doc is left untouched) sends the second case round again.
-    const created = await QuerySubscription.updateOne(
-      { queryId },
-      { $setOnInsert: { collectionName, query, fields, subscribers: [entry()] } },
-      { upsert: true }
-    );
-    if (created.upsertedCount > 0) return;
+    // Creating only when absent (an existing doc is left untouched) sends the second case round again,
+    // as does losing the insert to a concurrent first subscribe (duplicate _id).
+    try {
+      const created = await QuerySubscription.updateOne(
+        { queryId },
+        {
+          $setOnInsert: {
+            _id: querySubscriptionDocId(queryId),
+            collectionName,
+            query,
+            fields,
+            subscribers: [entry()],
+          },
+        },
+        { upsert: true }
+      );
+      if (created.upsertedCount > 0) return;
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+    }
   }
   throw new Error(`realtimeConnectionRepository: could not register subscriber ${subscriber.clientId}`);
 }

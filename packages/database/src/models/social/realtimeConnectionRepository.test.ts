@@ -622,6 +622,72 @@ describe('realtimeConnectionRepository.upsertSubscriber', () => {
     const matching = (await entries()).filter(entry => entry.clientId === 'c1');
     expect(matching).toHaveLength(1);
   });
+
+  it('clears a recorded errorReason when the subscriber re-subscribes', async () => {
+    await realtimeConnectionRepository.upsertSubscriber(identity, subscriber);
+    await QuerySubscription.collection.updateOne(
+      { queryId: 'q' },
+      { $set: { 'subscribers.0.errorReason': 'GoneException', 'subscribers.0.attempts': 3 } }
+    );
+
+    await realtimeConnectionRepository.upsertSubscriber(identity, subscriber);
+
+    const [only] = await entries();
+    expect(only).not.toHaveProperty('errorReason');
+    expect(only.attempts).toBe(0);
+  });
+
+  // The race only loses some of the time, so each case runs over many fresh queries.
+  const ROUNDS = 25;
+
+  it('creates one document when connections make the first subscribe to a query concurrently', async () => {
+    for (let round = 0; round < ROUNDS; round++) {
+      const queryId = `first-${round}`;
+      await Promise.all(
+        ['a1', 'a2', 'a3', 'a4'].map(connectionId =>
+          realtimeConnectionRepository.upsertSubscriber({ ...identity, queryId }, { ...subscriber, connectionId })
+        )
+      );
+
+      const docs = await QuerySubscription.find({ queryId }).lean();
+      expect(docs).toHaveLength(1);
+      expect(docs[0].subscribers.map(entry => entry.connectionId).sort()).toEqual(['a1', 'a2', 'a3', 'a4']);
+    }
+  });
+
+  it('stores one entry when the same first subscribe arrives concurrently', async () => {
+    for (let round = 0; round < ROUNDS; round++) {
+      const queryId = `same-${round}`;
+      await Promise.all(
+        Array.from({ length: 4 }, () =>
+          realtimeConnectionRepository.upsertSubscriber({ ...identity, queryId }, subscriber)
+        )
+      );
+
+      const docs = await QuerySubscription.find({ queryId }).lean();
+      expect(docs.flatMap(doc => doc.subscribers)).toHaveLength(1);
+    }
+  });
+
+  describe('when every write keeps losing to a concurrent writer', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('gives up after its bounded passes and throws', async () => {
+      const updateOne = vi
+        .spyOn(QuerySubscription, 'updateOne')
+        .mockResolvedValue({ matchedCount: 0, upsertedCount: 0 } as Awaited<
+          ReturnType<typeof QuerySubscription.updateOne>
+        >);
+
+      await expect(realtimeConnectionRepository.upsertSubscriber(identity, subscriber)).rejects.toThrow(
+        'could not register subscriber c1'
+      );
+      // Three writes (refresh, push, create) per pass, three passes.
+      expect(updateOne).toHaveBeenCalledTimes(9);
+    });
+  });
 });
 
 describe('realtimeConnectionRepository.removeConnectionSubscribers', () => {

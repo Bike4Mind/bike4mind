@@ -90,6 +90,7 @@ vi.mock('@server/auth/verifyFederatedIdToken', () => ({
 // Real consent gate (pure) - exercises the actual invariant, not a stub.
 
 import handler from '../../../pages/api/oauth/ai-token';
+import { realtimeConnectionRepository } from '@bike4mind/database';
 import { FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import { BadRequestError } from '@bike4mind/common';
 import { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/services';
@@ -377,7 +378,7 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       expect.objectContaining({ keyId: 'old-key' }),
       expect.objectContaining({
         db: expect.objectContaining({
-          realtimeConnections: expect.objectContaining({ endConnections: expect.any(Function) }),
+          realtimeConnections: realtimeConnectionRepository,
         }),
       })
     );

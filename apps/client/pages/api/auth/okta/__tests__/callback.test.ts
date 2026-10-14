@@ -32,22 +32,33 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: { endConnections: (...a: any[]) => mockEndConnections(...a) },
 }));
 
-// Stand-in for the services barrel (see the issueSession note below) carrying only the best-effort
-// wrapper's contract: it never throws.
+// Stand-in for the services barrel (see the issueSession note below) carrying the revoke primitive's
+// contract: the session revoke throws through, ending the realtime connections never does.
+const mockRevokeAllUserSessions = vi.fn(
+  async (
+    userId: string,
+    options: { exceptSid?: string },
+    {
+      db,
+    }: {
+      db: {
+        authSessions: { revokeAllByUserId: (userId: string, options: { exceptSid?: string }) => Promise<number> };
+        realtimeConnections: { endConnections: (filter: unknown) => Promise<{ connectionIds: string[] }> };
+      };
+    }
+  ) => {
+    const count = await db.authSessions.revokeAllByUserId(userId, options);
+    try {
+      await db.realtimeConnections.endConnections({ userId, sessionsOnly: true });
+    } catch {
+      // Best-effort, as in the real primitive.
+    }
+    return count;
+  }
+);
 vi.mock('@bike4mind/services', () => ({
   authSessionService: {
-    endRealtimeConnections: async (
-      filter: unknown,
-      {
-        db,
-      }: { db: { realtimeConnections: { endConnections: (filter: unknown) => Promise<{ connectionIds: string[] }> } } }
-    ) => {
-      try {
-        return (await db.realtimeConnections.endConnections(filter)).connectionIds;
-      } catch {
-        return [];
-      }
-    },
+    revokeAllUserSessions: (...a: Parameters<typeof mockRevokeAllUserSessions>) => mockRevokeAllUserSessions(...a),
   },
 }));
 
@@ -118,6 +129,7 @@ vi.mock('@server/auth/emailVerifiedGrants', () => ({
 // Import after mocks are registered.
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import handler from '@pages/api/auth/okta/callback';
 
 const STATE = 'state-token';
@@ -166,6 +178,7 @@ beforeEach(() => {
   mockUpdateOne.mockResolvedValue({});
   mockCreate.mockResolvedValue({ id: 'new-user', _id: 'new-user', tokenVersion: 0, isBanned: false });
   mockRevokeAllByUserId.mockResolvedValue(0);
+  mockEndConnections.mockResolvedValue({ connectionIds: [] });
   // Default both lookup stages to "no match" so tests that drive the handler
   // directly (rather than through runCallback) exercise the create path.
   mockFindOne.mockResolvedValue(null);
@@ -209,13 +222,18 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     // New provider link: tokenVersion incremented to invalidate other sessions.
     expect(mockUpdateOne).toHaveBeenCalledWith({ _id: 'u2' }, expect.objectContaining({ $inc: { tokenVersion: 1 } }));
     // ...and the paired AuthSession revoke fires, or opaque refresh tokens would survive the bump.
-    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2');
+    expect(mockRevokeAllUserSessions).toHaveBeenCalledWith(
+      'u2',
+      {},
+      { db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository } }
+    );
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2', {});
     expect(mockEndConnections).toHaveBeenCalledWith({ userId: 'u2', sessionsOnly: true });
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
   });
 
   it('still completes the login when ending realtime connections fails', async () => {
-    mockEndConnections.mockRejectedValue(new Error('prune failed'));
+    mockEndConnections.mockRejectedValueOnce(new Error('prune failed'));
 
     const res = await runCallback({
       user: { id: 'u2', _id: 'u2', email: 'User@Example.com', emailVerified: true, authProviders: [], tokenVersion: 3 },
@@ -223,7 +241,8 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     });
 
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
-    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2');
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2', {});
+    expect(mockEndConnections).toHaveBeenCalledTimes(1);
   });
 
   it('exempts a same-identity refresh from the gate (mismatch allowed on re-login)', async () => {

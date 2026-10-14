@@ -51,6 +51,7 @@ const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
 import { NotFoundError } from '@server/utils/errors';
+import { realtimeConnectionRepository } from '@bike4mind/database';
 // Order matters: the first baseApi() call is rotate, the second is revoke.
 import '@pages/api/user-api-keys/[id]/rotate';
 import '@pages/api/user-api-keys/[id]/revoke';
@@ -86,7 +87,7 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
       { keyId: 'key-1' },
       expect.objectContaining({
         db: expect.objectContaining({
-          realtimeConnections: expect.objectContaining({ endConnections: expect.any(Function) }),
+          realtimeConnections: realtimeConnectionRepository,
         }),
       })
     );
@@ -187,7 +188,7 @@ describe('POST /api/user-api-keys/[id]/revoke', () => {
       expect.objectContaining({
         db: expect.objectContaining({
           organizations: organizationRepository,
-          realtimeConnections: expect.objectContaining({ endConnections: expect.any(Function) }),
+          realtimeConnections: realtimeConnectionRepository,
         }),
       })
     );

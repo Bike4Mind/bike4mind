@@ -366,6 +366,8 @@ describe('dataSubscribeRequest - connection ended mid-subscribe', () => {
       }),
     });
     vi.mocked(inviteSubscriptionScope).mockReturnValue({ $or: [] });
+    mockRemoveConnectionSubscribers.mockResolvedValue(undefined);
+    mockCloseConnection.mockResolvedValue(undefined);
   });
 
   const inviteEvent = () => ({
@@ -392,6 +394,33 @@ describe('dataSubscribeRequest - connection ended mid-subscribe', () => {
     expect(mockUpsertSubscriber).toHaveBeenCalledTimes(1);
     expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
     expect(mockCloseConnection).toHaveBeenCalledWith('conn-1', expect.any(String));
+  });
+
+  const endAfterWrite = () =>
+    mockConnectionFindOne
+      .mockImplementationOnce(() => ({ lean: async () => ({ userId: 'caller-1' }) }))
+      .mockImplementationOnce(() => ({ lean: async () => null }));
+
+  it('still refuses with UnauthorizedError when the close fails', async () => {
+    endAfterWrite();
+    mockCloseConnection.mockRejectedValueOnce(new Error('close failed'));
+
+    await expect(func(inviteEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
+
+    expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
+  });
+
+  it('still closes the socket and refuses with UnauthorizedError when the subscriber pull fails', async () => {
+    endAfterWrite();
+    mockRemoveConnectionSubscribers.mockRejectedValueOnce(new Error('pull failed'));
+
+    await expect(func(inviteEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
+
+    expect(mockCloseConnection).toHaveBeenCalledWith('conn-1', expect.any(String));
+    expect(noopLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to remove subscribers of ended connection conn-1'),
+      expect.any(Error)
+    );
   });
 
   it('keeps the entry when the row is still live after the write', async () => {

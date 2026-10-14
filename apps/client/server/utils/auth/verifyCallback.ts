@@ -169,11 +169,10 @@ const authenticateUser = async (
       // link, so gate the revoke on the same condition. Safe to revoke ALL here: the session for THIS
       // login is minted later, in the callback handler, so it is created fresh and unaffected.
       if (isNewProvider) {
-        await authSessionRepository.revokeAllByUserId(String(user._id));
-        // The revoke above already holds; endRealtimeConnections never throws (the sweep backstops it).
-        await authSessionService.endRealtimeConnections(
-          { userId: String(user._id), sessionsOnly: true },
-          { db: { realtimeConnections: realtimeConnectionRepository } }
+        await authSessionService.revokeAllUserSessions(
+          String(user._id),
+          {},
+          { db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository } }
         );
       }
 

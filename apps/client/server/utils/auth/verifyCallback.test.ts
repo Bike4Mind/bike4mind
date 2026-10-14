@@ -29,31 +29,27 @@ const mockReleasePending = vi.fn();
 const mockShouldBlockDisposableEmail = vi.fn();
 const mockAddCredits = vi.fn();
 const mockApplyPartnerRuleMembership = vi.fn();
-vi.mock('@bike4mind/services', () => ({
-  authSessionService: {
-    endRealtimeConnections: async (
-      filter: unknown,
-      {
-        db,
-      }: { db: { realtimeConnections: { endConnections: (filter: unknown) => Promise<{ connectionIds: string[] }> } } }
-    ) => {
-      // Same contract as the real best-effort wrapper: never throws.
-      try {
-        return (await db.realtimeConnections.endConnections(filter)).connectionIds;
-      } catch {
-        return [];
-      }
+const mockRevokeAllUserSessions = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  // The real primitive runs against the repository mocks above, so the best-effort end of the
+  // realtime connections is exercised for real; the spy only records the adapters it was given.
+  mockRevokeAllUserSessions.mockImplementation(actual.authSessionService.revokeAllUserSessions);
+  return {
+    authSessionService: {
+      revokeAllUserSessions: (...args: Parameters<typeof actual.authSessionService.revokeAllUserSessions>) =>
+        mockRevokeAllUserSessions(...args),
     },
-  },
-  userService: {
-    releasePendingFreeCredits: (...args: unknown[]) => mockReleasePending(...args),
-    shouldBlockDisposableEmail: (...args: unknown[]) => mockShouldBlockDisposableEmail(...args),
-  },
-  creditService: { addCredits: (...args: unknown[]) => mockAddCredits(...args) },
-  organizationService: {
-    applyPartnerRuleMembership: (...args: unknown[]) => mockApplyPartnerRuleMembership(...args),
-  },
-}));
+    userService: {
+      releasePendingFreeCredits: (...args: unknown[]) => mockReleasePending(...args),
+      shouldBlockDisposableEmail: (...args: unknown[]) => mockShouldBlockDisposableEmail(...args),
+    },
+    creditService: { addCredits: (...args: unknown[]) => mockAddCredits(...args) },
+    organizationService: {
+      applyPartnerRuleMembership: (...args: unknown[]) => mockApplyPartnerRuleMembership(...args),
+    },
+  };
+});
 
 // The real signupDomainGrant helper runs; only its rule lookup and side-effect leaves are stubbed.
 const mockPartnerGrant = vi.fn();
@@ -77,6 +73,7 @@ vi.mock('./openRegistration', () => ({
   isOpenRegistrationAllowed: () => mockIsOpenRegistrationAllowed(),
 }));
 
+import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { verifyCallback } from './verifyCallback';
 
 const runStandard = (
@@ -94,6 +91,9 @@ beforeEach(() => {
   mockCreate.mockReset();
   mockRevokeAllByUserId.mockReset();
   mockRevokeAllByUserId.mockResolvedValue(0);
+  mockEndConnections.mockReset();
+  mockEndConnections.mockResolvedValue({ connectionIds: [] });
+  mockRevokeAllUserSessions.mockClear();
   mockUserRepositoryUpdate.mockReset();
   mockUserRepositoryUpdate.mockResolvedValue(undefined);
   mockReleasePending.mockReset();
@@ -273,12 +273,17 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     expect(mockFindOne).toHaveBeenCalledTimes(2);
     // The tokenVersion bump must be paired with a session revoke, else an opaque refresh token
     // (never checked against tokenVersion) would rotate past the bump and survive.
-    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u1');
+    expect(mockRevokeAllUserSessions).toHaveBeenCalledWith(
+      'u1',
+      {},
+      { db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository } }
+    );
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u1', {});
     expect(mockEndConnections).toHaveBeenCalledWith({ userId: 'u1', sessionsOnly: true });
   });
 
   it('still completes the link when ending realtime connections fails', async () => {
-    mockEndConnections.mockRejectedValue(new Error('prune failed'));
+    mockEndConnections.mockRejectedValueOnce(new Error('prune failed'));
     stage2Hit({ _id: 'u1', email: 'user@example.com', emailVerified: true, authProviders: [] });
 
     const { err, user } = await runStandard(AuthStrategy.Google, {
@@ -288,7 +293,8 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
 
     expect(err).toBeNull();
     expect(user).toBeDefined();
-    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u1');
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u1', {});
+    expect(mockEndConnections).toHaveBeenCalledTimes(1);
   });
 
   it('refuses when existing provider entry has DIFFERENT sub (impersonation via takeover of same strategy)', async () => {

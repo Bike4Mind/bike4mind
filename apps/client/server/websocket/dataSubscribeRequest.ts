@@ -308,9 +308,14 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   // A revoke can end the connection while this subscribe is in flight, after its own pull ran but
   // before this write landed. Re-read the row: if it is gone, back the entry out like the no-row
-  // check above does.
+  // check above does. Both steps are best-effort so the close still runs and the caller always
+  // gets the UnauthorizedError; the disconnect handler and the stale-subscriber pass sweep any leftover.
   if (!(await Connection.findOne({ connectionId }, { _id: 1 }).lean())) {
-    await realtimeConnectionRepository.removeConnectionSubscribers(connectionId);
+    await realtimeConnectionRepository
+      .removeConnectionSubscribers(connectionId)
+      .catch(error =>
+        logger.warn(`[dataSubscribeRequest] Failed to remove subscribers of ended connection ${connectionId}`, error)
+      );
     await closeConnection(connectionId, endpoint).catch(error =>
       logger.warn(`[dataSubscribeRequest] Failed to close ended connection ${connectionId}`, error)
     );

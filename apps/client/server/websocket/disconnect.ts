@@ -1,4 +1,10 @@
-import { activeCodeAgentRepository, Connection, QuerySubscription, User, userRepository } from '@bike4mind/database';
+import {
+  activeCodeAgentRepository,
+  Connection,
+  realtimeConnectionRepository,
+  User,
+  userRepository,
+} from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { reportCcAgentPresence } from '@server/websocket/ccAgentHearth';
 import { sendToClient, withWebSocketContext } from '@server/websocket/utils';
@@ -25,12 +31,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
   }
 
-  // Clean up query subscription subscribers for this connection
-  const updatedSubscriptions = await QuerySubscription.updateMany(
-    { 'subscribers.connectionId': connectionId },
-    { $pull: { subscribers: { connectionId } } }
-  );
-  console.debug(`Updated ${updatedSubscriptions.modifiedCount} query subscriptions`);
+  // Pull this connection's subscribers, deleting any QuerySubscription it leaves empty.
+  await realtimeConnectionRepository.removeConnectionSubscribers(connectionId);
 
   // Sweep any Claude Code agent sprites owned by this connection and
   // broadcast their despawn to every other tab the user has open.
