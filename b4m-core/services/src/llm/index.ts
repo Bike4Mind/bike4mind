@@ -38,6 +38,7 @@ export type {
   SubagentDispatchConfig,
   ChildExecutionStatus,
   BackgroundDispatchResult,
+  SubagentToolPermissions,
 } from './agents/ServerSubagentOrchestrator';
 export * from './MementoEvaluationService';
 export * from './LakeMemoryExtractionService';
