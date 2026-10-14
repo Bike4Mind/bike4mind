@@ -59,7 +59,9 @@ interface QueryInputs {
 
 type StepRunner = (slackUserId: string, inputs: Record<string, unknown>) => Promise<WorkflowStepResult>;
 
-type ActingSlackUser = { ok: true; slackUserId: string } | { ok: false; error: string };
+type ActingSlackUser =
+  | { ok: true; slackUserId: string }
+  | { ok: false; reason: 'legacy_user_id_input' | 'missing_user_context'; error: string };
 
 const SLACK_USER_ID_PATTERN = /^[UW][A-Z0-9]{2,}$/;
 
@@ -81,6 +83,7 @@ export function resolveActingSlackUserId(inputs: Record<string, unknown>): Actin
   if (inputs.user_id !== undefined) {
     return {
       ok: false,
+      reason: 'legacy_user_id_input',
       error:
         'This workflow step was added with an outdated app configuration that cannot verify who is running it. Ask your Slack app admin to update the app manifest, then re-add the step.',
     };
@@ -88,6 +91,7 @@ export function resolveActingSlackUserId(inputs: Record<string, unknown>): Actin
 
   return {
     ok: false,
+    reason: 'missing_user_context',
     error: 'Could not verify who is running this workflow. Start it from a trigger a person runs.',
   };
 }
@@ -150,7 +154,10 @@ export class WorkflowStepHandler {
     }
 
     try {
-      const result = await this.executeStep(callbackId, inputs);
+      const result = await this.executeStep(
+        { callbackId, functionExecutionId: function_execution_id, appId: func.app_id },
+        inputs
+      );
 
       // Report result to Slack
       if (result.success) {
@@ -210,7 +217,10 @@ export class WorkflowStepHandler {
     }
   }
 
-  private async executeStep(callbackId: string, inputs: Record<string, unknown>): Promise<WorkflowStepResult> {
+  private async executeStep(
+    { callbackId, functionExecutionId, appId }: { callbackId: string; functionExecutionId: string; appId: string },
+    inputs: Record<string, unknown>
+  ): Promise<WorkflowStepResult> {
     const runStep = this.stepRunnerFor(callbackId);
     if (!runStep) {
       this.logger.warn('[WorkflowStep] Unknown callback_id', { callbackId });
@@ -221,7 +231,9 @@ export class WorkflowStepHandler {
     if (!actingUser.ok) {
       this.logger.warn('[WorkflowStep] Rejected step without an attested acting user', {
         callbackId,
-        hasLegacyUserIdInput: inputs.user_id !== undefined,
+        functionExecutionId,
+        appId,
+        reason: actingUser.reason,
       });
       return { success: false, error: actingUser.error };
     }

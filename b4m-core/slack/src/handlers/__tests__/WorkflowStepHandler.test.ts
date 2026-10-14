@@ -827,6 +827,43 @@ describe('WorkflowStepHandler', () => {
       expect(User.findOne).not.toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'UVICTIM' });
     });
 
+    it.each(Object.values(WORKFLOW_STEP_CALLBACKS))(
+      '%s runs as the user_context id and never the conflicting user_id',
+      async callbackId => {
+        vi.mocked(User.findOne).mockResolvedValue(createMockUser());
+        vi.mocked(createSession).mockResolvedValue({ id: 'session_123', name: 'Test' } as any);
+        mockSlackClient.sendDirectMessage.mockResolvedValue(true);
+
+        await handler.handleFunctionExecuted(
+          createEvent(callbackId, {
+            user_context: ACTING_USER_CONTEXT,
+            user_id: 'UVICTIM',
+            message: 'Hello',
+            query: 'What is new?',
+            send_notification: true,
+          })
+        );
+
+        expect(User.findOne).toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'U123' });
+        expect(User.findOne).not.toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'UVICTIM' });
+        expect(mockSlackClient.sendDirectMessage).not.toHaveBeenCalledWith('UVICTIM', expect.anything());
+      }
+    );
+
+    it('logs the rejection with the execution id, app id and reason', async () => {
+      await handler.handleFunctionExecuted(createEvent(WORKFLOW_STEP_CALLBACKS.QUERY, { user_id: 'U123' }));
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('without an attested acting user'),
+        expect.objectContaining({
+          callbackId: WORKFLOW_STEP_CALLBACKS.QUERY,
+          functionExecutionId: 'Fx123456',
+          appId: 'A123',
+          reason: 'legacy_user_id_input',
+        })
+      );
+    });
+
     it('sends the notification DM to the user_context id', async () => {
       vi.mocked(User.findOne).mockResolvedValue(createMockUser());
       vi.mocked(createSession).mockResolvedValue({ id: 'session_123', name: 'Test' } as any);
@@ -895,6 +932,7 @@ describe('resolveActingSlackUserId', () => {
     const result = resolveActingSlackUserId({ user_id: 'U123' });
     expect(result.ok).toBe(false);
     if (result.ok) return;
+    expect(result.reason).toBe('legacy_user_id_input');
     expect(result.error).toContain('outdated app configuration');
     expect(result.error).toContain('update the app manifest');
   });
@@ -915,6 +953,7 @@ describe('resolveActingSlackUserId', () => {
   ])('returns the generic verification error for %s', (_label, inputs) => {
     expect(resolveActingSlackUserId(inputs)).toEqual({
       ok: false,
+      reason: 'missing_user_context',
       error: 'Could not verify who is running this workflow. Start it from a trigger a person runs.',
     });
   });

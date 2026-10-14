@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { compareManifests } from './manifestComparator';
+import { compareManifests, mergeManifest } from './manifestComparator';
 import { getControlledManifestFields } from './manifestTemplate';
 
 const BASE_URL = 'https://app.test.com';
@@ -43,6 +43,47 @@ describe('compareManifests - workflow step functions', () => {
     const result = compareManifests(live, BASE_URL, { enableWorkflowSteps: true });
 
     expect(functionDifferences(result.differences).map(d => d.field)).toEqual(['functions.b4m_query.input_parameters']);
+  });
+
+  describe('input_parameters export shapes', () => {
+    const wrapAsJsonSchema = (live: Record<string, any>) => {
+      for (const func of Object.values<any>(live.functions)) {
+        func.input_parameters = { properties: func.input_parameters, required: ['user_context'] };
+      }
+      return live;
+    };
+
+    it('reads a { properties, required } export as up to date', () => {
+      const result = compareManifests(wrapAsJsonSchema(upToDateLiveManifest()), BASE_URL, {
+        enableWorkflowSteps: true,
+      });
+
+      expect(result.differences).toEqual([]);
+    });
+
+    it('still flags a stale user_id input inside a { properties, required } export', () => {
+      const live = wrapAsJsonSchema(upToDateLiveManifest());
+      const { properties } = live.functions.b4m_query.input_parameters;
+      delete properties.user_context;
+      properties.user_id = { type: 'slack#/types/user_id' };
+
+      const result = compareManifests(live, BASE_URL, { enableWorkflowSteps: true });
+
+      expect(functionDifferences(result.differences).map(d => d.field)).toEqual([
+        'functions.b4m_query.input_parameters',
+      ]);
+    });
+  });
+
+  it('reads as up to date after merging over a live manifest that still has a user_id input', () => {
+    const stale = upToDateLiveManifest();
+    const params = stale.functions.b4m_send_message.input_parameters;
+    delete params.user_context;
+    params.user_id = { type: 'slack#/types/user_id' };
+
+    const merged = mergeManifest(stale, BASE_URL, { enableWorkflowSteps: true });
+
+    expect(compareManifests(merged, BASE_URL, { enableWorkflowSteps: true }).isUpToDate).toBe(true);
   });
 
   it('ignores title and description changes', () => {

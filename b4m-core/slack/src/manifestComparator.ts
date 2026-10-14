@@ -48,8 +48,12 @@ function functionInputTypes(func: unknown): Record<string, unknown> {
   if (typeof func !== 'object' || func === null) return {};
   const params = (func as { input_parameters?: unknown }).input_parameters;
   if (typeof params !== 'object' || params === null) return {};
+  // The manifest we write is a flat name -> param map, but a JSON-schema-style export would wrap it
+  // as { properties, required }; accept both so the export shape cannot read as permanent drift.
+  const { properties } = params as { properties?: unknown };
+  const parameterMap = typeof properties === 'object' && properties !== null ? properties : params;
   return Object.fromEntries(
-    Object.entries(params as Record<string, unknown>).map(([name, param]) => [
+    Object.entries(parameterMap as Record<string, unknown>).map(([name, param]) => [
       name,
       typeof param === 'object' && param !== null ? (param as { type?: unknown }).type : undefined,
     ])
