@@ -152,6 +152,11 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
           </Stack>
         </FormControl>
       );
+    default: {
+      // A new CapabilityControl kind must be handled here, or the field would render as nothing.
+      const unhandled: never = field;
+      return unhandled;
+    }
   }
 };
 
