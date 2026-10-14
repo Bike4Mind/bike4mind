@@ -1,6 +1,7 @@
+import { MAX_BROWSER_TABS } from '@shared/browserTabs';
 import { isLocalUrl, normalizeUrl } from '@shared/browserUrl';
 import type { ScrollTarget } from '../browser/pageScripts';
-import type { ApprovalPrompt, BrowserContext, BrowserPage, ToolContext, ToolDefinition } from './types';
+import type { ApprovalPrompt, BrowserContext, BrowserPage, BrowserTabInfo, ToolContext, ToolDefinition } from './types';
 import { capOutput, requireString } from './types';
 
 export { isLocalUrl, normalizeUrl };
@@ -20,14 +21,19 @@ function requireBrowser(context: ToolContext): BrowserContext {
 const STOPPED = 'Stopped: the turn was interrupted before this browser step finished.';
 
 /**
- * Run one tool's steps on the session's page, ending them at a stop.
+ * Run one tool's steps on the session's active tab, or on `tab` when the tool just opened one
+ * (the user may have switched away from it since), ending them at a stop.
  *
  * The stop also halts whatever the page is loading, so Chromium is not left fetching for a turn
  * that has moved on - and since Electron holds page scripts until a load ends, that is also what
  * frees a step still waiting inside. The page's own deadlines live in BrowserManager.
  */
-async function onPage<T>(context: ToolContext, steps: (page: BrowserPage) => Promise<T>): Promise<T> {
-  const page = await requireBrowser(context).page();
+async function onPage<T>(
+  context: ToolContext,
+  steps: (page: BrowserPage) => Promise<T>,
+  tab?: BrowserPage
+): Promise<T> {
+  const page = tab ?? (await requireBrowser(context).page());
   const { signal } = context;
   if (signal.aborted) throw new Error(STOPPED);
   let onAbort: () => void = () => undefined;
@@ -147,6 +153,34 @@ async function describePage(page: BrowserPage, maxChars: number, lead: string, i
   return capOutput(`${header}\n\n${snap.text || '(no visible text)'}${note}${eventsSection(page)}`);
 }
 
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
+}
+
+/** Load `url` into `tab` (the active tab when absent) and describe what arrived. */
+async function loadAndDescribe(context: ToolContext, url: string, label: string, tab?: BrowserPage): Promise<string> {
+  return onPage(
+    context,
+    async page => {
+      context.report?.label(label);
+      const loaded = await page.navigate(url);
+      const status = loaded.status ? ` (HTTP ${loaded.status})` : '';
+      const lead = loaded.stillLoading
+        ? `Loaded ${loaded.url}${status}, but it was still loading at the time limit, so loading was stopped ` +
+          'there. Parts of the page may be missing.'
+        : `Loaded ${loaded.url}${status}.`;
+      return describePage(page, SNAPSHOT_CHARS, lead);
+    },
+    tab
+  );
+}
+
+const AT_TAB_CAP = `This conversation already has ${MAX_BROWSER_TABS} tabs open, the most it may.`;
+
 export const browserNavigate: ToolDefinition = {
   schema: {
     name: 'browser_navigate',
@@ -154,11 +188,15 @@ export const browserNavigate: ToolDefinition = {
       "Open a URL in this conversation's browser - a real Chromium window with its own cookies, " +
       "separate from the user's browser - and return a text snapshot of the page. Interactive " +
       'elements appear as [ref] lines; pass a ref to browser_click or browser_type. Local dev ' +
-      'servers (localhost, 127.0.0.1) open without asking.',
+      'servers (localhost, 127.0.0.1) open without asking. Opens in the active tab unless new_tab is set.',
     parameters: {
       type: 'object',
       properties: {
         url: { type: 'string', description: 'The page to open, e.g. http://localhost:3000/login.' },
+        new_tab: {
+          type: 'boolean',
+          description: 'Open it in a new tab, which becomes the active one, keeping the current page open.',
+        },
       },
       required: ['url'],
     },
@@ -181,16 +219,100 @@ export const browserNavigate: ToolDefinition = {
   },
   async run(input, context) {
     const url = normalizeUrl(requireString(input, 'url'));
-    return onPage(context, async page => {
-      context.report?.label(`Opened ${url}`);
-      const loaded = await page.navigate(url);
-      const status = loaded.status ? ` (HTTP ${loaded.status})` : '';
-      const lead = loaded.stillLoading
-        ? `Loaded ${loaded.url}${status}, but it was still loading at the time limit, so loading was stopped ` +
-          'there. Parts of the page may be missing.'
-        : `Loaded ${loaded.url}${status}.`;
-      return describePage(page, SNAPSHOT_CHARS, lead);
-    });
+    if (input.new_tab !== true) return loadAndDescribe(context, url, `Opened ${url}`);
+    const tab = await requireBrowser(context).newTab();
+    if (tab) return loadAndDescribe(context, url, `Opened tab: ${hostOf(url)}`, tab);
+    const result = await loadAndDescribe(context, url, `Opened ${url}`);
+    return `${AT_TAB_CAP} It opened in the active tab instead; close a tab with browser_tabs to open more.\n${result}`;
+  },
+};
+
+const TAB_ACTIONS = ['list', 'new', 'select', 'close'] as const;
+type TabAction = (typeof TAB_ACTIONS)[number];
+
+function tabAction(input: Record<string, unknown>): TabAction {
+  const action = typeof input.action === 'string' ? input.action.trim().toLowerCase() : '';
+  if (!TAB_ACTIONS.includes(action as TabAction)) throw new Error(`"action" must be one of ${TAB_ACTIONS.join(', ')}.`);
+  return action as TabAction;
+}
+
+function tabId(input: Record<string, unknown>): number {
+  const raw = typeof input.id === 'string' ? input.id.trim() : input.id;
+  const id = typeof raw === 'string' && raw !== '' ? Number(raw) : raw;
+  if (typeof id !== 'number' || !Number.isInteger(id)) {
+    throw new Error('"id" is required: the tab id from browser_tabs with action "list".');
+  }
+  return id;
+}
+
+/** A url for `new`, or '' for a blank tab. Resolved the way browser_navigate resolves one. */
+function newTabUrl(input: Record<string, unknown>): string {
+  return typeof input.url === 'string' && input.url.trim() ? normalizeUrl(input.url) : '';
+}
+
+const tabName = (tab: BrowserTabInfo) => tab.title || (tab.url ? hostOf(tab.url) : 'New tab');
+
+function listTabs(tabs: readonly BrowserTabInfo[]): string {
+  if (tabs.length === 0) return 'No tabs are open. browser_navigate or browser_tabs with action "new" opens one.';
+  const lines = tabs.map(
+    tab =>
+      `- tab ${tab.id}${tab.active ? ' (active)' : ''}: ${tab.title || '(untitled)'} - ${tab.url || '(no page yet)'}`
+  );
+  return `${tabs.length} of at most ${MAX_BROWSER_TABS} tabs open:\n${lines.join('\n')}`;
+}
+
+/**
+ * One tool for the tab strip rather than four. Tabs are a side concern of browsing - most turns
+ * never touch them - and every declared tool's schema is paid for in every request.
+ */
+export const browserTabs: ToolDefinition = {
+  schema: {
+    name: 'browser_tabs',
+    description:
+      "Manage the browser's tabs. Every other browser tool acts on the active tab, which the user's " +
+      'pane shows too. Actions: list (each tab with its id, title, url and whether it is active); ' +
+      'new (opens a tab and makes it active; with url, loads it and returns its snapshot); select ' +
+      '(makes the tab with this id active and returns its snapshot); close (closes the tab with this id).',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: [...TAB_ACTIONS], description: 'What to do.' },
+        id: { type: 'number', description: 'The tab id, for select and close.' },
+        url: { type: 'string', description: 'For new: the page to open in it. Leave out for a blank tab.' },
+      },
+      required: ['action'],
+    },
+  },
+  needsApproval(input, context) {
+    if (tabAction(input) !== 'new' || !newTabUrl(input)) return false;
+    return browserNavigate.needsApproval!({ url: newTabUrl(input) }, context);
+  },
+  approval: (input, context) => browserNavigate.approval!({ url: newTabUrl(input) }, context),
+  async run(input, context) {
+    const browser = requireBrowser(context);
+    const action = tabAction(input);
+    if (action === 'list') {
+      context.report?.label('Listed tabs');
+      return listTabs(browser.tabs());
+    }
+    if (action === 'new') {
+      const url = newTabUrl(input);
+      const tab = await browser.newTab();
+      if (!tab) throw new Error(`${AT_TAB_CAP} Close one with browser_tabs before opening another.`);
+      if (url) return loadAndDescribe(context, url, `Opened tab: ${hostOf(url)}`, tab);
+      context.report?.label('Opened a new tab');
+      return `Opened a blank tab, which is now the active one.\n\n${listTabs(browser.tabs())}`;
+    }
+    const id = tabId(input);
+    if (action === 'close') {
+      const closed = await browser.closeTab(id);
+      context.report?.label(`Closed tab: ${tabName(closed)}`);
+      return `Closed tab ${id}.\n\n${listTabs(browser.tabs())}`;
+    }
+    const selected = await browser.selectTab(id);
+    context.report?.label(`Switched to tab: ${tabName(selected)}`);
+    if (!selected.url) return `Switched to tab ${id}, which has no page yet.`;
+    return onPage(context, page => describePage(page, SNAPSHOT_CHARS, `Switched to tab ${id}.`));
   },
 };
 
@@ -450,6 +572,7 @@ export const browserEvaluate: ToolDefinition = {
 
 export const BROWSER_TOOLS: readonly ToolDefinition[] = [
   browserNavigate,
+  browserTabs,
   browserSnapshot,
   browserClick,
   browserType,

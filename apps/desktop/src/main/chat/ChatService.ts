@@ -633,6 +633,8 @@ export class ChatService {
     // Stops polling only; opening the conversation again lists its cards, which resumes them.
     this.deps.videoJobs?.stopSession(sessionId);
     this.webSearches.forget(sessionId);
+    // Its tabs are live renderer processes; nothing is lost, since tabs never outlive the app either.
+    void this.deps.browser?.closeSession(sessionId).catch(() => undefined);
   }
 
   listModels(force = false): Promise<ChatModelCatalog> {
@@ -4204,6 +4206,10 @@ const BROWSER_GUIDANCE: readonly string[] = [
   'browser_evaluate runs JavaScript in the page with its cookies, for reading state or calling',
   'the app API as the signed-in user. Do not interact through it: scroll, click and type with',
   'browser_scroll, browser_click and browser_type, using refs from the snapshot.',
+  'The browser has tabs, and every browser tool acts on the active one. browser_tabs lists, opens,',
+  'selects and closes them; browser_navigate with new_tab opens a page beside the current one.',
+  'A link that opens a new tab opens it in the background and the step result says which tab;',
+  'select it to use it. The user can switch tabs too, so check the list before relying on one.',
 ];
 
 const WEB_GUIDANCE: readonly string[] = [

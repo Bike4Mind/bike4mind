@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { MAX_BROWSER_TABS } from '@shared/browserTabs';
 import type { ChatMedia } from '@shared/chat';
 import {
   browserClick,
@@ -7,10 +8,11 @@ import {
   browserScreenshot,
   browserScroll,
   browserSnapshot,
+  browserTabs,
   browserType,
   isLocalUrl,
 } from './browserTools';
-import type { BrowserPage, ToolContext } from './types';
+import type { BrowserPage, BrowserTabInfo, ToolContext } from './types';
 
 function fakePage(start = ''): BrowserPage & { url: string; events: string[] } {
   const page = {
@@ -37,14 +39,62 @@ function fakePage(start = ''): BrowserPage & { url: string; events: string[] } {
   return page;
 }
 
+/** A tab strip shaped like BrowserManager's: ids in opening order, the neighbour active after a close. */
+function fakeTabs(first: BrowserPage) {
+  const open = [{ id: 1, page: first }];
+  let active = 1;
+  let nextId = 2;
+  const info = (entry: (typeof open)[number]): BrowserTabInfo => ({
+    id: entry.id,
+    title: entry.page.currentUrl() ? 'Home' : '',
+    url: entry.page.currentUrl(),
+    active: entry.id === active,
+  });
+  const named = (id: number) => {
+    const entry = open.find(candidate => candidate.id === id);
+    if (!entry) throw new Error(`There is no tab ${id}.`);
+    return entry;
+  };
+  return {
+    open,
+    page: async () => named(active).page,
+    tabs: () => open.map(info),
+    newTab: async () => {
+      if (open.length >= MAX_BROWSER_TABS) return null;
+      const entry = { id: nextId++, page: fakePage() };
+      open.push(entry);
+      active = entry.id;
+      return entry.page;
+    },
+    selectTab: async (id: number) => {
+      active = named(id).id;
+      return info(named(id));
+    },
+    closeTab: async (id: number) => {
+      const entry = named(id);
+      const closed = info(entry);
+      const index = open.indexOf(entry);
+      open.splice(index, 1);
+      if (active === id) active = (open[index] ?? open[index - 1])?.id ?? 0;
+      return closed;
+    },
+  };
+}
+
 function contextFor(page: BrowserPage, importedSites: readonly string[] = []) {
   const media: ChatMedia[] = [];
   const images: { bytes: Buffer; mimeType: string }[] = [];
+  const labels: string[] = [];
+  const tabs = fakeTabs(page);
   const context: ToolContext = {
     roots: ['/repo'],
     signal: new AbortController().signal,
     browser: {
-      page: async () => page,
+      page: tabs.page,
+      tabs: tabs.tabs,
+      newTab: tabs.newTab,
+      selectTab: tabs.selectTab,
+      closeTab: tabs.closeTab,
       usesImportedCookies: url => importedSites.some(site => new URL(url).hostname === site),
       keepScreenshot: async (bytes, caption) => ({
         kind: 'image',
@@ -58,14 +108,14 @@ function contextFor(page: BrowserPage, importedSites: readonly string[] = []) {
       progress: () => undefined,
       media: item => media.push(item),
       notice: () => undefined,
-      label: () => undefined,
+      label: text => labels.push(text),
       moved: () => undefined,
       diff: () => undefined,
       detail: () => undefined,
       image: (bytes, mimeType) => images.push({ bytes, mimeType }),
     },
   };
-  return { context, media, images };
+  return { context, media, images, labels, open: tabs.open };
 }
 
 describe('isLocalUrl', () => {
@@ -356,5 +406,109 @@ describe('browser tools at a stop or a deadline', () => {
 
     await expect(browserSnapshot.run({}, { ...context, signal: controller.signal })).rejects.toThrow(/^Stopped/);
     expect(page.snapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe('browser tabs', () => {
+  const pageOf = (open: { id: number; page: BrowserPage }[], id: number) =>
+    open.find(entry => entry.id === id)?.page as ReturnType<typeof fakePage>;
+
+  it('lists every tab with its id, title, url and which one is active', async () => {
+    const { context } = contextFor(fakePage('http://localhost:3080/'));
+    await browserTabs.run({ action: 'new' }, context);
+
+    const listed = await browserTabs.run({ action: 'list' }, context);
+    expect(listed).toContain(`2 of at most ${MAX_BROWSER_TABS} tabs open:`);
+    expect(listed).toContain('- tab 1: Home - http://localhost:3080/');
+    expect(listed).toContain('- tab 2 (active): (untitled) - (no page yet)');
+  });
+
+  it('opens a url in a new tab, leaving the old page where it was', async () => {
+    const first = fakePage('http://localhost:3080/a');
+    const { context, open, labels } = contextFor(first);
+
+    const result = await browserTabs.run({ action: 'new', url: 'localhost:3080/b' }, context);
+
+    expect(first.navigate).not.toHaveBeenCalled();
+    expect(pageOf(open, 2).navigate).toHaveBeenCalledWith('http://localhost:3080/b');
+    expect(result).toContain('Loaded http://localhost:3080/b (HTTP 200).');
+    expect(labels.at(-1)).toBe('Opened tab: localhost:3080');
+  });
+
+  it('points every other tool at the active tab after a switch', async () => {
+    const first = fakePage('http://localhost:3080/a');
+    const { context, open, labels } = contextFor(first);
+    await browserTabs.run({ action: 'new', url: 'localhost:3080/b' }, context);
+
+    await browserClick.run({ ref: '1' }, context);
+    expect(pageOf(open, 2).click).toHaveBeenCalledTimes(1);
+    expect(first.click).not.toHaveBeenCalled();
+
+    const switched = await browserTabs.run({ action: 'select', id: '1' }, context);
+    expect(switched).toContain('Switched to tab 1.');
+    expect(labels.at(-1)).toBe('Switched to tab: Home');
+    await browserClick.run({ ref: '1' }, context);
+    expect(first.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes a tab and hands the active slot to its neighbour', async () => {
+    const { context, open, labels } = contextFor(fakePage('http://localhost:3080/a'));
+    await browserTabs.run({ action: 'new', url: 'localhost:3080/b' }, context);
+
+    const result = await browserTabs.run({ action: 'close', id: 2 }, context);
+    expect(result).toContain('Closed tab 2.');
+    expect(result).toContain('- tab 1 (active)');
+    expect(labels.at(-1)).toBe('Closed tab: Home');
+    expect(open.map(entry => entry.id)).toEqual([1]);
+  });
+
+  it('refuses a tab id it cannot read, and an action it does not know', async () => {
+    const { context } = contextFor(fakePage());
+    await expect(browserTabs.run({ action: 'select' }, context)).rejects.toThrow(/"id" is required/);
+    await expect(browserTabs.run({ action: 'close', id: 'two' }, context)).rejects.toThrow(/"id" is required/);
+    await expect(browserTabs.run({ action: 'select', id: 9 }, context)).rejects.toThrow('There is no tab 9.');
+    await expect(browserTabs.run({ action: 'move' }, context)).rejects.toThrow(/must be one of list, new/);
+  });
+
+  it('says so at the cap rather than opening another', async () => {
+    const { context } = contextFor(fakePage());
+    for (let i = 1; i < MAX_BROWSER_TABS; i++) await browserTabs.run({ action: 'new' }, context);
+
+    await expect(browserTabs.run({ action: 'new' }, context)).rejects.toThrow(/already has 10 tabs open/);
+  });
+
+  it('opens a tab to a url under browser_navigate approval rules, and asks nothing for the rest', async () => {
+    const { context } = contextFor(fakePage('https://example.com/'));
+    expect(await browserTabs.needsApproval!({ action: 'new', url: 'localhost:3080' }, context)).toBe(false);
+    expect(await browserTabs.needsApproval!({ action: 'new', url: 'example.com/cart' }, context)).toBe(true);
+    expect(await browserTabs.approval!({ action: 'new', url: 'example.com/cart' }, context)).toMatchObject({
+      detail: 'Open https://example.com/cart',
+      key: 'browser-open:https://example.com',
+    });
+    for (const input of [
+      { action: 'new' },
+      { action: 'list' },
+      { action: 'select', id: 1 },
+      { action: 'close', id: 1 },
+    ]) {
+      expect(await browserTabs.needsApproval!(input, context)).toBe(false);
+    }
+  });
+
+  it('opens browser_navigate in a new tab when asked, and in the active one past the cap', async () => {
+    const first = fakePage('http://localhost:3080/a');
+    const { context, open, labels } = contextFor(first);
+
+    await browserNavigate.run({ url: 'localhost:3080/b', new_tab: true }, context);
+    expect(first.navigate).not.toHaveBeenCalled();
+    expect(pageOf(open, 2).navigate).toHaveBeenCalledWith('http://localhost:3080/b');
+    expect(labels.at(-1)).toBe('Opened tab: localhost:3080');
+
+    while (open.length < MAX_BROWSER_TABS) await browserTabs.run({ action: 'new' }, context);
+    const active = pageOf(open, open.at(-1)!.id);
+    const result = await browserNavigate.run({ url: 'localhost:3080/c', new_tab: true }, context);
+    expect(active.navigate).toHaveBeenCalledWith('http://localhost:3080/c');
+    expect(open).toHaveLength(MAX_BROWSER_TABS);
+    expect(result).toMatch(/^This conversation already has 10 tabs open.*opened in the active tab instead/);
   });
 });

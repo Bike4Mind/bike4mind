@@ -25,6 +25,7 @@ import {
   type BrowserNavigateRequest,
   type BrowserPageStateEvent,
   type BrowserPaneRequest,
+  type BrowserTabRequest,
   type DesktopApi,
 } from '@shared/ipc';
 import type { PrBarState, PrOption, PrSummaryEvent } from '@shared/pullRequest';
@@ -180,6 +181,7 @@ const api: DesktopApi = {
     setPane: (request: BrowserPaneRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserSetPane, request),
     navigate: (request: BrowserNavigateRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserNavigate, request),
     go: (request: BrowserGoRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserGo, request),
+    tab: (request: BrowserTabRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserTab, request),
     onPageState: listener => {
       const handler = (_event: unknown, event: BrowserPageStateEvent) => listener(event);
       ipcRenderer.on(IPC_CHANNELS.browserPageState, handler);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
@@ -31,12 +31,15 @@ import { ArrowLeftIcon, ArrowRightIcon, ReloadIcon, WarningIcon } from './icons'
 export function BrowserNavbar({
   state,
   cookies,
+  addressRef,
   onNavigate,
   onGo,
   onCookieState,
 }: {
   state: BrowserPaneState;
   cookies: CookieImportState;
+  /** The address field, for the pane to focus when the user opens a blank tab. */
+  addressRef?: RefObject<HTMLInputElement | null>;
   onNavigate: (url: string) => void;
   onGo: (action: BrowserGoAction) => void;
   onCookieState: (state: CookieImportState) => void;
@@ -141,7 +144,7 @@ export function BrowserNavbar({
           }}
           sx={{ flex: 1, minWidth: 0, fontSize: 'xs' }}
           // On the field itself rather than on Joy's wrapper, so what finds it has its value.
-          slotProps={{ input: { 'aria-label': 'Address', 'data-testid': 'chat-browser-url' } }}
+          slotProps={{ input: { ref: addressRef, 'aria-label': 'Address', 'data-testid': 'chat-browser-url' } }}
         />
         <BrowserCookiesMenu state={cookies} onState={onCookieState} />
       </Stack>

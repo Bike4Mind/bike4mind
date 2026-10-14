@@ -173,9 +173,25 @@ export interface BrowserProvider {
   closeSession(sessionId: string): Promise<void>;
 }
 
+/** One of a conversation's tabs, as browser_tabs lists it. */
+export interface BrowserTabInfo {
+  id: number;
+  title: string;
+  url: string;
+  active: boolean;
+}
+
 export interface BrowserContext {
-  /** The session's page, opened on first use. */
+  /** The session's ACTIVE tab, opened on first use. Every page tool acts on this one. */
   page(): Promise<BrowserPage>;
+  /** In strip order. */
+  tabs(): BrowserTabInfo[];
+  /** Open a blank tab and make it the active one. Null when the conversation is at the tab cap. */
+  newTab(): Promise<BrowserPage | null>;
+  /** Make a tab the active one, which the user's pane follows. Throws for an id that is not open. */
+  selectTab(id: number): Promise<BrowserTabInfo>;
+  /** Close a tab; the one beside it becomes active if it was. Throws for an id that is not open. */
+  closeTab(id: number): Promise<BrowserTabInfo>;
   /** Keep a screenshot for the transcript, so the user sees what the model saw. */
   keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
   /**

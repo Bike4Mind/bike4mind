@@ -3,7 +3,7 @@ import { act, createRef, type RefObject } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BrowserPaneBounds, BrowserPaneRequest, BrowserPaneState } from '@shared/ipc';
+import type { BrowserPaneBounds, BrowserPaneRequest, BrowserPaneState, BrowserTabRequest } from '@shared/ipc';
 import { BROWSER_PANE_WIDTH } from './agentBrowser';
 import { BrowserPane } from './BrowserPane';
 
@@ -34,9 +34,15 @@ const PAGE: BrowserPaneState = {
   canGoForward: false,
   loading: false,
   error: '',
+  tabs: [
+    { id: 1, title: 'Example Domain', url: 'https://example.com/', loading: false },
+    { id: 4, title: '', url: '', loading: false },
+  ],
+  activeTabId: 1,
 };
 
 const setPane = vi.fn<(request: BrowserPaneRequest) => Promise<BrowserPaneState>>();
+const tab = vi.fn<(request: BrowserTabRequest) => Promise<BrowserPaneState>>();
 let frames = new Map<number, FrameRequestCallback>();
 let nextFrame = 1;
 /** Every live ResizeObserver's callback; jsdom has no layout to fire them from. */
@@ -154,11 +160,14 @@ beforeEach(() => {
 
   setPane.mockReset();
   setPane.mockResolvedValue(PAGE);
+  tab.mockReset();
+  tab.mockResolvedValue(PAGE);
   (window as unknown as { b4m: unknown }).b4m = {
     browser: {
       setPane,
       navigate: vi.fn(),
       go: vi.fn(),
+      tab,
       onPageState: () => () => {},
       cookies: {
         getState: () => Promise.resolve({ supported: false, unsupported: '', sites: [] }),
@@ -380,5 +389,86 @@ describe('the browser pane resize handle', () => {
     mount();
     // 1100px between the pane and the conversation; the conversation keeps 400 of it.
     expect(paneWidth()).toBe(700);
+  });
+});
+
+describe('the browser pane tab strip', () => {
+  const tabs = () => [...(host?.querySelectorAll<HTMLElement>('[data-testid="browser-tab-select-btn"]') ?? [])];
+  const address = () => host?.querySelector<HTMLInputElement>('[data-testid="chat-browser-url"]') ?? null;
+  const settled = () => act(async () => undefined);
+  const key = (target: HTMLElement | null, code: string, shiftKey = false) =>
+    act(() => {
+      target?.dispatchEvent(
+        new KeyboardEvent('keydown', { code, shiftKey, metaKey: true, ctrlKey: true, bubbles: true, cancelable: true })
+      );
+    });
+
+  it('draws each tab with the active one selected, and a blank one as a new tab', async () => {
+    mount();
+    await settled();
+    expect(tabs().map(element => [element.textContent, element.getAttribute('aria-selected')])).toEqual([
+      ['Example Domain', 'true'],
+      ['New tab', 'false'],
+    ]);
+  });
+
+  it('switches on a click, and closes on the close button or a middle-click without switching', async () => {
+    mount();
+    await settled();
+
+    act(() => tabs()[1].click());
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'select', tabId: 4 });
+
+    act(() => tabs()[1].querySelector<HTMLElement>('[data-testid="browser-tab-close-btn"]')?.click());
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'close', tabId: 4 });
+    expect(tab).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      tabs()[0].dispatchEvent(new MouseEvent('auxclick', { button: 1, bubbles: true }));
+    });
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'close', tabId: 1 });
+  });
+
+  it('opens a tab from the plus and puts the cursor in the address', async () => {
+    mount();
+    await settled();
+
+    act(() => host?.querySelector<HTMLElement>('[data-testid="browser-tab-new-btn"]')?.click());
+
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'new', tabId: undefined });
+    expect(document.activeElement).toBe(address());
+  });
+
+  it('takes the tab shortcuts while focus is in the pane, and swallows them', async () => {
+    mount();
+    await settled();
+    const field = address();
+
+    key(field, 'BracketRight', true);
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'select', tabId: 4 });
+    key(field, 'BracketLeft', true);
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'select', tabId: 4 });
+    key(field, 'KeyW');
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'close', tabId: 1 });
+    key(field, 'KeyT');
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'new', tabId: undefined });
+
+    const plain = new KeyboardEvent('keydown', { code: 'KeyW', bubbles: true, cancelable: true });
+    act(() => {
+      field?.dispatchEvent(plain);
+    });
+    expect(plain.defaultPrevented).toBe(false);
+    expect(tab).toHaveBeenCalledTimes(4);
+  });
+
+  it('says the conversation has no tabs once the last one closed', async () => {
+    setPane.mockResolvedValue({ ...PAGE, url: '', tabs: [], activeTabId: null });
+    mount();
+    await settled();
+
+    expect(tabs()).toEqual([]);
+    expect(host?.querySelector('[data-testid="chat-browser-pane-empty"]')?.textContent).toBe(
+      "This conversation's browser has no tabs open."
+    );
   });
 });

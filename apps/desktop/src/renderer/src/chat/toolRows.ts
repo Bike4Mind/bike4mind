@@ -300,6 +300,12 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Read ${n} web pages`,
     active: 'Reading a web page...',
   },
+  browser_tabs: {
+    didAlone: 'Changed browser tabs',
+    toAlone: 'change browser tabs',
+    many: n => `Changed browser tabs ${n} times`,
+    active: 'Switching tabs...',
+  },
   browser_scroll: {
     did: 'Scrolled to',
     didAlone: 'Scrolled the page',

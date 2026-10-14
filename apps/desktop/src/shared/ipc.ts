@@ -184,6 +184,8 @@ export const IPC_CHANNELS = {
   browserNavigate: 'browser:navigate',
   /** Back, forward or reload from the pane's url bar. Renderer -> main. */
   browserGo: 'browser:go',
+  /** Open, switch to or close a tab from the pane's tab strip. Renderer -> main. */
+  browserTab: 'browser:tab',
   /**
    * main -> renderer push; one conversation's page moved, started loading, or failed to.
    *
@@ -290,6 +292,23 @@ export interface BrowserPaneState {
    * of carrying it rather than letting the pane show a page that is quietly out of date.
    */
   error: string;
+  /**
+   * Every tab the conversation has open, in strip order. The fields above are the ACTIVE tab's;
+   * main owns which one that is, so the agent switching tabs and the user clicking one are the
+   * same push.
+   */
+  tabs: BrowserTabSummary[];
+  /** Null when the conversation has no tab open. */
+  activeTabId: number | null;
+}
+
+/** One entry in the pane's tab strip. */
+export interface BrowserTabSummary {
+  /** Stable for the tab's life and never reused within a conversation. */
+  id: number;
+  title: string;
+  url: string;
+  loading: boolean;
 }
 
 export type BrowserPageStateEvent = BrowserPaneState & { sessionId: string };
@@ -306,6 +325,15 @@ export type BrowserGoAction = 'back' | 'forward' | 'reload';
 export interface BrowserGoRequest {
   sessionId: string;
   action: BrowserGoAction;
+}
+
+export type BrowserTabAction = 'new' | 'select' | 'close';
+
+/** `tabId` names the tab for select and close; new ignores it. */
+export interface BrowserTabRequest {
+  sessionId: string;
+  action: BrowserTabAction;
+  tabId?: number;
 }
 
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
@@ -586,6 +614,7 @@ export interface DesktopApi {
     /** Open a url the user typed. Rejects with a reason for a scheme that is refused. */
     navigate(request: BrowserNavigateRequest): Promise<BrowserPaneState>;
     go(request: BrowserGoRequest): Promise<BrowserPaneState>;
+    tab(request: BrowserTabRequest): Promise<BrowserPaneState>;
     /** Subscribe to page state; returns the unsubscribe. */
     onPageState(listener: (event: BrowserPageStateEvent) => void): () => void;
     /**

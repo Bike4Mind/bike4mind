@@ -37,6 +37,8 @@ import {
   type BrowserPaneBounds,
   type BrowserPaneRequest,
   type BrowserPaneState,
+  type BrowserTabAction,
+  type BrowserTabRequest,
 } from '@shared/ipc';
 import type { McpMutationResult, McpServerInput, McpServersState } from '@shared/mcp';
 import type { AuthService } from '../auth';
@@ -645,6 +647,14 @@ export function registerChat(auth: AuthService): RegisteredChat {
       throw new Error('A conversation and one of back, forward or reload are required.');
     }
     return browser.go(request.sessionId, request.action);
+  });
+  ipcMain.handle(IPC_CHANNELS.browserTab, (_event, request: BrowserTabRequest): Promise<BrowserPaneState> => {
+    const actions: readonly BrowserTabAction[] = ['new', 'select', 'close'];
+    if (typeof request?.sessionId !== 'string' || !actions.includes(request?.action)) {
+      throw new Error('A conversation and one of new, select or close are required.');
+    }
+    const tabId = typeof request.tabId === 'number' && Number.isInteger(request.tabId) ? request.tabId : undefined;
+    return browser.tab(request.sessionId, request.action, tabId);
   });
 
   /**

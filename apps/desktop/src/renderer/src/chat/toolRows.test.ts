@@ -312,3 +312,19 @@ describe('browser_scroll rows', () => {
     expect(group.label).toBe('Scrolled 2 times');
   });
 });
+
+describe('browser_tabs rows', () => {
+  it('reads as what happened to the tabs, from the label the tool wrote', () => {
+    const opened = call('1', 'browser_tabs', { action: 'new', url: 'https://example.com' });
+    expect(toolRowLabel({ ...opened, label: 'Opened tab: example.com' })).toBe('Opened tab: example.com');
+    expect(
+      toolRowLabel({ ...call('2', 'browser_tabs', { action: 'select', id: 2 }), label: 'Switched to tab: Docs' })
+    ).toBe('Switched to tab: Docs');
+  });
+
+  it('does not claim a tab change that failed', () => {
+    expect(toolRowLabel(call('1', 'browser_tabs', { action: 'select', id: 9 }, 'error'))).toBe(
+      'Failed to change browser tabs'
+    );
+  });
+});

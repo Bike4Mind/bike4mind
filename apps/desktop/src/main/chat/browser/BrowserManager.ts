@@ -8,10 +8,17 @@ import {
 } from 'electron';
 import type { CookieImportState } from '@shared/browserCookies';
 import type { ChatMedia } from '@shared/chat';
+import { browserTabShortcut, MAX_BROWSER_TABS, type BrowserTabShortcut } from '@shared/browserTabs';
 import { normalizeUrl } from '@shared/browserUrl';
-import type { BrowserGoAction, BrowserPaneBounds, BrowserPaneState } from '@shared/ipc';
+import type {
+  BrowserGoAction,
+  BrowserPaneBounds,
+  BrowserPaneState,
+  BrowserTabAction,
+  BrowserTabSummary,
+} from '@shared/ipc';
 import { markAgentBrowserWindow } from '../../windows';
-import type { BrowserContext, BrowserPage, BrowserProvider } from '../tools/types';
+import type { BrowserContext, BrowserPage, BrowserProvider, BrowserTabInfo } from '../tools/types';
 import { CookieImporter } from './cookies/CookieImporter';
 import {
   CLICK_REF,
@@ -46,8 +53,24 @@ const CAPTURE_TIMEOUT_MS = 15_000;
 /** Network idle has to hold this long to count; a SPA fires its next request right after load. */
 const QUIET_MS = 400;
 const MAX_BUFFERED_EVENTS = 200;
+/**
+ * How long after an agent step a popup still counts as the agent's. Synthetic key events are
+ * delivered asynchronously, so the popup a pressed Enter causes can arrive after press() returned.
+ */
+const AGENT_POPUP_GRACE_MS = 1_000;
 
 type ConsoleArgs = [unknown, ...unknown[]];
+
+/** The url bar's half of the pane state: one tab's. The manager adds the strip. */
+type TabBarState = Omit<BrowserPaneState, 'tabs' | 'activeTabId'>;
+
+interface TabHooks {
+  onClosed: () => void;
+  onChanged: () => void;
+  /** A popup or `target=_blank` asked for `url`. `fromAgent` when one of the agent's own steps caused it. */
+  onWindowOpen: (url: string, fromAgent: boolean, background: boolean) => void;
+  onShortcut: (shortcut: BrowserTabShortcut) => void;
+}
 
 const TIMED_OUT = Symbol('timed out');
 
@@ -91,7 +114,7 @@ function consoleEntry(args: ConsoleArgs): { level: string; message: string; sour
 }
 
 /**
- * One conversation's page, as a view that can be moved between windows.
+ * One tab of a conversation's browser, as a view that can be moved between windows.
  *
  * A `WebContentsView` rather than a window of its own, because that is the only thing Electron
  * can put INSIDE the app window as a pane. It is always the child of some window: the app
@@ -113,13 +136,16 @@ class ElectronPage implements BrowserPage {
   private lastError = '';
   /** Main-frame navigations committed so far; tells a load that showed nothing from one that showed a page. */
   private commits = 0;
+  /** Agent steps running in this page right now; a popup opened during one is the agent's. */
+  private acting = 0;
+  private actedAt = 0;
   inflight = 0;
   lastNetworkAt = 0;
 
   constructor(
     partition: Session,
-    private readonly onClosed: () => void,
-    private readonly onChanged: () => void
+    readonly id: number,
+    private readonly hooks: TabHooks
   ) {
     this.host = new BrowserWindow({
       show: false,
@@ -133,7 +159,8 @@ class ElectronPage implements BrowserPage {
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
-        backgroundThrottling: false,
+        // Until it is the active tab; see setActive.
+        backgroundThrottling: true,
       },
     });
     this.host.contentView.addChildView(this.view);
@@ -144,30 +171,47 @@ class ElectronPage implements BrowserPage {
     this.webContents = contents;
     this.contentsId = contents.id;
     contents.setAudioMuted(true);
-    // A popup would be a window nobody can see; open it in this page instead.
-    contents.setWindowOpenHandler(({ url }) => {
-      void contents.loadURL(url).catch(() => undefined);
+    // A popup would be a window nobody can see, so it becomes a tab. Only http and https: main's
+    // loadURL is not bound by the rules that stop a web page opening file: itself.
+    contents.setWindowOpenHandler(({ url, disposition }) => {
+      const fromAgent = this.acting > 0 || Date.now() - this.actedAt < AGENT_POPUP_GRACE_MS;
+      if (/^https?:/i.test(url)) this.hooks.onWindowOpen(url, fromAgent, disposition === 'background-tab');
+      else this.record(`blocked a popup to ${url.slice(0, 200)}: only http and https pages open in a tab`);
       return { action: 'deny' };
+    });
+    // Focus inside the page means the renderer hears none of these keys.
+    contents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return;
+      const shortcut = browserTabShortcut({
+        code: input.code,
+        shift: input.shift,
+        alt: input.alt,
+        primary: process.platform === 'darwin' ? input.meta : input.control,
+      });
+      if (!shortcut) return;
+      event.preventDefault();
+      this.hooks.onShortcut(shortcut);
     });
     contents.on('did-navigate', (_event, url, status) => {
       this.commits += 1;
       this.lastStatus = status;
       this.lastError = '';
       this.record(`navigated to ${url}${status ? ` (HTTP ${status})` : ''}`);
-      this.onChanged();
+      this.hooks.onChanged();
     });
     // A route change inside a SPA never fires did-navigate, and the pane still has to learn
     // that this page is now somewhere.
     contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
-      if (isMainFrame) this.onChanged();
+      if (isMainFrame) this.hooks.onChanged();
     });
+    contents.on('page-title-updated', () => this.hooks.onChanged());
     // The url bar's spinner and its enabled state, which nothing else would tell it about: a
     // reload moves neither the url nor the history.
     contents.on('did-start-loading', () => {
       this.lastError = '';
-      this.onChanged();
+      this.hooks.onChanged();
     });
-    contents.on('did-stop-loading', () => this.onChanged());
+    contents.on('did-stop-loading', () => this.hooks.onChanged());
     contents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
       // -3 is ERR_ABORTED: a redirect or a client-side route change replacing the load, not a failure.
       if (!isMainFrame || code === -3) return;
@@ -183,13 +227,22 @@ class ElectronPage implements BrowserPage {
       this.record(`the page crashed (${details.reason})`);
       this.fail(`The page crashed (${details.reason}).`);
     });
-    contents.on('destroyed', () => this.onClosed());
+    contents.on('destroyed', () => this.hooks.onClosed());
   }
 
   /** Say why nothing arrived, and tell the pane: a silent failure is a blank pane with no reason. */
   fail(reason: string): void {
     this.lastError = reason;
-    this.onChanged();
+    this.hooks.onChanged();
+  }
+
+  /**
+   * Only the active tab runs at full speed. It is unthrottled even while parked, because parked
+   * is where the agent drives it from; an inactive one is throttled like a background tab in
+   * Chrome, so ten open tabs cost about what one does.
+   */
+  setActive(active: boolean): void {
+    if (!this.webContents.isDestroyed()) this.webContents.setBackgroundThrottling(!active);
   }
 
   record(line: string): void {
@@ -215,6 +268,7 @@ class ElectronPage implements BrowserPage {
 
   /** Take the view back out of the app window, at the size every tool has always seen. */
   park(): void {
+    if (this.parent === this.host) return;
     this.moveTo(this.host);
     this.view.setBounds({ x: 0, y: 0, ...VIEWPORT });
   }
@@ -230,8 +284,27 @@ class ElectronPage implements BrowserPage {
     return this.webContents.isDestroyed() ? '' : this.webContents.getURL();
   }
 
+  title(): string {
+    return this.webContents.isDestroyed() ? '' : this.webContents.getTitle();
+  }
+
+  summary(): BrowserTabSummary {
+    const url = this.currentUrl();
+    return {
+      id: this.id,
+      title: this.title(),
+      url: hasContent(url) ? url : '',
+      loading: !this.webContents.isDestroyed() && this.webContents.isLoading(),
+    };
+  }
+
+  /** Load without waiting, for a tab opened from a popup: its failures arrive as state and events. */
+  open(url: string): void {
+    if (!this.webContents.isDestroyed()) void this.webContents.loadURL(url).catch(() => undefined);
+  }
+
   /** What the pane's url bar draws. A destroyed page has nothing to say and no controls to offer. */
-  state(): BrowserPaneState {
+  state(): TabBarState {
     const contents = this.webContents;
     if (contents.isDestroyed()) {
       return { url: '', canGoBack: false, canGoForward: false, loading: false, error: this.lastError };
@@ -292,6 +365,20 @@ class ElectronPage implements BrowserPage {
    * the page recovers, which the error says.
    */
   private async script<T>(code: string, what: string, userGesture = false, timeoutMs = SCRIPT_TIMEOUT_MS): Promise<T> {
+    return this.asAgent(() => this.runScript<T>(code, what, userGesture, timeoutMs));
+  }
+
+  private async asAgent<T>(step: () => Promise<T>): Promise<T> {
+    this.acting += 1;
+    try {
+      return await step();
+    } finally {
+      this.acting -= 1;
+      this.actedAt = Date.now();
+    }
+  }
+
+  private async runScript<T>(code: string, what: string, userGesture: boolean, timeoutMs: number): Promise<T> {
     const contents = this.contents;
     const run = contents.executeJavaScript(code, userGesture) as Promise<T>;
     const first = await within(run, timeoutMs);
@@ -347,10 +434,12 @@ class ElectronPage implements BrowserPage {
       );
       if (submitted) return;
     }
-    contents.focus();
-    contents.sendInputEvent({ type: 'keyDown', keyCode: key });
-    if (key.length === 1) contents.sendInputEvent({ type: 'char', keyCode: key });
-    contents.sendInputEvent({ type: 'keyUp', keyCode: key });
+    await this.asAgent(async () => {
+      contents.focus();
+      contents.sendInputEvent({ type: 'keyDown', keyCode: key });
+      if (key.length === 1) contents.sendInputEvent({ type: 'char', keyCode: key });
+      contents.sendInputEvent({ type: 'keyUp', keyCode: key });
+    });
   }
 
   async screenshot(): Promise<Buffer> {
@@ -411,12 +500,25 @@ export const NO_PAGE: BrowserPaneState = {
   canGoForward: false,
   loading: false,
   error: '',
+  tabs: [],
+  activeTabId: null,
 };
 
+/** One conversation's tabs. `active` is set exactly when `list` is not empty. */
+interface SessionTabs {
+  list: ElectronPage[];
+  active: ElectronPage | undefined;
+  /** Kept when every tab closes, so an id the agent was told about never names a different tab. */
+  nextId: number;
+}
+
 /**
- * The agent's browser: one page per conversation, created on first use and closed with the
- * conversation or the app. Main-process only; tools reach it through {@link BrowserContext},
- * and the renderer reaches it through {@link setPane}.
+ * The agent's browser: an ordered list of tabs per conversation, created on first use and closed
+ * with the conversation or the app. Main-process only; tools reach it through
+ * {@link BrowserContext}, and the renderer reaches it through {@link setPane} and {@link tab}.
+ *
+ * Which tab is active lives here and nowhere else. The agent's tools act on it, the pane draws
+ * it, and either side changing it is one push the other follows.
  *
  * At most one page is on screen at a time. `pane` is the renderer's standing REQUEST - which
  * conversation, and where - and `apply` is what turns it into the one view that is currently a
@@ -424,10 +526,12 @@ export const NO_PAGE: BrowserPaneState = {
  * page that was blank when the pane opened appear by itself the moment the agent navigates it.
  */
 export class BrowserManager implements BrowserProvider {
-  private readonly pages = new Map<string, ElectronPage>();
+  private readonly sessions = new Map<string, SessionTabs>();
   private readonly byContents = new Map<number, ElectronPage>();
   private partition: Session | undefined;
   private pane: { window: BrowserWindow; sessionId: string; bounds: BrowserPaneBounds } | undefined;
+  /** The one tab that is a child of the app window, so apply never has to walk every conversation. */
+  private shown: ElectronPage | undefined;
   private readonly watchedWindows = new WeakSet<BrowserWindow>();
 
   /**
@@ -447,20 +551,39 @@ export class BrowserManager implements BrowserProvider {
     sessionId: string,
     keepScreenshot: (bytes: Buffer, caption: string) => Promise<ChatMedia | undefined>
   ): BrowserContext {
+    const named = (id: number): ElectronPage => {
+      const tab = this.sessions.get(sessionId)?.list.find(candidate => candidate.id === id);
+      if (!tab) throw new Error(`There is no tab ${id}. browser_tabs with action "list" shows the open ones.`);
+      return tab;
+    };
     return {
-      page: async () => this.pageFor(sessionId),
+      page: async () => this.activeTab(sessionId),
+      tabs: () => this.tabInfo(sessionId),
+      newTab: async () => this.openTab(sessionId, true) ?? null,
+      selectTab: async id => {
+        const tab = named(id);
+        this.activate(sessionId, tab);
+        return this.infoOf(sessionId, tab);
+      },
+      closeTab: async id => {
+        const tab = named(id);
+        const info = this.infoOf(sessionId, tab);
+        await this.closeTab(sessionId, tab);
+        return info;
+      },
       keepScreenshot,
       usesImportedCookies: url => this.cookies.usesImportedCookies(url),
     };
   }
 
   /**
-   * Show one conversation's page in the app window, or show none.
+   * Show one conversation's active tab in the app window, or show none.
    *
    * The renderer calls this on mount, on every resize, on every conversation switch and
-   * whenever something has to be drawn over the pane, so it is cheap and idempotent. A request
-   * WITH bounds is the only thing that opens a page, which is what keeps a browser from being
-   * created for every conversation the user merely clicks on.
+   * whenever something has to be drawn over the pane, so it is cheap and idempotent. It never
+   * opens a tab: that waits for the url bar, the "+" or the agent, which is what keeps a browser
+   * from being created for every conversation the user merely looks at - and what lets closing
+   * the last tab leave the pane empty rather than reopening one on the next resize.
    */
   setPane(window: BrowserWindow, sessionId: string | null, bounds: BrowserPaneBounds | null): BrowserPaneState {
     if (!sessionId) {
@@ -469,17 +592,16 @@ export class BrowserManager implements BrowserProvider {
     }
     if (!bounds) {
       this.hidePane();
-      return this.pages.get(sessionId)?.state() ?? NO_PAGE;
+      return this.stateOf(sessionId);
     }
-    const page = this.pageFor(sessionId);
     this.pane = { window, sessionId, bounds };
     this.watch(window);
     this.apply();
-    return page.state();
+    return this.stateOf(sessionId);
   }
 
   /**
-   * Open what the user typed in the url bar.
+   * Open what the user typed in the url bar, in the active tab.
    *
    * Unlike the agent's `browser_navigate` there is no approval in front of this: the person
    * typing it is the person the approvals protect. The address is still resolved here rather
@@ -488,52 +610,70 @@ export class BrowserManager implements BrowserProvider {
    * bar can draw, not as a rejection it would have to translate.
    */
   async navigate(sessionId: string, url: string): Promise<BrowserPaneState> {
-    const page = this.pageFor(sessionId);
     const resolved = normalizeUrl(url);
+    const page = this.activeTab(sessionId);
     try {
       await page.navigate(resolved);
     } catch (err) {
       page.fail(err instanceof Error ? err.message : String(err));
     }
     this.apply();
-    return page.state();
+    return this.stateOf(sessionId);
   }
 
   /** Back, forward or reload. The resulting navigation arrives on its own as a state push. */
   go(sessionId: string, action: BrowserGoAction): BrowserPaneState {
-    const page = this.pages.get(sessionId);
+    const page = this.sessions.get(sessionId)?.active;
     if (!page) return NO_PAGE;
     page.go(action);
-    return page.state();
+    return this.stateOf(sessionId);
+  }
+
+  /** The tab strip. An id that is no longer open is ignored: the push that removed it is on its way. */
+  async tab(sessionId: string, action: BrowserTabAction, tabId?: number): Promise<BrowserPaneState> {
+    if (action === 'new') {
+      this.openTab(sessionId, true);
+      return this.stateOf(sessionId);
+    }
+    const tab = this.sessions.get(sessionId)?.list.find(candidate => candidate.id === tabId);
+    if (tab && action === 'select') this.activate(sessionId, tab);
+    if (tab && action === 'close') await this.closeTab(sessionId, tab);
+    return this.stateOf(sessionId);
   }
 
   async closeSession(sessionId: string): Promise<void> {
     if (this.pane?.sessionId === sessionId) this.pane = undefined;
-    await this.pages.get(sessionId)?.close();
+    const tabs = this.sessions.get(sessionId);
+    // Gone before the tabs close, so each one's 'destroyed' finds nothing left to rearrange.
+    this.sessions.delete(sessionId);
+    if (!tabs) return;
+    if (this.shown && tabs.list.includes(this.shown)) this.shown = undefined;
+    await Promise.all(tabs.list.map(tab => tab.close()));
   }
 
   closeAll(): void {
     this.pane = undefined;
-    for (const page of this.pages.values()) void page.close();
+    this.shown = undefined;
+    const all = [...this.sessions.values()].flatMap(tabs => tabs.list);
+    this.sessions.clear();
+    for (const tab of all) void tab.close();
   }
 
   private hidePane(): void {
     this.pane = undefined;
-    for (const page of this.pages.values()) page.park();
+    this.shown?.park();
+    this.shown = undefined;
   }
 
   private apply(): void {
     const pane = this.pane;
-    if (!pane) return;
-    const page = this.pages.get(pane.sessionId);
-    // Every other conversation's page goes back to its own window first, so switching
-    // conversations can never leave the previous one's page over the new one's pane.
-    for (const [id, other] of this.pages) if (id !== pane.sessionId) other.park();
-    if (!page?.showable || pane.window.isDestroyed()) {
-      page?.park();
-      return;
-    }
-    page.showIn(pane.window, pane.bounds);
+    const active = pane ? this.sessions.get(pane.sessionId)?.active : undefined;
+    const next = pane && active?.showable && !pane.window.isDestroyed() ? active : undefined;
+    // Parked first, so switching tabs or conversations can never leave the previous page over
+    // the new one's pane.
+    if (this.shown && this.shown !== next) this.shown.park();
+    this.shown = next;
+    if (next && pane) next.showIn(pane.window, pane.bounds);
   }
 
   /**
@@ -549,24 +689,135 @@ export class BrowserManager implements BrowserProvider {
     });
   }
 
-  private pageFor(sessionId: string): ElectronPage {
-    const existing = this.pages.get(sessionId);
-    if (existing) return existing;
-    const page: ElectronPage = new ElectronPage(
-      this.session(),
-      () => {
-        this.pages.delete(sessionId);
-        this.byContents.delete(page.contentsId);
-        if (this.pane?.sessionId === sessionId) this.pane = undefined;
-      },
-      () => {
-        this.onPageState(sessionId, page.state());
+  private stateOf(sessionId: string): BrowserPaneState {
+    const tabs = this.sessions.get(sessionId);
+    if (!tabs?.active) return NO_PAGE;
+    return { ...tabs.active.state(), tabs: tabs.list.map(tab => tab.summary()), activeTabId: tabs.active.id };
+  }
+
+  private push(sessionId: string): void {
+    this.onPageState(sessionId, this.stateOf(sessionId));
+  }
+
+  private tabInfo(sessionId: string): BrowserTabInfo[] {
+    return this.sessions.get(sessionId)?.list.map(tab => this.infoOf(sessionId, tab)) ?? [];
+  }
+
+  private infoOf(sessionId: string, tab: ElectronPage): BrowserTabInfo {
+    const { id, title, url } = tab.summary();
+    return { id, title, url, active: this.sessions.get(sessionId)?.active === tab };
+  }
+
+  /** The tab every page tool acts on, opened if the conversation has none. */
+  private activeTab(sessionId: string): ElectronPage {
+    const active = this.sessions.get(sessionId)?.active;
+    if (active) return active;
+    // With no tab open there is nothing to count against the cap.
+    return this.openTab(sessionId, true)!;
+  }
+
+  /** A new tab at the end of the strip, or undefined at the cap. */
+  private openTab(sessionId: string, activate: boolean): ElectronPage | undefined {
+    let tabs = this.sessions.get(sessionId);
+    if (!tabs) {
+      tabs = { list: [], active: undefined, nextId: 1 };
+      this.sessions.set(sessionId, tabs);
+    }
+    if (tabs.list.length >= MAX_BROWSER_TABS) return undefined;
+    const tab: ElectronPage = new ElectronPage(this.session(), tabs.nextId++, {
+      onClosed: () => this.forget(sessionId, tab),
+      onChanged: () => {
+        this.push(sessionId);
         this.apply();
+      },
+      onWindowOpen: (url, fromAgent, background) => this.openFromPage(sessionId, tab, url, fromAgent, background),
+      onShortcut: shortcut => void this.onShortcut(sessionId, shortcut),
+    });
+    tabs.list.push(tab);
+    this.byContents.set(tab.contentsId, tab);
+    if (activate || !tabs.active) this.activate(sessionId, tab);
+    else this.push(sessionId);
+    return tab;
+  }
+
+  /**
+   * A popup or `target=_blank` link, as a tab.
+   *
+   * The user's own click brings it to the front, as in any browser. The agent's opens behind,
+   * so the snapshot its step returns is still of the page it acted on, and the note in that
+   * page's events tells it where the new one went.
+   */
+  private openFromPage(sessionId: string, opener: ElectronPage, url: string, fromAgent: boolean, background: boolean) {
+    if (!this.sessions.has(sessionId)) return;
+    const tab = this.openTab(sessionId, !fromAgent && !background);
+    if (!tab) {
+      opener.record(
+        `${url} asked for a new tab, but this conversation already has ${MAX_BROWSER_TABS} tabs open, ` +
+          'so it opened in this tab instead'
+      );
+      opener.open(url);
+      return;
+    }
+    tab.open(url);
+    const note = `${url} opened in a new tab (tab ${tab.id})`;
+    if (this.sessions.get(sessionId)?.active === tab) tab.record(`${note} from tab ${opener.id}`);
+    else opener.record(`${note} in the background; browser_tabs with action "select" switches to it`);
+  }
+
+  private activate(sessionId: string, tab: ElectronPage): void {
+    const tabs = this.sessions.get(sessionId);
+    if (!tabs) return;
+    if (tabs.active !== tab) tabs.active?.setActive(false);
+    tabs.active = tab;
+    tab.setActive(true);
+    this.push(sessionId);
+    this.apply();
+  }
+
+  private async closeTab(sessionId: string, tab: ElectronPage): Promise<void> {
+    this.forget(sessionId, tab);
+    await tab.close();
+  }
+
+  /**
+   * Take a tab out of its conversation. Runs for an explicit close and again from the tab's own
+   * 'destroyed', so it has to be idempotent - and the second time the contents are already gone,
+   * which is why the id it removes was read at construction.
+   */
+  private forget(sessionId: string, tab: ElectronPage): void {
+    this.byContents.delete(tab.contentsId);
+    if (this.shown === tab) this.shown = undefined;
+    const tabs = this.sessions.get(sessionId);
+    const index = tabs?.list.indexOf(tab) ?? -1;
+    if (!tabs || index < 0) return;
+    tabs.list.splice(index, 1);
+    if (tabs.active === tab) {
+      const neighbour = tabs.list[index] ?? tabs.list[index - 1];
+      tabs.active = undefined;
+      if (neighbour) {
+        this.activate(sessionId, neighbour);
+        return;
       }
-    );
-    this.pages.set(sessionId, page);
-    this.byContents.set(page.contentsId, page);
-    return page;
+    }
+    this.push(sessionId);
+    this.apply();
+  }
+
+  private async onShortcut(sessionId: string, shortcut: BrowserTabShortcut): Promise<void> {
+    const tabs = this.sessions.get(sessionId);
+    if (!tabs?.active) return;
+    if (shortcut === 'new') {
+      this.openTab(sessionId, true);
+      return;
+    }
+    if (shortcut === 'close') {
+      await this.closeTab(sessionId, tabs.active);
+      return;
+    }
+    const step = shortcut === 'next' ? 1 : -1;
+    const index = tabs.list.indexOf(tabs.active);
+    const target = tabs.list[(index + step + tabs.list.length) % tabs.list.length];
+    if (target) this.activate(sessionId, target);
   }
 
   /**

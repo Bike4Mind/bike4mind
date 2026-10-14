@@ -87,6 +87,10 @@ describe('ChatService interrupting a running tool', () => {
     const browser: BrowserProvider = {
       context: (_sessionId, keepScreenshot) => ({
         page: async () => page,
+        tabs: () => [],
+        newTab: async () => page,
+        selectTab: () => Promise.reject(new Error('No tabs in this test.')),
+        closeTab: () => Promise.reject(new Error('No tabs in this test.')),
         keepScreenshot,
         usesImportedCookies: () => false,
       }),
