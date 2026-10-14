@@ -18,6 +18,21 @@ describe('checkStorageLimit', () => {
     );
   });
 
+  it('carries a stable code and the used, limit and requested bytes', async () => {
+    await expect(
+      checkStorageLimit(user({ storageLimit: 10, currentStorageSize: 9 * MB }), 2 * MB)
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      info: {
+        errorCode: 'storage_limit_exceeded',
+        used_bytes: 9 * MB,
+        limit_bytes: 10 * MB,
+        requested_bytes: 2 * MB,
+        owner: 'user',
+      },
+    });
+  });
+
   it('defaults to a 1000MB limit', async () => {
     await expect(checkStorageLimit(user(), 1000 * MB + 1)).rejects.toThrow(BadRequestError);
     await expect(checkStorageLimit(user(), 1000 * MB)).resolves.toBe(undefined);
@@ -29,6 +44,19 @@ describe('checkOrganizationStorageLimit', () => {
     await expect(checkOrganizationStorageLimit(org({ storageLimit: 5 }), 5 * MB + 1)).rejects.toThrow(
       'Organization storage limit exceeded'
     );
+  });
+
+  it('carries a stable org code and the byte counts', async () => {
+    await expect(checkOrganizationStorageLimit(org({ storageLimit: 5 }), 5 * MB + 1)).rejects.toMatchObject({
+      statusCode: 400,
+      info: {
+        errorCode: 'org_storage_limit_exceeded',
+        used_bytes: 0,
+        limit_bytes: 5 * MB,
+        requested_bytes: 5 * MB + 1,
+        owner: 'org',
+      },
+    });
   });
 
   it('ignores any stray currentStorageSize persisted on the org', async () => {
