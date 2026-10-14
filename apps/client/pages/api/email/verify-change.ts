@@ -53,6 +53,8 @@ const handler = baseApi({ auth: false })
                 db: {
                   users: {
                     findByPendingEmailToken: async (token: string) => userRepository.findByPendingEmailToken(token),
+                    existsOtherUserWithEmail: async (email: string, excludeUserId?: string) =>
+                      userRepository.existsOtherUserWithEmail(email, excludeUserId),
                     update: async user => userRepository.update(user),
                   },
                 },

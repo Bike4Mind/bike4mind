@@ -24,14 +24,21 @@ export const getLogoUrl = (): string => {
 };
 
 /**
- * Minimal HTML escaper for transactional-email string building. Escapes &, <, >, " - safe for
- * both attribute values (its primary use: alt/src) and element inner text, since the `"` escaping
- * is harmless in text content. Brand name and logo URL come from operator config (process.env),
- * so this is defense-in-depth + consistency rather than a user-input XSS fix, but it keeps the
- * markup well-formed across all builders.
+ * HTML escaper for every value interpolated into a transactional-email body: escapes & < > " ',
+ * so the result is safe both as element text and inside a quoted attribute. Apply it to anything
+ * a user or operator can influence (usernames, names, emails, org and file names); never to a
+ * plain-text subject, which is not HTML.
  */
-export const escapeHtmlAttr = (value: string): string =>
-  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+export const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+/** Alias of {@link escapeHtml} for attribute call sites. */
+export const escapeHtmlAttr = escapeHtml;
 
 /**
  * Build the brand logo `<img>` for transactional emails, with both `alt` and `src` HTML-escaped.
@@ -44,6 +51,6 @@ export const escapeHtmlAttr = (value: string): string =>
  */
 export const buildEmailLogoImg = (brand: string, logoUrl: string = getLogoUrl()): string => {
   if (!logoUrl) return '';
-  const alt = brand ? `${escapeHtmlAttr(brand)} Logo` : 'Logo';
-  return `<img src="${escapeHtmlAttr(logoUrl)}" alt="${alt}" class="logo" />`;
+  const alt = brand ? `${escapeHtml(brand)} Logo` : 'Logo';
+  return `<img src="${escapeHtml(logoUrl)}" alt="${alt}" class="logo" />`;
 };

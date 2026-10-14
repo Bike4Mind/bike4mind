@@ -329,6 +329,31 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return this.model.findOne({ email }).collation({ locale: 'en', strength: 2 });
   }
 
+  async existsOtherUserWithEmail(email: string, excludeUserId?: string): Promise<boolean> {
+    return this.existsOtherUserWithValue('email', email, excludeUserId);
+  }
+
+  async existsOtherUserWithUsername(username: string, excludeUserId?: string): Promise<boolean> {
+    return this.existsOtherUserWithValue('username', username, excludeUserId);
+  }
+
+  // An anchored case-insensitive regex instead of .collation(): DocumentDB has no collation
+  // support (see documentdb-compat.ts), so this is the one form that matches the same rows on
+  // both engines. Soft-deleted rows count, because the unique index still covers them.
+  private async existsOtherUserWithValue(
+    field: 'email' | 'username',
+    value: string,
+    excludeUserId: string | undefined
+  ): Promise<boolean> {
+    const normalized = value.trim();
+    if (!normalized) return false;
+    const filter: Record<string, unknown> = {
+      [field]: { $regex: `^${escapeRegExp(normalized)}$`, $options: 'i' },
+    };
+    if (excludeUserId) filter._id = { $ne: excludeUserId };
+    return (await this.model.exists(filter)) !== null;
+  }
+
   async findOrCreateByEmail(email: string, defaults: Partial<IUserDocument>): Promise<IUserDocument> {
     try {
       const doc = await this.model.findOneAndUpdate(

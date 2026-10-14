@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userService } from '@bike4mind/services';
 import { EmailEvents } from '@server/utils/eventBus';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { generateVerificationLink, getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
+import { generateVerificationLink, getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
 import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
 
 // Requires authentication - users send verification to themselves
@@ -65,7 +65,7 @@ const handler = baseApi({ auth: true })
             <div class="content">
               ${buildEmailLogoImg(brand, logoUrl)}
               <h2>Verify Your Email Address</h2>
-              <p>Hello ${user.username},</p>
+              <p>Hello ${escapeHtml(user.username)},</p>
               <p>Thank you for joining${brand ? ` ${brand}` : ''}! Please verify your email address by clicking the button below:</p>
               <p><a href="${verificationLink}" class="button" style="display: inline-block; padding: 12px 24px; background-color: #1a82e2; color: #ffffff; text-decoration: none; border-radius: 4px; margin: 20px 0;">Verify Email Address</a></p>
               <p>Or copy and paste this link into your browser:</p>

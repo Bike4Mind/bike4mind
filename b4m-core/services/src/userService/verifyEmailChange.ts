@@ -1,7 +1,8 @@
-import { IUserDocument } from '@bike4mind/common';
+import { ConflictError, IUserDocument } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { safeCompareTokens } from '@bike4mind/auth/crypto';
+import { isDuplicateKeyErrorOn } from './duplicateKeyError';
 
 const verifyEmailChangeSchema = z.object({
   token: z.string(),
@@ -9,10 +10,13 @@ const verifyEmailChangeSchema = z.object({
 
 export type VerifyEmailChangeParameters = z.infer<typeof verifyEmailChangeSchema>;
 
+export const EMAIL_NO_LONGER_AVAILABLE_MESSAGE = 'This email address is no longer available.';
+
 interface VerifyEmailChangeAdapters {
   db: {
     users: {
       findByPendingEmailToken: (token: string) => Promise<IUserDocument | null>;
+      existsOtherUserWithEmail: (email: string, excludeUserId?: string) => Promise<boolean>;
       update: (user: Partial<IUserDocument>) => Promise<unknown>;
     };
   };
@@ -47,18 +51,38 @@ export const verifyEmailChange = async (
     throw new BadRequestError('Email change token has expired. Please request a new email change.');
   }
 
-  await db.users.update({
-    id: user.id,
-    // Single-use: burned in the same write that applies the change
-    pendingEmailUsed: true,
-    email: user.pendingEmail,
-    // Clear pending email fields
+  const newEmail = user.pendingEmail.trim().toLowerCase();
+  const clearPending = {
     pendingEmail: null,
     pendingEmailToken: null,
     pendingEmailSentAt: null,
     pendingEmailExpires: null,
-    // Since email changed, mark as verified with current timestamp
-    emailVerified: true,
-    emailVerifiedAt: new Date(),
-  });
+  };
+
+  // Another account can claim the address between request and verify; the request-time check
+  // alone cannot see that. The token is burned so the same link cannot be retried.
+  if (await db.users.existsOtherUserWithEmail(newEmail, user.id)) {
+    await db.users.update({ id: user.id, pendingEmailUsed: true, ...clearPending });
+    throw new ConflictError(EMAIL_NO_LONGER_AVAILABLE_MESSAGE);
+  }
+
+  try {
+    await db.users.update({
+      id: user.id,
+      // Single-use: burned in the same write that applies the change
+      pendingEmailUsed: true,
+      email: newEmail,
+      ...clearPending,
+      // Since email changed, mark as verified with current timestamp
+      emailVerified: true,
+      emailVerifiedAt: new Date(),
+    });
+  } catch (error) {
+    // Lost a race with a concurrent claim of the same exact address after the check above.
+    if (isDuplicateKeyErrorOn(error, 'email')) {
+      await db.users.update({ id: user.id, pendingEmailUsed: true, ...clearPending });
+      throw new ConflictError(EMAIL_NO_LONGER_AVAILABLE_MESSAGE);
+    }
+    throw error;
+  }
 };

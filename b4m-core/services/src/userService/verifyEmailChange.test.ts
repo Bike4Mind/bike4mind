@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { verifyEmailChange, VerifyEmailChangeParameters } from './verifyEmailChange';
 import { BadRequestError } from '@bike4mind/utils';
+import { ConflictError } from '@bike4mind/common';
 
 const baseParams: VerifyEmailChangeParameters = {
   token: 'valid-token-123',
@@ -27,6 +28,7 @@ describe('verifyEmailChange', () => {
       db: {
         users: {
           findByPendingEmailToken: vi.fn().mockResolvedValue(mockUser),
+          existsOtherUserWithEmail: vi.fn().mockResolvedValue(false),
           update: vi.fn().mockResolvedValue(undefined),
         },
       },
@@ -141,5 +143,51 @@ describe('verifyEmailChange', () => {
     expect(updatedUser.emailVerified).toBe(true);
     expect(updatedUser.emailVerifiedAt).toBeInstanceOf(Date);
     expect(updatedUser.emailVerifiedAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  describe('address availability at verify time', () => {
+    const burnedToken = {
+      id: 'userId123',
+      pendingEmailUsed: true,
+      pendingEmail: null,
+      pendingEmailToken: null,
+      pendingEmailSentAt: null,
+      pendingEmailExpires: null,
+    };
+
+    it('stores the new address trimmed and lowercased', async () => {
+      mockUser.pendingEmail = '  New.Email@Example.COM ';
+      await verifyEmailChange(baseParams, mockAdapters);
+
+      expect(mockAdapters.db.users.existsOtherUserWithEmail).toHaveBeenCalledWith('new.email@example.com', 'userId123');
+      expect(mockAdapters.db.users.update.mock.calls[0][0].email).toBe('new.email@example.com');
+    });
+
+    it('burns the token and throws a conflict when another user holds the address', async () => {
+      mockAdapters.db.users.existsOtherUserWithEmail.mockResolvedValue(true);
+
+      await expect(verifyEmailChange(baseParams, mockAdapters)).rejects.toThrow(ConflictError);
+      expect(mockAdapters.db.users.update).toHaveBeenCalledTimes(1);
+      expect(mockAdapters.db.users.update).toHaveBeenCalledWith(burnedToken);
+    });
+
+    it('maps a duplicate-key error on email to the same conflict and burns the token', async () => {
+      mockAdapters.db.users.update
+        .mockRejectedValueOnce(Object.assign(new Error('E11000'), { code: 11000, keyPattern: { email: 1 } }))
+        .mockResolvedValueOnce(undefined);
+
+      await expect(verifyEmailChange(baseParams, mockAdapters)).rejects.toThrow(
+        'This email address is no longer available.'
+      );
+      expect(mockAdapters.db.users.update).toHaveBeenLastCalledWith(burnedToken);
+    });
+
+    it('rethrows a duplicate-key error on another field unchanged', async () => {
+      const error = Object.assign(new Error('E11000'), { code: 11000, keyPattern: { username: 1 } });
+      mockAdapters.db.users.update.mockRejectedValueOnce(error);
+
+      await expect(verifyEmailChange(baseParams, mockAdapters)).rejects.toBe(error);
+      expect(mockAdapters.db.users.update).toHaveBeenCalledTimes(1);
+    });
   });
 });

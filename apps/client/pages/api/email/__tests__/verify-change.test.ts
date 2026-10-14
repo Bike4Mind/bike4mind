@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ConflictError } from '@bike4mind/common';
 
 // Middleware is stripped so the handler body runs directly (same pattern as verify.test.ts).
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
@@ -39,9 +40,11 @@ vi.mock('@server/auth/endUserSessions', () => ({
 }));
 
 const mockFindByPendingToken = vi.fn();
+const mockExistsOtherUserWithEmail = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   userRepository: {
     findByPendingEmailToken: (...a: unknown[]) => mockFindByPendingToken(...a),
+    existsOtherUserWithEmail: (...a: unknown[]) => mockExistsOtherUserWithEmail(...a),
     update: vi.fn(),
   },
 }));
@@ -103,5 +106,36 @@ describe('POST /api/email/verify-change', () => {
 
     expect(res._getStatusCode()).toBe(400);
     expect(mockSessionEnded).not.toHaveBeenCalled();
+  });
+
+  it('wires the availability lookup through to the repository', async () => {
+    mockVerifyEmailChange.mockImplementation(
+      async (
+        _params: unknown,
+        { db }: { db: { users: { existsOtherUserWithEmail: (email: string, id?: string) => unknown } } }
+      ) => {
+        await db.users.existsOtherUserWithEmail('new@example.com', 'user-1');
+      }
+    );
+    const { req, res } = fire();
+    await handler(req, res);
+
+    expect(mockExistsOtherUserWithEmail).toHaveBeenCalledWith('new@example.com', 'user-1');
+  });
+
+  it('audits and surfaces an unavailable address as a 409 with the service message', async () => {
+    mockVerifyEmailChange.mockRejectedValue(new ConflictError('This email address is no longer available.'));
+    const { req, res } = fire();
+
+    const error = await handler(req, res).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ConflictError);
+    expect((error as ConflictError).statusCode).toBe(409);
+    expect((error as ConflictError).message).toBe('This email address is no longer available.');
+    expect(mockSessionEnded).not.toHaveBeenCalled();
+    expect(mockLogAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'failed', error: 'This email address is no longer available.' }),
+      req.logger
+    );
   });
 });

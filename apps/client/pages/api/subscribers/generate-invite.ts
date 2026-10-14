@@ -5,7 +5,7 @@ import { subscriberRepository, registrationInviteRepository } from '@bike4mind/d
 import { generateCode } from '@server/managers/regInviteManager';
 import { RegInviteStatusType, requireEnv } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
-import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
+import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
 import { z } from 'zod';
 
 const generateInviteSchema = z.object({
@@ -171,7 +171,7 @@ ${brand ? `The ${brand} Team` : 'The Team'}`;
           </div>
 
           <div>
-            ${(emailBody || defaultEmailBody).replace(/\n/g, '<br/>')}
+            ${escapeHtml(emailBody || defaultEmailBody).replace(/\n/g, '<br/>')}
           </div>
 
           <div class="invite-code">

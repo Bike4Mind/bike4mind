@@ -673,6 +673,13 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   findByUsernameOrEmail: (username: string, email?: string | null) => Promise<IUserDocument | null>;
   findByEmail: (email: string) => Promise<IUserDocument | null>;
   /**
+   * Whether any user other than `excludeUserId` holds `email`, compared trimmed and
+   * case-insensitively. Engine-portable (MongoDB and DocumentDB), unlike the collation lookups.
+   */
+  existsOtherUserWithEmail: (email: string, excludeUserId?: string) => Promise<boolean>;
+  /** Username counterpart of {@link IUserRepository.existsOtherUserWithEmail}. */
+  existsOtherUserWithUsername: (username: string, excludeUserId?: string) => Promise<boolean>;
+  /**
    * Remove the given group ids from EVERY user's `groups[]` (org-wide blast radius; used when a
    * group type is revoked and its instances are soft-deleted). Named for the scope so a caller
    * cannot mistake it for a single-user operation.

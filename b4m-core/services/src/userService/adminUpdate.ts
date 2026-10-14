@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { updateUserSchema, applyBaseUserUpdates, toUserUpdatePartial } from './update';
+import {
+  updateUserSchema,
+  applyBaseUserUpdates,
+  toUserUpdatePartial,
+  validateUsernameChange,
+  writeUserUpdate,
+} from './update';
 import {
   CreditHolderType,
   ICreditTransactionRepository,
@@ -120,6 +126,7 @@ export async function adminUpdateUser(
   if (!user) {
     throw new Error('User not found');
   }
+  await validateUsernameChange(user, params, db.users);
 
   // Route a `currentCredits` change through the audited ledger when the adapter
   // is wired; its atomic `$inc` is the sole owner of the balance. The ledger runs
@@ -261,7 +268,7 @@ export async function adminUpdateUser(
     }
   }
 
-  await db.users.update(writeData);
+  await writeUserUpdate(db.users, writeData);
 
   // Apply the moderation escalation transition last so it authoritatively sets
   // `moderation.status`, `throttledUntil`, and the `isModerated` mirror.
