@@ -7,6 +7,7 @@ import {
   orgGoogleDriveConnectionRepository,
   isDriveSyncClaimLive,
 } from './OrgGoogleDriveConnectionModel';
+import { findOrphanedLakeConnections } from './orphanedLakeConnections';
 
 /**
  * Invariants for the org Google Drive connection (#1588). The load-bearing ones are the global
@@ -1005,5 +1006,28 @@ describe('OrgGoogleDriveConnectionModel - findOrphaned (lakeless connection scan
     const found = await orgGoogleDriveConnectionRepository.findOrphaned(2);
     expect(found.map(c => c.id)).toEqual([first.id, second.id]);
     expect(await orgGoogleDriveConnectionRepository.findOrphaned(0)).toEqual([]);
+  });
+
+  it('pages past a page with no orphans and stops at the end of the collection', async () => {
+    const live = await seedLake('paged', 'active');
+    const rows = [
+      { id: 'r1', targetDataLakeId: live },
+      { id: 'r2', targetDataLakeId: live },
+      { id: 'r3', targetDataLakeId: missingLakeId() },
+      { id: 'r4', targetDataLakeId: live },
+      { id: 'r5', targetDataLakeId: missingLakeId() },
+    ];
+    const afterIds: (string | undefined)[] = [];
+    const fetchPage = async (afterId: string | undefined, pageSize: number) => {
+      afterIds.push(afterId);
+      const start = afterId === undefined ? 0 : rows.findIndex(row => row.id === afterId) + 1;
+      return rows.slice(start, start + pageSize);
+    };
+
+    const found = await findOrphanedLakeConnections(10, fetchPage, 2);
+
+    expect(found.map(row => row.id)).toEqual(['r3', 'r5']);
+    // Each page resumes after the previous one's last row; the short third page ends the scan.
+    expect(afterIds).toEqual([undefined, 'r2', 'r4']);
   });
 });

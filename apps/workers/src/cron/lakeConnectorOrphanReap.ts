@@ -36,7 +36,19 @@ const logger = new Logger({ metadata: { service: 'lakeConnectorOrphanReap' } });
 
 export const MAX_REAPS_PER_CONNECTOR = 100;
 
-export type ConnectorReapResult = { found: number; released: number; failed: number; skipped?: true };
+// No new release starts past this, leaving headroom under the cron's 5-minute Lambda timeout (infra/cron.ts):
+// each release is a network call to Google or GitHub, and a run cut off by the timeout logs no summary.
+export const RUN_BUDGET_MS = 4 * 60_000;
+
+export type ConnectorReapResult = {
+  found: number;
+  released: number;
+  failed: number;
+  /** Found but not attempted because the run budget ran out; the next run picks them up. */
+  deferred: number;
+  skipped?: true;
+  scanFailed?: true;
+};
 
 export type LakeConnectorOrphanReapResult = {
   drive: ConnectorReapResult;
@@ -44,7 +56,7 @@ export type LakeConnectorOrphanReapResult = {
   disabled?: true;
 };
 
-const emptyResult = (): ConnectorReapResult => ({ found: 0, released: 0, failed: 0 });
+const emptyResult = (): ConnectorReapResult => ({ found: 0, released: 0, failed: 0, deferred: 0 });
 
 const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -52,10 +64,15 @@ const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e)
 async function reapEach<T extends { id: string }>(
   connector: 'drive' | 'github',
   orphans: readonly T[],
-  release: (orphan: T) => Promise<unknown>
+  release: (orphan: T) => Promise<unknown>,
+  deadline: number
 ): Promise<ConnectorReapResult> {
   const result: ConnectorReapResult = { ...emptyResult(), found: orphans.length };
   for (const orphan of orphans) {
+    if (Date.now() > deadline) {
+      result.deferred = result.found - result.released - result.failed;
+      break;
+    }
     const connectionId = String(orphan.id);
     try {
       await release(orphan);
@@ -72,23 +89,29 @@ async function reapEach<T extends { id: string }>(
   return result;
 }
 
-async function reapDrive(): Promise<ConnectorReapResult> {
+async function reapDrive(deadline: number): Promise<ConnectorReapResult> {
   const orphans = await orgGoogleDriveConnectionRepository.findOrphaned(MAX_REAPS_PER_CONNECTOR);
-  return reapEach('drive', orphans, async connection => {
-    // false means no row matched: a concurrent purge or ingest already retired it, which is the goal.
-    await releaseDriveConnection(connection.id, driveConnectionOwnerOf(connection));
-  });
+  return reapEach(
+    'drive',
+    orphans,
+    async connection => {
+      // false means no row matched: a concurrent purge or ingest already retired it, which is the goal.
+      await releaseDriveConnection(connection.id, driveConnectionOwnerOf(connection));
+    },
+    deadline
+  );
 }
 
-async function reapGitHub(): Promise<ConnectorReapResult> {
+async function reapGitHub(deadline: number): Promise<ConnectorReapResult> {
   const orphans = await orgGitHubLakeConnectionRepository.findOrphaned(MAX_REAPS_PER_CONNECTOR);
   // An absent App config throws only for an installation's last binding (it must delete the
   // installation); that row is counted as failed and retried once the App is configured.
   const config = getGitHubLakeAppConfig();
-  return reapEach('github', orphans, connection => releaseGitHubLakeConnection(connection, config));
+  return reapEach('github', orphans, connection => releaseGitHubLakeConnection(connection, config), deadline);
 }
 
 export async function runLakeConnectorOrphanReap(): Promise<LakeConnectorOrphanReapResult> {
+  const deadline = Date.now() + RUN_BUDGET_MS;
   const [lakesOn, githubOn] = await Promise.all([
     adminSettingsRepository.getSettingsValue('EnableDataLakes'),
     adminSettingsRepository.getSettingsValue('EnableDataLakeGitHub'),
@@ -101,14 +124,14 @@ export async function runLakeConnectorOrphanReap(): Promise<LakeConnectorOrphanR
   // Each leg's scan is guarded too, so one connector's failing query cannot hide the other's orphans.
   const scanFailed = (connector: 'drive' | 'github') => (e: unknown) => {
     logger.error('[lakeConnectorOrphanReap] orphan scan failed', { connector, error: errorMessage(e) });
-    return { ...emptyResult(), failed: 1 };
+    return { ...emptyResult(), scanFailed: true as const };
   };
 
-  const drive = await reapDrive().catch(scanFailed('drive'));
+  const drive = await reapDrive(deadline).catch(scanFailed('drive'));
 
   let github: ConnectorReapResult;
   if (githubOn) {
-    github = await reapGitHub().catch(scanFailed('github'));
+    github = await reapGitHub(deadline).catch(scanFailed('github'));
   } else {
     logger.info('[lakeConnectorOrphanReap] EnableDataLakeGitHub is off; skipping the GitHub leg');
     github = { ...emptyResult(), skipped: true };

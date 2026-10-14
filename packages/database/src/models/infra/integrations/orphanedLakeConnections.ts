@@ -31,12 +31,13 @@ async function existingLakeKeys(targetDataLakeIds: readonly string[]): Promise<S
  */
 export async function findOrphanedLakeConnections<T extends { id: string; targetDataLakeId: string }>(
   limit: number,
-  fetchPage: (afterId: string | undefined, pageSize: number) => Promise<T[]>
+  fetchPage: (afterId: string | undefined, pageSize: number) => Promise<T[]>,
+  pageSize = SCAN_PAGE_SIZE
 ): Promise<T[]> {
   const orphans: T[] = [];
   let afterId: string | undefined;
   while (orphans.length < limit) {
-    const page = await fetchPage(afterId, SCAN_PAGE_SIZE);
+    const page = await fetchPage(afterId, pageSize);
     if (page.length === 0) break;
     const existing = await existingLakeKeys(page.map(row => row.targetDataLakeId));
     for (const row of page) {
@@ -44,7 +45,7 @@ export async function findOrphanedLakeConnections<T extends { id: string; target
       const key = lakeKey(row.targetDataLakeId);
       if (key === null || !existing.has(key)) orphans.push(row);
     }
-    if (page.length < SCAN_PAGE_SIZE) break;
+    if (page.length < pageSize) break;
     afterId = page[page.length - 1].id;
   }
   return orphans;

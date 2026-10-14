@@ -35,7 +35,7 @@ vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
 
-import { runLakeConnectorOrphanReap, MAX_REAPS_PER_CONNECTOR } from './lakeConnectorOrphanReap';
+import { runLakeConnectorOrphanReap, MAX_REAPS_PER_CONNECTOR, RUN_BUDGET_MS } from './lakeConnectorOrphanReap';
 
 const APP_CONFIG = { appId: 'app' };
 const flagsOn = (...off: string[]) =>
@@ -73,8 +73,8 @@ describe('runLakeConnectorOrphanReap', () => {
       [ghB, APP_CONFIG],
     ]);
     expect(result).toEqual({
-      drive: { found: 2, released: 2, failed: 0 },
-      github: { found: 2, released: 2, failed: 0 },
+      drive: { found: 2, released: 2, failed: 0, deferred: 0 },
+      github: { found: 2, released: 2, failed: 0, deferred: 0 },
     });
   });
 
@@ -86,8 +86,8 @@ describe('runLakeConnectorOrphanReap', () => {
 
     expect(h.releaseDriveConnection).toHaveBeenCalledTimes(2);
     expect(h.releaseGitHubLakeConnection).toHaveBeenCalledTimes(2);
-    expect(result.drive).toEqual({ found: 2, released: 1, failed: 1 });
-    expect(result.github).toEqual({ found: 2, released: 1, failed: 1 });
+    expect(result.drive).toEqual({ found: 2, released: 1, failed: 1, deferred: 0 });
+    expect(result.github).toEqual({ found: 2, released: 1, failed: 1, deferred: 0 });
     expect(h.loggerError).toHaveBeenCalledWith(
       expect.stringContaining('failed to release'),
       expect.objectContaining({ connector: 'drive', connectionId: 'drive-org', error: 'google down' })
@@ -103,8 +103,26 @@ describe('runLakeConnectorOrphanReap', () => {
 
     const result = await runLakeConnectorOrphanReap();
 
-    expect(result.drive).toEqual({ found: 0, released: 0, failed: 1 });
-    expect(result.github).toEqual({ found: 2, released: 2, failed: 0 });
+    expect(result.drive).toEqual({ found: 0, released: 0, failed: 0, deferred: 0, scanFailed: true });
+    expect(result.github).toEqual({ found: 2, released: 2, failed: 0, deferred: 0 });
+  });
+
+  it('starts no release past the run budget and reports the rest as deferred', async () => {
+    const start = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(start);
+    // The first Drive release eats the whole budget, so nothing after it may start.
+    h.releaseDriveConnection.mockImplementationOnce(async () => {
+      clock.mockReturnValue(start + RUN_BUDGET_MS + 1);
+      return true;
+    });
+
+    const result = await runLakeConnectorOrphanReap();
+    clock.mockRestore();
+
+    expect(h.releaseDriveConnection).toHaveBeenCalledTimes(1);
+    expect(h.releaseGitHubLakeConnection).not.toHaveBeenCalled();
+    expect(result.drive).toEqual({ found: 2, released: 1, failed: 0, deferred: 1 });
+    expect(result.github).toEqual({ found: 2, released: 0, failed: 0, deferred: 2 });
   });
 
   it('does nothing when EnableDataLakes is off', async () => {
@@ -128,7 +146,7 @@ describe('runLakeConnectorOrphanReap', () => {
     expect(h.findOrphanedGitHub).not.toHaveBeenCalled();
     expect(h.releaseGitHubLakeConnection).not.toHaveBeenCalled();
     expect(h.getGitHubLakeAppConfig).not.toHaveBeenCalled();
-    expect(result.github).toEqual({ found: 0, released: 0, failed: 0, skipped: true });
+    expect(result.github).toEqual({ found: 0, released: 0, failed: 0, deferred: 0, skipped: true });
   });
 
   it('logs the summary even when there is nothing to reap', async () => {
@@ -138,8 +156,8 @@ describe('runLakeConnectorOrphanReap', () => {
     await runLakeConnectorOrphanReap();
 
     expect(h.loggerInfo).toHaveBeenCalledWith(expect.stringContaining('sweep complete'), {
-      drive: { found: 0, released: 0, failed: 0 },
-      github: { found: 0, released: 0, failed: 0 },
+      drive: { found: 0, released: 0, failed: 0, deferred: 0 },
+      github: { found: 0, released: 0, failed: 0, deferred: 0 },
     });
   });
 });
