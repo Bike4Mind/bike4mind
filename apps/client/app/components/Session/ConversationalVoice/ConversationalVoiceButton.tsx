@@ -69,6 +69,8 @@ export interface VoiceCallControlsProps {
   /** Cost hint for the idle tooltip. */
   hint: string;
   onClick: () => void;
+  /** The status pill fills the row's free space (a collapsed toolbar, SessionToolbar). */
+  stretch?: boolean;
 }
 
 /**
@@ -83,6 +85,7 @@ export const VoiceCallControls: React.FC<VoiceCallControlsProps> = ({
   levelActive,
   hint,
   onClick,
+  stretch = false,
 }) => {
   const costHintId = useId();
   const isReconnecting = phase === 'reconnecting';
@@ -106,6 +109,7 @@ export const VoiceCallControls: React.FC<VoiceCallControlsProps> = ({
           label={pillLabel(phase, mode)}
           bars={bars}
           isActive={phase === 'connected' && levelActive}
+          stretch={stretch}
           data-testid="conversational-voice-status"
         />
       )}
@@ -143,6 +147,8 @@ export const VoiceCallControls: React.FC<VoiceCallControlsProps> = ({
 export interface ConversationalVoiceButtonProps {
   currentSessionId: string | null;
   reasoningModelId?: string;
+  /** Passed to VoiceCallControls: the pill fills a collapsed toolbar row. */
+  stretch?: boolean;
 }
 
 /**
@@ -158,6 +164,7 @@ export interface ConversationalVoiceButtonProps {
 const ConversationalVoiceButton: React.FC<ConversationalVoiceButtonProps> = ({
   currentSessionId,
   reasoningModelId,
+  stretch = false,
 }) => {
   const enabled = useGetSettingsValue('voiceV2Enabled');
   const navigate = useNavigate();
@@ -216,6 +223,7 @@ const ConversationalVoiceButton: React.FC<ConversationalVoiceButtonProps> = ({
         levelActive={levels.isActive}
         hint={hint}
         onClick={handleClick}
+        stretch={stretch}
       />
       <CreditsModal open={creditsOpen} onClose={() => setCreditsOpen(false)} />
     </>

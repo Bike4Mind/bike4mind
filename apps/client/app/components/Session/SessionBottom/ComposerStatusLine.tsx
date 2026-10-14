@@ -26,7 +26,9 @@ export const useStatusLineCompact = () => useContext(StatusLineCompactContext);
  * stays inside the box. The caller sizes it to match the box, since the two are siblings.
  */
 const ComposerStatusLine: FC<ComposerStatusLineProps> = ({ left, right, sx }) => {
-  // The left side is the one that gives way (minWidth 0), so its overflow is the signal.
+  // The left side is the one that gives way (minWidth 0), so its overflow is the signal. It takes all
+  // the free space (flex 1) rather than hugging its items: once they shrink to icons, a hugging box
+  // would shrink with them and never measure wide enough to expand again.
   const leftRef = useRef<HTMLDivElement>(null);
   const compact = useOverflowCompact(leftRef);
 
@@ -51,7 +53,19 @@ const ComposerStatusLine: FC<ComposerStatusLineProps> = ({ left, right, sx }) =>
         ]}
       >
         {/* One gap between items on both sides; each item adds its own ~6px padding on top. */}
-        <Box ref={leftRef} sx={{ display: 'flex', alignItems: 'center', gap: ITEM_GAP, minWidth: 0 }}>
+        <Box
+          ref={leftRef}
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: ITEM_GAP,
+            flex: 1,
+            minWidth: 0,
+            // Items keep their width instead of squeezing their text into each other, so running out
+            // of room shows up as overflow - the signal that collapses them.
+            '& > *': { flexShrink: 0 },
+          }}
+        >
           {left}
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: ITEM_GAP, flexShrink: 0 }}>{right}</Box>

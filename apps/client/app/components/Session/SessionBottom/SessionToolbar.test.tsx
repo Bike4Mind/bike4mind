@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   voiceRecordingEnds: [] as ((prompt: string) => Promise<void>)[],
   // onRecordingStart from each VoiceRecordButton render, oldest first.
   voiceRecordingStarts: [] as (() => void)[],
+  rowCompact: false,
 }));
 
 // SessionToolbar imports `api` at module load (used inside onOptimizePrompt).
@@ -31,7 +32,14 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 // no child pulls in its own context/`@/`-alias chain.
 vi.mock('@client/app/components/Session/AttachFileButton', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/AISettings/FilesSection', () => ({ default: () => null }));
-vi.mock('@client/app/components/Session/AdvancedAISettings', () => ({ default: () => null }));
+vi.mock('@client/app/components/Session/AdvancedAISettings', () => {
+  // Reports the row as collapsed when the test says so, like the real overflow check would.
+  const AdvancedAISettingsStub = ({ onCompactChange }: { onCompactChange?: (compact: boolean) => void }) => {
+    React.useEffect(() => onCompactChange?.(mocks.rowCompact), [onCompactChange]);
+    return <div data-testid="ai-settings-row" />;
+  };
+  return { default: AdvancedAISettingsStub };
+});
 vi.mock('@client/app/components/Session/RephraseButton', () => ({ default: () => null }));
 vi.mock('@client/app/components/common/VoiceRecordButton', () => {
   const VoiceRecordButtonStub = React.forwardRef<
@@ -110,6 +118,7 @@ const baseProps = {
 beforeEach(() => {
   mocks.voiceRecordingEnds.length = 0;
   mocks.voiceRecordingStarts.length = 0;
+  mocks.rowCompact = false;
   useConversationalVoiceStore.setState({ phase: 'idle' });
 });
 
@@ -136,6 +145,22 @@ describe('SessionToolbar - dictation', () => {
     act(() => mocks.voiceRecordingStarts.at(-1)?.());
     expect(screen.queryByTestId('conversational-voice-btn')).toBeNull();
     expect(screen.getByTestId('voice-record-confirm-btn')).toBeInTheDocument();
+  });
+});
+
+describe('SessionToolbar - voice pill in a collapsed row', () => {
+  it('keeps the model, Tools and Agents beside the recording at full width', () => {
+    render(<SessionToolbar {...baseProps} />, { wrapper: Wrapper });
+    act(() => mocks.voiceRecordingStarts.at(-1)?.());
+    expect(screen.getByTestId('ai-settings-row')).toBeVisible();
+  });
+
+  it('gives their space to the recording once the row has collapsed to icons', () => {
+    mocks.rowCompact = true;
+    render(<SessionToolbar {...baseProps} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('ai-settings-row')).toBeVisible();
+    act(() => mocks.voiceRecordingStarts.at(-1)?.());
+    expect(screen.getByTestId('ai-settings-row')).not.toBeVisible();
   });
 });
 

@@ -36,6 +36,8 @@ interface AISettingsProps {
   voiceOver?: boolean;
   onRollDice: () => void;
   currentSession: ISessionDocument | null;
+  /** Told whenever the row collapses to icon buttons or expands again (SessionToolbar). */
+  onCompactChange?: (compact: boolean) => void;
 }
 
 const AISettings: FC<AISettingsProps> = ({
@@ -46,6 +48,7 @@ const AISettings: FC<AISettingsProps> = ({
   voiceOver,
   onRollDice,
   currentSession,
+  onCompactChange,
 }) => {
   const [showAdvancedSettings, setShowAdvancedSettings] = useAdvancedAISettings(
     useShallow(state => [state.showAdvancedSettings, state.setShowAdvancedSettings])
@@ -125,6 +128,9 @@ const AISettings: FC<AISettingsProps> = ({
   // buttons until it fits, the model name moving to the gear's tooltip.
   const rowRef = useRef<HTMLDivElement>(null);
   const composerCompact = useOverflowCompact(rowRef);
+  useEffect(() => {
+    onCompactChange?.(composerCompact);
+  }, [composerCompact, onCompactChange]);
   const { data: modelInfoRepo } = useModelInfo();
   const modelInfo = modelInfoRepo?.find(m => m.id === model);
 

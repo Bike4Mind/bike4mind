@@ -130,6 +130,10 @@ export function SessionToolbar(props: SessionToolbarProps) {
   const voiceRecordRef = useRef<VoiceRecordButtonRef>(null);
   const [recording, setRecording] = useState(false);
   const voiceCallActive = useConversationalVoiceStore(s => isCallActivePhase(s.phase));
+  // Only when the row is collapsed (a split view, a narrow window) does the voice pill take over the
+  // model, Tools and Agents' space; at full width they keep their place beside it.
+  const [rowCompact, setRowCompact] = useState(false);
+  const stretchVoice = (recording || voiceCallActive) && rowCompact;
   const [isSettingsExiting] = useState(false);
 
   const sendBlockedLabel = sendBlockedReason ? getSendBlockedLabel(sendBlockedReason, t) : null;
@@ -209,17 +213,23 @@ export function SessionToolbar(props: SessionToolbarProps) {
                 />
               )}
 
-              <AdvancedAISettings
-                stream={stream}
-                setStream={setStream}
-                spokenWords={spokenWords}
-                setSpokenWords={setSpokenWords}
-                onRollDice={rollRandomDice}
-                currentSession={currentSession}
-              />
+              {/* In a collapsed row, while dictating or on a Voice v2 call, the voice status pill takes
+                  this space (it stretches, see VoiceStatusPill), so the row keeps its width and nothing
+                  shifts. Hidden, not unmounted: remounting would re-run its model hydration. */}
+              <Box sx={{ display: stretchVoice ? 'none' : 'contents' }}>
+                <AdvancedAISettings
+                  stream={stream}
+                  setStream={setStream}
+                  spokenWords={spokenWords}
+                  setSpokenWords={setSpokenWords}
+                  onRollDice={rollRandomDice}
+                  currentSession={currentSession}
+                  onCompactChange={setRowCompact}
+                />
+              </Box>
 
               {/* Action buttons: Rephrase, Voice Record, Stop/Send */}
-              {!isMobile && chatInputValue && chatInputValue.trim() !== '' && (
+              {!isMobile && !stretchVoice && chatInputValue && chatInputValue.trim() !== '' && (
                 <RephraseButton
                   currentText={chatInputValue}
                   onRephrase={text => {
@@ -248,6 +258,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
                 (!chatInputValue || chatInputValue.trim() === '' || recording) && (
                   <VoiceRecordButton
                     ref={voiceRecordRef}
+                    stretch={stretchVoice}
                     onRecordingStart={() => setRecording(true)}
                     onRecordingError={() => setRecording(false)}
                     onRecordingEnd={async (prompt: string) => {
@@ -272,7 +283,11 @@ export function SessionToolbar(props: SessionToolbarProps) {
                   Hidden once the composer has text so only the send button shows, and while a
                   prompt is being dictated so only the recording and its confirm button show. */}
               {!recording && (!chatInputValue || chatInputValue.trim() === '') && (
-                <ConversationalVoiceButton currentSessionId={currentSessionId} reasoningModelId={model} />
+                <ConversationalVoiceButton
+                  currentSessionId={currentSessionId}
+                  reasoningModelId={model}
+                  stretch={stretchVoice}
+                />
               )}
               {shouldShowStopButton ? (
                 <Tooltip title="Stop Generation">

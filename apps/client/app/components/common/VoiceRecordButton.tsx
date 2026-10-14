@@ -21,24 +21,26 @@ import { AnimatedText, VoiceStatusPill, fadeIn } from './VoiceStatusPill';
 import { toolbarIconSx } from '@client/app/components/Session/toolbarIconSx';
 
 /** The shared status pill fed from the dictation's own microphone stream. */
-const RecordingPill = forwardRef<HTMLDivElement, { stream: MediaStream | null; onCancel: () => void }>(
-  function RecordingPill({ stream, onCancel, ...rest }, ref) {
-    const theme = useTheme();
-    const audioData = useAudioAnalyzer(stream);
-    return (
-      <VoiceStatusPill
-        ref={ref}
-        {...rest}
-        label="Recording"
-        bars={audioData.frequencyBars}
-        isActive={audioData.isActive}
-        onClick={onCancel}
-        endDecorator={<CloseIcon sx={{ fontSize: 20, color: theme.palette.text.tertiary }} />}
-        data-testid="voice-record-cancel-pill"
-      />
-    );
-  }
-);
+const RecordingPill = forwardRef<
+  HTMLDivElement,
+  { stream: MediaStream | null; onCancel: () => void; stretch?: boolean }
+>(function RecordingPill({ stream, onCancel, stretch, ...rest }, ref) {
+  const theme = useTheme();
+  const audioData = useAudioAnalyzer(stream);
+  return (
+    <VoiceStatusPill
+      ref={ref}
+      {...rest}
+      label="Recording"
+      bars={audioData.frequencyBars}
+      isActive={audioData.isActive}
+      onClick={onCancel}
+      stretch={stretch}
+      endDecorator={<CloseIcon sx={{ fontSize: 20, color: theme.palette.text.tertiary }} />}
+      data-testid="voice-record-cancel-pill"
+    />
+  );
+});
 
 // VoiceRecordButton
 
@@ -47,6 +49,8 @@ interface IProps {
   onRecordingEnd: (prompt: string) => void;
   onRecordingError: () => void;
   disabled?: boolean;
+  /** Recording and transcribing fill the row's free space (a collapsed toolbar, SessionToolbar). */
+  stretch?: boolean;
 }
 
 export interface VoiceRecordButtonRef {
@@ -55,7 +59,7 @@ export interface VoiceRecordButtonRef {
 }
 
 export const VoiceRecordButton = forwardRef<VoiceRecordButtonRef, IProps>(
-  ({ onRecordingStart, onRecordingEnd, onRecordingError, disabled = false }, ref) => {
+  ({ onRecordingStart, onRecordingEnd, onRecordingError, disabled = false, stretch = false }, ref) => {
     const theme = useTheme();
     const [permission, setPermission] = useState(false);
     const [stream, setStream] = useState<MediaStream | null>(null);
@@ -221,6 +225,8 @@ export const VoiceRecordButton = forwardRef<VoiceRecordButtonRef, IProps>(
             borderRadius: '6px',
             backgroundColor: theme.palette.mode === 'dark' ? theme.palette.border.solid : grayAlpha[150][20],
             animation: `${fadeIn} 0.2s ease-out`,
+            // Fills the space the hidden model, Tools and Agents leave in a collapsed row (SessionToolbar).
+            ...(stretch && { flex: '1 1 auto', minWidth: 0 }),
           }}
           data-testid="voice-record-transcribing"
         >
@@ -238,12 +244,14 @@ export const VoiceRecordButton = forwardRef<VoiceRecordButtonRef, IProps>(
             alignItems: 'center',
             gap: 1,
             animation: `${fadeIn} 0.2s ease-out`,
+            // Fills the space the hidden model, Tools and Agents leave in a collapsed row (SessionToolbar).
+            ...(stretch && { flex: '1 1 auto', minWidth: 0 }),
           }}
           data-testid="voice-record-strip"
         >
           {/* Recording pill with animated text + green equalizer + cancel */}
           <Tooltip title="Cancel recording" placement="top">
-            <RecordingPill stream={stream} onCancel={cancelRecording} />
+            <RecordingPill stream={stream} onCancel={cancelRecording} stretch={stretch} />
           </Tooltip>
         </Box>
       );

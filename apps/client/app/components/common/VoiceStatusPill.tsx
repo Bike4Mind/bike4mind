@@ -90,12 +90,17 @@ interface VoiceStatusPillProps {
   onClick?: () => void;
   /** e.g. a cancel icon after the equalizer. */
   endDecorator?: ReactNode;
+  /**
+   * Fill the toolbar row's free space (SessionToolbar hides the model, Tools and Agents meanwhile),
+   * so the row keeps its width; the end decorator moves to the far right.
+   */
+  stretch?: boolean;
   'data-testid'?: string;
 }
 
 // forwardRef: dictation wraps the pill in a Tooltip, which needs a ref on its child.
 export const VoiceStatusPill = forwardRef<HTMLDivElement, VoiceStatusPillProps>(function VoiceStatusPill(
-  { label, bars, isActive, onClick, endDecorator, 'data-testid': testId, ...rest },
+  { label, bars, isActive, onClick, endDecorator, stretch = false, 'data-testid': testId, ...rest },
   ref
 ) {
   const theme = useTheme();
@@ -114,6 +119,7 @@ export const VoiceStatusPill = forwardRef<HTMLDivElement, VoiceStatusPillProps>(
         borderRadius: '6px',
         backgroundColor: background,
         animation: `${fadeIn} 0.2s ease-out`,
+        ...(stretch && { flex: '1 1 auto', minWidth: 0 }),
         ...(onClick && {
           cursor: 'pointer',
           '&:hover': {
@@ -125,7 +131,7 @@ export const VoiceStatusPill = forwardRef<HTMLDivElement, VoiceStatusPillProps>(
     >
       <AnimatedText text={label} color={theme.palette.text.tertiary} />
       <MiniEqualizer bars={bars} isActive={isActive} />
-      {endDecorator}
+      {endDecorator && (stretch ? <Box sx={{ ml: 'auto', display: 'flex' }}>{endDecorator}</Box> : endDecorator)}
     </Box>
   );
 });
