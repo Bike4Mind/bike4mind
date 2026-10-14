@@ -747,6 +747,51 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         />
                       )}
 
+                      {/* Files attached to this message: compact tiles above its text (MessageFileThumbnails). */}
+                      {pendingMessageFiles.length > 0 && (
+                        <MessageFileThumbnails
+                          files={pendingMessageFiles}
+                          onRemove={fileId => {
+                            setPendingMessageFiles(prev => prev.filter(item => item.fabFile.id !== fileId));
+                            setFiles(prevFiles => prevFiles.filter(f => f.serverId !== fileId));
+
+                            // Strip knowledgeIds BEFORE the hard delete. If the delete succeeded and
+                            // this failed, knowledgeIds would keep a dead id that every later hydration
+                            // tries and fails to resolve. Keyed off the item's own frozen scope rather
+                            // than the current control value, which the user may have changed since.
+                            const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
+                            const stripped =
+                              removed?.scope === 'notebook'
+                                ? removeFromNotebookContext(currentSessionId, fileId).catch(() => {})
+                                : Promise.resolve();
+
+                            void stripped.then(() =>
+                              deleteFileUtility(fileId).catch(err => {
+                                console.error('Failed to delete file:', err);
+                              })
+                            );
+                          }}
+                          onClick={file => {
+                            // First ensure the KnowledgeViewer is open by setting layout to vertical
+                            setSessionLayout({
+                              layout: 'vertical',
+                              selectedArtifactId: undefined,
+                              artifactData: undefined,
+                            });
+
+                            // Find the message file in the sorted knowledge items list
+                            const messageFileIndex = sortedKnowledgeItems.findIndex(item => item.id === file.id);
+
+                            // Set the knowledge viewer to show the message file
+                            // setTimeout ensures the layout change completes before setting the tab index
+                            if (messageFileIndex !== -1) {
+                              setTimeout(() => {
+                                setKnowledgeViewer({ selectedTabIndex: messageFileIndex });
+                              }, 0);
+                            }
+                          }}
+                        />
+                      )}
                       <LexicalChatInput
                         ref={lexicalInputRef}
                         value={chatInputValue}
@@ -816,52 +861,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
             attachScopeMode={attachScopeMode}
             currentSessionId={currentSessionId}
             addToNotebookContext={addToNotebookContext}
-          />
-        )}
-
-        {/* File Thumbnails */}
-        {pendingMessageFiles.length > 0 && (
-          <MessageFileThumbnails
-            files={pendingMessageFiles}
-            onRemove={fileId => {
-              setPendingMessageFiles(prev => prev.filter(item => item.fabFile.id !== fileId));
-              setFiles(prevFiles => prevFiles.filter(f => f.serverId !== fileId));
-
-              // Strip knowledgeIds BEFORE the hard delete. If the delete succeeded and
-              // this failed, knowledgeIds would keep a dead id that every later hydration
-              // tries and fails to resolve. Keyed off the item's own frozen scope rather
-              // than the current control value, which the user may have changed since.
-              const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
-              const stripped =
-                removed?.scope === 'notebook'
-                  ? removeFromNotebookContext(currentSessionId, fileId).catch(() => {})
-                  : Promise.resolve();
-
-              void stripped.then(() =>
-                deleteFileUtility(fileId).catch(err => {
-                  console.error('Failed to delete file:', err);
-                })
-              );
-            }}
-            onClick={file => {
-              // First ensure the KnowledgeViewer is open by setting layout to vertical
-              setSessionLayout({
-                layout: 'vertical',
-                selectedArtifactId: undefined,
-                artifactData: undefined,
-              });
-
-              // Find the message file in the sorted knowledge items list
-              const messageFileIndex = sortedKnowledgeItems.findIndex(item => item.id === file.id);
-
-              // Set the knowledge viewer to show the message file
-              // setTimeout ensures the layout change completes before setting the tab index
-              if (messageFileIndex !== -1) {
-                setTimeout(() => {
-                  setKnowledgeViewer({ selectedTabIndex: messageFileIndex });
-                }, 0);
-              }
-            }}
           />
         )}
 
