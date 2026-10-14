@@ -102,8 +102,8 @@ export async function logSignInSuccess(
   });
 }
 
-// Access token only, never a refresh token: /api/auth/refreshToken has no mfaPending check,
-// so a pending refresh token would mint a full session without the second factor.
+// Access token only, never a refresh token. Core's verifyRefreshToken also rejects an
+// mfaPending token, so this is defence in depth: a pending refresh token must never exist.
 function signMfaPendingToken(user: Pick<IUserDocument, 'id' | 'tokenVersion'>, origin: SignInOrigin): string {
   return jwt.sign(
     {

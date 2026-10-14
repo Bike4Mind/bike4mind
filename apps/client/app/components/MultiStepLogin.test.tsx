@@ -10,6 +10,11 @@ import { ExternalLinks } from '@client/app/utils/externalLinks';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import MultiStepLogin from './MultiStepLogin';
 
+type MfaHookOptions = {
+  onComplete: (result: unknown) => void;
+  onCancel?: (mode: 'verify' | 'setup') => void;
+};
+
 // Factory-safe mock handles (vi.mock is hoisted above imports).
 const mocks = vi.hoisted(() => ({
   sendOTC: vi.fn(),
@@ -27,7 +32,8 @@ const mocks = vi.hoisted(() => ({
     setMfaPendingTokens: vi.fn(),
     forceLogoutTokens: vi.fn(),
   },
-  toast: { success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), dismiss: vi.fn() },
+  mfa: { options: null as MfaHookOptions | null, begin: vi.fn() },
   // Empty for every suite but the Cookie settings one, so the legal sentence stays hidden and
   // the checkbox's Privacy Policy link is the only one on the page.
   websiteUrl: '',
@@ -49,6 +55,13 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
     { getState: () => mocks.accessTokenState }
   ),
 }));
+vi.mock('@client/app/hooks/useMfaChallenge', () => ({
+  useMfaChallenge: (options: MfaHookOptions) => {
+    mocks.mfa.options = options;
+    return { begin: mocks.mfa.begin, modalProps: { open: false } };
+  },
+}));
+vi.mock('./common/MFAModal', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/data/mfa', () => ({
   useVerifyMFA: () => ({ mutateAsync: vi.fn() }),
   useSetupMFA: () => ({ mutateAsync: vi.fn() }),
@@ -560,4 +573,106 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
       vi.useRealTimers();
     }
   });
+});
+
+describe('MultiStepLogin - second-factor handoff', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
+    mocks.mfa.options = null;
+    mocks.sendOTC.mockResolvedValue({ pendingToken: 'ptok-1' });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ requiresRedirect: false }),
+    }) as unknown as typeof fetch;
+  });
+
+  const submitCode = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.type(textboxIn('login-email-input'), 'a@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+    const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
+    await user.type(otcInput, '12345678');
+    await user.click(screen.getByTestId('login-verify-btn'));
+  };
+
+  it('begins a verify challenge when the code step answers mfaRequired', async () => {
+    mocks.verifyOTC.mockResolvedValueOnce({
+      mfaRequired: true,
+      userId: 'u1',
+      accessToken: 'pending-tok',
+      passkeyAvailable: true,
+    });
+    renderLogin();
+
+    await submitCode(userEvent.setup());
+
+    await waitFor(() => expect(mocks.mfa.begin).toHaveBeenCalledTimes(1));
+    expect(mocks.mfa.begin).toHaveBeenCalledWith({
+      userId: 'u1',
+      mfaToken: 'pending-tok',
+      mode: 'verify',
+      passkeyAvailable: true,
+    });
+    expect(mocks.setCurrentUser).not.toHaveBeenCalled();
+  });
+
+  it('begins a setup challenge when the code step answers mfaSetupRequired', async () => {
+    mocks.verifyOTC.mockResolvedValueOnce({ mfaSetupRequired: true, userId: 'u1', accessToken: 'pending-tok' });
+    renderLogin();
+
+    await submitCode(userEvent.setup());
+
+    await waitFor(() => expect(mocks.mfa.begin).toHaveBeenCalledTimes(1));
+    expect(mocks.mfa.begin).toHaveBeenCalledWith({ userId: 'u1', mfaToken: 'pending-tok', mode: 'setup' });
+  });
+
+  it('begins the challenge when the inline registration answers with an MFA login shape', async () => {
+    const user = userEvent.setup();
+    mocks.verifyOTC
+      .mockResolvedValueOnce({ registrationRequired: true, email: 'new@test.com', pendingToken: 'ptok-2' })
+      .mockResolvedValueOnce({ mfaRequired: true, userId: 'u2', accessToken: 'pending-2' });
+    renderLogin();
+
+    await advanceToUsernameStep(user);
+    await user.type(textboxIn('login-register-username-input'), 'newbie');
+    await acceptInlinePolicies(user);
+    await user.click(screen.getByTestId('login-register-username-btn'));
+
+    await waitFor(() => expect(mocks.mfa.begin).toHaveBeenCalledTimes(1));
+    expect(mocks.mfa.begin).toHaveBeenCalledWith({
+      userId: 'u2',
+      mfaToken: 'pending-2',
+      mode: 'verify',
+      passkeyAvailable: false,
+    });
+    expect(mocks.setCurrentUser).not.toHaveBeenCalled();
+  });
+
+  it('sets the current user from the completed challenge', () => {
+    renderLogin();
+
+    mocks.mfa.options!.onComplete({ accessToken: 'full', user: { id: 'u1' } });
+
+    expect(mocks.setCurrentUser).toHaveBeenCalledWith({ id: 'u1' });
+  });
+
+  it.each([
+    ['verify', 'error'],
+    ['setup', 'info'],
+  ] as const)(
+    'restarts from the email step with a %s notice when the challenge is cancelled',
+    async (mode, toastKind) => {
+      mocks.verifyOTC.mockResolvedValueOnce({ mfaRequired: true, userId: 'u1', accessToken: 'pending-tok' });
+      renderLogin();
+      await submitCode(userEvent.setup());
+      await waitFor(() => expect(mocks.mfa.begin).toHaveBeenCalled());
+      expect(screen.queryByTestId('login-email-input')).not.toBeInTheDocument();
+
+      act(() => mocks.mfa.options!.onCancel!(mode));
+
+      expect(await screen.findByTestId('login-email-input')).toBeInTheDocument();
+      expect(mocks.toast[toastKind as 'error' | 'info']).toHaveBeenCalledTimes(1);
+    }
+  );
 });

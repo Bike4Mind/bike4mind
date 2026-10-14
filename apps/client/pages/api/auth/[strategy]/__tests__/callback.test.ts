@@ -29,10 +29,6 @@ vi.mock('@server/auth/tokenGenerator', () => ({
   },
 }));
 vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: vi.fn() }));
-vi.mock('@server/auth/authSuccessRedirect', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/auth/authSuccessRedirect')>()),
-  authSuccessRedirectQuery: () => '',
-}));
 
 const mockResolveSecondFactor = vi.fn();
 const mockLogSignInSuccess = vi.fn().mockResolvedValue(undefined);
@@ -351,6 +347,27 @@ describe('[strategy]/callback - second factor gate', () => {
     expect(res._getRedirectUrl()).not.toContain('#token=');
     expect(mockIssueBrowserSession).not.toHaveBeenCalled();
     expect(mockLogSignInSuccess).not.toHaveBeenCalled();
+  });
+
+  it('keeps the requested redirectTo ahead of the MFA handoff fragment', async () => {
+    vi.mocked(verifyStateToken).mockReturnValueOnce({
+      valid: true,
+      payload: {
+        handle: 'h',
+        createdAt: 0,
+        aud: 'github-oauth-state',
+        iss: 'test',
+        redirectTo: '/projects/p1?tab=files',
+      },
+    });
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    const res = await runCallback(null, { id: 'u-mfa', isBanned: false }, undefined);
+
+    const location = res._getRedirectUrl();
+    const expectedQuery = `/auth/success?redirectTo=${encodeURIComponent('/projects/p1?tab=files')}`;
+    expect(location.startsWith(expectedQuery)).toBe(true);
+    expect(location.indexOf(expectedQuery)).toBeLessThan(location.indexOf('#mfaToken='));
   });
 
   it('tells the second-factor step where the sign-in started so its completion can be audited', async () => {

@@ -1,4 +1,4 @@
-import { useState, type ComponentProps } from 'react';
+import { useRef, useState, type ComponentProps } from 'react';
 import { toast } from 'sonner';
 import type { IUserDocument } from '@bike4mind/common';
 import type MFAModal from '@client/app/components/common/MFAModal';
@@ -74,8 +74,19 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     setSetupData(null);
   };
 
+  // A same-user handoff can arrive while this browser already holds a verified session.
+  // begin() overwrites the in-memory token with the pending one, so keep the old one to
+  // restore on cancel: resetTokens() would persist hasSession:false and sign out every tab.
+  const previousVerifiedToken = useRef<string | null>(null);
+
   const endWithoutSession = (mode: MfaChallengeMode) => {
-    useAccessToken.getState().resetTokens();
+    const { setVerifiedSession, resetTokens } = useAccessToken.getState();
+    if (previousVerifiedToken.current) {
+      setVerifiedSession(previousVerifiedToken.current);
+    } else {
+      resetTokens();
+    }
+    previousVerifiedToken.current = null;
     reset();
     onCancel?.(mode);
   };
@@ -87,12 +98,15 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     // protected navigation must not reuse the "no session" answer from before login.
     resetSessionBootstrap();
     useAccessToken.getState().setVerifiedSession(result.accessToken);
+    previousVerifiedToken.current = null;
     reset();
     onComplete(result);
   };
 
   const begin = async ({ userId, mfaToken, mode, passkeyAvailable = false }: MfaChallengeStart) => {
-    useAccessToken.getState().setMfaPendingTokens(mfaToken);
+    const { accessToken, mfaPending, setMfaPendingTokens } = useAccessToken.getState();
+    previousVerifiedToken.current = accessToken && !mfaPending ? accessToken : null;
+    setMfaPendingTokens(mfaToken);
     setChallenge({ userId, mode, passkeyAvailable: mode === 'verify' && passkeyAvailable });
     setError(null);
     if (mode === 'verify') {

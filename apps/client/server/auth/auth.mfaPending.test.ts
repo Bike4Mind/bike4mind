@@ -41,6 +41,11 @@ describe('auth middleware: mfaPending allowlist', () => {
     '/api/auth/mfa/passkey/authenticate',
     '/api/identify',
     '/api/logout',
+    '/api/auth/mfa/verify-setup',
+    '/api/auth/mfa/cancel-setup',
+    '/api/auth/mfa/status',
+    '/api/auth/mfa/passkey/authenticate-options',
+    '/api/settings/fetch',
   ])('lets a pending session reach %s', async url => {
     expect((await requestAsMfaPending(url)).blocked).toBe(false);
   });
@@ -62,8 +67,27 @@ describe('auth middleware: mfaPending allowlist', () => {
     expect((await requestAsMfaPending('/api/auth/mfa/setup', {})).status).toBe(200);
   });
 
-  it('does not widen access for a pending token whose user has not accepted the policies', async () => {
-    // The consent exemption exists only for the enrollment route; everything else stays blocked.
-    expect((await requestAsMfaPending('/api/users/u1', {})).blocked).toBe(true);
+  it('still enforces the policy gate on a full session that has not accepted the policies', async () => {
+    // The consent exemption is only for mfaPending tokens: a verified session with no recorded
+    // acceptance is refused (403) on a route outside the consent allowlist.
+    const { status, blocked } = await requestAsMfaPending('/api/settings/fetch', {
+      mfaPending: false,
+      aupAcceptedVersion: undefined,
+    });
+    expect(blocked).toBe(false);
+    expect(status).toBe(403);
+  });
+
+  it('lets a full session that accepted the policies reach the same route', async () => {
+    const { status } = await requestAsMfaPending('/api/settings/fetch', {
+      mfaPending: false,
+      aupAcceptedVersion: 'v1',
+    });
+    expect(status).toBe(200);
+  });
+
+  it('keeps a pending token off non-allowlisted routes even without accepted policies', async () => {
+    const { blocked } = await requestAsMfaPending('/api/users/u1', { aupAcceptedVersion: undefined });
+    expect(blocked).toBe(true);
   });
 });

@@ -46,13 +46,13 @@ describe('completeMfaLogin', () => {
     expect(mockLogSecondFactorSignIn).toHaveBeenCalledWith(req, 'u1', origin);
   });
 
-  it('attributes any other origin to MFA and audits it', async () => {
+  it('keeps the first-factor origin on the session and audits it', async () => {
     const origin = { strategy: 'google', createdVia: 'oauth' };
     const req = requestFor({ id: 'u1', mfaSignIn: origin });
 
     await completeMfaLogin(req, res, user, {});
 
-    expect(mockIssueBrowserSession).toHaveBeenCalledWith(req, res, 'u1', { createdVia: 'mfa', tokenVersion: 2 });
+    expect(mockIssueBrowserSession).toHaveBeenCalledWith(req, res, 'u1', { createdVia: 'oauth', tokenVersion: 2 });
     expect(mockLogSecondFactorSignIn).toHaveBeenCalledWith(req, 'u1', origin);
   });
 

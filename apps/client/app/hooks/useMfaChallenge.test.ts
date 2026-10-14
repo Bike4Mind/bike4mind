@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   resetRefreshCoordinator: vi.fn(),
   resetSessionBootstrap: vi.fn(),
   toastError: vi.fn(),
+  tokenState: { accessToken: null as string | null, mfaPending: false },
 }));
 
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError } }));
@@ -29,6 +30,8 @@ vi.mock('@client/app/hooks/data/passkeys', () => ({
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: {
     getState: () => ({
+      accessToken: mocks.tokenState.accessToken,
+      mfaPending: mocks.tokenState.mfaPending,
       setMfaPendingTokens: mocks.setMfaPendingTokens,
       setVerifiedSession: mocks.setVerifiedSession,
       resetTokens: mocks.resetTokens,
@@ -52,6 +55,8 @@ function setup(options: { allowRememberDevice?: boolean } = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.tokenState.accessToken = null;
+  mocks.tokenState.mfaPending = false;
   mocks.verifyMutateAsync.mockResolvedValue(session);
   mocks.verifySetupMutateAsync.mockResolvedValue(session);
   mocks.setupMutateAsync.mockResolvedValue({ qrCodeUrl: 'qr', manualEntryKey: 'KEY', backupCodes: ['b1'] });
@@ -174,5 +179,72 @@ describe('useMfaChallenge verification', () => {
     expect(result.current.modalProps.error).toBe('MFA verification returned no session');
     expect(mocks.setVerifiedSession).not.toHaveBeenCalled();
     expect(onComplete).not.toHaveBeenCalled();
+  });
+});
+
+describe('useMfaChallenge passkey', () => {
+  const passkeyStart = { ...verifyStart, passkeyAvailable: true };
+
+  it('verifies with the passkey, stores the session and completes', async () => {
+    mocks.verifyPasskeyMutateAsync.mockResolvedValue(session);
+    const { result, onComplete } = setup({ allowRememberDevice: true });
+    await act(() => result.current.begin(passkeyStart));
+
+    await act(() => result.current.modalProps.onPasskeyVerify!(true));
+
+    expect(mocks.verifyPasskeyMutateAsync).toHaveBeenCalledWith({ rememberDevice: true });
+    expect(mocks.setVerifiedSession).toHaveBeenCalledWith('full-access');
+    expect(onComplete).toHaveBeenCalledWith(session);
+    expect(result.current.modalProps.open).toBe(false);
+  });
+
+  it('shows the passkey error and keeps the modal open when verification is rejected', async () => {
+    mocks.verifyPasskeyMutateAsync.mockRejectedValue(new Error('denied'));
+    const { result, onComplete } = setup({ allowRememberDevice: true });
+    await act(() => result.current.begin(passkeyStart));
+
+    await act(() => result.current.modalProps.onPasskeyVerify!(false));
+
+    expect(result.current.modalProps.error).toBe('passkey: denied');
+    expect(result.current.modalProps.open).toBe(true);
+    expect(mocks.setVerifiedSession).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+});
+
+describe('useMfaChallenge cancel with a prior verified session', () => {
+  it('restores the verified token instead of resetting tokens', async () => {
+    mocks.tokenState.accessToken = 'verified-tok';
+    mocks.tokenState.mfaPending = false;
+    const { result, onCancel } = setup();
+    await act(() => result.current.begin(verifyStart));
+
+    act(() => result.current.modalProps.onCancel?.());
+
+    expect(mocks.setVerifiedSession).toHaveBeenCalledWith('verified-tok');
+    expect(mocks.resetTokens).not.toHaveBeenCalled();
+    expect(onCancel).toHaveBeenCalledWith('verify');
+  });
+
+  it('resets tokens when the held token was itself pending', async () => {
+    mocks.tokenState.accessToken = 'stale-pending';
+    mocks.tokenState.mfaPending = true;
+    const { result } = setup();
+    await act(() => result.current.begin(verifyStart));
+
+    act(() => result.current.modalProps.onCancel?.());
+
+    expect(mocks.resetTokens).toHaveBeenCalledTimes(1);
+    expect(mocks.setVerifiedSession).not.toHaveBeenCalled();
+  });
+
+  it('resets tokens when there was no prior session', async () => {
+    const { result } = setup();
+    await act(() => result.current.begin(verifyStart));
+
+    act(() => result.current.modalProps.onCancel?.());
+
+    expect(mocks.resetTokens).toHaveBeenCalledTimes(1);
+    expect(mocks.setVerifiedSession).not.toHaveBeenCalled();
   });
 });

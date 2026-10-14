@@ -20,8 +20,9 @@ export async function completeMfaLogin(
 ): Promise<{ accessToken: string; deviceRemembered: boolean }> {
   const origin = readSignInOrigin(req.user);
   const { accessToken } = await issueBrowserSession(req, res, user.id, {
-    // Break-glass sessions stay identifiable as such; every other sign-in is attributed to MFA.
-    createdVia: origin?.createdVia === 'emergency' ? 'emergency' : 'mfa',
+    // Keep the first-factor origin (oauth, okta, otc, emergency) so the active-sessions UI still
+    // shows how the user signed in; 'mfa' only when the request carries no origin.
+    createdVia: origin?.createdVia ?? 'mfa',
     tokenVersion: user.tokenVersion ?? 0,
   });
   if (origin) await logSecondFactorSignIn(req, user.id, origin);

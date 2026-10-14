@@ -91,6 +91,7 @@ vi.mock('@server/utils/auth/oauthSignupGrants', () => ({
 
 // Import after mocks are registered.
 import { issueBrowserSession } from '@server/auth/issueSession';
+import { logAuthAudit } from '@server/utils/authAudit';
 import handler from '@pages/api/auth/okta/callback';
 
 const STATE = 'state-token';
@@ -697,6 +698,42 @@ describe('/api/auth/okta/callback - second factor', () => {
     expect(res._getRedirectUrl()).not.toContain('#token=');
     expect(issueBrowserSession).not.toHaveBeenCalled();
     expect(mockLogSignInSuccess).not.toHaveBeenCalled();
+  });
+
+  it('audits a brand-new provider link even when the second factor ends the request', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    const res = await runCallback({ user: { ...existingUser, authProviders: [] }, userInfo });
+
+    expect(res._getRedirectUrl()).toContain('#mfaToken=pending-tok');
+    expect(issueBrowserSession).not.toHaveBeenCalled();
+    expect(logAuthAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId: 'u-mfa', event: 'oauth_link', strategy: 'okta' })
+    );
+  });
+
+  it('does not audit a link on a routine re-login that is handed to the challenge', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    await runCallback({ user: existingUser, userInfo });
+
+    expect(logAuthAudit).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ event: 'oauth_link' }));
+  });
+
+  it('keeps the requested redirectTo ahead of the MFA handoff fragment', async () => {
+    mockGetConfig.mockResolvedValue(sstFallbackConfig);
+    mockVerifyState.mockReturnValue({ valid: true, payload: { redirectTo: '/projects/p1?tab=files' } });
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    const res = await runCallback({ user: existingUser, userInfo });
+
+    const location = res._getRedirectUrl();
+    const expectedQuery = `/auth/success?redirectTo=${encodeURIComponent('/projects/p1?tab=files')}`;
+    expect(location.startsWith(expectedQuery)).toBe(true);
+    expect(location.indexOf(expectedQuery)).toBeLessThan(location.indexOf('#mfaToken='));
   });
 
   it('sends the unbound SST fallback to MFA setup when enrollment is owed', async () => {

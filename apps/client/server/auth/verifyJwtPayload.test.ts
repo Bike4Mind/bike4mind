@@ -168,6 +168,19 @@ describe('verifyJwtPayload', () => {
       expect((user as { mfaSignIn?: unknown }).mfaSignIn).toBeUndefined();
     });
 
+    it.each([
+      ['only the strategy', { signInStrategy: 'google' }],
+      ['only the created-via', { signInVia: 'oauth' }],
+    ])('sets no origin on a pending token carrying %s', async (_label, partial) => {
+      mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
+      const done = vi.fn();
+
+      await verifyJwtPayload({ id: 'user-1', tokenVersion: 0, mfaPending: true, ...partial }, done);
+
+      const [, user] = done.mock.calls[0];
+      expect((user as { mfaSignIn?: unknown }).mfaSignIn).toBeUndefined();
+    });
+
     it('sets no origin on a pending token that lacks one (a pre-upgrade token)', async () => {
       mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
       const done = vi.fn();

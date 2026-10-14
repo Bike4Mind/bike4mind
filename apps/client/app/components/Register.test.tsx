@@ -1,6 +1,6 @@
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, within, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -9,6 +9,11 @@ import { ExternalLinks } from '@client/app/utils/externalLinks';
 // Data/context deps are stubbed; the real @mui/joy Checkbox + Link and react-hook-form render so we
 // can assert the anchors the registration consent checkbox exposes. Open registration is enabled
 // (allowOpenRegistration: true, not loading) so the form renders instead of the config gate.
+type MfaHookOptions = {
+  onComplete: (result: unknown) => void;
+  onCancel?: (mode: 'verify' | 'setup') => void;
+};
+
 const mocks = vi.hoisted(() => ({
   setCurrentUser: vi.fn(),
   setAccessToken: vi.fn(),
@@ -17,12 +22,19 @@ const mocks = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   navigate: vi.fn(),
   trackSignupConversion: vi.fn(),
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), dismiss: vi.fn() },
+  mfa: { options: null as MfaHookOptions | null, begin: vi.fn() },
 }));
 
 vi.mock('@client/app/hooks/data/auth', () => ({
   useSendOTC: () => ({ mutateAsync: mocks.sendOTC, isPending: false }),
   useVerifyOTC: () => ({ mutateAsync: mocks.verifyOTC, isPending: false }),
+}));
+vi.mock('@client/app/hooks/useMfaChallenge', () => ({
+  useMfaChallenge: (options: MfaHookOptions) => {
+    mocks.mfa.options = options;
+    return { begin: mocks.mfa.begin, modalProps: { open: false } };
+  },
 }));
 vi.mock('@client/app/hooks/data/mfa', () => ({
   useVerifyMFA: () => ({ mutateAsync: mocks.mutateAsync, isPending: false }),
@@ -149,5 +161,79 @@ describe('Register - field errors and rate limiting', () => {
     expect(alert).toHaveAttribute('role', 'alert');
     expect(screen.getByTestId('register-submit-btn')).toBeDisabled();
     expect(screen.getByTestId('register-submit-btn')).toHaveTextContent('auth.retryIn');
+  });
+});
+
+describe('Register - second-factor handoff', () => {
+  const submitCode = async (user: ReturnType<typeof userEvent.setup>) => {
+    mocks.sendOTC.mockResolvedValue({ pendingToken: 'ptok-1' });
+    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
+    await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
+    await user.click(screen.getByTestId('register-submit-btn'));
+    const otcInput = within(await screen.findByTestId('register-otc-input')).getByRole('textbox');
+    await user.type(otcInput, '12345678');
+    await user.click(screen.getByTestId('register-verify-btn'));
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.mfa.options = null;
+  });
+
+  it('begins a verify challenge when the account already exists and demands MFA', async () => {
+    mocks.verifyOTC.mockResolvedValueOnce({
+      mfaRequired: true,
+      userId: 'u1',
+      accessToken: 'pending-tok',
+      passkeyAvailable: true,
+    });
+    renderRegister();
+
+    await submitCode(userEvent.setup());
+
+    await waitFor(() => expect(mocks.mfa.begin).toHaveBeenCalledTimes(1));
+    expect(mocks.mfa.begin).toHaveBeenCalledWith({
+      userId: 'u1',
+      mfaToken: 'pending-tok',
+      mode: 'verify',
+      passkeyAvailable: true,
+    });
+    expect(mocks.setCurrentUser).not.toHaveBeenCalled();
+  });
+
+  it('begins a setup challenge when the response is mfaSetupRequired', async () => {
+    mocks.verifyOTC.mockResolvedValueOnce({ mfaSetupRequired: true, userId: 'u1', accessToken: 'pending-tok' });
+    renderRegister();
+
+    await submitCode(userEvent.setup());
+
+    await waitFor(() => expect(mocks.mfa.begin).toHaveBeenCalledTimes(1));
+    expect(mocks.mfa.begin).toHaveBeenCalledWith({ userId: 'u1', mfaToken: 'pending-tok', mode: 'setup' });
+  });
+
+  it('sets the current user from the completed challenge', () => {
+    renderRegister();
+
+    mocks.mfa.options!.onComplete({ accessToken: 'full', user: { id: 'u1' } });
+
+    expect(mocks.setCurrentUser).toHaveBeenCalledWith({ id: 'u1' });
+  });
+
+  it.each([
+    ['verify', 'error'],
+    ['setup', 'info'],
+  ] as const)('returns to the form with a %s notice when the challenge is cancelled', async (mode, toastKind) => {
+    mocks.verifyOTC.mockResolvedValueOnce({ mfaRequired: true, userId: 'u1', accessToken: 'pending-tok' });
+    renderRegister();
+    await submitCode(userEvent.setup());
+    await waitFor(() => expect(mocks.mfa.begin).toHaveBeenCalled());
+    expect(screen.queryByTestId('register-form')).not.toBeInTheDocument();
+
+    act(() => mocks.mfa.options!.onCancel!(mode));
+
+    expect(await screen.findByTestId('register-form')).toBeInTheDocument();
+    expect(mocks.toast[toastKind]).toHaveBeenCalledTimes(1);
   });
 });
