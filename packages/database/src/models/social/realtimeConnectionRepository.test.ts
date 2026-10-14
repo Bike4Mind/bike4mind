@@ -612,6 +612,19 @@ describe('realtimeConnectionRepository.upsertSubscriber', () => {
     expect(await entries()).toHaveLength(3);
   });
 
+  it('gives a re-created document a fresh _id, so a stale delete by _id cannot reach it', async () => {
+    await realtimeConnectionRepository.upsertSubscriber(identity, subscriber);
+    const firstId = (await QuerySubscription.findOne({ queryId: 'q' }).lean())!._id;
+
+    // Pulling the last subscriber deletes the doc. The fanout keys its deletes by _id, so a doc
+    // created for the same query afterwards must not reuse the deleted one's id.
+    await realtimeConnectionRepository.removeConnectionSubscribers(subscriber.connectionId);
+    await realtimeConnectionRepository.upsertSubscriber(identity, subscriber);
+
+    const recreated = await QuerySubscription.findOne({ queryId: 'q' }).lean();
+    expect(recreated!._id.equals(firstId)).toBe(false);
+  });
+
   it('stores one entry when the same subscribe arrives concurrently', async () => {
     await realtimeConnectionRepository.upsertSubscriber(identity, { ...subscriber, clientId: 'seed' });
 
