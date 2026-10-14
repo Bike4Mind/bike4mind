@@ -9,9 +9,15 @@
  * failed should be re-run alone, not with the rest). Recordings are written as `<scenario>.json` and win over
  * the `.synthetic.json` stand-ins without any test edit. The key is checked absent from every file before it
  * is written, and the download probe records only status and headers, never the bytes.
+ *
+ * `blocked` needs a prompt Veo actually refuses; the gory default was NOT blocked live (Veo made a normal video).
+ * Set BLOCKED_PROMPT to override it, and BLOCKED_IMAGE=<local png/jpg/webp> to submit image-to-video instead (the
+ * likeness filter fires only on an input image). BLOCKED_NAME overrides the written name (default `blocked`).
  */
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { extname } from 'node:path';
 import { deflateSync, crc32 } from 'node:zlib';
+import { classifyGeminiSubmitFailure } from '../../gemini/geminiHttp';
 import { assertNoSecret, scrubBody, scrubUrl } from './scrub';
 
 const BASE = 'https://generativelanguage.googleapis.com';
@@ -177,6 +183,18 @@ const recordGeneration = async (
   write(scenario, [{ name: 'submit', ...submit.exchange }, ...exchanges, download]);
 };
 
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+};
+const imageMimeOf = (path: string): string => {
+  const mimeType = IMAGE_MIME_TYPES[extname(path).toLowerCase()];
+  if (!mimeType) throw new Error(`BLOCKED_IMAGE must be png, jpg or webp: ${path}`);
+  return mimeType;
+};
+
 const BLOCKED_REDACTION = '<redacted:blocked-prompt>';
 
 // Everything echoed back from a blocked request is replaced, so the fixture never carries the prompt text.
@@ -205,23 +223,41 @@ const scenarios: Record<string, () => Promise<void>> = {
     ),
 
   blocked: async () => {
-    // Prompt kept generic and redacted in the fixture; override locally if it does not trigger a block.
+    // Redacted in the fixture either way. This default did not trigger a block live; see the header.
     const blockedPrompt =
       process.env.BLOCKED_PROMPT ?? 'Extremely graphic, gory footage of a person being violently injured.';
-    const blocked = await call('POST', SUBMIT_PATH, submitBody({ prompt: blockedPrompt }));
-    process.stdout.write(`blocked: submit ${blocked.exchange.response.status}\n`);
+    const imagePath = process.env.BLOCKED_IMAGE;
+    const name = process.env.BLOCKED_NAME ?? 'blocked';
+    const body = imagePath
+      ? submitBody(
+          {
+            prompt: blockedPrompt,
+            image: { bytesBase64Encoded: readFileSync(imagePath).toString('base64'), mimeType: imageMimeOf(imagePath) },
+          },
+          { personGeneration: 'allow_adult' }
+        )
+      : submitBody({ prompt: blockedPrompt });
+    const blocked = await call('POST', SUBMIT_PATH, body);
+    const { status } = blocked.exchange.response;
+    process.stdout.write(`${name}: submit ${status}\n`);
+    // A parameter 400 must not land as a block fixture; only one the adapter would classify as blocked does.
+    if (status >= 400 && classifyGeminiSubmitFailure(status, blocked.parsed, 'veo') !== 'blocked') {
+      throw new Error(
+        `${name}: submit ${status} is not a safety block; nothing written: ${JSON.stringify(blocked.exchange.response.body)}`
+      );
+    }
     const exchanges: Exchange[] = [{ name: 'submit', ...blocked.exchange }];
-    if (blocked.exchange.response.status < 400) {
+    if (status < 400) {
       const { exchanges: polls, terminal } = await pollToTerminal(operationNameOf(blocked.parsed));
       // The prompt did not trigger a block (a billed video was generated): a success recording must not pass as one.
       if (findVideoUri(terminal)) {
-        throw new Error('blocked: the operation produced a video, so the prompt was not blocked; nothing written');
+        throw new Error(`${name}: the operation produced a video, so the prompt was not blocked; nothing written`);
       }
       exchanges.push(...polls);
     }
     const redacted = redactBlocked(exchanges, blockedPrompt);
     if (!Array.isArray(redacted)) throw new Error('redaction changed the exchange list shape');
-    write('blocked', redacted);
+    write(name, redacted);
   },
 
   // An unsupported aspect ratio is rejected at submit, before any generation is billed.
