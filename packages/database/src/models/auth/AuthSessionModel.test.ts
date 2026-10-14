@@ -199,11 +199,50 @@ describe('AuthSessionModel repository', () => {
       await authSessionRepository.create(base({ sid: 'ch-c', userId: 'owner' }));
       await authSessionRepository.setStepUpEmailChallenge('ch-c', 'owner', challenge());
       const at = new Date();
-      expect(await authSessionRepository.consumeStepUpEmailChallenge('ch-c', 'other', 'tok', at)).toBeNull();
-      const consumed = await authSessionRepository.consumeStepUpEmailChallenge('ch-c', 'owner', 'tok', at);
+      expect(await authSessionRepository.consumeStepUpEmailChallenge('ch-c', 'other', 'tok', at, 5)).toBeNull();
+      const consumed = await authSessionRepository.consumeStepUpEmailChallenge('ch-c', 'owner', 'tok', at, 5);
       expect(consumed?.stepUpAt?.getTime()).toBe(at.getTime());
-      expect(await authSessionRepository.consumeStepUpEmailChallenge('ch-c', 'owner', 'tok', at)).toBeNull();
+      expect(await authSessionRepository.consumeStepUpEmailChallenge('ch-c', 'owner', 'tok', at, 5)).toBeNull();
       expect(await authSessionRepository.findStepUpEmailChallenge('ch-c', 'owner')).toBeNull();
+    });
+
+    it('consume refuses a challenge that has used up its attempts', async () => {
+      await authSessionRepository.create(base({ sid: 'ch-max', userId: 'owner' }));
+      await authSessionRepository.setStepUpEmailChallenge('ch-max', 'owner', challenge());
+      await authSessionRepository.recordStepUpEmailChallengeFailure('ch-max', 'tok');
+      await authSessionRepository.recordStepUpEmailChallengeFailure('ch-max', 'tok');
+
+      expect(
+        await authSessionRepository.consumeStepUpEmailChallenge('ch-max', 'owner', 'tok', new Date(), 2)
+      ).toBeNull();
+      const stillOutstanding = await authSessionRepository.findStepUpEmailChallenge('ch-max', 'owner');
+      expect(stillOutstanding).toMatchObject({ tokenHash: 'tok', attempts: 2 });
+      expect(
+        await authSessionRepository.consumeStepUpEmailChallenge('ch-max', 'owner', 'tok', new Date(), 3)
+      ).not.toBeNull();
+    });
+
+    it('consume refuses a challenge that expired before the write', async () => {
+      await authSessionRepository.create(base({ sid: 'ch-late', userId: 'owner' }));
+      const expiresAt = new Date(Date.now() + 60_000);
+      await authSessionRepository.setStepUpEmailChallenge('ch-late', 'owner', challenge({ expiresAt }));
+
+      const afterExpiry = new Date(expiresAt.getTime() + 1);
+      expect(
+        await authSessionRepository.consumeStepUpEmailChallenge('ch-late', 'owner', 'tok', afterExpiry, 5)
+      ).toBeNull();
+      expect((await AuthSessionModel.findOne({ sid: 'ch-late' }).lean())?.stepUpAt ?? null).toBeNull();
+    });
+
+    it('consume and failure counting refuse a revoked session', async () => {
+      await authSessionRepository.create(base({ sid: 'ch-rev', userId: 'owner' }));
+      await authSessionRepository.setStepUpEmailChallenge('ch-rev', 'owner', challenge());
+      await authSessionRepository.revokeBySid('ch-rev');
+
+      expect(await authSessionRepository.recordStepUpEmailChallengeFailure('ch-rev', 'tok')).toBeNull();
+      expect(
+        await authSessionRepository.consumeStepUpEmailChallenge('ch-rev', 'owner', 'tok', new Date(), 5)
+      ).toBeNull();
     });
   });
 

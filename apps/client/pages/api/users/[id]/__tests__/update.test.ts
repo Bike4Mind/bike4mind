@@ -82,6 +82,8 @@ vi.mock('@bike4mind/services', async orig => ({
     adminUpdateUserSchema: z.object({
       id: z.string(),
       name: z.string().optional(),
+      email: z.string().optional(),
+      password: z.string().optional(),
       isAdmin: z.boolean().optional(),
       tags: z.array(z.string()).nullable().optional(),
       currentCredits: z.number().optional(),
@@ -216,6 +218,59 @@ describe('PUT /api/users/:id/update - changing your own password', () => {
     await expect(promise).rejects.toBeInstanceOf(ForbiddenError);
     expect(mockRequireStepUp).not.toHaveBeenCalled();
     expect(mockUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('treats an upper-case form of your own id as yourself', async () => {
+    const ownId = '65a1b2c3d4e5f6a7b8c9d0e1';
+    mockRequireStepUp.mockRejectedValue(stepUpRequired);
+    const { promise } = run({
+      user: { ...ADMIN, id: ownId },
+      userId: ownId.toUpperCase(),
+      body: { password: 'new-password' },
+    });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403, additionalInfo: { code: 'step_up_required' } });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('gates an admin changing their own email, and writes once recently verified', async () => {
+    mockRequireStepUp.mockRejectedValueOnce(stepUpRequired);
+    const blocked = run({ user: ADMIN, userId: ADMIN.id, body: { email: 'new@example.com' } });
+    await expect(blocked.promise).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { code: 'step_up_required' },
+    });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+
+    const allowed = run({ user: ADMIN, userId: ADMIN.id, body: { email: 'new@example.com' } });
+    await allowed.promise;
+    expect(allowed.res._getStatusCode()).toBe(200);
+    expect(mockRequireStepUp).toHaveBeenCalledTimes(2);
+    expect(mockAdminUpdateUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an admin changing their own email with an API key', async () => {
+    const { promise } = run({
+      user: ADMIN,
+      userId: ADMIN.id,
+      body: { email: 'new@example.com' },
+      apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] },
+    });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it("leaves an admin changing another user's email or password unchanged", async () => {
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'other-user',
+      body: { email: 'other@example.com', password: 'reset-value' },
+      apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] },
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).toHaveBeenCalledTimes(1);
   });
 
   it("leaves updates without a password, and an admin setting another user's password, ungated", async () => {

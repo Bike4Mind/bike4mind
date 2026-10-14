@@ -70,14 +70,22 @@ const { sessions, authSessionRepository } = vi.hoisted(() => {
       return c && c.expiresAt > new Date() ? { ...c } : null;
     },
     recordStepUpEmailChallengeFailure: async (sid: string, tokenHash: string) => {
-      const c = sessions.get(sid)?.stepUpEmailChallenge;
+      const s = sessions.get(sid);
+      const c = s && !s.revokedAt ? s.stepUpEmailChallenge : null;
       if (!c || c.tokenHash !== tokenHash) return null;
       c.attempts += 1;
       return c.attempts;
     },
-    consumeStepUpEmailChallenge: async (sid: string, userId: string, tokenHash: string, at: Date) => {
+    consumeStepUpEmailChallenge: async (
+      sid: string,
+      userId: string,
+      tokenHash: string,
+      at: Date,
+      maxAttempts: number
+    ) => {
       const s = live(sid, userId);
-      if (!s || s.stepUpEmailChallenge?.tokenHash !== tokenHash) return null;
+      const c = s?.stepUpEmailChallenge;
+      if (!s || !c || c.tokenHash !== tokenHash || c.attempts >= maxAttempts || c.expiresAt <= at) return null;
       s.stepUpEmailChallenge = null;
       s.stepUpAt = at;
       return s;
@@ -100,7 +108,11 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
   return {
-    userService: { sendOTC: actual.userService.sendOTC, OTC_EXPIRY_MS: actual.userService.OTC_EXPIRY_MS },
+    userService: {
+      sendOTC: actual.userService.sendOTC,
+      OTC_EXPIRY_MS: actual.userService.OTC_EXPIRY_MS,
+      OTC_CODE_LENGTH: actual.userService.OTC_CODE_LENGTH,
+    },
     mfaService: {
       userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean } }) => !!user.mfa?.totpEnabled,
       isUserLockedOut: (user: { mfa?: { lockedUntil?: Date } }) =>
@@ -146,6 +158,12 @@ const call = async (handler: unknown, { method = 'POST', body = {}, sid = 'sid-1
 const asUser = (user: object) => {
   h.findByIdWithPassword.mockResolvedValue(user);
   h.findByIdWithMfaSecrets.mockResolvedValue(user);
+};
+
+/** A rejected proof answers 400 with a code, so the client never treats it as an expired session. */
+const expectStepUpFailed = (res: { _getStatusCode: () => number; _getJSONData: () => unknown }) => {
+  expect(res._getStatusCode()).toBe(400);
+  expect(res._getJSONData()).toMatchObject({ code: 'step_up_failed', error: expect.any(String) });
 };
 
 const lastEmailedCode = () => {
@@ -202,11 +220,11 @@ describe('POST /api/auth/step-up - totp', () => {
     expect(h.logAuthAudit.mock.calls[0][1]).toMatchObject({ event: 'step_up_success', metadata: { method: 'totp' } });
   });
 
-  it('answers a wrong code with 401, counting it toward the shared MFA lockout', async () => {
+  it('answers a wrong code with 400 step_up_failed, counting it toward the shared MFA lockout', async () => {
     h.verifyMFA.mockRejectedValue(new Error('Invalid TOTP or backup code.'));
     const res = await call(stepUpHandler, { body: { method: 'totp', code: '000000' } });
 
-    expect(res._getStatusCode()).toBe(401);
+    expectStepUpFailed(res);
     expect(res._getJSONData()).toMatchObject({ attemptsRemaining: 2 });
     expect(h.recordFailedAttempt).toHaveBeenCalledWith('user-1');
     expect(sessions.get('sid-1')!.stepUpAt).toBeNull();
@@ -243,11 +261,9 @@ describe('POST /api/auth/step-up - passkey', () => {
     expect(sessions.get('sid-1')!.stepUpAt).toBeInstanceOf(Date);
   });
 
-  it('counts a rejected assertion (401) but not an expired ceremony (400)', async () => {
+  it('counts a rejected assertion (step_up_failed) but not an expired ceremony', async () => {
     h.finishPasskeyAuthentication.mockRejectedValue(passkeyError('verification_failed'));
-    expect((await call(stepUpHandler, { body: { method: 'passkey', response: assertion } }))._getStatusCode()).toBe(
-      401
-    );
+    expectStepUpFailed(await call(stepUpHandler, { body: { method: 'passkey', response: assertion } }));
     expect(h.recordFailedAttempt).toHaveBeenCalledTimes(1);
 
     h.finishPasskeyAuthentication.mockRejectedValue(passkeyError('challenge_expired'));
@@ -268,8 +284,8 @@ describe('POST /api/auth/step-up - passkey', () => {
 describe('POST /api/auth/step-up - password', () => {
   beforeEach(() => asUser(PLAIN));
 
-  it('stamps the session on the right password and 401s a wrong one', async () => {
-    expect((await call(stepUpHandler, { body: { method: 'password', password: 'nope' } }))._getStatusCode()).toBe(401);
+  it('stamps the session on the right password and rejects a wrong one', async () => {
+    expectStepUpFailed(await call(stepUpHandler, { body: { method: 'password', password: 'nope' } }));
     expect(sessions.get('sid-1')!.stepUpAt).toBeNull();
     expect(h.logAuthAudit.mock.calls[0][1]).toMatchObject({
       event: 'step_up_failed',
@@ -318,8 +334,7 @@ describe('POST /api/auth/step-up - email', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(sessions.get('sid-1')!.stepUpAt).toBeInstanceOf(Date);
 
-    const replay = await call(stepUpHandler, { body: { method: 'email', pendingToken, code } });
-    expect(replay._getStatusCode()).toBe(401);
+    expectStepUpFailed(await call(stepUpHandler, { body: { method: 'email', pendingToken, code } }));
   });
 
   it('counts wrong codes and expires the challenge after the limit', async () => {
@@ -328,12 +343,13 @@ describe('POST /api/auth/step-up - email', () => {
     const wrong = code === '00000000' ? '11111111' : '00000000';
 
     const first = await call(stepUpHandler, { body: { method: 'email', pendingToken, code: wrong } });
-    expect(first._getStatusCode()).toBe(401);
+    expectStepUpFailed(first);
     expect(first._getJSONData().attemptsRemaining).toBe(4);
     for (let i = 0; i < 4; i += 1) await call(stepUpHandler, { body: { method: 'email', pendingToken, code: wrong } });
 
     const late = await call(stepUpHandler, { body: { method: 'email', pendingToken, code } });
-    expect(late._getStatusCode()).toBe(401);
+    expectStepUpFailed(late);
+    expect(late._getJSONData().attemptsRemaining).toBe(0);
     expect(sessions.get('sid-1')!.stepUpAt).toBeNull();
   });
 
@@ -351,12 +367,12 @@ describe('POST /api/auth/step-up - email', () => {
     const withLoginToken = await call(stepUpHandler, {
       body: { method: 'email', pendingToken: login.pendingToken, code: loginCode },
     });
-    expect(withLoginToken._getStatusCode()).toBe(401);
+    expectStepUpFailed(withLoginToken);
     // Independent random 8-digit codes: a collision is a 1e-8 event.
     const loginCodeWithStepUpToken = await call(stepUpHandler, {
       body: { method: 'email', pendingToken: stepUpToken, code: loginCode },
     });
-    expect(loginCodeWithStepUpToken._getStatusCode()).toBe(401);
+    expectStepUpFailed(loginCodeWithStepUpToken);
     expect(sessions.get('sid-1')!.stepUpAt).toBeNull();
   });
 
@@ -366,8 +382,14 @@ describe('POST /api/auth/step-up - email', () => {
     sessions.set('sid-2', { ...sessions.get('sid-1')!, sid: 'sid-2', stepUpEmailChallenge: null });
 
     const res = await call(stepUpHandler, { body: { method: 'email', pendingToken, code }, sid: 'sid-2' });
-    expect(res._getStatusCode()).toBe(401);
+    expectStepUpFailed(res);
     expect(sessions.get('sid-2')!.stepUpAt).toBeNull();
+  });
+
+  it('sends nothing when the challenge cannot be stored on the session', async () => {
+    vi.spyOn(authSessionRepository, 'setStepUpEmailChallenge').mockResolvedValueOnce(false);
+    await expect(call(emailSendHandler)).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.publishEmail).not.toHaveBeenCalled();
   });
 
   it('is refused (400) for an MFA-enrolled user', async () => {

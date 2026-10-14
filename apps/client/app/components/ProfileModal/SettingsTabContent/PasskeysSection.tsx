@@ -9,6 +9,7 @@ import {
   useRegisterPasskey,
   useRemovePasskey,
 } from '@client/app/hooks/data/passkeys';
+import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 
 const formatDate = (value: string | null): string =>
   value ? new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'Never';
@@ -36,6 +37,7 @@ const PasskeysSection: React.FC<{ enabled: boolean }> = ({ enabled }) => {
           toast.success(`Added passkey "${passkey.name}"`);
         },
         onError: error => {
+          if (isStepUpCancelled(error)) return;
           toast.error(describePasskeyError(error, 'Could not add the passkey'));
         },
       }
@@ -47,7 +49,10 @@ const PasskeysSection: React.FC<{ enabled: boolean }> = ({ enabled }) => {
       { id },
       {
         onSuccess: () => toast.success(`Removed passkey "${label}"`),
-        onError: () => toast.error(`Could not remove passkey "${label}"`),
+        onError: error => {
+          if (isStepUpCancelled(error)) return;
+          toast.error(`Could not remove passkey "${label}"`);
+        },
       }
     );
   };

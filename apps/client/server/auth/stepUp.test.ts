@@ -59,8 +59,12 @@ describe('getStepUpUntil / requireStepUp', () => {
     });
   });
 
-  it('rejects a request with no session id (API key, legacy token) without a lookup', async () => {
-    await expect(requireStepUp({ user: { id: 'user-1' } } as Request)).rejects.toMatchObject({ statusCode: 403 });
+  it('answers step_up_unavailable, not step_up_required, for a request with no session id', async () => {
+    // The client prompts only on step_up_required; a session-less request could never satisfy it.
+    await expect(requireStepUp({ user: { id: 'user-1' } } as Request)).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { code: 'step_up_unavailable' },
+    });
     expect(mockFindBySid).not.toHaveBeenCalled();
   });
 });

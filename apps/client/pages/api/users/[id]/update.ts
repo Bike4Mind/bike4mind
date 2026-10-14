@@ -29,6 +29,9 @@ const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
   ignoredFields: z.array(z.string()).optional(),
 });
 
+/** Fields that change how the account signs in; see the self-update gate in the handler. */
+const SELF_CREDENTIAL_FIELDS = ['password', 'email'] as const;
+
 async function getPreviousConsentLevel(
   userId: string,
   incomingLevel: string,
@@ -130,17 +133,26 @@ const handler = baseApi().put(
     const { id: userId } = idParamSchema.parse(req.query);
     const currentUser = req.user;
 
+    // Ids compare case-insensitively: Mongo resolves an upper-case hex id to the same user.
+    const isSelf = currentUser.id.toLowerCase() === userId.toLowerCase();
+
     // Non-admin users can only update their own profile
-    if (!currentUser.isAdmin && currentUser.id !== userId) {
+    if (!currentUser.isAdmin && !isSelf) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    // Changing your OWN password needs a browser session that recently re-verified, so an API key
-    // can never do it. An admin setting another user's password is not gated here.
-    const rawPassword = (req.body as Record<string, unknown> | undefined)?.password;
-    if (currentUser.id === userId && rawPassword !== undefined && rawPassword !== null) {
-      if (req.apiKeyInfo) throw new ForbiddenError('Password cannot be changed with an API key.');
-      await requireStepUp(req);
+    // Changing your OWN sign-in credentials needs a browser session that recently re-verified, so
+    // an API key can never do it. Only the admin schema accepts `email`; an admin changing ANOTHER
+    // user's email or password is not gated here.
+    if (isSelf) {
+      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      const changesCredentials = SELF_CREDENTIAL_FIELDS.some(
+        field => rawBody[field] !== undefined && rawBody[field] !== null
+      );
+      if (changesCredentials) {
+        if (req.apiKeyInfo) throw new ForbiddenError('Password and email cannot be changed with an API key.');
+        await requireStepUp(req);
+      }
     }
 
     if (currentUser.isAdmin) {
@@ -176,7 +188,7 @@ const handler = baseApi().put(
       if (body.isAdmin === false) {
         const targetUser = (await User.findById(userId).select('isAdmin').lean()) as Record<string, unknown> | null;
         if (targetUser?.isAdmin) {
-          if (currentUser.id === userId) {
+          if (isSelf) {
             return res.status(400).json({ error: 'You cannot remove your own Super Admin role.' });
           }
           const adminCount = await userRepository.count({ isAdmin: true });

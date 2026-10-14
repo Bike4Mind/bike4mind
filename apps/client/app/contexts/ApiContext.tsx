@@ -93,11 +93,14 @@ api.interceptors.response.use(
     // 401 handling below run (it already no-ops the redirect for mfaPending).
     const isMfaPending401 =
       isAxiosError(error) && error.response?.status === 401 && error.response?.data?.mfaPending === true;
+    // Also expected: the step-up interceptor below turns it into a verification prompt.
+    const isStepUpRequired403 =
+      isAxiosError(error) && error.response?.status === 403 && error.response?.data?.code === 'step_up_required';
 
-    // Suppress logging for the expected mid-MFA rejection; log everything else.
+    // Suppress logging for the expected rejections above; log everything else.
     // TODO: have graceful toasters for customers vs developers
     // For now just a console.log
-    if (!isMfaPending401) {
+    if (!isMfaPending401 && !isStepUpRequired403) {
       if (isAxiosError(error)) {
         if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
           console.error('Network Error: Backend may not be running. Check that SST is started.');

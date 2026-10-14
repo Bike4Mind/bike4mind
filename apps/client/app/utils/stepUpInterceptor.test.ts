@@ -3,6 +3,7 @@ import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRe
 import { api } from '@client/app/contexts/ApiContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useStepUpStore } from '@client/app/stores/useStepUpStore';
+import { isStepUpCancelled } from './stepUpInterceptor';
 
 vi.mock('@client/app/utils/clearClientCaches', () => ({ clearClientCaches: vi.fn().mockResolvedValue(undefined) }));
 
@@ -63,7 +64,10 @@ describe('step-up response interceptor', () => {
     await vi.waitFor(() => expect(useStepUpStore.getState().open).toBe(true));
     useStepUpStore.getState().cancelStepUp();
 
-    await expect(request).rejects.toMatchObject({ response: { status: 403, data: stepUpRequired } });
+    const error = await request.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AxiosError);
+    expect(error).toMatchObject({ response: { status: 403, data: stepUpRequired } });
+    expect(isStepUpCancelled(error)).toBe(true);
     expect(calls).toHaveLength(1);
   });
 
@@ -89,7 +93,9 @@ describe('step-up response interceptor', () => {
     await vi.waitFor(() => expect(useStepUpStore.getState().open).toBe(true));
     useStepUpStore.getState().completeStepUp();
 
-    await expect(request).rejects.toMatchObject({ response: { status: 403 } });
+    const error = await request.catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ response: { status: 403 } });
+    expect(isStepUpCancelled(error)).toBe(false);
     expect(calls).toHaveLength(2);
     expect(useStepUpStore.getState().open).toBe(false);
   });
@@ -116,5 +122,22 @@ describe('step-up response interceptor', () => {
 
     await expect(api.post('/api/email/change', {})).rejects.toMatchObject({ response: { status: 403 } });
     expect(useStepUpStore.getState().open).toBe(false);
+  });
+
+  it('does not prompt while the stored token is an mfaPending sign-in token', async () => {
+    useAccessToken.setState({ accessToken: 'token', mfaPending: true });
+    installAdapter(() => false);
+
+    await expect(api.post('/api/email/change', {})).rejects.toMatchObject({ response: { status: 403 } });
+    expect(useStepUpStore.getState().open).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe('isStepUpCancelled', () => {
+  it('is false for values the interceptor did not tag', () => {
+    expect(isStepUpCancelled(new Error('x'))).toBe(false);
+    expect(isStepUpCancelled(null)).toBe(false);
+    expect(isStepUpCancelled('step_up_required')).toBe(false);
   });
 });

@@ -14,7 +14,13 @@ import {
   getPasskeyRelyingParty,
   passkeyDeps,
 } from '@server/auth/passkey';
-import { markStepUp, stepUpMethodsFor, stepUpUnavailableError, type StepUpMethod } from '@server/auth/stepUp';
+import {
+  markStepUp,
+  STEP_UP_FAILED_CODE,
+  stepUpMethodsFor,
+  stepUpUnavailableError,
+  type StepUpMethod,
+} from '@server/auth/stepUp';
 import { verifyStepUpEmailCode } from '@server/auth/stepUpEmail';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { NotFoundError } from '@server/utils/errors';
@@ -43,6 +49,13 @@ type StepUpBody = z.infer<typeof bodySchema>;
 
 const audit = (req: Request, userId: string, method: StepUpMethod, success: boolean) =>
   logAuthAudit(req, { userId, event: success ? 'step_up_success' : 'step_up_failed', metadata: { method } });
+
+/**
+ * A rejected proof answers 400, never 401: the client's HTTP layer treats a 401 as an expired
+ * access token and would refresh and replay the same proof (see app/contexts/ApiContext.tsx).
+ */
+const sendStepUpFailed = (res: Response, body: { error: string; attemptsRemaining?: number }) =>
+  res.status(400).json({ ...body, code: STEP_UP_FAILED_CODE });
 
 async function succeed(req: Request, res: Response, method: StepUpMethod, stepUpUntil: Date | null) {
   if (!stepUpUntil) throw stepUpUnavailableError();
@@ -77,7 +90,7 @@ async function verifyFactor(req: Request, res: Response, body: Extract<StepUpBod
       }
     }
     await audit(req, user.id, body.method, false);
-    return sendFailedMfaAttempt(res, user.id, { error: 'Verification failed.' }, 401);
+    return sendFailedMfaAttempt(res, user.id, { error: 'Verification failed.', code: STEP_UP_FAILED_CODE });
   }
 
   return succeed(req, res, body.method, await markStepUp(req.user));
@@ -108,7 +121,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       case 'password': {
         if (!user.password || !(await bcrypt.compare(body.password, user.password))) {
           await audit(req, user.id, 'password', false);
-          return res.status(401).json({ error: 'Incorrect password.' });
+          return sendStepUpFailed(res, { error: 'Incorrect password.' });
         }
         return succeed(req, res, 'password', await markStepUp(req.user));
       }
@@ -123,8 +136,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
         if (!result.ok) {
           await audit(req, user.id, 'email', false);
           return result.reason === 'expired'
-            ? res.status(401).json({ error: 'This code has expired. Request a new one.', attemptsRemaining: 0 })
-            : res.status(401).json({ error: 'Invalid code.', attemptsRemaining: result.attemptsRemaining });
+            ? sendStepUpFailed(res, { error: 'This code has expired. Request a new one.', attemptsRemaining: 0 })
+            : sendStepUpFailed(res, { error: 'Invalid code.', attemptsRemaining: result.attemptsRemaining });
         }
         return succeed(req, res, 'email', result.stepUpUntil);
       }

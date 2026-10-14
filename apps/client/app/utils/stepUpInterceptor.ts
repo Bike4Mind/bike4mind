@@ -6,6 +6,16 @@ type StepUpRetryConfig = InternalAxiosRequestConfig & { _stepUpRetried?: boolean
 
 const STEP_UP_ROUTE_PREFIX = '/api/auth/step-up';
 
+/** Set on the rejected error when the user dismissed the verification prompt. */
+const STEP_UP_CANCELLED = Symbol('stepUpCancelled');
+
+/**
+ * True when a request failed only because the user cancelled the verification prompt: the call
+ * site should stay silent rather than report an error the user chose.
+ */
+export const isStepUpCancelled = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && STEP_UP_CANCELLED in error;
+
 const isStepUpRequired = (error: unknown): boolean =>
   isAxiosError(error) &&
   error.response?.status === 403 &&
@@ -25,11 +35,14 @@ export function registerStepUpInterceptor(client: AxiosInstance): void {
       const config = error.config as StepUpRetryConfig | undefined;
       if (!config || config._stepUpRetried) return Promise.reject(error);
       if (config.url?.includes(STEP_UP_ROUTE_PREFIX)) return Promise.reject(error);
-      if (!useAccessToken.getState().accessToken) return Promise.reject(error);
+      // An mfaPending sign-in token never reaches gated routes, and could not step up if it did.
+      const { accessToken, mfaPending } = useAccessToken.getState();
+      if (!accessToken || mfaPending) return Promise.reject(error);
 
       try {
         await useStepUpStore.getState().requestStepUp();
       } catch {
+        Object.defineProperty(error, STEP_UP_CANCELLED, { value: true });
         return Promise.reject(error);
       }
 

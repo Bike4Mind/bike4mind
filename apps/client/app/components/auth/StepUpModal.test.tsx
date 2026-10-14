@@ -82,6 +82,61 @@ describe('StepUpModal', () => {
     expect(useStepUpStore.getState().open).toBe(true);
   });
 
+  it('shows only the server message once no attempts remain', async () => {
+    await openWith(['totp']);
+    mockPost.mockRejectedValue(
+      axiosFailure({ error: 'This code has expired. Request a new one.', attemptsRemaining: 0 })
+    );
+    fireEvent.change(await screen.findByTestId('step-up-modal-totp-input'), { target: { value: '000000' } });
+    fireEvent.click(screen.getByTestId('step-up-modal-verify-btn'));
+
+    const alert = await screen.findByTestId('step-up-modal-error');
+    expect(alert.textContent).toBe('This code has expired. Request a new one.');
+  });
+
+  it('offers a retry when the options fail to load, without claiming no method exists', async () => {
+    mockGet
+      .mockRejectedValueOnce(axiosFailure({ error: 'Server unavailable' }))
+      .mockResolvedValueOnce({ data: { methods: ['totp'], stepUpUntil: null } });
+    renderModal();
+    act(() => {
+      void useStepUpStore
+        .getState()
+        .requestStepUp()
+        .catch(() => undefined);
+    });
+
+    expect((await screen.findByTestId('step-up-modal-load-error')).textContent).toContain('Server unavailable');
+    expect(screen.queryByTestId('step-up-modal-no-methods')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('step-up-modal-retry-btn'));
+    await screen.findByTestId('step-up-modal-totp-input');
+    expect(mockGet).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId('step-up-modal-load-error')).toBeNull();
+  });
+
+  it('says no method is available only when the server returns none', async () => {
+    await openWith([]);
+    await screen.findByTestId('step-up-modal-no-methods');
+    expect(screen.queryByTestId('step-up-modal-load-error')).toBeNull();
+  });
+
+  it('keeps Cancel disabled while a verification is in flight', async () => {
+    await openWith(['totp']);
+    let finish: (value: unknown) => void = () => undefined;
+    mockPost.mockReturnValue(new Promise(resolve => (finish = resolve)));
+    fireEvent.change(await screen.findByTestId('step-up-modal-totp-input'), { target: { value: '123456' } });
+    fireEvent.click(screen.getByTestId('step-up-modal-verify-btn'));
+
+    const cancel = screen.getByTestId('step-up-modal-cancel-btn') as HTMLButtonElement;
+    await waitFor(() => expect(cancel.disabled).toBe(true));
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(useStepUpStore.getState().open).toBe(true);
+
+    await act(async () => finish({ data: { stepUpUntil: 'x' } }));
+    expect(useStepUpStore.getState().open).toBe(false);
+  });
+
   it('runs the passkey ceremony', async () => {
     const { pending } = await openWith(['passkey']);
     mockStartAuthentication.mockResolvedValue({ id: 'cred' });
@@ -115,6 +170,30 @@ describe('StepUpModal', () => {
     expect(mockPost).toHaveBeenNthCalledWith(2, '/api/auth/step-up', {
       method: 'email',
       pendingToken: 'tok',
+      code: '12345678',
+    });
+  });
+
+  it('sends a new email code on request and verifies with the newest token', async () => {
+    const { pending } = await openWith(['email']);
+    mockPost
+      .mockResolvedValueOnce({ data: { pendingToken: 'tok-1' } })
+      .mockResolvedValueOnce({ data: { pendingToken: 'tok-2' } })
+      .mockResolvedValueOnce({ data: {} });
+    fireEvent.click(await screen.findByTestId('step-up-modal-email-send-btn'));
+    fireEvent.click(await screen.findByTestId('step-up-modal-email-resend-btn'));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+    fireEvent.change(screen.getByTestId('step-up-modal-email-code-input'), { target: { value: '12345678' } });
+    await waitFor(() =>
+      expect((screen.getByTestId('step-up-modal-email-verify-btn') as HTMLButtonElement).disabled).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId('step-up-modal-email-verify-btn'));
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(mockPost).toHaveBeenNthCalledWith(2, '/api/auth/step-up/email/send');
+    expect(mockPost).toHaveBeenNthCalledWith(3, '/api/auth/step-up', {
+      method: 'email',
+      pendingToken: 'tok-2',
       code: '12345678',
     });
   });

@@ -78,6 +78,9 @@ export interface IAuthSession {
   stepUpEmailChallenge?: IAuthSessionStepUpEmailChallenge | null;
 }
 
+/** Proofs a session can re-verify with (POST /api/auth/step-up); the server picks which apply. */
+export type StepUpMethod = 'totp' | 'passkey' | 'password' | 'email';
+
 export interface IAuthSessionStepUpEmailChallenge {
   /** sha256 of the opaque pending token handed to the client. */
   tokenHash: string;
@@ -191,16 +194,18 @@ export interface IAuthSessionRepository extends IBaseRepository<IAuthSessionDocu
   ) => Promise<boolean>;
   /** The live session's unexpired emailed step-up challenge, or null. */
   findStepUpEmailChallenge: (sid: string, userId: string) => Promise<IAuthSessionStepUpEmailChallenge | null>;
-  /** Count a wrong code against the challenge identified by `tokenHash`; returns the new count, or
-   *  null when that challenge is no longer outstanding. */
+  /** Count a wrong code against the challenge identified by `tokenHash` on a session that is not
+   *  revoked; returns the new count, or null when that challenge is no longer outstanding. */
   recordStepUpEmailChallengeFailure: (sid: string, tokenHash: string) => Promise<number | null>;
   /** Atomically clear the challenge identified by `tokenHash` and stamp `stepUpAt`. Null when the
-   *  challenge was already consumed or replaced, so a code can satisfy step-up at most once. */
+   *  challenge was already consumed or replaced, has expired by `at`, or has `maxAttempts` wrong
+   *  codes against it, so a code can satisfy step-up at most once and only within its limits. */
   consumeStepUpEmailChallenge: (
     sid: string,
     userId: string,
     tokenHash: string,
-    at: Date
+    at: Date,
+    maxAttempts: number
   ) => Promise<IAuthSessionDocument | null>;
   /** Revoke a single session (this-device logout / reuse detection). Returns the doc, or null. */
   revokeBySid: (sid: string) => Promise<IAuthSessionDocument | null>;

@@ -18,9 +18,8 @@ import { isAxiosError } from 'axios';
 import { startAuthentication } from '@simplewebauthn/browser';
 import { api } from '@client/app/contexts/ApiContext';
 import { describePasskeyMfaError, passkeysSupported } from '@client/app/hooks/data/passkeys';
+import type { StepUpMethod } from '@bike4mind/common';
 import { useStepUpStore } from '@client/app/stores/useStepUpStore';
-
-type StepUpMethod = 'totp' | 'passkey' | 'password' | 'email';
 
 type StepUpOptions = { methods: StepUpMethod[]; stepUpUntil: string | null };
 
@@ -28,7 +27,8 @@ const describeError = (error: unknown, fallback: string): string => {
   if (!isAxiosError(error)) return fallback;
   const data = error.response?.data as { error?: string; attemptsRemaining?: number } | undefined;
   const message = data?.error || fallback;
-  return data?.attemptsRemaining !== undefined ? `${message} (${data.attemptsRemaining} attempts remaining)` : message;
+  // At 0 the server's own message (expired / request a new code) already says what to do.
+  return data?.attemptsRemaining ? `${message} (${data.attemptsRemaining} attempts remaining)` : message;
 };
 
 /**
@@ -41,6 +41,8 @@ const StepUpModal: React.FC = () => {
   const cancelStepUp = useStepUpStore(state => state.cancelStepUp);
 
   const [methods, setMethods] = useState<StepUpMethod[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [totpCode, setTotpCode] = useState('');
@@ -50,29 +52,36 @@ const StepUpModal: React.FC = () => {
 
   useEffect(() => {
     if (!open) return;
-    setMethods(null);
     setError(null);
     setTotpCode('');
     setPassword('');
     setEmailPendingToken(null);
     setEmailCode('');
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setMethods(null);
+    setLoadError(null);
 
     let cancelled = false;
-    api
-      .get<StepUpOptions>('/api/auth/step-up/options')
-      .then(({ data }) => {
+    const loadOptions = async () => {
+      try {
+        const { data } = await api.get<StepUpOptions>('/api/auth/step-up/options');
         if (!cancelled) setMethods(data.methods);
-      })
-      .catch(optionsError => {
-        if (!cancelled) {
-          setMethods([]);
-          setError(describeError(optionsError, 'Could not load verification options'));
-        }
-      });
+      } catch (optionsError) {
+        if (!cancelled) setLoadError(describeError(optionsError, 'Could not load verification options'));
+      }
+    };
+    void loadOptions();
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, loadAttempt]);
+
+  const handleCancel = () => {
+    if (!submitting) cancelStepUp();
+  };
 
   const submit = useCallback(
     async (body: Record<string, unknown>, fallback: string) => {
@@ -110,7 +119,9 @@ const StepUpModal: React.FC = () => {
     setError(null);
     try {
       const { data } = await api.post<{ pendingToken: string }>('/api/auth/step-up/email/send');
+      // A new send replaces the session's challenge, so only the newest token can verify.
       setEmailPendingToken(data.pendingToken);
+      setEmailCode('');
     } catch (sendError) {
       setError(describeError(sendError, 'Could not send the verification code'));
     } finally {
@@ -238,6 +249,15 @@ const StepUpModal: React.FC = () => {
           >
             Verify
           </Button>
+          <Button
+            variant="plain"
+            size="sm"
+            disabled={submitting}
+            onClick={() => void handleSendEmail()}
+            data-testid="step-up-modal-email-resend-btn"
+          >
+            Send a new code
+          </Button>
         </Stack>
       ) : (
         <Button
@@ -256,7 +276,7 @@ const StepUpModal: React.FC = () => {
   return (
     <Modal
       open={open}
-      onClose={cancelStepUp}
+      onClose={handleCancel}
       sx={{ zIndex: theme => theme.zIndex.modal + 100 }}
       data-testid="step-up-modal"
     >
@@ -271,7 +291,28 @@ const StepUpModal: React.FC = () => {
               {error}
             </Alert>
           )}
-          {methods === null && !error && <Typography level="body-sm">Loading...</Typography>}
+          {loadError && (
+            <Alert
+              color="danger"
+              sx={{ mb: 2 }}
+              role="alert"
+              data-testid="step-up-modal-load-error"
+              endDecorator={
+                <Button
+                  size="sm"
+                  variant="soft"
+                  color="danger"
+                  onClick={() => setLoadAttempt(attempt => attempt + 1)}
+                  data-testid="step-up-modal-retry-btn"
+                >
+                  Retry
+                </Button>
+              }
+            >
+              {loadError}
+            </Alert>
+          )}
+          {methods === null && !loadError && <Typography level="body-sm">Loading...</Typography>}
           {methods?.length === 0 && (
             <Alert color="warning" sx={{ mb: 2 }} data-testid="step-up-modal-no-methods">
               No verification method is available for this account. Please contact support to make this change.
@@ -286,7 +327,13 @@ const StepUpModal: React.FC = () => {
             ))}
           </Stack>
         </DialogContent>
-        <Button variant="plain" color="neutral" onClick={cancelStepUp} data-testid="step-up-modal-cancel-btn">
+        <Button
+          variant="plain"
+          color="neutral"
+          onClick={handleCancel}
+          disabled={submitting}
+          data-testid="step-up-modal-cancel-btn"
+        >
           Cancel
         </Button>
       </ModalDialog>

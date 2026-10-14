@@ -207,7 +207,7 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
 
   async recordStepUpEmailChallengeFailure(sid: string, tokenHash: string): Promise<number | null> {
     const session = await AuthSessionModel.findOneAndUpdate(
-      { sid, 'stepUpEmailChallenge.tokenHash': tokenHash },
+      { sid, revokedAt: null, 'stepUpEmailChallenge.tokenHash': tokenHash },
       { $inc: { 'stepUpEmailChallenge.attempts': 1 } },
       { new: true }
     )
@@ -220,12 +220,22 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
     sid: string,
     userId: string,
     tokenHash: string,
-    at: Date
+    at: Date,
+    maxAttempts: number
   ): Promise<IAuthSessionDocument | null> {
     // The tokenHash in the filter is the compare-and-swap: of N concurrent correct submissions,
-    // only the first clears the challenge, so one code yields one step-up.
+    // only the first clears the challenge, so one code yields one step-up. The attempts and expiry
+    // terms re-check at write time what the caller read earlier, closing the gap between the two.
     return AuthSessionModel.findOneAndUpdate(
-      { sid, userId, revokedAt: null, expiresAt: { $gt: at }, 'stepUpEmailChallenge.tokenHash': tokenHash },
+      {
+        sid,
+        userId,
+        revokedAt: null,
+        expiresAt: { $gt: at },
+        'stepUpEmailChallenge.tokenHash': tokenHash,
+        'stepUpEmailChallenge.attempts': { $lt: maxAttempts },
+        'stepUpEmailChallenge.expiresAt': { $gt: at },
+      },
       { $set: { stepUpAt: at, stepUpEmailChallenge: null } },
       { new: true }
     ).exec();

@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from 'express';
-import { ForbiddenError, type IUserDocument } from '@bike4mind/common';
+import { ForbiddenError, type IUserDocument, type StepUpMethod } from '@bike4mind/common';
 import { mfaService } from '@bike4mind/services';
 import { authSessionRepository, passkeyCredentialRepository } from '@bike4mind/database';
 
@@ -14,8 +14,10 @@ export const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
 /** Error `code` a gated route returns; the client's HTTP layer keys its verification prompt on it. */
 export const STEP_UP_REQUIRED_CODE = 'step_up_required';
 
-export const STEP_UP_METHODS = ['totp', 'passkey', 'password', 'email'] as const;
-export type StepUpMethod = (typeof STEP_UP_METHODS)[number];
+/** Error `code` POST /api/auth/step-up returns (status 400) for a wrong, expired or used-up proof. */
+export const STEP_UP_FAILED_CODE = 'step_up_failed';
+
+export type { StepUpMethod } from '@bike4mind/common';
 
 type StepUpUser = Pick<IUserDocument, 'id'> & { sid?: string };
 
@@ -38,8 +40,13 @@ export async function getStepUpUntil(user: StepUpUser, now = new Date()): Promis
   return until > now ? until : null;
 }
 
-/** Throws the 403 `step_up_required` error unless this session verified within the window. */
+/**
+ * Throws the 403 `step_up_required` error unless this session verified within the window, or
+ * `step_up_unavailable` when the request has no session to verify.
+ */
 export async function requireStepUp(req: Pick<Request, 'user'>): Promise<void> {
+  // Without a session id no proof could ever be recorded, so prompting would be a dead end.
+  if (req.user && !req.user.sid) throw stepUpUnavailableError();
   if (!req.user || !(await getStepUpUntil(req.user))) throw stepUpRequiredError();
 }
 

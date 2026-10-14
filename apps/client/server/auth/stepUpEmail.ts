@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'crypto';
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { authSessionRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
@@ -40,7 +40,8 @@ function stepUpEmailBody(code: string): string {
  * Email a step-up code to `email` and bind it to this session. The returned pending token is an
  * opaque handle; the code hash lives on the AuthSession, never in the shared sign-in code store,
  * so a sign-in code cannot satisfy step-up and a step-up code cannot sign anyone in.
- * Returns null when the session is gone (nothing is sent).
+ * The challenge is stored before the email goes out; returns null (nothing sent) when the
+ * session is gone.
  */
 export async function sendStepUpEmailCode(params: {
   sid: string;
@@ -51,25 +52,16 @@ export async function sendStepUpEmailCode(params: {
   if (!session || session.userId !== params.userId || session.revokedAt) return null;
 
   const pendingToken = randomBytes(32).toString('base64url');
-  // sendOTC only generates, hashes and mails the code; its own sign-in pending token is unused.
-  const issued = await userService.sendOTC(
-    { email: params.email },
-    {
-      mailer: {
-        sendOTCEmail: async (to, code) => {
-          await EmailEvents.Send.publish({ to, subject: 'Your verification code', body: stepUpEmailBody(code) });
-        },
-      },
-      signPendingToken: () => pendingToken,
-    }
-  );
-
+  const code = String(randomInt(0, 10 ** userService.OTC_CODE_LENGTH)).padStart(userService.OTC_CODE_LENGTH, '0');
   const stored = await authSessionRepository.setStepUpEmailChallenge(params.sid, params.userId, {
     tokenHash: hashToken(pendingToken),
-    codeHash: issued.otcHash,
+    codeHash: await bcrypt.hash(code, 10),
     expiresAt: new Date(Date.now() + userService.OTC_EXPIRY_MS),
   });
-  return stored ? { pendingToken } : null;
+  if (!stored) return null;
+
+  await EmailEvents.Send.publish({ to: params.email, subject: 'Your verification code', body: stepUpEmailBody(code) });
+  return { pendingToken };
 }
 
 export type StepUpEmailResult =
@@ -104,7 +96,13 @@ export async function verifyStepUpEmailCode(params: {
   }
 
   const now = new Date();
-  const session = await authSessionRepository.consumeStepUpEmailChallenge(params.sid, params.userId, tokenHash, now);
+  const session = await authSessionRepository.consumeStepUpEmailChallenge(
+    params.sid,
+    params.userId,
+    tokenHash,
+    now,
+    STEP_UP_EMAIL_MAX_ATTEMPTS
+  );
   return session
     ? { ok: true, stepUpUntil: new Date(now.getTime() + STEP_UP_WINDOW_MS) }
     : { ok: false, reason: 'expired' };
