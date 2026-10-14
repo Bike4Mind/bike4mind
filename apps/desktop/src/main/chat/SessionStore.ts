@@ -92,7 +92,10 @@ function summarize(session: ChatSession): ChatSessionSummary {
   return { ...summary, messageCount: messages.length };
 }
 
-/** Settled suggestions kept for their "Started" rows; older ones are dropped on the next write. */
+/**
+ * Started suggestions kept so a later session_suggestion_update on one can name the child it
+ * became; older ones are dropped on the next write.
+ */
 const MAX_SETTLED_SUGGESTIONS = 20;
 
 function normalizeSuggestions(value: unknown): ChatSpawnSuggestion[] {
@@ -110,9 +113,7 @@ function normalizeSuggestions(value: unknown): ChatSpawnSuggestion[] {
 
 /** What a suggestion list still needs to hold once its outcomes are reported. */
 function pruneSuggestions(suggestions: readonly ChatSpawnSuggestion[]): ChatSpawnSuggestion[] {
-  const kept = suggestions.filter(
-    entry => entry.status === 'pending' || entry.unreported || (entry.status === 'started' && !entry.cleared)
-  );
+  const kept = suggestions.filter(entry => entry.status !== 'dismissed' || entry.unreported);
   const settled = kept.filter(entry => entry.status !== 'pending');
   const excess = settled.length - MAX_SETTLED_SUGGESTIONS;
   if (excess <= 0) return kept;

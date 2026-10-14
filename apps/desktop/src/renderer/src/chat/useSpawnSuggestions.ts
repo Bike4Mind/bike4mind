@@ -7,11 +7,10 @@ import type {
 } from '@shared/chat';
 
 export interface SpawnSuggestionsController {
-  /** Pending cards and started rows the user has not closed, oldest first. */
-  visible: ChatSpawnSuggestion[];
+  /** Oldest first; the tray draws only the pending ones. */
+  suggestions: ChatSpawnSuggestion[];
   start: (request: Omit<StartSpawnSuggestionRequest, 'sessionId'>) => Promise<SpawnSuggestionResult>;
   dismiss: (suggestionId: string) => Promise<SpawnSuggestionResult>;
-  clear: (suggestionId: string) => void;
 }
 
 const NO_SESSION: SpawnSuggestionResult = { ok: false, error: 'No conversation is open.' };
@@ -52,15 +51,6 @@ export function useSpawnSuggestions(session: ChatSession | null): SpawnSuggestio
       sessionId ? window.b4m.chat.dismissSpawnSuggestion(sessionId, suggestionId) : Promise.resolve(NO_SESSION),
     [sessionId]
   );
-  const clear = useCallback(
-    (suggestionId: string) => {
-      if (sessionId) void window.b4m.chat.clearSpawnSuggestion(sessionId, suggestionId);
-    },
-    [sessionId]
-  );
 
-  const visible = suggestions.filter(
-    entry => entry.status === 'pending' || (entry.status === 'started' && !entry.cleared)
-  );
-  return { visible, start, dismiss, clear };
+  return { suggestions, start, dismiss };
 }

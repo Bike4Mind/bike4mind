@@ -115,8 +115,6 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatStartSpawnSuggestion, request),
     dismissSpawnSuggestion: (sessionId: string, suggestionId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatDismissSpawnSuggestion, sessionId, suggestionId),
-    clearSpawnSuggestion: (sessionId: string, suggestionId: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.chatClearSpawnSuggestion, sessionId, suggestionId),
     onQueueChanged: listener => {
       const handler = (_event: unknown, queueEvent: ChatQueueEvent) => listener(queueEvent);
       ipcRenderer.on(IPC_CHANNELS.chatQueueChanged, handler);

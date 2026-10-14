@@ -109,7 +109,6 @@ export const IPC_CHANNELS = {
   chatQueueChanged: 'chat:queue-changed',
   chatStartSpawnSuggestion: 'chat:start-spawn-suggestion',
   chatDismissSpawnSuggestion: 'chat:dismiss-spawn-suggestion',
-  chatClearSpawnSuggestion: 'chat:clear-spawn-suggestion',
   chatRespondToApproval: 'chat:respond-to-approval',
   chatPickAttachments: 'chat:pick-attachments',
   chatAddAttachments: 'chat:add-attachments',
@@ -502,8 +501,6 @@ export interface DesktopApi {
      */
     startSpawnSuggestion(request: StartSpawnSuggestionRequest): Promise<SpawnSuggestionResult>;
     dismissSpawnSuggestion(sessionId: string, suggestionId: string): Promise<SpawnSuggestionResult>;
-    /** Hide a started suggestion's row from the tray. */
-    clearSpawnSuggestion(sessionId: string, suggestionId: string): Promise<void>;
     /** Open the OS file picker and take in whatever is chosen. Resolves empty if the user cancels. */
     pickAttachments(sessionId: string): Promise<AddAttachmentsResult>;
     /** Take in dropped or pasted files. The bytes are written to disk before this resolves. */

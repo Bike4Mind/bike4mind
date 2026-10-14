@@ -6,13 +6,12 @@ import FormHelperText from '@mui/joy/FormHelperText';
 import FormLabel from '@mui/joy/FormLabel';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
-import Link from '@mui/joy/Link';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import type { ChatSpawnSuggestion, SpawnSuggestionResult, StartSpawnSuggestionRequest } from '@shared/chat';
-import { BranchIcon, ChevronIcon, CloseIcon } from './icons';
+import { BranchIcon, ChevronIcon } from './icons';
 import { contentColumnSx } from './layout';
 import {
   acceptAssistant,
@@ -37,81 +36,29 @@ type StartFn = (request: Omit<StartSpawnSuggestionRequest, 'sessionId'>) => Prom
  * acts on while the conversation keeps going: inline, the card scrolls away the moment the model
  * answers "also make it do X", and that is exactly when it needs to be in view. The turn is never
  * held on it, so the composer below stays fully usable.
+ *
+ * Only pending suggestions are drawn: once one starts, its session in the sidebar is the record.
  */
 export function SpawnSuggestionTray({
   suggestions,
   onStart,
   onDismiss,
-  onClear,
-  onOpenSession,
 }: {
   suggestions: readonly ChatSpawnSuggestion[];
   onStart: StartFn;
   onDismiss: (suggestionId: string) => Promise<SpawnSuggestionResult>;
-  onClear: (suggestionId: string) => void;
-  onOpenSession: (sessionId: string) => void;
 }) {
-  if (suggestions.length === 0) return null;
+  const pending = suggestions.filter(suggestion => suggestion.status === 'pending');
+  if (pending.length === 0) return null;
   return (
     <Stack
       spacing={0.75}
       sx={{ ...contentColumnSx, pt: 1.5, maxHeight: '45vh', overflowY: 'auto' }}
       data-testid="spawn-suggestion-tray"
     >
-      {suggestions.map(suggestion =>
-        suggestion.status === 'started' ? (
-          <StartedRow key={suggestion.id} suggestion={suggestion} onClear={onClear} onOpenSession={onOpenSession} />
-        ) : (
-          <SpawnSuggestionCard key={suggestion.id} suggestion={suggestion} onStart={onStart} onDismiss={onDismiss} />
-        )
-      )}
-    </Stack>
-  );
-}
-
-function StartedRow({
-  suggestion,
-  onClear,
-  onOpenSession,
-}: {
-  suggestion: ChatSpawnSuggestion;
-  onClear: (suggestionId: string) => void;
-  onOpenSession: (sessionId: string) => void;
-}) {
-  const started = suggestion.started;
-  if (!started) return null;
-  return (
-    <Stack
-      direction="row"
-      alignItems="center"
-      spacing={1}
-      sx={{ borderRadius: 'sm', border: '1px solid', borderColor: 'neutral.outlinedBorder', px: 1, py: 0.5 }}
-      data-testid="spawn-suggestion-started"
-    >
-      <Typography level="body-sm" sx={{ flex: 1, minWidth: 0 }} noWrap>
-        Started{' '}
-        <Link
-          component="button"
-          level="body-sm"
-          onClick={() => onOpenSession(started.sessionId)}
-          data-testid="spawn-suggestion-open-link"
-        >
-          {started.title}
-        </Link>
-        <Typography component="span" level="body-xs" textColor="text.tertiary" sx={{ ml: 1 }}>
-          {started.placement === 'worktree' ? `on ${started.branch ?? ''}` : 'in this working directory'}
-        </Typography>
-      </Typography>
-      <IconButton
-        size="sm"
-        variant="plain"
-        color="neutral"
-        onClick={() => onClear(suggestion.id)}
-        aria-label="Hide this row"
-        data-testid="spawn-suggestion-clear-btn"
-      >
-        <CloseIcon />
-      </IconButton>
+      {pending.map(suggestion => (
+        <SpawnSuggestionCard key={suggestion.id} suggestion={suggestion} onStart={onStart} onDismiss={onDismiss} />
+      ))}
     </Stack>
   );
 }

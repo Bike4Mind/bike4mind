@@ -534,9 +534,6 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatDismissSpawnSuggestion, (_event, sessionId: string, suggestionId: string) =>
     service.dismissSpawnSuggestion(sessionId, suggestionId)
   );
-  ipcMain.handle(IPC_CHANNELS.chatClearSpawnSuggestion, (_event, sessionId: string, suggestionId: string) =>
-    service.clearSpawnSuggestion(sessionId, suggestionId)
-  );
   ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, answer: ChatApprovalAnswer) =>
     approvals.resolve(approvalId, answer)
   );

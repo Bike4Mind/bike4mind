@@ -678,14 +678,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
           />
 
           <SpawnSuggestionTray
-            suggestions={spawnSuggestions.visible}
+            suggestions={spawnSuggestions.suggestions}
             onStart={spawnSuggestions.start}
             onDismiss={spawnSuggestions.dismiss}
-            onClear={spawnSuggestions.clear}
-            onOpenSession={sessionId => {
-              setScreen('conversation');
-              setActiveId(sessionId);
-            }}
           />
 
           {/* Every Code session, bound or not. The chips are how a project is chosen, so gating

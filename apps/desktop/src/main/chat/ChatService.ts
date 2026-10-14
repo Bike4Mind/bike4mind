@@ -2824,16 +2824,6 @@ export class ChatService {
     return { ok: true, suggestion: dismissed };
   }
 
-  async clearSpawnSuggestion(sessionId: string, suggestionId: string): Promise<void> {
-    if (!isValidSessionId(sessionId)) return;
-    const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current =>
-      current.some(entry => entry.id === suggestionId && entry.status === 'started')
-        ? current.map(entry => (entry.id === suggestionId ? { ...entry, cleared: true } : entry))
-        : null
-    );
-    if (stored) this.emitSuggestions(sessionId, stored);
-  }
-
   private emitSuggestions(sessionId: string, suggestions: ChatSpawnSuggestion[]): void {
     this.emit({ type: 'spawn-suggestions', sessionId, suggestions });
   }
