@@ -136,6 +136,8 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
     !!ownerId &&
     ownerId === currentUser?.id &&
     (type === InviteType.Session || type === InviteType.FabFile);
+  // Shared by the notebook and file notes below so the two cannot drift apart.
+  const linkExpiryNote = canTurnOffLinks ? 'Links keep working until you turn them off.' : "Links don't expire.";
   const [revokedLink, setRevokedLink] = useState('');
   const cancelInvites = useCancelInvite({
     onSuccess: () => {
@@ -691,8 +693,23 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
 
               {tabIndex === 1 && (
                 <Typography level="body-xs" data-testid="share-modal-link-access-note" sx={{ mt: '10px' }}>
-                  Anyone with the link can open {isBulkSharing ? 'these items' : `this ${itemType}`} after signing in,
-                  and can share it on. Links don&apos;t expire.
+                  {/* Accepting a notebook link also grants its attached files, but only the ones the
+                      inviter holds `share` on (sharingService/accept.ts), hence "allowed to share". */}
+                  {isBulkSharingSessions ? (
+                    "Anyone with the link can open these notebooks after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off from each notebook's Share menu."
+                  ) : !isBulkSharing && type === InviteType.Session ? (
+                    <>
+                      {
+                        "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share."
+                      }{' '}
+                      {linkExpiryNote}
+                    </>
+                  ) : (
+                    <>
+                      Anyone with the link can open {isBulkSharing ? 'these items' : `this ${itemType}`} after signing
+                      in, and can share it on. {linkExpiryNote}
+                    </>
+                  )}
                 </Typography>
               )}
 
