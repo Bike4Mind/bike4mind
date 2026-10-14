@@ -1212,7 +1212,9 @@ export class AnthropicBackend implements ICompletionBackend {
         thinking?: { enabled?: boolean; budget_tokens?: number };
       };
       const isQuestMaster = thinkingOptions.questMaster === true;
-      const userThinkingEnabled = thinkingOptions.thinking?.enabled === true;
+      // The forced response_format tool cannot run alongside thinking, so an explicit request falls
+      // through to the reasoningEffort plan below, which only keeps the off switch there.
+      const userThinkingEnabled = thinkingOptions.thinking?.enabled === true && !usingResponseFormatToolUse;
 
       if (userThinkingEnabled || isQuestMaster) {
         // Determine budget and effort based on context

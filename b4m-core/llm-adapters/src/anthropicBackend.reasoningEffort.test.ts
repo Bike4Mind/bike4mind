@@ -135,6 +135,19 @@ describe('AnthropicBackend reasoningEffort', () => {
     expect(request.output_config).toBeUndefined();
   });
 
+  it('drops an explicit thinking request under the forced response_format tool', async () => {
+    const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
+      reasoningEffort: 'high',
+      thinking: { enabled: true, budget_tokens: 8000 },
+      maxTokens: 2000,
+      responseFormat: jsonSchemaFormat,
+    });
+
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
+    expect(request.thinking).toBeUndefined();
+    expect(request.output_config).toBeUndefined();
+  });
+
   it('still honours `none` under the forced response_format tool', async () => {
     const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
       reasoningEffort: 'none',

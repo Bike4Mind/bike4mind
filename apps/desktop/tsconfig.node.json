@@ -13,6 +13,9 @@
     "paths": {
       "@shared/*": [
         "./src/shared/*"
+      ],
+      "@bike4mind/cli/skills": [
+        "../../packages/cli/src/skills/index.ts"
       ]
     }
   },

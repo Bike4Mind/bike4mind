@@ -6,6 +6,8 @@ import { defineConfig, externalizeDepsPlugin, loadEnv } from 'electron-vite';
 import type { Plugin } from 'vite';
 
 const sharedDir = resolve(__dirname, 'src/shared');
+// Imported from source: the published CLI is bin-only and ships no skills entry point.
+const cliSkills = resolve(__dirname, '../../packages/cli/src/skills/index.ts');
 // See the shim's own header: @bike4mind/common's barrel statically imports node:crypto,
 // which a sandboxed renderer cannot resolve.
 const nodeCryptoShim = resolve(__dirname, 'src/renderer/src/shims/nodeCrypto.ts');
@@ -44,7 +46,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     main: {
-      resolve: { alias: { '@shared': sharedDir } },
+      resolve: { alias: { '@shared': sharedDir, '@bike4mind/cli/skills': cliSkills } },
       // The brand's default backend, baked in at build time exactly as the CLI bakes it via
       // tsdown. A packaged app inherits no shell environment, so reading it at runtime would
       // always be empty; substituting only this one expression leaves every other

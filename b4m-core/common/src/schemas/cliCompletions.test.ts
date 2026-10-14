@@ -420,10 +420,14 @@ describe('CompletionRequestSchema options.thinking', () => {
     expect(parsed.options?.thinking).toEqual({ enabled: true });
   });
 
-  it('rejects a non-positive budget', () => {
+  it('rejects a budget below the API minimum of 1024', () => {
     expect(() =>
-      CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true, budget_tokens: 0 } } })
+      CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true, budget_tokens: 1023 } } })
     ).toThrow();
+    expect(
+      CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true, budget_tokens: 1024 } } }).options
+        ?.thinking
+    ).toEqual({ enabled: true, budget_tokens: 1024 });
   });
 });
 
