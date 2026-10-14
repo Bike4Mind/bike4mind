@@ -280,24 +280,69 @@ describe('PUT /api/users/:id/update - changing your own password', () => {
     expect(mockAdminUpdateUser).not.toHaveBeenCalled();
   });
 
-  it("leaves an admin changing another user's email or password unchanged", async () => {
-    const { res, promise } = run({
-      user: ADMIN,
-      userId: 'other-user',
-      body: { email: 'other@example.com', password: 'reset-value' },
-      apiKeyInfo: { scopes: [ApiKeyScope.ADMIN] },
-    });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
+  it('leaves updates without a password ungated', async () => {
+    await run({ user: SELF, userId: 'u1', body: { name: 'New' } }).promise;
+    await run({ user: SELF, userId: 'u1', body: { password: null } }).promise;
     expect(mockRequireStepUp).not.toHaveBeenCalled();
+  });
+});
+
+describe("PUT /api/users/:id/update - an admin changing another user's credentials or role", () => {
+  const stepUpRequired = Object.assign(new ForbiddenError('Recent verification required'), {
+    additionalInfo: { code: 'step_up_required' },
+  });
+  const API_KEY = { keyId: 'k1', scopes: [ApiKeyScope.ADMIN] };
+  const gatedBodies: Array<[string, Record<string, unknown>]> = [
+    ['password', { password: 'reset-value' }],
+    ['email', { email: 'other@example.com' }],
+    ['an admin-role grant', { isAdmin: true }],
+  ];
+
+  it.each(gatedBodies)('requires recent verification for %s and does not write without it', async (_label, body) => {
+    mockRequireStepUp.mockRejectedValue(stepUpRequired);
+    const { promise } = run({ user: ADMIN, userId: 'other-user', body });
+    await expect(promise).rejects.toMatchObject({ statusCode: 403, additionalInfo: { code: 'step_up_required' } });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it.each(gatedBodies)('writes %s once recently verified', async (_label, body) => {
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body });
+    await promise;
+    expect(mockRequireStepUp).toHaveBeenCalledTimes(1);
+    expect(res._getStatusCode()).toBe(200);
     expect(mockAdminUpdateUser).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves updates without a password, and an admin setting another user's password, ungated", async () => {
-    await run({ user: SELF, userId: 'u1', body: { name: 'New' } }).promise;
-    await run({ user: SELF, userId: 'u1', body: { password: null } }).promise;
-    await run({ user: ADMIN, userId: 'other-user', body: { password: 'reset-value' } }).promise;
+  it.each(gatedBodies)('refuses %s from an API key before any write', async (_label, body) => {
+    const { promise } = run({ user: ADMIN, userId: 'other-user', body, apiKeyInfo: API_KEY });
+    await expect(promise).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringMatching(/signed-in session/),
+    });
     expect(mockRequireStepUp).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('does not gate setting isAdmin: true on a user who is already an admin', async () => {
+    mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin: true });
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { isAdmin: true } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['revoking the admin role', { isAdmin: false }],
+    ['a ban', { isBanned: true }],
+    ['an unrelated field', { name: 'Renamed' }],
+  ])('leaves %s ungated, including with an API key', async (_label, body) => {
+    mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin: true });
+    await run({ user: ADMIN, userId: 'other-user', body }).promise;
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body, apiKeyInfo: API_KEY });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRequireStepUp).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -347,8 +392,8 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { isAdmin: true } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    // In-transaction snapshot and refetch; no guard read.
-    expect(mockUserFindById).toHaveBeenCalledTimes(2);
+    // Role-grant check, in-transaction snapshot and refetch; no lockout guard read.
+    expect(mockUserFindById).toHaveBeenCalledTimes(3);
     expect(mockCount).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });

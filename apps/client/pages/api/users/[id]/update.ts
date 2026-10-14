@@ -29,8 +29,13 @@ const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
   ignoredFields: z.array(z.string()).optional(),
 });
 
-/** Fields that change how the account signs in; see the self-update gate in the handler. */
-const SELF_CREDENTIAL_FIELDS = ['password', 'email'] as const;
+/** Fields that change how the account signs in; see the credential gates in the handler. */
+const CREDENTIAL_FIELDS = ['password', 'email'] as const;
+
+const writesCredentialFields = (body: unknown): boolean => {
+  const fields = (body ?? {}) as Record<string, unknown>;
+  return CREDENTIAL_FIELDS.some(field => fields[field] !== undefined && fields[field] !== null);
+};
 
 async function getPreviousConsentLevel(
   userId: string,
@@ -142,17 +147,11 @@ const handler = baseApi().put(
     }
 
     // Changing your OWN sign-in credentials needs a browser session that recently re-verified, so
-    // an API key can never do it. Only the admin schema accepts `email`; an admin changing ANOTHER
-    // user's email or password is not gated here.
-    if (isSelf) {
-      const rawBody = (req.body ?? {}) as Record<string, unknown>;
-      const changesCredentials = SELF_CREDENTIAL_FIELDS.some(
-        field => rawBody[field] !== undefined && rawBody[field] !== null
-      );
-      if (changesCredentials) {
-        if (req.apiKeyInfo) throw new ForbiddenError('Password and email cannot be changed with an API key.');
-        await requireStepUp(req);
-      }
+    // an API key can never do it. Only the admin schema accepts `email`. An admin writing ANOTHER
+    // user's credentials or granting the admin role is held to the same bar in the admin branch.
+    if (isSelf && writesCredentialFields(req.body)) {
+      if (req.apiKeyInfo) throw new ForbiddenError('Password and email cannot be changed with an API key.');
+      await requireStepUp(req);
     }
 
     if (currentUser.isAdmin) {
@@ -166,6 +165,21 @@ const handler = baseApi().put(
       // needs one field off the request.
       if (req.apiKeyInfo && !req.apiKeyInfo.scopes.includes(ApiKeyScope.ADMIN)) {
         throw new ForbiddenError('Insufficient API key permissions', { required_scopes: [ApiKeyScope.ADMIN] });
+      }
+
+      // Another user's credentials and the admin role are session-only changes: an API key is
+      // refused, a browser session must have recently re-verified. Both run before any write.
+      // Revoking the role, bans and every other field stay ungated.
+      if (!isSelf) {
+        const grantsAdminRole =
+          (req.body as Record<string, unknown> | undefined)?.isAdmin === true &&
+          !((await User.findById(userId).select('isAdmin').lean()) as { isAdmin?: boolean } | null)?.isAdmin;
+        if (writesCredentialFields(req.body) || grantsAdminRole) {
+          if (req.apiKeyInfo) {
+            throw new ForbiddenError('Credential and admin-role changes require a signed-in session.');
+          }
+          await requireStepUp(req);
+        }
       }
 
       // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
