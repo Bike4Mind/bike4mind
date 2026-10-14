@@ -88,19 +88,63 @@
     // task, so ^build never hashes it - list it here for the same reason.
     "@bike4mind/workers#typecheck": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../client/**/*.ts",
+        "../client/tsconfig.json",
+        "../../packages/scripts/help/**/*.ts",
+        "../../packages/server-utils/src/**"
+      ]
     },
     "@bike4mind/workers#typecheck:native": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../client/**/*.ts",
+        "../client/tsconfig.json",
+        "../../packages/scripts/help/**/*.ts",
+        "../../packages/server-utils/src/**"
+      ]
     },
     "@bike4mind/workers#typecheck:fast": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../client/**/*.ts",
+        "../client/tsconfig.json",
+        "../../packages/scripts/help/**/*.ts",
+        "../../packages/server-utils/src/**"
+      ]
     },
     "@bike4mind/workers#test": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../client/**/*.ts",
+        "../client/tsconfig.json",
+        "../../packages/scripts/help/**/*.ts",
+        "../../packages/server-utils/src/**"
+      ]
+    },
+    // @bike4mind/server-utils is source-only (no build task), so ^build never hashes it and an edit
+    // there would replay a cached client result. Its source is listed as an input instead - the
+    // workers entries above carry the same glob. Package-specific config REPLACES the generic
+    // entry, so dependsOn is repeated here.
+    "@bike4mind/client#typecheck": {
+      "dependsOn": ["codegen", "^build"],
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/src/**"]
+    },
+    "@bike4mind/client#typecheck:native": {
+      "dependsOn": ["codegen", "^build"],
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/src/**"]
+    },
+    "@bike4mind/client#typecheck:fast": {
+      "dependsOn": ["codegen", "^build"],
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/src/**"]
+    },
+    "@bike4mind/client#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/src/**"]
     },
     // The moderation scanner reads source outside this package.
     "@bike4mind/infra#test": {

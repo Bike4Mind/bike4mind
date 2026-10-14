@@ -1,0 +1,10 @@
+{
+  "extends": "@bike4mind/typescript-config/node.json",
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "lib": ["ESNext"],
+    "types": ["node"]
+  },
+  "include": ["sst-env.d.ts", "src/**/*.ts"]
+}

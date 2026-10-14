@@ -262,6 +262,9 @@ importers:
       '@bike4mind/scripts':
         specifier: workspace:*
         version: link:../../packages/scripts
+      '@bike4mind/server-utils':
+        specifier: workspace:*
+        version: link:../../packages/server-utils
       '@bike4mind/services':
         specifier: workspace:*
         version: link:../../b4m-core/services
@@ -1056,6 +1059,9 @@ importers:
       '@bike4mind/scripts':
         specifier: workspace:*
         version: link:../../packages/scripts
+      '@bike4mind/server-utils':
+        specifier: workspace:*
+        version: link:../../packages/server-utils
       '@bike4mind/services':
         specifier: workspace:*
         version: link:../../b4m-core/services
@@ -2475,6 +2481,34 @@ importers:
       tsdown:
         specifier: ^0.22.3
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+
+  packages/server-utils:
+    dependencies:
+      '@bike4mind/common':
+        specifier: workspace:*
+        version: link:../../b4m-core/common
+      '@bike4mind/memory':
+        specifier: workspace:*
+        version: link:../../b4m-core/memory
+      '@bike4mind/resource':
+        specifier: workspace:*
+        version: link:../../b4m-core/resource
+      sst:
+        specifier: 4.17.1
+        version: 4.17.1
+    devDependencies:
+      '@bike4mind/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.12.3
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -9741,9 +9775,6 @@ packages:
 
   jose@6.2.12:
     resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
-
-  jose@6.2.3:
-    resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
 
   jpeg-js@0.4.4:
     resolution: {integrity: sha512-WZzeDOEtTOBK4Mdsar0IqEU5sMr3vSV2RqkAIzUEV2BHnUfKGyswWFPFwK5EeDo93K3FohSHbLAjj0s1Wzd+dg==}
@@ -22089,8 +22120,6 @@ snapshots:
 
   jose@6.2.12: {}
 
-  jose@6.2.3: {}
-
   jpeg-js@0.4.4: {}
 
   js-levenshtein@1.1.6: {}
@@ -22388,7 +22417,7 @@ snapshots:
       '@livekit/protocol': 1.42.2
       '@types/dom-mediacapture-record': 1.0.22
       events: 3.3.0
-      jose: 6.2.3
+      jose: 6.2.12
       loglevel: 1.9.2
       sdp-transform: 2.15.0
       ts-debounce: 4.0.0

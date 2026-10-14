@@ -332,6 +332,41 @@ const noUiImportsInWorkers = {
   ],
 };
 
+// @bike4mind/server-utils sits below both apps: apps/client and apps/workers import it, so an import
+// back into either (directly or through their @server/@client/@pages/@public/@/@workers aliases)
+// would cycle, and it runs in Lambdas and the self-host worker, so no UI code either.
+const SERVER_UTILS_BOUNDARY_MESSAGE =
+  '@bike4mind/server-utils must not import from apps/client, apps/workers or UI code. Move the ' +
+  'dependency into the package first, or keep the importing code in the app.';
+const SERVER_UTILS_BOUNDARY = {
+  paths: [
+    { name: 'react', message: SERVER_UTILS_BOUNDARY_MESSAGE },
+    { name: 'react-dom', message: SERVER_UTILS_BOUNDARY_MESSAGE },
+    { name: 'next', message: SERVER_UTILS_BOUNDARY_MESSAGE },
+  ],
+  patterns: [
+    {
+      // Bare entries for the same reason as noUiImportsInWorkers: `x` matches `x` and every `x/...`.
+      group: [
+        '**/apps/**',
+        '@server',
+        '@client',
+        '@pages',
+        '@public',
+        '@/*',
+        '@workers',
+        '@bike4mind/client',
+        '@bike4mind/workers',
+        'react/*',
+        'react-dom/*',
+        'next/*',
+        '@mui/*',
+      ],
+      message: SERVER_UTILS_BOUNDARY_MESSAGE,
+    },
+  ],
+};
+
 // Local rules, served as one plugin. `--cache` keys results on the plugin's name@version, not on
 // the rule source, so the version is a hash of that source - editing a rule invalidates the cache.
 const localRuleSources = ['./eslint-rules/no-raw-entity-response.mjs'];
@@ -712,6 +747,23 @@ export default defineConfig([
             ...b4mv3RestrictedPatterns,
             ...noUiImportsInWorkers.patterns,
           ],
+        },
+      ],
+    },
+  },
+
+  // packages/server-utils - the server code apps/client and apps/workers share. Both apps depend on
+  // it, so it must never reach back into either app (by path or through their tsconfig aliases) or
+  // pull in UI code. Comes after the generic b4m-core/packages block above and so replaces it
+  // (last-rule-wins), which is why it repeats the B4Mv3 restrictions.
+  {
+    files: ['packages/server-utils/**/*.{ts,mts}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [...b4mv3RestrictedPaths, ...SERVER_UTILS_BOUNDARY.paths],
+          patterns: [...b4mv3RestrictedPatterns, ...SERVER_UTILS_BOUNDARY.patterns],
         },
       ],
     },
