@@ -266,6 +266,54 @@ describe('OpenAI non-streaming: cached prompt tokens', () => {
     expect(info.cacheReadInputTokens).toBe(280_000);
     expect(info.outputTokens).toBe(50);
   });
+
+  it('carries every turn onto the terminal emit of a turn that ends after a flagged tool', async () => {
+    // The end-of-turn emit is the only one this round makes, so it alone carries the last request.
+    // MCP tools, because the non-streaming path drops built-in tools after the first round.
+    const lookupMcp: ICompletionOptionTools = { ...sampleTool, _isMcpTool: true };
+    const suggestTool: ICompletionOptionTools = {
+      ...lookupMcp,
+      toolSchema: { ...sampleTool.toolSchema, name: 'suggest' },
+      endsTurnAfterText: true,
+    };
+    const { backend } = nonStreamingBackend([
+      {
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              tool_calls: [{ id: 't1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+        usage: { prompt_tokens: 900, completion_tokens: 10, prompt_tokens_details: { cached_tokens: 700 } },
+      },
+      {
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: 'answer',
+              tool_calls: [{ id: 't2', type: 'function', function: { name: 'suggest', arguments: '{}' } }],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+        usage: { prompt_tokens: 1000, completion_tokens: 40 },
+      },
+    ]);
+
+    const frames = await run(backend, ChatModels.GPT4o, { stream: false, tools: [lookupMcp, suggestTool] });
+
+    expect(settled(frames).stopReason).toBe('tool_use');
+    expect(settled(frames).turnUsage).toEqual([
+      { inputTokens: 200, cacheReadInputTokens: 700, outputTokens: 10 },
+      { inputTokens: 1000, outputTokens: 40 },
+    ]);
+  });
 });
 
 describe('OpenAI Responses API: cached prompt tokens', () => {
@@ -308,6 +356,34 @@ describe('OpenAI Responses API: cached prompt tokens', () => {
       { inputTokens: 400, cacheReadInputTokens: 600, outputTokens: 20 },
       { inputTokens: 700, cacheReadInputTokens: 500, outputTokens: 30 },
     ]);
+  });
+
+  // Each of these emits is the round's only usage frame.
+  const toolRound = (name: string) => ({
+    output: [{ type: 'function_call', call_id: 'c1', name, arguments: '{}' }],
+    usage: { input_tokens: 1000, output_tokens: 20, input_tokens_details: { cached_tokens: 600 } },
+  });
+
+  it('reports the request on the executeTools:false emit', async () => {
+    const { backend } = responsesBackend([toolRound('lookup')]);
+
+    const info = settled(await run(backend, ChatModels.GPT5, { tools: [sampleTool], executeTools: false }));
+
+    expect(info.turnUsage).toEqual([{ inputTokens: 400, cacheReadInputTokens: 600, outputTokens: 20 }]);
+  });
+
+  it('reports the request on the emit of a turn that ends after a flagged tool', async () => {
+    const suggestTool: ICompletionOptionTools = {
+      ...sampleTool,
+      toolSchema: { ...sampleTool.toolSchema, name: 'suggest' },
+      endsTurnAfterText: true,
+    };
+    const { backend } = responsesBackend([toolRound('suggest')]);
+
+    const info = settled(await run(backend, ChatModels.GPT5, { tools: [suggestTool] }));
+
+    expect(info.stopReason).toBe('tool_use');
+    expect(info.turnUsage).toEqual([{ inputTokens: 400, cacheReadInputTokens: 600, outputTokens: 20 }]);
   });
 });
 
