@@ -6,8 +6,7 @@ import {
   CreateIntegrationAuditLogInput,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import type { Request } from 'express';
-import type { NextApiRequest } from 'next';
+import type { IncomingMessage } from 'http';
 import { getClientIp } from '@server/utils/ip';
 
 /**
@@ -67,7 +66,7 @@ export class IntegrationAuditLogger {
   private userAgent: string;
   private logged = false;
 
-  constructor(context: IntegrationAuditContext, req?: Request | NextApiRequest, logger?: MinimalLogger) {
+  constructor(context: IntegrationAuditContext, req?: IncomingMessage, logger?: MinimalLogger) {
     this.context = context;
     this.startTime = Date.now();
     this.logger = logger || Logger;
@@ -80,7 +79,7 @@ export class IntegrationAuditLogger {
    */
   static create(
     context: IntegrationAuditContext,
-    req?: Request | NextApiRequest,
+    req?: IncomingMessage,
     logger?: MinimalLogger
   ): IntegrationAuditLogger {
     return new IntegrationAuditLogger(context, req, logger);
@@ -212,19 +211,20 @@ function redactSensitiveData(data: Record<string, unknown>): Record<string, unkn
  * Delegates to the shared getClientIp resolver, which walks the canonical CDN
  * headers in priority order and filters private/reserved ranges. This avoids
  * trusting the raw, spoofable leftmost x-forwarded-for value in audit records.
- * Cast is required because getClientIp is typed for express Request,
- * while audit logging also accepts NextApiRequest - both expose the headers /
- * socket / ip fields the resolver reads.
+ * Cast is required because getClientIp is typed for express Request, while
+ * audit logging takes any IncomingMessage (NextApiRequest and express Request
+ * both extend it). The resolver reads headers and socket; its express-only
+ * req.ip fallback is simply undefined on a plain IncomingMessage.
  */
-function extractIp(req: Request | NextApiRequest): string {
-  // any: getClientIp is typed for express Request; NextApiRequest is structurally
-  // compatible for the fields it reads (headers, socket, ip) but not assignable.
+function extractIp(req: IncomingMessage): string {
+  // any: getClientIp is typed for express Request; IncomingMessage carries the headers and
+  // socket it reads but is not assignable (no ip field).
   return getClientIp(req as any);
 }
 
 /**
  * Extract user agent from request headers
  */
-function extractUserAgent(req: Request | NextApiRequest): string {
+function extractUserAgent(req: IncomingMessage): string {
   return req.headers?.['user-agent'] || 'unknown';
 }

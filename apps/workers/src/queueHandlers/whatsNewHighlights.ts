@@ -417,7 +417,7 @@ async function postToSlack(
         unfurl_media: false,
       }),
     });
-    result = await response.json();
+    result = (await response.json()) as SlackPostMessageResponse;
   } catch (error) {
     throw new Error(`Slack chat.postMessage request failed: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -468,7 +468,7 @@ async function uploadMarkdownSnippet(
         Authorization: `Bearer ${botToken}`,
       },
     });
-    getUrlResult = await getUrlResponse.json();
+    getUrlResult = (await getUrlResponse.json()) as SlackGetUploadUrlResponse;
   } catch (error) {
     logger.warn('Failed to request upload URL for markdown snippet', {
       error: error instanceof Error ? error.message : String(error),
@@ -523,7 +523,7 @@ async function uploadMarkdownSnippet(
         initial_comment: 'Raw markdown version for easy copy/paste:',
       }),
     });
-    completeResult = await completeResponse.json();
+    completeResult = (await completeResponse.json()) as SlackCompleteUploadResponse;
   } catch (error) {
     logger.warn('Failed to complete Slack upload', {
       error: error instanceof Error ? error.message : String(error),
