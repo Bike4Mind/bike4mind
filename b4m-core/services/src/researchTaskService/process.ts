@@ -49,7 +49,10 @@ interface ResearchTaskProcessAdapters {
   db: {
     transaction: <T>(fn: () => Promise<T>) => Promise<T>;
     researchTasks: IResearchTaskRepository;
-    fabFiles: Pick<IFabFileRepository, 'create' | 'findById' | 'update' | 'shareable' | 'commitContentRewrite'>;
+    fabFiles: Pick<
+      IFabFileRepository,
+      'create' | 'findById' | 'update' | 'shareable' | 'commitContentRewrite' | 'findChargeState'
+    >;
     fileTags: Pick<IFileTagRepository, 'findByIdAndUserId' | 'create' | 'findByFoldedNameAndUserId'>;
     users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
     adminSettings: IAdminSettingsRepository;

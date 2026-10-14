@@ -217,7 +217,15 @@ describe('sessionSummarization summary-file lookup', () => {
   // A stored meta-tag or prefix-arm content tag is never carried through by hand here -
   it('skips a re-summary that would grow the file past the quota, keeping the old file', async () => {
     h.fabFileStore.push({ id: 'fabfile-owner', userId: OWNER, sessionId: SESSION_ID, tags: [] });
-    h.updateFabFile.mockRejectedValueOnce(new Error('File size exceeds storage limit'));
+    h.updateFabFile.mockRejectedValueOnce(
+      new StorageLimitError('File size exceeds storage limit', {
+        errorCode: 'storage_limit_exceeded',
+        used_bytes: 0,
+        limit_bytes: 1,
+        requested_bytes: 2,
+        owner: 'user',
+      })
+    );
 
     await expect(run()).resolves.toBeUndefined();
 
