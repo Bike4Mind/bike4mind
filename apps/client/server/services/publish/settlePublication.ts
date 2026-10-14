@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { PublishedArtifact } from '@bike4mind/database';
-import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
+import type { CitableSource, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import { checkPublishQuota } from './checkPublishQuota';
 import { invalidatePublishCdn, toCacheTarget } from './invalidatePublishCdn';
 import { restrictDuplicatePublications } from './restrictDuplicatePublications';
@@ -24,7 +24,7 @@ export interface SettlePublicationInput {
   title: string;
   renderedBody: string;
   /** Extra source-specific fields written alongside the snapshot (e.g. reply citables). */
-  extraSet?: Record<string, unknown>;
+  extraSet?: { citables?: CitableSource[] };
   logger: MinimalLogger;
 }
 
@@ -45,11 +45,10 @@ function newPublicId(): string {
  */
 export async function settlePublication(input: SettlePublicationInput) {
   const { ownerId, source, tier, scopeId, visibility, renderedBody } = input;
-  const sourceKey = Object.fromEntries(
-    Object.entries(source)
-      .filter(([k]) => k !== 'kind')
-      .map(([k, v]) => [`source.${k}`, v])
-  );
+  const sourceKey =
+    source.kind === 'reply'
+      ? { 'source.sessionId': source.sessionId, 'source.messageId': source.messageId }
+      : { 'source.fabFileId': source.fabFileId };
   const existing = await PublishedArtifact.findOne({
     ownerId,
     'source.kind': source.kind,
@@ -91,6 +90,7 @@ export async function settlePublication(input: SettlePublicationInput) {
     existing ? { _id: existing._id, ownerId, deletedAt: null } : { tier, scopeId, slug, deletedAt: null },
     {
       $set: {
+        ...input.extraSet,
         publicId,
         tier,
         scopeId,
@@ -102,7 +102,6 @@ export async function settlePublication(input: SettlePublicationInput) {
         size: { totalBytes: bytes, fileCount: 0 },
         manifest: [],
         renderedBody,
-        ...input.extraSet,
         publishedAt,
       },
       $setOnInsert: { ownerId },

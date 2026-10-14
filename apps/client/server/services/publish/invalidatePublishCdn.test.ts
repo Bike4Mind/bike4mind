@@ -188,7 +188,40 @@ describe('invalidatePublishCdnMany', () => {
       { publicId: 'b2', tier: 'user', scopeId: 'u1', slug: 'two', sourceKind: 'bundle' },
     ]);
 
-    expect(sentPaths().map(p => p[0])).toEqual(['/p/u/u1/one', '/p/u/u1/two', '/p/r/reply-0', '/p/r/reply-0*']);
+    // Two bundles send 8 wildcards, over the budget, so the reply's variants collapse to the kind wildcard.
+    expect(sentPaths().map(p => p[0])).toEqual(['/p/u/u1/one', '/p/u/u1/two', '/p/r/reply-0', '/p/r/*']);
+  });
+
+  it('counts bundle wildcards against the budget so replies collapse to the kind wildcard', async () => {
+    await invalidatePublishCdnMany([
+      { publicId: 'b1', tier: 'user', scopeId: 'u1', slug: 'one', sourceKind: 'bundle' },
+      ...short(2, 'reply'),
+    ]);
+
+    const variants = sentPaths().at(-1);
+    expect(variants).toEqual(['/p/r/*']);
+  });
+
+  it('retries once with the kind wildcards when the per-page request fails', async () => {
+    sendMock
+      .mockResolvedValueOnce({}) // exact paths
+      .mockRejectedValueOnce(new Error('TooManyInvalidationsInProgress')); // per-page wildcards
+
+    await invalidatePublishCdnMany([...short(2, 'reply'), ...short(1, 'fabfile')]);
+
+    expect(sentPaths()).toEqual([
+      ['/p/r/reply-0', '/p/r/reply-1', '/p/f/fabfile-0'],
+      ['/p/r/reply-0*', '/p/r/reply-1*', '/p/f/fabfile-0*'],
+      ['/p/r/*', '/p/f/*'],
+    ]);
+  });
+
+  it('does not retry when the kind-wildcard request itself fails', async () => {
+    sendMock.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('Throttling'));
+
+    await invalidatePublishCdnMany(short(40, 'reply'));
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
   });
 
   it('sends nothing for an empty list or an unconfigured distribution', async () => {

@@ -23,8 +23,9 @@ export interface DuplicateKeeper {
  * Carry a downgrade over to the owner's OTHER live publications of the same reply or file.
  * Replies and files are one record per owner+source (reply.ts / fabfile.ts), but before that
  * rule a re-publish into another scope minted a second record, so a Private pick on the record
- * the dialog shows must not leave an older copy serving. Only ever narrows: a sibling that is
- * more open than `keep` (VISIBILITY_ORDER) is set to private - the one rung every tier allows
+ * the dialog shows must not leave an older copy serving. Only ever narrows: a sibling ranked
+ * above `keep` in VISIBILITY_ORDER (so a project keeper also narrows organization siblings) is set
+ * to private - the one rung every tier allows
  * (SCOPE_POLICY) - and, if it was public, purged from the CDN. Bundles
  * are skipped - several publications of one notebook artifact are legitimate there.
  * Returns how many siblings were changed. Never throws on the purge (invalidatePublishCdn).

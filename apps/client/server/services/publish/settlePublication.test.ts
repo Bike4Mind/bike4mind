@@ -124,6 +124,16 @@ describe('settlePublication - first publish', () => {
   });
 });
 
+describe('settlePublication - extra fields', () => {
+  it('never lets extra source fields override the tier, scope or visibility being written', async () => {
+    const extraSet = { tier: 'organization', visibility: 'public', scopeId: 'other' } as unknown as NonNullable<
+      SettlePublicationInput['extraSet']
+    >;
+    await settlePublication(input({ extraSet }));
+    expect(writeCall()[1].$set).toMatchObject({ tier: 'user', scopeId: OWNER, visibility: 'private' });
+  });
+});
+
 describe('settlePublication - re-publish rewrites the existing record in place', () => {
   it('a re-publish into a new scope rewrites the existing record in place', async () => {
     mocks.findOneLean.mockResolvedValue(existingRow({ tier: 'organization', scopeId: 'org1' }));
