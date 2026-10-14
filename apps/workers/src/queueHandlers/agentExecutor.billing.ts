@@ -36,6 +36,8 @@ export type BillingCheckpoint = {
   totalCacheWriteTokens: number;
   /** Provider stop reason for this iteration's completion, e.g. from `AgentCheckpoint.finishReason`. */
   finishReason?: string;
+  /** `AgentCheckpoint.turnUsage`: the same totals per provider request (see unbilledTurns). */
+  turnUsage?: readonly TurnUsage[];
 };
 
 /** Per-iteration token deltas (this iteration's contribution). */
@@ -226,7 +228,7 @@ type IterationTokenRecord = Pick<
 
 /**
  * One iteration's agent usage as a single provider request: ReActAgent calls the model with
- * executeTools: false, so an iteration is exactly one request, and that request's own prompt
+ * executeTools: false, so an iteration is normally one request, and that request's own prompt
  * picks its long-context tier. Pricing the run's cumulative totals instead tiers every iteration
  * on the whole run (and on cache-exclusive input).
  */
@@ -237,6 +239,46 @@ function iterationTurn(tokens: IterationTokenRecord): TurnUsage {
     cacheReadInputTokens: tokens.cacheReadTokens,
     cacheCreationInputTokens: tokens.cacheWriteTokens,
   };
+}
+
+type TokenSums = IterationTokenDeltas;
+
+const sameTokens = (a: TokenSums, b: TokenSums): boolean =>
+  a.inputTokens === b.inputTokens &&
+  a.outputTokens === b.outputTokens &&
+  a.cacheReadTokens === b.cacheReadTokens &&
+  a.cacheWriteTokens === b.cacheWriteTokens;
+
+/**
+ * The provider requests this bill covers: the checkpoint's turns after the prefix that sums to
+ * `counters` (already billed). One bill can cover more than one request - a call aborted at the
+ * iteration deadline leaves its partial usage in the checkpoint the continuation resumes from, and
+ * a Lambda lost between the checkpoint write and the billing record leaves an unbilled iteration -
+ * and pricing those as one request would tier them on their combined prompt. Falls back to
+ * `deltas` as one request when there are no turns or they do not reconcile with the totals.
+ */
+function unbilledTurns(checkpoint: BillingCheckpoint, counters: BillingCounters, deltas: TokenSums): TurnUsage[] {
+  const turns = checkpoint.turnUsage;
+  if (turns?.length) {
+    const sum: TokenSums = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    let billedCount = -1;
+    for (let i = 0; ; i++) {
+      if (billedCount < 0 && sameTokens(sum, counters)) billedCount = i;
+      if (i === turns.length) break;
+      sum.inputTokens += turns[i].inputTokens;
+      sum.outputTokens += turns[i].outputTokens;
+      sum.cacheReadTokens += turns[i].cacheReadInputTokens ?? 0;
+      sum.cacheWriteTokens += turns[i].cacheCreationInputTokens ?? 0;
+    }
+    const totals: TokenSums = {
+      inputTokens: checkpoint.totalInputTokens,
+      outputTokens: checkpoint.totalOutputTokens,
+      cacheReadTokens: checkpoint.totalCacheReadTokens,
+      cacheWriteTokens: checkpoint.totalCacheWriteTokens,
+    };
+    if (billedCount >= 0 && sameTokens(sum, totals)) return turns.slice(billedCount);
+  }
+  return [iterationTurn(deltas)];
 }
 
 /**
@@ -287,9 +329,9 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
     cacheWriteTokens: checkpoint.totalCacheWriteTokens - counters.cacheWriteTokens,
   };
 
-  // Price this iteration on its own (see iterationTurn), cache tokens at their own rates:
-  // totalInputTokens EXCLUDES cache-read/write. Mirrors the chat path.
-  const agentCostDelta = getTurnsCost(modelInfo, [iterationTurn(deltas)]);
+  // Price each request this bill covers on its own tier (see unbilledTurns), cache tokens at
+  // their own rates: totalInputTokens EXCLUDES cache-read/write. Mirrors the chat path.
+  const agentCostDelta = getTurnsCost(modelInfo, unbilledTurns(checkpoint, counters, deltas));
   const cumulativeCost = counters.cumulativeCost + agentCostDelta;
   // Settle the agent's own cost growth plus any tool-internal spend (#630). Tool spend is
   // already priced per-tool, so it adds directly as USD. Both terms are >= 0, so an

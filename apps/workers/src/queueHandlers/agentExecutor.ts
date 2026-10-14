@@ -166,6 +166,7 @@ import {
   takeToolUsage,
   foldGeneratedMediaUsd,
   settleSubagentMediaUsage,
+  type BillingCheckpoint,
   type BillingCounters,
   type MediaCostPhase,
   type PendingToolUsage,
@@ -2168,13 +2169,7 @@ async function processExecution(
     // are fixed for the lifetime of the Lambda invocation.
     const billIterationIfNeeded = async (
       iterationIndex: number,
-      checkpoint: {
-        totalInputTokens: number;
-        totalOutputTokens: number;
-        totalCacheReadTokens: number;
-        totalCacheWriteTokens: number;
-        finishReason?: string;
-      },
+      checkpoint: BillingCheckpoint,
       counters: BillingCounters
     ) => {
       if (!modelInfo) return;

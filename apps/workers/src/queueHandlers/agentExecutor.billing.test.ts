@@ -14,6 +14,7 @@ import {
   takeToolUsage,
   foldGeneratedMediaUsd,
   settleSubagentMediaUsage,
+  type BillingCheckpoint,
   type BillingCounters,
   type IterationBillingEffects,
   type PendingToolUsage,
@@ -693,6 +694,55 @@ describe('billIteration (long-context tiers)', () => {
 
     expect([...firstLeg.charged, ...secondLeg.charged]).toEqual(straight.charged);
     expect(secondLeg.counters.cumulativeCost).toBeCloseTo(straight.counters.cumulativeCost, 10);
+  });
+
+  const billOnce = async (cp: BillingCheckpoint, counters: BillingCounters = makeCounters()) => {
+    const { effects, spies } = makeEffects();
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: cp,
+      counters,
+      modelInfo: tiered,
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+    return spies.recordUsageEvent.mock.calls[0]?.[0].costUsd as number;
+  };
+
+  it('a bill covering two unbilled requests prices each on its own tier, not on their combined prompt', async () => {
+    // e.g. a call aborted at the iteration deadline plus its retry in the continuation Lambda.
+    const charged = await billOnce({
+      ...checkpoint(300_000, { output: 2_000 }),
+      turnUsage: [
+        { inputTokens: 150_000, outputTokens: 1_000 },
+        { inputTokens: 150_000, outputTokens: 1_000 },
+      ],
+    });
+    expect(charged).toBeCloseTo(300_000 * perM(2) + 2_000 * perM(12), 10);
+  });
+
+  it('skips the turns the counters already billed', async () => {
+    const charged = await billOnce(
+      {
+        ...checkpoint(500_000, { output: 3_000 }),
+        turnUsage: [
+          { inputTokens: 250_000, outputTokens: 1_000 },
+          { inputTokens: 150_000, outputTokens: 1_000 },
+          { inputTokens: 100_000, outputTokens: 1_000 },
+        ],
+      },
+      makeCounters({ inputTokens: 250_000, outputTokens: 1_000 })
+    );
+    expect(charged).toBeCloseTo(250_000 * perM(2) + 2_000 * perM(12), 10);
+  });
+
+  it('falls back to the delta as one request when the turns do not reconcile with the totals', async () => {
+    const charged = await billOnce({
+      ...checkpoint(300_000, { output: 2_000 }),
+      turnUsage: [{ inputTokens: 150_000, outputTokens: 1_000 }],
+    });
+    expect(charged).toBeCloseTo(300_000 * perM(4) + 2_000 * perM(18), 10);
   });
 });
 
