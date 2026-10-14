@@ -451,7 +451,7 @@ export const formatCustomSlackMessage = (
   sections.push('\n───────────────────────────');
 
   // User activity summary
-  sections.push('\n📈 *User Engagement Overview (7 Days)*');
+  sections.push('\n📈 *User Engagement Overview (24H)*');
 
   const internalPercentage =
     userActivity.totalUniqueUsers > 0
