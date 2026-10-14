@@ -115,7 +115,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       return res.status(409).json({ error: 'Incident is not in confirmed_csam state' });
     }
     if (!incident.ncmecReportId) {
-      return res.status(409).json({ error: 'Incident has no stored reportId; use mark_reported or requeue instead' });
+      return res.status(409).json({
+        error:
+          'Incident has no stored reportId -- check the [NCMEC] log lines for a reportId before requeueing; if one is there use mark_reported, if NCMEC confirmed no tip was filed use requeue',
+      });
     }
     const credentials = resolveNcmecCredentials();
     if (!isNcmecConfigured(credentials)) {

@@ -111,6 +111,17 @@ describe('evaluateTier1Secrets', () => {
     expect(status?.blocksDeploy).toBe(false);
   });
 
+  it('warn enforcement never blocks even on a production stage', () => {
+    const values = allConfigured();
+    delete values.NCMEC_ESP_ID;
+    delete values.NCMEC_API_KEY;
+    delete values.NCMEC_ESP_EMAIL;
+    const statuses = evaluate(values, 'production', true);
+    expect(statuses.find(s => s.name === 'NCMEC_ESP_ID')?.blocksDeploy).toBe(false);
+    expect(statuses.find(s => s.name === 'NCMEC_API_KEY')?.blocksDeploy).toBe(false);
+    expect(statuses.find(s => s.name === 'NCMEC_ESP_EMAIL')?.blocksDeploy).toBe(false);
+  });
+
   it('does not block on a JWT_SECRET that is short but above the hard floor', () => {
     const status = evaluate({ ...allConfigured(), JWT_SECRET: 'a1'.repeat(20) }, 'production', true).find(
       s => s.name === 'JWT_SECRET'
