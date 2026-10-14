@@ -15,11 +15,15 @@ env:
         name: {{ $.Values.existingSecret }}
         key: {{ $key }}
 {{- end }}
-{{- if .Values.externalMongo.enabled }}
   - name: MONGODB_URI
     valueFrom:
+{{- if .Values.externalMongo.enabled }}
       secretKeyRef:
         name: {{ .Values.existingSecret }}
+        key: MONGODB_URI
+{{- else }}
+      configMapKeyRef:
+        name: {{ .Release.Name }}-config
         key: MONGODB_URI
 {{- end }}
 {{- end -}}
@@ -57,16 +61,34 @@ initContainers:
       - -ec
       - |
         {{- if .Values.externalMongo.enabled }}
+        command -v timeout >/dev/null || { echo MongoProbeUnavailable >&2; exit 1; }
         for i in $(seq 1 60); do
-          mongosh --nodb --quiet --eval '
+          if reason=$(timeout -k 5s 15s mongosh --nodb --quiet --eval '
             try {
               const uri = process.env.MONGODB_URI;
-              if (!uri) quit(1);
+              if (!uri) { print("MongoUriMissing"); quit(1); }
+              const query = uri.includes("?") ? uri.slice(uri.indexOf("?") + 1) : "";
+              const keys = new Set(query.split("&").map(option => decodeURIComponent(option.split("=")[0]).toLowerCase()));
+              const options = ["serverSelectionTimeoutMS=10000", "connectTimeoutMS=10000", "socketTimeoutMS=10000"]
+                .filter(option => !keys.has(option.split("=")[0].toLowerCase()));
               const separator = uri.includes("?") ? "&" : "?";
-              const database = connect(uri + separator + "serverSelectionTimeoutMS=10000&connectTimeoutMS=10000&socketTimeoutMS=10000");
-              if (!database.hello().isWritablePrimary) quit(1);
-            } catch (_) { quit(1); }
-          ' >/dev/null 2>&1 && exit 0
+              const database = connect(uri + (options.length ? separator + options.join("&") : ""));
+              if (!database.hello().isWritablePrimary) { print("MongoNotWritablePrimary"); quit(1); }
+            } catch (error) {
+              const names = ["MongoServerSelectionError", "MongoNetworkError", "MongoNetworkTimeoutError", "MongoParseError", "MongoInvalidArgumentError", "MongoServerError"];
+              print(names.includes(error?.name) ? error.name : "MongoConnectionError");
+              quit(1);
+            }
+          ' 2>/dev/null); then exit 0; else status=$?; fi
+          case "$status" in
+            124|137) echo MongoProbeTimeout >&2 ;;
+            *)
+              case "$reason" in
+                MongoUriMissing|MongoNotWritablePrimary|MongoServerSelectionError|MongoNetworkError|MongoNetworkTimeoutError|MongoParseError|MongoInvalidArgumentError|MongoServerError|MongoConnectionError) echo "$reason" >&2 ;;
+                *) echo MongoConnectionError >&2 ;;
+              esac
+              ;;
+          esac
           sleep 2
         done
         {{- else }}

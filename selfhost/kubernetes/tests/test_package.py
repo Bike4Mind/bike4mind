@@ -1,7 +1,10 @@
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 import yaml
 
@@ -135,18 +138,114 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn('rs.initiate', str(wait))
         self.assertEqual(len([o for o in objects if o['kind'] == 'PersistentVolumeClaim']), 2)
 
-    def test_external_mongo_check_resolves_environment_and_fails_closed(self):
+    def test_local_mongo_explicit_uri_overrides_lingering_secret_key(self):
+        objects = self.render({'agentExecutor': {'enabled': True, 'image': 'example/executor:tested'}})
+        config = next(obj for obj in objects if obj['metadata']['name'] == 'test-config')
+        self.assertEqual(config['data']['MONGODB_URI'], 'mongodb://test-mongo-0.test-mongo:27017/bike4mind?replicaSet=rs0')
+        checked = 0
+        for obj in objects:
+            if obj['kind'] not in ['Deployment', 'StatefulSet', 'Job']:
+                continue
+            pod = obj['spec']['template']['spec']
+            for container in pod.get('containers', []) + pod.get('initContainers', []):
+                if not container.get('envFrom'):
+                    continue
+                uri = [entry for entry in container['env'] if entry['name'] == 'MONGODB_URI']
+                self.assertEqual(len(uri), 1, container['name'])
+                self.assertEqual(uri[0]['valueFrom'], {'configMapKeyRef': {'name': 'test-config', 'key': 'MONGODB_URI'}})
+                self.assertEqual(container['envFrom'][-1], {'secretRef': {'name': 'runtime'}})
+                checked += 1
+        self.assertGreaterEqual(checked, 6)
+
+    def external_mongo_wait_command(self):
         objects = self.render({'externalMongo': {'enabled': True}})
-        app = next(o for o in objects if o['kind'] == 'Deployment' and o['metadata']['name'] == 'test-app')
-        wait = next(c for c in app['spec']['template']['spec']['initContainers'] if c['name'] == 'wait-mongo')
-        javascript = wait['command'][-1].split("--eval '", 1)[1].split("' >/dev/null", 1)[0]
-        for uri, primary, expected in [('mongodb://example/test', True, 0), ('mongodb://example/test?tls=true', True, 0), ('', True, 1), ('mongodb://example/test', False, 1)]:
-            with self.subTest(uri=uri, primary=primary):
-                prelude = 'process.env.MONGODB_URI=' + json.dumps(uri) + '; const quit=process.exit; const connect=(resolved)=>{if(!resolved.includes("serverSelectionTimeoutMS=10000") || !resolved.includes("connectTimeoutMS=10000") || !resolved.includes("socketTimeoutMS=10000") || !resolved.startsWith(process.env.MONGODB_URI)) process.exit(2); return {hello:()=>({isWritablePrimary:' + str(primary).lower() + '})};};'
+        app = next(obj for obj in objects if obj['kind'] == 'Deployment' and obj['metadata']['name'] == 'test-app')
+        wait = next(container for container in app['spec']['template']['spec']['initContainers'] if container['name'] == 'wait-mongo')
+        return wait['command'][-1]
+
+    def test_external_mongo_check_resolves_environment_and_fails_closed(self):
+        javascript = self.external_mongo_wait_command().split("--eval '", 1)[1].split("' 2>/dev/null", 1)[0]
+        cases = [
+            ('mongodb://example/test', True, None, ''),
+            ('mongodb://example/test?tls=true', True, None, ''),
+            ('mongodb://example/test?connectTimeoutMS=5000', True, None, ''),
+            ('mongodb+srv://example/test?connectTimeoutMS=5000&tls=true', True, None, ''),
+            ('mongodb://first:27017,second:27017/test?connect%54imeoutMS=5000', True, None, ''),
+            ('mongodb://example/test?serverSelectionTimeoutM%53=0&CONNECT%54IMEOUTMS=500&socketTimeout%4dS=900000', True, None, ''),
+            ('mongodb://example/test?SERVERSELECTIONTIMEOUTMS=500&ConnectTimeoutMS=0&socketTimeoutMS=900000', True, None, ''),
+            ('mongodb://example/test?connectTimeoutMS=500&CONNECTTIMEOUTMS=600', True, None, 'MongoInvalidArgumentError'),
+            ('', True, None, 'MongoUriMissing'),
+            ('mongodb://example/test', False, None, 'MongoNotWritablePrimary'),
+            ('mongodb://example/test', True, 'MongoServerSelectionError', 'MongoServerSelectionError'),
+            ('mongodb://example/test', True, 'MongoInvalidArgumentError', 'MongoInvalidArgumentError'),
+            ('mongodb://example/test', True, 'untrusted mongodb://fake:credential@example/test', 'MongoConnectionError'),
+        ]
+        for uri, primary, error_name, reason in cases:
+            with self.subTest(uri=uri, primary=primary, error_name=error_name):
+                prelude = '''
+                  process.env.MONGODB_URI = __URI__;
+                  const quit = process.exit;
+                  const print = console.log;
+                  const connect = resolved => {
+                    if (!resolved.startsWith(process.env.MONGODB_URI)) process.exit(2);
+                    const query = value => new URLSearchParams(value.includes("?") ? value.slice(value.indexOf("?") + 1) : "");
+                    const supplied = query(process.env.MONGODB_URI);
+                    const options = new Map();
+                    for (const [key, value] of query(resolved)) {
+                      const normalized = key.toLowerCase();
+                      if (options.has(normalized)) { const error = new Error("duplicated option"); error.name = "MongoInvalidArgumentError"; throw error; }
+                      options.set(normalized, value);
+                    }
+                    for (const [key, value] of supplied) if (options.get(key.toLowerCase()) !== value) process.exit(2);
+                    for (const key of ["serverselectiontimeoutms", "connecttimeoutms", "sockettimeoutms"]) {
+                      if (!options.has(key)) process.exit(2);
+                      const original = [...supplied].find(([name]) => name.toLowerCase() === key);
+                      if (!original && options.get(key) !== "10000") process.exit(2);
+                    }
+                    if ([...supplied.keys()].length === 3 && resolved !== process.env.MONGODB_URI) process.exit(2);
+                    if (__ERROR_NAME__ !== null) { const error = new Error("mongodb://fake:credential@example/test"); error.name = __ERROR_NAME__; throw error; }
+                    return {hello: () => ({isWritablePrimary: __PRIMARY__})};
+                  };
+                '''.replace('__URI__', json.dumps(uri)).replace('__ERROR_NAME__', json.dumps(error_name)).replace('__PRIMARY__', str(primary).lower())
                 result = subprocess.run(['node', '-e', prelude + javascript], capture_output=True, text=True)
-                self.assertEqual(result.returncode, expected, result.stderr)
-                self.assertEqual(result.stdout, '')
+                self.assertEqual(result.returncode, 1 if reason else 0, result.stderr)
+                self.assertEqual(result.stdout, reason + '\n' if reason else '')
                 self.assertEqual(result.stderr, '')
+                self.assertNotIn('credential', result.stdout)
+                self.assertNotIn('mongodb://', result.stdout)
+
+    def test_external_mongo_shell_emits_only_safe_failure_reasons(self):
+        command = self.external_mongo_wait_command().replace('seq 1 60', 'seq 1 1').replace('sleep 2', 'sleep 0')
+        for diagnostic, expected in [('MongoNetworkError', 'MongoNetworkError'), ('mongodb://fake:credential@example/test', 'MongoConnectionError'), ('MongoNetworkError\nprivate detail', 'MongoConnectionError')]:
+            with self.subTest(diagnostic=diagnostic), tempfile.TemporaryDirectory() as directory:
+                timeout = pathlib.Path(directory) / 'timeout'
+                timeout.write_text('#!/bin/sh\ntest "$1" = -k && test "$2" = 5s && test "$3" = 15s || exit 2\nshift 3\nexec "$@"\n')
+                timeout.chmod(0o755)
+                mongosh = pathlib.Path(directory) / 'mongosh'
+                mongosh.write_text('#!/bin/sh\nprintf "%s\\n" "$FAKE_DIAGNOSTIC"\necho "private credential" >&2\nexit 1\n')
+                mongosh.chmod(0o755)
+                env = {**os.environ, 'PATH': directory + os.pathsep + os.environ['PATH'], 'FAKE_DIAGNOSTIC': diagnostic}
+                result = subprocess.run(['/bin/sh', '-ec', command], env=env, text=True, capture_output=True, timeout=3)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, '')
+                self.assertEqual(result.stderr, expected + '\n')
+
+    @unittest.skipUnless(shutil.which('timeout'), 'GNU timeout is required for the real process-bound test')
+    def test_external_mongo_process_timeout_suppresses_connection_output(self):
+        command = self.external_mongo_wait_command()
+        self.assertIn('timeout -k 5s 15s mongosh', command)
+        command = command.replace('timeout -k 5s 15s', 'timeout -k 0.1s 0.1s').replace('seq 1 60', 'seq 1 1').replace('sleep 2', 'sleep 0')
+        with tempfile.TemporaryDirectory() as directory:
+            shell = pathlib.Path(directory) / 'mongosh'
+            shell.write_text('#!/bin/sh\necho "mongodb://fake:credential@example/test"\necho "fake credential" >&2\nsleep 30\n')
+            shell.chmod(0o755)
+            env = {**os.environ, 'PATH': directory + os.pathsep + os.environ['PATH'], 'MONGODB_URI': 'mongodb://example/test?connectTimeoutMS=0'}
+            start = time.monotonic()
+            result = subprocess.run(['/bin/sh', '-ec', command], env=env, text=True, capture_output=True, timeout=3)
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, '')
+        self.assertEqual(result.stderr, 'MongoProbeTimeout\n')
 
     def test_argocd_example_requires_manual_preparation(self):
         application = yaml.safe_load((CHART / 'argocd-application.example.yaml').read_text())
@@ -158,15 +257,35 @@ class PackageTests(unittest.TestCase):
         self.assertFalse(values['externalMongo']['enabled'])
         self.assertEqual(values['storage']['className'], 'gp3-retain')
         self.assertTrue(all('localhost' in value for value in values['config'].values()))
-        self.render(values, success=False)
+        invalid = self.render(values, success=False)
+        self.assertRegex(invalid.stderr, r'images[/.](app|chatcompletion|ws|minio|mc|subscriberFanout)')
+        valid = {key: value for key, value in values.items() if key != 'images'}
+        objects = self.render(valid)
+        self.assertTrue(any(obj['metadata']['name'] == 'test-mongo' and obj['kind'] == 'StatefulSet' for obj in objects))
+        claims = [obj for obj in objects if obj['kind'] == 'PersistentVolumeClaim']
+        self.assertEqual(len(claims), 3)
+        self.assertTrue(all(obj['spec']['storageClassName'] == 'gp3-retain' for obj in claims))
 
     def test_external_mongo_uri_cannot_be_supplied_in_values(self):
-        self.render({'externalMongo': {'enabled': True}, 'config': {'MONGODB_URI': 'mongodb://example/db'}}, success=False)
+        result = self.render({'externalMongo': {'enabled': True}, 'config': {'MONGODB_URI': 'mongodb://example/db'}}, success=False)
+        self.assertIn('never config values', result.stderr)
+
+    def test_external_mongo_example_uses_documented_runtime_secret(self):
+        example = yaml.safe_load((CHART / 'external-mongo.example.yaml').read_text())
+        self.assertEqual(example['existingSecret'], 'bike4mind-runtime')
+        objects = self.render(example)
+        self.assertFalse(any(obj['kind'] == 'StatefulSet' and obj['metadata']['name'] == 'test-mongo' for obj in objects))
 
     def test_missing_secret_floating_image_and_secret_in_values_fail(self):
-        for overrides in [{'existingSecret': ''}, {'images': {'app': 'example/app:latest'}}, {'config': {'JWT_SECRET': 'unsafe'}}]:
+        cases = [
+            ({'existingSecret': ''}, r'existingSecret'),
+            ({'images': {'app': 'example/app:latest'}}, r'images[/.]app'),
+            ({'config': {'JWT_SECRET': 'unsafe'}}, r'JWT_SECRET'),
+        ]
+        for overrides, reason in cases:
             with self.subTest(overrides=overrides):
-                self.render(overrides, success=False)
+                result = self.render(overrides, success=False)
+                self.assertRegex(result.stderr, reason)
 
 if __name__ == '__main__':
     unittest.main()
