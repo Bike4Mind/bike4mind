@@ -48,7 +48,7 @@ function bodyOf(model: string, options: Record<string, unknown>) {
   return JSON.parse(payload.body) as Record<string, unknown> & { tools?: Array<Record<string, unknown>> };
 }
 
-describe('AnthropicBedrockBackend never forces a tool on Claude 5.x models', () => {
+describe('AnthropicBedrockBackend never sends tool_choice in the request body', () => {
   it.each(MODELS)('sends no tool_choice for a named or required choice on %s', model => {
     for (const toolChoice of ['required', { type: 'function', function: { name: 'get_weather' } }] as const) {
       const body = bodyOf(model, { tools: [tool], tool_choice: toolChoice });
