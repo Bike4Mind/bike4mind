@@ -200,6 +200,23 @@ describe('MediaPlayer', () => {
       expect(screen.queryByTestId('media-player-error')).toBeNull();
     });
 
+    it('re-signs again when a URL re-signed long ago fails before ever loading (preload none)', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      getFabFileByIdFromServer
+        .mockResolvedValueOnce({ fileUrl: 'https://files.example.test/a' })
+        .mockResolvedValueOnce({ fileUrl: 'https://files.example.test/b' });
+      renderPlayer(makeFile({ fileUrlExpireAt: new Date('2025-12-31T00:00:00Z') }), { preload: 'none' });
+      await waitFor(() => expect(srcOf(audio())).toContain('/a'));
+
+      vi.setSystemTime(new Date('2026-01-01T01:00:00Z'));
+      fireEvent.error(audio());
+
+      await waitFor(() => expect(srcOf(audio())).toContain('/b'));
+      expect(getFabFileByIdFromServer).toHaveBeenCalledTimes(2);
+      expect(screen.queryByTestId('media-player-error')).toBeNull();
+    });
+
     it('announces the error state and retries on demand', async () => {
       getFabFileByIdFromServer.mockRejectedValueOnce(new Error('gone'));
       renderPlayer(makeFile());

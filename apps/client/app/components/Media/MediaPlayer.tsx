@@ -23,6 +23,9 @@ type MediaPlayerProps = {
 
 type Status = 'ready' | 'refreshing' | 'failed';
 
+/** A load error this soon after a re-sign means the fresh URL failed too; later, it has most likely expired. */
+const RESIGN_GIVE_UP_WINDOW_MS = 60 * 1000;
+
 const hasExpired = (expireAt: MediaPlayerFile['fileUrlExpireAt']): boolean =>
   !!expireAt && new Date(expireAt).getTime() <= Date.now();
 
@@ -45,17 +48,19 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
   // An expired URL is never handed to the element: its instant 403 would race the re-sign below.
   const [status, setStatus] = useState<Status>(needsUrl ? 'refreshing' : 'ready');
   const [downloading, setDownloading] = useState(false);
-  // One re-sign per successful load: a URL that fails right after re-signing is a missing or unplayable file.
-  const resignedSinceLoadRef = useRef(false);
+  // When the URL was last re-signed, cleared by a successful load. Time-based rather than per load because a
+  // `preload="none"` row loads nothing until played, so it may first fail on a URL that expired long ago.
+  const lastResignAtRef = useRef<number | null>(null);
   // Remounts the element after each re-sign, so a same-URL answer (a transient error) still reloads it.
   const [loadAttempt, setLoadAttempt] = useState(0);
 
   const refresh = async () => {
-    if (resignedSinceLoadRef.current) {
+    const lastResignAt = lastResignAtRef.current;
+    if (lastResignAt !== null && Date.now() - lastResignAt < RESIGN_GIVE_UP_WINDOW_MS) {
       setStatus('failed');
       return;
     }
-    resignedSinceLoadRef.current = true;
+    lastResignAtRef.current = Date.now();
     setStatus('refreshing');
     try {
       setSrc(await fetchFreshUrl(file.id));
@@ -74,7 +79,7 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
   }, []);
 
   const retry = () => {
-    resignedSinceLoadRef.current = false;
+    lastResignAtRef.current = null;
     void refresh();
   };
 
@@ -133,7 +138,7 @@ const PlayerBody: FC<MediaPlayerProps> = ({ file, preload = 'metadata', hideDown
           if (status === 'ready') void refresh();
         }}
         onLoadedMetadata={() => {
-          resignedSinceLoadRef.current = false;
+          lastResignAtRef.current = null;
         }}
         aria-label={file.fileName}
         data-testid={isVideo ? 'media-player-video' : 'media-player-audio'}

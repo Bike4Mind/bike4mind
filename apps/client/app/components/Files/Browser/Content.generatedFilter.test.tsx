@@ -57,7 +57,18 @@ vi.mock('./ViewActions', () => ({ default: () => null }));
 vi.mock('./TagSidebar', () => ({ default: () => null }));
 vi.mock('./TagView', () => ({ TagViewPanel: () => null }));
 vi.mock('./HomeView', () => ({ HomeViewPanel: () => <div data-testid="stub-home-view" /> }));
-vi.mock('./MobileSearchFilter', () => ({ MobileSearchFilter: () => null }));
+// Forwards the props Content passes, so the mobile wiring itself is exercised (the desktop toggle shares its test id).
+vi.mock('./MobileSearchFilter', () => ({
+  MobileSearchFilter: (props: { generatedOnly?: boolean; onGeneratedChange?: (generatedOnly: boolean) => void }) => (
+    <button
+      data-testid="stub-mobile-generated"
+      aria-pressed={String(props.generatedOnly)}
+      onClick={() => props.onGeneratedChange?.(!props.generatedOnly)}
+    />
+  ),
+}));
+// Rendered by the list only while Content's hasFilters is true.
+vi.mock('./TagFilter', () => ({ default: () => <div data-testid="stub-tag-filters" /> }));
 vi.mock('./UploadActionsSelect', () => ({ UploadActionsSelect: () => null }));
 vi.mock('../../common/FileStorageBar', () => ({ default: () => null }));
 vi.mock('../../common/ShareModal', () => ({ default: () => null }));
@@ -106,5 +117,25 @@ describe('FileBrowserContent - Generated quick filter', () => {
 
     expect(screen.queryByTestId('stub-home-view')).not.toBeInTheDocument();
     expect(searchCalls[searchCalls.length - 1].filters?.generated).toBe(true);
+    expect(screen.getByTestId('stub-tag-filters')).toBeInTheDocument();
+  });
+
+  it('wires the mobile toggle: on narrows to generated files, off clears the filter', () => {
+    renderContent();
+    const mobileToggle = () => screen.getByTestId('stub-mobile-generated');
+    expect(mobileToggle()).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(mobileToggle());
+
+    expect(screen.queryByTestId('stub-home-view')).not.toBeInTheDocument();
+    expect(searchCalls[searchCalls.length - 1].filters?.generated).toBe(true);
+    expect(mobileToggle()).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('stub-tag-filters')).toBeInTheDocument();
+
+    fireEvent.click(mobileToggle());
+
+    expect(searchCalls[searchCalls.length - 1].filters?.generated).toBeUndefined();
+    expect(mobileToggle()).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByTestId('stub-tag-filters')).not.toBeInTheDocument();
   });
 });

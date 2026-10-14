@@ -5,8 +5,8 @@ export const GENERATED_ASSET_GENERATORS = ['music', 'video', 'image', 'speech', 
 export type GeneratedAssetGenerator = (typeof GENERATED_ASSET_GENERATORS)[number];
 
 /**
- * Tag every generated-file writer (saveGeneratedAsset, persistGeneratedFile) applies; the Files "Generated" filter
- * matches on it.
+ * Tag the generated-file writers apply (saveGeneratedAsset always, persistGeneratedFile unless its caller passes its
+ * own tags); the Files "Generated" filter matches on it.
  */
 export const GENERATED_ASSET_TAG = 'generated';
 
