@@ -37,6 +37,14 @@ describe('collectDagChildArtifactBlocks', () => {
     expect(blocks).toEqual([]);
   });
 
+  it('keeps two children that pick the same explicit identifier for different content', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: [`A\n${artifact('report', '<p>first</p>')}`, `B\n${artifact('report', '<p>second</p>')}`],
+    });
+    expect(blocks).toEqual([artifact('report', '<p>first</p>'), artifact('report', '<p>second</p>')]);
+  });
+
   it('keeps two children whose different untitled scripts share a promoted id', () => {
     const script = (n: number) => `\`\`\`python\nimport os\nx = ${n}\nprint(x)\n\`\`\``;
     const blocks = collectDagChildArtifactBlocks({
