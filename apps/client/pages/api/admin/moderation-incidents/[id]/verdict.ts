@@ -114,7 +114,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     if (!updated) {
       return res.status(409).json({
         error:
-          'Incident is not a stale confirmed_csam claim without an ncmecReportId (wrong state, submission still in flight, or an unfinished report exists -- use mark_reported once it is finalized)',
+          'Incident is not a stale confirmed_csam claim without an ncmecReportId (wrong state, submission still in flight, or an unfinished report exists -- use retry_finish within the 24-hour window, or mark_reported once it is finalized)',
       });
     }
     req.logger.info(`[Moderation] incident ${incidentId} requeued from confirmed_csam by admin=${req.user.id}`);
@@ -137,23 +137,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     }
     const credentials = resolveNcmecCredentials();
     if (!isNcmecConfigured(credentials)) {
-      return res
-        .status(503)
-        .json({
-          error:
-            'NCMEC credentials not configured -- set NCMEC_ESP_ID, NCMEC_API_KEY and NCMEC_ESP_EMAIL via sst secret set',
-        });
+      return res.status(503).json({
+        error:
+          'NCMEC credentials not configured -- set NCMEC_ESP_ID, NCMEC_API_KEY and NCMEC_ESP_EMAIL via sst secret set',
+      });
     }
     try {
       await ncmecService.finishNcmecReport(credentials, incident.ncmecReportId);
     } catch (err) {
       req.logger.error(
-        `[NCMEC] retry_finish failed for incident ${incidentId}, reportId=${incident.ncmecReportId}: ${(err as Error).message}`
+        `[NCMEC] retry_finish failed for incident ${incidentId}, reportId=${incident.ncmecReportId}, by admin=${req.user.id}: ${(err as Error).message}`
       );
       return res.status(502).json({ error: `NCMEC /finish retry failed: ${(err as Error).message}` });
     }
     req.logger.info(
-      `[NCMEC] retry_finish succeeded for incident ${incidentId}, reportId=${incident.ncmecReportId}; marking reported`
+      `[NCMEC] retry_finish succeeded for incident ${incidentId}, reportId=${incident.ncmecReportId}, by admin=${req.user.id}; marking reported`
     );
     // Pass staleAfterMs=0: /finish just succeeded so the outcome is known; the stale filter
     // is not appropriate here (it exists to prevent mark_reported/requeue from racing a live
