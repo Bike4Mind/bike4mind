@@ -25,18 +25,20 @@ const makeDb = () => ({
 
 describe('purgeDataLakeConnectionFiles', () => {
   // The refund sums `chargedBytes`, not the raw claimed size: a stamped row and a legacy pre-stamp
-  // `complete` row were both charged, a `pending` row that never won the charge was not.
+  // `complete` row were both charged, a `pending` row that never won the charge was not, and neither
+  // was a post-stamp `complete` row (marked uploaded before its event, so still unstamped).
   it('refunds only the charged bytes of the rows it hard-deleted', async () => {
     const db = makeDb();
     const files = [
       file({ id: 'f-stamped', fileSize: 100, storageChargedAt: CHARGED_AT }),
       file({ id: 'f-legacy', fileSize: 200, status: 'complete', createdAt: BEFORE_STAMP }),
       file({ id: 'f-pending', fileSize: 500, status: 'pending', createdAt: CHARGED_AT }),
+      file({ id: 'f-late', fileSize: 400, status: 'complete', createdAt: CHARGED_AT }),
     ];
 
     const result = await purgeDataLakeConnectionFiles(SCOPE, files, { db });
 
-    expect(result.filesPurged).toBe(3);
+    expect(result.filesPurged).toBe(4);
     expect(db.users.incrementCurrentStorage).toHaveBeenCalledTimes(1);
     expect(db.users.incrementCurrentStorage).toHaveBeenCalledWith('owner-1', -300);
   });
