@@ -121,8 +121,8 @@ export function renderBundleLoaderShell(): string {
   // The iframe starts hidden so a slow `?raw=1` round-trip shows "Loading..." instead of a
   // blank viewport; it's revealed once srcdoc is set. Title is a constant (see header).
   // The dark palette is page-level (html/body, not #b4m-msg) so the noscript fallback follows it
-  // too. The iframe pins the old light scheme + white backdrop so a transparent bundle renders
-  // exactly as it did before the page went dark.
+  // too. The iframe pins `color-scheme:normal` + white so the bundle's scheme and backdrop don't
+  // follow the page's dark mode.
   // brand is externalized: drop the brand clause when APP_NAME is unconfigured.
   const brand = process.env.APP_NAME || '';
   const sharedTitle = `Shared${brand ? ` from ${brand}` : ''}`;
