@@ -107,9 +107,17 @@ describe('sessionService - delete', () => {
     expect(mockFabFileRepo.updateGuarded).not.toHaveBeenCalled();
   });
 
-  it('deletes the files an in-chat tool generated in the session along with it', async () => {
+  it("keeps the files an in-chat tool generated, revoking only this session's grants on them", async () => {
     const session = { id: sessionId, userId: ownerId, deletedAt: null };
-    const generated = { id: 'file-generated', userId: ownerId, fileSize: 10, users: [] };
+    const generated = {
+      id: 'file-generated',
+      userId: ownerId,
+      fileSize: 10,
+      users: [
+        { userId: 'third-party', permissions: ['read'], sessionId },
+        { userId: 'third-party', permissions: ['read'] },
+      ],
+    };
 
     (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
     (mockFabFileRepo.find as Mock).mockResolvedValue([]);
@@ -119,7 +127,15 @@ describe('sessionService - delete', () => {
     await deleteSession(ownerId, { id: sessionId }, adapters);
 
     expect(mockFabFileRepo.findToolGeneratedBySessionId).toHaveBeenCalledWith(sessionId);
-    expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith(['file-generated']);
+    expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith([]);
+    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
+    expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'file-generated',
+        users: [{ userId: 'third-party', permissions: ['read'] }],
+      }),
+      { includeDeleted: true }
+    );
   });
 
   // Otherwise the owner's storage stays counted for files that no longer exist until an admin

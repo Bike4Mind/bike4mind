@@ -126,6 +126,8 @@ export function shouldTriggerFallback(error: Error): boolean {
     // available' trigger requires the literal word "model"; this provider message says
     // "<name> is not available", so it needs its own substring.
     'is not available',
+    // Google's 404 for a model closed upstream: "models/<id> is no longer available to new users".
+    'no longer available to new users',
     // Claude Fable 5 GA safety-classifier refusal: the Anthropic backend surfaces a
     // stop_reason: 'refusal' as a thrown error for REFUSAL_FALLBACK_MODELS so blocked
     // requests continue on Opus 5 via the claude-fable-5 fallback chain below.

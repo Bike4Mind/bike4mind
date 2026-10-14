@@ -30,6 +30,26 @@
         "default": "./dist/artifactParser.cjs"
       }
     },
+    "./toolOutputResultScan": {
+      "import": {
+        "types": "./dist/toolOutputResultScan.d.mts",
+        "default": "./dist/toolOutputResultScan.mjs"
+      },
+      "require": {
+        "types": "./dist/toolOutputResultScan.d.cts",
+        "default": "./dist/toolOutputResultScan.cjs"
+      }
+    },
+    "./importStatements": {
+      "import": {
+        "types": "./dist/importStatements.d.mts",
+        "default": "./dist/importStatements.mjs"
+      },
+      "require": {
+        "types": "./dist/importStatements.d.cts",
+        "default": "./dist/importStatements.cjs"
+      }
+    },
     "./artifactElision": {
       "import": {
         "types": "./dist/artifactElision.d.mts",
@@ -249,6 +269,8 @@
     "zod": "^4.6.6"
   },
   "devDependencies": {
+    "@babel/standalone": "^8.0.4",
+    "@types/babel__standalone": "^7.1.9",
     "@types/lodash": "^4.17.24",
     "@types/mime-types": "^3.0.1",
     "esbuild": "0.28.1",

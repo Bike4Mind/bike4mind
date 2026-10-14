@@ -1,4 +1,4 @@
-import { FabFileSourceType, KnowledgeType, type GeneratedAssetMetadata } from '@bike4mind/common';
+import { FabFileSourceType, KnowledgeType, StorageLimitError, type GeneratedAssetMetadata } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { saveGeneratedAsset, type SaveGeneratedAssetDeps, type SaveGeneratedAssetParams } from './saveGeneratedAsset';
 
@@ -85,6 +85,26 @@ describe('saveGeneratedAsset', () => {
     expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata).toEqual({ generation: music });
   });
 
+  it('records the inline-playback copy key so a delete can remove that copy too', async () => {
+    await saveGeneratedAsset(params({ sessionId: 's1', generatedCopyKey: 'abc.mp3' }), deps);
+
+    expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata).toEqual({
+      sessionId: 's1',
+      generatedCopyKey: 'abc.mp3',
+      generation: music,
+    });
+  });
+
+  it.each([
+    ['audio/L16', 'pcm'],
+    ['audio/basic', 'ulaw'],
+  ])('saves raw %s audio as .%s instead of refusing it', async (contentType, extension) => {
+    const result = await saveGeneratedAsset(params({ contentType }), deps);
+
+    expect(result.saved).toBe(true);
+    expect(createFabFile.mock.calls[0][1].fileName).toMatch(new RegExp(`\\.${extension}$`));
+  });
+
   it('stores video as VIDEO under its own prefix, tagged with the job', async () => {
     const generation: GeneratedAssetMetadata = { generator: 'video', provider: 'veo', jobId: 'j1', prompt: 'waves' };
     await saveGeneratedAsset(params({ contentType: 'video/mp4', generation }), deps);
@@ -145,13 +165,27 @@ describe('saveGeneratedAsset', () => {
   });
 
   it.each([
-    ['File size exceeds storage limit', 'storage_limit'],
-    ['File size exceeds maximum file size', 'file_too_large'],
-    ['boom', 'error'],
-  ])('maps a %j failure to %s without throwing', async (message, reason) => {
-    createFabFile.mockRejectedValue(new Error(message));
+    ['storage_limit_exceeded', 'storage_limit'],
+    ['org_storage_limit_exceeded', 'storage_limit'],
+    ['file_too_large', 'file_too_large'],
+  ] as const)('maps a %s refusal to %s whatever its message says', async (errorCode, reason) => {
+    createFabFile.mockRejectedValue(
+      new StorageLimitError('reworded message that matches nothing', {
+        errorCode,
+        used_bytes: 0,
+        limit_bytes: 1,
+        requested_bytes: 2,
+        owner: 'user',
+      })
+    );
 
     await expect(saveGeneratedAsset(params(), deps)).resolves.toEqual({ saved: false, reason });
+  });
+
+  it('maps an unrelated failure, even one that quotes the old message, to error', async () => {
+    createFabFile.mockRejectedValue(new Error('File size exceeds storage limit'));
+
+    await expect(saveGeneratedAsset(params(), deps)).resolves.toEqual({ saved: false, reason: 'error' });
   });
 
   it('reports a created file without a storage path as an error', async () => {

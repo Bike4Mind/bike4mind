@@ -158,6 +158,7 @@ describe('music_generation tool', () => {
         prompt: 'lofi',
         durationSeconds: 30,
       },
+      generatedCopyKey: 'stored-key.mp3',
     });
     expect(context.statusUpdate).toHaveBeenCalledWith({ images: ['stored-key.mp3'] });
     expect(result).toBe('Successfully generated music');

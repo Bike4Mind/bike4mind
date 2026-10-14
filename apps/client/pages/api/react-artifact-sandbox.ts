@@ -66,7 +66,7 @@ const BASE_SCRIPT_TAGS = BASE_SANDBOX_SCRIPTS.map(src => `<script src="${src}"><
  * Regex backslashes are doubled (`\\s`) because this string is a template literal whose
  * content becomes the literal script source. The body avoids inner template literals to
  * keep the escaping tractable. The import scanner is the exception: it is the source text of
- * createImportScanner (app/utils/importStatements.ts), interpolated as a value, so it is NOT
+ * createImportScanner (b4m-core/utils/src/importStatements.ts), interpolated as a value, so it is NOT
  * backslash-doubled and is the same code the publish transpiler runs on the server.
  *
  * FOOTGUN: never write the literal sequence `</script>` anywhere in this template -

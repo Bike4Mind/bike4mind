@@ -21,8 +21,9 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
+let mockAccessToken: string | null = 'tok';
 vi.mock('@client/app/hooks/useAccessToken', () => ({
-  useAccessToken: () => ({ accessToken: 'tok', resetTokens: vi.fn() }),
+  useAccessToken: () => ({ accessToken: mockAccessToken, resetTokens: vi.fn() }),
 }));
 
 // The branded header reaches react-query through useLogoSettings/useConfig, which this suite
@@ -275,5 +276,59 @@ describe('OAuthAuthorizePage scope label readability', () => {
     // nothing. text.tertiary used to serve here, until the theme raised it to AA (contrast.test.ts);
     // text.icon is a non-text token held only to 3:1, so it still sits below the text bar.
     expect(contrastOnCard(mode, 'icon')).toBeLessThan(WCAG_AA_NORMAL_TEXT);
+  });
+});
+
+describe('OAuthAuthorizePage signed-out routing', () => {
+  let originalLocation: Location;
+  const AUTHORIZE_SEARCH = '?client_id=client-1&response_type=code';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    global.fetch = vi.fn();
+    originalLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { href: '', pathname: '/oauth/authorize', search: AUTHORIZE_SEARCH },
+    });
+  });
+
+  afterEach(() => {
+    mockAccessToken = 'tok';
+    Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+  });
+
+  const base = { client_id: 'client-1', redirect_uri: REDIRECT, response_type: 'code' };
+
+  it('sends a signed-out visitor with screen_hint=signup to /register, keeping redirectTo', () => {
+    mockAccessToken = null;
+    searchParams = { ...base, screen_hint: 'signup' };
+    renderPage();
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/register',
+      search: { redirectTo: `/oauth/authorize${AUTHORIZE_SEARCH}` },
+    });
+  });
+
+  it.each([undefined, 'login', 'SIGNUP'])('sends a signed-out visitor to /login when screen_hint is %s', hint => {
+    mockAccessToken = null;
+    searchParams = { ...base, screen_hint: hint };
+    renderPage();
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/login',
+      search: { redirectTo: `/oauth/authorize${AUTHORIZE_SEARCH}` },
+    });
+  });
+
+  it('ignores screen_hint for a signed-in user and requests the code', async () => {
+    (global.fetch as unknown as Mock).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ code: 'c' }),
+    });
+    searchParams = { ...base, screen_hint: 'signup' };
+    renderPage();
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });

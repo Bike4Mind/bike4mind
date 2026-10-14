@@ -1,6 +1,7 @@
 import {
   extensionFromMimeType,
   FabFileSourceType,
+  isStorageLimitError,
   KnowledgeType,
   videoFileExtension,
   type GeneratedAssetGenerator,
@@ -47,12 +48,6 @@ const PROMPT_SNIPPET_CHARS = 40;
 // sourceMetadata rides every metadata-only file listing, so a long TTS script or lyric sheet is not stored whole.
 const MAX_STORED_TEXT_CHARS = 2_000;
 
-// createFabFile reports the storage quota and the per-file cap only through BadRequestError messages.
-const SKIP_REASON_PATTERNS: ReadonlyArray<[RegExp, GeneratedAssetSaveSkippedReason]> = [
-  [/storage limit/i, 'storage_limit'],
-  [/maximum file size/i, 'file_too_large'],
-];
-
 export type SaveGeneratedAssetResult =
   | { saved: true; fileId: string; s3Key: string; fileName: string; fileUrl?: string }
   | { saved: false; reason: GeneratedAssetSaveSkippedReason };
@@ -66,6 +61,8 @@ export type SaveGeneratedAssetParams = {
   /** The notebook the asset was made in, for in-chat producers. */
   sessionId?: string;
   questId?: string;
+  /** Generated-bucket key of the copy the producer also keeps for inline chat playback; deletes remove it too. */
+  generatedCopyKey?: string;
   /** An abort rejects rather than reporting a skipped save, so a lease-bounded step fails and retries. */
   signal?: AbortSignal;
 };
@@ -140,6 +137,7 @@ export async function saveGeneratedAsset(
           sourceMetadata: {
             ...(params.sessionId && { sessionId: params.sessionId }),
             ...(params.questId && { questId: params.questId }),
+            ...(params.generatedCopyKey && { generatedCopyKey: params.generatedCopyKey }),
             generation: storedGeneration(generation),
           },
         },
@@ -183,8 +181,8 @@ function fileExtension(modality: Modality, contentType: string): string | undefi
 }
 
 function skipReasonFor(error: unknown): GeneratedAssetSaveSkippedReason {
-  const message = error instanceof Error ? error.message : '';
-  return SKIP_REASON_PATTERNS.find(([pattern]) => pattern.test(message))?.[1] ?? 'error';
+  if (!isStorageLimitError(error)) return 'error';
+  return error.info.errorCode === 'file_too_large' ? 'file_too_large' : 'storage_limit';
 }
 
 // No dots in the snippet, so the appended extension is the only one the name carries.

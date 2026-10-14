@@ -16,6 +16,7 @@ import { satisfiesMembershipScope, type MembershipLake } from '../dataLakeServic
 import { registryMembershipScope } from '../dataLakeService/lakeMembershipScope';
 import type { ManageActor } from '../dataLakeService/manageRule';
 import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
+import { deleteStoredObjects, type GeneratedCopyStore, type ObjectStorage } from './deleteStoredObjects';
 import {
   recordLakeMembershipChange,
   type LakeMembershipAuditAdapters,
@@ -59,9 +60,12 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
     // below is skipped entirely rather than failing to compile (see LakeMembershipAuditAdapters).
     dataLakes?: Pick<IDataLakeRepository, 'find' | 'findByDatalakeTag'>;
   };
-  storage: {
-    delete: (path: string) => Promise<unknown>;
-  };
+  storage: ObjectStorage;
+  /**
+   * Where an in-chat generated asset's inline-playback copy lives. Optional so the doors that never delete
+   * generated files need not wire it; a door that can must, or the copy outlives the file.
+   */
+  generatedCopies?: GeneratedCopyStore;
   /** `sizeToDeduct` is the charged bytes (`chargedBytes`), not the raw `fileSize`; 0 when never charged. */
   onDeleteComplete?: (fabFile: IFabFileDocument, sizeToDeduct: number) => Promise<void>;
   /**
@@ -87,7 +91,16 @@ export const deleteFabFile = async (
   parameters: DeleteFabFileParameters,
   adapter: DeleteFabFileAdapter
 ): Promise<DeleteFabFileResult> => {
-  const { db, storage, onDeleteComplete, searchIndex, origin = 'person', auditPrincipal, logger } = adapter;
+  const {
+    db,
+    storage,
+    generatedCopies,
+    onDeleteComplete,
+    searchIndex,
+    origin = 'person',
+    auditPrincipal,
+    logger,
+  } = adapter;
   const { id } = secureParameters(parameters, deleteFabFileSchema);
 
   const user = await db.users.findById(userId);
@@ -136,12 +149,8 @@ export const deleteFabFile = async (
       );
     }
 
-    // Delete the main file in S3 and calculate size
     let sizeToDeduct = 0;
-    const storagePathsToDelete: string[] = [];
     if (ownedFile.filePath) {
-      Logger.globalInstance.log(`[deleteFabFile] Deleting S3 object — path: ${ownedFile.filePath}`);
-      storagePathsToDelete.push(ownedFile.filePath);
       sizeToDeduct += chargedBytes(ownedFile);
     }
 
@@ -166,10 +175,7 @@ export const deleteFabFile = async (
       await db.sessions.update({ id: notebook.id, knowledgeIds: updatedKnowledgeIds });
     }
 
-    // Delete the file in S3
-    for (const path of storagePathsToDelete) {
-      await storage.delete(path);
-    }
+    await deleteStoredObjects([ownedFile], { files: storage, generated: generatedCopies });
 
     // sizeToDeduct is the bytes this row was charged (see chargedBytes), so 0 for a never-charged row
     if (onDeleteComplete) {

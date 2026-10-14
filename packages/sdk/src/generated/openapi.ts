@@ -416,7 +416,7 @@ export interface paths {
     };
     /**
      * List the decision models you can use
-     * @description Returns the decision models this deployment serves, with their per-model caps and USD token prices. A floating alias carries `alias_of`; pin the versioned id when you tune thresholds, since a new version can shift probabilities. The catalog is a handful of entries, so it is returned whole, not paginated (as `GET /api/v1/video-models`).
+     * @description Returns the decision models you can call right now, with their per-model caps and USD token prices. A model is listed only when a key for its provider is available to you (your own provider key or one the deployment configures), so the list can differ between callers and grows when a key is added. A floating alias carries `alias_of`; pin the versioned id when you tune thresholds, since a new version can shift probabilities. The catalog is a handful of entries, so it is returned whole, not paginated (as `GET /api/v1/video-models`).
      */
     get: operations['listDecisionModels'];
     put?: never;
@@ -1988,6 +1988,8 @@ export interface components {
      *             "xhigh"
      *           ],
      *           "supports_tools": true,
+     *           "supports_tool_search": true,
+     *           "supports_tool_changes": false,
      *           "supports_vision": true,
      *           "deprecation_date": null,
      *           "replaced_by": null,
@@ -2011,6 +2013,8 @@ export interface components {
      *           "reasons_within_output_budget": false,
      *           "reasoning_efforts": [],
      *           "supports_tools": false,
+     *           "supports_tool_search": false,
+     *           "supports_tool_changes": false,
      *           "supports_vision": false,
      *           "deprecation_date": null,
      *           "replaced_by": null,
@@ -2080,6 +2084,10 @@ export interface components {
         /** @description The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer. */
         reasoning_efforts: ('none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh')[];
         supports_tools: boolean;
+        /** @description Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model only: `/api/ai/v1/completions` does not accept these yet. */
+        supports_tool_search: boolean;
+        /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not accept these blocks yet. */
+        supports_tool_changes: boolean;
         supports_vision: boolean;
         /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
         deprecation_date: string | null;
@@ -2441,6 +2449,31 @@ export interface components {
       id: string;
       upload_url: string;
       upload_url_expires_at: string;
+    };
+    createFileUploadResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /**
+       * @description Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit), or `file_too_large` (the per-file size limit). Branch on this, not on the message.
+       * @enum {string}
+       */
+      errorCode?: 'storage_limit_exceeded' | 'org_storage_limit_exceeded' | 'file_too_large';
+      /** @description Bytes already stored against the limit. 0 for `org_storage_limit_exceeded` and `file_too_large`. */
+      used_bytes?: number;
+      /** @description The limit, in bytes, that the request ran into. */
+      limit_bytes?: number;
+      /** @description Size of the refused upload, in bytes. */
+      requested_bytes?: number;
+      /**
+       * @description Whose limit was hit: `user` or `org`. Always `user` for `file_too_large`, a platform-wide cap.
+       * @enum {string}
+       */
+      owner?: 'user' | 'org';
     };
     /**
      * @example {
@@ -7283,7 +7316,7 @@ export interface operations {
           'application/json': components['schemas']['createFileUploadResponse201'];
         };
       };
-      /** @description Unsupported file type, file larger than the upload limit, or storage quota exceeded. */
+      /** @description Unsupported file type, file larger than the upload limit, or storage quota exceeded. A size or quota refusal carries a stable `errorCode` plus `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together; an unsupported type carries none of them. This endpoint checks only the user quota and the per-file cap, so `org_storage_limit_exceeded` is never returned here. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -7303,7 +7336,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['createFileUploadResponse400'];
         };
       };
       /** @description Missing or invalid credentials. */
@@ -8293,7 +8326,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description The served models. */
+      /** @description The models you can call. */
       200: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

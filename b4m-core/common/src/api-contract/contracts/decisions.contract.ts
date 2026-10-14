@@ -165,7 +165,9 @@ export const listDecisionModelsContract = defineEndpoint({
   operationId: 'listDecisionModels',
   summary: 'List the decision models you can use',
   description:
-    'Returns the decision models this deployment serves, with their per-model caps and USD token prices. ' +
+    'Returns the decision models you can call right now, with their per-model caps and USD token prices. ' +
+    'A model is listed only when a key for its provider is available to you (your own provider key or one ' +
+    'the deployment configures), so the list can differ between callers and grows when a key is added. ' +
     'A floating alias carries `alias_of`; pin the versioned id when you tune thresholds, since a new version ' +
     'can shift probabilities. The catalog is a handful of entries, so it is returned whole, not paginated ' +
     '(as `GET /api/v1/video-models`).',
@@ -173,7 +175,7 @@ export const listDecisionModelsContract = defineEndpoint({
   auth: 'apiKeyOrJwt',
   scopes: DECISION_SCOPES,
   responses: {
-    200: { description: 'The served models.', schema: ListDecisionModelsResponseSchema },
+    200: { description: 'The models you can call.', schema: ListDecisionModelsResponseSchema },
     403: scopeForbidden,
     429: rateLimited,
   },

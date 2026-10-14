@@ -6,6 +6,7 @@ import {
   FileEvents,
   FileGeneratePresignedUrlRequestInputType,
   KnowledgeType,
+  StorageLimitError,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -68,7 +69,15 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   const maxFileSize = getSettingsValue('MaxFileSize', settings, MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
   if (!data.fileSize) throw new BadRequestError('No file size provided');
-  if (data.fileSize >= maxFileSize) throw new BadRequestError('File size exceeds maximum file size');
+  if (data.fileSize >= maxFileSize) {
+    throw new StorageLimitError('File size exceeds maximum file size', {
+      errorCode: 'file_too_large',
+      used_bytes: 0,
+      limit_bytes: maxFileSize,
+      requested_bytes: data.fileSize,
+      owner: 'user',
+    });
+  }
 
   await checkStorageLimit(req.user, data.fileSize);
 

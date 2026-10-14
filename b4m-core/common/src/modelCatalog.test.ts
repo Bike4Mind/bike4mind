@@ -7,6 +7,7 @@ import {
   inferVendor,
   isPromptMetaModelType,
   isRenderableModelType,
+  isDedicatedApiModel,
   MODEL_INFO_TYPES,
   PROMPT_META_MODEL_TYPES,
   toModelInfo,
@@ -246,4 +247,26 @@ describe('isPromptMetaModelType', () => {
   it('declares only types that are real ModelInfo types', () => {
     expect(PROMPT_META_MODEL_TYPES.every(type => isRenderableModelType(type))).toBe(true);
   });
+});
+
+describe('isDedicatedApiModel', () => {
+  it.each([
+    'deep-research-preview-04-2026',
+    'deep-research-max-preview-04-2026',
+    'gemini-2.5-computer-use-preview-10-2025',
+    'Deep-Research-Preview',
+    'models/deep-research-x',
+    'deep-research',
+    'o3-deep-research',
+    'computer-use-preview',
+  ])('matches %s', id => expect(isDedicatedApiModel(id)).toBe(true));
+
+  it.each([
+    'gemini-3.5-flash',
+    'gemini-2.5-pro',
+    'research-assistant-1',
+    'gemini-deepresearch',
+    'gemini-3-deep-researcher',
+    'gpt-5.5',
+  ])('does not match %s', id => expect(isDedicatedApiModel(id)).toBe(false));
 });

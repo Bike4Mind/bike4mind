@@ -200,6 +200,44 @@ describe('GET /api/v1/models', () => {
     });
   });
 
+  it('publishes native tool search and tool changes only on the Claude models that take them', async () => {
+    getCallerModelList.mockResolvedValue({
+      models: [
+        textModel(ChatModels.CLAUDE_5_5_OPUS),
+        textModel(ChatModels.CLAUDE_5_SONNET),
+        textModel(ChatModels.CLAUDE_4_1_OPUS),
+        { ...textModel(ChatModels.CLAUDE_4_8_OPUS_BEDROCK), backend: ModelBackend.Bedrock },
+        { ...textModel(ChatModels.CLAUDE_4_SONNET_BEDROCK), backend: ModelBackend.Bedrock },
+        { ...textModel(ChatModels.GPT5_5), backend: ModelBackend.OpenAI },
+        { ...textModel(ChatModels.GEMINI_2_5_PRO), backend: ModelBackend.Gemini },
+        imageModel,
+      ],
+      supersededModels: [],
+    });
+    const { req, res } = get();
+
+    await run(req, res);
+
+    const body = res._getJSONData();
+    expect(ListModelsResponseSchema.safeParse(body).success).toBe(true);
+    const byId = Object.fromEntries(
+      body.data.map((row: { id: string; supports_tool_search: boolean; supports_tool_changes: boolean }) => [
+        row.id,
+        [row.supports_tool_search, row.supports_tool_changes],
+      ])
+    );
+    expect(byId).toEqual({
+      [ChatModels.CLAUDE_5_5_OPUS]: [true, true],
+      [ChatModels.CLAUDE_5_SONNET]: [true, false],
+      [ChatModels.CLAUDE_4_1_OPUS]: [false, false],
+      [ChatModels.CLAUDE_4_8_OPUS_BEDROCK]: [true, true],
+      [ChatModels.CLAUDE_4_SONNET_BEDROCK]: [false, false],
+      [ChatModels.GPT5_5]: [false, false],
+      [ChatModels.GEMINI_2_5_PRO]: [false, false],
+      [ImageModels.GPT_IMAGE_1]: [false, false],
+    });
+  });
+
   it('publishes null, not 0, for an unpriced text model and for image models', async () => {
     getCallerModelList.mockResolvedValue({
       models: [{ ...textModel('model-unpriced'), pricing: {} }, imageModel],

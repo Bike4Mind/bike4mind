@@ -2064,6 +2064,65 @@ describe('ChatCompletionProcess', () => {
           expect(reply).not.toContain('b4m-tool-output');
         });
       });
+
+      describe('elision stamp', () => {
+        beforeEach(() => {
+          mockedGetSettingsValue.mockImplementation(((key: string) =>
+            key === 'EnableArtifacts' ? true : undefined) as typeof getSettingsValue);
+        });
+        afterEach(() => mockedGetSettingsValue.mockReset());
+
+        function answer(text: string) {
+          setupTurn(async cb => {
+            await cb([text], { toolsUsed: [] });
+            await cb([], { toolsUsed: [], stopReason: 'end_turn' });
+          });
+        }
+
+        it.each([
+          ['tsx', '// ... existing code\nconst x = useMemo(() => compute(a), [a]);\n// ... rest unchanged'],
+          ['python', 'def process(x):\n    # ... rest unchanged\n    return x'],
+        ])('stamps no suspectedElision on a %s edit snippet', async (lang, body) => {
+          answer(`Change this part:\n\n\`\`\`${lang}\n${body}\n\`\`\`\n`);
+
+          await runTurn();
+
+          // Still promoted, so chat and agent see the same artifact; only the verdict is withheld.
+          expect(mockQuest.replies.join('')).toContain('<artifact');
+          expect(mockQuest.promptMeta.suspectedElision).toBeUndefined();
+        });
+
+        it('still stamps an elided model-tagged artifact', async () => {
+          answer(
+            '<artifact identifier="app" type="application/vnd.ant.react" title="App">\n// ... existing code\nconst x = useMemo(() => compute(a), [a]);\n// ... rest unchanged\n</artifact>'
+          );
+
+          await runTurn();
+
+          expect(mockQuest.promptMeta.suspectedElision).toBeDefined();
+        });
+      });
+
+      describe('artifact type fallback', () => {
+        beforeEach(() => {
+          mockedGetSettingsValue.mockImplementation(((key: string) =>
+            key === 'EnableArtifacts' ? true : undefined) as typeof getSettingsValue);
+        });
+        afterEach(() => mockedGetSettingsValue.mockReset());
+
+        it('records an untyped model-tagged artifact as a code artifact', async () => {
+          setupTurn(async cb => {
+            await cb(['<artifact identifier="notes" title="Notes">plain body</artifact>'], { toolsUsed: [] });
+            await cb([], { toolsUsed: [], stopReason: 'end_turn' });
+          });
+
+          await runTurn();
+
+          expect(mockQuest.promptMeta.artifacts).toContainEqual(
+            expect.objectContaining({ type: 'code', content: 'plain body' })
+          );
+        });
+      });
     });
 
     // Every other test in this file mocks messageTruncation: null, which never exercises the

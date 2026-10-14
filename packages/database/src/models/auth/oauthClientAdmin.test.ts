@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { ConflictError, NotFoundError, BadRequestError } from '@bike4mind/common';
+import { ConflictError, NotFoundError, BadRequestError, isOAuthClientIdShape } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { OAuthClientModel, oauthClientRepository } from './OAuthClientModel';
 import {
@@ -43,6 +43,14 @@ describe('generateOAuthClientId', () => {
     expect(id).toMatch(new RegExp(`^b4m_a{39}_[0-9a-f]{8}$`));
     expect(id).not.toContain('__');
   });
+
+  // Attribution drops any client_id failing isOAuthClientIdShape, so every minted id must pass it.
+  it.each(['My App', 'x'.repeat(200), '\u00e9t\u00e9 \r\n app', '!!!'])(
+    'mints an id that isOAuthClientIdShape accepts (%#)',
+    name => {
+      expect(isOAuthClientIdShape(generateOAuthClientId(name))).toBe(true);
+    }
+  );
 });
 
 describe('createOAuthClient', () => {

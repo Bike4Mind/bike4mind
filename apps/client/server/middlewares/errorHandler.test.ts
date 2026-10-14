@@ -4,7 +4,9 @@ import {
   ApiErrorSchema,
   BadGatewayError,
   BadRequestError,
+  StorageLimitError,
   TooManyRequestsError,
+  parseStorageLimitErrorInfo,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import errorHandler, { buildErrorBody } from './errorHandler';
@@ -100,6 +102,24 @@ describe('errorHandler - the body carries no keys the envelope does not document
       name: 'BadRequestError',
       request_id: 'trace-err-1',
     });
+  });
+
+  it('serves a storage refusal as a 400 carrying its code and byte counts, whatever the message says', () => {
+    const info = {
+      errorCode: 'storage_limit_exceeded',
+      used_bytes: 900,
+      limit_bytes: 1000,
+      requested_bytes: 200,
+      owner: 'user',
+    } as const;
+    for (const message of ['File size exceeds storage limit', 'Reworded entirely']) {
+      const { req, res, status, json } = makeReqRes();
+      errorHandler(new StorageLimitError(message, info), req, res);
+      expect(status).toHaveBeenCalledWith(400);
+      const body = json.mock.calls[0][0];
+      expect(body).toMatchObject({ ...info, error: message, request_id: 'trace-err-1' });
+      expect(parseStorageLimitErrorInfo(body)).toEqual(info);
+    }
   });
 
   // The HTTPError branch is the only one that reaches `additionalInfo`, so without a

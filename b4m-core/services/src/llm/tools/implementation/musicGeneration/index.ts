@@ -113,6 +113,7 @@ export const musicGenerationTool: ToolDefinition = {
           prompt,
           durationSeconds: lengthMs / 1000,
         },
+        generatedCopyKey: storedPath,
       });
 
       // Reserve + record the charge now that generation succeeded (host settles

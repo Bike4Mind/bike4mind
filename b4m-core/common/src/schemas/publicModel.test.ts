@@ -56,6 +56,8 @@ describe('toPublicModel', () => {
       reasons_within_output_budget: false,
       reasoning_efforts: [],
       supports_tools: true,
+      supports_tool_search: false,
+      supports_tool_changes: false,
       supports_vision: true,
       deprecation_date: '2027-01-01',
       replaced_by: 'gpt-5',
@@ -139,6 +141,17 @@ describe('toPublicModel', () => {
     expect(PublicModelSchema.strict().safeParse(projected).success).toBe(true);
   });
 
+  it.each([
+    ['Claude Opus 5.5 direct', ModelBackend.Anthropic, 'claude-opus-5-5', true, true],
+    ['Claude Sonnet 5 on Bedrock', ModelBackend.Bedrock, 'global.anthropic.claude-sonnet-5', true, false],
+    ['Claude Opus 4.1', ModelBackend.Anthropic, 'claude-opus-4-1-20250805', false, false],
+    ['GPT-4o', ModelBackend.OpenAI, 'gpt-4o', false, false],
+  ])('publishes native tool search and tool changes for %s', (_label, backend, id, toolSearch, toolChanges) => {
+    const projected = project({ ...textModel, id: id as ModelInfo['id'], backend });
+
+    expect(projected).toMatchObject({ supports_tool_search: toolSearch, supports_tool_changes: toolChanges });
+  });
+
   it('publishes null on image models, which are not priced per token', () => {
     expect(project(imageModel(ImageModels.GPT_IMAGE_1)).credits_per_1m_tokens).toBeNull();
   });
@@ -171,6 +184,22 @@ describe('listModelsContract example', () => {
   });
 
   it("advertises gpt-image-1's real image block, so the docs cannot drift from the request rules", () => {
-    expect(example.data.find(model => model.id === 'gpt-image-1')?.image).toEqual(project(imageModel(ImageModels.GPT_IMAGE_1)).image);
+    expect(example.data.find(model => model.id === 'gpt-image-1')?.image).toEqual(
+      project(imageModel(ImageModels.GPT_IMAGE_1)).image
+    );
+  });
+
+  it("advertises claude-sonnet-5's real tool capability flags", () => {
+    const row = example.data.find(model => model.id === 'claude-sonnet-5');
+    const projected = project({
+      ...textModel,
+      id: 'claude-sonnet-5' as ModelInfo['id'],
+      backend: ModelBackend.Anthropic,
+    });
+
+    expect(row).toMatchObject({
+      supports_tool_search: projected.supports_tool_search,
+      supports_tool_changes: projected.supports_tool_changes,
+    });
   });
 });

@@ -41,6 +41,15 @@ export class ProjectsPage extends BasePage {
     );
   }
 
+  /** Create opens the new project's page (#4585), not the list - assert we landed on it */
+  async expectOnProjectPage(name: string) {
+    await this.page.waitForURL(/\/projects\/.+/, { timeout: TIMEOUTS.NAVIGATION });
+    await expect(this.page.getByTestId('project-tab-list')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(this.page.getByRole('main').getByRole('navigation').getByText(name, { exact: true })).toBeVisible({
+      timeout: TIMEOUTS.VISIBLE,
+    });
+  }
+
   async openProject(name: string) {
     const card = this.page
       .getByTestId('project-card')

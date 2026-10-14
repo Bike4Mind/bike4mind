@@ -83,6 +83,7 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   creditLotRepository: {},
   authSessionRepository: {},
+  oauthClientRepository: {},
   passkeyCredentialRepository: { countByUser: (...a: unknown[]) => mockCountPasskeys(...a) },
 }));
 

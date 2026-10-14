@@ -42,7 +42,6 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
 vi.mock('@bike4mind/common', () => ({
   ProjectEvents: { REMOVE_MEMBER: 'remove_member', PROJECT_LEAVED: 'project_leaved' },
 }));
-vi.mock('@client/config/activities', () => ({ ActivityType: { PROJECT_LEAVED: 'project_leaved' } }));
 
 import '@pages/api/projects/[id]/members';
 
