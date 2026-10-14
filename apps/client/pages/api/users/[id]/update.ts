@@ -11,12 +11,22 @@ import {
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
 import { commitWithSessionEnd, type SessionEndReason } from '@server/auth/endUserSessions';
-import { ApiKeyScope, ForbiddenError, redactUserSecretsForSelf } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ForbiddenError,
+  redactUserSecretsForSelf,
+  selfUserProfileResponseSchema,
+} from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@server/utils/ip';
 import * as z from 'zod';
 
 const idParamSchema = z.object({ id: z.string() });
+
+const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
+  ignoredFields: z.array(z.string()).optional(),
+});
 
 async function getPreviousConsentLevel(
   userId: string,
@@ -214,7 +224,11 @@ const handler = baseApi().put(
       });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.
-      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
+      return respond(
+        res,
+        updateUserResponseSchema.nullable(),
+        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+      );
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
@@ -259,7 +273,11 @@ const handler = baseApi().put(
       const safeUser = redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'] });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.
-      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
+      return respond(
+        res,
+        updateUserResponseSchema.nullable(),
+        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+      );
     }
   })
 );

@@ -3,6 +3,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { ExtractJwt } from 'passport-jwt';
+import { respond } from '@server/utils/respond';
+import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
 
 // Per-user cap (req.user is set here, so rateLimit keys by user id, not IP). No legitimate
 // flow calls identify anywhere near 60/min - it fires on cold load, tab refocus and WS
@@ -34,7 +36,7 @@ const handler = baseApi()
       `Successful auth for "${req.user?.username}" (${req.user?.email}) via ${isApiKeyCaller ? 'api key' : 'jwt'}`
     );
 
-    return res.status(200).json({
+    return respond(res, selfSessionResponseSchema, {
       // Same self-view shape as refreshToken and the login endpoints, which feed the
       // client's currentUser from this identical sanitizer. Raw `req.user` is the
       // hydrated document, so returning it shipped OAuth tokens, encrypted integration

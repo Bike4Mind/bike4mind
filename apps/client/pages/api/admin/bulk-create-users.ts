@@ -1,5 +1,6 @@
 import { userRepository } from '@bike4mind/database';
-import { ApiKeyScope, AuthEvents, redactUserSecretsForSelf } from '@bike4mind/common';
+import { ApiKeyScope, AuthEvents, redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { userService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -26,6 +27,17 @@ interface UserImportRow {
   startingStorage?: number;
   tags?: string[];
 }
+
+const bulkCreateResponseSchema = z.object({
+  success: z.literal(true),
+  results: z.array(
+    z.discriminatedUnion('success', [
+      z.object({ success: z.literal(true), email: z.string(), user: selfUserResponseSchema }),
+      // Echoes the row as submitted: it failed validation, so its email may be missing or not a string.
+      z.object({ success: z.literal(false), email: z.unknown().optional(), error: z.string() }),
+    ])
+  ),
+});
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler<{}, unknown, { users: UserImportRow[] }>(async (req, res) => {
@@ -149,7 +161,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       })
     );
 
-    return res.json({
+    // Validates after users are created and invites sent: a bad success row would 500 a batch that
+    // succeeded and a retry would hit duplicates, so keep the row schema permissive.
+    return respond(res, bulkCreateResponseSchema, {
       success: true,
       results,
     });
