@@ -132,6 +132,7 @@ const ImageContainer: FC<ImageContainerProps> = ({
   const [downloading, setDownloading] = useState<boolean>(false);
   const [currentIndex, setCurrentIndex] = useState<number>(index);
   const [editing, setEditing] = useState<boolean>(false);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   // Read-only hides Edit: the masker uploads a mask file before the (no-op) send.
   const readOnly = useSessionReadOnly();
 
@@ -556,13 +557,23 @@ const ImageContainer: FC<ImageContainerProps> = ({
           // `src` there falls through to the plain <img> below (prior behavior)
           // instead of the upload-scanning copy.
           <ImageModerationPlaceholder status="scanning" size={previewSize} />
+        ) : failedSrc === src ? (
+          // A missing object (e.g. a deleted image) reads as gone rather than a broken <img>.
+          <Typography
+            level="body-xs"
+            title="This image is no longer available."
+            data-testid="ai-response-image-unavailable"
+            sx={{ width: previewSize, height: previewSize, display: 'flex', alignItems: 'center', p: 1 }}
+          >
+            This image is no longer available.
+          </Typography>
         ) : (
           <img
             src={src}
             height={previewSize}
             width={previewSize}
             alt={`Generated image ${index + 1} of ${totalImages}`}
-            onError={handleImageError}
+            onError={() => setFailedSrc(src)}
             sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
             style={{
               objectFit: isThumbnail ? 'cover' : 'scale-down',

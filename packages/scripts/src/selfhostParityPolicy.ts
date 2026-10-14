@@ -366,7 +366,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker('queue:infra/queues.ts:generationJobDLQ', '0eb29387a6952921e713298ba6acf3cd1aef5f60d84e67cffe177843b714f38f'),
   wired(
     'queue:infra/queues.ts:generationJobQueue',
-    '37081f36e3d78c66a67d8f045c151c74abbfe86998248fa4c351616babdd2984',
+    '0d42d959085700123e83ffac8104c2907b47ba917463a6e7fe57c005734b9cb4',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationJobQueue',
@@ -799,7 +799,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    '3488e94c575dba01aa41247bf9cbab1b4486ad4be1f8131c545821b0a8cf7c8c',
+    '1fd10d2ea20fcddcfc7f36d741a30fb18d5de1e8f615b9d954d8733f4cd613ae',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),

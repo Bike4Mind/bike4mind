@@ -13,7 +13,7 @@ import {
   DEFAULT_LAMBDA_ENVIRONMENT,
   PRODUCTION_STAGES,
   TEST_DECISION_PROVIDER_ENVIRONMENT,
-  TEST_VIDEO_PROVIDER_ENVIRONMENT,
+  TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
 import { attackSimulationFunction, modelDiscoveryFunction } from './cron';
 // web -> agentExecutor -> websocket is acyclic: websocket.ts deliberately does
@@ -431,7 +431,7 @@ export const web = new sst.aws.Nextjs(
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-      ...TEST_VIDEO_PROVIDER_ENVIRONMENT,
+      ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
       ...TEST_DECISION_PROVIDER_ENVIRONMENT,
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
       // Optional https URL of another deployment's GET /api/v1/whats-new, served ahead of local notes.

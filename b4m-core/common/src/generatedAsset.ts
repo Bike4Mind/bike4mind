@@ -24,6 +24,15 @@ export const GeneratedAssetMetadataSchema = z.object({
 export type GeneratedAssetMetadata = z.infer<typeof GeneratedAssetMetadataSchema>;
 
 /**
+ * The generated-content bucket key of the second copy an in-chat tool keeps for inline playback
+ * (`quest.images`), stamped as `sourceMetadata.generatedCopyKey` so deleting the file can remove that copy too.
+ */
+export function generatedCopyKeyOf(file: { sourceMetadata?: Record<string, unknown> }): string | undefined {
+  const key = file.sourceMetadata?.generatedCopyKey;
+  return typeof key === 'string' && key.length > 0 ? key : undefined;
+}
+
+/**
  * Why a generated file was not kept in the user's files. Never fatal: the output was already produced and
  * billed, so it is still handed to the caller.
  */

@@ -230,3 +230,29 @@ describe('CounterLogRepository.metricsByDate - weeklyActiveUsers (real WAU)', ()
     expect(result.weeklyActiveUsers ?? []).toHaveLength(0);
   });
 });
+
+describe('CounterLogRepository.metricsByDate - topUsers email', () => {
+  it.each([
+    ['daily', undefined],
+    ['weekly', '2026-05-26'],
+  ])('takes the email from the user document in the %s report', async (_label, startDate) => {
+    const userId = await seedUser('top@example.com');
+    await CounterLog.insertMany([logFor(userId, inWindow)]);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE, startDate);
+
+    expect(result.topUsers).toEqual([expect.objectContaining({ _id: userId, email: 'top@example.com' })]);
+  });
+
+  it.each([
+    ['daily', undefined],
+    ['weekly', '2026-05-26'],
+  ])('returns a null email for a deleted user in the %s report', async (_label, startDate) => {
+    const orphanId = new mongoose.Types.ObjectId().toString();
+    await CounterLog.insertMany([logFor(orphanId, inWindow)]);
+
+    const [result] = await counterLogRepository.metricsByDate(REPORT_DATE, startDate);
+
+    expect(result.topUsers).toEqual([expect.objectContaining({ _id: orphanId, email: null })]);
+  });
+});
