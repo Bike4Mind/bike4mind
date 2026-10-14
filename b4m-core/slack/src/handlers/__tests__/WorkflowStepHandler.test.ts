@@ -827,28 +827,38 @@ describe('WorkflowStepHandler', () => {
       expect(User.findOne).not.toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'UVICTIM' });
     });
 
-    it.each(Object.values(WORKFLOW_STEP_CALLBACKS))(
-      '%s runs as the user_context id and never the conflicting user_id',
-      async callbackId => {
-        vi.mocked(User.findOne).mockResolvedValue(createMockUser());
-        vi.mocked(createSession).mockResolvedValue({ id: 'session_123', name: 'Test' } as any);
-        mockSlackClient.sendDirectMessage.mockResolvedValue(true);
+    it.each([
+      ['a notebook step', WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {}],
+      ['a message step that waits for the reply', WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { wait_for_response: true }],
+      ['a message step that does not wait', WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { wait_for_response: false }],
+      ['a query step', WORKFLOW_STEP_CALLBACKS.QUERY, {}],
+    ])('%s runs as the user_context id and never the conflicting user_id', async (_label, callbackId, extraInputs) => {
+      vi.mocked(User.findOne).mockResolvedValue(createMockUser());
+      vi.mocked(createSession).mockResolvedValue({ id: 'session_123', name: 'Test' } as any);
+      vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as any);
+      vi.mocked(Quest.findById).mockResolvedValue({ status: 'done', replies: ['ok'] } as any);
+      vi.mocked(Session.findById).mockResolvedValue({ name: 'Test' } as any);
+      mockSlackClient.sendDirectMessage.mockResolvedValue(true);
 
-        await handler.handleFunctionExecuted(
-          createEvent(callbackId, {
-            user_context: ACTING_USER_CONTEXT,
-            user_id: 'UVICTIM',
-            message: 'Hello',
-            query: 'What is new?',
-            send_notification: true,
-          })
-        );
+      await handler.handleFunctionExecuted(
+        createEvent(callbackId, {
+          user_context: ACTING_USER_CONTEXT,
+          user_id: 'UVICTIM',
+          message: 'Hello',
+          query: 'What is new?',
+          send_notification: true,
+          ...extraInputs,
+        })
+      );
 
-        expect(User.findOne).toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'U123' });
-        expect(User.findOne).not.toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'UVICTIM' });
-        expect(mockSlackClient.sendDirectMessage).not.toHaveBeenCalledWith('UVICTIM', expect.anything());
-      }
-    );
+      expect(User.findOne).toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'U123' });
+      expect(User.findOne).not.toHaveBeenCalledWith({ 'slackSettings.slackUserId': 'UVICTIM' });
+      // Assert the step actually reached the notification, so the DM target is pinned and not
+      // passed vacuously by an error path that never sends one.
+      expect(mockSlackClient.functionCompleteSuccess).toHaveBeenCalled();
+      expect(mockSlackClient.sendDirectMessage).toHaveBeenCalledWith('U123', expect.any(String));
+      expect(mockSlackClient.sendDirectMessage).not.toHaveBeenCalledWith('UVICTIM', expect.anything());
+    });
 
     it('logs the rejection with the execution id, app id and reason', async () => {
       await handler.handleFunctionExecuted(createEvent(WORKFLOW_STEP_CALLBACKS.QUERY, { user_id: 'U123' }));
