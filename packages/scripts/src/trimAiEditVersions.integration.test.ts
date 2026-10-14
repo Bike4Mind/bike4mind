@@ -97,6 +97,29 @@ describe('trimAiEditVersions', () => {
     expect(storage.delete).not.toHaveBeenCalled();
   });
 
+  it('skips a row that gained a version between the read and the write, deleting nothing', async () => {
+    const id = await seedFile(5);
+    const storage = { delete: vi.fn().mockResolvedValue(undefined) };
+    // An edit appends a version but leaves filePath alone, so only the `$size` guard can catch it.
+    const original = FabFile.updateOne.bind(FabFile);
+    const spy = vi
+      .spyOn(FabFile, 'updateOne')
+      .mockImplementationOnce(((filter: object, update: object) =>
+        FabFile.collection
+          .updateOne(
+            { _id: id },
+            { $push: { versions: { version: 7, filePath: 'files/u/extra', fileSize: 10, mimeType: 'x' } } }
+          )
+          .then(() => original(filter, update))) as unknown as typeof FabFile.updateOne);
+
+    const result = await trimAiEditVersions({ dryRun: false, maxEditedVersions: 2, storage, log: silent });
+
+    spy.mockRestore();
+    expect(result).toMatchObject({ files: 0, skipped: 1 });
+    expect(await versionsOf(id)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
+
   it('ignores soft-deleted files', async () => {
     await seedFile(5, { deletedAt: new Date() });
     const storage = { delete: vi.fn() };

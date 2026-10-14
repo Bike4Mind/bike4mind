@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { IFabFile, IFabFileVersion, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import {
+  AI_EDIT_VERSION_RETENTION_DEFAULT,
+  IFabFile,
+  IFabFileVersion,
+  SupportedFabFileMimeTypes,
+} from '@bike4mind/common';
 import axios from 'axios';
 import { BadRequestError, CorruptedFileError } from './errors';
 import { Logger } from '@bike4mind/observability';
@@ -244,7 +249,8 @@ export const appendEditedVersion = (params: {
   newFileSize: number;
   now: Date;
   nonce: string;
-  maxEditedVersions: number;
+  /** Defaults to AI_EDIT_VERSION_RETENTION_DEFAULT; the edit routes pass the admin setting. */
+  maxEditedVersions?: number;
 }): { newFilePath: string; versions: IFabFileVersion[]; droppedVersions: IFabFileVersion[] } => {
   const history: IFabFileVersion[] = params.existingVersions?.length
     ? [...params.existingVersions]
@@ -272,5 +278,5 @@ export const appendEditedVersion = (params: {
     mimeType: params.mimeType,
     createdAt: params.now,
   });
-  return { newFilePath, ...trimVersionHistory(history, params.maxEditedVersions) };
+  return { newFilePath, ...trimVersionHistory(history, params.maxEditedVersions ?? AI_EDIT_VERSION_RETENTION_DEFAULT) };
 };

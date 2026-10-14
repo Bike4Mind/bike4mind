@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { AI_EDIT_VERSION_RETENTION_DEFAULT, SupportedFabFileMimeTypes } from '@bike4mind/common';
 import type { BaseStorage } from '@bike4mind/fab-pipeline';
 import type { Logger } from '@bike4mind/observability';
 
@@ -129,6 +129,16 @@ describe('appendEditedVersion', () => {
     const atCap = appendEditedVersion({ ...base, existingVersions: historyOf(3), maxEditedVersions: 3 });
     expect(atCap.versions.map(v => v.version)).toEqual([1, 2, 3, 4]);
     expect(atCap.droppedVersions).toEqual([]);
+  });
+
+  it('caps at the default retention when maxEditedVersions is omitted', () => {
+    const { maxEditedVersions: _omitted, ...withoutCap } = base;
+    const { versions, droppedVersions } = appendEditedVersion({
+      ...withoutCap,
+      existingVersions: historyOf(AI_EDIT_VERSION_RETENTION_DEFAULT + 3),
+    });
+    expect(versions).toHaveLength(AI_EDIT_VERSION_RETENTION_DEFAULT + 1);
+    expect(droppedVersions).toHaveLength(3);
   });
 
   it('keeps v1 plus the last N edited versions and reports the dropped ones', () => {

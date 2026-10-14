@@ -27,7 +27,8 @@ export interface TrimAiEditVersionsResult {
  * Trim AI-edited files already over the version cap, using the same rule as new edits
  * (trimVersionHistory: keep v1 plus the last N). The DB write is conditional on the row being
  * unchanged since the read, and objects are deleted only after it lands, so a concurrent edit is
- * never undone and a crash mid-run leaves at worst orphaned objects. An edit still using a higher cached cap can re-persist trimmed entries; see the runbook in trim-ai-edit-versions.ts.
+ * never undone and a crash mid-run leaves at worst orphaned objects. An edit still using a higher
+ * cached cap can re-persist trimmed entries; see the runbook in trim-ai-edit-versions.ts.
  * Soft-deleted rows are excluded (the soft-delete plugin scopes the find). Rows deleted before
  * deleteFabFile started removing version keys still have orphaned version objects; this script does
  * not sweep them.

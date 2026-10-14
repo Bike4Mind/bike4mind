@@ -137,8 +137,10 @@ export const deleteFabFile = async (
     // Delete the main file in S3 and calculate size
     let sizeToDeduct = 0;
     // Every stored key, not just the current one: an AI-edited file keeps its retained revisions in
-    // `versions[]` under their own keys (see appendEditedVersion). Versions first, `filePath` last,
-    // matching purgeDataLakeDocument.ts. Only `fileSize` counts toward quota, so it alone is deducted.
+    // `versions[]` under their own keys (see appendEditedVersion). Listed versions first, `filePath`
+    // last, as purgeDataLakeDocument.ts does; unlike that sweep every key is attempted regardless of
+    // earlier failures (below), so the order carries no failure semantics here. Only `fileSize`
+    // counts toward quota, so it alone is deducted.
     const isStorageKey = (path: unknown): path is string => typeof path === 'string' && path.length > 0;
     const storagePathsToDelete: string[] = Array.from(
       new Set((ownedFile.versions ?? []).map(version => version?.filePath).filter(isStorageKey))
