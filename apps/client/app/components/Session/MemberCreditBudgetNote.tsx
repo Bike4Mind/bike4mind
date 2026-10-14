@@ -5,11 +5,10 @@ import {
 } from '@client/app/components/organizations/memberCreditBudget';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization } from '@client/app/hooks/data/organizations';
-import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
-import { Box, IconButton, Typography, useTheme } from '@mui/joy';
+import { Typography } from '@mui/joy';
 import { useState } from 'react';
 import type { SxProps } from '@mui/joy/styles/types';
-import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
+import { ComposerNote } from './ComposerNote';
 
 /**
  * The note itself, with no data of its own so a preview can render it. Sits above the composer
@@ -24,42 +23,18 @@ export function MemberCreditBudgetNoteView({
   onDismiss: () => void;
   sx?: SxProps;
 }) {
-  const theme = useTheme();
-  const isDarkMode = theme.palette.mode === 'dark';
-  const border = isDarkMode ? 'rgba(234, 179, 8, 0.4)' : 'rgba(202, 138, 4, 0.35)';
-  const bg = isDarkMode ? 'rgba(120, 80, 20, 0.35)' : 'rgba(254, 249, 195, 0.8)';
-
   return (
-    <Box
+    <ComposerNote
       data-testid="session-member-credit-budget-note"
-      sx={[
-        {
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 1,
-          background: bg,
-          border: `1px solid ${border}`,
-          borderRadius: '8px',
-          p: '8px',
-        },
-        ...(Array.isArray(sx) ? sx : [sx]),
-      ]}
+      dismissTestId="member-credit-budget-note-dismiss"
+      dismissLabel="Dismiss credit limit note"
+      onDismiss={onDismiss}
+      sx={sx}
     >
       <Typography data-testid="member-credit-budget-note-text" sx={{ fontSize: '13px', color: 'text.primary' }}>
         {text}
       </Typography>
-      <IconButton
-        data-testid="member-credit-budget-note-dismiss"
-        size="sm"
-        variant="plain"
-        onClick={onDismiss}
-        aria-label="Dismiss credit limit note"
-        sx={{ ...HEADER_ICON_BUTTON_SX, flexShrink: 0 }}
-      >
-        <CloseRoundedIcon sx={{ fontSize: '16px' }} />
-      </IconButton>
-    </Box>
+    </ComposerNote>
   );
 }
 

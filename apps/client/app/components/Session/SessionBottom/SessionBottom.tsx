@@ -561,6 +561,14 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         ref={notesRef}
         sx={[aboveBoxSx, { display: 'flex', flexDirection: 'column', gap: '8px', '&:not(:empty)': { mb: '8px' } }]}
       >
+        <LowCreditsWarning
+          show={creditUi.lowCreditsNotice}
+          currentCredits={effectiveCredits}
+          onDismiss={() => {
+            dismissCreditNudge(currentUserId);
+            setLowCreditsDismissedFor(currentUserId ?? null);
+          }}
+        />
         {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
       </Box>
       {/* Above the box rather than under it: the file viewer and other embedded chats leave no room
@@ -677,14 +685,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         borderRadius: '8px',
                       }}
                     >
-                      <LowCreditsWarning
-                        show={creditUi.lowCreditsNotice}
-                        currentCredits={effectiveCredits}
-                        onDismiss={() => {
-                          dismissCreditNudge(currentUserId);
-                          setLowCreditsDismissedFor(currentUserId ?? null);
-                        }}
-                      />
                       {/* Slash command suggestions */}
                       {showSlashSuggestions && (
                         <SlashCommandSuggestions

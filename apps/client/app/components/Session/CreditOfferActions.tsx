@@ -1,14 +1,12 @@
 import { useState } from 'react';
-import { Box, Button, Typography } from '@mui/joy';
+import { Box, Button } from '@mui/joy';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { isCancellableSubscriptionStatus } from '@client/lib/subscriptions/types';
 import { getBrandName } from '@client/config/general';
-import { formatCreditAmount } from '@client/app/utils/formatCredits';
-import { SubscribeButton, SessionCreditsButton } from './SessionCreditsButtons';
-import { useProCreditOffer, type ProCreditOffer } from './useProCreditOffer';
+import { SubscribeButton, SessionCreditsButton, SECONDARY_CREDIT_BUTTON_PROPS } from './SessionCreditsButtons';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -18,7 +16,7 @@ export function buildAdminRequestMessage(orgName: string, memberName: string): s
 }
 
 /** No member-facing notify endpoint exists yet, so this opens a mailto to the billing contact or copies the message. */
-function AskAdminButton({ organizationId }: { organizationId: string }) {
+function AskAdminButton({ organizationId, secondary = false }: { organizationId: string; secondary?: boolean }) {
   const { currentUser } = useUser();
   const { data: organization } = useGetOrganization(organizationId);
   const [copied, setCopied] = useState(false);
@@ -47,7 +45,11 @@ function AskAdminButton({ organizationId }: { organizationId: string }) {
   };
 
   return (
-    <Button onClick={handleClick} data-testid="credit-offer-ask-admin-btn">
+    <Button
+      onClick={handleClick}
+      data-testid="credit-offer-ask-admin-btn"
+      {...(secondary && SECONDARY_CREDIT_BUTTON_PROPS)}
+    >
       {copied ? 'Message copied' : 'Ask your admin'}
     </Button>
   );
@@ -66,35 +68,27 @@ export type CreditOfferKind =
  * The actions for one kind of account, with no data of its own beyond the org lookup inside Ask
  * your admin - so a preview can render every kind side by side.
  */
-export function CreditOfferActionsView({
-  moment,
-  account,
-  offer,
-}: CreditOfferActionsProps & { account: CreditOfferKind; offer: ProCreditOffer | null }) {
+export function CreditOfferActionsView({ moment, account }: CreditOfferActionsProps & { account: CreditOfferKind }) {
   if (account.kind === 'org') {
-    return <AskAdminButton organizationId={account.organizationId} />;
+    // Low is a heads-up, so its one action stays secondary; out of credits makes it the primary one.
+    return <AskAdminButton organizationId={account.organizationId} secondary={moment === 'low'} />;
   }
 
   if (account.kind === 'subscriber') {
     return (
       <Box data-testid="credit-offer-actions" sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-        <SessionCreditsButton label={moment === 'low' ? 'Add Credits' : 'Buy a credit pack'} />
+        <SessionCreditsButton
+          secondary={moment === 'low'}
+          label={moment === 'low' ? 'Add Credits' : 'Buy a credit pack'}
+        />
       </Box>
     );
   }
 
   return (
-    <Box data-testid="credit-offer-actions" sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-        <SubscribeButton label={`Subscribe to ${offer?.name ?? 'Pro'}`} />
-        <SessionCreditsButton secondary label={moment === 'low' ? 'Add Credits' : 'Buy a credit pack'} />
-      </Box>
-      {offer && (
-        <Typography data-testid="credit-offer-pitch" level="body-xs" sx={{ color: 'text.tertiary' }}>
-          {offer.priceLabel ? `${offer.priceLabel}/mo for ` : ''}
-          {formatCreditAmount(offer.credits)} credits every month
-        </Typography>
-      )}
+    <Box data-testid="credit-offer-actions" sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+      <SubscribeButton label="Subscribe" />
+      <SessionCreditsButton secondary label={moment === 'low' ? 'Add Credits' : 'Buy a credit pack'} />
     </Box>
   );
 }
@@ -106,7 +100,6 @@ export function CreditOfferActionsView({
  */
 export function CreditOfferActions({ moment }: CreditOfferActionsProps) {
   const selectedAccount = useSelectedAccount(s => s.selectedAccount);
-  const offer = useProCreditOffer();
   const isOrgAccount = !!selectedAccount && !selectedAccount.personal;
   const subscriptions = useGetSubscriptions({ enabled: !isOrgAccount });
   // Same "has a plan" test CreditsModal uses; a subscriber is offered a top-up, never the plan they hold.
@@ -117,5 +110,5 @@ export function CreditOfferActions({ moment }: CreditOfferActionsProps) {
     : hasPlan
       ? { kind: 'subscriber' }
       : { kind: 'unsubscribed' };
-  return <CreditOfferActionsView moment={moment} account={account} offer={offer} />;
+  return <CreditOfferActionsView moment={moment} account={account} />;
 }

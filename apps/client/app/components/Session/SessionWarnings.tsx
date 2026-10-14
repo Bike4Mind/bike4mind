@@ -1,8 +1,7 @@
-import { Box, Button, Divider, IconButton, Typography } from '@mui/joy';
+import { Box, Button, Divider, Typography } from '@mui/joy';
 import type { ReactNode } from 'react';
-import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
-import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
 import { CreditOfferActions } from './CreditOfferActions';
+import { ComposerNote } from './ComposerNote';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 
 const NO_MODELS_COPY = {
@@ -77,58 +76,34 @@ interface LowCreditsWarningProps {
 }
 
 /**
- * Low but not out: an in-flow banner above the message box, so typing is never blocked. Dismissal
- * is the caller's to remember (see creditNudgeDismissal).
+ * Low but not out: a note in the stack above the composer's status line (SessionBottom), so typing
+ * is never blocked and the box does not move. Dismissal is the caller's to remember (see
+ * creditNudgeDismissal).
  */
 export function LowCreditsWarning({ show, currentCredits, onDismiss, actions }: LowCreditsWarningProps) {
   if (!show) return null;
 
   return (
-    <Box
+    <ComposerNote
       data-testid="session-low-credits-warning"
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 1.5,
-        flexWrap: 'wrap',
-        backgroundColor: 'background.level1',
-        border: '1px solid',
-        borderColor: 'warning.outlinedBorder',
-        borderRadius: '8px',
-        px: 1.5,
-        py: 1,
-        mb: 1,
-      }}
+      dismissTestId="low-credits-warning-dismiss"
+      dismissLabel="Dismiss low credits notice"
+      onDismiss={onDismiss}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
-        <WarningAmberRoundedIcon
-          data-testid="low-credits-warning-icon"
-          sx={{ fontSize: '22px', color: 'warning.plainColor', flexShrink: 0 }}
-        />
-        <Box>
-          <Typography data-testid="low-credits-warning-text" level="title-sm">
-            Running low on credits
-          </Typography>
-          <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-            {formatCreditAmount(currentCredits)} credits remaining. Your work isn&apos;t interrupted.
-          </Typography>
-        </Box>
-      </Box>
-      <Box data-testid="low-credits-warning-actions" display="flex" gap={1.5} alignItems="center">
+      <Typography
+        data-testid="low-credits-warning-text"
+        sx={{ fontSize: '13px', fontWeight: 600, color: 'text.primary' }}
+      >
+        Running low on credits
+      </Typography>
+      <Typography sx={{ fontSize: '13px', color: 'text.primary' }}>
+        {formatCreditAmount(currentCredits)} credits remaining. Your work isn&apos;t interrupted.
+      </Typography>
+      {/* The actions go under the copy, not beside it. */}
+      <Box data-testid="low-credits-warning-actions" sx={{ mt: '12px' }}>
         {actions ?? <CreditOfferActions moment="low" />}
-        <IconButton
-          data-testid="low-credits-warning-dismiss"
-          aria-label="Dismiss low credits notice"
-          size="sm"
-          variant="plain"
-          color="neutral"
-          onClick={onDismiss}
-        >
-          <CloseRoundedIcon />
-        </IconButton>
       </Box>
-    </Box>
+    </ComposerNote>
   );
 }
 
