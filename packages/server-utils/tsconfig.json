@@ -6,5 +6,7 @@
     "lib": ["ESNext"],
     "types": ["node"]
   },
-  "include": ["sst-env.d.ts", "src/**/*.ts"]
+  "include": ["sst-env.d.ts", "src/**/*.ts"],
+  // Same as apps/client and apps/workers, which these tests came from.
+  "exclude": ["node_modules", "**/*.test.ts"]
 }

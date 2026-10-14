@@ -625,7 +625,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
    * the spider itself already runs at.
    *
    * Must stay in step with the handler's gate (`determineSessionOperations` in
-   * apps/client/server/utils/sessionOperations.ts): quest existence AND the retry backoff. Both halves of
+   * packages/server-utils/src/utils/sessionOperations.ts): quest existence AND the retry backoff. Both halves of
    * the backoff are declared together in `@bike4mind/common` so they cannot drift.
    */
   async countTaggableNotebooks(userId: string): Promise<number> {
