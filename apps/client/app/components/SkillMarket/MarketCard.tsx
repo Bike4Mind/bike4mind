@@ -39,7 +39,7 @@ const MarketCard: FC<{ listing: MarketListing }> = ({ listing }) => {
         height: '100%',
         transition: 'border-color 120ms, box-shadow 120ms, transform 120ms',
         '&:hover, &:focus-visible': {
-          borderColor: 'primary.outlinedHoverBorder',
+          borderColor: 'primary.outlinedBorder',
           boxShadow: 'sm',
           transform: 'translateY(-1px)',
         },
