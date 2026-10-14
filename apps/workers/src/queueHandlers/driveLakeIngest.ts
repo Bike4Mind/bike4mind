@@ -21,6 +21,7 @@ import {
   driveConnectionOwnerOf,
   isLakeIngestable,
   isSameDriveConnectionOwner,
+  isStorageLimitError,
   type LakeSkippedFileReason,
 } from '@bike4mind/common';
 import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -1275,7 +1276,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         try {
           await checkStorageLimit(user, Math.max(0, acceptedBytes + bytes.length - stagedReclaim));
         } catch (error) {
-          if (!(error instanceof BadRequestError)) throw error;
+          if (!isStorageLimitError(error)) throw error;
           await skip(file, 'storage_limit', bytes.length);
           continue;
         }
