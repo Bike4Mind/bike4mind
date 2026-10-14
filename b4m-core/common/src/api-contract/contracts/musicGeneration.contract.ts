@@ -29,7 +29,7 @@ const exampleJob = {
   source: 'api',
   error: null,
   output: null,
-  credits: { reserved: 80, settled: null },
+  credits: { reserved: 160, settled: null },
   created_at: '2026-10-14T00:00:00.000Z',
   updated_at: '2026-10-14T00:00:00.000Z',
 } as const;
@@ -49,7 +49,8 @@ export const listMusicModelsContract = defineEndpoint({
   description:
     'Returns the music models that are enabled, available in this deployment and have a usable provider key ' +
     'for the caller, with their capabilities and credit price. Validate requests against these capabilities: ' +
-    'an unsupported duration, lyrics or vocals option is a 422, never silently adjusted.',
+    'an unsupported duration, lyrics or vocals option is a 422, never silently adjusted. A few limits only ' +
+    'show when the song is rendered (e.g. more lyrics than fit a very short song); such a job ends `failed`.',
   tags: ['Music'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
@@ -70,7 +71,7 @@ export const createMusicGenerationContract = defineEndpoint({
   description:
     'Queues a song and returns `202` with the job. Poll `GET /api/v1/music-generations/{id}` until `state` is ' +
     '`succeeded`, `failed`, `blocked` or `cancelled`. A finished song is saved to your Files with the ' +
-    '`generated` tag. On success, `output.availability` says whether it can be downloaded: `ready` means ' +
+    '`generated` tag (if that save fails it is kept outside Files and `output.file_id` is null). On success, `output.availability` says whether it can be downloaded: `ready` means ' +
     '`output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); ' +
     '`pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted ' +
     'installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and ' +
@@ -107,7 +108,7 @@ export const createMusicGenerationContract = defineEndpoint({
     },
     422: {
       description:
-        'The request cannot run: a body or capability violation (`errorCode` names it, e.g. ' +
+        'The request cannot run: a malformed body, a capability violation (`errorCode` names it, e.g. ' +
         '`unsupported_duration` or `lyrics_too_long`), an unknown or unavailable model (`model_unavailable`), a ' +
         'model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), no room ' +
         'in your Files storage for the song (`storage_limit_exceeded`), or an Idempotency-Key problem ' +

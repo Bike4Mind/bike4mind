@@ -24,6 +24,7 @@ export const MUSIC_GENERATION_API_ERROR_CODES = [
   'idempotency_key_reused',
   'invalid_idempotency_key',
 ] as const satisfies readonly ApiErrorCode[];
+export type MusicGenerationApiErrorCode = (typeof MUSIC_GENERATION_API_ERROR_CODES)[number];
 
 // The classifiers a polled job can carry. Internal-only codes are folded into these by toPublicMusicJobErrorCode.
 export const MUSIC_JOB_PUBLIC_ERROR_CODES = [
@@ -126,7 +127,12 @@ export const MusicGenerationSchema = z.object({
       expires_at: z.string().nullable().describe('ISO 8601. When url stops working; null whenever url is.'),
       content_type: z.string(),
       duration_seconds: z.number().describe('The length of the song produced, which can differ from the request.'),
-      lyrics: z.string().nullable().describe('What the model sang, as plain lines; null for instrumental output.'),
+      lyrics: z
+        .string()
+        .nullable()
+        .describe(
+          'What the model sang, as plain lines; null for instrumental output or when the provider does not report it.'
+        ),
       file_id: z.string().nullable().describe('The Files entry, or null when the song was stored outside Files.'),
     })
     .nullable(),

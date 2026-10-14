@@ -190,7 +190,7 @@ describe('POST /api/v1/music-generations', () => {
     [{ status: 402, code: 'insufficient_credits' }, 'insufficient_credits'],
     [{ status: 403, code: 'model_disabled' }, 'model_disabled'],
     [{ status: 400, code: 'invalid_request' }, 'invalid_request'],
-    [{ status: 413, code: 'storage_quota_exceeded' }, 'storage_limit_exceeded'],
+    [{ status: 422, code: 'storage_quota_exceeded' }, 'storage_limit_exceeded'],
   ])('maps a %o refusal to 422 with errorCode %s', async (refusal, errorCode) => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     h.createMusicJob.mockResolvedValue({ ok: false, message: 'refused', ...refusal });

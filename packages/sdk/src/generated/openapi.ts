@@ -698,7 +698,7 @@ export interface paths {
     put?: never;
     /**
      * Start a music generation
-     * @description Queues a song and returns `202` with the job. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. A finished song is saved to your Files with the `generated` tag. On success, `output.availability` says whether it can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the model's price are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the song before rejecting it and billed it: then the price is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/music-models`. Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; omitted, the job bills your home organization (or your personal credits if you have none). Keys are scoped to the billed account, so the same key sent for a different `organization_id` starts a new job.
+     * @description Queues a song and returns `202` with the job. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. A finished song is saved to your Files with the `generated` tag (if that save fails it is kept outside Files and `output.file_id` is null). On success, `output.availability` says whether it can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the model's price are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the song before rejecting it and billed it: then the price is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/music-models`. Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; omitted, the job bills your home organization (or your personal credits if you have none). Keys are scoped to the billed account, so the same key sent for a different `organization_id` starts a new job.
      */
     post: operations['createMusicGeneration'];
     delete?: never;
@@ -736,7 +736,7 @@ export interface paths {
     };
     /**
      * List the music models you can use
-     * @description Returns the music models that are enabled, available in this deployment and have a usable provider key for the caller, with their capabilities and credit price. Validate requests against these capabilities: an unsupported duration, lyrics or vocals option is a 422, never silently adjusted.
+     * @description Returns the music models that are enabled, available in this deployment and have a usable provider key for the caller, with their capabilities and credit price. Validate requests against these capabilities: an unsupported duration, lyrics or vocals option is a 422, never silently adjusted. A few limits only show when the song is rendered (e.g. more lyrics than fit a very short song); such a job ends `failed`.
      */
     get: operations['listMusicModels'];
     put?: never;
@@ -3839,7 +3839,7 @@ export interface components {
      *       "error": null,
      *       "output": null,
      *       "credits": {
-     *         "reserved": 80,
+     *         "reserved": 160,
      *         "settled": null
      *       },
      *       "created_at": "2026-10-14T00:00:00.000Z",
@@ -3885,7 +3885,7 @@ export interface components {
         content_type: string;
         /** @description The length of the song produced, which can differ from the request. */
         duration_seconds: number;
-        /** @description What the model sang, as plain lines; null for instrumental output. */
+        /** @description What the model sang, as plain lines; null for instrumental output or when the provider does not report it. */
         lyrics: string | null;
         /** @description The Files entry, or null when the song was stored outside Files. */
         file_id: string | null;
@@ -3911,7 +3911,7 @@ export interface components {
      *       "error": null,
      *       "output": null,
      *       "credits": {
-     *         "reserved": 80,
+     *         "reserved": 160,
      *         "settled": null
      *       },
      *       "created_at": "2026-10-14T00:00:00.000Z",
@@ -3957,7 +3957,7 @@ export interface components {
         content_type: string;
         /** @description The length of the song produced, which can differ from the request. */
         duration_seconds: number;
-        /** @description What the model sang, as plain lines; null for instrumental output. */
+        /** @description What the model sang, as plain lines; null for instrumental output or when the provider does not report it. */
         lyrics: string | null;
         /** @description The Files entry, or null when the song was stored outside Files. */
         file_id: string | null;
@@ -4026,7 +4026,7 @@ export interface components {
      *       "error": null,
      *       "output": null,
      *       "credits": {
-     *         "reserved": 80,
+     *         "reserved": 160,
      *         "settled": null
      *       },
      *       "created_at": "2026-10-14T00:00:00.000Z",
@@ -4072,7 +4072,7 @@ export interface components {
         content_type: string;
         /** @description The length of the song produced, which can differ from the request. */
         duration_seconds: number;
-        /** @description What the model sang, as plain lines; null for instrumental output. */
+        /** @description What the model sang, as plain lines; null for instrumental output or when the provider does not report it. */
         lyrics: string | null;
         /** @description The Files entry, or null when the song was stored outside Files. */
         file_id: string | null;
@@ -4124,7 +4124,7 @@ export interface components {
           content_type: string;
           /** @description The length of the song produced, which can differ from the request. */
           duration_seconds: number;
-          /** @description What the model sang, as plain lines; null for instrumental output. */
+          /** @description What the model sang, as plain lines; null for instrumental output or when the provider does not report it. */
           lyrics: string | null;
           /** @description The Files entry, or null when the song was stored outside Files. */
           file_id: string | null;
@@ -11497,7 +11497,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration` or `lyrics_too_long`), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), no room in your Files storage for the song (`storage_limit_exceeded`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      /** @description The request cannot run: a malformed body, a capability violation (`errorCode` names it, e.g. `unsupported_duration` or `lyrics_too_long`), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), no room in your Files storage for the song (`storage_limit_exceeded`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

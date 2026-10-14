@@ -12,9 +12,10 @@ import {
   UnprocessableEntityError,
   type CreateMusicGenerationBody,
   type GenerationJobSource,
+  type MusicGenerationApiErrorCode,
   type MusicGenerationRequest,
 } from '@bike4mind/common';
-import { createMusicJob, type CreateMusicJobResult } from '@bike4mind/services/musicJobs';
+import { createMusicJob, type CreateMusicJobErrorCode, type CreateMusicJobResult } from '@bike4mind/services/musicJobs';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
@@ -43,12 +44,25 @@ const toDomainRequest = (body: CreateMusicGenerationBody): MusicGenerationReques
   };
 };
 
-// CONVENTIONS allow no 400 or 402, so every refusal is a 422; the storage code takes the public name the Files
-// upload routes already use for the same condition.
+// Total over the service's codes, so a new refusal fails to compile until it has a published errorCode. The
+// storage code takes the public name the Files upload routes already use for the same condition.
+const PUBLIC_ERROR_CODES: Record<CreateMusicJobErrorCode, MusicGenerationApiErrorCode> = {
+  unsupported_duration: 'unsupported_duration',
+  unsupported_lyrics: 'unsupported_lyrics',
+  unsupported_vocals: 'unsupported_vocals',
+  lyrics_with_instrumental: 'lyrics_with_instrumental',
+  lyrics_too_long: 'lyrics_too_long',
+  invalid_request: 'invalid_request',
+  model_disabled: 'model_disabled',
+  model_unavailable: 'model_unavailable',
+  insufficient_credits: 'insufficient_credits',
+  storage_quota_exceeded: 'storage_limit_exceeded',
+  idempotency_key_reused: 'idempotency_key_reused',
+};
+
+// CONVENTIONS allow no 400 or 402, so every refusal is a 422.
 const toHttpError = (refusal: Extract<CreateMusicJobResult, { ok: false }>) =>
-  new UnprocessableEntityError(refusal.message, {
-    errorCode: refusal.code === 'storage_quota_exceeded' ? 'storage_limit_exceeded' : refusal.code,
-  });
+  new UnprocessableEntityError(refusal.message, { errorCode: PUBLIC_ERROR_CODES[refusal.code] });
 
 const createRouter = nextRouteForContract(createMusicGenerationContract, {
   rateLimit: perUserRateLimit('POST /api/v1/music-generations'),
