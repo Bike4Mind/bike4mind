@@ -35,6 +35,7 @@ vi.mock('@server/websocket/utils', () => ({
   sendToConnection: vi.fn().mockResolvedValue(undefined),
 }));
 
+import { checkRateLimit } from '@server/cli/auth';
 import { func } from './cliCompletion';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
@@ -62,6 +63,12 @@ describe('cliCompletion websocket handler', () => {
     await run();
 
     expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', source: 'cli' }));
+  });
+
+  it('rate-limits the JWT path at the cli source, not the default cap', async () => {
+    await run();
+
+    expect(checkRateLimit).toHaveBeenCalledWith('u1', 'cli');
   });
 
   it('logs success analytics with source cli', async () => {
