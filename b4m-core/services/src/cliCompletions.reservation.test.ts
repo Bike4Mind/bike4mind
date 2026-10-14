@@ -326,17 +326,16 @@ describe('executeCompletion - pre-flight reservation size', () => {
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
-    it.each([
-      ['Bedrock (this path never enables its caching)', BEDROCK_MODEL_ID, BEDROCK_MODEL_INFO],
-      ['Gemini (not an auto-caching backend)', GEMINI_MODEL_ID, GEMINI_MODEL_INFO],
-      ['xAI (its adapter reports no cache reads)', XAI_MODEL_ID, XAI_MODEL_INFO],
-    ])('leaves a %s conversation uncached despite a published cache_read', async (_name, id, info) => {
-      const { db, users } = buildDb();
-      await executeCompletion({ ...roundParams, model: id, db, messages: toolLoop(true) });
+    it.each([['Bedrock (this path never enables its caching)', BEDROCK_MODEL_ID, BEDROCK_MODEL_INFO]])(
+      'leaves a %s conversation uncached despite a published cache_read',
+      async (_name, id, info) => {
+        const { db, users } = buildDb();
+        await executeCompletion({ ...roundParams, model: id, db, messages: toolLoop(true) });
 
-      const expected = usdToCredits(getTextModelCost(info, 68_000, OUTPUT));
-      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
-    });
+        const expected = usdToCredits(getTextModelCost(info, 68_000, OUTPUT));
+        expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+      }
+    );
 
     it('leaves a backend without a published cache_read rate unchanged', async () => {
       const { db, users } = buildDb();
@@ -350,6 +349,8 @@ describe('executeCompletion - pre-flight reservation size', () => {
       ['OpenAI', OPENAI_CACHED_MODEL_ID, OPENAI_CACHED_MODEL_INFO],
       ['Kimi', KIMI_CACHED_MODEL_ID, KIMI_CACHED_MODEL_INFO],
       ['DeepSeek', DEEPSEEK_CACHED_MODEL_ID, DEEPSEEK_CACHED_MODEL_INFO],
+      ['Gemini', GEMINI_MODEL_ID, GEMINI_MODEL_INFO],
+      ['xAI', XAI_MODEL_ID, XAI_MODEL_INFO],
     ])('prices %s (auto-caching, published cache_read) up to the last assistant message', async (_name, id, info) => {
       const { db, users } = buildDb();
       await executeCompletion({ ...roundParams, model: id, db, messages: toolLoop(false) });

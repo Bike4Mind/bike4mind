@@ -420,3 +420,209 @@ describe.each(SPECS)('$name token accumulation', spec => {
     expect(lastCb!.outputTokens).toBe(41);
   });
 });
+
+// --- Per-request usage: Gemini and xAI ---
+//
+// Both report cache-INCLUSIVE prompt counts. Each provider request must land as its own turnUsage
+// entry carrying that request's values (cached part split out), and the cache split may only happen
+// on a model that publishes a cache_read rate.
+
+interface CachedTurnUsage extends MockUsage {
+  cached: number;
+}
+
+interface TurnUsageSpec {
+  name: string;
+  /** Publishes cache_read on every tier, so cached tokens are forwarded. */
+  cachedModel: string;
+  /** Publishes no cache_read, so cached tokens must stay in inputTokens. */
+  uncachedModel: string;
+  build: (stream: boolean) => { backend: ICompletionBackend; setMockSequence: (s: unknown[]) => void };
+  toolTurn: (stream: boolean, id: string, args: Record<string, unknown>, usage: CachedTurnUsage) => unknown;
+  textTurn: (stream: boolean, text: string, usage: CachedTurnUsage) => unknown;
+}
+
+const geminiUsage = (u: CachedTurnUsage) => ({
+  promptTokenCount: u.input,
+  candidatesTokenCount: u.output,
+  cachedContentTokenCount: u.cached,
+});
+
+const geminiTurnUsageSpec: TurnUsageSpec = {
+  name: 'GeminiBackend',
+  cachedModel: 'gemini-2.5-flash',
+  uncachedModel: 'gemini-3.5-flash',
+  build: () => {
+    const backend = new GeminiBackend('test-key');
+    let calls = 0;
+    let sequence: unknown[] = [];
+    const next = () => {
+      const response = sequence[calls++];
+      if (!response) throw new Error(`No mock for call ${calls}`);
+      return response;
+    };
+    (backend as unknown as { _api: unknown })._api = {
+      models: {
+        generateContentStream: async () => asyncIterable(next() as unknown[]),
+        generateContent: async () => next(),
+      },
+    };
+    return {
+      backend,
+      setMockSequence: s => {
+        sequence = s;
+        calls = 0;
+      },
+    };
+  },
+  toolTurn: (stream, _id, args, usage) => {
+    const chunk = {
+      candidates: [{ content: { parts: [{ functionCall: { name: 'add', args } }] } }],
+      usageMetadata: geminiUsage(usage),
+    };
+    return stream ? [chunk] : chunk;
+  },
+  textTurn: (stream, text, usage) => {
+    const chunk = { candidates: [{ content: { parts: [{ text }] } }], usageMetadata: geminiUsage(usage) };
+    return stream ? [chunk] : chunk;
+  },
+};
+
+const xaiUsage = (u: CachedTurnUsage) => ({
+  prompt_tokens: u.input,
+  completion_tokens: u.output,
+  total_tokens: u.input + u.output,
+  prompt_tokens_details: { cached_tokens: u.cached },
+});
+
+const xaiTurnUsageSpec: TurnUsageSpec = {
+  name: 'XAIBackend',
+  cachedModel: 'grok-4.5',
+  uncachedModel: 'grok-3',
+  build: stream => {
+    const backend = new XAIBackend('test-key');
+    let calls = 0;
+    let sequence: unknown[] = [];
+    (backend as unknown as { _api: unknown })._api = {
+      chat: {
+        completions: {
+          create: async () => {
+            const response = sequence[calls++];
+            if (!response) throw new Error(`No mock for call ${calls}`);
+            return stream ? asOpenAIStream(response as unknown[]) : response;
+          },
+        },
+      },
+    };
+    return {
+      backend,
+      setMockSequence: s => {
+        sequence = s;
+        calls = 0;
+      },
+    };
+  },
+  toolTurn: (stream, id, args, usage) => {
+    if (!stream) {
+      return {
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name: 'add', arguments: JSON.stringify(args) } }],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+        usage: xaiUsage(usage),
+      };
+    }
+    const [first, second, last] = openaiSpec.turnWithToolCall('add', id, args, usage) as Record<string, unknown>[];
+    return [first, second, { ...last, usage: xaiUsage(usage) }];
+  },
+  textTurn: (stream, text, usage) => {
+    if (!stream) {
+      return {
+        choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+        usage: xaiUsage(usage),
+      };
+    }
+    const [first, last] = openaiSpec.turnWithText(text, usage) as Record<string, unknown>[];
+    return [first, { ...last, usage: xaiUsage(usage) }];
+  },
+};
+
+describe.each([geminiTurnUsageSpec, xaiTurnUsageSpec])('$name per-request usage', spec => {
+  const runChain = async (stream: boolean, model: string) => {
+    const { backend, setMockSequence } = spec.build(stream);
+    setMockSequence([
+      spec.toolTurn(stream, 'tool_t1', { a: 1, b: 1 }, { input: 80, output: 15, cached: 0 }),
+      spec.toolTurn(stream, 'tool_t2', { a: 2, b: 2 }, { input: 150, output: 18, cached: 60 }),
+      spec.textTurn(stream, 'Done.', { input: 220, output: 8, cached: 140 }),
+    ]);
+    const { calls, cb } = captureCb();
+    await backend.complete(
+      model,
+      [{ role: 'user', content: 'Run two adds.' }],
+      { stream, tools: [ADD_TOOL], executeTools: true },
+      cb
+    );
+    return finalCbInfo(calls)!;
+  };
+
+  it.each([true, false])(
+    'reports one entry per request with its own values, cached part split out (stream: %s)',
+    async stream => {
+      const final = await runChain(stream, spec.cachedModel);
+
+      expect(final.turnUsage).toEqual([
+        { inputTokens: 80, outputTokens: 15 },
+        { inputTokens: 90, cacheReadInputTokens: 60, outputTokens: 18 },
+        { inputTokens: 80, cacheReadInputTokens: 140, outputTokens: 8 },
+      ]);
+      // The aggregates are the sum of the entries.
+      expect(final.inputTokens).toBe(250);
+      expect(final.cacheReadInputTokens).toBe(200);
+      expect(final.outputTokens).toBe(41);
+    }
+  );
+
+  it.each([true, false])(
+    'keeps cached tokens in inputTokens on a model with no published cache rate (stream: %s)',
+    async stream => {
+      const final = await runChain(stream, spec.uncachedModel);
+
+      expect(final.turnUsage).toEqual([
+        { inputTokens: 80, outputTokens: 15 },
+        { inputTokens: 150, outputTokens: 18 },
+        { inputTokens: 220, outputTokens: 8 },
+      ]);
+      expect(final.inputTokens).toBe(450);
+      expect(final.cacheReadInputTokens).toBeUndefined();
+      expect(final.outputTokens).toBe(41);
+    }
+  );
+
+  it.each([true, false])(
+    'reports the call as a turn when tool calls are passed through (executeTools: false, stream: %s)',
+    async stream => {
+      const { backend, setMockSequence } = spec.build(stream);
+      setMockSequence([spec.toolTurn(stream, 'tool_t1', { a: 1, b: 1 }, { input: 80, output: 15, cached: 30 })]);
+      const { calls, cb } = captureCb();
+
+      await backend.complete(
+        spec.cachedModel,
+        [{ role: 'user', content: 'Add.' }],
+        { stream, tools: [ADD_TOOL], executeTools: false },
+        cb
+      );
+
+      const final = finalCbInfo(calls)!;
+      expect(final.turnUsage).toEqual([{ inputTokens: 50, cacheReadInputTokens: 30, outputTokens: 15 }]);
+      expect(final.inputTokens).toBe(50);
+      expect(final.cacheReadInputTokens).toBe(30);
+    }
+  );
+});

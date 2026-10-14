@@ -7,11 +7,13 @@ import {
   IMessage,
   ModelBackend,
   PermissionDeniedError,
+  publishesCacheReadRate,
   stripToolArtifactMarkup,
   type CacheUsageStats,
   type ModelInfo,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
+import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
@@ -298,6 +300,9 @@ export class XAIBackend implements ICompletionBackend {
     // running total across recursive turns.
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
+    // Cache reads accumulate alongside the CACHE-INCLUSIVE accumInputTokens; usageSoFar splits them.
+    const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set maxToolCalls); else the default.
@@ -369,6 +374,18 @@ export class XAIBackend implements ICompletionBackend {
     // Check thinking support once at the beginning
     const supportsThinking = await this.modelSupportsThinking(model);
 
+    // xAI's prompt_tokens include the cached prefix. Without a published cache rate the cached
+    // tokens stay in inputTokens: getTextModelCost's 0.1x default is Anthropic's discount, not xAI's.
+    const forwardsCacheReads = publishesCacheReadRate((await this.getModelInfo()).find(m => m.id === model));
+    const turnCacheReads = (usage: unknown): number =>
+      forwardsCacheReads ? cachedTokensFromUsage(usage as Record<string, unknown> | undefined) : 0;
+    // Running totals plus this request, and this request appended to the per-request breakdown.
+    const usageSoFar = (turnPromptTokens: number, turnCacheReadTokens: number, turnOutputTokens: number) => ({
+      ...splitCacheInclusiveInput(accumInputTokens + turnPromptTokens, accumCacheReadTokens + turnCacheReadTokens),
+      outputTokens: accumOutputTokens + turnOutputTokens,
+      turnUsage: appendCacheInclusiveTurn(accumTurnUsage, turnPromptTokens, turnCacheReadTokens, turnOutputTokens),
+    });
+
     // Check if thinking is enabled in options
     const thinkingEnabled = supportsThinking && (options as any).thinking?.enabled === true;
 
@@ -395,6 +412,12 @@ export class XAIBackend implements ICompletionBackend {
 
     if (!(response instanceof Stream)) {
       const streamedText: string[] = [];
+      const responseUsage = () =>
+        usageSoFar(
+          response.usage?.prompt_tokens || 0,
+          turnCacheReads(response.usage),
+          response.usage?.completion_tokens || 0
+        );
 
       // Ensure response.choices exists and has elements
       if (!response.choices || response.choices.length === 0) {
@@ -552,8 +575,7 @@ export class XAIBackend implements ICompletionBackend {
               // Text is not emitted before tools in this path, so it rides on the terminal frame.
               await (artifactGuard?.callback ?? callback)([roundText], {
                 toolsUsed,
-                inputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
-                outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                ...responseUsage(),
                 stopReason: 'tool_use',
               });
               if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
@@ -573,6 +595,8 @@ export class XAIBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
                   accumOutputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                  accumCacheReadTokens: accumCacheReadTokens + turnCacheReads(response.usage),
+                  accumTurnUsage: responseUsage().turnUsage,
                   artifactGuard,
                 },
               },
@@ -590,8 +614,7 @@ export class XAIBackend implements ICompletionBackend {
             // Terminal leaf - emit accumulated total plus this turn's tokens.
             this.logger.debug(`[Tool Execution] executeTools=false, passing tool calls to callback`);
             await callback([null], {
-              inputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
-              outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+              ...responseUsage(),
               toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
             });
             return; // Exit after passing tools
@@ -616,8 +639,7 @@ export class XAIBackend implements ICompletionBackend {
       // Emit accum + this turn's tokens.
       const finishReason = normalizeOpenAIFinishReason(response.choices[0]?.finish_reason);
       const completionInfo = {
-        inputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
-        outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+        ...responseUsage(),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
@@ -631,6 +653,8 @@ export class XAIBackend implements ICompletionBackend {
     let isInThinkingBlock = false;
     const reasoningEscaper = createThinkMarkerEscaper();
     let cachedTokensFromStream = 0; // Track cached tokens from streaming chunks
+    // Only the billed share: zero unless the model publishes a cache rate (turnCacheReads).
+    const streamCacheReads = () => (forwardsCacheReads ? cachedTokensFromStream : 0);
     // Keep the last non-null finish_reason (mirrors anthropicBackend's stopReason
     // capture) - the terminal chunk of a round carries it, earlier chunks don't.
     let streamFinishReason: string | undefined;
@@ -642,11 +666,8 @@ export class XAIBackend implements ICompletionBackend {
       if (chunk.usage) {
         inputTokens = Math.max(inputTokens, chunk.usage?.prompt_tokens || 0);
         outputTokens += chunk.usage?.completion_tokens || 0;
-        // Capture cached tokens if available in streaming response (xAI-specific field)
-        const chunkUsage = chunk.usage as Record<string, unknown>;
-        if (chunkUsage.cached_prompt_tokens !== undefined) {
-          cachedTokensFromStream = chunkUsage.cached_prompt_tokens as number;
-        }
+        // xAI reports cache hits under prompt_tokens_details.cached_tokens (OpenAI's shape).
+        cachedTokensFromStream = Math.max(cachedTokensFromStream, cachedTokensFromUsage(chunk.usage));
       }
 
       chunk?.choices.forEach((c: ChatCompletionChunk.Choice) => {
@@ -692,8 +713,7 @@ export class XAIBackend implements ICompletionBackend {
       // (assign-not-add) ends each turn at the cumulative cross-turn total.
       const normalizedFinishReason = normalizeOpenAIFinishReason(streamFinishReason);
       await callback(streamedText, {
-        inputTokens: accumInputTokens + inputTokens,
-        outputTokens: accumOutputTokens + outputTokens,
+        ...usageSoFar(inputTokens, streamCacheReads(), outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
       });
@@ -704,8 +724,7 @@ export class XAIBackend implements ICompletionBackend {
     // partial marker is lost when the tool recursion creates a fresh reasoningEscaper.
     if (isInThinkingBlock) {
       await callback([reasoningEscaper.flush() + '</think>'], {
-        inputTokens: accumInputTokens + inputTokens,
-        outputTokens: accumOutputTokens + outputTokens,
+        ...usageSoFar(inputTokens, streamCacheReads(), outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
       });
       isInThinkingBlock = false;
@@ -736,8 +755,7 @@ export class XAIBackend implements ICompletionBackend {
     // last frame. The per-chunk cb above already delivered the JSON content.
     if (bestEffortFormat && func.length === 0) {
       await callback([], {
-        inputTokens: accumInputTokens + inputTokens,
-        outputTokens: accumOutputTokens + outputTokens,
+        ...usageSoFar(inputTokens, streamCacheReads(), outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         responseFormatMode: 'best-effort',
       });
@@ -874,8 +892,7 @@ export class XAIBackend implements ICompletionBackend {
           });
           await (artifactGuard?.callback ?? callback)([], {
             toolsUsed,
-            inputTokens: accumInputTokens + inputTokens,
-            outputTokens: accumOutputTokens + outputTokens,
+            ...usageSoFar(inputTokens, streamCacheReads(), outputTokens),
             stopReason: 'tool_use',
           });
           if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
@@ -896,6 +913,8 @@ export class XAIBackend implements ICompletionBackend {
               toolCallCount: toolCallCount + 1,
               accumInputTokens: accumInputTokens + inputTokens,
               accumOutputTokens: accumOutputTokens + outputTokens,
+              accumCacheReadTokens: accumCacheReadTokens + streamCacheReads(),
+              accumTurnUsage: usageSoFar(inputTokens, streamCacheReads(), outputTokens).turnUsage,
               artifactGuard,
             },
           },
@@ -909,8 +928,7 @@ export class XAIBackend implements ICompletionBackend {
         // Terminal leaf - emit accumulated total plus this turn's tokens.
         this.logger.debug(`[Tool Execution] executeTools=false, passing tool calls to callback`);
         await callback([null], {
-          inputTokens: accumInputTokens + inputTokens,
-          outputTokens: accumOutputTokens + outputTokens,
+          ...usageSoFar(inputTokens, streamCacheReads(), outputTokens),
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         });
       }

@@ -176,14 +176,17 @@ function estimateInputTokens(messages: IMessage[]): number {
  * Backends whose server caches prompt prefixes without a client flag; they only get the cache
  * rate when the catalog publishes an explicit cache_read (the default 0.1x multiplier is
  * Anthropic's). Must stay in sync with the adapters that report cache reads into settlement
- * (those calling `splitCacheInclusiveInput`): xAI's adapter does not, so settlement bills its
- * full input. Gemini and Ollama publish no cache_read; Bedrock's cache_control is gated on
- * options.cacheStrategy.enableCaching, which this path never sets.
+ * (those calling `splitCacheInclusiveInput`); the Gemini and xAI adapters forward them only for a
+ * model that publishes cache_read, the same condition this path checks. Ollama publishes no
+ * cache_read; Bedrock's cache_control is gated on options.cacheStrategy.enableCaching, which this
+ * path never sets.
  */
 const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.OpenAI,
   ModelBackend.Kimi,
   ModelBackend.DeepSeek,
+  ModelBackend.Gemini,
+  ModelBackend.XAI,
 ]);
 
 // Bounds a cold or fabricated cache at about 2.5x the floor (a write costs 1.25x against the 0.5x floor).

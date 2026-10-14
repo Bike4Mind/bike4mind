@@ -233,26 +233,43 @@ export interface TextModelCreditsPer1M {
   output: number;
   /**
    * Rate for cache-read input tokens, by the same default multiplier getTextModelCost applies.
-   * Null where settlement never sees a cache read, so cached tokens bill at `input`.
+   * Null where settlement never sees a cache read (including a Gemini or xAI model with no published
+   * cache_read rate), so cached tokens bill at `input`.
    */
   cachedInput: number | null;
 }
 
 /**
  * Backends whose adapters report cache reads apart from input (CompletionInfo.cacheReadInputTokens),
- * the only way a cache read reaches getTextModelCost at its own rate. Gemini, xAI and Bedrock's
- * non-Claude families report none, so their cached tokens settle at the full input rate. Must stay in
- * sync with the adapters in @bike4mind/llm-adapters that set cacheReadInputTokens.
+ * the only way a cache read reaches getTextModelCost at its own rate. Bedrock's non-Claude families
+ * report none, so their cached tokens settle at the full input rate. Must stay in sync with the
+ * adapters in @bike4mind/llm-adapters that set cacheReadInputTokens.
  */
 const CACHE_READ_SETTLING_BACKENDS: ReadonlySet<string> = new Set([
   ModelBackend.Anthropic,
   ModelBackend.OpenAI,
   ModelBackend.Kimi,
   ModelBackend.DeepSeek,
+  ModelBackend.Gemini,
+  ModelBackend.XAI,
 ]);
 
+/**
+ * Of those, the backends whose adapters forward cache reads only for a model that publishes a
+ * cache_read rate (publishesCacheReadRate), since the 0.1x default is Anthropic's discount, not
+ * theirs. On any other model of these backends the cached tokens stay in inputTokens.
+ */
+const PUBLISHED_CACHE_READ_BACKENDS: ReadonlySet<string> = new Set([ModelBackend.Gemini, ModelBackend.XAI]);
+
+/** True when every pricing tier of `model` carries an explicit cache_read rate. */
+export const publishesCacheReadRate = (model: Pick<ModelInfo, 'pricing'> | undefined): boolean => {
+  const tiers = Object.values(model?.pricing ?? {});
+  return tiers.length > 0 && tiers.every(tier => tier?.cache_read !== undefined);
+};
+
 const settlesCacheReads = (model: ModelInfo): boolean =>
-  CACHE_READ_SETTLING_BACKENDS.has(model.backend) ||
+  (CACHE_READ_SETTLING_BACKENDS.has(model.backend) &&
+    (!PUBLISHED_CACHE_READ_BACKENDS.has(model.backend) || publishesCacheReadRate(model))) ||
   (model.backend === ModelBackend.Bedrock && stripBedrockRegionPrefix(model.id).startsWith('anthropic.'));
 
 /**
