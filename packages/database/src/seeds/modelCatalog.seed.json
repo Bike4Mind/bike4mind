@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-12T09:24:38.235Z",
-  "notice": "Fallback defaults last maintained on 2026-10-12. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-10-13T08:32:30.420Z",
+  "notice": "Fallback defaults last maintained on 2026-10-13. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",

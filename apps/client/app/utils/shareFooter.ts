@@ -291,7 +291,7 @@ export function replaceSignupGateHtml(html: string, opts: SignupGateOptions = {}
 }
 
 // Exact opening tag of the brand card buildShareFooterHtml emits. Already-published pages carry
-// these bytes, so changing them strands stripShareFooterCtaBeforeGate on old content.
+// these bytes, so changing them strands holdShareFooterCtaBeforeGate on old content.
 const SHARE_FOOTER_CARD_OPEN =
   '<div style="margin-top:3rem;display:flex;justify-content:center;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif">';
 const SHARE_FOOTER_UTM = 'utm_medium=share-footer';
@@ -323,13 +323,23 @@ export function hasShareFooterCardHtml(html: string): boolean {
 }
 
 /**
- * Remove the brand footer card that renderArtifactIndexHtml bakes directly in front of the
- * sign-up gate, so a viewer shown the gate gets one sign-up CTA rather than two (the
- * reply/fabfile viewer does the same with `hideCta`). Only an exact card sitting immediately
- * before the gate is removed, so it works on pages published before this existed and never
- * touches the artifact's own content. No-op on a page without that pairing.
+ * Id of the hidden holder holdShareFooterCtaBeforeGate wraps the footer card in. The in-frame
+ * signup-gate bridge (server/services/publish/signupGateBridge.ts) reveals it for a viewer the
+ * wrapper reports as signed in.
  */
-export function stripShareFooterCtaBeforeGate(html: string): string {
+export const SHARE_FOOTER_HELD_ID = 'b4m-footer-held';
+
+/**
+ * Hide the brand footer card that renderArtifactIndexHtml bakes directly in front of the
+ * sign-up gate, so a viewer shown the gate gets one sign-up CTA rather than two (the
+ * reply/fabfile viewer drops it with `hideCta`). The card is wrapped in a `display:none`
+ * holder rather than removed so a signed-in viewer, whom the server cannot recognize on a
+ * cached open-public page, gets it back when the gate bridge hides the gate. Only an exact
+ * card sitting immediately before the gate is held, so it works on pages published before
+ * this existed and never touches the artifact's own content. No-op on a page without that
+ * pairing.
+ */
+export function holdShareFooterCtaBeforeGate(html: string): string {
   const gateStart = findBakedSignupGate(html)?.start ?? -1;
   if (gateStart === -1) return html;
   const cardStart = html.lastIndexOf(SHARE_FOOTER_CARD_OPEN, gateStart);
@@ -340,7 +350,9 @@ export function stripShareFooterCtaBeforeGate(html: string): string {
     card.indexOf('</div>') === card.lastIndexOf('</div>') &&
     card.indexOf('</a>') === card.lastIndexOf('</a>') &&
     card.includes(SHARE_FOOTER_UTM);
-  return isExactCard ? html.slice(0, cardStart) + html.slice(gateStart) : html;
+  return isExactCard
+    ? `${html.slice(0, cardStart)}<div id="${SHARE_FOOTER_HELD_ID}" style="display:none">${card.trimEnd()}</div>${html.slice(gateStart)}`
+    : html;
 }
 
 /** Returns the footer as an HTML string ready to inject before `</body>`. */

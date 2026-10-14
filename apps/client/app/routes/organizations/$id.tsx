@@ -9,7 +9,7 @@ import OrganizationAnalysisSection from '@client/app/components/organizations/Or
 import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIntegration';
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
@@ -372,7 +372,11 @@ const OrganizationHeader: FC<{
             <Chip size="sm" variant="soft" startDecorator={<GroupOutlinedIcon sx={{ fontSize: 14 }} />}>
               {currentSeats} Members
             </Chip>
-            <Chip size="sm" variant="soft" startDecorator={<Bike4MindIcon size="14" />}>
+            <Chip
+              size="sm"
+              variant="soft"
+              startDecorator={<CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />}
+            >
               {formatCreditAmount(organization.currentCredits)} Credits
             </Chip>
             <Chip
@@ -422,7 +426,11 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
         </Card>
         <Card variant="outlined" sx={{ flex: 1, minWidth: 200, p: 3 }}>
           <Stack spacing={1}>
-            <Typography level="body-xs" color="neutral" startDecorator={<Bike4MindIcon size="14" />}>
+            <Typography
+              level="body-xs"
+              color="neutral"
+              startDecorator={<CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />}
+            >
               Available Credits
             </Typography>
             <Typography level="h2">{formatCreditAmount(organization.currentCredits)}</Typography>

@@ -74,10 +74,12 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
   // 'studio' means any first-party session (the SPA), not only the Studio page; an API key is the public API.
   // Idempotency keys are scoped per source, so the same key sent from both is two different requests.
   const source: GenerationJobSource = isApiKeyAuth(req) ? 'api' : 'studio';
+  // null = personal account, undefined = the caller's own org; any org the caller isn't a member of is rejected.
+  const organizationId = await resolveBillingOrgId(req, req.validated.organization_id);
   // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(
     {
-      user: { id: req.user.id, organizationId: await resolveBillingOrgId(req, undefined) },
+      user: { id: req.user.id, organizationId },
       request,
       source,
       // The domain scopes keys per credit owner (the org for members): per user keeps members apart, and per

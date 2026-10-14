@@ -63,9 +63,10 @@ export enum FabFileSourceType {
   PROPOSAL_APPROVAL = 'proposal_approval',
   GITHUB = 'github',
   /**
-   * Produced by an in-chat tool (image/audio/music/Excel generation). `sourceMetadata.sessionId`
-   * links it to the notebook it was made in - see persistGeneratedFileAsFabFile for why that link
-   * is not the top-level `sessionId`.
+   * Produced by a generator: an in-chat tool, a generation route or a generation job. Media saved
+   * through saveGeneratedAsset carries `sourceMetadata.generation` (GeneratedAssetMetadata).
+   * `sourceMetadata.sessionId`, when set, links it to the notebook it was made in - see
+   * persistGeneratedFileAsFabFile for why that link is not the top-level `sessionId`.
    */
   TOOL_GENERATED = 'tool_generated',
 }

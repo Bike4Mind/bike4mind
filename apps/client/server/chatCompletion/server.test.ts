@@ -381,24 +381,28 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
       body: JSON.stringify(body),
     });
 
-  it('streams an SSE error and does not execute when both API key and JWT auth fail', async () => {
+  it('returns 401 JSON and does not execute when both API key and JWT auth fail', async () => {
     mockAuth.verifyApiKey.mockRejectedValue(new Error('No API key provided'));
     mockAuth.verifyJwtToken.mockRejectedValue(new Error('No authorization token provided'));
 
     const res = await postCompletion(VALID_COMPLETION);
-    // The SSE stream is established (200 + headers written) before auth runs, so the failure
-    // is delivered as an in-stream error event rather than an HTTP error status.
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toContain('text/event-stream');
-    const text = await res.text();
-    expect(text).toContain('Authentication failed');
+    expect(res.status).toBe(401);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(await res.json()).toEqual({
+      error: 'Authentication failed. Provide a valid API key or JWT token.',
+      request_id: res.headers.get('x-request-id'),
+    });
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('streams an SSE error on an invalid request body (no execution)', async () => {
+  it('returns 422 JSON on an invalid request body (no execution)', async () => {
     const res = await postCompletion({ messages: [] }); // missing required `model`
-    const text = await res.text();
-    expect(text).toContain('Invalid request body');
+    expect(res.status).toBe(422);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    const body = (await res.json()) as { error: string; request_id: string };
+    expect(body.error).toMatch(/^Validation error/);
+    expect(body.error).toContain('model');
+    expect(body.request_id).toBe(res.headers.get('x-request-id'));
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
@@ -410,11 +414,13 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
       rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
     });
     mockAuth.checkApiKeyRateLimitOrThrow.mockResolvedValue({});
-    mockExecuteCompletion.mockImplementation(async ({ onChunk }) => {
+    mockExecuteCompletion.mockImplementation(async ({ onReady, onChunk }) => {
+      await onReady?.();
       await onChunk(['Hello', null], { outputTokens: 5 });
     });
 
     const res = await postCompletion(VALID_COMPLETION, { 'x-api-key': 'b4m_test' });
+    expect(res.headers.get('content-type')).toContain('text/event-stream');
     const text = await res.text();
 
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
@@ -431,7 +437,8 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     mockAuth.verifyApiKey.mockRejectedValue(new Error('No API key provided'));
     mockAuth.verifyJwtToken.mockResolvedValue({ id: 'u2', email: null, username: null, user: {} });
     mockAuth.checkRateLimit.mockResolvedValue(undefined);
-    mockExecuteCompletion.mockImplementation(async ({ onChunk }) => {
+    mockExecuteCompletion.mockImplementation(async ({ onReady, onChunk }) => {
+      await onReady?.();
       await onChunk(['hi', null]);
     });
 
@@ -456,7 +463,8 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
       rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
     });
     mockAuth.checkApiKeyRateLimitOrThrow.mockResolvedValue({});
-    mockExecuteCompletion.mockImplementation(async ({ onChunk }) => {
+    mockExecuteCompletion.mockImplementation(async ({ onReady, onChunk }) => {
+      await onReady?.();
       await onChunk(['Hello', null], { outputTokens: 5 });
     });
 

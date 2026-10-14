@@ -277,6 +277,19 @@ describe('objectCreated - moderation claim identity', () => {
     );
   });
 
+  it("adopts the winner's byte-sniffed mime type when it loses the claim", async () => {
+    // The on-demand route can win the claim and persist a corrected type; running the lake stats on
+    // the client-declared one would classify the file wrongly.
+    h.findOneAndUpdate.mockResolvedValue(null);
+    h.findById.mockReturnValue({ session: () => ({ moderationStatus: 'clean', mimeType: 'image/jpeg' }) });
+
+    await run();
+
+    expect(h.moderateUploadedFile).not.toHaveBeenCalled();
+    expect(file.mimeType).toBe('image/jpeg');
+    expect(h.recomputeUploaded).toHaveBeenCalledWith(file, { logger });
+  });
+
   it('discards its verdict and reports pending when the claim was superseded mid-scan', async () => {
     // The rescue sweep returned this stale 'scanning' row to 'pending' while the scan ran, and a
     // successor re-claimed it. An unguarded write here would clobber the successor's verdict -

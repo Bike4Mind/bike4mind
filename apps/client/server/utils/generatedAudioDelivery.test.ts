@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { Response } from 'express';
 import type { Logger } from '@bike4mind/observability';
-import type { PersistGeneratedAudioResult } from '@server/utils/persistGeneratedAudio';
+import type { SaveGeneratedAssetResult } from '@bike4mind/services';
 
 const { upload, getSignedUrl } = vi.hoisted(() => ({ upload: vi.fn(), getSignedUrl: vi.fn() }));
 vi.mock('@server/utils/storage', () => ({
@@ -20,9 +20,10 @@ import {
 
 type DeliverParams = Parameters<typeof deliverGeneratedAudio>[1];
 
-const savedCopy: PersistGeneratedAudioResult = {
+const savedCopy: SaveGeneratedAssetResult = {
   saved: true,
-  fabFileId: 'fab-1',
+  fileId: 'fab-1',
+  s3Key: 'k/audio-1.mp3',
   fileName: 'audio-1.mp3',
   fileUrl: 'https://s3/saved',
 };
@@ -95,7 +96,7 @@ describe('deliverGeneratedAudio', () => {
     });
 
     it('omits the File-Url header when the saved copy has no URL', async () => {
-      const { res } = await deliver({ save: { saved: true, fabFileId: 'fab-1', fileName: 'a.mp3' } });
+      const { res } = await deliver({ save: { saved: true, fileId: 'fab-1', s3Key: 'k/a.mp3', fileName: 'a.mp3' } });
       expect(res.getHeader('X-B4M-Audio-File-Name')).toBe('a.mp3');
       expect(res.getHeader('X-B4M-Audio-File-Url')).toBeUndefined();
     });
@@ -158,7 +159,7 @@ describe('deliverGeneratedAudio', () => {
 
     it('offloads when there is no saved copy, or the saved copy has no URL', async () => {
       await deliver({ audio: oversized(), save: { saved: false, reason: 'storage_limit' } });
-      await deliver({ audio: oversized(), save: { saved: true, fabFileId: 'f', fileName: 'a.mp3' } });
+      await deliver({ audio: oversized(), save: { saved: true, fileId: 'f', s3Key: 'k/a.mp3', fileName: 'a.mp3' } });
       expect(upload).toHaveBeenCalledTimes(2);
     });
 

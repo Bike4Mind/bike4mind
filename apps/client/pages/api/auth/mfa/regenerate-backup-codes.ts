@@ -25,7 +25,7 @@ const handler = baseApi()
 
         const result = await mfaService.regenerateBackupCodes({ user: freshUser }, userRepository);
 
-        res.json(result);
+        res.json({ backupCodes: result.backupCodes });
       } catch (error: any) {
         console.error('Error regenerating backup codes:', error);
         res.status(400).json({ error: error.message || 'Failed to regenerate backup codes' });

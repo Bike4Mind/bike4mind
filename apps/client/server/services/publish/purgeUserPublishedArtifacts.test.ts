@@ -1,17 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { purgeMock, invalidateMock } = vi.hoisted(() => ({
+const { purgeMock, purgeBySourceMock, invalidateManyMock } = vi.hoisted(() => ({
   purgeMock: vi.fn(),
-  invalidateMock: vi.fn(),
+  purgeBySourceMock: vi.fn(),
+  invalidateManyMock: vi.fn(),
 }));
 
-vi.mock('@bike4mind/database', () => ({ purgeOwnerPublishedArtifacts: purgeMock }));
+vi.mock('@bike4mind/database', () => ({
+  purgeOwnerPublishedArtifacts: purgeMock,
+  purgeOwnerPublishedArtifactsBySource: purgeBySourceMock,
+}));
 vi.mock('./invalidatePublishCdn', async importOriginal => ({
   ...(await importOriginal<typeof import('./invalidatePublishCdn')>()),
-  invalidatePublishCdn: invalidateMock,
+  invalidatePublishCdnMany: invalidateManyMock,
 }));
 
-import { purgeUserPublishedArtifacts } from './purgeUserPublishedArtifacts';
+import { purgeUserPublishedArtifacts, unpublishUserArtifactsBySource } from './purgeUserPublishedArtifacts';
 
 const purged = (publicId: string, visibility: string, kind = 'bundle') => ({
   publicId,
@@ -22,9 +26,13 @@ const purged = (publicId: string, visibility: string, kind = 'bundle') => ({
   source: { kind },
 });
 
+const invalidatedIds = () =>
+  invalidateManyMock.mock.calls.flatMap(([targets]) => (targets as { publicId: string }[]).map(t => t.publicId));
+
 beforeEach(() => {
   purgeMock.mockReset();
-  invalidateMock.mockReset().mockResolvedValue(undefined);
+  purgeBySourceMock.mockReset();
+  invalidateManyMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe('purgeUserPublishedArtifacts', () => {
@@ -41,9 +49,9 @@ describe('purgeUserPublishedArtifacts', () => {
 
     expect(purgeMock).toHaveBeenCalledWith('u1', { deletedBy: 'admin1' });
     expect(result.artifacts).toHaveLength(3);
-    expect(invalidateMock).toHaveBeenCalledTimes(2);
-    expect(invalidateMock.mock.calls.map(([target]) => target.publicId)).toEqual(['pub', 'rep']);
-    expect(invalidateMock.mock.calls[1][0]).toMatchObject({ sourceKind: 'reply' });
+    expect(invalidateManyMock).toHaveBeenCalledTimes(1);
+    expect(invalidatedIds()).toEqual(['pub', 'rep']);
+    expect(invalidateManyMock.mock.calls[0][0][1]).toMatchObject({ sourceKind: 'reply' });
   });
 
   it('invalidates the CDN for public org pages handed to their last publisher', async () => {
@@ -60,7 +68,7 @@ describe('purgeUserPublishedArtifacts', () => {
 
     await purgeUserPublishedArtifacts('u1', { deletedBy: 'admin1' });
 
-    expect(invalidateMock.mock.calls.map(([target]) => target.publicId)).toEqual(['org-pub']);
+    expect(invalidatedIds()).toEqual(['org-pub']);
   });
 
   it('issues no invalidation when nothing was live', async () => {
@@ -68,13 +76,40 @@ describe('purgeUserPublishedArtifacts', () => {
 
     await purgeUserPublishedArtifacts('u1', { deletedBy: 'admin1' });
 
-    expect(invalidateMock).not.toHaveBeenCalled();
+    expect(invalidatedIds()).toEqual([]);
   });
 
   it('propagates a database failure to the caller', async () => {
     purgeMock.mockRejectedValue(new Error('db down'));
 
     await expect(purgeUserPublishedArtifacts('u1', { deletedBy: 'admin1' })).rejects.toThrow('db down');
-    expect(invalidateMock).not.toHaveBeenCalled();
+    expect(invalidateManyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('unpublishUserArtifactsBySource', () => {
+  it('takes down by source as the owner and invalidates the public pages in one pass', async () => {
+    purgeBySourceMock.mockResolvedValue({
+      artifacts: [purged('r1', 'public', 'reply'), purged('r2', 'private', 'reply'), purged('r3', 'public', 'reply')],
+      annotations: 0,
+      reports: 0,
+      viewAudits: 0,
+    });
+
+    const result = await unpublishUserArtifactsBySource('u1', { kind: 'reply', sessionIds: ['s1'] });
+
+    expect(purgeBySourceMock).toHaveBeenCalledWith('u1', { kind: 'reply', sessionIds: ['s1'] }, { deletedBy: 'u1' });
+    expect(result.artifacts).toHaveLength(3);
+    expect(invalidateManyMock).toHaveBeenCalledTimes(1);
+    expect(invalidatedIds()).toEqual(['r1', 'r3']);
+  });
+
+  it('propagates a database failure so the delete does not go ahead', async () => {
+    purgeBySourceMock.mockRejectedValue(new Error('db down'));
+
+    await expect(unpublishUserArtifactsBySource('u1', { kind: 'fabfile', fabFileIds: ['f1'] })).rejects.toThrow(
+      'db down'
+    );
+    expect(invalidateManyMock).not.toHaveBeenCalled();
   });
 });

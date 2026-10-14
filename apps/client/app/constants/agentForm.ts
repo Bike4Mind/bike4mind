@@ -48,7 +48,7 @@ export const GENDER_OPTIONS = [
 
 /**
  * Default iteration caps per thoroughness. Mirrors the executor's runtime
- * defaults in `apps/client/server/queueHandlers/agentExecutor.ts`, kept in sync
+ * defaults in `apps/workers/src/queueHandlers/agentExecutor.ts`, kept in sync
  * manually until both paths can import from `b4m-core/common`. Server is the
  * source of truth; this is the form's pre-fill copy.
  */
@@ -141,7 +141,7 @@ export const THOROUGHNESS_OPTIONS: ReadonlyArray<{ value: ThoroughnessLevel; lab
 
 /**
  * Tools that always require a permission card the first time an agent invokes them.
- * Mirrors `REQUIRES_APPROVAL_TOOLS` in `apps/client/server/queueHandlers/agentExecutorUtils/toolPermissions.ts`.
+ * Mirrors `REQUIRES_APPROVAL_TOOLS` in `apps/workers/src/queueHandlers/agentExecutorUtils/toolPermissions.ts`.
  * Presentational hint on the tool picker only; the server is the source of truth
  * for the actual permission classification at runtime.
  */

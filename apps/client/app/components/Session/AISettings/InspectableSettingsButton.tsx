@@ -23,6 +23,7 @@ const InspectableSettingsButton: FC<InspectableSettingsButtonProps> = ({
         data-testid="ai-settings-btn"
         variant="outlined"
         onClick={onClick}
+        aria-label={showModelName ? `AI Settings, model: ${modelName}` : 'AI Settings'}
         className="quick-model-preview-btn"
         sx={{
           display: 'flex',
@@ -32,6 +33,9 @@ const InspectableSettingsButton: FC<InspectableSettingsButtonProps> = ({
           borderRadius: '6px',
           width: 'auto',
           minWidth: '32px',
+          // The composer row scrolls sideways, so the button holds its width rather than letting
+          // flex squeeze the label down to a single character.
+          flexShrink: 0,
           maxWidth: { xs: '200px', md: 'none' },
           height: '32px',
           minHeight: 'auto',
@@ -66,6 +70,8 @@ const InspectableSettingsButton: FC<InspectableSettingsButtonProps> = ({
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
               flex: 1,
+              // Wide enough to tell models apart, short enough to leave room for the other controls.
+              maxWidth: { xs: '120px', md: 'none' },
               textAlign: 'center',
               minWidth: 0,
               ml: 1,

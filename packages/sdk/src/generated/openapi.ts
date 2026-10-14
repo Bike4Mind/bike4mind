@@ -140,9 +140,9 @@ export interface paths {
     put?: never;
     /**
      * Create a chat completion
-     * @description OpenAI-compatible completion. The response is ALWAYS an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. Once the stream has opened the HTTP status stays 200 and failures arrive as an in-band `error` event. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
-     *     BILLING FAILURES. Headers are flushed before authentication or pricing, so unlike the JSON surfaces this endpoint has no pre-stream `422` + `errorCode: "insufficient_credits"` to pair with: credit exhaustion ALWAYS arrives as the in-band `error` event, whether it is caught by the reservation before the first token or by settlement mid-generation. Branch on that event's `code` (`insufficient_credits` - buy credits; `spend_cap_exceeded` - the owner is solvent but this key hit its admin-set ceiling, so raise the cap), never on `message`, which is prose and may change. `code` is absent on unclassified failures.
+     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "unknown_model"` for the latter), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB `413`, a body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment `503` with `errorCode: "provider_not_configured"` (retryable). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
      */
     post: operations['createCompletion'];
     delete?: never;
@@ -162,7 +162,7 @@ export interface paths {
     put?: never;
     /**
      * Synthesize speech from text
-     * @description Generates speech from text using OpenAI or ElevenLabs. When the requested provider has no usable key (or the provider rejects it), another configured provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the `X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a 422 before any provider cost is incurred. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser by default (opt out per-user via the saveGeneratedAudio preference, or per-call with `preview`); the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description Generates speech from text using OpenAI or ElevenLabs. When the requested provider has no usable key (or the provider rejects it), another configured provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the `X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a 422 before any provider cost is incurred. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
      */
     post: operations['synthesizeSpeech'];
     delete?: never;
@@ -182,7 +182,7 @@ export interface paths {
     put?: never;
     /**
      * Generate background music
-     * @description Generates an instrumental or vocal background-music track from a text prompt. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser by default (opt out per-user via the saveGeneratedAudio preference, or per-call with `preview`); the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description Generates an instrumental or vocal background-music track from a text prompt. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
      */
     post: operations['generateMusic'];
     delete?: never;
@@ -202,7 +202,7 @@ export interface paths {
     put?: never;
     /**
      * Generate a sound effect
-     * @description Generates a short sound effect from a text description. Omitting `durationSeconds` lets the provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) against variation (0). Credits are reserved before generation and refunded if it fails. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser by default (opt out per-user via the saveGeneratedAudio preference, or per-call with `preview`); the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description Generates a short sound effect from a text description. Omitting `durationSeconds` lets the provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) against variation (0). Credits are reserved before generation and refunded if it fails. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
      */
     post: operations['generateSoundEffect'];
     delete?: never;
@@ -260,7 +260,7 @@ export interface paths {
     };
     /**
      * List models
-     * @description Lists the models the caller can use right now - the platform catalog filtered to the providers the caller has a key for, their own or the platform's. Use it to choose a `model` by capability before calling a generation endpoint: `context_window` and `max_output_tokens` for text models, and for image models the `image` block, which lists the accepted `size` values (or the rule they must meet) and whether `background`, `seed`, `quality`, `n` and reference images are honoured. To pick the cheapest text model, compare `credits_per_1m_tokens` - the rate a call is billed at. The list is cached for up to a minute per caller. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT.
+     * @description Lists the models the caller can use right now - the platform catalog filtered to the providers the caller has a key for, their own or the platform's. Use it to choose a `model` by capability before calling a generation endpoint: `context_window` and `max_output_tokens` for text models, and for image models the `image` block, which lists the accepted `size` values (or the rule they must meet) and whether `background`, `seed`, `quality`, `n` and reference images are honoured. To pick the cheapest text model, compare `credits_per_1m_tokens` - the rate a call is billed at. The list is cached for up to a minute per caller. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Sorted by `id` ascending. Authenticate with an API key (`b4m_live_`) carrying `ai:chat` or `ai:generate`, or a JWT.
      */
     get: operations['listModels'];
     put?: never;
@@ -614,7 +614,7 @@ export interface paths {
     put?: never;
     /**
      * Start a video generation
-     * @description Queues a video generation and returns `202` with the job. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. On success, `output.availability` says whether the clip can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the requested duration are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the clip before rejecting it and billed it: then the requested duration is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`.
+     * @description Queues a video generation and returns `202` with the job. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. On success, `output.availability` says whether the clip can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the requested duration are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the clip before rejecting it and billed it: then the requested duration is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`. Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; omitted, the job bills your home organization (or your personal credits if you have none). Keys are scoped to the billed account, so the same key sent for a different `organization_id` starts a new job.
      */
     post: operations['createVideoGeneration'];
     delete?: never;
@@ -1501,8 +1501,42 @@ export interface components {
           message: string;
           requestId?: string;
           /** @enum {string} */
-          code?: 'insufficient_credits' | 'spend_cap_exceeded';
+          code?:
+            'insufficient_credits' | 'spend_cap_exceeded' | 'provider_error' | 'provider_rejected' | 'content_blocked';
         };
+    createCompletionResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'unknown_model';
+    };
+    createCompletionResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+    };
+    createCompletionResponse503: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'provider_not_configured';
+    };
     /**
      * @example {
      *       "model": "claude-opus-4-8",
@@ -1605,7 +1639,7 @@ export interface components {
               };
             };
         /**
-         * @description Reasoning effort hint. Honoured only by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only) and DeepSeek adapters; Kimi and DeepSeek map it onto their own scale. Silently ignored by every other adapter (Anthropic, Gemini, Bedrock, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.
+         * @description Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.
          * @enum {string}
          */
         reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -1789,7 +1823,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     /**
      * @example {
@@ -1864,7 +1898,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     /**
      * @example {
@@ -1935,6 +1969,36 @@ export interface components {
      * @example {
      *       "data": [
      *         {
+     *           "id": "claude-sonnet-5",
+     *           "name": "Claude Sonnet 5",
+     *           "type": "text",
+     *           "backend": "anthropic",
+     *           "description": null,
+     *           "context_window": 1000000,
+     *           "max_output_tokens": 128000,
+     *           "supports_streaming": true,
+     *           "supports_thinking": true,
+     *           "reasons_within_output_budget": true,
+     *           "reasoning_efforts": [
+     *             "none",
+     *             "minimal",
+     *             "low",
+     *             "medium",
+     *             "high",
+     *             "xhigh"
+     *           ],
+     *           "supports_tools": true,
+     *           "supports_vision": true,
+     *           "deprecation_date": null,
+     *           "replaced_by": null,
+     *           "image": null,
+     *           "credits_per_1m_tokens": {
+     *             "input": 6000,
+     *             "output": 30000,
+     *             "cached_input": 600
+     *           }
+     *         },
+     *         {
      *           "id": "gpt-image-1",
      *           "name": "GPT Image 1",
      *           "type": "image",
@@ -1944,6 +2008,8 @@ export interface components {
      *           "max_output_tokens": 0,
      *           "supports_streaming": false,
      *           "supports_thinking": false,
+     *           "reasons_within_output_budget": false,
+     *           "reasoning_efforts": [],
      *           "supports_tools": false,
      *           "supports_vision": false,
      *           "deprecation_date": null,
@@ -2009,6 +2075,10 @@ export interface components {
         max_output_tokens: number;
         supports_streaming: boolean;
         supports_thinking: boolean;
+        /** @description Whether reasoning tokens are spent inside `max_output_tokens` on every turn. When true, a small `max_tokens` can be used up by reasoning alone and return an empty reply, so leave room above the answer you expect. */
+        reasons_within_output_budget: boolean;
+        /** @description The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer. */
+        reasoning_efforts: ('none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh')[];
         supports_tools: boolean;
         supports_vision: boolean;
         /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
@@ -3215,7 +3285,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     searchDataLakeResponse503: {
       error: string;
@@ -3466,6 +3536,8 @@ export interface components {
       /** @description An image file you own, for image_to_video. */
       input_image_file_id?: string;
       audio?: boolean;
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. */
+      organization_id?: string | null;
     };
     /**
      * @example {
@@ -3721,7 +3793,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     createVoiceSessionResponse503: {
       error: string;
@@ -4179,7 +4251,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     /**
      * @example {
@@ -4210,7 +4282,7 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits';
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     createTranscriptionResponse503: {
       error: string;
@@ -5659,7 +5731,7 @@ export interface operations {
           'text/event-stream': components['schemas']['createCompletionResponse200'];
         };
       };
-      /** @description Malformed JSON body (rejected before the stream opens). */
+      /** @description Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -5667,7 +5739,29 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
+          'application/json': components['schemas']['createCompletionResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -5681,6 +5775,63 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request body over 25 MB. */
+      413: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The body failed schema validation, or the caller cannot afford the request (`errorCode: "insufficient_credits"`: personal or org balance, or an org per-member credit cap). */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createCompletionResponse422'];
+        };
+      };
+      /** @description Rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Internal error before the stream opened. */
+      500: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Temporarily unavailable: the model's provider is not configured on this deployment (`errorCode: "provider_not_configured"`), or the database is unreachable (no `errorCode`). Retry later. */
+      503: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createCompletionResponse503'];
         };
       };
     };
@@ -10118,7 +10269,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope. */
+      /** @description The API key lacks the `ai:generate` scope, or `organization_id` names an organization you do not belong to (or is not a valid id). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -10141,7 +10292,7 @@ export interface operations {
           'application/json': components['schemas']['ScopeForbiddenResponse'];
         };
       };
-      /** @description `input_image_file_id` does not name an image you own (`errorCode: input_image_not_found`). */
+      /** @description `input_image_file_id` does not name an image you own (`errorCode: input_image_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

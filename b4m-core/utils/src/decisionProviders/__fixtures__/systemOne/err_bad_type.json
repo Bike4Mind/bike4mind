@@ -1,0 +1,6 @@
+{
+  "detail": {
+    "error_type": "api_usage_error",
+    "message": "Invalid request."
+  }
+}

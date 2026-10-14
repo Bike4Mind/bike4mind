@@ -1,10 +1,10 @@
 // Vendors, for key resolution, billing and metrics. Each provider PR appends its id here.
-export const DECISION_PROVIDER_IDS = ['test', 'openai'] as const;
+export const DECISION_PROVIDER_IDS = ['test', 'openai', 'typesafe'] as const;
 export type DecisionProviderId = (typeof DECISION_PROVIDER_IDS)[number];
 
 // Adapters are keyed by wire protocol, not vendor: one protocol can front several vendors (e.g. one
 // vendor-compatible endpoint served by more than one host).
-export const DECISION_PROTOCOLS = ['test', 'openaiDecisions'] as const;
+export const DECISION_PROTOCOLS = ['test', 'openaiDecisions', 'systemOne'] as const;
 export type DecisionProtocol = (typeof DECISION_PROTOCOLS)[number];
 
 export type DecisionModelLimits = {

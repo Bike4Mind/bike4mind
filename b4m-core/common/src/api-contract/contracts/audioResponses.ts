@@ -39,9 +39,9 @@ export const GENERATED_AUDIO_SAVE_HEADERS = {
 export const GENERATED_AUDIO_DESCRIPTION =
   'The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio ' +
   'over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` ' +
-  'variant for base64). Generated audio is saved to the file browser by default (opt out per-user via the ' +
-  'saveGeneratedAudio preference, or per-call with `preview`); the outcome is reported in the JSON save ' +
-  'fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, ' +
+  'variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the ' +
+  'outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy ' +
+  'from `fileUrl` / `X-B4M-Audio-File-Url`, ' +
   'since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key ' +
   '(`b4m_live_`) or a JWT.';
 

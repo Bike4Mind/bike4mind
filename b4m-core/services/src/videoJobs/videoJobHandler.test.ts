@@ -39,7 +39,7 @@ const setup = (overrides: Partial<VideoJobDeps> = {}) => {
     getSettings: async () => ({ enforceCredits: true, videoGeneration: undefined }),
     resolveApiKey: async () => 'key',
     loadInputImage: async () => ({ bytes: Buffer.from('img'), mimeType: 'image/png' }),
-    saveToFiles: vi.fn(async ({ jobId }: { jobId: string }) => ({
+    saveToFiles: vi.fn(async ({ generation: { jobId } }: { generation: { jobId: string } }) => ({
       saved: true as const,
       fileId: `file-${jobId}`,
       s3Key: `files/${jobId}.mp4`,
@@ -246,6 +246,30 @@ describe('video job end to end with the test provider', () => {
     expect(job.payload.output).toMatchObject({ location: 'generated', s3Key: `generated-video/u1/${job.id}.mp4` });
     expect(job.payload.output?.fileId).toBeUndefined();
     expect(settleCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('rethrows a rejecting Files save so the store step retries rather than falling back', async () => {
+    const saveError = new Error('dedup lookup failed');
+    const t = setup({ saveToFiles: vi.fn(async () => Promise.reject(saveError)) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    const pending = t.jobOf(created);
+    const storing = {
+      ...pending,
+      state: 'storing' as const,
+      payload: {
+        ...pending.payload,
+        providerOutput: {
+          kind: 'inline' as const,
+          base64: Buffer.from('clip').toString('base64'),
+          contentType: 'video/mp4',
+        },
+      },
+    };
+
+    await expect(createVideoJobHandler(t.deps).store(storing, { signal: new AbortController().signal })).rejects.toBe(
+      saveError
+    );
+    expect(t.deps.saveToGeneratedBucket).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -682,6 +706,26 @@ describe('video job end to end with the test provider', () => {
     expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
   });
 
+  it('saves the clip with its generation metadata', async () => {
+    const t = setup();
+    const created = await createVideoJob({ user, request: request('a cat'), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith({
+      userId: 'u1',
+      bytes: expect.any(Buffer),
+      contentType: expect.any(String),
+      generation: {
+        generator: 'video',
+        provider: 'test',
+        modelId: 'test-video',
+        jobId: created.job.id,
+        prompt: 'a cat',
+        durationSeconds: 4,
+      },
+      signal: expect.any(AbortSignal),
+    });
+  });
+
   it('store may run twice for one job: both runs save under the same job id, which saveToFiles dedups', async () => {
     const t = setup();
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
@@ -706,7 +750,10 @@ describe('video job end to end with the test provider', () => {
     expect(first).toMatchObject({ next: 'succeeded', payload: { output: { location: 'files', bytes: 4 } } });
     expect(rerun).toEqual(first);
     expect(t.deps.saveToFiles).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(t.deps.saveToFiles).mock.calls.map(([params]) => params.jobId)).toEqual([pending.id, pending.id]);
+    expect(vi.mocked(t.deps.saveToFiles).mock.calls.map(([params]) => params.generation.jobId)).toEqual([
+      pending.id,
+      pending.id,
+    ]);
   });
 
   it('persists the settlement marker even when recording usage fails', async () => {

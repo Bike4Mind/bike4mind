@@ -152,6 +152,8 @@ import EnsureOAuthGrantUserRevokedUpdatedAtIndex from './20260921235961_ensure-o
 import EnsureGitHubLakeAuthGrantIndexes from './20260921235962_ensure-github-lake-auth-grant-indexes';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
 import EnsureSessionOriginChannelIndex from './20260921235980_ensure-session-origin-channel-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureStaleVoiceHoldIndex from './20260921235986_ensure-stale-voice-hold-index';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
 import EnsureQuestCallbackDispatchedIndex from './20260921235990_ensure-quest-callback-dispatched-index';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
@@ -163,6 +165,8 @@ import EnsureApiKeyUsageLogSourceOwnerIndex from './20260921235995_ensure-apikey
 import DetachForeignQuestNodeArtifacts from './20260921235996_detach-foreign-quest-node-artifacts';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureSessionUserIdIdIndex from './20260921235997_ensure-session-userid-id-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureLakeSkippedFileIndexes from './20260921235989_ensure-lake-skipped-file-indexes';
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import ReplaceReleaseNoteStatusIndex from './20260921235998_replace-release-note-status-index';
@@ -305,12 +309,14 @@ const coreMigrations: MigrationFile[] = [
   EnsureOAuthGrantUserRevokedUpdatedAtIndex,
   EnsureGitHubLakeAuthGrantIndexes,
   EnsureSessionOriginChannelIndex,
+  EnsureStaleVoiceHoldIndex,
   EnsureQuestCallbackDispatchedIndex,
   EnsureGenerationJobIndexes,
   EnsureGenerationJobRequesterIndex,
   EnsureApiKeyUsageLogSourceOwnerIndex,
   DetachForeignQuestNodeArtifacts,
   EnsureSessionUserIdIdIndex,
+  EnsureLakeSkippedFileIndexes,
   EnsureOAuthGrantClientUserIndex,
   ReplaceReleaseNoteStatusIndex,
   EnsureFabFileOwnedKeysetIndex,
