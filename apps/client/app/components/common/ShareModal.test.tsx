@@ -4,7 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { InviteType, IFabFileDocument } from '@bike4mind/common';
+import { InviteType, IFabFileDocument, ISessionDocument } from '@bike4mind/common';
 import { MAX_EMAIL_MESSAGE_LENGTH, MAX_EMAIL_RECIPIENTS, MAX_EMAIL_RECIPIENTS_ERROR } from '@client/types/api';
 import ShareDocumentModal from './ShareModal';
 
@@ -111,7 +111,7 @@ describe('ShareModal - By Link tab', () => {
     renderModal();
     expect(screen.queryByTestId('share-modal-generated-link')).not.toBeInTheDocument();
     expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
-      "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share. They can share it on. Nothing is shared until you tap Generate, and links don't expire until you turn them off."
+      "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off."
     );
   });
 
@@ -123,7 +123,7 @@ describe('ShareModal - By Link tab', () => {
     );
     const note = screen.getByTestId('share-modal-link-access-note');
     expect(note).toHaveTextContent(
-      "Anyone with the link can open this item after signing in, and can share it on. Links don't expire."
+      'Anyone with the link can open this item after signing in, and can share it on. Links keep working until you turn them off.'
     );
     expect(note).not.toHaveTextContent('attached files');
   });
@@ -133,6 +133,25 @@ describe('ShareModal - By Link tab', () => {
     const note = screen.getByTestId('share-modal-link-access-note');
     expect(note).toHaveTextContent('Anyone with the link can open these items after signing in');
     expect(note).not.toHaveTextContent('attached files');
+  });
+
+  it('tells a bulk notebook sharer the link reaches the notebooks and their shareable attached files', () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal
+          sessions={[
+            { id: 'notebook-1', name: 'One' } as ISessionDocument,
+            { id: 'notebook-2', name: 'Two' } as ISessionDocument,
+          ]}
+          type={InviteType.Session}
+          open
+          onClose={vi.fn()}
+        />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
+      "Anyone with the link can open these notebooks after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off."
+    );
   });
 
   it('lets a file owner turn off links for that file after confirmation', async () => {
