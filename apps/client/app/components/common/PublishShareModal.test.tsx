@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 import { PublishShareModal } from './PublishShareModal';
-import type { PublishResult } from '@bike4mind/common';
+import type { PublishResult, PublishVisibility } from '@bike4mind/common';
 
 // Mock the axios instance so we can assert the exact comment-policy PATCH an update issues
 // (the restricted->open widening regression). Mocking at the transport level keeps the real
@@ -319,22 +319,38 @@ describe('PublishShareModal - no-sign-in (/a) share link', () => {
     tier: 'user',
     scopeId: 'u1',
     slug: 's',
-    visibility: 'public',
+    visibility: 'private',
     publishedAt: '2026-01-01T00:00:00.000Z',
   };
 
-  const renderShared = async () => {
+  const renderShared = async (visibility: PublishVisibility = 'private') => {
     apiPost.mockClear().mockResolvedValue({ data: { shareToken: 'TOK', shareUrl: '/a/TOK' } });
     apiDelete.mockClear().mockResolvedValue({ data: {} });
-    const publish = vi.fn().mockResolvedValue(publishResult);
+    const publish = vi.fn().mockResolvedValue({ ...publishResult, visibility });
     render(
       <Wrapper>
-        <PublishShareModal open onClose={() => {}} publish={publish} title="My artifact" defaultVisibility="public" />
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={publish}
+          title="My artifact"
+          defaultVisibility={visibility}
+        />
       </Wrapper>
     );
     fireEvent.click(screen.getByTestId('publish-share-create'));
     await screen.findByTestId('publish-share-url'); // shared phase
   };
+
+  it('hides the section for a public page, whose main link already opens without sign-in', async () => {
+    await renderShared('public');
+    expect(screen.queryByTestId('publish-share-token-section')).toBeNull();
+  });
+
+  it('says the main link of a private page only opens for the owner', async () => {
+    await renderShared();
+    expect(screen.getByTestId('publish-share-token-hint').textContent).toContain('only opens for you');
+  });
 
   it('mints the /a link on demand and shows it in a copyable field', async () => {
     await renderShared();
