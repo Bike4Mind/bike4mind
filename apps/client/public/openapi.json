@@ -3025,11 +3025,11 @@
                 },
                 "supports_tool_search": {
                   "type": "boolean",
-                  "description": "Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front."
+                  "description": "Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model only: `/api/ai/v1/completions` does not accept these yet."
                 },
                 "supports_tool_changes": {
                   "type": "boolean",
-                  "description": "Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation."
+                  "description": "Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not accept these blocks yet."
                 },
                 "supports_vision": {
                   "type": "boolean"

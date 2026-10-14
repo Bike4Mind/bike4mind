@@ -114,13 +114,15 @@ export const PublicModelSchema = z.object({
     .boolean()
     .describe(
       'Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, ' +
-        'so a large tool catalog is searched on demand instead of loaded into context up front.'
+        'so a large tool catalog is searched on demand instead of loaded into context up front. Describes the ' +
+        'model only: `/api/ai/v1/completions` does not accept these yet.'
     ),
   supports_tool_changes: z
     .boolean()
     .describe(
       'Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or ' +
-        'remove a declared tool mid-conversation.'
+        'remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not ' +
+        'accept these blocks yet.'
     ),
   supports_vision: z.boolean(),
   deprecation_date: z.string().nullable().describe('`YYYY-MM-DD`; null when no retirement is scheduled.'),

@@ -51,10 +51,10 @@ function claudeFamilyVersion(modelId: string): string | null {
   return minor ? `${family}-${major}-${minor}` : `${family}-${major}`;
 }
 
-export interface ClaudeToolCapabilityModel {
+export type ClaudeToolCapabilityModel = {
   id: string;
   backend: ModelBackend;
-}
+};
 
 // The direct API and Bedrock (InvokeModel) both carry these features; any other route to a Claude id does not.
 function servedNatively(model: ClaudeToolCapabilityModel, versions: ReadonlySet<string>): boolean {

@@ -2084,9 +2084,9 @@ export interface components {
         /** @description The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer. */
         reasoning_efforts: ('none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh')[];
         supports_tools: boolean;
-        /** @description Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. */
+        /** @description Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model only: `/api/ai/v1/completions` does not accept these yet. */
         supports_tool_search: boolean;
-        /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. */
+        /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not accept these blocks yet. */
         supports_tool_changes: boolean;
         supports_vision: boolean;
         /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
