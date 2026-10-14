@@ -571,8 +571,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       className="session-bottom"
       sx={{
         pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout || isDataLakeSurface ? '0' : '8px',
-        // On desktop the status line above the box (its own padding) replaces the top padding.
-        paddingTop: isMobile ? '20px' : 0,
+        // The status line above the box (its own padding) replaces the top padding.
+        paddingTop: 0,
         position: 'relative',
       }}
       display={'flex'}
@@ -580,20 +580,19 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       justifyContent={'center'}
     >
       <HighlanderFocus targetId="chatInput" />
-      {/* Phones skip the line: the composer is pinned over the keyboard there, and the balance is
-          in the profile. Above the box rather than under it because the file viewer and other
-          embedded chats leave no room below. */}
-      {!isMobile && (
-        <ComposerStatusLine
-          right={<CreditBalanceChip />}
-          sx={{
-            width: '100%',
-            maxWidth: promptBarMaxWidth,
-            marginLeft: isCompactLayout ? '0px' : 'auto',
-            marginRight: isCompactLayout ? '0px' : 'auto',
-          }}
-        />
-      )}
+      {/* Above the box rather than under it: the file viewer and other embedded chats leave no room
+          below, and on phones the box sits on the keyboard. Phones get a slimmer line to keep
+          the chat's height. */}
+      <ComposerStatusLine
+        right={<CreditBalanceChip />}
+        sx={{
+          width: '100%',
+          maxWidth: promptBarMaxWidth,
+          marginLeft: isCompactLayout ? '0px' : 'auto',
+          marginRight: isCompactLayout ? '0px' : 'auto',
+          ...(isMobile && { py: '4px' }),
+        }}
+      />
       <Stack
         className="session-bottom-container"
         data-testid="session-bottom-container"
