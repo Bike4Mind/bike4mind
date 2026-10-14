@@ -6,6 +6,8 @@ import {
   type ModelInfo,
   CompletionInfo,
   getTextModelCost,
+  getTurnsCost,
+  type TurnUsage,
   pricingTierForTokens,
   CreditHolderType,
   ICreditHolder,
@@ -560,16 +562,31 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Same assign-not-add contract as input/output tokens.
   let finalCacheReadTokens = 0;
   let finalCacheCreationTokens = 0;
+  // Per-request breakdown of the same totals, from adapters that report it; prices each request on
+  // its own long-context tier. Same assign-not-add contract.
+  let finalTurnUsage: TurnUsage[] | undefined;
   // Latched from whichever chunk carries it (backends emit it on their terminal chunk)
   // and re-emitted on the final settlement event below, so a client that only inspects
   // the last event still learns the reply was truncated.
   let finalStopReason: string | undefined;
+
+  const settledUsdCost = (pricedModel: ModelInfo): number =>
+    finalTurnUsage?.length
+      ? getTurnsCost(pricedModel, finalTurnUsage)
+      : getTextModelCost(
+          pricedModel,
+          finalInputTokens,
+          finalOutputTokens,
+          finalCacheReadTokens,
+          finalCacheCreationTokens
+        );
 
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
     if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
     if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
+    if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
     if (info?.stopReason) finalStopReason = info.stopReason;
 
     if (info?.inputTokens || info?.outputTokens) {
@@ -628,13 +645,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           outputTokens: finalOutputTokens,
           cachedInputTokens: finalCacheReadTokens,
           cacheWriteTokens: finalCacheCreationTokens,
-          costUsd: getTextModelCost(
-            modelInfo,
-            finalInputTokens,
-            finalOutputTokens,
-            finalCacheReadTokens,
-            finalCacheCreationTokens
-          ),
+          costUsd: settledUsdCost(modelInfo),
           creditsCharged: 0,
           status: isRefusal ? 'refusal' : 'error',
           latencyMs: Date.now() - completionStartTime,
@@ -655,13 +666,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   let finalCredits = 0;
 
   if (modelInfo) {
-    finalUsdCost = getTextModelCost(
-      modelInfo,
-      finalInputTokens,
-      finalOutputTokens,
-      finalCacheReadTokens,
-      finalCacheCreationTokens
-    );
+    finalUsdCost = settledUsdCost(modelInfo);
     finalCredits = usdToCreditsStochastic(finalUsdCost);
 
     logger?.info?.(
