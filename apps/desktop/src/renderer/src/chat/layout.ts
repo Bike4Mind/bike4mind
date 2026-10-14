@@ -56,6 +56,15 @@ export const thinScrollbarSx = {
 } as const;
 
 /**
+ * No scrollbar at all, for a strip that scrolls sideways but has no room for one: the browser's
+ * tab row, where a bar would push the tabs off the url bar they sit on. Wheel and trackpad still
+ * scroll it.
+ */
+export const hiddenScrollbarSx = {
+  scrollbarWidth: 'none',
+} as const;
+
+/**
  * Width of a `thinScrollbarSx` scrollbar, published as a CSS variable on the document root.
  *
  * CSS has no way to read it and the column needs it: the transcript scrolls and the rows under

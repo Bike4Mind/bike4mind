@@ -5,6 +5,7 @@ import Typography from '@mui/joy/Typography';
 import { MAX_BROWSER_TABS } from '@shared/browserTabs';
 import type { BrowserTabSummary } from '@shared/ipc';
 import { CloseIcon, PlusIcon } from './icons';
+import { hiddenScrollbarSx } from './layout';
 
 /** What a tab with no title yet is called: a host while it loads, "New tab" before it has been anywhere. */
 export function browserTabLabel(tab: BrowserTabSummary): string {
@@ -50,11 +51,7 @@ export function BrowserTabStrip({
       sx={{ flexShrink: 0, px: 0.75, pt: 0.5, minWidth: 0 }}
       data-testid="browser-tab-strip"
     >
-      <Stack
-        direction="row"
-        spacing={0.25}
-        sx={{ minWidth: 0, overflowX: 'auto', scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' } }}
-      >
+      <Stack direction="row" spacing={0.25} sx={{ minWidth: 0, overflowX: 'auto', ...hiddenScrollbarSx }}>
         {tabs.map(tab => {
           const active = tab.id === activeTabId;
           const label = browserTabLabel(tab);
