@@ -473,16 +473,16 @@ export default defineConfig([
     },
   },
 
-  // TypeScript configuration for all .ts/.tsx files, plus apps/client's .mts/.cts, which the
-  // apps/workers boundary block below opts into linting.
+  // TypeScript configuration for all .ts/.tsx files, plus the .mts/.cts of apps/client and
+  // packages/server-utils, which their boundary blocks below opt into linting.
   ...tseslint.configs.recommended.map(config => ({
     ...config,
-    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}'],
+    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
   })),
 
   // TypeScript custom rules
   {
-    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}'],
+    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
     rules: {
       'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': [
@@ -757,7 +757,7 @@ export default defineConfig([
   // pull in UI code. Comes after the generic b4m-core/packages block above and so replaces it
   // (last-rule-wins), which is why it repeats the B4Mv3 restrictions.
   {
-    files: ['packages/server-utils/**/*.{ts,mts}'],
+    files: ['packages/server-utils/**/*.{ts,tsx,mts,cts,js,mjs}'],
     rules: {
       'no-restricted-imports': [
         'error',

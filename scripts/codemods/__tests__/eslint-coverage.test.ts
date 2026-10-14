@@ -246,6 +246,20 @@ describe('@bike4mind/server-utils import boundary', () => {
     expect(hasRestrictedImportError(messages, SERVER_UTILS_BOUNDARY)).toBe(true);
   });
 
+  it.each(['tsx', 'cts', 'js', 'mjs'])('flags it in a .%s file too', async ext => {
+    const messages = await lint(`import x from '@server/utils/config';`, `packages/server-utils/src/memory/foo.${ext}`);
+    expect(hasRestrictedImportError(messages, SERVER_UTILS_BOUNDARY)).toBe(true);
+  });
+
+  // The package's .mts/.cts must get the TypeScript parser, or type syntax there is a parse error.
+  it.each(['mts', 'cts'])('parses type syntax in a .%s file', async ext => {
+    const messages = await lint(
+      `import type { Foo } from '@bike4mind/common';\nexport const x: Foo | null = null;`,
+      `packages/server-utils/src/memory/foo.${ext}`
+    );
+    expect(messages.filter(m => m.fatal)).toEqual([]);
+  });
+
   it.each(['@bike4mind/common', 'sst', 'node:crypto', '../utils/sessionOperations'])(
     'does not flag the package importing %s',
     async specifier => {
