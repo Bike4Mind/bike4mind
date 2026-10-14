@@ -6,7 +6,7 @@ import type { ValidatedVideoRequest } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { describeVideoProviderConformance, type ConformanceScenario } from '../conformance';
 import { ProviderOutputUnavailableError, ProviderSubmitError } from '../types';
-import { VeoVideoProvider } from './VeoVideoProvider';
+import { veoTerminalIsBlocked, VeoVideoProvider } from './VeoVideoProvider';
 
 type Exchange = {
   name: string;
@@ -396,6 +396,18 @@ describe('VeoVideoProvider specifics', () => {
       retryable: false,
       message: 'veo_no_video',
     });
+  });
+
+  // The fixture recorder gates its writes on this predicate, so the terminals the adapter reads as blocked must
+  // pass it and every other terminal must not.
+  it.each<[string, unknown, boolean]>([
+    ['an RAI count', doneWith({ raiMediaFilteredCount: 1 }), true],
+    ['RAI reasons only', doneWith({ raiMediaFilteredReasons: blockedReasons() }), true],
+    ['a safety error', { name: OPERATION, done: true, error: { code: 3, message: 'x', status: 'SAFETY' } }, true],
+    ['a non-safety error', { name: OPERATION, done: true, error: { code: 13, message: 'internal' } }, false],
+    ['no verdict', doneWith({ generatedSamples: [] }), false],
+  ])('tells the recorder that %s is blocked=%s', (_label, body, expected) => {
+    expect(veoTerminalIsBlocked(body)).toBe(expected);
   });
 
   it('maps the unknown-operation 403 and a 404 to a non-retryable failure', async () => {

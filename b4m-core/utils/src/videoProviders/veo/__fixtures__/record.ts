@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import { deflateSync, crc32 } from 'node:zlib';
 import { classifyGeminiSubmitFailure } from '../../gemini/geminiHttp';
+import { veoTerminalIsBlocked } from '../VeoVideoProvider';
 import { assertNoSecret, scrubBody, scrubUrl } from './scrub';
 
 const BASE = 'https://generativelanguage.googleapis.com';
@@ -76,17 +77,6 @@ const findVideoUri = (value: unknown): string | undefined => {
   if (!isRecord(value)) return undefined;
   if (isRecord(value.video) && typeof value.video.uri === 'string') return value.video.uri;
   return findVideoUri(Object.values(value));
-};
-
-// A done operation is a filter block for the adapter only when it carries the RAI filter fields; any other
-// "done without a video" terminal is a failure there, so it must not be recorded as the blocked fixture.
-const hasFilterVerdict = (value: unknown): boolean => {
-  if (!isRecord(value) || isRecord(value.error)) return false;
-  const video = isRecord(value.response) ? value.response.generateVideoResponse : undefined;
-  if (!isRecord(video)) return false;
-  const count = video.raiMediaFilteredCount;
-  const reasons = video.raiMediaFilteredReasons;
-  return (typeof count === 'number' && count > 0) || (Array.isArray(reasons) && reasons.length > 0);
 };
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -218,6 +208,20 @@ const redactBlocked = (value: unknown, prompt: string): unknown => {
   return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, redactBlocked(inner, prompt)]));
 };
 
+// The default prompt was not blocked live, and an input image is what triggers the likeness filter, so one of the
+// two must be set. Read before any scenario runs, so a bare run fails before it is billed.
+const blockedInput = (): { imagePath: string | undefined; prompt: string } => {
+  const imagePath = process.env.BLOCKED_IMAGE;
+  if (imagePath === '') throw new Error('BLOCKED_IMAGE is empty');
+  if (imagePath === undefined && process.env.BLOCKED_PROMPT === undefined) {
+    throw new Error('blocked: set BLOCKED_IMAGE or BLOCKED_PROMPT (the default prompt is not blocked)');
+  }
+  return {
+    imagePath,
+    prompt: process.env.BLOCKED_PROMPT ?? 'Extremely graphic, gory footage of a person being violently injured.',
+  };
+};
+
 const scenarios: Record<string, () => Promise<void>> = {
   'text-to-video': () =>
     recordGeneration(
@@ -235,21 +239,13 @@ const scenarios: Record<string, () => Promise<void>> = {
     ),
 
   blocked: async () => {
-    // The default prompt below was not blocked live, and an input image is what triggers the likeness filter:
-    // require an explicit input so a bare run cannot pay for a video the guard then discards.
-    const imagePath = process.env.BLOCKED_IMAGE;
-    if (imagePath === '') throw new Error('BLOCKED_IMAGE is empty');
-    if (imagePath === undefined && process.env.BLOCKED_PROMPT === undefined) {
-      throw new Error('blocked: set BLOCKED_IMAGE or BLOCKED_PROMPT (the default prompt is not blocked)');
-    }
-    const blockedPrompt =
-      process.env.BLOCKED_PROMPT ?? 'Extremely graphic, gory footage of a person being violently injured.';
+    const { imagePath, prompt } = blockedInput();
     const body = imagePath
-      ? imageToVideoBody(blockedPrompt, {
+      ? imageToVideoBody(prompt, {
           bytesBase64Encoded: readFileSync(imagePath).toString('base64'),
           mimeType: imageMimeOf(imagePath),
         })
-      : submitBody({ prompt: blockedPrompt });
+      : submitBody({ prompt });
     const blocked = await call('POST', SUBMIT_PATH, body);
     const { status } = blocked.exchange.response;
     process.stdout.write(`blocked: submit ${status}\n`);
@@ -266,13 +262,13 @@ const scenarios: Record<string, () => Promise<void>> = {
       if (findVideoUri(terminal)) {
         throw new Error('blocked: the operation produced a video, so the prompt was not blocked; nothing written');
       }
-      // Nor may a terminal the adapter reads as a failure overwrite a good blocked.json.
-      if (!hasFilterVerdict(terminal)) {
-        throw new Error('blocked: the operation finished without a RAI filter verdict; nothing written');
+      // Nor may a terminal the adapter does not read as a block overwrite a good blocked.json.
+      if (!veoTerminalIsBlocked(terminal)) {
+        throw new Error('blocked: the operation did not end in a safety block; nothing written');
       }
       exchanges.push(...polls);
     }
-    const redacted = redactBlocked(exchanges, blockedPrompt);
+    const redacted = redactBlocked(exchanges, prompt);
     if (!Array.isArray(redacted)) throw new Error('redaction changed the exchange list shape');
     write('blocked', redacted);
   },
@@ -294,7 +290,10 @@ const main = async () => {
   const requested = process.argv.slice(2);
   const unknown = requested.filter(name => !(name in scenarios));
   if (unknown.length > 0) throw new Error(`unknown scenario(s): ${unknown.join(', ')}`);
-  for (const name of requested.length > 0 ? requested : Object.keys(scenarios)) await scenarios[name]();
+  const toRun = requested.length > 0 ? requested : Object.keys(scenarios);
+  // Check the blocked inputs before the loop: a no-argument run must not pay for the billed scenarios and then throw.
+  if (toRun.includes('blocked')) blockedInput();
+  for (const name of toRun) await scenarios[name]();
 };
 
 await main();
