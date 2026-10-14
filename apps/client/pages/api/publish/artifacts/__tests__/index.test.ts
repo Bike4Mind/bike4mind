@@ -459,6 +459,13 @@ describe('GET /api/publish/artifacts - reply titles', () => {
     expect(row.title).toBe('*Draft* v2');
   });
 
+  it('keeps the stored title when stripping would leave it empty', async () => {
+    // A whitespace-only code span strips to ''; the serve route falls back too (SHARED_FALLBACK_TITLE).
+    withRows([{ publicId: 'r4', ownerId: USER, title: '` `', replyTitleBody: '` `\n\nbody' }]);
+    const [row] = artifacts(await run({ mine: 'true' }));
+    expect(row.title).toBe('` `');
+  });
+
   it('never sends the reply body to the caller', async () => {
     withRows([{ publicId: 'r3', ownerId: USER, title: 'Recap: *Tides*', replyTitleBody: '# Recap: *Tides*' }]);
     const [row] = artifacts(await run({ mine: 'true' }));
