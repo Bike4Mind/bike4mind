@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../../__test__/createMongoServer';
+import { DataLakeModel } from '../../ai/DataLakeModel';
 import {
   OrgGitHubLakeConnection,
   orgGitHubLakeConnectionRepository,
@@ -529,5 +530,62 @@ describe('isGitHubLakeSyncClaimLive', () => {
     [{ status: 'syncing' as const, syncClaimedAt: minutesAgo(61), activeIngestBatchId: 'b1' }, false],
   ])('%o -> %s', (conn, live) => {
     expect(isGitHubLakeSyncClaimLive(conn, now)).toBe(live);
+  });
+});
+
+describe('OrgGitHubLakeConnectionModel - findOrphaned (lakeless binding scan)', () => {
+  const seedLake = async (slug: string, status: string) => {
+    const lake = await DataLakeModel.create({
+      name: `lake-${slug}`,
+      slug,
+      fileTagPrefix: `${slug}:`,
+      datalakeTag: `dl-${slug}`,
+      createdByUserId: 'user-1',
+      status,
+    });
+    return String(lake._id);
+  };
+  const bind = (n: number, targetDataLakeId: string, extra: Record<string, unknown> = {}) =>
+    OrgGitHubLakeConnection.create({
+      ...base,
+      repositoryId: n,
+      repositoryFullName: `acme/repo-${n}`,
+      targetDataLakeId,
+      ...extra,
+    });
+  const missingLakeId = () => new mongoose.Types.ObjectId().toHexString();
+
+  afterEach(async () => {
+    await DataLakeModel.deleteMany({});
+  });
+
+  it('returns a binding whose lake document is gone, and none whose lake exists in any status', async () => {
+    const orphan = await bind(1, missingLakeId());
+    await bind(2, await seedLake('live', 'active'));
+    await bind(3, await seedLake('soft-deleted', 'deleted'));
+    await bind(4, await seedLake('archived', 'archived'));
+
+    const found = await orgGitHubLakeConnectionRepository.findOrphaned(10);
+    expect(found.map(c => c.id)).toEqual([orphan.id]);
+    expect(found[0].installationId).toBe(base.installationId);
+  });
+
+  it('returns orphans whatever their enabled flag or status', async () => {
+    const disabled = await bind(1, missingLakeId(), { enabled: false, disconnectRequestedAt: new Date() });
+    const errored = await bind(2, missingLakeId(), { status: 'error' });
+    const lost = await bind(3, missingLakeId(), { status: 'access_lost' });
+
+    const found = await orgGitHubLakeConnectionRepository.findOrphaned(10);
+    expect(found.map(c => c.id).sort()).toEqual([disabled.id, errored.id, lost.id].sort());
+  });
+
+  it('honors the limit, oldest first', async () => {
+    const first = await bind(1, missingLakeId());
+    const second = await bind(2, missingLakeId());
+    await bind(3, missingLakeId());
+
+    const found = await orgGitHubLakeConnectionRepository.findOrphaned(2);
+    expect(found.map(c => c.id)).toEqual([first.id, second.id]);
+    expect(await orgGitHubLakeConnectionRepository.findOrphaned(0)).toEqual([]);
   });
 });

@@ -36,6 +36,7 @@ import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import {
   disableDriveConnectionForLake,
   getValidConnectionDriveAccessToken,
+  releaseDriveConnection,
 } from '@server/integrations/google/drive/common';
 import {
   createDriveClient,
@@ -590,11 +591,29 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     const lake = await dataLakeRepository.findById(connection.targetDataLakeId);
     if (!lake) {
-      logger.warn('[driveLakeIngest] target data lake not found; dropping', { connectionId });
+      logger.warn('[driveLakeIngest] target data lake not found; retiring the connection', {
+        connectionId,
+        dataLakeId: connection.targetDataLakeId,
+      });
       // Same reasoning as the connection-not-found exit above: a continuation reaching here still
       // owns an adopted batch that needs settling.
       if (resumeBatchId) await settleChainedBatch(resumeBatchId);
-      await releaseClaim(null);
+      // A soft-deleted lake still has its document (status 'deleted', handled below), so a missing one
+      // is gone for good. Tear the connection down the way the lake purge does
+      // (releaseDriveConnectionForLake): releasing the claim back to 'connected' would re-poll it
+      // forever and keep its globally unique driveFolderId claimed by a lake nobody can reach.
+      const retired = await releaseDriveConnection(connectionId, driveConnectionOwnerOf(connection)).catch(
+        (e: unknown) => {
+          logger.warn('[driveLakeIngest] could not release the connection of a missing lake', {
+            connectionId,
+            error: e instanceof Error ? e.message : String(e),
+          });
+          return false;
+        }
+      );
+      // Not retired (a throw, or no row matched the owner): hand the claim back so the next poll retries
+      // the teardown rather than stranding the row 'syncing'. A no-op if a concurrent purge deleted it.
+      if (!retired) await releaseClaim(null);
       return;
     }
     // A non-ingestable lake is a no-op here, not a failure.
