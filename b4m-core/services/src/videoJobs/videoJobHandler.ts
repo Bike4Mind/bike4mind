@@ -16,7 +16,7 @@ import {
 import {
   ProviderSubmitError,
   ProviderOutputUnavailableError,
-  VideoOutputTooLargeError,
+  ProviderOutputTooLargeError,
   type ProviderJobHandle,
   type ProviderOutput,
   type ResolvedInputs,
@@ -250,7 +250,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
       try {
         bytes = await providerFor(job).fetchOutput(payload.providerOutput, ctx);
       } catch (error) {
-        if (error instanceof VideoOutputTooLargeError) return fail('output_too_large', error.message);
+        if (error instanceof ProviderOutputTooLargeError) return fail('output_too_large', error.message);
         // Retention ran out (or the file was purged): another attempt cannot fetch it.
         if (error instanceof ProviderOutputUnavailableError) {
           return fail('provider_error', 'The provider no longer has the generated video', { status: error.status });
@@ -266,10 +266,16 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
 
       const files = await deps.saveToFiles({
         userId: job.requestedBy,
-        jobId: job.id,
         bytes,
         contentType,
-        prompt: payload.request.prompt,
+        generation: {
+          generator: 'video',
+          provider: payload.providerId,
+          modelId: payload.request.model,
+          jobId: job.id,
+          prompt: payload.request.prompt,
+          durationSeconds: common.durationSeconds,
+        },
         signal: context.signal,
       });
       let output: VideoJobOutput;

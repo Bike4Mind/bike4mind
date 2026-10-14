@@ -16,6 +16,7 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 }));
 // The GitHub chip reads the flag cache and its own query; it has its own suite (LakeGitHubStatusChip.test.tsx).
 vi.mock('@client/app/components/datalake/LakeGitHubStatusChip', () => ({ default: () => null }));
+vi.mock('@client/app/components/datalake/LakeSkippedFilesChip', () => ({ default: () => null }));
 vi.mock('./FinishSourceConnectBanner', () => ({ default: () => null }));
 
 // "Start chat" pulls in SessionsContext/react-router/react-query transitively - irrelevant to this

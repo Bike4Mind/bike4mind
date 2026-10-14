@@ -30,12 +30,14 @@ import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy/styles';
 import { useTranslation } from 'react-i18next';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
-import { ModelBackend, ModelInfo, resolveModelName, usdToCredits } from '@bike4mind/common';
-import { dedupePricingRows, textModelPriceCells } from './modelPricingRows';
+import { ModelBackend, ModelInfo, usdToCredits } from '@bike4mind/common';
+import { bedrockChipLabels, dedupePricingRows, textModelPriceCells } from './modelPricingRows';
+import { aggregateUsageByModel } from './usageByModel';
 import SectionContainer from './SectionContainer';
 import { TYPE } from './settingsStyles';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
+import { computeBurnStats, MIN_DAYS_FOR_PROJECTION } from './creditBurnRate';
 
 const TIME_PERIODS = {
   WEEK: '7d',
@@ -69,7 +71,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
   });
 
   // Process transactions for the chart
-  const { chartData, usageByModel, burnRate, usageTrend, daysRemaining } = useMemo(() => {
+  const { chartData, usageByModel, burnRate, usageTrend, daysRemaining, observedDays } = useMemo(() => {
     if (!transactions || transactions.length === 0) {
       return {
         chartData: [],
@@ -77,6 +79,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
         burnRate: 0,
         usageTrend: 'stable',
         daysRemaining: null,
+        observedDays: 0,
       };
     }
 
@@ -124,65 +127,17 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...musicUsageTransactions,
     ];
 
-    // Calculate burn rate (average daily usage)
-    let burnRate = 0;
-    let usageTrend: 'increasing' | 'decreasing' | 'stable' = 'stable';
-    let daysRemaining: number | null = null;
-
-    if (allDeductTransactions.length > 0) {
-      // Total credits used (as positive numbers)
-      const totalUsage = allDeductTransactions.reduce((sum, t) => sum + Math.abs(t.credits), 0);
-
-      const daysDiff = Math.max(1, endDate.diff(startDate, 'day'));
-      burnRate = totalUsage / daysDiff;
-
-      // Calculate trend by comparing first half to second half of the period
-      if (daysDiff >= 6) {
-        // Only calculate trend if we have at least 6 days of data
-        const midPoint = startDate.add(Math.floor(daysDiff / 2), 'day');
-
-        const firstHalfTransactions = allDeductTransactions.filter(t => dayjs(t.createdAt).isBefore(midPoint));
-
-        const secondHalfTransactions = allDeductTransactions.filter(
-          t => dayjs(t.createdAt).isAfter(midPoint) || dayjs(t.createdAt).isSame(midPoint, 'day')
-        );
-
-        const firstHalfUsage = firstHalfTransactions.reduce((sum, t) => sum + Math.abs(t.credits), 0);
-        const secondHalfUsage = secondHalfTransactions.reduce((sum, t) => sum + Math.abs(t.credits), 0);
-
-        // Calculate daily rates for each half
-        const firstHalfDays = Math.max(1, midPoint.diff(startDate, 'day'));
-        const secondHalfDays = Math.max(1, endDate.diff(midPoint, 'day'));
-
-        const firstHalfRate = firstHalfUsage / firstHalfDays;
-        const secondHalfRate = secondHalfUsage / secondHalfDays;
-
-        // Determine trend with 10% threshold for meaningful change
-        const changePercent = ((secondHalfRate - firstHalfRate) / firstHalfRate) * 100;
-
-        if (changePercent > 10) {
-          usageTrend = 'increasing';
-        } else if (changePercent < -10) {
-          usageTrend = 'decreasing';
-        }
-      }
-
-      // Calculate estimated days remaining based on current balance and burn rate
-      if (burnRate > 0 && currentUser?.currentCredits) {
-        daysRemaining = Math.floor(currentUser.currentCredits / burnRate);
-      }
-    }
-
-    const modelUsageMap: Record<string, number> = {};
-
-    allDeductTransactions.forEach(transaction => {
-      const modelName = resolveModelName(transaction);
-
-      if (!modelUsageMap[modelName]) {
-        modelUsageMap[modelName] = 0;
-      }
-      modelUsageMap[modelName] += Math.abs(transaction.credits);
+    const { burnRate, usageTrend, daysRemaining, observedDays } = computeBurnStats({
+      usage: allDeductTransactions,
+      periodDays: parseInt(timePeriod, 10),
+      accountCreatedAt: currentUser?.createdAt,
+      balance: currentUser?.currentCredits,
     });
+
+    const modelUsageMap = aggregateUsageByModel(allDeductTransactions, [
+      ...accessibleTextModels,
+      ...accessibleImageModels,
+    ]);
 
     // Aggregate transactions by day for each type
     const purchaseDailyData = new Map<string, { x: string; y: number }>();
@@ -479,17 +434,24 @@ const CreditAnalyticsTabContent: React.FC = () => {
       burnRate,
       usageTrend,
       daysRemaining,
+      observedDays,
     };
-  }, [transactions, timePeriod, viewMode, theme.palette, currentUser]);
+  }, [transactions, timePeriod, viewMode, theme.palette, currentUser, accessibleTextModels, accessibleImageModels]);
 
   // Tooltip text for days remaining, adjusted based on selected time period
+  // Only when a projection would otherwise exist: no burn or no balance is N/A, not "too early".
+  const tooEarlyToProject =
+    burnRate > 0 && (currentUser?.currentCredits ?? 0) > 0 && observedDays < MIN_DAYS_FOR_PROJECTION;
   const daysTooltipText = useMemo(() => {
+    if (tooEarlyToProject) {
+      return `Shown once there are ${MIN_DAYS_FOR_PROJECTION} days of usage to project from`;
+    }
     const selectedDays = parseInt(timePeriod, 10);
     if (Number.isFinite(selectedDays)) {
-      return `Based on your usage pattern from the last ${selectedDays} days`;
+      return `Based on your usage pattern from the last ${Math.min(selectedDays, Math.round(observedDays) || selectedDays)} days`;
     }
     return 'Based on your recent usage pattern';
-  }, [timePeriod]);
+  }, [timePeriod, observedDays, tooEarlyToProject]);
 
   // Calculate tick interval based on time period to avoid overcrowding
   const tickInterval = useMemo(() => {
@@ -553,11 +515,13 @@ const CreditAnalyticsTabContent: React.FC = () => {
     },
   };
 
-  const { textModels, imageModels } = useMemo(() => {
+  const { textModels, imageModels, textBedrockChips } = useMemo(() => {
     const byName = (a: ModelInfo, b: ModelInfo) => a.name.localeCompare(b.name);
+    const textRows = dedupePricingRows(accessibleTextModels).sort(byName);
     return {
-      textModels: dedupePricingRows(accessibleTextModels).sort(byName),
+      textModels: textRows,
       imageModels: dedupePricingRows(accessibleImageModels).sort(byName),
+      textBedrockChips: bedrockChipLabels(textRows),
     };
   }, [accessibleTextModels, accessibleImageModels]);
 
@@ -666,7 +630,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                   />
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: '4px' }}>
-                  <Bike4MindIcon size="20" />
+                  <CreditIcon sx={{ fontSize: 20, color: 'var(--Icon-color)' }} />
                   <Typography level={TYPE.statValue} sx={{ color: 'text.primary' }}>
                     {currentUser?.currentCredits?.toLocaleString() || 0}
                   </Typography>
@@ -686,7 +650,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                   />
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: '4px' }}>
-                  <Bike4MindIcon size="20" />
+                  <CreditIcon sx={{ fontSize: 20, color: 'var(--Icon-color)' }} />
                   <Typography level={TYPE.statValue} sx={{ color: 'text.primary' }}>
                     {Math.max(0, Math.round(burnRate)).toLocaleString()}
                   </Typography>
@@ -748,8 +712,12 @@ const CreditAnalyticsTabContent: React.FC = () => {
                   </Typography>
                   <FieldTooltip content={daysTooltipText} ariaLabel="Help: Days remaining" iconSize={16} />
                 </Box>
-                <Typography level={TYPE.statValue} sx={{ color: 'text.primary', mt: '4px' }}>
-                  {daysRemaining !== null ? daysRemaining : 'N/A'}
+                <Typography
+                  level={TYPE.statValue}
+                  sx={{ color: 'text.primary', mt: '4px' }}
+                  data-testid="credit-analytics-days-remaining"
+                >
+                  {daysRemaining !== null ? daysRemaining.toLocaleString() : tooEarlyToProject ? 'Too early' : 'N/A'}
                 </Typography>
               </Box>
             </Box>
@@ -1143,7 +1111,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                             </Typography>
                             {model.backend === ModelBackend.Bedrock && (
                               <Chip size="sm" variant="soft" data-testid={`model-pricing-bedrock-${model.id}`}>
-                                AWS Bedrock
+                                {textBedrockChips.get(model.id)}
                               </Chip>
                             )}
                             {model.description && (
@@ -1163,13 +1131,13 @@ const CreditAnalyticsTabContent: React.FC = () => {
                           <td>{renderPriceTier(model)}</td>
                           <td>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <Bike4MindIcon size="14" />
+                              <CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />
                               <Typography level="body-sm">{inputCost}</Typography>
                             </Box>
                           </td>
                           <td>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <Bike4MindIcon size="14" />
+                              <CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />
                               <Typography level="body-sm">{outputCost}</Typography>
                             </Box>
                           </td>
@@ -1269,7 +1237,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                           <td>{renderPriceTier(model)}</td>
                           <td>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <Bike4MindIcon size="14" />
+                              <CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />
                               <Typography level="body-sm">{inputCost}</Typography>
                             </Box>
                           </td>

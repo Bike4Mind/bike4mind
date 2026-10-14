@@ -128,6 +128,19 @@ The files are removed in the background, so a large folder can take a few minute
 finishes the connection shows **Disconnecting** and cannot be synced. If it stops making progress,
 a **Retry disconnect** button appears.
 
+**Why does my Drive connection say "Credential error"?**
+Google Drive access for the connection was revoked or has expired, so syncing has stopped. Click
+**Reconnect Google Drive**, approve Google's consent screen, and the folder re-syncs when you return.
+
+**Why is a file from my Drive folder or GitHub repository missing from the Data Lake?**
+Sync skips files it cannot ingest, for example a file over the size limit, a file type that cannot
+be imported (such as a Google Form), or a GitHub file that is not text. When files were skipped,
+the Data Lake manager shows a chip such as **3 files not ingested** to anyone who can manage the
+lake. Click it to see each file by name with the reason it was skipped. A file leaves the list once
+it ingests or is removed from the folder or repository. Files skipped because they could not be
+downloaded, or because the lake owner's storage was full, are retried on a later sync (for Drive,
+at the latest on its daily full re-sync).
+
 ## Related
 
 - [Knowledge Management](./knowledge-management.md) -- uploading and managing files

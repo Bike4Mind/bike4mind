@@ -24,7 +24,9 @@ const mocks = vi.hoisted(() => ({
   listPublicVoiceAgents: vi.fn(),
   countActiveVoiceSessions: vi.fn(),
   sessionUpdate: vi.fn(),
+  openVoiceHold: vi.fn(),
   claimVoiceHold: vi.fn(),
+  restoreVoiceHold: vi.fn(),
   findByIdAndUserId: vi.fn(),
   incrementCredits: vi.fn(),
   getSession: vi.fn(),
@@ -111,8 +113,10 @@ vi.mock('@bike4mind/database', async orig => {
       ...(actual.sessionRepository as object),
       countActiveVoiceSessionsByUserId: (...a: unknown[]) => mocks.countActiveVoiceSessions(...a),
       update: (...a: unknown[]) => mocks.sessionUpdate(...a),
+      openVoiceHold: (...a: unknown[]) => mocks.openVoiceHold(...a),
       findByIdAndUserId: (...a: unknown[]) => mocks.findByIdAndUserId(...a),
       claimVoiceHold: (...a: unknown[]) => mocks.claimVoiceHold(...a),
+      restoreVoiceHold: (...a: unknown[]) => mocks.restoreVoiceHold(...a),
     },
     userRepository: {
       ...(actual.userRepository as object),
@@ -139,6 +143,9 @@ import endHandler from '../sessions/[id]/end';
 import legacyVoicesHandler from '../../../voice/v2/voices';
 import legacySessionsHandler from '../../../voice/v2/sessions';
 import legacyEndHandler from '../../../voice/v2/sessions/[id]/end';
+import { MAX_SESSION_SECONDS } from '@server/voice/voiceSessionLimits';
+import { VOICE_HOLD_LOSER_REFUND_FAILED_LOG } from '@server/voice/settleVoiceHold';
+import { Logger } from '@bike4mind/observability';
 import legacyAgentsHandler from '../../../voice/v2/agents';
 import {
   ApiKeyScope,
@@ -206,8 +213,9 @@ beforeEach(() => {
   mocks.listPublicVoiceAgents.mockResolvedValue([]);
   mocks.countActiveVoiceSessions.mockResolvedValue(0);
   mocks.sessionUpdate.mockResolvedValue(undefined);
+  mocks.openVoiceHold.mockResolvedValue(true);
   mocks.incrementCredits.mockResolvedValue(undefined);
-  mocks.claimVoiceHold.mockResolvedValue(true);
+  mocks.claimVoiceHold.mockResolvedValue({ billedCredits: null });
   mocks.findByIdAndUserId.mockResolvedValue({ id: SESSION_ID, name: 'My notebook' });
   mocks.createSession.mockResolvedValue({ id: SESSION_ID, name: 'Voice' });
   mocks.signVoiceSessionToken.mockReturnValue('signed-session-token');
@@ -315,12 +323,12 @@ describe('POST /api/v1/voice/sessions', () => {
   });
 
   // The proxy forwards this claim to the turn's tools; without it a key-minted call reads as a session.
-  it('binds the minting key id into the session token', async () => {
+  it('binds an apiKey origin and the minting key id into the session token', async () => {
     const { res, run } = fireSessions();
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.signVoiceSessionToken).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKeyId: 'k1' }),
+      expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }),
       expect.any(Number)
     );
   });
@@ -333,7 +341,9 @@ describe('POST /api/v1/voice/sessions', () => {
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.validate).not.toHaveBeenCalled();
-    expect((mocks.signVoiceSessionToken.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId).toBeUndefined();
+    const claims = mocks.signVoiceSessionToken.mock.calls[0][0] as { authOrigin?: string; apiKeyId?: string };
+    expect(claims.authOrigin).toBe('session');
+    expect(claims.apiKeyId).toBeUndefined();
   });
 
   it('rejects a body that fails the contract schema (422)', async () => {
@@ -399,17 +409,163 @@ describe('POST /api/v1/voice/sessions', () => {
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.incrementCredits).not.toHaveBeenCalled();
-    expect(mocks.sessionUpdate).not.toHaveBeenCalled();
+    expect(mocks.openVoiceHold).not.toHaveBeenCalled();
+  });
+
+  it('settles a realtime hold and reserves afresh on a reconnect, never reusing it', async () => {
+    const startedAt = new Date(Date.now() - 60_000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      userId: 'user-1',
+      name: 'My notebook',
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: startedAt,
+      // Realtime marker: this hold settles on the realtime floor, not ElevenLabs time.
+      voiceBilledCredits: 0,
+    });
+    const { res, run } = fireSessions({ body: { sessionId: SESSION_ID, isReconnect: true } });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, startedAt);
+    expect(mocks.incrementCredits).toHaveBeenLastCalledWith('user-1', -RESERVED_CREDITS);
+    expect(mocks.openVoiceHold).toHaveBeenCalledWith(
+      SESSION_ID,
+      startedAt,
+      expect.objectContaining({ voiceReservedCredits: RESERVED_CREDITS, realtime: false })
+    );
+    const [claims] = mocks.signVoiceSessionToken.mock.calls[0] as [{ voiceHoldStartedAt?: string }];
+    expect(claims.voiceHoldStartedAt).not.toBe(startedAt.toISOString());
   });
 
   it('records the reservation on a fresh connect', async () => {
     const { res, run } = fireSessions();
     await run();
     expect(res._getStatusCode()).toBe(200);
-    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS })
+    expect(mocks.openVoiceHold).toHaveBeenCalledWith(
+      SESSION_ID,
+      null,
+      expect.objectContaining({ voiceReservedCredits: RESERVED_CREDITS, realtime: false })
     );
     expect(mocks.findByIdAndUserId).toHaveBeenCalledWith(SESSION_ID, 'user-1');
+  });
+
+  it("names the call's hold in its session token, so its activity marks only that hold", async () => {
+    const { run } = fireSessions();
+    await run();
+    const [, , update] = mocks.openVoiceHold.mock.calls[0] as [string, Date | null, { voiceSessionStartedAt: Date }];
+    const [claims] = mocks.signVoiceSessionToken.mock.calls[0] as [{ voiceHoldStartedAt?: string }];
+    expect(claims.voiceHoldStartedAt).toBe(update.voiceSessionStartedAt.toISOString());
+  });
+
+  it('names the reused hold in the token of a reconnect', async () => {
+    const startedAt = new Date(Date.now() - 60_000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      name: 'My notebook',
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: startedAt,
+    });
+    const { run } = fireSessions({ body: { sessionId: SESSION_ID, isReconnect: true } });
+    await run();
+    const [claims] = mocks.signVoiceSessionToken.mock.calls[0] as [{ voiceHoldStartedAt?: string }];
+    expect(claims.voiceHoldStartedAt).toBe(startedAt.toISOString());
+  });
+
+  it('settles an earlier call left open before a fresh connect overwrites its hold', async () => {
+    const startedAt = new Date(Date.now() - 20 * 60 * 1000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      userId: 'user-1',
+      name: 'My notebook',
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: startedAt,
+      // Last seen alive a minute after it connected: the earlier call keeps that minute.
+      voiceConnectedAt: startedAt,
+      voiceLastActivityAt: new Date(startedAt.getTime() + 60 * 1000),
+    });
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.claimVoiceHold).toHaveBeenCalledWith(SESSION_ID, startedAt);
+    expect(mocks.incrementCredits.mock.calls).toEqual([
+      ['user-1', RESERVED_CREDITS - Math.ceil(RESERVED_CREDITS / 5)],
+      ['user-1', -RESERVED_CREDITS],
+    ]);
+  });
+
+  it('drops the realtime marker of a prior realtime hold that had no reserve', async () => {
+    // enforceCredits off when the realtime call opened: no reserve, so the prior hold is never claimed.
+    settings({ enforceCredits: 'false' });
+    const priorStartedAt = new Date(Date.now() - 60_000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      userId: 'user-1',
+      name: 'My notebook',
+      voiceReservedCredits: null,
+      voiceSessionStartedAt: priorStartedAt,
+      voiceBilledCredits: 0,
+    });
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.claimVoiceHold).not.toHaveBeenCalled();
+    expect(mocks.openVoiceHold).toHaveBeenCalledWith(
+      SESSION_ID,
+      priorStartedAt,
+      expect.objectContaining({ voiceReservedCredits: null, realtime: false })
+    );
+  });
+
+  it('refunds the reserve and answers 409 when a concurrent bootstrap wrote its hold first', async () => {
+    mocks.openVoiceHold.mockResolvedValue(false);
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toMatchObject({ error: expect.any(String) });
+    expect(mocks.incrementCredits.mock.calls).toEqual([
+      ['user-1', -RESERVED_CREDITS],
+      ['user-1', RESERVED_CREDITS],
+    ]);
+  });
+
+  it('still answers 409 and logs the owed refund when the loser refund throws', async () => {
+    mocks.openVoiceHold.mockResolvedValue(false);
+    mocks.incrementCredits.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('db down'));
+    const logError = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    try {
+      const { res, run } = fireSessions();
+      await run();
+      expect(res._getStatusCode()).toBe(409);
+      expect(res._getJSONData()).toMatchObject({ error: expect.any(String) });
+      expect(logError).toHaveBeenCalledWith(VOICE_HOLD_LOSER_REFUND_FAILED_LOG, {
+        userId: 'user-1',
+        sessionId: SESSION_ID,
+        refund: RESERVED_CREDITS,
+        err: { message: 'db down', name: 'Error' },
+      });
+    } finally {
+      logError.mockRestore();
+    }
+  });
+
+  it('leaves exactly one hold and one reserve charged when two fresh bootstraps race', async () => {
+    // Stands in for the conditional write: it lands only over no hold (the state both requests read).
+    let held: Date | null = null;
+    mocks.openVoiceHold.mockImplementation(
+      async (_id: string, prior: Date | null, hold: { voiceSessionStartedAt: Date }) => {
+        if (held !== null && held !== prior) return false;
+        held = hold.voiceSessionStartedAt;
+        return true;
+      }
+    );
+    const a = fireSessions();
+    const b = fireSessions();
+    await Promise.all([a.run(), b.run()]);
+
+    expect([a.res._getStatusCode(), b.res._getStatusCode()].sort()).toEqual([200, 409]);
+    expect(held).not.toBeNull();
+    const net = mocks.incrementCredits.mock.calls.reduce((sum, [, delta]) => sum + (delta as number), 0);
+    expect(net).toBe(-RESERVED_CREDITS);
   });
 
   it('creates a session when no sessionId is sent', async () => {
@@ -424,8 +580,10 @@ describe('POST /api/v1/voice/sessions', () => {
       expect.anything()
     );
     expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', -RESERVED_CREDITS);
-    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS })
+    expect(mocks.openVoiceHold).toHaveBeenCalledWith(
+      SESSION_ID,
+      null,
+      expect.objectContaining({ voiceReservedCredits: RESERVED_CREDITS, realtime: false })
     );
   });
 
@@ -434,8 +592,10 @@ describe('POST /api/v1/voice/sessions', () => {
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', -RESERVED_CREDITS);
-    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ voiceReservedCredits: RESERVED_CREDITS })
+    expect(mocks.openVoiceHold).toHaveBeenCalledWith(
+      SESSION_ID,
+      null,
+      expect.objectContaining({ voiceReservedCredits: RESERVED_CREDITS, realtime: false })
     );
   });
 
@@ -451,7 +611,7 @@ describe('POST /api/v1/voice/sessions', () => {
     await run();
     expect(res._getStatusCode()).toBe(502);
     expect(mocks.incrementCredits).not.toHaveBeenCalled();
-    expect(mocks.sessionUpdate).not.toHaveBeenCalled();
+    expect(mocks.openVoiceHold).not.toHaveBeenCalled();
   });
 
   it('returns 404 for a session the caller cannot see', async () => {
@@ -532,13 +692,72 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     );
   });
 
+  it('refunds the whole hold of a call that never connected', async () => {
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: new Date(Date.now() - 120_000),
+      voiceConnectedAt: null,
+    });
+    const { res, run } = fireEnd();
+    await run();
+    expect(res._getJSONData()).toMatchObject({ refunded: RESERVED_CREDITS });
+  });
+
+  it('bills a connected call from its connect, not from the hold start', async () => {
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: new Date(Date.now() - MAX_SESSION_SECONDS * 1000),
+      voiceConnectedAt: new Date(Date.now() - (MAX_SESSION_SECONDS * 1000) / 2),
+    });
+    const { res, run } = fireEnd();
+    await run();
+    const { refunded } = res._getJSONData();
+    // About half the hold: connected for half the longest call.
+    expect(refunded).toBeGreaterThan(RESERVED_CREDITS * 0.45);
+    expect(refunded).toBeLessThan(RESERVED_CREDITS * 0.55);
+  });
+
+  it('restores the hold with its last activity at the end when the refund fails, so a retry bills to the end', async () => {
+    const startedAt = new Date(Date.now() - 300_000);
+    const connectedAt = new Date(Date.now() - 240_000);
+    const lastActivityAt = new Date(Date.now() - 10_000);
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: startedAt,
+      voiceConnectedAt: connectedAt,
+      voiceLastActivityAt: lastActivityAt,
+    });
+    mocks.incrementCredits.mockRejectedValue(new Error('db blip'));
+    mocks.restoreVoiceHold.mockResolvedValue(true);
+    const { res, run } = fireEnd();
+    const beforeEnd = Date.now();
+    await run();
+    expect(res._getStatusCode()).toBe(500);
+    expect(mocks.restoreVoiceHold).toHaveBeenCalledWith(SESSION_ID, RESERVED_CREDITS, startedAt, {
+      voiceConnectedAt: connectedAt,
+      voiceLastActivityAt: expect.any(Date),
+      voiceBilledCredits: null,
+    });
+    const [, , , markers] = mocks.restoreVoiceHold.mock.calls[0] as [
+      unknown,
+      unknown,
+      unknown,
+      { voiceLastActivityAt: Date },
+    ];
+    expect(markers.voiceLastActivityAt.getTime()).toBeGreaterThanOrEqual(beforeEnd);
+    expect(markers.voiceLastActivityAt.getTime()).toBeGreaterThan(lastActivityAt.getTime());
+  });
+
   it('refunds nothing when a concurrent end or the stale hold sweep settled the hold first', async () => {
     mocks.findByIdAndUserId.mockResolvedValue({
       id: SESSION_ID,
       voiceReservedCredits: RESERVED_CREDITS,
       voiceSessionStartedAt: new Date(Date.now() - 1000),
     });
-    mocks.claimVoiceHold.mockResolvedValue(false);
+    mocks.claimVoiceHold.mockResolvedValue(null);
     const { res, run } = fireEnd();
     await run();
     expect(res._getStatusCode()).toBe(200);
@@ -553,5 +772,22 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ refunded: 0, alreadyReconciled: true });
     expect(mocks.incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('drops the realtime billed-credits marker when there is no hold to settle', async () => {
+    // enforceCredits off: a realtime bootstrap leaves no reservation but does write the marker.
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      voiceReservedCredits: null,
+      voiceSessionStartedAt: new Date(Date.now() - 1000),
+      voiceBilledCredits: 0,
+    });
+    const { res, run } = fireEnd();
+    await run();
+    expect(res._getJSONData()).toEqual({ refunded: 0, alreadyReconciled: true });
+    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
+      { id: SESSION_ID, voiceReservedCredits: null, voiceSessionStartedAt: null },
+      { unset: ['voiceBilledCredits'] }
+    );
   });
 });

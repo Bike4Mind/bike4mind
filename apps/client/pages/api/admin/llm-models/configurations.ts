@@ -1,5 +1,5 @@
 import { AdminSettings } from '@bike4mind/database/infra';
-import { ApiKeyScope, LLMModelConfig } from '@bike4mind/common';
+import { ApiKeyScope, LLMModelConfig, OAUTH_SOURCE_TAG_PREFIX, isOAuthSourceTag } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -66,6 +66,11 @@ const putHandler = asyncHandler<unknown, unknown, { configurations: LLMModelConf
       if (typeof tag !== 'string') {
         throw new BadRequestError(`Configuration at index ${index}, allowedUserTags[${tagIndex}] must be a string`);
       }
+      if (isOAuthSourceTag(tag)) {
+        throw new BadRequestError(
+          `Configuration at index ${index}, allowedUserTags[${tagIndex}] cannot use the self-assignable "${OAUTH_SOURCE_TAG_PREFIX}" namespace`
+        );
+      }
     });
     // Validate allowedEntitlements if provided (optional - must be a string array)
     if (config.allowedEntitlements !== undefined) {
@@ -76,6 +81,11 @@ const putHandler = asyncHandler<unknown, unknown, { configurations: LLMModelConf
         if (typeof key !== 'string') {
           throw new BadRequestError(
             `Configuration at index ${index}, allowedEntitlements[${keyIndex}] must be a string`
+          );
+        }
+        if (isOAuthSourceTag(key)) {
+          throw new BadRequestError(
+            `Configuration at index ${index}, allowedEntitlements[${keyIndex}] cannot use the self-assignable "${OAUTH_SOURCE_TAG_PREFIX}" namespace`
           );
         }
       });

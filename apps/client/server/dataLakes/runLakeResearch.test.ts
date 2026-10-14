@@ -27,6 +27,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: {},
   lakeConfigChangeEventRepository: {},
   usageEventRepository: {},
+  creditTransactionRepository: {},
   userRepository: { findById: h.findUserById },
   organizationRepository: { findById: h.findOrgById },
   dataLakeRepository: { findById: h.findLakeById },
@@ -311,11 +312,29 @@ describe('runLakeResearch', () => {
           feature: 'operations',
           provider: 'openai',
           model: 'gpt-4.1-mini',
+          // The ACTUAL spend, not the run's ceiling.
           costUsd: 800 / 1_000_000,
-          bypassCreditBilling: true,
+          forceCreditBilling: true,
         }),
         expect.anything()
       );
+      // The deduct path is all-or-nothing on these three: without them wired, recordOperationalUsage
+      // silently degrades to recorded-only and the owner's balance never moves.
+      expect(h.recordOperationalUsage.mock.calls[0][1]).toMatchObject({
+        db: {
+          creditTransactions: expect.anything(),
+          users: expect.anything(),
+          organizations: expect.anything(),
+        },
+      });
+    });
+
+    // The debit alone cannot cover the balance - a run started below its ceiling must not debit at
+    // all, which is what makes the startResearchRun pre-flight the thing that bounds cross-run spend.
+    it('no longer bypasses credit billing', async () => {
+      await runLakeResearch('run-1', logger);
+
+      expect(h.recordOperationalUsage.mock.calls[0][0].bypassCreditBilling).toBeUndefined();
     });
 
     // The fallback default model is not necessarily in the deployment's own catalog (it is a
@@ -470,6 +489,83 @@ describe('runLakeResearch', () => {
 
       expect(lead.search).toHaveBeenCalledWith('q', 5, { recencyDays: 30 });
       expect(hits()).toEqual([{ title: 'Lead', url: 'https://lead.example', snippet: 's' }]);
+    });
+
+    it('logs the query, serving provider, levers, hit count and hostnames for the run', async () => {
+      const backup = {
+        name: 'searxng',
+        search: vi.fn(async () => [
+          { title: 'A', url: 'https://arxiv.org/abs/1', snippet: 's' },
+          { title: 'B', url: 'https://www.ieee.org/x', snippet: 's' },
+        ]),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([timedOutLead(), backup]);
+      searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect((logger as unknown as { log: ReturnType<typeof vi.fn> }).log).toHaveBeenCalledWith(
+        '[lakeResearch] search',
+        {
+          runId: 'run-1',
+          provider: 'searxng',
+          query: 'q',
+          maxResults: 5,
+          recencyDays: 30,
+          hits: 2,
+          hosts: ['arxiv.org', 'www.ieee.org'],
+        }
+      );
+    });
+
+    it('logs at most ten hostnames, passes an unparseable url through raw, and names the lead when it serves', async () => {
+      const lead = {
+        name: 'serpapi',
+        search: vi.fn(async () =>
+          Array.from({ length: 12 }, (_, i) => ({
+            title: `T${i}`,
+            url: i === 2 ? 'not a url' : `https://h${i}.example/p`,
+            snippet: 's',
+          }))
+        ),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([lead, null]);
+      searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      const call = (logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.find(
+        ([msg]) => msg === '[lakeResearch] search'
+      );
+      expect(call?.[1]).toMatchObject({ provider: 'serpapi', hits: 12 });
+      const hosts = (call?.[1] as { hosts: string[] }).hosts;
+      expect(hosts).toHaveLength(10);
+      expect(hosts[2]).toBe('not a url');
+      expect(hosts[0]).toBe('h0.example');
+    });
+
+    it('logs the query and rethrows when every provider fails', async () => {
+      const failing = (message: string) => ({
+        name: 'p',
+        search: vi.fn(async () => {
+          throw new Error(message);
+        }),
+      });
+      h.resolveWebSearchProviders.mockResolvedValue([failing('lead down'), failing('backup down')]);
+      searchOnce();
+
+      await expect(runLakeResearch('run-1', logger)).rejects.toThrow(/Web search failed on both providers/);
+
+      expect((logger as unknown as { error: ReturnType<typeof vi.fn> }).error).toHaveBeenCalledWith(
+        '[lakeResearch] search failed',
+        expect.objectContaining({
+          runId: 'run-1',
+          query: 'q',
+          maxResults: 5,
+          recencyDays: 30,
+          error: expect.stringMatching(/Web search failed on both providers/),
+        })
+      );
     });
 
     it('fails the run naming both providers when both fail', async () => {

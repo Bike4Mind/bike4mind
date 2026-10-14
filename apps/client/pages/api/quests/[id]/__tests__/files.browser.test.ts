@@ -23,7 +23,8 @@ it.each([undefined, '', '   ', 'https://objects.example.invalid'])(
     vi.clearAllMocks();
     const request = { user: { id: 'owner' }, query: { id: 'quest' } };
     const json = vi.fn();
-    await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(request, { json });
+    const status = vi.fn().mockReturnValue({ json });
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(request, { json, status });
     const adapter = (h.list.mock.calls[0] as unknown[])[2] as {
       storage: { signedUrlCache?: string; generateSignedUrl: (path: string, expiry: number) => Promise<string | null> };
     };

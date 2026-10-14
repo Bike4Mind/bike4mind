@@ -462,6 +462,24 @@ export const billingRoute = createRoute({
   },
 });
 
+// Guessed URLs with no page of their own. Chats are listed in the sidenav, so /notebooks lands on
+// the app home; /subscriptions opens the plans modal the way /billing/plans does.
+export const notebooksIndexRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/notebooks',
+  beforeLoad: () => {
+    throw redirect({ to: '/', replace: true });
+  },
+});
+
+export const subscriptionsIndexRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/subscriptions',
+  beforeLoad: () => {
+    throw redirect({ href: billingLandingHref('plans'), replace: true });
+  },
+});
+
 const AGENT_FEATURE_GATE = {
   feature: 'enableAgents' as const,
   featureName: 'Agents',
@@ -1189,6 +1207,8 @@ const routeTree = rootRoute.addChildren([
     feedbackRollupRoute,
     subscriptionsCheckoutRoute,
     billingRoute,
+    notebooksIndexRoute,
+    subscriptionsIndexRoute,
     agentsRoute,
     newAgentRoute,
     agentDetailRoute,

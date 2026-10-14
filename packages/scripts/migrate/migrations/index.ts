@@ -141,6 +141,7 @@ import EnsureDataLakeResearchScheduleIndex from './20260921125000_ensure-data-la
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod's for the same reason as
 // EnsureDataLakeInconsistencyScanIndex above - see that migration's docstring.
 import BackfillShareTokens from './20260921130000_backfill-share-tokens';
+import DropShareTokenScalar from './20260921140000_drop-share-token-scalar';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod's, as EnsureDataLakeInconsistencyScanIndex.
 import EnsureQuestCallbackPendingIndex from './20260921235900_ensure-quest-callback-pending-index';
 import EnsureFabFileGitHubConnectionIndex from './20260921235958_ensure-fabfile-github-connection-index';
@@ -151,6 +152,8 @@ import EnsureOAuthGrantUserRevokedUpdatedAtIndex from './20260921235961_ensure-o
 import EnsureGitHubLakeAuthGrantIndexes from './20260921235962_ensure-github-lake-auth-grant-indexes';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
 import EnsureSessionOriginChannelIndex from './20260921235980_ensure-session-origin-channel-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureStaleVoiceHoldIndex from './20260921235986_ensure-stale-voice-hold-index';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
 import EnsureQuestCallbackDispatchedIndex from './20260921235990_ensure-quest-callback-dispatched-index';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
@@ -162,6 +165,8 @@ import EnsureApiKeyUsageLogSourceOwnerIndex from './20260921235995_ensure-apikey
 import DetachForeignQuestNodeArtifacts from './20260921235996_detach-foreign-quest-node-artifacts';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureSessionUserIdIdIndex from './20260921235997_ensure-session-userid-id-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureLakeSkippedFileIndexes from './20260921235989_ensure-lake-skipped-file-indexes';
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import ReplaceReleaseNoteStatusIndex from './20260921235998_replace-release-note-status-index';
@@ -174,6 +179,8 @@ import ReplaceReleaseNoteStatusIndex from './20260921235998_replace-release-note
 import EnsureFabFileOwnedKeysetIndex from './20260921235994_ensure-fabfile-owned-keyset-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import UnsetStoredDefaultForcedRetrievalFloor from './20260921235999_unset-stored-default-forced-retrieval-floor';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureArtifactOwnedKeysetIndex from './20260921235993_ensure-artifact-owned-keyset-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -295,22 +302,26 @@ const coreMigrations: MigrationFile[] = [
   EnsureDataLakeInconsistencyScanIndex,
   EnsureDataLakeResearchScheduleIndex,
   BackfillShareTokens,
+  DropShareTokenScalar,
   EnsureQuestCallbackPendingIndex,
   EnsureFabFileGitHubConnectionIndex,
   EnsureOrgGitHubLakeConnectionIndexes,
   EnsureOAuthGrantUserRevokedUpdatedAtIndex,
   EnsureGitHubLakeAuthGrantIndexes,
   EnsureSessionOriginChannelIndex,
+  EnsureStaleVoiceHoldIndex,
   EnsureQuestCallbackDispatchedIndex,
   EnsureGenerationJobIndexes,
   EnsureGenerationJobRequesterIndex,
   EnsureApiKeyUsageLogSourceOwnerIndex,
   DetachForeignQuestNodeArtifacts,
   EnsureSessionUserIdIdIndex,
+  EnsureLakeSkippedFileIndexes,
   EnsureOAuthGrantClientUserIndex,
   ReplaceReleaseNoteStatusIndex,
   EnsureFabFileOwnedKeysetIndex,
   UnsetStoredDefaultForcedRetrievalFloor,
+  EnsureArtifactOwnedKeysetIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

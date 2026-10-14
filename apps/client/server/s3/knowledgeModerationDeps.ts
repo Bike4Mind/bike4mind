@@ -59,10 +59,10 @@ export function buildKnowledgeModerationDeps(
           // The attempt bookkeeping the rescue sweep's fairness sort and backoff read - see
           // moderationRescueSweep.ts. Written here because this is the single point every
           // transient failure on THIS door (the import path, the self-host webhook and the sweep's
-          // re-scan) funnels through. The hosted upload-time scan (server/s3/objectCreated.ts) has
-          // no equivalent release - a crashed hosted scan is only ever recovered by the sweep's own
-          // stale-claim reclaim, so its attempt count is undercounted relative to a row scanned
-          // through here.
+          // re-scan) funnels through. The hosted S3 handler (server/s3/objectCreated.ts) has no
+          // release - a crashed hosted scan is only ever recovered by the sweep's own stale-claim
+          // reclaim, so its attempt count is undercounted. The on-demand route releases through
+          // moderationScan.releaseModerationClaim, which writes the same bookkeeping.
           $set: { moderationStatus: 'pending', moderationLastAttemptAt: new Date() },
           $inc: { moderationAttempts: 1 },
           $unset: { moderationClaimedAt: 1 },

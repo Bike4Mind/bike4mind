@@ -29,7 +29,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findById: (...a: unknown[]) => mockFindById(...a), update: (...a: unknown[]) => mockUserUpdate(...a) },
+  userRepository: {
+    findById: (...a: unknown[]) => mockFindById(...a),
+    update: (...a: unknown[]) => mockUserUpdate(...a),
+  },
   mcpServerRepository: {
     findOne: (...a: unknown[]) => mockServerFindOne(...a),
     update: (...a: unknown[]) => mockServerUpdate(...a),
@@ -78,11 +81,9 @@ describe('POST /api/mcp-servers/atlassian/finalize - reconnect', () => {
   it('clears the confirmed-empty marker before fetching on an existing server', async () => {
     await run();
 
-    expect(mockServerUpdate).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ id: SERVER_ID, enabled: true }),
-      { unset: ['toolSchemasFetchedAt'] }
-    );
+    expect(mockServerUpdate).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: SERVER_ID, enabled: true }), {
+      unset: ['toolSchemasFetchedAt'],
+    });
   });
 
   it('stamps a fresh marker after the reconnect tool fetch', async () => {

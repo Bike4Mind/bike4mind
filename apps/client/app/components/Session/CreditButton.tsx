@@ -1,6 +1,6 @@
 import { Button, Tooltip } from '@mui/joy';
 import { FC, useState } from 'react';
-import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
+import CreditIcon from '../svgs/icons/CreditIcon';
 import CreditsModal from '../subscription/CreditsModal';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
@@ -47,7 +47,7 @@ const CreditBalanceChip: FC<{ compact?: boolean }> = ({ compact = false }) => {
           onClick={() => setIsOpen(true)}
           data-testid="credit-balance-chip"
           aria-label={`${formatCreditBalance(credits)}. Open credits`}
-          startDecorator={<Bike4MindIcon size="14" fill="currentColor" />}
+          startDecorator={<CreditIcon sx={{ fontSize: 14 }} />}
           sx={{
             height: '32px',
             minHeight: '32px',

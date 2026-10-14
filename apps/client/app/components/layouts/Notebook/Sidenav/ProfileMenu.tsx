@@ -4,7 +4,7 @@ import { useColorScheme, useTheme } from '@mui/joy/styles';
 import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { UiNavigationEvents } from '@bike4mind/common';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import InboxBadge from '@client/app/components/inbox/Badge';
 import { useReferralModal } from '@client/app/components/referrals/ReferralModal';
 import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
@@ -23,6 +23,7 @@ import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.g
 import { openExternalLinkByKey } from '@client/app/utils/externalLinks';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import { greenAlpha } from '@client/app/utils/themes/colors';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
@@ -211,7 +212,8 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
       <Chip
         size="sm"
         variant="plain"
-        startDecorator={<Bike4MindIcon size="12" />}
+        // margin: 0 cancels Joy's decorator nudge so the icon lines up under the account name (px: 0).
+        startDecorator={<CreditIcon sx={{ fontSize: 12, color: 'var(--Icon-color)', margin: 0 }} />}
         sx={theme => ({
           alignSelf: 'flex-start',
           backgroundColor: 'transparent',
@@ -219,11 +221,11 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
           px: 0,
           fontSize: '13px',
           gap: '6px',
-          // Bike4MindIcon fills with var(--Icon-color); tint it tertiary.
+          // CreditIcon reads var(--Icon-color); tint it tertiary.
           '--Icon-color': theme.palette.text.tertiary,
         })}
       >
-        {credits.toLocaleString()}
+        {formatCreditAmount(credits)}
       </Chip>
     )}
   </Box>
@@ -488,7 +490,7 @@ const ProfileMenu = () => {
           {isCreditsEnabled && (
             <MenuRow
               testId="profile-menu-credits"
-              icon={<Bike4MindIcon size="18" />}
+              icon={<CreditIcon sx={{ fontSize: 18, color: 'var(--Icon-color)' }} />}
               label={t('credits.title', 'Credits')}
               onClick={() => {
                 logEvent.mutate({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });

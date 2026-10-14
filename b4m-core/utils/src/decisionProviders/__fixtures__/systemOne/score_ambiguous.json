@@ -1,0 +1,24 @@
+{
+  "model": "jev-1.13.0",
+  "answers": {
+    "severity": {
+      "type": "score",
+      "score": 0.01,
+      "confidence": 0.98,
+      "legend": {
+        "0": "Cosmetic",
+        "1": "Workaround available",
+        "2": "Fully blocked"
+      },
+      "probabilities": {
+        "0": 0.99,
+        "1": 0.01,
+        "2": 0
+      }
+    }
+  },
+  "usage": {
+    "input_tokens": 310,
+    "output_tokens": 17
+  }
+}

@@ -7,7 +7,7 @@ import type { AudioGenerationToolCall } from '@bike4mind/common';
 const mockSynthesize = vi.fn();
 const mockGenerate = vi.fn();
 const mockGetEffectiveApiKey = vi.fn();
-const mockPersistFab = vi.fn().mockResolvedValue(undefined);
+const mockSaveAsset = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
@@ -24,7 +24,7 @@ vi.mock('../../../../apiKeyService', async importOriginal => {
 });
 
 vi.mock('../../helpers/persistGeneratedFile', () => ({
-  persistGeneratedFileAsFabFile: mockPersistFab,
+  saveGeneratedAssetFromTool: mockSaveAsset,
 }));
 
 // Imported after the mocks so the tool picks up the mocked dependencies.
@@ -63,7 +63,7 @@ describe('audio_generation tool', () => {
     mockSynthesize.mockReset();
     mockGenerate.mockReset();
     mockGetEffectiveApiKey.mockReset();
-    mockPersistFab.mockClear();
+    mockSaveAsset.mockClear();
     mockSynthesize.mockResolvedValue({
       audio: Buffer.from('fake-mp3'),
       contentType: 'audio/mpeg',
@@ -260,18 +260,32 @@ describe('audio_generation tool', () => {
     expect(mockSynthesize).not.toHaveBeenCalled();
   });
 
-  it('honors saveGeneratedAudio=false: uploads for inline playback but skips the KB FabFile copy', async () => {
+  it('always saves a speech copy with its generation metadata (no user preference gate)', async () => {
     const context = createFakeContext();
     (context as { user: unknown }).user = { preferences: { saveGeneratedAudio: false } };
     const result = await run(context, { kind: 'speech', text: 'hello world' });
     expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
-    expect(mockPersistFab).not.toHaveBeenCalled();
+    expect(mockSaveAsset).toHaveBeenCalledTimes(1);
+    expect(mockSaveAsset).toHaveBeenCalledWith(context, {
+      bytes: Buffer.from('fake-mp3'),
+      contentType: 'audio/mpeg',
+      generation: {
+        generator: 'speech',
+        provider: expect.any(String),
+        modelId: expect.any(String),
+        prompt: 'hello world',
+      },
+    });
     expect(result).toBe('Successfully generated speech');
   });
 
-  it('persists the KB FabFile copy when saveGeneratedAudio is unset (defaults on)', async () => {
+  it('saves a sound-effect copy with its duration', async () => {
     const context = createFakeContext();
-    await run(context, { kind: 'speech', text: 'hello world' });
-    expect(mockPersistFab).toHaveBeenCalledTimes(1);
+    await run(context, { kind: 'sound_effect', text: 'dog barking', durationSeconds: 5 });
+    expect(mockSaveAsset).toHaveBeenCalledWith(context, {
+      bytes: Buffer.from('fake-sfx'),
+      contentType: 'audio/mpeg',
+      generation: { generator: 'sound_effect', provider: 'elevenlabs', prompt: 'dog barking', durationSeconds: 5 },
+    });
   });
 });

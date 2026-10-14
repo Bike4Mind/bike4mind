@@ -218,6 +218,12 @@ describe('GET /api/users - publicView projection coupling', () => {
     expect(JSON.stringify(matchStage())).toContain('isAdmin');
   });
 
+  it('filters an admin listing by an OAuth source tag', async () => {
+    const { req, res } = mocks({ id: 'a1', isAdmin: true }, { tags: ['source:acme_app'] });
+    await mockRefs.getHandler!(req, res);
+    expect(JSON.stringify(matchStage())).toContain('{"tags":{"$in":["source:acme_app"]}}');
+  });
+
   it('anchors the publicView search so it cannot walk the directory by domain', async () => {
     // `search=com` used to match every address on the instance through an unanchored
     // substring regex over email.

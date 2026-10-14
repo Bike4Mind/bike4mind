@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { OpenAiDecisionProvider } from './openaiDecisions/OpenAiDecisionProvider';
 import { createDecisionProviderRegistry } from './registry';
+import { SystemOneDecisionProvider } from './systemOne/SystemOneDecisionProvider';
 import { TestDecisionProvider } from './test/TestDecisionProvider';
 import type { DecisionProvider } from './types';
 
@@ -9,6 +10,12 @@ describe('createDecisionProviderRegistry', () => {
     const registry = createDecisionProviderRegistry([new TestDecisionProvider(), new OpenAiDecisionProvider()]);
     expect(registry.forModel('gpt-6-luna')?.id).toBe('openaiDecisions');
     expect(registry.forModel('test-decisions')?.id).toBe('test');
+  });
+
+  it('routes both Jev models to the systemOne adapter', () => {
+    const registry = createDecisionProviderRegistry([new SystemOneDecisionProvider()]);
+    expect(registry.forModel('jev-1.13.0')?.id).toBe('systemOne');
+    expect(registry.forModel('jev-latest')?.id).toBe('systemOne');
   });
 
   it('leaves a model unserved when its adapter is not registered', () => {

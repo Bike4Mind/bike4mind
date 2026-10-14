@@ -8,9 +8,10 @@ export interface FacetResults {
   lastMonth?: Array<{ _id: string; count: number }>;
   allUsers?: Array<{ count: number }>;
   internalUsers?: Array<{ count: number }>;
+  weeklyActiveUsers?: Array<{ count: number }>;
   topUsers?: Array<{
     _id: string;
-    email: string;
+    email: string | null;
     interactions: number;
     rankChange?: 'up' | 'down' | 'new' | 'same';
     lastWeekRank?: number | 'new' | '>#20';

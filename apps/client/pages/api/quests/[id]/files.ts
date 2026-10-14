@@ -1,14 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import {
-  adminSettingsRepository,
-  fabFileRepository,
-  questRepository,
-  sessionRepository,
-  userRepository,
-} from '@bike4mind/database';
-import { fabFilesService } from '@bike4mind/services';
 import { ApiKeyScope } from '@bike4mind/common';
-import { getFilesStorage } from '@server/utils/storage';
+import { listQuestFiles } from '@server/files/listQuestFiles';
 
 // Quest files are part of the documented chat-reply poll, so an AI scope
 // (ai:chat / ai:generate) grants read here as well as notebooks:read. OR
@@ -23,28 +15,7 @@ const handler = baseApi({
     const userId = req.user!.id;
     const { id } = req.query as { id?: string };
 
-    const results = await fabFilesService.listFabFilesByQuest(
-      userId,
-      { questId: id! },
-      {
-        db: {
-          chatHistories: questRepository,
-          fabFiles: fabFileRepository,
-          sessions: sessionRepository,
-          users: userRepository,
-          adminSettings: adminSettingsRepository,
-        },
-        storage: {
-          ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-          generateSignedUrl: async (path: string, expireInSeconds: number) => {
-            return await getFilesStorage().getSignedUrl(path, 'get', {
-              expiresIn: expireInSeconds,
-              audience: 'browser',
-            });
-          },
-        },
-      }
-    );
+    const results = await listQuestFiles(userId, id!);
 
     return res.json(results);
   });

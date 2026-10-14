@@ -1,0 +1,867 @@
+{
+  "apps/client/pages/api/[type]/[id]/revokeSharing.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/agent-ops-settings.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/admin/agent-ops-settings/seed.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/agent-ops-settings/versions/[version]/activate.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/context-telemetry/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/email/attempts/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/email/jobs/[id]/clone.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/email/jobs/[id]/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/email/jobs/[id]/schedule.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/email/jobs/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/email/templates/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/email/templates/[id]/clone.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/email/templates/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/gears/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/help-analytics.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/identity-providers/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/identity-providers/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/integration-audit-logs/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/liveops-triage-configs/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/liveops-triage-configs/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/modals/variants.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/admin/model-deprecation-status.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/model-prices.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/organizations/grants.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/partner-signup-rules/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/partner-signup-rules/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/provider-invoices.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/published-artifacts/[id]/reports.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/published-artifacts/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/rapid-reply/mappings/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/rapid-reply/mappings/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/rapid-reply/prompts/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/admin/rapid-reply/prompts/[id]/activate.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/rapid-reply/prompts/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/rate-limits.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/scoped-settings/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/attack-simulation-ingest.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/cloud-prowler-ingest.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/cloud-prowler.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/cloud.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/code-semgrep-ingest.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/code.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/packages-ingest.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/packages.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/secrets-ingest.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/secrets.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/waf.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/web-owasp-ingest.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/security-dashboard/web.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/security-scan-schedule/[scanType].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/slack-audit-logs/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/slack-workspaces.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/system-prompts/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/team-members.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/admin/users/[userId]/user-api-keys.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/users/email-verification.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/voice-agents/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/voice-agents/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/webhook-logs/[deliveryId].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/agents/[id]/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/agents/create-from-context.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/agents/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/ai/llm.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/api-keys/create.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/api-keys/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/app-files/update-tags.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/artifacts/[id]/versions.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/briefcase/prompts/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/briefcase/prompts/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/business-links/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/business-links/category/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/business-links/category/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/business-links/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/credits/transactions.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id]/articles.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id]/findings/[findingId].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id]/findings/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id]/lifecycle.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id]/proposals/[proposalId].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id]/proposals/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id]/research/configs/[configId].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id]/research/configs/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id]/research/runs/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id]/settings.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id]/transfer-ownership.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/data-lakes/[id]/visibility.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/data-lakes/archived.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/data-lakes/batches/[batchId].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/data-lakes/batches/[batchId]/reanalyze-taxonomy.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/data-lakes/batches/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/data-lakes/deleted.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/data-lakes/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/elabs/voice/[id]/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/elabs/voice/[id]/set-active.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/elabs/voice/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/fabfiles/[id]/apply-auto-rename.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/feedback/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/files/[id]/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/files/copy-generated-image.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/files/createFabFile.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/files/createFabFileURL.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/files/tags/toggle.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/friends/by-user/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/groups/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/help/my-feedback.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/image-templates/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/image-templates/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/import-history-jobs/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/inbox/admin-send.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/inbox/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/mcp-servers/[id]/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/mcp-servers/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/mementos/[id]/update.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/mementos/create-batch.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/mementos/create.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/mementos/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/modals/[id]/delete.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/modals/create.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/groups/[groupId]/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/groups/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/projects/[id]/files.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/projects/[id]/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/projects/[id]/members.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/projects/[id]/sessions.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/projects/[id]/systemPrompts/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/projects/[id]/systemPrompts/toggle.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/projects/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/projects/removeNonExistintFiles.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/prompts/[id]/update.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/prompts/get-by-name.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/prompts/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/quest-master-plans/[id]/blockers.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/quest-master-plans/[id]/decisions.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/quest-master-plans/[id]/handoff.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/quest-master-plans/[id]/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/quest-master-plans/[id]/resolve-blocker.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/quest-master-plans/[id]/review-gate.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/quest-master-plans/[id]/subquest-progress.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/quest-plans/[id]/clone.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/quest-plans/[id]/continue.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/quest-plans/[id]/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/quest-plans/[id]/progress.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/quest-plans/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/quests/[id]/check-timeout.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/reg-invites/create.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/reg-invites/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/reg-invites/update.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/files.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/research/data/files.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/roll.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/security/blocked-ips.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/security/user-summary.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/chat/[messageId]/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/chat/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/questmaster-plans/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/settings/update.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/skills/[id]/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/skills/[id]/share.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/skills/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/slack/workspace/[workspaceId].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/subscribers/[id]/delete.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/subscriptions/cancel.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/subscriptions/own.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/users/[id]/activities/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/users/[id]/projects.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/users/activities/recent.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/users/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/v1/image-edits.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/webhooks/github/subscriptions/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/webhooks/github/subscriptions/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/webhooks/jira/subscriptions/[id].ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/webhooks/jira/subscriptions/index.ts": {
+    "b4m/no-raw-entity-response": {
+      "count": 2
+    }
+  }
+}

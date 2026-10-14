@@ -50,7 +50,7 @@ export async function resolveBridgeWsAuth(params: {
   } catch (apiKeyErr) {
     try {
       const user = await verifyJwtToken(accessToken);
-      await checkRateLimit(user.id);
+      await checkRateLimit(user.id, undefined, { bucket: 'ws' });
       userId = user.id;
       // A bridge action authenticated by a JWT is unusual in steady state -
       // the daemon authenticates with an API key. Log so an unexpected fall-

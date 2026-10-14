@@ -20,6 +20,7 @@ import { recordSignupAcquisition } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
+import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 
 const handler = baseApi({ auth: false })
   .use(async (req, res, next) => {
@@ -115,6 +116,23 @@ const handler = baseApi({ auth: false })
           return res.redirect('/login?error=account_suspended');
         }
 
+        // Resume the originally requested path, round-tripped via the signed
+        // state JWT (embedded by PassportOAuthStateStore.store). /auth/success
+        // applies sanitizeRedirectTo before navigating, so pass it through as an
+        // opaque, URL-encoded query value (kept out of the token fragment).
+        //
+        // The state store already verified this token (CSRF) inside
+        // passport.authenticate above; we re-decode here only to read the
+        // embedded redirectTo and clientId. The extra HS256 verify is cheap and avoids
+        // threading the payload out through passport-oauth2's internals.
+        const stateResult =
+          typeof req.query.state === 'string'
+            ? verifyStateToken<BaseStatePayload & { redirectTo?: string; clientId?: string }>(req.query.state, {
+                audience: `${strategy}-oauth-state`,
+              })
+            : undefined;
+        const redirectTo = stateResult?.valid ? stateResult.payload.redirectTo : undefined;
+
         // A brand-new account (flagged by verifyCallback's User.create branch)
         // also logs REGISTER, matching the OTC signup path (pages/api/otc/verify.ts)
         // - OAuth signups used to be indistinguishable from logins in the event log.
@@ -132,6 +150,7 @@ const handler = baseApi({ auth: false })
           } catch (logError) {
             console.error('Failed to log OAuth registration:', logError);
           }
+          await stampOAuthSourceTag(user.id, stateResult?.valid ? stateResult.payload.clientId : undefined);
           // Credit the signup to the product the visitor came through, if any, and only with
           // consent - see readConsentedAcquisitionTouches. Before the session is minted, as in
           // OTC: a mint failure after the account exists would otherwise lose the signup for
@@ -183,22 +202,6 @@ const handler = baseApi({ auth: false })
           await logAuthAudit(req, { userId: user.id, event: 'oauth_link', strategy });
         }
 
-        // Resume the originally requested path, round-tripped via the signed
-        // state JWT (embedded by PassportOAuthStateStore.store). /auth/success
-        // applies sanitizeRedirectTo before navigating, so pass it through as an
-        // opaque, URL-encoded query value (kept out of the token fragment).
-        //
-        // The state store already verified this token (CSRF) inside
-        // passport.authenticate above; we re-decode here only to read the
-        // embedded redirectTo. The extra HS256 verify is cheap and avoids
-        // threading the payload out through passport-oauth2's internals.
-        const stateResult =
-          typeof req.query.state === 'string'
-            ? verifyStateToken<BaseStatePayload & { redirectTo?: string }>(req.query.state, {
-                audience: `${strategy}-oauth-state`,
-              })
-            : undefined;
-        const redirectTo = stateResult?.valid ? stateResult.payload.redirectTo : undefined;
         const successQuery = authSuccessRedirectQuery(redirectTo);
 
         // Redirect with tokens in URL fragment (not query string)

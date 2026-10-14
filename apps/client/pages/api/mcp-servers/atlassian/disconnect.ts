@@ -2,8 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository, jiraWebhookConfigRepository, jiraWebhookSubscriptionRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { McpServer } from '@bike4mind/database/ai';
-import { getAtlassianOAuthConfig } from '@server/integrations/jira/atlassianConfig';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { revokeAtlassianGrant } from '@server/integrations/jira/revokeAtlassianGrant';
 
 const handler = baseApi().delete(async (req, res) => {
   try {
@@ -11,49 +10,27 @@ const handler = baseApi().delete(async (req, res) => {
     const user = await userRepository.findById(req.user.id);
     const atlassianConnect = user?.atlassianConnect;
 
-    if (atlassianConnect?.accessToken) {
-      try {
-        const { clientId, clientSecret } = await getAtlassianOAuthConfig();
-
-        if (clientId && clientSecret) {
-          console.log('[Atlassian Disconnect] 🔄 Revoking OAuth token with Atlassian...');
-
-          const revokeResponse = await fetch('https://auth.atlassian.com/oauth/token/revoke', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              client_id: clientId,
-              client_secret: clientSecret,
-              token: decryptToken(atlassianConnect.accessToken) ?? '',
-            }),
-          });
-
-          if (revokeResponse.ok) {
-            console.log('[Atlassian Disconnect] ✅ OAuth token revoked successfully');
-          } else {
-            const errorText = await revokeResponse.text();
-            console.warn('[Atlassian Disconnect] ⚠️ Failed to revoke token:', errorText);
-          }
-        }
-      } catch (revokeError) {
-        // Log but don't fail disconnect if revocation fails
-        console.error('[Atlassian Disconnect] ❌ Token revocation failed:', revokeError);
-      }
-    }
+    // Both: Atlassian does not document whether revoking the refresh token also kills issued access tokens.
+    await revokeAtlassianGrant(atlassianConnect?.refreshToken, `user ${req.user.id}`);
+    await revokeAtlassianGrant(atlassianConnect?.accessToken, `user ${req.user.id}`);
 
     // Clean up Jira webhook configs and subscriptions for all connected resources
     if (atlassianConnect?.resources) {
       for (const resource of atlassianConnect.resources) {
         try {
           const webhookConfig = await jiraWebhookConfigRepository.findByAtlassianCloudId(resource.id);
-          if (webhookConfig) {
+          // Admins are deliberately excluded: they remove a shared config via DELETE /api/webhooks/jira/config
+          if (webhookConfig?.createdBy === req.user.id) {
             const deletedSubs = await jiraWebhookSubscriptionRepository.deleteByWebhookConfig(webhookConfig.id);
             await jiraWebhookConfigRepository.delete(webhookConfig.id);
             console.log(
               `[Atlassian Disconnect] ✅ Deleted webhook config and ${deletedSubs} subscription(s) for cloud ${resource.id}`
             );
+          } else if (webhookConfig) {
+            const ownSub = await jiraWebhookSubscriptionRepository.findByUserAndConfig(req.user.id, webhookConfig.id);
+            if (ownSub) {
+              await jiraWebhookSubscriptionRepository.delete(ownSub.id);
+            }
           }
         } catch (webhookError) {
           console.error(

@@ -30,6 +30,26 @@
         "default": "./dist/artifactParser.cjs"
       }
     },
+    "./toolOutputResultScan": {
+      "import": {
+        "types": "./dist/toolOutputResultScan.d.mts",
+        "default": "./dist/toolOutputResultScan.mjs"
+      },
+      "require": {
+        "types": "./dist/toolOutputResultScan.d.cts",
+        "default": "./dist/toolOutputResultScan.cjs"
+      }
+    },
+    "./importStatements": {
+      "import": {
+        "types": "./dist/importStatements.d.mts",
+        "default": "./dist/importStatements.mjs"
+      },
+      "require": {
+        "types": "./dist/importStatements.d.cts",
+        "default": "./dist/importStatements.cjs"
+      }
+    },
     "./artifactElision": {
       "import": {
         "types": "./dist/artifactElision.d.mts",
@@ -160,6 +180,16 @@
         "default": "./dist/decisionProviders/index.cjs"
       }
     },
+    "./generationProviders": {
+      "import": {
+        "types": "./dist/generationProviders/index.d.mts",
+        "default": "./dist/generationProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/generationProviders/index.d.cts",
+        "default": "./dist/generationProviders/index.cjs"
+      }
+    },
     "./videoProviders": {
       "import": {
         "types": "./dist/videoProviders/index.d.mts",
@@ -168,6 +198,16 @@
       "require": {
         "types": "./dist/videoProviders/index.d.cts",
         "default": "./dist/videoProviders/index.cjs"
+      }
+    },
+    "./musicProviders": {
+      "import": {
+        "types": "./dist/musicProviders/index.d.mts",
+        "default": "./dist/musicProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/musicProviders/index.d.cts",
+        "default": "./dist/musicProviders/index.cjs"
       }
     },
     "./security": {
@@ -195,13 +235,13 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@aws-sdk/client-apigatewaymanagementapi": "^3.1080.0",
-    "@aws-sdk/client-bedrock-runtime": "^3.1080.0",
-    "@aws-sdk/client-lambda": "^3.1080.0",
-    "@aws-sdk/client-rekognition": "^3.1080.0",
-    "@aws-sdk/client-s3": "^3.1080.0",
-    "@aws-sdk/client-sqs": "^3.1080.0",
-    "@aws-sdk/s3-request-presigner": "^3.1080.0",
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.1150.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1150.0",
+    "@aws-sdk/client-lambda": "^3.1150.0",
+    "@aws-sdk/client-rekognition": "^3.1150.0",
+    "@aws-sdk/client-s3": "^3.1150.0",
+    "@aws-sdk/client-sqs": "^3.1150.0",
+    "@aws-sdk/s3-request-presigner": "^3.1150.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
@@ -226,9 +266,11 @@
     "unpdf": "^1.6.2",
     "uuid": "^14.0.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
+    "@babel/standalone": "^8.0.4",
+    "@types/babel__standalone": "^7.1.9",
     "@types/lodash": "^4.17.24",
     "@types/mime-types": "^3.0.1",
     "esbuild": "0.28.1",

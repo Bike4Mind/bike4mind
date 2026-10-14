@@ -97,6 +97,7 @@
       "dependsOn": ["^build"],
       "inputs": [
         "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/turbo.json",
         "../../apps/client/pages/**",
         "../../apps/client/server/**",
         "../../apps/workers/src/**",

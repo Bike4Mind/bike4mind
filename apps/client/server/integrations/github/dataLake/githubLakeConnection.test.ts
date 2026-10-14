@@ -37,6 +37,7 @@ const h = vi.hoisted(() => ({
   ghConnTouchDisconnect: vi.fn(),
   fabFilesFindByGitHubConnectionIdInDataLake: vi.fn(),
   purgeConnectionIngestedFiles: vi.fn(),
+  deleteSkipsForSource: vi.fn(async () => 0),
   driveConnFindByDataLakeIdAny: vi.fn(),
   driveConnFindById: vi.fn(),
   sendToQueue: vi.fn(),
@@ -119,6 +120,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
       ...actual.fabFileRepository,
       findByGitHubConnectionIdInDataLake: h.fabFilesFindByGitHubConnectionIdInDataLake,
     },
+    lakeSkippedFileRepository: { ...actual.lakeSkippedFileRepository, deleteForSource: h.deleteSkipsForSource },
     orgGoogleDriveConnectionRepository: {
       ...actual.orgGoogleDriveConnectionRepository,
       findById: h.driveConnFindById,
@@ -1191,6 +1193,7 @@ describe('revokeGitHubLakeConnection', () => {
       expect.objectContaining({ connectionId: 'conn1', logger, sliceSize: REVOKE_PURGE_SLICE_SIZE })
     );
     expect(h.purgeConnectionIngestedFiles.mock.calls[0][2].restore).toBeUndefined();
+    expect(h.deleteSkipsForSource).toHaveBeenCalledWith(LAKE.id, 'github');
     expect(h.ghConnRelease).toHaveBeenCalledWith(CONNECTION.id, CONNECTION.organizationId);
   });
 
@@ -1203,6 +1206,7 @@ describe('revokeGitHubLakeConnection', () => {
     });
     expect(h.ghConnRelease).not.toHaveBeenCalled();
     expect(h.deleteInstallation).not.toHaveBeenCalled();
+    expect(h.deleteSkipsForSource).not.toHaveBeenCalled();
   });
 
   it('does not re-enable the connection when the purge fails, since the App has lost access', async () => {

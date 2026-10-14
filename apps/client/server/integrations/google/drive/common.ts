@@ -65,6 +65,8 @@ export async function revokeToken(accessToken: string) {
   await oauth2Client.revokeToken(accessToken);
 }
 
+const REVOKE_TIMEOUT_MS = 10_000;
+
 /** Outcome of a grant revocation attempt. `already_invalid` and `revoked` both mean nothing is live at Google. */
 export type RevokeOutcome = 'revoked' | 'already_invalid' | 'no_credential' | 'failed';
 
@@ -106,7 +108,12 @@ export async function revokeDriveGrant(
   }
 
   try {
-    await revokeToken(token);
+    // revokeToken takes no timeout and retries, so bound it: callers run inline in a Lambda request.
+    const timeout = AbortSignal.timeout(REVOKE_TIMEOUT_MS);
+    await Promise.race([
+      revokeToken(token),
+      new Promise<never>((_, reject) => timeout.addEventListener('abort', () => reject(timeout.reason))),
+    ]);
     console.log(`[googleDrive] revoked grant at Google (${context})`);
     return 'revoked';
   } catch (e) {
@@ -282,7 +289,11 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
   }
   if (!refreshToken) throw new BadRequestError('Google Drive refresh token unreadable - reconnect required');
 
-  const credentials = await refreshAccessToken(refreshToken);
+  const credentials = await refreshAccessToken(refreshToken).catch((e: unknown) => {
+    // A revoked/expired grant is a reconnect (400), not a server fault: left raw, drive-sync 500s on it.
+    if (isInvalidGrantError(e)) throw new BadRequestError('Google Drive access was revoked - reconnect required');
+    throw e;
+  });
   if (!credentials.access_token) throw new BadRequestError('Google Drive token refresh returned no access token');
 
   await User.updateOne(
@@ -307,8 +318,12 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
  * `credential_error`: nothing but a manual reconnect clears that state, and the poll skips it.
  */
 function isTerminalDriveGrantError(e: unknown): boolean {
-  // getValidUserDriveAccessToken's expected states (unlinked, unreadable, empty refresh) are all reconnects.
-  if (e instanceof BadRequestError) return true;
+  // getValidUserDriveAccessToken's expected states (unlinked, unreadable, revoked) are all reconnects.
+  return e instanceof BadRequestError || isInvalidGrantError(e);
+}
+
+/** A revoked/expired Google grant: only a fresh consent fixes it. */
+export function isInvalidGrantError(e: unknown): boolean {
   if (!(e instanceof Error)) return false;
   // google-auth-library surfaces a revoked/expired grant as a GaxiosError whose body is the OAuth error.
   const response: unknown = 'response' in e ? e.response : undefined;

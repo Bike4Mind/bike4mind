@@ -26,6 +26,8 @@ export interface OktaStateInput {
   idpId?: string;
   /** Post-login path to resume, round-tripped via the state JWT */
   redirectTo?: string;
+  /** OAuth client named by an /oauth/authorize redirectTo, for the signup source tag */
+  clientId?: string;
   [key: string]: unknown; // Required for Record<string, unknown> compatibility
 }
 
@@ -38,4 +40,5 @@ export interface OktaStatePayload extends BaseStatePayload {
   idpId?: string;
   /** Post-login path to resume, round-tripped via the state JWT */
   redirectTo?: string;
+  clientId?: string;
 }

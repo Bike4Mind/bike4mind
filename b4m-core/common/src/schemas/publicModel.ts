@@ -1,7 +1,10 @@
 import { z } from 'zod';
+import { supportsToolChanges, supportsToolSearch } from '../claudeToolCapabilities';
 import { ModelBackend, type ModelInfo } from '../models';
 import { getTextModelCreditsPer1M } from '../pricing';
+import type { ReasoningEffort } from '../types/common';
 import type { ImageModelCapabilities, ImageSizing } from '../utils/imageCapabilities';
+import { CompletionReasoningEffortSchema } from './cliCompletions';
 import { OpenAIImageQualitySchema } from './openai';
 import { paginatedResponseSchema } from './pagination';
 
@@ -90,7 +93,37 @@ export const PublicModelSchema = z.object({
   max_output_tokens: z.number().int(),
   supports_streaming: z.boolean(),
   supports_thinking: z.boolean(),
+  reasons_within_output_budget: z
+    .boolean()
+    .describe(
+      'Whether reasoning tokens are spent inside `max_output_tokens` on every turn. When true, a small ' +
+        '`max_tokens` can be used up by reasoning alone and return an empty reply, so leave room above ' +
+        'the answer you expect.'
+    ),
+  reasoning_efforts: z
+    .array(CompletionReasoningEffortSchema)
+    .describe(
+      'The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. ' +
+        '`none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the ' +
+        'provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on ' +
+        'tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room ' +
+        'for the budget plus the answer.'
+    ),
   supports_tools: z.boolean(),
+  supports_tool_search: z
+    .boolean()
+    .describe(
+      'Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, ' +
+        'so a large tool catalog is searched on demand instead of loaded into context up front. Describes the ' +
+        'model only: `/api/ai/v1/completions` does not accept these yet.'
+    ),
+  supports_tool_changes: z
+    .boolean()
+    .describe(
+      'Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or ' +
+        'remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not ' +
+        'accept these blocks yet.'
+    ),
   supports_vision: z.boolean(),
   deprecation_date: z.string().nullable().describe('`YYYY-MM-DD`; null when no retirement is scheduled.'),
   replaced_by: z.string().nullable().describe('The id of the recommended successor, when there is one.'),
@@ -167,7 +200,16 @@ function toPublicImageCapabilities(image: ImageModelCapabilities): PublicImageCa
   };
 }
 
-export function toPublicModel(model: ModelInfo): PublicModel {
+/**
+ * Reasoning behaviour the route computes in llm-adapters (reasonsWithinOutputBudget,
+ * reasoningEffortsFor), which this package cannot import.
+ */
+export interface PublicModelReasoning {
+  reasonsWithinOutputBudget: boolean;
+  reasoningEfforts: ReasoningEffort[];
+}
+
+export function toPublicModel(model: ModelInfo, reasoning: PublicModelReasoning): PublicModel {
   return {
     id: model.id,
     name: model.name,
@@ -178,7 +220,11 @@ export function toPublicModel(model: ModelInfo): PublicModel {
     max_output_tokens: model.max_tokens,
     supports_streaming: model.can_stream ?? false,
     supports_thinking: model.can_think ?? false,
+    reasons_within_output_budget: reasoning.reasonsWithinOutputBudget,
+    reasoning_efforts: reasoning.reasoningEfforts,
     supports_tools: model.supportsTools ?? false,
+    supports_tool_search: supportsToolSearch(model),
+    supports_tool_changes: supportsToolChanges(model),
     supports_vision: model.supportsVision ?? false,
     deprecation_date: model.deprecationDate ?? null,
     replaced_by: model.replacedBy ?? null,

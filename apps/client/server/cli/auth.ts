@@ -9,17 +9,18 @@ import {
   type IEmbedBranding,
 } from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
-import {
-  userApiKeyService,
-  cacheService,
-  userService,
-  isTokenVersionCurrent,
-  isTokenTypeAcceptable,
-} from '@bike4mind/services';
+import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
-import { UnauthorizedError, ForbiddenError } from '@server/utils/errors';
+import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@server/utils/errors';
 import { z } from 'zod';
+
+/** `additionalInfo` of a rate-limit TooManyRequestsError; transports turn it into response headers. */
+export type RateLimitErrorInfo = {
+  retryAfter?: number;
+  rateLimitHeaders?: Record<string, string | number>;
+};
 
 export interface VerifiedUser {
   id: string;
@@ -222,30 +223,6 @@ async function assertOwnerAccountUsable(userId: string): Promise<void> {
 }
 
 /**
- * The account-state checks of {@link assertOwnerAccountUsable} against an already-loaded
- * user, so the JWT path (verifyJwtToken, which already holds the user) can apply the same
- * gate without a second lookup. One helper so the two entry points can't drift.
- *
- * Which conditions block comes from `userService.accountBlockReasons`, the single definition
- * shared with the admin update and the Stripe dispute path. The error classes and messages
- * below are this client's mapping and must follow that list's precedence.
- */
-export function assertAccountStateUsable(user: IUserDocument): void {
-  switch (userService.accountBlockReasons(user)[0]) {
-    case 'banned':
-      throw new UnauthorizedError('User not found or banned');
-    case 'disputePending':
-      throw new ForbiddenError('Account suspended pending dispute resolution. Please contact support.');
-    case 'suspended':
-      throw new ForbiddenError(
-        'Your account is suspended for repeated content-policy violations. Please contact support to appeal.'
-      );
-    default:
-      return;
-  }
-}
-
-/**
  * Verify API key from headers
  * @throws Error if API key is invalid, expired, missing required scope, or owned by
  * a banned/disputed/suspended account
@@ -274,7 +251,9 @@ export async function verifyApiKey(
 
     if (!hasRequiredScope) {
       const list = requiredScopes.join(' or ');
-      throw new Error(`API key does not have permission for this endpoint (requires ${list})`);
+      throw new ForbiddenError(`API key does not have permission for this endpoint (requires ${list})`, {
+        required_scopes: requiredScopes,
+      });
     }
 
     await assertOwnerAccountUsable(validation.userId);
@@ -359,7 +338,8 @@ export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
  * Check API key rate limits
  * @param apiKeyInfo - API key information including rate limits
  * @param context - Optional context for analytics logging (userId, endpoint, method)
- * @throws Error if rate limit is exceeded
+ * @throws TooManyRequestsError if the limit is exceeded, with `retryAfter` (seconds) and
+ *   `rateLimitHeaders` in additionalInfo for the transport to set as response headers
  * @returns Rate limit headers to include in response
  */
 export async function checkApiKeyRateLimitOrThrow(
@@ -369,7 +349,8 @@ export async function checkApiKeyRateLimitOrThrow(
   const result = await checkApiKeyRateLimit(apiKeyInfo.keyId, apiKeyInfo.rateLimit, context);
 
   if (!result.allowed) {
-    throw new Error(result.error || 'Rate limit exceeded');
+    const info = { retryAfter: result.retryAfter, rateLimitHeaders: result.headers } satisfies RateLimitErrorInfo;
+    throw new TooManyRequestsError(result.error || 'Rate limit exceeded', info);
   }
 
   return result.headers;
@@ -397,12 +378,17 @@ const JWT_RATE_LIMIT_DEFAULT = 100;
 const JWT_RATE_WINDOW_MS = 60 * 60_000; // 1 hour
 
 /**
- * A counter kept apart from the shared per-user one. Callers without a bucket
- * share a single counter across every surface, so a CLI/agent session running
- * at its 1000 cap would exhaust a 100-cap endpoint on the same account. A public
- * endpoint that documents its own budget needs its own bucket.
+ * A counter kept apart from the shared per-user one. Callers without a bucket share a single
+ * counter across every surface, so a session running at a 1000 cap would exhaust a 100-cap
+ * endpoint on the same account. A public endpoint that documents its own budget needs its own
+ * bucket.
+ *
+ * - `ws` holds the 100-cap WebSocket handlers (tool execution, agent execute, keep relay,
+ *   cc-agent auth).
+ * - `completions` holds the sources whose cap is above the default (`cli`, `agent`); it is
+ *   derived from `source`, so the unbucketed counter only ever carries 100-cap sources.
  */
-export type JwtRateLimitBucket = 'tools' | 'desktop';
+export type JwtRateLimitBucket = 'tools' | 'desktop' | 'ws' | 'completions';
 
 /**
  * Per-client caps for first-party clients that run a client-side tool loop against the
@@ -434,6 +420,11 @@ function getJwtRateLimit(source?: CompletionSource): number {
   return JWT_RATE_LIMIT_BY_SOURCE[source] ?? JWT_RATE_LIMIT_DEFAULT;
 }
 
+/** Sources raised above the default cap must not spend the counter the 100-cap sources read. */
+function bucketForSource(source?: CompletionSource): JwtRateLimitBucket | undefined {
+  return getJwtRateLimit(source) > JWT_RATE_LIMIT_DEFAULT ? 'completions' : undefined;
+}
+
 function jwtRateLimitKey(userId: string, bucket?: JwtRateLimitBucket): string {
   return bucket ? `rate-limit:ws-auth:${bucket}:${userId}` : `rate-limit:ws-auth:${userId}`;
 }
@@ -449,6 +440,8 @@ function jwtRateLimitKey(userId: string, bucket?: JwtRateLimitBucket): string {
  * turned the window into a perpetually-sliding lockout - an active user who
  * hit the cap could never recover without going idle for a full hour from
  * their *most recent* request.
+ *
+ * @throws TooManyRequestsError with `additionalInfo.retryAfter` (seconds left in the window)
  */
 export async function checkRateLimit(
   userId: string,
@@ -458,7 +451,7 @@ export async function checkRateLimit(
   // One match drives both: an explicit bucket still wins, but a client-matched cap always
   // brings its own counter with it.
   const byClient = matchClient(options.client);
-  const key = jwtRateLimitKey(userId, options.bucket ?? byClient?.bucket);
+  const key = jwtRateLimitKey(userId, options.bucket ?? byClient?.bucket ?? bucketForSource(source));
   const adapters = { db: { caches: cacheRepository } };
   const limit = byClient?.limit ?? getJwtRateLimit(source);
 
@@ -471,7 +464,8 @@ export async function checkRateLimit(
   if (current >= limit) {
     const ttl = await cacheService.ttl({ key }, adapters);
     const resetSeconds = Math.ceil((ttl > 0 ? ttl : JWT_RATE_WINDOW_MS) / 1000);
-    throw new Error(`Rate limit exceeded. Try again in ${resetSeconds} seconds.`);
+    const info = { retryAfter: resetSeconds } satisfies RateLimitErrorInfo;
+    throw new TooManyRequestsError(`Rate limit exceeded. Try again in ${resetSeconds} seconds.`, info);
   }
 
   // Preserve the remaining window - do NOT reset TTL on increment.

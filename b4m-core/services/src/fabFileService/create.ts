@@ -11,6 +11,7 @@ import {
   SupportedFabFileMimeTypes,
   isStorableFabFileMimeType,
   settingsMap,
+  StorageLimitError,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -209,7 +210,15 @@ export const prepareFabFile = async (
 
   const maxFileSize = getSettingsValue('MaxFileSize', await getSettingsMap(db), MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
-  if (params.fileSize >= maxFileSize) throw new BadRequestError('File size exceeds maximum file size');
+  if (params.fileSize >= maxFileSize) {
+    throw new StorageLimitError('File size exceeds maximum file size', {
+      errorCode: 'file_too_large',
+      used_bytes: 0,
+      limit_bytes: maxFileSize,
+      requested_bytes: params.fileSize,
+      owner: 'user',
+    });
+  }
 
   // Check storage limit - use organization limit if organizationId is provided
   await checkStorageLimitForFile(user, params.fileSize, params.organizationId, db.organizations?.findById);

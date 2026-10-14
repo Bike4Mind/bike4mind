@@ -39,6 +39,14 @@ export type LambdaRateLimit = (ctx: {
 
 export type LambdaRouteOptions = { rateLimit?: LambdaRateLimit };
 
+export function internalErrorResult(requestId: string, statusCode = 500): APIGatewayProxyResultV2 {
+  return {
+    statusCode,
+    headers: { 'Content-Type': 'application/json', [REQUEST_ID_HEADER]: requestId },
+    body: JSON.stringify({ error: 'Internal server error', request_id: requestId }),
+  };
+}
+
 /** A ForbiddenError (authenticated but forbidden, e.g. a suspended account) is a 403;
  * any other auth throw, plain Errors included, is a 401. */
 function authFailureStatus(error: unknown): 401 | 403 {
@@ -48,7 +56,7 @@ function authFailureStatus(error: unknown): 401 | 403 {
 /**
  * AWS Lambda Function URL adapter for an {@link EndpointContract} - the transport
  * used for public endpoints the Next.js API can't serve (SST dev + Function URLs +
- * CloudFront had socket hang-ups; see cli/tools.ts).
+ * CloudFront had socket hang-ups; see pages/api/ai/v1/tools.ts).
  *
  * Owns the boilerplate every Function-URL handler repeats: request-id resolution,
  * the contract's method (405), body parsing (400), DB connect, contract-driven auth (401/403, via resolveContractAuth
@@ -68,18 +76,17 @@ export function defineLambdaRoute<C extends EndpointContract>(
   contract: C,
   handle: (ctx: LambdaRouteContext<C>) => Promise<LambdaRouteResult>,
   options: LambdaRouteOptions = {}
-): (event: APIGatewayProxyEventV2, resolvedRequestId?: string) => Promise<APIGatewayProxyResultV2> {
+): (event: APIGatewayProxyEventV2, opts?: { requestId?: string }) => Promise<APIGatewayProxyResultV2> {
   const checkMethod = createMethodGuard([contract.method]);
 
-  return async (event: APIGatewayProxyEventV2, resolvedRequestId?: string): Promise<APIGatewayProxyResultV2> => {
-    // Reuse the wrapper's id when threaded (so both layers report the same value
-    // even when the caller sent no header), else resolve from headers / generate.
-    const requestId =
-      resolvedRequestId ??
-      resolveRequestId(
-        event.headers?.[REQUEST_ID_HEADER.toLowerCase()],
-        event.headers?.[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
-      );
+  return async (event: APIGatewayProxyEventV2, opts?: { requestId?: string }): Promise<APIGatewayProxyResultV2> => {
+    // Reuse the wrapper's id (sanitized like a header) so both layers agree. An options bag, not a positional id:
+    // Lambda passes its context as the 2nd arg, which has no requestId field.
+    const requestId = resolveRequestId(
+      opts?.requestId,
+      event.headers?.[REQUEST_ID_HEADER.toLowerCase()],
+      event.headers?.[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
+    );
 
     const json = (
       statusCode: number,
@@ -164,13 +171,12 @@ export function defineLambdaRoute<C extends EndpointContract>(
         const message = `[${contract.operationId}] ${error.statusCode}: ${error.message}`;
         if (error.statusCode >= 500 && !error.expected) log.error(message, error);
         else log.warn(message);
+        // Stricter than errorHandler (server/middlewares/errorHandler.ts), which still echoes 5xx messages.
+        if (error.statusCode >= 500) return internalErrorResult(requestId, error.statusCode);
         return json(error.statusCode, { error: error.message, request_id: requestId });
       }
       log.error(`[${contract.operationId}] Unhandled handler error`, error);
-      return json(500, {
-        error: error instanceof Error ? error.message : 'Internal server error',
-        request_id: requestId,
-      });
+      return internalErrorResult(requestId);
     }
 
     // Non-prod safety net (see defineNextRoute): warn on a response body that does

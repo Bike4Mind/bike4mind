@@ -308,3 +308,24 @@ describe('SetLakeFileTagsRequestInput', () => {
     expect(SetLakeFileTagsRequestInput.safeParse({ tags: ['lk:a\rb'] }).success).toBe(false);
   });
 });
+
+describe('lake access gates refuse the self-assignable source: namespace', () => {
+  it.each(['source:acme', '  Source:Acme  '])('refuses requiredUserTag %p on create and update', tag => {
+    expect(CreateDataLakeRequestInput.safeParse(input('acme:', tag)).success).toBe(false);
+    expect(UpdateDataLakeRequestInput.safeParse({ requiredUserTag: tag }).success).toBe(false);
+  });
+
+  it('refuses a source: requiredEntitlement on create and update', () => {
+    expect(
+      CreateDataLakeRequestInput.safeParse({ ...input('acme:'), requiredEntitlement: 'source:acme' }).success
+    ).toBe(false);
+    expect(UpdateDataLakeRequestInput.safeParse({ requiredEntitlement: 'source:acme' }).success).toBe(false);
+  });
+
+  it('still accepts an ordinary namespaced entitlement and a tag merely containing source', () => {
+    expect(CreateDataLakeRequestInput.safeParse({ ...input('acme:'), requiredEntitlement: 'acme:pro' }).success).toBe(
+      true
+    );
+    expect(UpdateDataLakeRequestInput.safeParse({ requiredUserTag: 'opensource:fan' }).success).toBe(true);
+  });
+});

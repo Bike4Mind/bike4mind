@@ -1,4 +1,5 @@
 import { handleToolRequest } from './tools';
+import { internalErrorResult } from './defineLambdaRoute';
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { LEGACY_REQUEST_ID_HEADER, REQUEST_ID_HEADER, resolveRequestId } from '@bike4mind/common';
@@ -18,17 +19,9 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     event.headers?.[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
   );
   try {
-    return await handleToolRequest(event, requestId);
+    return await handleToolRequest(event, { requestId });
   } catch (error) {
-    console.error('[CLI_TOOLS] Handler error:', error);
-    return {
-      statusCode: 500,
-      headers: { 'Content-Type': 'application/json', [REQUEST_ID_HEADER]: requestId },
-      body: JSON.stringify({
-        error: 'Internal server error',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        request_id: requestId,
-      }),
-    };
+    console.error('[CLI_TOOLS] Handler error:', { requestId }, error);
+    return internalErrorResult(requestId);
   }
 };

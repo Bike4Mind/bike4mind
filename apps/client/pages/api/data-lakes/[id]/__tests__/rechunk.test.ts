@@ -66,8 +66,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
-vi.mock('@server/queueHandlers/convergenceProvenance', () => ({ CONVERGENCE_ORIGIN: 'convergence' }));
-vi.mock('@server/queueHandlers/convergenceKillSwitch', () => ({ isConvergenceHalted: h.isConvergenceHalted }));
+vi.mock('@server/dataLakes/convergenceKillSwitch', () => ({ isConvergenceHalted: h.isConvergenceHalted }));
 
 import handler from '../rechunk';
 

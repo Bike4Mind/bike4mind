@@ -1,6 +1,7 @@
 import { ModelBackend, type ModelInfo } from '@bike4mind/common';
 
-// Bedrock cross-region inference profiles prefix the foundation-model id with a geography.
+// Bedrock cross-region inference profiles prefix the foundation-model id with a geography. Must stay
+// in sync with BEDROCK_PROFILE_PREFIX in b4m-core/llm-adapters/src/routeTwinNames.ts.
 const BEDROCK_PROFILE_PREFIX = /^(global|us-gov|us|eu|apac|jp|au|ca)\./;
 const VERSION_SUFFIX = /-v(\d+(?::\d+)?)$/;
 const DATE_SUFFIX = /-(\d{8}|\d{4}-\d{2}-\d{2})$/;
@@ -103,4 +104,12 @@ export function dedupeModelsForPicker(
 
   const kept = new Set(Array.from(winners.values(), winner => winner.model));
   return models.filter(model => kept.has(model) || (model.disabled && String(model.id) === activeModelId));
+}
+
+/** Splits a provider group into direct-API rows and Bedrock-routed rows, keeping each side's order. */
+export function splitModelsByRoute(models: ModelInfo[]): { direct: ModelInfo[]; bedrock: ModelInfo[] } {
+  return {
+    direct: models.filter(model => model.backend !== ModelBackend.Bedrock),
+    bedrock: models.filter(model => model.backend === ModelBackend.Bedrock),
+  };
 }

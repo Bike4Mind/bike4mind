@@ -100,10 +100,10 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
       }
     );
 
-    if (!holdsApiKeyScope(req, FILES_READ_SCOPES)) {
-      return res.json({ ...updatedFabFile, fileUrl: undefined, fileUrlExpireAt: undefined });
-    }
-    return res.json(await signBrowserFileResponse(updatedFabFile));
+    const responseFile = holdsApiKeyScope(req, FILES_READ_SCOPES)
+      ? await signBrowserFileResponse(updatedFabFile)
+      : { ...updatedFabFile, fileUrl: undefined, fileUrlExpireAt: undefined };
+    return res.json(responseFile);
   })
   /**
    * Delete FabFile by ID

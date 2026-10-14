@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -36,6 +36,7 @@ describe('CreditBalanceChip', () => {
     renderChip();
     const chip = screen.getByTestId('credit-balance-chip');
     expect(chip).toHaveTextContent('9,982 credits');
+    expect(within(chip).getByTestId('credit-icon')).toBeInTheDocument();
     expect(screen.queryByTestId('credits-modal-open')).not.toBeInTheDocument();
     fireEvent.click(chip);
     expect(screen.getByTestId('credits-modal-open')).toBeInTheDocument();
