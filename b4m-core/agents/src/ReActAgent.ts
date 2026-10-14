@@ -70,9 +70,16 @@ export type CompletionFoldBaselines = {
  * field is `baseline + latest-cumulative`, NEVER `+=` - the prior `+=` re-added
  * the whole prompt-token count on every chunk and multiplied a single
  * iteration's input tokens by the chunk count. Every field guards on VALUE
- * presence (not object presence) so a trailing token-less frame - or a
- * cacheStats object with a zero sub-field - can't zero a running total; absent
- * fields return `current` unchanged.
+ * presence (not object presence) so a trailing token-less frame - or a zero
+ * cache field - can't zero a running total; absent fields return `current` unchanged.
+ *
+ * Cache tokens come only from the top-level cacheReadInputTokens/cacheCreationInputTokens, the
+ * billing convention (disjoint from inputTokens) that settlement and turnUsage use. `cacheStats`
+ * is never folded: every adapter whose inputTokens excludes cache (Anthropic, Bedrock, OpenAI,
+ * Kimi, DeepSeek) also sets the top-level fields on the same frame, while the ones that set
+ * cacheStats alone (Gemini and xAI, and after their per-request split only for models without a
+ * published cache-read rate) keep the cached tokens INSIDE inputTokens, so adding cacheStats
+ * there would count them twice. Ollama sets neither.
  *
  * Extracted so the two identical fold sites (`run()` and `runIteration()`) -
  * which carried the original `+=` bug in both places - share one implementation.
@@ -80,21 +87,19 @@ export type CompletionFoldBaselines = {
 export function foldCompletionInfo(
   info: Pick<
     CompletionInfo,
-    'inputTokens' | 'outputTokens' | 'creditsUsed' | 'cacheStats' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'
+    'inputTokens' | 'outputTokens' | 'creditsUsed' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'
   >,
   baselines: CompletionFoldBaselines,
   current: CompletionFoldBaselines
 ): CompletionFoldBaselines & { totalTokens: number } {
   const inputTokens = info.inputTokens ? baselines.inputTokens + info.inputTokens : current.inputTokens;
   const outputTokens = info.outputTokens ? baselines.outputTokens + info.outputTokens : current.outputTokens;
-  // OpenAI-family adapters report cache only on the top-level fields (already split off
-  // inputTokens, see cacheInclusiveUsage.ts), never cacheStats. Without the fallback their cache
-  // reads were dropped from the totals - billed at $0 and left out of the long-context tier -
-  // while turnUsage carried them.
-  const frameCacheRead = info.cacheStats?.cacheReadTokens || info.cacheReadInputTokens;
-  const frameCacheWrite = info.cacheStats?.cacheWriteTokens || info.cacheCreationInputTokens;
-  const cacheReadTokens = frameCacheRead ? baselines.cacheReadTokens + frameCacheRead : current.cacheReadTokens;
-  const cacheWriteTokens = frameCacheWrite ? baselines.cacheWriteTokens + frameCacheWrite : current.cacheWriteTokens;
+  const cacheReadTokens = info.cacheReadInputTokens
+    ? baselines.cacheReadTokens + info.cacheReadInputTokens
+    : current.cacheReadTokens;
+  const cacheWriteTokens = info.cacheCreationInputTokens
+    ? baselines.cacheWriteTokens + info.cacheCreationInputTokens
+    : current.cacheWriteTokens;
   const credits = info.creditsUsed ? baselines.credits + info.creditsUsed : current.credits;
   return {
     inputTokens,

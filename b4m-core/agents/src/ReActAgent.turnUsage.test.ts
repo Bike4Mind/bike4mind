@@ -11,8 +11,8 @@ import type { IMessage } from '@bike4mind/common';
 
 type Frame = CompletionInfo & { text: string };
 
-// Only the field the agent folds; the rest of CacheUsageStats is irrelevant here.
-const cacheRead = (cacheReadTokens: number) => ({ cacheReadTokens }) as CompletionInfo['cacheStats'];
+// Only the token fields; the rest of CacheUsageStats is irrelevant here.
+const cacheStats = (cacheReadTokens: number) => ({ cacheReadTokens }) as CompletionInfo['cacheStats'];
 
 /** Each `complete()` call emits the next scripted frame (or throws when the entry is an Error). */
 function scriptedLlm(script: Array<Frame | Error>): ICompletionBackend {
@@ -75,7 +75,7 @@ const toolIteration: Frame = {
   text: 'Searching.',
   inputTokens: 1000,
   outputTokens: 20,
-  cacheStats: cacheRead(150_000),
+  cacheReadInputTokens: 150_000,
   toolsUsed: [{ name: 'search', arguments: '{}' }],
   turnUsage: [{ inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 150_000 }],
 };
@@ -84,7 +84,7 @@ const finalIteration: Frame = {
   text: 'Done.',
   inputTokens: 2000,
   outputTokens: 30,
-  cacheStats: cacheRead(151_000),
+  cacheReadInputTokens: 151_000,
   toolsUsed: [],
   stopReason: 'end_turn',
 };
@@ -199,7 +199,8 @@ describe('ReActAgent per-request usage', () => {
   it('run(): synthesizes cache writes into the turn, and records no turn for an iteration with no usage', async () => {
     const withWrite: Frame = {
       ...toolIteration,
-      cacheStats: { cacheReadTokens: 0, cacheWriteTokens: 3_000 } as CompletionInfo['cacheStats'],
+      cacheReadInputTokens: undefined,
+      cacheCreationInputTokens: 3_000,
       turnUsage: undefined,
     };
     const noUsage: Frame = { text: 'Done.', toolsUsed: [], stopReason: 'end_turn' };
@@ -251,5 +252,22 @@ describe('ReActAgent per-request usage', () => {
 
     expect(result.finalAnswer).toBe('Interrupted');
     expect(result.completionInfo.turnUsage).toEqual(toolIteration.turnUsage);
+  });
+
+  it('runIteration(): a Gemini/xAI-shaped frame (cache inside inputTokens, cacheStats only) is not counted twice', async () => {
+    const geminiFrame: Frame = {
+      text: 'Searching.',
+      inputTokens: 151_000,
+      outputTokens: 20,
+      cacheStats: cacheStats(150_000),
+      toolsUsed: [{ name: 'search', arguments: '{}' }],
+    };
+    const agent = new ReActAgent(context(scriptedLlm([geminiFrame])));
+
+    const { checkpoint } = await agent.runIteration('find it');
+
+    expect(checkpoint.totalInputTokens).toBe(151_000);
+    expect(checkpoint.totalCacheReadTokens).toBe(0);
+    expect(checkpoint.turnUsage).toEqual([{ inputTokens: 151_000, outputTokens: 20 }]);
   });
 });

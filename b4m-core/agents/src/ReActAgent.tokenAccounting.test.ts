@@ -20,7 +20,16 @@ import type { AgentContext } from './types';
 import type { ICompletionBackend, CompletionInfo, ICompletionOptions } from '@bike4mind/llm-adapters';
 import type { CacheUsageStats, IMessage } from '@bike4mind/common';
 
-/** Full CacheUsageStats with the two token fields the fold reads; rest are filler. */
+/** Anthropic-shaped cache usage: the top-level billing fields plus the matching cacheStats. */
+function anthropicCache(cacheReadTokens: number, cacheWriteTokens: number) {
+  return {
+    cacheStats: cacheStats(cacheReadTokens, cacheWriteTokens),
+    cacheReadInputTokens: cacheReadTokens,
+    cacheCreationInputTokens: cacheWriteTokens,
+  };
+}
+
+/** Full CacheUsageStats with the two token fields; rest are filler. */
 function cacheStats(cacheReadTokens: number, cacheWriteTokens: number): CacheUsageStats {
   return {
     provider: 'anthropic',
@@ -194,16 +203,16 @@ describe('ReActAgent token accounting (#657)', () => {
   });
 
   it('runIteration(): cache tokens fold to the final cumulative, not the per-frame sum', async () => {
-    // The mock backend now emits cumulative cacheStats so the #657 bug class
+    // The mock backend emits cumulative cache counts so the #657 bug class
     // (cache-write tokens billed ~1.25x when summed) has a regression guard.
     const llm: ICompletionBackend = {
       currentModel: 'test-model',
       getModelInfo: async () => [],
       complete: async (_model, _messages, _options, callback) => {
         // cacheRead is constant (prompt cache is fixed); cacheWrite grows then settles.
-        await callback(['a'], { inputTokens: 100, outputTokens: 10, cacheStats: cacheStats(800, 200), toolsUsed: [] });
-        await callback(['b'], { inputTokens: 100, outputTokens: 20, cacheStats: cacheStats(800, 200), toolsUsed: [] });
-        await callback(['c'], { inputTokens: 100, outputTokens: 30, cacheStats: cacheStats(800, 200), toolsUsed: [] });
+        await callback(['a'], { inputTokens: 100, outputTokens: 10, ...anthropicCache(800, 200), toolsUsed: [] });
+        await callback(['b'], { inputTokens: 100, outputTokens: 20, ...anthropicCache(800, 200), toolsUsed: [] });
+        await callback(['c'], { inputTokens: 100, outputTokens: 30, ...anthropicCache(800, 200), toolsUsed: [] });
       },
       pushToolMessages: vi.fn(),
     };
@@ -247,15 +256,15 @@ describe('foldCompletionInfo (#657 assign-not-add contract)', () => {
     expect(folded.outputTokens).toBe(140);
   });
 
-  it('value-guards cache tokens: a zero sub-field keeps the current total (not baseline)', () => {
+  it('value-guards cache tokens: a zero field keeps the current total (not baseline)', () => {
     const current: CompletionFoldBaselines = { ...baselines, cacheReadTokens: 900, cacheWriteTokens: 250 };
-    const folded = foldCompletionInfo({ cacheStats: cacheStats(0, 0) }, baselines, current);
+    const folded = foldCompletionInfo({ cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }, baselines, current);
     expect(folded.cacheReadTokens).toBe(900);
     expect(folded.cacheWriteTokens).toBe(250);
   });
 
-  it('folds present cache tokens as baseline + cumulative', () => {
-    const folded = foldCompletionInfo({ cacheStats: cacheStats(800, 200) }, baselines, { ...baselines });
+  it('folds present cache tokens as baseline + cumulative (Anthropic shape: both fields set, counted once)', () => {
+    const folded = foldCompletionInfo({ inputTokens: 500, ...anthropicCache(800, 200) }, baselines, { ...baselines });
     expect(folded.cacheReadTokens).toBe(900); // 100 + 800
     expect(folded.cacheWriteTokens).toBe(250); // 50 + 200
   });
@@ -270,13 +279,12 @@ describe('foldCompletionInfo (#657 assign-not-add contract)', () => {
     expect(folded.cacheWriteTokens).toBe(250); // 50 + 200
   });
 
-  it('prefers cacheStats over the top-level cache fields when a frame carries both', () => {
-    const folded = foldCompletionInfo(
-      { cacheStats: cacheStats(800, 200), cacheReadInputTokens: 5, cacheCreationInputTokens: 5 },
-      baselines,
-      { ...baselines }
-    );
-    expect(folded.cacheReadTokens).toBe(900);
-    expect(folded.cacheWriteTokens).toBe(250);
+  it('never folds cacheStats alone: Gemini/xAI keep the cached tokens inside inputTokens', () => {
+    // promptTokenCount 1000 already includes the 800 cached tokens.
+    const folded = foldCompletionInfo({ inputTokens: 1000, cacheStats: cacheStats(800, 0) }, baselines, {
+      ...baselines,
+    });
+    expect(folded.inputTokens).toBe(2000);
+    expect(folded.cacheReadTokens).toBe(100); // baseline only, not 100 + 800
   });
 });
