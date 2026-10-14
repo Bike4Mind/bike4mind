@@ -14,78 +14,30 @@ import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardR
 import { Box, IconButton, Tooltip, useTheme } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import MicTwoToneIcon from '@mui/icons-material/MicTwoTone';
-import { keyframes } from '@mui/system';
 import { api } from '@client/app/contexts/ApiContext';
 import { useAudioAnalyzer } from '@client/app/hooks/useAudioAnalyzer';
-import { grayAlpha, green } from '@client/app/utils/themes/colors';
+import { grayAlpha } from '@client/app/utils/themes/colors';
+import { AnimatedText, VoiceStatusPill, fadeIn } from './VoiceStatusPill';
 
-// Animations (matching VoiceInlineIndicator)
-
-const fadeIn = keyframes`
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
-`;
-
-const letterWave = keyframes`
-  0% { opacity: 1; }
-  100% { opacity: 0.5; }
-`;
-
-/** Renders each character with a staggered opacity wave animation. */
-const AnimatedText: React.FC<{ text: string; color: string }> = ({ text, color }) => (
-  <Box component="span" sx={{ display: 'inline-flex', flexShrink: 0, fontSize: 'var(--joy-fontSize-xs)', color }}>
-    {text.split('').map((char, i) => (
-      <Box
-        key={i}
-        component="span"
-        sx={{
-          animation: `${letterWave} 0.75s infinite alternate`,
-          animationDelay: `${i * 0.1}s`,
-        }}
-      >
-        {char}
-      </Box>
-    ))}
-  </Box>
+/** The shared status pill fed from the dictation's own microphone stream. */
+const RecordingPill = forwardRef<HTMLDivElement, { stream: MediaStream | null; onCancel: () => void }>(
+  function RecordingPill({ stream, onCancel, ...rest }, ref) {
+    const theme = useTheme();
+    const audioData = useAudioAnalyzer(stream);
+    return (
+      <VoiceStatusPill
+        ref={ref}
+        {...rest}
+        label="Recording"
+        bars={audioData.frequencyBars}
+        isActive={audioData.isActive}
+        onClick={onCancel}
+        endDecorator={<CloseIcon sx={{ fontSize: 20, color: theme.palette.text.tertiary }} />}
+        data-testid="voice-record-cancel-pill"
+      />
+    );
+  }
 );
-
-// MiniEqualizer (matching VoiceInlineIndicator)
-
-const MiniEqualizer: React.FC<{ stream: MediaStream | null }> = ({ stream }) => {
-  const audioData = useAudioAnalyzer(stream);
-
-  const indices = [0, 2, 5, 7, 10, 12, 14];
-  const bars = indices.map(i => audioData.frequencyBars[i] ?? 0);
-
-  return (
-    <Box
-      sx={{
-        display: 'flex',
-        alignItems: 'flex-end',
-        justifyContent: 'center',
-        gap: '2px',
-        width: '28px',
-        height: '20px',
-        flexShrink: 0,
-      }}
-      data-testid="voice-record-equalizer"
-    >
-      {bars.map((intensity, i) => (
-        <Box
-          key={i}
-          sx={{
-            width: '3px',
-            borderRadius: '1.5px',
-            backgroundColor: green[500],
-            height: audioData.isActive ? `${Math.max(3, Math.round(intensity * 20))}px` : '6px',
-            transition: 'height 0.06s ease-out',
-            opacity: audioData.isActive ? 1 : 0.5,
-          }}
-        />
-      ))}
-    </Box>
-  );
-};
 
 // VoiceRecordButton
 
@@ -290,27 +242,7 @@ export const VoiceRecordButton = forwardRef<VoiceRecordButtonRef, IProps>(
         >
           {/* Recording pill with animated text + green equalizer + cancel */}
           <Tooltip title="Cancel recording" placement="top">
-            <Box
-              onClick={cancelRecording}
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.75,
-                padding: '4px 8px 4px 10px',
-                minHeight: '32px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                backgroundColor: theme.palette.mode === 'dark' ? theme.palette.border.solid : grayAlpha[150][20],
-                '&:hover': {
-                  backgroundColor: theme.palette.mode === 'dark' ? '#363B40' : grayAlpha[150][30],
-                },
-              }}
-              data-testid="voice-record-cancel-pill"
-            >
-              <AnimatedText text="Recording" color={theme.palette.text.tertiary} />
-              <MiniEqualizer stream={stream} />
-              <CloseIcon sx={{ fontSize: 20, color: theme.palette.text.tertiary }} />
-            </Box>
+            <RecordingPill stream={stream} onCancel={cancelRecording} />
           </Tooltip>
         </Box>
       );

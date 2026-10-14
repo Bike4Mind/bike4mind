@@ -24,6 +24,10 @@ import VoiceInlineButton, {
   VOICE_DEBUG_STATE,
 } from '@client/app/components/Session/VoiceSessionModal/VoiceInlineIndicator';
 import ConversationalVoiceButton from '@client/app/components/Session/ConversationalVoice/ConversationalVoiceButton';
+import {
+  isCallActivePhase,
+  useConversationalVoiceStore,
+} from '@client/app/components/Session/ConversationalVoice/useConversationalVoice';
 
 interface SessionToolbarProps {
   // Layout
@@ -125,6 +129,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
   // Toolbar-local state
   const voiceRecordRef = useRef<VoiceRecordButtonRef>(null);
   const [recording, setRecording] = useState(false);
+  const voiceCallActive = useConversationalVoiceStore(s => isCallActivePhase(s.phase));
   const [isSettingsExiting] = useState(false);
 
   const sendBlockedLabel = sendBlockedReason ? getSendBlockedLabel(sendBlockedReason, t) : null;
@@ -235,8 +240,10 @@ export function SessionToolbar(props: SessionToolbarProps) {
                   in progress even if the user types - unmounting mid-recording
                   would orphan the live MediaStream (mic stays on) and strand the
                   Confirm button with a null ref. The button disappears once
-                  recording ends. */}
+                  recording ends. Hidden too while a Voice v2 call is up: the call's own
+                  status pill and end button take the spot. */}
               {!(isVoiceSessionEnabled && (voiceEngine.isActive || VOICE_DEBUG_STATE)) &&
+                (!voiceCallActive || recording) &&
                 (!chatInputValue || chatInputValue.trim() === '' || recording) && (
                   <VoiceRecordButton
                     ref={voiceRecordRef}

@@ -22,7 +22,11 @@ interface SessionsResponse {
   clientBootstrap: ConversationalClientBootstrap;
 }
 
-type Phase = 'idle' | 'requesting-session' | 'connecting' | 'connected' | 'reconnecting' | 'ended' | 'error';
+export type Phase = 'idle' | 'requesting-session' | 'connecting' | 'connected' | 'reconnecting' | 'ended' | 'error';
+
+/** A call is starting, live or reconnecting - everything but idle/ended/error. */
+export const isCallActivePhase = (phase: Phase): boolean =>
+  phase === 'requesting-session' || phase === 'connecting' || phase === 'connected' || phase === 'reconnecting';
 type ConversationHandle = Awaited<ReturnType<typeof Conversation.startSession>>;
 
 export interface StartVoiceOptions {
@@ -428,6 +432,15 @@ async function establishConnection(
     void queueSettle(sid);
   }
 }
+
+/**
+ * Byte frequency data of the live call - the user's microphone or the agent's voice - for the
+ * composer's equalizer. Read per frame, outside React; null while there is no connected call.
+ */
+export const getCallFrequencyData = (source: 'input' | 'output'): Uint8Array | null => {
+  if (!conversation) return null;
+  return source === 'input' ? conversation.getInputByteFrequencyData() : conversation.getOutputByteFrequencyData();
+};
 
 export const useConversationalVoiceStore = create<ConversationalVoiceState>(set => ({
   phase: 'idle',

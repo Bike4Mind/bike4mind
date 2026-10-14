@@ -13,7 +13,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
 const mocks = vi.hoisted(() => ({
   // onRecordingEnd from each VoiceRecordButton render, oldest first.
   voiceRecordingEnds: [] as ((prompt: string) => Promise<void>)[],
-  voiceRecordingStart: undefined as (() => void) | undefined,
+  // onRecordingStart from each VoiceRecordButton render, oldest first.
+  voiceRecordingStarts: [] as (() => void)[],
 }));
 
 // SessionToolbar imports `api` at module load (used inside onOptimizePrompt).
@@ -38,8 +39,8 @@ vi.mock('@client/app/components/common/VoiceRecordButton', () => {
     { onRecordingEnd: (prompt: string) => Promise<void>; onRecordingStart: () => void }
   >(props => {
     mocks.voiceRecordingEnds.push(props.onRecordingEnd);
-    mocks.voiceRecordingStart = props.onRecordingStart;
-    return null;
+    mocks.voiceRecordingStarts.push(props.onRecordingStart);
+    return <div data-testid="voice-record-btn" />;
   });
   VoiceRecordButtonStub.displayName = 'VoiceRecordButtonStub';
   return { default: VoiceRecordButtonStub };
@@ -54,6 +55,7 @@ vi.mock('@client/app/components/Session/ConversationalVoice/ConversationalVoiceB
 }));
 
 import { SessionToolbar, appendTranscript } from './SessionToolbar';
+import { useConversationalVoiceStore } from '@client/app/components/Session/ConversationalVoice/useConversationalVoice';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { act } from '@testing-library/react';
 
@@ -107,6 +109,8 @@ const baseProps = {
 
 beforeEach(() => {
   mocks.voiceRecordingEnds.length = 0;
+  mocks.voiceRecordingStarts.length = 0;
+  useConversationalVoiceStore.setState({ phase: 'idle' });
 });
 
 describe('SessionToolbar - Send button blocked reason', () => {
@@ -129,9 +133,19 @@ describe('SessionToolbar - dictation', () => {
   it('hides the voice session while a prompt is being dictated, leaving the recording and its confirm', () => {
     render(<SessionToolbar {...baseProps} />, { wrapper: Wrapper });
     expect(screen.getByTestId('conversational-voice-btn')).toBeInTheDocument();
-    act(() => mocks.voiceRecordingStart?.());
+    act(() => mocks.voiceRecordingStarts.at(-1)?.());
     expect(screen.queryByTestId('conversational-voice-btn')).toBeNull();
     expect(screen.getByTestId('voice-record-confirm-btn')).toBeInTheDocument();
+  });
+});
+
+describe('SessionToolbar - voice call', () => {
+  it('hides dictation while a Voice v2 call is up, leaving the call controls', () => {
+    render(<SessionToolbar {...baseProps} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('voice-record-btn')).toBeInTheDocument();
+    act(() => useConversationalVoiceStore.setState({ phase: 'connected' }));
+    expect(screen.queryByTestId('voice-record-btn')).toBeNull();
+    expect(screen.getByTestId('conversational-voice-btn')).toBeInTheDocument();
   });
 });
 
