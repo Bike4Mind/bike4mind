@@ -95,7 +95,7 @@ export type StorageErrorCode = z.infer<typeof StorageErrorCodeSchema>;
  */
 export const StorageLimitErrorInfoSchema = z.object({
   errorCode: StorageErrorCodeSchema.describe(
-    'Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit; never returned by `POST /api/v1/files`, which checks only the user quota), or `file_too_large` (the per-file size limit). Branch on this, not on the message.'
+    'Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit), or `file_too_large` (the per-file size limit). Branch on this, not on the message.'
   ),
   used_bytes: z
     .number()
@@ -136,23 +136,11 @@ export function parseStorageLimitErrorInfo(body: unknown): StorageLimitErrorInfo
   return parsed.success ? parsed.data : undefined;
 }
 
-const DECIMAL_UNITS = ['B', 'kB', 'MB', 'GB', 'TB'];
-
-function defaultFormatBytes(bytes: number): string {
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1000 && unit < DECIMAL_UNITS.length - 1) {
-    value /= 1000;
-    unit += 1;
-  }
-  return `${Number(value.toPrecision(3))} ${DECIMAL_UNITS[unit]}`;
-}
-
-/** The one user-facing wording for a storage refusal, built from the numbers so rewording the thrown message cannot change it. */
-export function describeStorageLimitError(
-  info: StorageLimitErrorInfo,
-  formatBytes: (bytes: number) => string = defaultFormatBytes
-): string {
+/**
+ * The one user-facing wording for a storage refusal, built from the numbers so rewording the thrown message
+ * cannot change it. The caller supplies the byte formatter so the app's own units stay the single source.
+ */
+export function describeStorageLimitError(info: StorageLimitErrorInfo, formatBytes: (bytes: number) => string): string {
   const { errorCode, used_bytes, limit_bytes, requested_bytes } = info;
   switch (errorCode) {
     case 'storage_limit_exceeded': {

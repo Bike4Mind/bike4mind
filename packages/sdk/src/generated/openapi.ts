@@ -2451,7 +2451,7 @@ export interface components {
        */
       name?: string;
       /**
-       * @description Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit; never returned by `POST /api/v1/files`, which checks only the user quota), or `file_too_large` (the per-file size limit). Branch on this, not on the message.
+       * @description Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit), or `file_too_large` (the per-file size limit). Branch on this, not on the message.
        * @enum {string}
        */
       errorCode?: 'storage_limit_exceeded' | 'org_storage_limit_exceeded' | 'file_too_large';
@@ -7308,7 +7308,7 @@ export interface operations {
           'application/json': components['schemas']['createFileUploadResponse201'];
         };
       };
-      /** @description Unsupported file type, file larger than the upload limit, or storage quota exceeded. A size or quota refusal carries a stable `errorCode` plus `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together; an unsupported type carries none of them. */
+      /** @description Unsupported file type, file larger than the upload limit, or storage quota exceeded. A size or quota refusal carries a stable `errorCode` plus `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together; an unsupported type carries none of them. This endpoint checks only the user quota and the per-file cap, so `org_storage_limit_exceeded` is never returned here. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { StorageLimitError, StorageLimitErrorInfoSchema } from '@bike4mind/common';
 import type { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import { checkOrganizationStorageLimit, checkStorageLimit, checkStorageLimitForFile } from './user';
 import { BadRequestError } from './errors';
@@ -33,6 +34,26 @@ describe('checkStorageLimit', () => {
     });
   });
 
+  it('clamps a drifted negative counter so the info still satisfies the wire schema', async () => {
+    const error = await checkStorageLimit(user({ storageLimit: 1, currentStorageSize: -500_000 }), 1_600_000).catch(
+      (thrown: unknown) => thrown
+    );
+
+    expect(error).toBeInstanceOf(StorageLimitError);
+    const { info } = error as StorageLimitError;
+    expect(info.used_bytes).toBe(0);
+    expect(StorageLimitErrorInfoSchema.safeParse(info).success).toBe(true);
+  });
+
+  it('clamps a negative stored limit so the info still satisfies the wire schema', async () => {
+    const error = await checkStorageLimit(user({ storageLimit: -1 }), 1).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(StorageLimitError);
+    const { info } = error as StorageLimitError;
+    expect(info.limit_bytes).toBe(0);
+    expect(StorageLimitErrorInfoSchema.safeParse(info).success).toBe(true);
+  });
+
   it('defaults to a 1000MB limit', async () => {
     await expect(checkStorageLimit(user(), 1000 * MB + 1)).rejects.toThrow(BadRequestError);
     await expect(checkStorageLimit(user(), 1000 * MB)).resolves.toBe(undefined);
@@ -57,6 +78,15 @@ describe('checkOrganizationStorageLimit', () => {
         owner: 'org',
       },
     });
+  });
+
+  it('clamps a negative stored org limit so the info still satisfies the wire schema', async () => {
+    const error = await checkOrganizationStorageLimit(org({ storageLimit: -1 }), 1).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(StorageLimitError);
+    const { info } = error as StorageLimitError;
+    expect(info.limit_bytes).toBe(0);
+    expect(StorageLimitErrorInfoSchema.safeParse(info).success).toBe(true);
   });
 
   it('ignores any stray currentStorageSize persisted on the org', async () => {

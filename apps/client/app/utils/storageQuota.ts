@@ -10,7 +10,7 @@ const DEFAULT_STORAGE_LIMIT_MB = 1000;
 const BYTES_PER_MB = 1_000_000;
 const STORAGE_WARNING_PERCENT = 90;
 
-/** @deprecated Fallback for a server that predates the `code` on storage refusals (b4m-core/common
+/** @deprecated Fallback for a server that predates the `errorCode` on storage refusals (b4m-core/common
  * StorageLimitError); drop it one release after every deploy returns the code.
  * Remove after 2026-11-15, together with the two legacy cases in storageQuota.test.ts. */
 const LEGACY_SERVER_STORAGE_LIMIT_MESSAGE = 'storage limit';

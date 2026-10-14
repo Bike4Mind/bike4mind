@@ -575,6 +575,16 @@ describe('driveLakeIngest consumer', () => {
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
   });
 
+  it('rethrows a plain BadRequestError from the quota check rather than recording a quota skip', async () => {
+    h.walkFolder.mockResolvedValue([{ id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+    h.checkStorageLimit.mockRejectedValueOnce(new BadRequestError('Organization not found'));
+
+    await expect(run()).rejects.toThrow('Organization not found');
+    expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
   it('credits bytes a same-run duplicate retire already reclaimed against a later quota check', async () => {
     // d1 has a stale duplicate copy retired by the step-4b sweep (100 bytes, per the default
     // deleteFabFile mock) before the loop reaches d2. d2's check must be credited that reclaim, or

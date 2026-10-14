@@ -414,8 +414,32 @@ describe('processSlackFiles storage + MaxFileSize limits (#1685)', () => {
     expect(result.fabFileIds).toEqual([]);
     expect(create).not.toHaveBeenCalled();
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain("This file is larger than your organization's storage limit.");
+    expect(result.errors[0]).toContain("Your organization's storage limit would be exceeded.");
     expect(result.errors[0]).not.toContain('Not enough storage for this file.');
+  });
+
+  it('refuses the attachment that tips the running total over the org limit without claiming it is too large alone', async () => {
+    // 1 MB limit; each file is 600 kB, so the second only fails because of the first.
+    organizationFindById.mockReturnValue({
+      select: () => ({ lean: () => ({ exec: () => Promise.resolve({ storageLimit: 1 }) }) }),
+    });
+    downloadFile.mockResolvedValue(Buffer.alloc(600_000));
+
+    const slackEvent = new SlackEvent({ channel: 'C1', user: 'U1', text: 'hello', ts: '1700000000.0001' } as never);
+    const user = { id: 'user-1', organizationId: 'org-1' } as never;
+    const handler = new CommandHandler(slackEvent, user, { downloadFile } as never, logger);
+
+    const result = await handler.processSlackFiles([
+      attachment({ id: 'F1', name: 'one.pdf', size: 600_000 }),
+      attachment({ id: 'F2', name: 'two.pdf', size: 600_000 }),
+    ] as never);
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(result.fabFileIds).toHaveLength(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("Your organization's storage limit would be exceeded.");
+    expect(result.errors[0]).toContain('two.pdf');
+    expect(result.errors[0]).not.toContain('larger than');
   });
 
   it('echoes the message of a non-storage BadRequestError from the limit check, with a trailing period', async () => {

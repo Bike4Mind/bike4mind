@@ -380,6 +380,15 @@ describe('runGitHubLakeSlice', () => {
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
   });
 
+  it('rethrows a plain BadRequestError from the storage check rather than counting a quota skip', async () => {
+    tree(blob('a.md', 's1'));
+    h.checkStorageLimit.mockRejectedValue(new BadRequestError('Organization not found'));
+    await expect(runGitHubLakeSlice(input())).rejects.toThrow('Organization not found');
+    expect(h.recordSkip).not.toHaveBeenCalled();
+    expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+    expect(h.ingest).not.toHaveBeenCalled();
+  });
+
   it('adopts the chain s batch and subtracts the paths it already skipped', async () => {
     tree(blob('bin.md', 's1'), blob('new.md', 's2'));
     h.batchFindById.mockResolvedValue({

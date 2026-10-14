@@ -7,8 +7,10 @@ export const checkStorageLimit = async (user: IUserDocument, fileSize: number) =
   if (fileSize + currentStorageSize > storageLimit) {
     throw new StorageLimitError('File size exceeds storage limit', {
       errorCode: 'storage_limit_exceeded',
-      used_bytes: currentStorageSize,
-      limit_bytes: storageLimit,
+      // Clamped: a drifted counter or a negative stored limit must not put a value on the wire
+      // that StorageLimitErrorInfoSchema (nonnegative) rejects.
+      used_bytes: Math.max(0, currentStorageSize),
+      limit_bytes: Math.max(0, storageLimit),
       requested_bytes: fileSize,
       owner: 'user',
     });
@@ -22,7 +24,7 @@ export const checkOrganizationStorageLimit = async (organization: IOrganizationD
     throw new StorageLimitError('Organization storage limit exceeded', {
       errorCode: 'org_storage_limit_exceeded',
       used_bytes: 0,
-      limit_bytes: storageLimit,
+      limit_bytes: Math.max(0, storageLimit),
       requested_bytes: fileSize,
       owner: 'org',
     });

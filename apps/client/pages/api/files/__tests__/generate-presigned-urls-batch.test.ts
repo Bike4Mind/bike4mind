@@ -489,7 +489,13 @@ describe('POST /api/files/generate-presigned-urls-batch - MaxFileSize resolution
 
     await expect(run({ files: [file({ fileSize: mb(DEFAULT_MB + 5) })] }, res)).rejects.toMatchObject({
       message: expect.stringMatching(/exceeds maximum file size/i),
-      info: { errorCode: 'file_too_large', limit_bytes: mb(DEFAULT_MB), requested_bytes: mb(DEFAULT_MB + 5) },
+      info: {
+        errorCode: 'file_too_large',
+        owner: 'user',
+        used_bytes: 0,
+        limit_bytes: mb(DEFAULT_MB),
+        requested_bytes: mb(DEFAULT_MB + 5),
+      },
     });
     expect(h.createFabFile).not.toHaveBeenCalled();
   });

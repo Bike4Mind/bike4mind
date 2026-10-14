@@ -198,26 +198,19 @@ describe('StorageLimitError', () => {
     expect(parseStorageLimitErrorInfo({ error: 'x' })).toBeUndefined();
   });
 
-  it('words each code from its numbers with the default byte formatter', () => {
-    expect(describeStorageLimitError(info)).toBe(
-      'Not enough storage: you are using 800 kB of 1 MB, and this upload needs 300 kB. Free up at least 100 kB to continue.'
+  it('words each code from its numbers with the supplied byte formatter', () => {
+    const formatBytes = (bytes: number) => `${bytes} B`;
+    expect(describeStorageLimitError(info, formatBytes)).toBe(
+      'Not enough storage: you are using 800000 B of 1000000 B, and this upload needs 300000 B. Free up at least 100000 B to continue.'
     );
     expect(
-      describeStorageLimitError({ ...info, errorCode: 'org_storage_limit_exceeded', owner: 'org', used_bytes: 0 })
-    ).toBe("This upload (300 kB) is larger than your organization's storage limit of 1 MB.");
-    expect(describeStorageLimitError({ ...info, errorCode: 'file_too_large', used_bytes: 0 })).toBe(
-      'This file (300 kB) is larger than the maximum file size of 1 MB.'
+      describeStorageLimitError(
+        { ...info, errorCode: 'org_storage_limit_exceeded', owner: 'org', used_bytes: 0 },
+        formatBytes
+      )
+    ).toBe("This upload (300000 B) is larger than your organization's storage limit of 1000000 B.");
+    expect(describeStorageLimitError({ ...info, errorCode: 'file_too_large', used_bytes: 0 }, formatBytes)).toBe(
+      'This file (300000 B) is larger than the maximum file size of 1000000 B.'
     );
-  });
-
-  it('formats plain bytes and larger units', () => {
-    expect(
-      describeStorageLimitError({
-        ...info,
-        errorCode: 'file_too_large',
-        requested_bytes: 512,
-        limit_bytes: 2_500_000_000,
-      })
-    ).toBe('This file (512 B) is larger than the maximum file size of 2.5 GB.');
   });
 });
