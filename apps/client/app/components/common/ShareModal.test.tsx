@@ -143,7 +143,9 @@ describe('ShareModal - By Link tab', () => {
   it('describes a bulk link as covering these items, without the attached-files wording', () => {
     renderModal([{ id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument]);
     const note = screen.getByTestId('share-modal-link-access-note');
-    expect(note).toHaveTextContent('Anyone with the link can open these items after signing in');
+    expect(note).toHaveTextContent(
+      "Anyone with the link can open these items after signing in, and can share it on. Links don't expire."
+    );
     expect(note).not.toHaveTextContent('attached files');
   });
 
@@ -164,6 +166,7 @@ describe('ShareModal - By Link tab', () => {
     expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
       "Anyone with the link can open these notebooks after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off from each notebook's Share menu."
     );
+    expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
   });
 
   it('lets a file owner turn off links for that file after confirmation', async () => {
@@ -199,6 +202,9 @@ describe('ShareModal - By Link tab', () => {
   it('offers no off switch to a sharee, since the cancel route is owner-only', () => {
     renderModal(undefined, 'someone-else');
     expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
+    expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
+      "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share. Links don't expire."
+    );
   });
 
   it('offers no off switch for a bulk share', () => {
