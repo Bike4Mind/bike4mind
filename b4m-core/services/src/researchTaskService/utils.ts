@@ -1,5 +1,4 @@
 import {
-  BadRequestError,
   IFabFileDocument,
   IFabFileRepository,
   IFileTag,
@@ -11,6 +10,7 @@ import {
   IUserDocument,
   IUserRepository,
   isImageServeable,
+  isStorageLimitError,
 } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import { FunctionQueueRunner } from '@bike4mind/utils';
@@ -91,7 +91,7 @@ export async function findOrUpdateExistingResearchData(
       try {
         await assertRewriteFits(existingFile, newSize, adapters.db, user);
       } catch (error) {
-        if (!(error instanceof BadRequestError)) throw error;
+        if (!isStorageLimitError(error)) throw error;
         // Background path: keep the previous crawl rather than fail (and retry) the whole task, but
         // still refresh its url below.
         fits = false;
