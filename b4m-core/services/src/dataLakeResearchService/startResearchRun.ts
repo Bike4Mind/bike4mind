@@ -108,6 +108,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * A CHECK, not a reservation, the same gap every check-then-charge pre-flight in this codebase
  * accepts: settlement moves the balance itself (once per run, for the ACTUAL spend), so reserving
  * the ceiling here would double-charge and would need refunding on an early cancel.
+ *
+ * The holder lookup is deliberately NOT caught (unlike the org read below): every read before this
+ * one already fails the start closed, and starting a run whose balance could not be read is exactly
+ * the unbilled spend this gate exists to prevent.
  */
 async function assertResearchRunAffordable(
   lake: LakeConfigAuditLakeRef,
