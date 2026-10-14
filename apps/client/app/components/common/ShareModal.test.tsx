@@ -4,7 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { InviteType, IFabFileDocument } from '@bike4mind/common';
+import { InviteType, IFabFileDocument, ISessionDocument } from '@bike4mind/common';
 import { MAX_EMAIL_MESSAGE_LENGTH, MAX_EMAIL_RECIPIENTS, MAX_EMAIL_RECIPIENTS_ERROR } from '@client/types/api';
 import ShareDocumentModal from './ShareModal';
 
@@ -107,11 +107,77 @@ describe('ShareModal - By Link tab', () => {
     expect(screen.getByTestId('share-modal-submit-button')).not.toBeDisabled();
   });
 
-  it('says who can open the link', () => {
+  it('tells a notebook owner the link reaches its shareable attached files, before anything is generated', () => {
     renderModal();
+    expect(screen.queryByTestId('share-modal-generated-link')).not.toBeInTheDocument();
     expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
-      'Anyone with the link can open this notebook after signing in'
+      "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off."
     );
+  });
+
+  it('keeps the file note free of the notebook-only attached-files wording', () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal id="file-1" name="a.pdf" type={InviteType.FabFile} ownerId="u1" open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    const note = screen.getByTestId('share-modal-link-access-note');
+    expect(note).toHaveTextContent(
+      'Anyone with the link can open this item after signing in, and can share it on. Links keep working until you turn them off.'
+    );
+    expect(note).not.toHaveTextContent('attached files');
+  });
+
+  it('does not promise an off switch to a file sharer who is not the owner', () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal id="file-1" name="a.pdf" type={InviteType.FabFile} ownerId="u2" open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
+      "Anyone with the link can open this item after signing in, and can share it on. Links don't expire."
+    );
+    expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
+  });
+
+  it('describes a bulk link as covering these items, without the attached-files wording', () => {
+    renderModal([{ id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument]);
+    const note = screen.getByTestId('share-modal-link-access-note');
+    expect(note).toHaveTextContent(
+      "Anyone with the link can open these items after signing in, and can share it on. Links don't expire."
+    );
+    expect(note).not.toHaveTextContent('attached files');
+  });
+
+  it('tells a bulk notebook sharer the link reaches the notebooks and their shareable attached files', () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal
+          sessions={[
+            { id: 'notebook-1', name: 'One' } as ISessionDocument,
+            { id: 'notebook-2', name: 'Two' } as ISessionDocument,
+          ]}
+          type={InviteType.Session}
+          open
+          onClose={vi.fn()}
+        />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
+      "Anyone with the link can open these notebooks after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off from each notebook's Share menu."
+    );
+    expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
+  });
+
+  it('lets a file owner turn off links for that file after confirmation', async () => {
+    render(
+      <TestWrapper>
+        <ShareDocumentModal id="file-1" name="a.pdf" type={InviteType.FabFile} ownerId="u1" open onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    await userEvent.setup().click(screen.getByTestId('share-modal-turn-off-links-button'));
+    mocks.confirm.mock.calls[0][0].onOk();
+    expect(mocks.cancelInvite).toHaveBeenCalledWith({ id: 'file-1', type: InviteType.FabFile });
   });
 
   it('shows the whole generated link as text next to a labelled copy button', () => {
@@ -136,6 +202,9 @@ describe('ShareModal - By Link tab', () => {
   it('offers no off switch to a sharee, since the cancel route is owner-only', () => {
     renderModal(undefined, 'someone-else');
     expect(screen.queryByTestId('share-modal-turn-off-links-button')).not.toBeInTheDocument();
+    expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
+      "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share. Links don't expire."
+    );
   });
 
   it('offers no off switch for a bulk share', () => {

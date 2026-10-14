@@ -129,6 +129,19 @@ describe('WebSocketLlmBackend transport (open)', () => {
     await expect(consumer).rejects.toThrow('model overloaded');
   });
 
+  it('surfaces retryAfter from a rate-limit cli_completion_error frame', async () => {
+    const ws = new FakeWsManager();
+    const backend = makeBackend(ws);
+    const consumer = (async () => {
+      for await (const _event of backend.open(req)) void _event;
+    })();
+
+    await tick();
+    ws.emit({ action: 'cli_completion_error', error: 'Rate limit exceeded.', retryAfter: 120 });
+
+    await expect(consumer).rejects.toThrow('Rate limit exceeded. (retry after 120s)');
+  });
+
   it('throws a retryable error when the socket is not connected', async () => {
     const ws = new FakeWsManager();
     ws.connected = false;

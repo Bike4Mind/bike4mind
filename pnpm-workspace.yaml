@@ -29,7 +29,7 @@ packages:
 overrides:
   "esbuild": "0.28.1"
   "esbuild-wasm": "0.28.1"
-  "@smithy/core": "3.35.0"
+  "@smithy/core": "3.35.2"
   "@smithy/types": "4.19.0"
   "axios@<1.20.0": "1.20.0"
   "minimatch@<3.1.3": "3.1.5"

@@ -13,6 +13,7 @@ import {
   DATALAKE_TAG_STRENGTH,
   FabFileSourceType,
   GITHUB_LAKE_FILE_RULES,
+  isStorageLimitError,
   KnowledgeType,
   type GitHubLakeTreeCounts,
   type IFabFileDocument,
@@ -311,7 +312,7 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
       try {
         await checkStorageLimit(user, Math.max(0, acceptedBytes + bytes.length - retirer.stagedReclaimFor(user.id)));
       } catch (error) {
-        if (!(error instanceof BadRequestError)) throw error;
+        if (!isStorageLimitError(error)) throw error;
         // Not a chain skip: freeing space makes it ingestable, so later slices and the next sync retry it.
         transientSkips++;
         await recordLakeSkip(candidate.path, 'storage_limit', bytes.length);

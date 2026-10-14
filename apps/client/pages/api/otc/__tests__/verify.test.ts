@@ -93,6 +93,7 @@ vi.mock('@bike4mind/database', () => ({
     consumeOtherCodes: (...a: any[]) => mockConsumeOtherCodes(...a),
   },
   authSessionRepository: {},
+  oauthClientRepository: { findByClientId: vi.fn() },
 }));
 
 const mockVerifyPendingOTC = vi.fn();
@@ -111,6 +112,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
+import { oauthClientRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import handler from '@pages/api/otc/verify';
@@ -507,6 +509,57 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(res._getStatusCode()).toBe(200);
     expect(mockRegisterViaOTC).not.toHaveBeenCalled();
     expect(mockEmitSignup).not.toHaveBeenCalled();
+  });
+
+  describe('OAuth source client', () => {
+    const registerParams = () => mockRegisterViaOTC.mock.calls[0][0];
+
+    it('passes a string sourceClientId and the OAuth client lookup to registration', async () => {
+      const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+      (req as any).body.sourceClientId = 'b4m_acme_0a1b2c3d';
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(registerParams().sourceClientId).toBe('b4m_acme_0a1b2c3d');
+      expect(mockRegisterViaOTC.mock.calls[0][1].db.oauthClients).toBe(oauthClientRepository);
+    });
+
+    it.each([
+      ['absent', undefined],
+      ['empty', ''],
+      ['a number', 42],
+      ['an object', { $ne: null }],
+      ['an array', ['b4m_acme_0a1b2c3d']],
+      ['overlong', 'a'.repeat(129)],
+    ])('drops a sourceClientId that is %s and still registers', async (_label, value) => {
+      const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+      (req as any).body.sourceClientId = value;
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRegisterViaOTC).toHaveBeenCalledTimes(1);
+      expect(registerParams().sourceClientId).toBeUndefined();
+    });
+
+    it('never registers (so never tags) a returning user who arrives with a sourceClientId', async () => {
+      mockFindByEmail.mockResolvedValue({
+        id: 'u-existing',
+        isSystem: false,
+        isBanned: false,
+        emailVerified: true,
+        tokenVersion: 0,
+        toJSON: () => ({ id: 'u-existing', username: 'bob' }),
+      });
+      const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+      (req as any).body.sourceClientId = 'b4m_acme_0a1b2c3d';
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRegisterViaOTC).not.toHaveBeenCalled();
+    });
   });
 
   it('is a sanity check that the fixture domain actually confers the product credit sum', () => {

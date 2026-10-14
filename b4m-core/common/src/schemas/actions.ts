@@ -631,6 +631,8 @@ export const CliCompletionErrorAction = z.object({
   action: z.literal('cli_completion_error'),
   requestId: z.string(),
   error: z.string(),
+  /** Seconds until the caller's rate-limit window reopens; present only on a rate-limit refusal. */
+  retryAfter: z.number().optional(),
 });
 export type ICliCompletionErrorAction = z.infer<typeof CliCompletionErrorAction>;
 

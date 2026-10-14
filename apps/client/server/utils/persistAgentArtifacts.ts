@@ -76,9 +76,10 @@ export function buildAgentArtifactPayloads(args: {
 }): AgentArtifactPayload[] {
   const { artifacts } = parseArtifactsWithFallback(args.replyText);
 
-  // `parseArtifacts` sorts its result array in place by DESCENDING startIndex, so
-  // this list runs last-to-first through the reply. That order is load-bearing only
-  // because `_{index}` must be STABLE across re-parses of the same reply for the
+  // `parseArtifacts` sorts its result array in place by DESCENDING startIndex, and
+  // `parseArtifactsWithFallback` parses the converted reply once, so this one list (explicit
+  // and promoted artifacts together) runs last-to-first through the reply. That order is
+  // load-bearing only because `_{index}` must be STABLE across re-parses of the same reply for the
   // idempotency pre-check to recognize an already-written row. Reordering here would
   // remint every id and orphan the rows already persisted. (Adoption by the rendered
   // card does not depend on it - `findExistingArtifactId` compares only the
@@ -222,9 +223,8 @@ function defaultDeps(sourceRefsGuard?: artifactService.ArtifactSourceRefsGuard):
  * identifiers, so the ids differ and both writes land. `questId` is the only
  * value stable across both, so it is what gates the whole run.
  *
- * The per-id existence check stays as a second line - it covers ids the parser
- * cannot make deterministic (`convertToolOutputsToArtifacts` embeds `Date.now()`
- * in the identifier of tool-output recharts/mermaid) within a single write.
+ * The per-id existence check stays as a second line - it skips rows that a
+ * partial earlier write already created.
  */
 export async function persistAgentArtifacts(args: {
   replyText: string;

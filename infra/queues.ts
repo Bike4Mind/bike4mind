@@ -3,7 +3,7 @@ import {
   DEFAULT_LAMBDA_ENVIRONMENT,
   PRODUCTION_STAGES,
   SINGLE_RECORD_BATCH,
-  TEST_VIDEO_PROVIDER_ENVIRONMENT,
+  TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
 import { imageProcessor } from './imageProcessor';
 import { allSecrets } from './secrets';
@@ -922,8 +922,9 @@ const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    // fabFileBucket for the uploads; the queue itself for deadline, rate-limit and claim-loser re-enqueues.
-    link: [...allSecrets, fabFileBucket, githubLakeIngestQueue],
+    // fabFileBucket for the uploads; the queue itself for deadline, rate-limit and claim-loser re-enqueues;
+    // githubLakeRevokeQueue because retiring a lakeless connection can defer a failed uninstall there.
+    link: [...allSecrets, fabFileBucket, githubLakeIngestQueue, githubLakeRevokeQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1039,7 +1040,7 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-      ...TEST_VIDEO_PROVIDER_ENVIRONMENT,
+      ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     },
     concurrency: {
       // Store steps hold up to 256MB of output and providers rate-limit.

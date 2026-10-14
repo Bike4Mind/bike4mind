@@ -8,7 +8,7 @@ import {
   videoFileExtension,
   videoInputImageRef,
   type GenerationJobErrorCode,
-  type IGenerationJobDocument,
+  type IGenerationJobDocumentOf,
   type ValidatedVideoRequest,
   type VideoJobOutput,
   type VideoJobPayload,
@@ -23,20 +23,23 @@ import {
   type VideoProvider,
   type VideoProviderContext,
 } from '@bike4mind/utils/videoProviders';
-import { releaseCreditHold, settleCreditHold, type CreditLedgerEntry } from '../creditService/creditHold';
+import type { CreditLedgerEntry } from '../creditService/creditHold';
+import { releaseJobHold, settleJobHold } from '../generationJobs/settlement';
 import type { GenerationJobHandler, GenerationJobStepContext, StepResult } from '../generationJobs/types';
 import { isUsableApiKey, type VideoJobDeps } from './types';
 
 const FEATURE_LABEL = 'video generation';
 
-const fail = (code: GenerationJobErrorCode, message: string, rawProviderError?: unknown): StepResult => ({
+type VideoJob = IGenerationJobDocumentOf<'video'>;
+type VideoStepResult = StepResult<'video'>;
+
+const fail = (code: GenerationJobErrorCode, message: string, rawProviderError?: unknown): VideoStepResult => ({
   next: 'failed',
   error: { code, message },
   rawProviderError,
 });
 
-const noApiKey = (job: IGenerationJobDocument) =>
-  fail('provider_error', `No API key configured for ${job.payload.providerId}`);
+const noApiKey = (job: VideoJob) => fail('provider_error', `No API key configured for ${job.payload.providerId}`);
 
 // Decoded size from the base64 length; padding makes this overestimate by at most two bytes.
 const inlineBytes = (output: ProviderOutput) =>
@@ -61,8 +64,8 @@ type PreparedSubmit = {
 const withoutProviderOutput = ({ providerOutput: _dropped, ...payload }: VideoJobPayload): VideoJobPayload => payload;
 
 /** The video kind on the generic GenerationJobEngine: provider calls, output storage and credit settlement. */
-export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler {
-  const providerFor = (job: IGenerationJobDocument): VideoProvider => {
+export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<'video'> {
+  const providerFor = (job: VideoJob): VideoProvider => {
     const provider = deps.providers.get(job.payload.providerId);
     if (!provider) throw new Error(`video provider '${job.payload.providerId}' is not registered`);
     return provider;
@@ -70,7 +73,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
 
   // Every provider call goes through here, so this is the last boundary before an unusable key reaches a provider.
   const contextFor = async (
-    job: IGenerationJobDocument,
+    job: VideoJob,
     { signal }: GenerationJobStepContext
   ): Promise<VideoProviderContext | null> => {
     const apiKey = await deps.resolveApiKey(job.payload.providerId, job.requestedBy);
@@ -78,11 +81,11 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     return { apiKey, logger: deps.logger, now: () => deps.now(), signal };
   };
 
-  const handleOf = (job: IGenerationJobDocument): ProviderJobHandle | null => job.payload.providerHandle ?? null;
+  const handleOf = (job: VideoJob): ProviderJobHandle | null => job.payload.providerHandle ?? null;
 
   // A pricing failure (a catalog change since the job was created, including a removed model) must not fail
   // terminal handling: NaN makes settleCreditHold keep the full reservation and log it at error level.
-  const estimate = (job: IGenerationJobDocument) => {
+  const estimate = (job: VideoJob) => {
     const { request } = job.payload;
     try {
       const caps = getVideoModelCapabilities(request.model);
@@ -97,7 +100,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     }
   };
 
-  const settle = async (job: IGenerationJobDocument) => {
+  const settle = async (job: VideoJob) => {
     const { request } = job.payload;
     const { billed, credits, usd } = estimate(job);
     // Jobs without a quest use the job id: the video ledger variant is quest-scoped.
@@ -107,16 +110,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
       questId: job.questId ?? job.id,
       model: request.model,
     };
-    const charged = job.creditHold
-      ? await settleCreditHold(
-          job.creditHold,
-          credits,
-          entry,
-          { featureLabel: FEATURE_LABEL, logger: deps.logger },
-          deps.credits
-        )
-      : 0;
-    await markSettled(job, charged);
+    const charged = await settleJobHold(job, { credits, entry, featureLabel: FEATURE_LABEL }, deps);
     // Without a price there is no honest cost to report; the estimate failure is already logged.
     if (usd === null) return;
     // Usage is reporting only: the credits already moved, so a failure here must not hold up terminal handling.
@@ -135,9 +129,9 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
   };
 
   const prepareSubmit = async (
-    job: IGenerationJobDocument,
+    job: VideoJob,
     context: GenerationJobStepContext
-  ): Promise<PreparedSubmit | StepResult> => {
+  ): Promise<PreparedSubmit | VideoStepResult> => {
     const provider = providerFor(job);
     const ctx = await contextFor(job, context);
     if (!ctx) return noApiKey(job);
@@ -155,22 +149,11 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     return { provider, request: validation.request, inputs, ctx };
   };
 
-  const release = async (job: IGenerationJobDocument) => {
-    if (job.creditHold) await releaseCreditHold(job.creditHold, deps.credits);
-    await markSettled(job, 0);
-  };
-
-  // Written right after credits move, before anything else can fail, so a manual repair of a stuck terminal claim
-  // (the engine's reportUnclaimable) can tell "settled, but markTerminalHandled was lost" from "never settled".
-  const markSettled = async (job: IGenerationJobDocument, settledCredits: number) => {
-    await deps.repository.recordSettlement(job.id, settledCredits);
-  };
-
   return {
     kind: 'video',
 
     async submit(job, context) {
-      let prepared: PreparedSubmit | StepResult;
+      let prepared: PreparedSubmit | VideoStepResult;
       try {
         prepared = await prepareSubmit(job, context);
       } catch (error) {
@@ -311,7 +294,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     async onTerminal(job) {
       const charged = job.state === 'succeeded' || (job.state === 'blocked' && job.payload.billedBlock === true);
       if (charged) await settle(job);
-      else await release(job);
+      else await releaseJobHold(job, deps);
     },
   };
 }

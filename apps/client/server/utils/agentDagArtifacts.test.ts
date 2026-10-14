@@ -29,6 +29,46 @@ describe('collectDagChildArtifactBlocks', () => {
     expect(blocks).toEqual([artifact('shared')]);
   });
 
+  it('drops a child draft the parent refined under the same explicit identifier', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: `Refined chart:\n${artifact('chart', 'graph TD; A-->B; B-->C')}`,
+      childAnswers: [`Draft chart:\n${artifact('chart', 'graph TD; A-->B')}`],
+    });
+    expect(blocks).toEqual([]);
+  });
+
+  it('keeps two children that pick the same explicit identifier for different content', () => {
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: [`A\n${artifact('report', '<p>first</p>')}`, `B\n${artifact('report', '<p>second</p>')}`],
+    });
+    expect(blocks).toEqual([artifact('report', '<p>first</p>'), artifact('report', '<p>second</p>')]);
+  });
+
+  it('does not read a promoted fence as an explicit id the parent used', () => {
+    // The parent's "sales-chart" is model-written; the child's same id is title-derived by promotion.
+    // Only an explicit id is an identity the parent can adopt, so the child's fence is a distinct card.
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: `Mine:\n${artifact('sales-chart', '<p>mine</p>')}`,
+      childAnswers: [
+        'Child:\n```html\n<!DOCTYPE html><html><head><title>Sales Chart</title></head><body>hi</body></html>\n```',
+      ],
+    });
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toContain('identifier="sales-chart"');
+  });
+
+  it('keeps two children whose different untitled scripts share a promoted id', () => {
+    const script = (n: number) => `\`\`\`python\nimport os\nx = ${n}\nprint(x)\n\`\`\``;
+    const blocks = collectDagChildArtifactBlocks({
+      parentAnswer: 'Summary.',
+      childAnswers: [`A\n${script(1)}`, `B\n${script(2)}`],
+    });
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toContain('x = 1');
+    expect(blocks[1]).toContain('x = 2');
+  });
+
   it('keeps distinct child artifacts and preserves child order', () => {
     const blocks = collectDagChildArtifactBlocks({
       parentAnswer: 'Summary.',
@@ -53,6 +93,16 @@ describe('collectDagChildArtifactBlocks', () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0]).toContain('<artifact');
     expect(blocks[0]).toContain('</artifact>');
+  });
+
+  it('bubbles up an untyped child artifact, still deduped by identifier against the parent', () => {
+    const untyped = '<artifact identifier="notes" title="Notes">plain body</artifact>';
+    expect(collectDagChildArtifactBlocks({ parentAnswer: 'Summary.', childAnswers: [`Done.\n${untyped}`] })).toEqual([
+      untyped,
+    ]);
+    expect(
+      collectDagChildArtifactBlocks({ parentAnswer: `Mine:\n${untyped}`, childAnswers: [`Done.\n${untyped}`] })
+    ).toEqual([]);
   });
 
   it('returns nothing when there are no child artifacts', () => {

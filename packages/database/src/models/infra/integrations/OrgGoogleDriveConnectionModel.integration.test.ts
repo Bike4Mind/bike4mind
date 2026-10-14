@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../../__test__/createMongoServer';
+import { DataLakeModel } from '../../ai/DataLakeModel';
 import {
   OrgGoogleDriveConnection,
   orgGoogleDriveConnectionRepository,
   isDriveSyncClaimLive,
 } from './OrgGoogleDriveConnectionModel';
+import { findOrphanedLakeConnections } from './orphanedLakeConnections';
 
 /**
  * Invariants for the org Google Drive connection (#1588). The load-bearing ones are the global
@@ -952,5 +954,80 @@ describe('isDriveSyncClaimLive', () => {
     [{ status: 'syncing' as const, syncClaimedAt: minutesAgo(61), activeIngestBatchId: 'b1' }, false],
   ])('%o -> %s', (conn, live) => {
     expect(isDriveSyncClaimLive(conn, now)).toBe(live);
+  });
+});
+
+describe('OrgGoogleDriveConnectionModel - findOrphaned (lakeless connection scan)', () => {
+  const seedLake = async (slug: string, status: string) => {
+    const lake = await DataLakeModel.create({
+      name: `lake-${slug}`,
+      slug,
+      fileTagPrefix: `${slug}:`,
+      datalakeTag: `dl-${slug}`,
+      createdByUserId: 'user-1',
+      status,
+    });
+    return String(lake._id);
+  };
+  const connect = (n: number, targetDataLakeId: string, extra: Record<string, unknown> = {}) =>
+    OrgGoogleDriveConnection.create({ ...base, driveFolderId: `folder-${n}`, targetDataLakeId, ...extra });
+  const missingLakeId = () => new mongoose.Types.ObjectId().toHexString();
+
+  afterEach(async () => {
+    await DataLakeModel.deleteMany({});
+  });
+
+  it('returns a connection whose lake document is gone, and none whose lake exists in any status', async () => {
+    const orphan = await connect(1, missingLakeId());
+    await connect(2, await seedLake('live', 'active'));
+    await connect(3, await seedLake('soft-deleted', 'deleted'));
+    await connect(4, (await seedLake('upper', 'active')).toUpperCase());
+
+    const found = await orgGoogleDriveConnectionRepository.findOrphaned(10);
+    expect(found.map(c => c.id)).toEqual([orphan.id]);
+  });
+
+  it('returns orphans whatever their enabled flag or status, without the credential', async () => {
+    const disabled = await connect(1, missingLakeId(), { enabled: false, oauthRefreshToken: 'enc' });
+    const broken = await connect(2, missingLakeId(), { status: 'credential_error' });
+    const syncing = await connect(3, missingLakeId(), { status: 'syncing', syncClaimedAt: new Date() });
+    const personal = await connect(4, 'not-an-object-id', { organizationId: undefined });
+
+    const found = await orgGoogleDriveConnectionRepository.findOrphaned(10);
+    expect(found.map(c => c.id).sort()).toEqual([disabled.id, broken.id, syncing.id, personal.id].sort());
+    expect(found.every(c => c.oauthRefreshToken === undefined)).toBe(true);
+  });
+
+  it('honors the limit, oldest first', async () => {
+    const first = await connect(1, missingLakeId());
+    const second = await connect(2, missingLakeId());
+    await connect(3, missingLakeId());
+
+    const found = await orgGoogleDriveConnectionRepository.findOrphaned(2);
+    expect(found.map(c => c.id)).toEqual([first.id, second.id]);
+    expect(await orgGoogleDriveConnectionRepository.findOrphaned(0)).toEqual([]);
+  });
+
+  it('pages past a page with no orphans and stops at the end of the collection', async () => {
+    const live = await seedLake('paged', 'active');
+    const rows = [
+      { id: 'r1', targetDataLakeId: live },
+      { id: 'r2', targetDataLakeId: live },
+      { id: 'r3', targetDataLakeId: missingLakeId() },
+      { id: 'r4', targetDataLakeId: live },
+      { id: 'r5', targetDataLakeId: missingLakeId() },
+    ];
+    const afterIds: (string | undefined)[] = [];
+    const fetchPage = async (afterId: string | undefined, pageSize: number) => {
+      afterIds.push(afterId);
+      const start = afterId === undefined ? 0 : rows.findIndex(row => row.id === afterId) + 1;
+      return rows.slice(start, start + pageSize);
+    };
+
+    const found = await findOrphanedLakeConnections(10, fetchPage, 2);
+
+    expect(found.map(row => row.id)).toEqual(['r3', 'r5']);
+    // Each page resumes after the previous one's last row; the short third page ends the scan.
+    expect(afterIds).toEqual([undefined, 'r2', 'r4']);
   });
 });

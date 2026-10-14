@@ -20,6 +20,7 @@ import {
   HTTPError,
   IUserDocument,
   BadRequestError,
+  isStorageLimitError,
   type IAdminSettingsRepository,
   type IOrganizationDocument,
 } from '@bike4mind/common';
@@ -646,17 +647,22 @@ export class CommandHandler {
             findOrganizationOnce
           );
         } catch (limitError) {
-          // Only a `BadRequestError` (the three thrown by checkStorageLimitForFile/
-          // checkOrganizationStorageLimit in @bike4mind/utils) is safe to post verbatim to
-          // Slack. Anything else - notably whatever the memoized `Organization.findById(...)`
+          // Only a `BadRequestError` (a `StorageLimitError` from checkStorageLimitForFile/
+          // checkOrganizationStorageLimit in @bike4mind/utils) is safe to post to Slack. Anything else - notably whatever the memoized `Organization.findById(...)`
           // lookup throws on a DB blip - is an internal error (can name a host/port) and must
           // not be echoed into a customer channel.
           if (!(limitError instanceof BadRequestError)) {
             this.logger.error('[Slack Files] Storage limit check failed', { error: limitError, fileName: file.name });
           }
-          const message =
-            limitError instanceof BadRequestError ? limitError.message : 'Could not verify your storage limit';
-          const error = `\u26a0\ufe0f ${message}. Skipping "${file.name}".`;
+          // No byte counts: the reply is a normal thread message every channel member sees, and the
+          // refused size here is the running total for the message, not this file's, so neither
+          // reply may claim this file alone is over a limit.
+          const message = isStorageLimitError(limitError)
+            ? limitError.info.errorCode === 'org_storage_limit_exceeded'
+              ? "Your organization's storage limit would be exceeded."
+              : 'Not enough storage for this file.'
+            : `${limitError instanceof BadRequestError ? limitError.message : 'Could not verify your storage limit'}.`;
+          const error = `\u26a0\ufe0f ${message} Skipping "${file.name}".`;
           this.logger.warn(error);
           errors.push(error);
           continue;

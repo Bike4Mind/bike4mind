@@ -11,6 +11,7 @@ export * from './OrgGoogleDriveConnectionModel';
 export * from './OrgJiraConnectionModel';
 export * from './OrgSlackWorkspaceModel';
 export * from './OrgWebhookConfigModel';
+export * from './orphanedLakeConnections';
 export * from './SlackAuditLogModel';
 export * from './SlackChannelConfigModel';
 export * from './SlackDevWorkspaceModel';

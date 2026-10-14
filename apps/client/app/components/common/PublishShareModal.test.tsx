@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 import { PublishShareModal } from './PublishShareModal';
-import type { PublishResult } from '@bike4mind/common';
+import type { PublishResult, PublishVisibility } from '@bike4mind/common';
 
 // Mock the axios instance so we can assert the exact comment-policy PATCH an update issues
 // (the restricted->open widening regression). Mocking at the transport level keeps the real
@@ -319,22 +319,68 @@ describe('PublishShareModal - no-sign-in (/a) share link', () => {
     tier: 'user',
     scopeId: 'u1',
     slug: 's',
-    visibility: 'public',
+    visibility: 'private',
     publishedAt: '2026-01-01T00:00:00.000Z',
   };
 
-  const renderShared = async () => {
+  const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
+
+  const renderShared = async (visibility: PublishVisibility = 'private', liveToken: string | null = null) => {
+    apiGet.mockClear().mockImplementation((url: string) =>
+      Promise.resolve({
+        data: url.endsWith('/share-token') ? { shareToken: liveToken, shareLinks: [] } : { artifact: {} },
+      })
+    );
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
     apiPost.mockClear().mockResolvedValue({ data: { shareToken: 'TOK', shareUrl: '/a/TOK' } });
     apiDelete.mockClear().mockResolvedValue({ data: {} });
-    const publish = vi.fn().mockResolvedValue(publishResult);
+    const publish = vi.fn().mockResolvedValue({ ...publishResult, visibility });
     render(
       <Wrapper>
-        <PublishShareModal open onClose={() => {}} publish={publish} title="My artifact" defaultVisibility="public" />
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={publish}
+          title="My artifact"
+          defaultVisibility={visibility}
+        />
       </Wrapper>
     );
     fireEvent.click(screen.getByTestId('publish-share-create'));
     await screen.findByTestId('publish-share-url'); // shared phase
   };
+
+  it('hides the section for a public page, whose main link already opens without sign-in', async () => {
+    await renderShared('public');
+    expect(screen.queryByTestId('publish-share-token-section')).toBeNull();
+  });
+
+  it('shows a live link left from a past session on a public page so it can still be revoked', async () => {
+    await renderShared('public', 'OLD');
+    const input = (await screen.findByTestId('publish-share-token-url')) as HTMLInputElement;
+    expect(input.value).toContain('/a/OLD');
+    expect(apiGet).toHaveBeenCalledWith('/api/publish/pub-1/share-token');
+    expect(apiPost).not.toHaveBeenCalledWith('/api/publish/pub-1/share-token', expect.anything());
+    expect(screen.getByTestId('publish-share-token-revoke')).not.toBeNull();
+  });
+
+  it('keeps a link minted while private after switching to public, then hides it on revoke', async () => {
+    await renderShared();
+    fireEvent.click(screen.getByTestId('publish-share-token-create'));
+    await screen.findByTestId('publish-share-token-url');
+
+    fireEvent.click(radio('public')!);
+    await waitFor(() => expect(apiPatch).toHaveBeenCalled());
+    expect(screen.getByTestId('publish-share-token-hint').textContent).toContain('already opens for anyone');
+
+    fireEvent.click(screen.getByTestId('publish-share-token-revoke'));
+    await waitFor(() => expect(screen.queryByTestId('publish-share-token-section')).toBeNull());
+  });
+
+  it('says the main link of a private page only opens for the owner', async () => {
+    await renderShared();
+    expect(screen.getByTestId('publish-share-token-hint').textContent).toContain('only opens for you');
+  });
 
   it('mints the /a link on demand and shows it in a copyable field', async () => {
     await renderShared();
@@ -885,29 +931,5 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     );
     await waitFor(() => expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(false));
     expect(screen.getByTestId('publish-share-intro').textContent).not.toContain('Checking');
-  });
-});
-
-describe('PublishShareModal - the two links are described accurately', () => {
-  it('does not imply the main share link needs an account', async () => {
-    apiPost.mockClear();
-    const publish = vi.fn().mockResolvedValue({
-      publicId: 'pub-2',
-      url: '/p/r/pub-2',
-      tier: 'user',
-      scopeId: 'u1',
-      slug: 'r-pub-2',
-      visibility: 'public',
-      publishedAt: '2026-01-01T00:00:00.000Z',
-    } satisfies PublishResult);
-    render(
-      <Wrapper>
-        <PublishShareModal open onClose={() => {}} publish={publish} title="An answer" defaultVisibility="public" />
-      </Wrapper>
-    );
-    fireEvent.click(screen.getByTestId('publish-share-create'));
-    const section = await screen.findByTestId('publish-share-token-section');
-    expect(section.textContent).not.toContain('without an account');
-    expect(screen.getByTestId('publish-share-token-hint').textContent).toContain('even while it is Private');
   });
 });

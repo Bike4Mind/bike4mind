@@ -364,8 +364,10 @@ jobs:
         env:
           CI: 'true'
 
+      # Uncached on purpose: ESLint's cache keys on the linted file, not the core types the type-aware
+      # b4m/no-raw-entity-response rule reads, and node_modules (cache dir included) is restored above.
       - name: Lint (errors only)
-        run: pnpm exec eslint . --quiet --cache --cache-location node_modules/.cache/eslint/
+        run: pnpm exec eslint . --quiet
 
   # OpenAPI contract gate: the spec is generated from the same Zod schemas that
   # validate requests at runtime, so it cannot drift silently - UNLESS a schema
