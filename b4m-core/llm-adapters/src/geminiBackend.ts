@@ -1562,12 +1562,13 @@ export class GeminiBackend implements ICompletionBackend {
     model: ModelInfo,
     options: Partial<ICompletionOptions>
   ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens'> {
+    // Thinking models get neither setting. Google's default temperature of 1.0 avoids looping and
+    // degraded reasoning, and thinking counts against maxOutputTokens, which we send no budget for,
+    // so a caller's small cap would starve the visible reply.
+    if (model.can_think) return {};
     return {
-      // No temperature unless the caller sets one; the model default is what Google tunes for.
       ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-      // Gemini counts thinking against maxOutputTokens and we send no thinking budget, so a caller's
-      // small cap would starve the visible reply; thinking models run at the model's own limit.
-      ...(model.can_think ? {} : { maxOutputTokens: options.maxTokens ?? 8192 }),
+      maxOutputTokens: options.maxTokens ?? 8192,
     };
   }
 

@@ -106,12 +106,17 @@ describe.each([
   });
 
   it.each([{ temperature: 0.3 }, { temperature: 0 }])(
-    'sends temperature $temperature as given',
+    'sends temperature $temperature as given on a non-thinking model',
     async ({ temperature }) => {
-      const { requests } = await run({ options: { temperature } });
+      const { requests } = await run({ model: NON_THINKING_MODEL, options: { temperature } });
       expect(requests[0].config?.temperature).toBe(temperature);
     }
   );
+
+  it('omits temperature on a thinking model even when the caller sets one', async () => {
+    const { requests } = await run({ model: THINKING_MODEL, options: { temperature: 0.9 } });
+    expect(requests[0].config).not.toHaveProperty('temperature');
+  });
 
   it('omits temperature when none is given', async () => {
     const { requests } = await run();
