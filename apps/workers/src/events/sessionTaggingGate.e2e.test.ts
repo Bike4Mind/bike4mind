@@ -86,7 +86,7 @@ vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
 import { TAG_RETRY_BACKOFF_MS } from '@bike4mind/common';
 import { Session, Quest, User, sessionRepository } from '@bike4mind/database';
 import { handler } from './sessionTagging';
-import { determineSessionOperations } from '@server/utils/sessionOperations';
+import { determineSessionOperations } from '@bike4mind/server-utils/utils/sessionOperations';
 
 let mongoServer: MongoMemoryServer;
 

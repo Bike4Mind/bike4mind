@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 import { securityScanScheduleRepository, SecurityScanType } from '@bike4mind/database';
-import { resolveStage } from '@server/security/resolveStage';
+import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { calculateNextRunTime } from '@server/utils/scheduleCalculator';
 import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
 import { z } from 'zod';

@@ -122,7 +122,9 @@ vi.mock('@bike4mind/database/ai', () => ({
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/generatedFiles', () => ({ toGeneratedFiles: () => [] }));
-vi.mock('@server/chatCompletion/questTimeoutRecovery', () => ({ resolveQuestTimeoutRecovery: () => null }));
+vi.mock('@bike4mind/server-utils/chatCompletion/questTimeoutRecovery', () => ({
+  resolveQuestTimeoutRecovery: () => null,
+}));
 vi.mock('@server/utils/sessionOwnership', () => ({ isSessionOwnedByUser: () => true }));
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: () => Promise.resolve([]) }));
 vi.mock('@bike4mind/mcp', () => ({ MCPClient: class {}, findForbiddenMcpEnvKeys: () => [] }));

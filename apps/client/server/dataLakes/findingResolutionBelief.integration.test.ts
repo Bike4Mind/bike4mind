@@ -39,8 +39,8 @@ vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveLLMApiKeys:
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 // The keyring is the one piece that must stay fake: the real provider talks to KMS. Everything it
 // wraps - the AES sealing in `factCipher`, the chain hashing, the fold - runs for real.
-vi.mock('@server/memory/factCipher', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/memory/factCipher')>()),
+vi.mock('@bike4mind/server-utils/memory/factCipher', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/memory/factCipher')>()),
   createKeyProvider: () => h.keyring.provider,
 }));
 vi.mock('@server/memory/mementoEmbedder', () => ({ createMementoEmbedder: () => h.embed }));

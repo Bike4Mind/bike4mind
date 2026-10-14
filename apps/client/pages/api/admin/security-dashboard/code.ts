@@ -5,7 +5,7 @@ import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { getCooldownStatus } from '@server/security/cooldown';
-import { resolveStage } from '@server/security/resolveStage';
+import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { computeCategoryScoreAndCounts, computeDeterministicStatus } from '@server/security/securityDashboardScoring';
 
 import type { Request, Response } from 'express';

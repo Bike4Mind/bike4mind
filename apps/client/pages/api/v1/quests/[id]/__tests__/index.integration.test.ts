@@ -103,7 +103,7 @@ import {
   QUEST_TIMEOUT_THRESHOLD_MS,
   STUCK_QUEST_RECOVERED_LOG,
   UNFINISHED_REPLY_NOTICE,
-} from '@server/chatCompletion/questTimeoutRecovery';
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 // The real middleware chain attaches a real Logger to req (server/middlewares/logging.ts), so spy
 // on the prototype to assert the applied-recovery alert. `vi.clearAllMocks()` in beforeEach wipes

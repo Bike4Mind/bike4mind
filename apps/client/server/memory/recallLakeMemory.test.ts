@@ -25,7 +25,7 @@ vi.mock('@bike4mind/database', () => ({
   memoryLedgerRepository: {},
   memoryPrincipalKeyRepository: {},
 }));
-vi.mock('./factCipher', () => ({ createKeyProvider: () => ({}) }));
+vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
 vi.mock('./ledgerMemoryStore', () => ({
   createLedgerMemoryStore: () => ({ readProfile: mocks.readProfile }),
 }));
