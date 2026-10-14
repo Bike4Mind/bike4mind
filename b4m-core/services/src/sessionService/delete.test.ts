@@ -100,9 +100,17 @@ describe('sessionService - delete', () => {
     expect(mockFabFileRepo.updateGuarded).not.toHaveBeenCalled();
   });
 
-  it('deletes the files an in-chat tool generated in the session along with it', async () => {
+  it("keeps the files an in-chat tool generated, revoking only this session's grants on them", async () => {
     const session = { id: sessionId, userId: ownerId, deletedAt: null };
-    const generated = { id: 'file-generated', userId: ownerId, fileSize: 10, users: [] };
+    const generated = {
+      id: 'file-generated',
+      userId: ownerId,
+      fileSize: 10,
+      users: [
+        { userId: 'third-party', permissions: ['read'], sessionId },
+        { userId: 'third-party', permissions: ['read'] },
+      ],
+    };
 
     (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
     (mockFabFileRepo.find as Mock).mockResolvedValue([]);
@@ -112,52 +120,15 @@ describe('sessionService - delete', () => {
     await deleteSession(ownerId, { id: sessionId }, adapters);
 
     expect(mockFabFileRepo.findToolGeneratedBySessionId).toHaveBeenCalledWith(sessionId);
-    expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith(['file-generated']);
-  });
-
-  it("removes the owned files' stored objects, generated-bucket copies included, after the DB writes", async () => {
-    const session = { id: sessionId, userId: ownerId, deletedAt: null };
-    const uploaded = { id: 'file-uploaded', userId: ownerId, filePath: 'uploads/a.pdf', users: [] };
-    const generated = {
-      id: 'file-generated',
-      userId: ownerId,
-      filePath: 'generated-audio/b.mp3',
-      sourceMetadata: { sessionId, generatedCopyKey: 'b.mp3' },
-      users: [],
-    };
-    const sharedIn = { id: 'file-shared', userId: otherUserId, filePath: 'uploads/theirs.pdf', users: [] };
-    const storage = {
-      files: { delete: vi.fn().mockResolvedValue(undefined) },
-      generated: {
-        storage: { delete: vi.fn().mockResolvedValue(undefined) },
-        quests: { findSessionIdsByImage: vi.fn().mockResolvedValue([sessionId]) },
-      },
-    };
-
-    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
-    (mockFabFileRepo.find as Mock).mockResolvedValue([uploaded, sharedIn]);
-    (mockFabFileRepo.findToolGeneratedBySessionId as Mock).mockResolvedValue([generated]);
-    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
-
-    await deleteSession(ownerId, { id: sessionId }, { ...adapters, storage });
-
-    expect(storage.files.delete.mock.calls.map(([key]) => key)).toEqual(['uploads/a.pdf', 'generated-audio/b.mp3']);
-    expect(storage.generated.storage.delete.mock.calls).toEqual([['b.mp3']]);
-    const tombstoneOrder = (mockFabFileRepo.deleteManyInIds as Mock).mock.invocationCallOrder[0];
-    expect(storage.files.delete.mock.invocationCallOrder[0]).toBeGreaterThan(tombstoneOrder);
-  });
-
-  it('keeps the stored objects when the delete fails before the files are tombstoned', async () => {
-    const session = { id: sessionId, userId: ownerId, deletedAt: null };
-    const uploaded = { id: 'file-uploaded', userId: ownerId, filePath: 'uploads/a.pdf', users: [] };
-    const storage = { files: { delete: vi.fn() } };
-
-    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
-    (mockFabFileRepo.find as Mock).mockResolvedValue([uploaded]);
-    (mockFabFileRepo.deleteManyInIds as Mock).mockRejectedValue(new Error('write failed'));
-
-    await expect(deleteSession(ownerId, { id: sessionId }, { ...adapters, storage })).rejects.toThrow('write failed');
-    expect(storage.files.delete).not.toHaveBeenCalled();
+    expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith([]);
+    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
+    expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'file-generated',
+        users: [{ userId: 'third-party', permissions: ['read'] }],
+      }),
+      { includeDeleted: true }
+    );
   });
 
   // Otherwise the owner's storage stays counted for files that no longer exist until an admin

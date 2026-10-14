@@ -9,7 +9,6 @@ import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { bestEffortAdjustOwnerStorage, groupStorageDeltaByOwner } from '../dataLakeService/ports';
-import { deleteStoredObjects, type StoredObjectBuckets } from '../fabFileService/deleteStoredObjects';
 import { grantWrite } from '../sharingService/grantWrite';
 
 const deleteSessionSchema = z.object({
@@ -32,12 +31,6 @@ interface DeleteSessionAdapters {
     // compiling and running without it - the cleanup below is then just skipped for that caller.
     sessionAgentConfigs?: ISessionAgentConfigRepository;
   };
-  /**
-   * Where the deleted files' objects live. Optional for the same published-signature reason as `users`, but
-   * absent, the tombstoned files' objects (generated media included) stay in storage with nothing left to
-   * reach them - so every in-repo route must wire it.
-   */
-  storage?: StoredObjectBuckets;
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
 }
 
@@ -46,7 +39,7 @@ export const deleteSession = async (
   parameters: DeleteSessionParameters,
   adapters: DeleteSessionAdapters
 ) => {
-  const { db, storage, logger } = adapters;
+  const { db, logger } = adapters;
   const { id } = secureParameters(parameters, deleteSessionSchema);
 
   const session = await db.sessions.findByIdAndUserId(id, userId);
@@ -60,19 +53,20 @@ export const deleteSession = async (
   // owned-vs-shared-in split in DELETE /api/files; anything else just loses the grants this session
   // minted on it.
   // Tool-generated files link to their notebook through provenance, not `sessionId` (see
-  // persistGeneratedFileAsFabFile), so they need their own lookup to go with the notebook.
-  const fabFiles = [
-    ...(await db.fabFiles.find({ sessionId: session.id })),
-    ...(await db.fabFiles.findToolGeneratedBySessionId(session.id)),
-  ];
-  const ownedFiles = fabFiles.filter(file => file.userId === userId);
+  // persistGeneratedFileAsFabFile). They are the user's library and outlive the notebook (deleted
+  // from Files instead), so they are not in the delete set, but they still lose this session's grants.
+  const sessionFiles = await db.fabFiles.find({ sessionId: session.id });
+  const generatedFiles = await db.fabFiles.findToolGeneratedBySessionId(session.id);
+  const ownedFiles = sessionFiles.filter(file => file.userId === userId);
 
   // Both sets, because a grant this session minted and a file this session holds are not the same
   // thing: accept.ts propagates onto `knowledgeIds`, which can name files uploaded elsewhere, while
   // `sessionId` names files uploaded here that may never have been attached as knowledge.
-  const grantedFiles = [...fabFiles, ...(await db.fabFiles.findAllByIds(session.knowledgeIds ?? []))].filter(
-    (file, index, all) => all.findIndex(other => other.id === file.id) === index
-  );
+  const grantedFiles = [
+    ...sessionFiles,
+    ...generatedFiles,
+    ...(await db.fabFiles.findAllByIds(session.knowledgeIds ?? [])),
+  ].filter((file, index, all) => all.findIndex(other => other.id === file.id) === index);
 
   // Cascade BEFORE the tombstone. softDeletePlugin puts `deletedAt: null` on every findOne, and
   // findByIdAndUserId is a bare findOne, so a session tombstoned first is unreachable on a retry:
@@ -120,10 +114,6 @@ export const deleteSession = async (
   // stale row on session-not-found/deleted, it never deletes it (see getEligibleConfigs.ts).
   // Optional so a caller on the pre-cleanup adapter shape still compiles and runs.
   await db.sessionAgentConfigs?.deleteBySessionId(session.id);
-
-  // Last of the writes, since a deleted object cannot come back. Only a failed commit of the caller's
-  // transaction can still strand a live row without its object - the same tradeoff DELETE /api/files makes.
-  if (storage) await deleteStoredObjects(ownedFiles, storage);
 
   const mostRecent = await db.sessions.findRecentlyUpdatedByUserId(userId);
 

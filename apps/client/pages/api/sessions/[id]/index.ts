@@ -19,7 +19,6 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getFilesStorage } from '@server/utils/storage';
-import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
 
 // Each verb's auth mode, required scope, and path/body validation come from its contract
 // (sessionGetContract, sessionUpdateContract, sessionDeleteContract), the single source of truth
@@ -55,7 +54,6 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
           users: userRepository,
           sessionAgentConfigs: sessionAgentConfigRepository,
         },
-        storage: { files: getFilesStorage(), generated: getGeneratedCopyStore() },
         logger: req.logger,
       }
     )
