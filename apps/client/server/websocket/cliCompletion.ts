@@ -79,7 +79,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       const user = await verifyJwtToken(accessToken);
       userId = user.id;
       logger.info('[CLI_WS] Authenticated via JWT', { userId });
-      await checkRateLimit(userId);
+      await checkRateLimit(userId, source);
     } catch {
       await sendToConnection(connectionId, endpoint, {
         action: 'cli_completion_error' as const,
