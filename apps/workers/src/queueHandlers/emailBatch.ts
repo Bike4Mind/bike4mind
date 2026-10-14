@@ -15,6 +15,7 @@ import {
 } from '@bike4mind/common';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import mailer from '@server/utils/mailer';
+import { escapeHtml } from '@server/utils/mailer/emailHelpers';
 import { SQSBatchResponse } from 'aws-lambda';
 import { z } from 'zod';
 
@@ -225,18 +226,6 @@ async function getRecipientData(
     // Ignore errors - will fall back to email-based defaults
   }
   return {};
-}
-
-/**
- * HTML-escape a string to prevent XSS when injecting into templates.
- */
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 export function renderTemplate(

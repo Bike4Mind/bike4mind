@@ -48,8 +48,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
-vi.mock('@server/integrations/google/drive/common', () => ({
+// common.ts reads Config at import, so importOriginal crashes here: take the real predicate from its own module.
+vi.mock('@server/integrations/google/drive/common', async () => ({
   getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
+  isTerminalDriveGrantError: (
+    await vi.importActual<typeof import('@server/integrations/google/drive/driveGrantErrors')>(
+      '@server/integrations/google/drive/driveGrantErrors'
+    )
+  ).isTerminalDriveGrantError,
 }));
 // Keep isValidDriveFolderId real; mock only the Drive network calls.
 vi.mock('@server/integrations/google/drive/driveClient', async importOriginal => {

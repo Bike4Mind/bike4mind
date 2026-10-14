@@ -100,7 +100,7 @@ export const allAtlasVectorIndexDefinitions = (): AtlasVectorIndexDefinition[] =
 /**
  * Idempotently ensures every per-model Atlas vector index exists. Called from
  * `updateDatabase`/`createDatabase` rather than a numbered migration - see
- * `apps/client/server/utils/manageDatabase.ts`.
+ * `apps/workers/src/database/manageDatabase.ts`.
  *
  * No-ops entirely on a non-Atlas backend (DocumentDB/self-host), since `createSearchIndex`
  * is an Atlas-only server command and would otherwise throw on every deploy.

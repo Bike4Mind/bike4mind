@@ -3,6 +3,7 @@
  */
 import type { CompletionSseErrorCode } from '../schemas/cliCompletions';
 import type { StreamChannel } from './streamVisibility';
+import type { TurnUsage } from '../models';
 
 export interface SSEContentEvent {
   type: 'content' | 'tool_use';
@@ -90,6 +91,8 @@ export interface CompletionInfo {
   /** Anthropic-style cache token deltas */
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  /** Per-provider-request breakdown, for settlement only; buildSSEEvent never forwards it. */
+  turnUsage?: TurnUsage[];
   /**
    * Credit usage information
    */

@@ -466,6 +466,8 @@ describe('makeDagDispatcher artifact opt-out inheritance', () => {
     organizationId: 'o1',
     sessionId: 's1',
     questId: 'q1',
+    approvedTools: [] as string[],
+    deniedTools: [] as string[],
   };
   const node = { id: 'explore', description: 'Search code', dependsOn: [] as string[] };
 
@@ -532,6 +534,33 @@ describe('makeDagDispatcher artifact opt-out inheritance', () => {
     await make([]).createNode(args);
     expect(Object.keys(createMock.mock.calls[1][0] as Record<string, unknown>)).not.toContain('scopeDeniedTools');
   });
+
+  it('copies the parent permission lists onto the node row', async () => {
+    // A node cannot pause for approval, so its row is the only source its tool gate reads
+    // (processSubagentDispatch). The row gets its own copy, never an alias of the parent's array.
+    createMock.mockClear();
+    const approvedTools = ['send_slack_message'];
+    const deniedTools = ['web_search'];
+    const dispatcher = makeDagDispatcher({
+      connectionId: 'c1',
+      nodeDefaults: { ...nodeDefaultsBase, approvedTools, deniedTools },
+      logger: silentLogger,
+    });
+
+    await dispatcher.createNode({
+      parentExecutionId: 'p1',
+      node,
+      thoroughness: 'quick',
+      agentName: 'worker',
+      model: 'm1',
+      maxIterations: 3,
+    });
+
+    const row = createMock.mock.calls[0][0] as { approvedTools: string[]; deniedTools: string[] };
+    expect(row.approvedTools).toEqual(['send_slack_message']);
+    expect(row.deniedTools).toEqual(['web_search']);
+    expect(row.approvedTools).not.toBe(approvedTools);
+  });
 });
 
 /**
@@ -555,5 +584,50 @@ describe('artifact opt-out producer hops in agentExecutor', () => {
 
   it('spreads the inherited fields into the subagent create payload', () => {
     expect(source).toContain('...inheritedArtifactFields(callerEnableArtifacts)');
+  });
+});
+
+/**
+ * Same static-analysis approach for the subagent permission gate: every hop that carries the
+ * parent's approved/denied lists to a child lives in `processExecution` /
+ * `processSubagentDispatch`, which have no harness. Drop any one and children silently run
+ * tools the parent's gate would have paused on.
+ */
+describe('subagent permission-list producer hops in agentExecutor', () => {
+  const source = readFileSync(resolve(__dirname, 'agentExecutor.ts'), 'utf8');
+  const dispatchStart = source.indexOf('async function processSubagentDispatch(');
+  const execPart = source.slice(source.indexOf('async function processExecution('), dispatchStart);
+  const dispatchPart = source.slice(dispatchStart);
+  const toolDepsRe = /const toolDeps: ToolBuilderDeps = \{[\s\S]*?\n {4}\};/;
+
+  it('hands the run lists to in-process children through the tool deps', () => {
+    const deps = execPart.match(toolDepsRe);
+    expect(deps, 'processExecution toolDeps literal not found in agentExecutor.ts').not.toBeNull();
+    expect(deps![0]).toContain('toolPermissions: { approvedTools, deniedTools },');
+  });
+
+  it('copies the run lists onto Lambda-dispatched subagent rows', () => {
+    const baseFields = source.match(/const baseFields = \{[\s\S]*?\n {8}\};/);
+    expect(baseFields, 'baseFields literal not found in agentExecutor.ts').not.toBeNull();
+    expect(baseFields![0]).toContain('approvedTools: [...approvedTools],');
+    expect(baseFields![0]).toContain('deniedTools: [...deniedTools],');
+  });
+
+  it('hands the run lists to the DAG dispatcher', () => {
+    const call = source.match(/makeDagDispatcher\(\{[\s\S]*?\n {4}\}\);/);
+    expect(call, 'makeDagDispatcher call site not found in agentExecutor.ts').not.toBeNull();
+    expect(call![0]).toMatch(/\n\s+approvedTools,\n\s+deniedTools,\n/);
+  });
+
+  it('gates a dispatched child on its own row, in both its tool deps and its orchestrator', () => {
+    expect(source).toContain(
+      'const childToolPermissions = { approvedTools: child.approvedTools ?? [], deniedTools: child.deniedTools ?? [] };'
+    );
+    const childDeps = dispatchPart.match(toolDepsRe);
+    expect(childDeps, 'dispatched child toolDeps literal not found in agentExecutor.ts').not.toBeNull();
+    expect(childDeps![0]).toContain('toolPermissions: childToolPermissions,');
+    const orch = dispatchPart.match(/new ServerSubagentOrchestrator\(\{[\s\S]*?\n {4}\}\);/);
+    expect(orch, 'ServerSubagentOrchestrator literal not found in agentExecutor.ts').not.toBeNull();
+    expect(orch![0]).toContain('toolPermissions: childToolPermissions,');
   });
 });

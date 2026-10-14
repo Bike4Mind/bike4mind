@@ -2,7 +2,8 @@
  * Claude Opus 5.5, Sonnet 5.5 and Fable 5.1 on Bedrock return 400 for a forced tool_choice
  * (`any` / `tool`). The Bedrock Anthropic body never carries tool_choice at all and honors
  * json_schema by prompt instruction (best-effort), so none of the inputs that force a tool on
- * the direct backend may reach these models' request body.
+ * the direct backend may reach these models' request body. Haiku 5.5 accepts a forced tool_choice
+ * on Bedrock, but the body still never carries one, so it is pinned here too.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -14,6 +15,7 @@ const MODELS = [
   ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+  ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
 ];
 
 const tool: ICompletionOptionTools = {
@@ -46,7 +48,7 @@ function bodyOf(model: string, options: Record<string, unknown>) {
   return JSON.parse(payload.body) as Record<string, unknown> & { tools?: Array<Record<string, unknown>> };
 }
 
-describe('AnthropicBedrockBackend never forces a tool on models without forced tool use', () => {
+describe('AnthropicBedrockBackend never sends tool_choice in the request body', () => {
   it.each(MODELS)('sends no tool_choice for a named or required choice on %s', model => {
     for (const toolChoice of ['required', { type: 'function', function: { name: 'get_weather' } }] as const) {
       const body = bodyOf(model, { tools: [tool], tool_choice: toolChoice });

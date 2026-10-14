@@ -115,7 +115,7 @@ def main():
             for key, expected in [
                 ("PUBLISHED_ARTIFACTS_BUCKET", {("drafts/", 7)}),
                 ("HISTORY_IMPORT_BUCKET", {(None, 7)}),
-                ("FAB_FILE_BUCKET", {("exports/", 1), ("generated-audio-offload/", 1)}),
+                ("FAB_FILE_BUCKET", {("exports/", 1), ("generated-audio-offload/", 1), ("text-edit-backups/", 30)}),
             ]:
                 lifecycle = json.loads(mc(
                     "mc ilm export " + shlex.quote("local/" + buckets[key]), capture=True,

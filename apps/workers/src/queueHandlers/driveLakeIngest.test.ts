@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError as ServerBadRequestError } from '@server/utils/errors';
 import { DATA_LAKE_STATUSES, DocumentDateSource, StorageLimitError } from '@bike4mind/common';
 
 const storageRefusal = () =>
@@ -19,6 +20,7 @@ vi.mock('@server/queueHandlers/utils', () => ({
 const h = vi.hoisted(() => ({
   // repos + collaborators
   connFindById: vi.fn(),
+  updateHealth: vi.fn(),
   claimForSync: vi.fn(),
   releaseSyncClaim: vi.fn(),
   probeConnectedFolder: vi.fn(),
@@ -121,6 +123,7 @@ vi.mock('@bike4mind/database', () => ({
     renewSyncClaim: h.renewSyncClaim,
     releaseSyncClaim: h.releaseSyncClaim,
     updateSyncCursor: h.updateSyncCursor,
+    updateHealth: h.updateHealth,
   },
 }));
 // Only the two settings/quota reads this door gates on are stubbed; BadRequestError stays the
@@ -161,10 +164,17 @@ vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false })
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
-vi.mock('@server/integrations/google/drive/common', () => ({
+// common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: take the real
+// isTerminalDriveGrantError from its Config-free module instead.
+vi.mock('@server/integrations/google/drive/common', async () => ({
   getValidConnectionDriveAccessToken: h.getValidConnectionDriveAccessToken,
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
   releaseDriveConnection: h.releaseDriveConnection,
+  isTerminalDriveGrantError: (
+    await vi.importActual<typeof import('@server/integrations/google/drive/driveGrantErrors')>(
+      '@server/integrations/google/drive/driveGrantErrors'
+    )
+  ).isTerminalDriveGrantError,
 }));
 // isFolder/isValidDriveFolderId etc. stay real (classifyDriveChanges depends on the real isFolder),
 // and so does isDriveRateLimitError - the throttle deferrals below are exactly the behaviour a
@@ -173,7 +183,8 @@ vi.mock('@server/integrations/google/drive/driveClient', async importOriginal =>
   const actual = await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>();
   return {
     ...actual,
-    createDriveClient: () => ({}),
+    // Echoes the token so a test can tell which credential built the client a call received.
+    createDriveClient: (token: string) => ({ token }),
     listChanges: h.listChanges,
     getStartPageToken: h.getStartPageToken,
     isDriveInvalidCursorError: h.isDriveInvalidCursorError,
@@ -203,11 +214,12 @@ import {
   dispatch,
   hasDriveFileChanged,
   classifyDriveChanges,
-  MAX_INGEST_CANDIDATES,
   MAX_INGEST_REDRIVES,
   MAX_INGEST_SLICES,
 } from './driveLakeIngest';
+import { MAX_INGEST_CANDIDATES } from '@server/integrations/google/drive/driveIngestLimits';
 import { DriveWalkTimeBudgetExceededError } from '@server/integrations/google/drive/driveContent';
+import { REJECTED_DRIVE_TOKEN_MESSAGE } from '@server/integrations/google/drive/driveClient';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -2575,6 +2587,175 @@ describe('driveLakeIngest consumer', () => {
 
       expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', 'Backend Error');
       expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
+    describe('a 401 from the probe (token rejected)', () => {
+      const unauthorized = () => Object.assign(new Error('Invalid Credentials'), { code: 401 });
+
+      it('refreshes the token once and carries on when the retried probe reaches the folder', async () => {
+        h.probeConnectedFolder.mockRejectedValueOnce(unauthorized()).mockResolvedValueOnce({ reachable: true });
+        h.getValidConnectionDriveAccessToken.mockResolvedValueOnce('stale-token').mockResolvedValueOnce('fresh-token');
+        h.walkFolder.mockResolvedValue([]);
+
+        await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+        expect(h.probeConnectedFolder).toHaveBeenCalledTimes(2);
+        expect(h.probeConnectedFolder).toHaveBeenNthCalledWith(1, { token: 'stale-token' }, 'FOLDER');
+        expect(h.probeConnectedFolder).toHaveBeenNthCalledWith(2, { token: 'fresh-token' }, 'FOLDER');
+        expect(h.walkFolder.mock.calls[0]?.[0]).toEqual({ token: 'fresh-token' });
+        expect(h.getValidConnectionDriveAccessToken).toHaveBeenCalledTimes(2);
+        expect(h.getValidConnectionDriveAccessToken).toHaveBeenLastCalledWith('conn1', expect.anything(), {
+          forceRefresh: true,
+        });
+        expect(h.releaseSyncClaim).not.toHaveBeenCalledWith(
+          'conn1',
+          expect.anything(),
+          expect.anything(),
+          'needs_reconnect'
+        );
+        expect(h.walkFolder).toHaveBeenCalled();
+      });
+
+      it('stops quietly, with no SQS retry or needs_reconnect, when the forced refresh finds the grant revoked', async () => {
+        h.probeConnectedFolder.mockRejectedValueOnce(unauthorized());
+        h.getValidConnectionDriveAccessToken
+          .mockResolvedValueOnce('stale-token')
+          .mockRejectedValueOnce(new ServerBadRequestError('Google Drive access was revoked - reconnect required'));
+
+        await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+        expect(h.getValidConnectionDriveAccessToken).toHaveBeenLastCalledWith('conn1', expect.anything(), {
+          forceRefresh: true,
+        });
+        expect(h.probeConnectedFolder).toHaveBeenCalledTimes(1);
+        expect(h.releaseSyncClaim).not.toHaveBeenCalledWith(
+          'conn1',
+          expect.anything(),
+          expect.anything(),
+          'needs_reconnect'
+        );
+        expect(h.walkFolder).not.toHaveBeenCalled();
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+      });
+
+      it('settles the adopted batch of a continuation when the grant was revoked', async () => {
+        h.probeConnectedFolder.mockRejectedValueOnce(unauthorized());
+        h.getValidConnectionDriveAccessToken
+          .mockResolvedValueOnce('stale-token')
+          .mockRejectedValueOnce(new ServerBadRequestError('Google Drive access was revoked - reconnect required'));
+        h.batchFindById.mockResolvedValue({
+          id: 'batch1',
+          dataLakeId: 'lake1',
+          status: 'processing',
+          totalFiles: 3,
+          skippedFiles: 0,
+          files: [{ fabFileId: 'ff-prev' }],
+          vectorizedFiles: 0,
+          failedFiles: 0,
+        });
+
+        await expect(
+          run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' })
+        ).resolves.toBeUndefined();
+
+        expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+        expect(h.walkFolder).not.toHaveBeenCalled();
+      });
+
+      it('flags credential_error and stops quietly when the forced refresh succeeds but Drive 401s again', async () => {
+        h.probeConnectedFolder.mockRejectedValueOnce(unauthorized()).mockRejectedValueOnce(unauthorized());
+
+        await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+        expect(h.probeConnectedFolder).toHaveBeenCalledTimes(2);
+        expect(h.updateHealth).toHaveBeenCalledWith('conn1', {
+          status: 'credential_error',
+          lastError: REJECTED_DRIVE_TOKEN_MESSAGE,
+        });
+        expect(h.walkFolder).not.toHaveBeenCalled();
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+        expect(h.releaseSyncClaim).not.toHaveBeenCalledWith(
+          'conn1',
+          expect.anything(),
+          expect.anything(),
+          'needs_reconnect'
+        );
+      });
+
+      it('treats a revoked-scope 403 like a 401: one forced refresh, then credential_error', async () => {
+        const scopeRevoked = () =>
+          Object.assign(new Error('Insufficient Permission'), {
+            code: 403,
+            errors: [{ reason: 'insufficientPermissions' }],
+          });
+        h.probeConnectedFolder.mockRejectedValueOnce(scopeRevoked()).mockRejectedValueOnce(scopeRevoked());
+
+        await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+        expect(h.getValidConnectionDriveAccessToken).toHaveBeenLastCalledWith('conn1', expect.anything(), {
+          forceRefresh: true,
+        });
+        expect(h.updateHealth).toHaveBeenCalledWith('conn1', {
+          status: 'credential_error',
+          lastError: REJECTED_DRIVE_TOKEN_MESSAGE,
+        });
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+      });
+
+      it('stops quietly when the first token fetch already finds the grant revoked', async () => {
+        h.getValidConnectionDriveAccessToken.mockRejectedValueOnce(
+          new ServerBadRequestError('Google Drive access was revoked - reconnect required')
+        );
+
+        await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+        expect(h.probeConnectedFolder).not.toHaveBeenCalled();
+        expect(h.walkFolder).not.toHaveBeenCalled();
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+        // A run with no resumeBatchId must not settle a batch: looking one up by an undefined id would
+        // still count as a lookup here, so pin the guard, not just the finalize.
+        expect(h.batchFindById).not.toHaveBeenCalled();
+        expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
+      });
+
+      it('settles the adopted batch of a continuation when the first token fetch finds the grant revoked', async () => {
+        h.getValidConnectionDriveAccessToken.mockRejectedValueOnce(
+          new ServerBadRequestError('Google Drive access was revoked - reconnect required')
+        );
+        h.batchFindById.mockResolvedValue({
+          id: 'batch1',
+          dataLakeId: 'lake1',
+          status: 'processing',
+          totalFiles: 3,
+          skippedFiles: 0,
+          files: [{ fabFileId: 'ff-prev' }],
+          vectorizedFiles: 0,
+          failedFiles: 0,
+        });
+
+        await expect(
+          run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' })
+        ).resolves.toBeUndefined();
+
+        expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+        expect(h.probeConnectedFolder).not.toHaveBeenCalled();
+      });
+
+      it('rethrows a non-terminal failure of the first token fetch so SQS retries', async () => {
+        h.getValidConnectionDriveAccessToken.mockRejectedValueOnce(new Error('Backend Error'));
+
+        await expect(run({ connectionId: 'conn1' })).rejects.toThrow('Backend Error');
+        expect(h.probeConnectedFolder).not.toHaveBeenCalled();
+      });
+
+      it('rethrows a non-terminal failure of the forced refresh so SQS retries', async () => {
+        h.probeConnectedFolder.mockRejectedValueOnce(unauthorized());
+        h.getValidConnectionDriveAccessToken
+          .mockResolvedValueOnce('stale-token')
+          .mockRejectedValueOnce(new Error('Backend Error'));
+
+        await expect(run({ connectionId: 'conn1' })).rejects.toThrow('Backend Error');
+      });
     });
 
     it('logs and returns when the claim was taken away before the park landed', async () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageGenerationService } from './ImageGeneration';
+import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
 import { SUMMARIZATION_CONFIG } from './ChatCompletionFeatures';
 import {
   ImageModels,
@@ -15,6 +16,7 @@ import { estimateImageCredits } from '../imageCost';
 import type { Logger } from '@bike4mind/observability';
 import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
 import { getSettingsValue } from '@bike4mind/utils';
+import { moderateImageOrThrow } from './imageModerationGate';
 import { deductCreditsWithOrgSupport } from '../creditService';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
@@ -1388,7 +1390,9 @@ describe('ImageGenerationService quest partial writes', () => {
     pricing: { 1: { input: 0, output: 0 } },
   } as unknown as ModelInfo;
 
-  const makeService = (opts: { startImageGenerationProcess?: ReturnType<typeof vi.fn> } = {}) => {
+  const makeService = (
+    opts: { startImageGenerationProcess?: ReturnType<typeof vi.fn>; saveGeneratedAsset?: SaveGeneratedAssetFn } = {}
+  ) => {
     const quest: Record<string, unknown> = {
       id: 'quest1',
       sessionId: 'session1',
@@ -1417,6 +1421,7 @@ describe('ImageGenerationService quest partial writes', () => {
         },
       },
       startImageGenerationProcess: opts.startImageGenerationProcess ?? vi.fn(async () => undefined),
+      saveGeneratedAsset: opts.saveGeneratedAsset ?? vi.fn(async () => ({ saved: true })),
       logEvent: vi.fn().mockResolvedValue(undefined),
       abilityGetter: vi.fn().mockReturnValue({}),
       storage: { upload: vi.fn().mockResolvedValue('generated/output.png') },
@@ -1481,9 +1486,10 @@ describe('ImageGenerationService quest partial writes', () => {
       userId: 'user1',
     });
 
-  const processEdit = (service: ImageGenerationService) =>
+  const processEdit = (service: ImageGenerationService, generationId?: string) =>
     service.process({
       body: {
+        generationId,
         sessionId: 'session1',
         questId: 'quest1',
         userId: 'user1',
@@ -1584,6 +1590,147 @@ describe('ImageGenerationService quest partial writes', () => {
       },
       creditsUsed: 7,
     });
+  });
+
+  describe('saving generated images to the user files', () => {
+    const arrange = (saveGeneratedAsset: SaveGeneratedAssetFn) => {
+      vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+      mockGeminiEdit.mockReset();
+      mockGeminiEdit.mockResolvedValue({ type: 'success', dataUrl: 'data:image/png;base64,RESULT' });
+      return makeService({ saveGeneratedAsset });
+    };
+
+    it('saves the stored image once, keyed by generationId and image index', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service } = arrange(save);
+      await processEdit(service, 'gen-1');
+
+      expect(save).toHaveBeenCalledTimes(1);
+      expect(save.mock.calls[0][0]).toMatchObject({
+        userId: 'user1',
+        sessionId: 'session1',
+        questId: 'quest1',
+        contentType: 'image/png',
+        generation: {
+          generator: 'image',
+          provider: ModelBackend.Gemini,
+          modelId: ImageModels.GEMINI_3_PRO_IMAGE,
+          prompt: 'make it blue',
+          jobId: 'gen-1-0',
+        },
+      });
+    });
+
+    const processGenerate = (service: ImageGenerationService, generationId: string) =>
+      service.process({
+        body: {
+          generationId,
+          sessionId: 'session1',
+          questId: 'quest1',
+          userId: 'user1',
+          prompt: 'make it blue',
+          model: ImageModels.GEMINI_3_PRO_IMAGE,
+          n: 2,
+        } as never,
+        logger: silentLogger,
+      });
+
+    const twoImages = ['data:image/png;base64,ONE', 'data:image/png;base64,TWO'];
+
+    it('saves each of two images with its own index-suffixed jobId', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service } = arrange(save);
+      mockGeminiGenerate.mockReset();
+      mockGeminiGenerate.mockResolvedValue(twoImages);
+      await processGenerate(service, 'gen-1');
+
+      expect(save).toHaveBeenCalledTimes(2);
+      expect(save.mock.calls.map(call => call[0].generation?.jobId).sort()).toEqual(['gen-1-0', 'gen-1-1']);
+    });
+
+    it('saves nothing when moderation blocks the second image', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service, update } = arrange(save);
+      mockGeminiGenerate.mockReset();
+      mockGeminiGenerate.mockResolvedValue(twoImages);
+      vi.mocked(moderateImageOrThrow)
+        .mockImplementationOnce(async () => undefined)
+        .mockImplementationOnce(async () => {
+          throw new Error('blocked by moderation');
+        });
+      await processGenerate(service, 'gen-1');
+
+      expect(save).not.toHaveBeenCalled();
+      expect(callArgs(update).find(arg => arg.type === 'error')).toMatchObject({ status: 'done' });
+    });
+
+    it('saves nothing when billing fails', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service, update } = arrange(save);
+      enforceCredits(service);
+      vi.mocked(deductCreditsWithOrgSupport).mockRejectedValueOnce(new Error('billing down'));
+      await processEdit(service, 'gen-1');
+
+      expect(save).not.toHaveBeenCalled();
+      expect(callArgs(update).find(arg => arg.type === 'error')).toMatchObject({ reply: 'billing down' });
+    });
+
+    it('saves nothing when the done write fails', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service, update } = arrange(save);
+      update.mockImplementation(async (arg: Record<string, unknown>) => {
+        if ('images' in arg) throw new Error('write failed');
+        return undefined;
+      });
+      await processEdit(service, 'gen-1');
+
+      expect(save).not.toHaveBeenCalled();
+      expect(callArgs(update).find(arg => arg.type === 'error')).toMatchObject({ reply: 'write failed' });
+    });
+
+    it('still finishes the quest when the save rejects', async () => {
+      const { service, update } = arrange(vi.fn(async () => Promise.reject(new Error('disk full'))));
+      await processEdit(service, 'gen-1');
+
+      expect(callArgs(update).find(arg => arg.status === 'done')).toMatchObject({
+        status: 'done',
+        images: ['generated/output.png'],
+      });
+    });
+
+    it('still finishes the quest when the save reports storage_limit', async () => {
+      const { service, update } = arrange(vi.fn(async () => ({ saved: false, reason: 'storage_limit' }) as never));
+      await processEdit(service, 'gen-1');
+
+      expect(callArgs(update).find(arg => arg.status === 'done')).toMatchObject({
+        status: 'done',
+        images: ['generated/output.png'],
+      });
+    });
+  });
+
+  it('invoke stamps a non-empty generationId on the queued body', async () => {
+    const startImageGenerationProcess = vi.fn(async () => undefined);
+    const { service } = makeService({ startImageGenerationProcess });
+    await invoke(service);
+
+    const [queued] = startImageGenerationProcess.mock.calls[0] as unknown as [{ generationId?: unknown }];
+    expect(typeof queued.generationId).toBe('string');
+    expect(queued.generationId).not.toBe('');
+  });
+
+  it('invoke stamps a fresh generationId on each retry of the same quest', async () => {
+    const startImageGenerationProcess = vi.fn(async () => undefined);
+    const { service } = makeService({ startImageGenerationProcess });
+    await invoke(service);
+    await invoke(service);
+
+    const [first, second] = startImageGenerationProcess.mock.calls.map(
+      call => (call as unknown as [{ generationId?: string }])[0].generationId
+    );
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(first).not.toBe(second);
   });
 
   it('process Gemini clarification writes exactly reply, type, status, promptMeta and creditsUsed', async () => {

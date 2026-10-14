@@ -231,6 +231,10 @@ const PromptMetaContextSchema = z.object({
     .optional(),
 });
 
+/** A public /api/chat request's tool-selection mode (`SimplifiedChatRequestSchema.toolMode` in schemas/chat.ts). */
+export const ChatToolModeSchema = z.enum(['fast', 'smart']);
+export type ChatToolMode = z.infer<typeof ChatToolModeSchema>;
+
 const PromptMetaFunctionCallSchema = z.object({
   name: z.string().optional(),
   parameters: z.record(z.string(), z.any()).optional(), // z.any() supports arrays, objects, and all JSON types
@@ -879,6 +883,9 @@ export const PromptMetaZodSchema = z.object({
    * eval/measurement and for diagnosing the silent no-tool-offered state.
    */
   offeredTools: z.array(z.string()).optional(),
+  /** The public /api/chat request's `toolMode`, kept so tool-calling evals can split by it. Absent
+   * when the request set none, which includes every in-app turn. */
+  toolMode: ChatToolModeSchema.optional(),
   performance: PromptMetaPerformanceSchema.optional(),
   session: PromptMetaSessionSchema.optional(),
   questId: z.string().optional(),

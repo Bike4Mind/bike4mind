@@ -22,24 +22,13 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
+import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
 
 const CURSOR_SCOPE = 'v1.video-generations';
-
-const IDEMPOTENCY_KEY_PATTERN = /^[\x20-\x7e]{1,255}$/;
-
-const readIdempotencyKey = (header: string | string[] | undefined): string | undefined => {
-  if (header === undefined) return undefined;
-  if (typeof header !== 'string' || !IDEMPOTENCY_KEY_PATTERN.test(header)) {
-    throw new UnprocessableEntityError('Idempotency-Key must be 1-255 printable ASCII characters', {
-      errorCode: 'invalid_idempotency_key',
-    });
-  }
-  return header;
-};
 
 // Omitted fields take the model's catalog defaults; createVideoJob then validates against its capabilities.
 const toDomainRequest = (body: CreateVideoGenerationBody): VideoGenerationRequest => {

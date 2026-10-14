@@ -6,6 +6,7 @@ import { BFLSafetyToleranceSchema } from './schemas/bfl';
 import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 import { GenerationCallbackUrlSchema } from './schemas/generationCallback';
+import { ChatToolModeSchema } from './schemas/promptMeta';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -360,6 +361,8 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   allowedAgents: z.array(z.string()).optional(),
   /** When true, Quest Processor injects Slack-specific tool configs (help, notebooks, curated files) */
   enableSlackTools: z.boolean().optional(),
+  /** Public /api/chat `toolMode`, persisted on promptMeta for tool-calling evals. */
+  toolMode: ChatToolModeSchema.optional(),
   /**
    * Agent-mode toggle state forwarded from the composer. The chat
    * completion path itself does not branch on this - that decision happens
@@ -377,7 +380,9 @@ export const ChatCompletionInvokeParamsSchema = z.object({
 });
 export type ChatCompletionInvokeParams = z.infer<typeof ChatCompletionInvokeParamsSchema>;
 
-export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.extend({
+// toolMode is omitted so an in-app request cannot stamp a mode no tool selection ran under; only
+// /api/chat sets it, after its own toolMode handling.
+export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.omit({ toolMode: true }).extend({
   /** Notebook session ID */
   sessionId: z.string().optional(),
   /** Notebook session name */

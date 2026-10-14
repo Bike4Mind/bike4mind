@@ -33,7 +33,7 @@ import { getEffectiveApiKey } from '../../../../apiKeyService';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
 import { v4 as uuidv4 } from 'uuid';
-import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
+import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { resolveImageArgs } from './resolveImageArgs';
@@ -100,12 +100,13 @@ async function moderateToolImage(
 export async function processAndStoreImages(
   images: string[],
   context: ToolContext,
-  model: string,
-  provider: string
+  { model, provider, prompt }: { model: string; provider: string; prompt: string }
 ): Promise<string[]> {
   await context.statusUpdate({}, 'Storing images...');
+  // Unique file names for an n>1 batch, which would otherwise share the Date.now() suffix.
+  const batchId = uuidv4();
   return Promise.all(
-    images.map(async image => {
+    images.map(async (image, index) => {
       const buffer = await downloadImageAsBuffer(image);
       const fileType = await fileTypeFromBuffer(buffer);
       // Default the extension when detection fails: a `${uuid}.undefined` filename would
@@ -120,15 +121,12 @@ export async function processAndStoreImages(
 
       const path = await context.imageGenerateStorage.upload(buffer, filename, {});
 
-      // Also persist as a session FabFile so the image is browsable in the Knowledge Base
-      // (the inline chat grid reads quest.images from the generated bucket; this makes the
-      // same image survive as a first-class, downloadable file). Best-effort - never blocks
-      // the image from rendering inline. Use a human-readable name (not the raw uuid storage
-      // key) so the Knowledge Base shows a sensible title.
-      await persistGeneratedFileAsFabFile(context, {
-        fileName: `generated-image-${filename.slice(0, 8)}.${ext}`,
-        mimeType: fileType?.mime ?? 'image/png',
-        content: buffer,
+      // The inline chat grid reads quest.images from the generated bucket; the FabFile copy is what the user
+      // keeps in Files. A failed save resolves with a reason rather than throwing, so it never blocks the image.
+      await saveGeneratedAssetFromTool(context, {
+        bytes: buffer,
+        contentType: mimeType,
+        generation: { generator: 'image', provider, modelId: model, jobId: `${batchId}-${index}`, prompt },
       });
 
       return path;
@@ -257,7 +255,7 @@ export const imageGenerationTool: ToolDefinition = {
           safety_tolerance,
         });
 
-        const storedImageUrls = await processAndStoreImages(images, context, model, provider);
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
         return updateQuestAndReturnMarkdown(storedImageUrls, context);
       } else if (isBFLModel) {
@@ -285,7 +283,7 @@ export const imageGenerationTool: ToolDefinition = {
             safety_tolerance: safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT,
           });
 
-          const storedImageUrls = await processAndStoreImages(images, context, model, provider);
+          const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
           return updateQuestAndReturnMarkdown(storedImageUrls, context);
         } catch (bflError) {
@@ -336,7 +334,7 @@ export const imageGenerationTool: ToolDefinition = {
           seed: seed,
         });
 
-        const storedImageUrls = await processAndStoreImages(images, context, model, provider);
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
         return updateQuestAndReturnMarkdown(storedImageUrls, context);
       } else if (isLocalImageModel) {
@@ -363,7 +361,7 @@ export const imageGenerationTool: ToolDefinition = {
           ...resolveImageDimensions({ width, height, size }),
         });
 
-        const storedImageUrls = await processAndStoreImages(images, context, model, provider);
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
         return updateQuestAndReturnMarkdown(storedImageUrls, context);
       } else {
@@ -393,7 +391,7 @@ export const imageGenerationTool: ToolDefinition = {
           return `Error: ${message}`;
         }
 
-        const storedImageUrls = await processAndStoreImages(images, context, model, provider);
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
         return updateQuestAndReturnMarkdown(storedImageUrls, context);
       }

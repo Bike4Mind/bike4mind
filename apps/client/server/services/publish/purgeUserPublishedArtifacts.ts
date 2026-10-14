@@ -6,11 +6,7 @@ import {
   type PurgeOwnerPublishedArtifactsResult,
 } from '@bike4mind/database';
 import { invalidatePublishCdnMany, toCacheTarget } from './invalidatePublishCdn';
-
-interface MinimalLogger {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
-}
+import type { MinimalLogger } from './minimalLogger';
 
 /**
  * Take down everything `userId` has published (see purgeOwnerPublishedArtifacts) and purge the

@@ -14,6 +14,7 @@ import { aiImageService, getSettingsValue } from '@bike4mind/utils';
 import { estimateImageCredits } from '../imageCost';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { ImageEditService, type ImageEditBody } from './ImageEdit';
+import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -1042,7 +1043,11 @@ describe('ImageEditService quest partial writes', () => {
   const editSpy = vi.fn();
   const promptMeta = { marker: 'meta' };
 
-  const makeService = (questSessionId = 'session1') => {
+  const makeService = (
+    questSessionId = 'session1',
+    saveGeneratedAsset: SaveGeneratedAssetFn = vi.fn(async () => ({ saved: true }) as never),
+    dbExtras: Record<string, unknown> = {}
+  ) => {
     const quest: Record<string, unknown> = {
       id: 'quest1',
       sessionId: questSessionId,
@@ -1061,8 +1066,10 @@ describe('ImageEditService quest partial writes', () => {
         users: { findById: vi.fn(async () => richUser) },
         organizations: { findById: vi.fn(async () => null) },
         fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
+        ...dbExtras,
       },
       startImageEditProcess,
+      saveGeneratedAsset,
       deleteFabFile: vi.fn(),
       wsHttpsUrl: 'wss://example.invalid',
       abilityGetter: vi.fn(),
@@ -1077,12 +1084,13 @@ describe('ImageEditService quest partial writes', () => {
     return { service, quest, update, startImageEditProcess };
   };
 
-  const process = (service: ImageEditService) =>
+  const process = (service: ImageEditService, generationId?: string) =>
     service.process({
       body: {
         sessionId: 'session1',
         questId: 'quest1',
         userId: 'user1',
+        generationId,
         prompt: 'make it blue',
         model: ImageModels.GPT_IMAGE_1_5,
         image: 'https://example.invalid/source.png',
@@ -1163,6 +1171,95 @@ describe('ImageEditService quest partial writes', () => {
       status: 'done',
       creditsUsed: undefined,
     });
+  });
+
+  describe('saving the edited image to the user files', () => {
+    const arrange = (saveGeneratedAsset: SaveGeneratedAssetFn, dbExtras: Record<string, unknown> = {}) => {
+      editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/out.png' });
+      vi.mocked(getSettingsValue).mockImplementation(key => (key === 'ImageModerationEnabled' ? false : undefined));
+      return makeService('session1', saveGeneratedAsset, dbExtras);
+    };
+
+    const arrangeBilled = (saveGeneratedAsset: SaveGeneratedAssetFn) => {
+      const arranged = arrange(saveGeneratedAsset, { creditTransactions: { create: vi.fn() } });
+      vi.mocked(getSettingsValue).mockImplementation(key =>
+        key === 'enforceCredits' ? true : key === 'ImageModerationEnabled' ? false : undefined
+      );
+      return arranged;
+    };
+
+    it('saves the stored image once, keyed by the generationId', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service } = arrange(save);
+      await process(service, 'gen-1');
+
+      expect(save).toHaveBeenCalledTimes(1);
+      expect(save.mock.calls[0][0]).toMatchObject({
+        userId: 'user1',
+        sessionId: 'session1',
+        questId: 'quest1',
+        contentType: 'image/png',
+        generation: {
+          generator: 'image',
+          provider: 'openai',
+          modelId: ImageModels.GPT_IMAGE_1_5,
+          prompt: 'make it blue',
+          jobId: 'gen-1',
+        },
+      });
+    });
+
+    it('saves nothing when billing fails', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service, update } = arrangeBilled(save);
+      vi.mocked(deductCreditsWithOrgSupport).mockRejectedValueOnce(new Error('billing down'));
+      await process(service, 'gen-1');
+
+      expect(save).not.toHaveBeenCalled();
+      expect(
+        update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error')
+      ).toMatchObject({ reply: 'billing down' });
+    });
+
+    it('saves nothing when the done write fails', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service, update } = arrange(save);
+      update.mockImplementation(async (arg: Record<string, unknown>) => {
+        if ('images' in arg) throw new Error('write failed');
+        return arg;
+      });
+      await process(service, 'gen-1');
+
+      expect(save).not.toHaveBeenCalled();
+      expect(
+        update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error')
+      ).toMatchObject({ reply: 'write failed' });
+    });
+
+    it('still finishes the quest when the save rejects', async () => {
+      const { service, update } = arrange(vi.fn(async () => Promise.reject(new Error('disk full'))));
+      await process(service, 'gen-1');
+
+      const doneCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.status === 'done');
+      expect(doneCall).toMatchObject({ status: 'done', images: ['stored/out.png'] });
+    });
+
+    it('still finishes the quest when the save reports storage_limit', async () => {
+      const { service, update } = arrange(vi.fn(async () => ({ saved: false, reason: 'storage_limit' }) as never));
+      await process(service, 'gen-1');
+
+      const doneCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.status === 'done');
+      expect(doneCall).toMatchObject({ status: 'done', images: ['stored/out.png'] });
+    });
+  });
+
+  it('invoke stamps a non-empty generationId on the queued body', async () => {
+    const { service, startImageEditProcess } = makeService();
+    await invoke(service);
+
+    const [queued] = startImageEditProcess.mock.calls[0] as unknown as [{ generationId?: unknown }];
+    expect(typeof queued.generationId).toBe('string');
+    expect(queued.generationId).not.toBe('');
   });
 
   it('process error writes exactly the seven error fields', async () => {
