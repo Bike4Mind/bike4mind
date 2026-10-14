@@ -35,10 +35,6 @@ const mockResolveSecondFactor = vi.fn();
 vi.mock('@server/auth/signInSecondFactor', () => ({
   resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
 }));
-const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'session-tok' });
-vi.mock('@server/auth/issueSession', () => ({
-  issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
-}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
 import { UnauthorizedError } from '@server/utils/errors';
@@ -69,7 +65,6 @@ describe('POST /api/admin/emergency-login', () => {
     expect(outcome).toBeInstanceOf(UnauthorizedError);
     expect((outcome as Error).message).toBe('Invalid credentials');
     expect(mockResolveSecondFactor).not.toHaveBeenCalled();
-    expect(mockIssueBrowserSession).not.toHaveBeenCalled();
   });
 
   it('answers an enrolled admin with an MFA challenge carrying only the pending token', async () => {
@@ -87,7 +82,19 @@ describe('POST /api/admin/emergency-login', () => {
       origin: { strategy: 'local', createdVia: 'emergency' },
       honourTrustedDevice: false,
     });
-    expect(mockIssueBrowserSession).not.toHaveBeenCalled();
+    expect(res.getHeader('set-cookie')).toBeUndefined();
+  });
+
+  it.each([
+    ['satisfied', { kind: 'satisfied', trustedDevice: null }],
+    ['enroll', { kind: 'enroll', mfaToken: 'x' }],
+  ])('fails closed when the second-factor step resolves %s instead of a challenge', async (kind, resolved) => {
+    mockResolveSecondFactor.mockResolvedValue(resolved);
+
+    const { res, outcome } = await callHandler();
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toContain(kind);
     expect(res.getHeader('set-cookie')).toBeUndefined();
   });
 

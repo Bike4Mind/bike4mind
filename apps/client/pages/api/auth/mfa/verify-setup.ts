@@ -33,6 +33,10 @@ const handler = baseApi()
         return res.status(401).json({ error: 'User not found' });
       }
 
+      if (readSignInOrigin(req.user)?.createdVia === 'emergency') {
+        return res.status(403).json({ error: 'Authenticator enrollment is not available during emergency sign-in.' });
+      }
+
       // Get fresh user data (incl. select:false MFA secrets) to verify setup + check lockout
       const freshUser = await userRepository.findByIdWithMfaSecrets(user.id);
       if (!freshUser) {

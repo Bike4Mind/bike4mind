@@ -270,7 +270,18 @@ describe('AuthSuccessPage', () => {
 
       mfaOptions.current?.onCancel(mode);
 
-      expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { error } });
+      expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { error, redirectTo: '/new' } });
+    });
+
+    it('omits redirectTo from the /login search when the handoff carried none', async () => {
+      mockSearch = {};
+      mockParseAuthParams.mockReturnValue(MFA_PARAMS);
+      render(<AuthSuccessPage />);
+      await waitFor(() => expect(mockBeginMfa).toHaveBeenCalled());
+
+      mfaOptions.current?.onCancel('verify');
+
+      expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { error: 'mfa_required' } });
     });
 
     it('returns a still-signed-in user to their destination when the challenge is abandoned', async () => {

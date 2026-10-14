@@ -147,6 +147,12 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
           : await verifyMFA.mutateAsync({ token: code, rememberDevice: allowRememberDevice && rememberDevice })
       );
     } catch (verifyError: unknown) {
+      // A wrong code answers 400/423, so a 401 means the pending token itself is gone.
+      if ((verifyError as { response?: { status?: number } })?.response?.status === 401) {
+        toast.error('Your sign-in expired. Please sign in again.');
+        endWithoutSession(challenge.mode);
+        return;
+      }
       const errorData = readErrorData(verifyError);
       const baseError = (errorData?.error as string) || (verifyError as Error).message || 'MFA verification failed';
       const attemptsInfo = errorData?.attemptsRemaining ? ` (${errorData.attemptsRemaining} attempts remaining)` : '';

@@ -40,7 +40,10 @@ const AuthSuccessPage = () => {
         applyRedirect(router.history, redirectTo);
         return;
       }
-      navigate({ to: '/login', search: { error: mode === 'setup' ? 'mfa_setup_required' : 'mfa_required' } });
+      navigate({
+        to: '/login',
+        search: { error: mode === 'setup' ? 'mfa_setup_required' : 'mfa_required', ...(redirectTo && { redirectTo }) },
+      });
     },
   });
 

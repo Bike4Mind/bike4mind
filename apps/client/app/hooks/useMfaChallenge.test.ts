@@ -173,6 +173,19 @@ describe('useMfaChallenge verification', () => {
     expect(onComplete).not.toHaveBeenCalled();
   });
 
+  it('ends the sign-in when the pending token has expired (401)', async () => {
+    mocks.verifyMutateAsync.mockRejectedValue({ response: { status: 401, data: { error: 'Unauthorized' } } });
+    const { result, onCancel, onComplete } = setup();
+    await act(() => result.current.begin(verifyStart));
+
+    await act(() => result.current.modalProps.onVerify('000000', false));
+
+    expect(mocks.toastError).toHaveBeenCalledWith('Your sign-in expired. Please sign in again.');
+    expect(onCancel).toHaveBeenCalledWith('verify');
+    expect(result.current.modalProps.open).toBe(false);
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
   it('refuses a response without an access token and never completes', async () => {
     mocks.verifyMutateAsync.mockResolvedValue({ user: { id: 'u1' } });
     const { result, onComplete } = setup();

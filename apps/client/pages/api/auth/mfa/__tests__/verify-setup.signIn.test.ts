@@ -55,6 +55,20 @@ beforeEach(() => {
   mocks.logSecondFactorSignIn.mockResolvedValue(undefined);
 });
 
+describe('POST /api/auth/mfa/verify-setup - emergency sign-in', () => {
+  it('refuses enrollment for an emergency pending token, without enrolling or minting a session', async () => {
+    const res = await verifySetupAs({
+      id: 'u1',
+      mfaPending: true,
+      mfaSignIn: { strategy: 'local', createdVia: 'emergency' },
+    });
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mocks.verifyMFASetup).not.toHaveBeenCalled();
+    expect(mocks.issueBrowserSession).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/auth/mfa/verify-setup - sign-in audit', () => {
   it('records the sign-in that enrollment completed when the pending token carries an origin', async () => {
     const origin = { strategy: 'google', createdVia: 'oauth' };
