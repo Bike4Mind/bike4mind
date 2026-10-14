@@ -50,6 +50,9 @@ const EVALUATE_TIMEOUT_MS = 30_000;
 /** How long a script held by a load gets to run once that load is stopped. Measured at under 10ms. */
 const STOP_RELEASE_MS = 2_000;
 const CAPTURE_TIMEOUT_MS = 15_000;
+/** A freeze-frame later than this is drawn after the hide it was for has usually ended. */
+const STILL_TIMEOUT_MS = 1_000;
+const STILL_JPEG_QUALITY = 80;
 /** Network idle has to hold this long to count; a SPA fires its next request right after load. */
 const QUIET_MS = 400;
 const MAX_BUFFERED_EVENTS = 200;
@@ -264,13 +267,36 @@ class ElectronPage implements BrowserPage {
   showIn(window: BrowserWindow, bounds: BrowserPaneBounds): void {
     this.moveTo(window);
     this.view.setBounds(bounds);
+    this.view.setVisible(true);
+  }
+
+  /**
+   * Off screen but left in place, at the pane's size. Unlike parking, the page does not reflow
+   * to the parked viewport and back for every menu, and {@link still} captures it as it looked.
+   */
+  hold(): void {
+    this.view.setVisible(false);
   }
 
   /** Take the view back out of the app window, at the size every tool has always seen. */
   park(): void {
+    this.view.setVisible(true);
     if (this.parent === this.host) return;
     this.moveTo(this.host);
     this.view.setBounds({ x: 0, y: 0, ...VIEWPORT });
+  }
+
+  /** The held page as a JPEG data URL, or null when it painted nothing or took too long. */
+  async still(): Promise<string | null> {
+    if (this.webContents.isDestroyed()) return null;
+    try {
+      // `stayHidden`, or capturing would put the held view back on screen.
+      const image = await within(this.webContents.capturePage(undefined, { stayHidden: true }), STILL_TIMEOUT_MS);
+      if (image === TIMED_OUT || image.isEmpty()) return null;
+      return `data:image/jpeg;base64,${image.toJPEG(STILL_JPEG_QUALITY).toString('base64')}`;
+    } catch {
+      return null;
+    }
   }
 
   private moveTo(next: BaseWindow): void {
@@ -529,7 +555,8 @@ export class BrowserManager implements BrowserProvider {
   private readonly sessions = new Map<string, SessionTabs>();
   private readonly byContents = new Map<number, ElectronPage>();
   private partition: Session | undefined;
-  private pane: { window: BrowserWindow; sessionId: string; bounds: BrowserPaneBounds } | undefined;
+  /** `held` while the renderer has the page off screen for a moment; see {@link holdPane}. */
+  private pane: { window: BrowserWindow; sessionId: string; bounds: BrowserPaneBounds; held: boolean } | undefined;
   /** The one tab that is a child of the app window, so apply never has to walk every conversation. */
   private shown: ElectronPage | undefined;
   private readonly watchedWindows = new WeakSet<BrowserWindow>();
@@ -591,13 +618,24 @@ export class BrowserManager implements BrowserProvider {
       return NO_PAGE;
     }
     if (!bounds) {
-      this.hidePane();
+      this.holdPane(window, sessionId);
       return this.stateOf(sessionId);
     }
-    this.pane = { window, sessionId, bounds };
+    this.pane = { window, sessionId, bounds, held: false };
     this.watch(window);
     this.apply();
     return this.stateOf(sessionId);
+  }
+
+  /**
+   * A still of the page being held, for the pane to draw while it is off screen. Null when the
+   * hold ended, or the tab changed, before the capture came back.
+   */
+  async freezeFrame(window: BrowserWindow, sessionId: string): Promise<string | null> {
+    const page = this.shown;
+    if (!page || !this.isHeld(window, sessionId)) return null;
+    const still = await page.still();
+    return this.shown === page && this.isHeld(window, sessionId) ? still : null;
   }
 
   /**
@@ -663,6 +701,26 @@ export class BrowserManager implements BrowserProvider {
     for (const tab of all) void tab.close();
   }
 
+  private isHeld(window: BrowserWindow, sessionId: string): boolean {
+    const pane = this.pane;
+    return pane !== undefined && pane.held && pane.window === window && pane.sessionId === sessionId;
+  }
+
+  /**
+   * Null bounds for the conversation already on screen - an overlay, a drag - keep the request
+   * and hide the page where it is. For any other window or conversation there is nothing to
+   * keep, and the page is parked as before.
+   */
+  private holdPane(window: BrowserWindow, sessionId: string): void {
+    const pane = this.pane;
+    if (!pane || pane.window !== window || pane.sessionId !== sessionId) {
+      this.hidePane();
+      return;
+    }
+    pane.held = true;
+    this.apply();
+  }
+
   private hidePane(): void {
     this.pane = undefined;
     this.shown?.park();
@@ -676,6 +734,12 @@ export class BrowserManager implements BrowserProvider {
     // Parked first, so switching tabs or conversations can never leave the previous page over
     // the new one's pane.
     if (this.shown && this.shown !== next) this.shown.park();
+    if (pane?.held) {
+      // Nothing new goes up while held: a tab switched to now shows when the hold ends.
+      if (this.shown !== next) this.shown = undefined;
+      this.shown?.hold();
+      return;
+    }
     this.shown = next;
     if (next && pane) next.showIn(pane.window, pane.bounds);
   }

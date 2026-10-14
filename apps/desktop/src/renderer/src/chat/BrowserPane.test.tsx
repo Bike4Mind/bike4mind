@@ -3,7 +3,14 @@ import { act, createRef, type RefObject } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BrowserPaneBounds, BrowserPaneRequest, BrowserPaneState, BrowserTabRequest } from '@shared/ipc';
+import type {
+  BrowserFreezeFrameRequest,
+  BrowserPageStateEvent,
+  BrowserPaneBounds,
+  BrowserPaneRequest,
+  BrowserPaneState,
+  BrowserTabRequest,
+} from '@shared/ipc';
 import { BROWSER_PANE_WIDTH } from './agentBrowser';
 import { BrowserPane } from './BrowserPane';
 
@@ -41,8 +48,12 @@ const PAGE: BrowserPaneState = {
   activeTabId: 1,
 };
 
+const STILL = 'data:image/jpeg;base64,c3RpbGw=';
+
 const setPane = vi.fn<(request: BrowserPaneRequest) => Promise<BrowserPaneState>>();
 const tab = vi.fn<(request: BrowserTabRequest) => Promise<BrowserPaneState>>();
+const freezeFrame = vi.fn<(request: BrowserFreezeFrameRequest) => Promise<string | null>>();
+let pageState: ((event: BrowserPageStateEvent) => void) | null = null;
 let frames = new Map<number, FrameRequestCallback>();
 let nextFrame = 1;
 /** Every live ResizeObserver's callback; jsdom has no layout to fire them from. */
@@ -162,13 +173,20 @@ beforeEach(() => {
   setPane.mockResolvedValue(PAGE);
   tab.mockReset();
   tab.mockResolvedValue(PAGE);
+  freezeFrame.mockReset();
+  freezeFrame.mockResolvedValue(STILL);
+  pageState = null;
   (window as unknown as { b4m: unknown }).b4m = {
     browser: {
       setPane,
+      freezeFrame,
       navigate: vi.fn(),
       go: vi.fn(),
       tab,
-      onPageState: () => () => {},
+      onPageState: (listener: (event: BrowserPageStateEvent) => void) => {
+        pageState = listener;
+        return () => {};
+      },
       cookies: {
         getState: () => Promise.resolve({ supported: false, unsupported: '', sites: [] }),
         onChanged: () => () => {},
@@ -470,5 +488,87 @@ describe('the browser pane tab strip', () => {
     expect(host?.querySelector('[data-testid="chat-browser-pane-empty"]')?.textContent).toBe(
       "This conversation's browser has no tabs open."
     );
+  });
+});
+
+describe('the browser pane under overlays', () => {
+  const layers: HTMLElement[] = [];
+  /** Over the bottom-left of the page's hole, the way the context ring's tooltip reached it. */
+  const overPage = rect(1300, 300, 700, 40);
+
+  /** A portalled layer as Joy appends it to the body; the observer hears it on a microtask. */
+  const portal = async (role: string, html: string) => {
+    const layer = document.createElement('div');
+    layer.setAttribute('role', role);
+    layer.innerHTML = html;
+    layer.getBoundingClientRect = () => overPage;
+    await act(async () => {
+      document.body.appendChild(layer);
+    });
+    flushFrames();
+    layers.push(layer);
+    return layer;
+  };
+  const remove = async (layer: HTMLElement) => {
+    await act(async () => layer.remove());
+    flushFrames();
+    await act(async () => undefined);
+  };
+  const still = () => host?.querySelector<HTMLImageElement>('[data-testid="chat-browser-pane-still"]') ?? null;
+  /** Past the still's delay, with the capture's promise settled. */
+  const waitForStill = () => act(() => new Promise(resolve => setTimeout(resolve, 80)));
+
+  afterEach(() => {
+    for (const layer of layers.splice(0)) layer.remove();
+  });
+
+  it('keeps the page up under a tooltip that only shows text', async () => {
+    mount();
+    setPane.mockClear();
+    await portal('tooltip', 'Context 27k / 400k');
+    expect(setPane).not.toHaveBeenCalledWith(expect.objectContaining({ bounds: null }));
+  });
+
+  it('takes the page down under a menu over it', async () => {
+    mount();
+    setPane.mockClear();
+    await portal('menu', '<li role="menuitem" tabindex="-1">GPT-5</li>');
+    expect(lastBounds()).toBeNull();
+  });
+
+  it('draws a still of the page while it is held, and drops it once the page is back', async () => {
+    mount();
+    await act(async () => undefined);
+    const menu = await portal('menu', '<li role="menuitem" tabindex="-1">GPT-5</li>');
+    expect(still()).toBeNull();
+
+    await waitForStill();
+    expect(freezeFrame).toHaveBeenCalledTimes(1);
+    expect(freezeFrame).toHaveBeenCalledWith({ sessionId: 's1' });
+    expect(still()?.getAttribute('src')).toBe(STILL);
+
+    await remove(menu);
+    expect(lastBounds()).not.toBeNull();
+    expect(still()).toBeNull();
+  });
+
+  it('asks for no still when the page is back within the delay', async () => {
+    mount();
+    const menu = await portal('menu', '<li role="menuitem" tabindex="-1">GPT-5</li>');
+    await remove(menu);
+    await waitForStill();
+    expect(freezeFrame).not.toHaveBeenCalled();
+    expect(still()).toBeNull();
+  });
+
+  it('drops the still when the active tab changes underneath it', async () => {
+    mount();
+    await act(async () => undefined);
+    await portal('menu', '<li role="menuitem" tabindex="-1">GPT-5</li>');
+    await waitForStill();
+    expect(still()).not.toBeNull();
+
+    act(() => pageState?.({ ...PAGE, activeTabId: 4, sessionId: 's1' }));
+    expect(still()).toBeNull();
   });
 });

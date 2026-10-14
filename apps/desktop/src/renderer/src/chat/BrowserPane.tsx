@@ -7,7 +7,14 @@ import { browserTabShortcut } from '@shared/browserTabs';
 import type { BrowserGoAction, BrowserPaneBounds, BrowserPaneState, BrowserTabAction } from '@shared/ipc';
 import { BrowserNavbar } from './BrowserNavbar';
 import { BrowserTabStrip } from './BrowserTabStrip';
-import { BROWSER_PANE_WIDTH, coveredByOverlay, overlayRects, sameBounds, toPaneBounds } from './agentBrowser';
+import {
+  BROWSER_PANE_WIDTH,
+  coveredByOverlay,
+  overlayRects,
+  reservePageArea,
+  sameBounds,
+  toPaneBounds,
+} from './agentBrowser';
 import {
   BROWSER_PANE_MIN_WIDTH,
   browserPaneMaxWidth,
@@ -33,6 +40,15 @@ const SETTLE_FRAMES = 12;
 
 /** Long enough for any layout transition in the app to have finished. See `settle` below. */
 const SETTLE_MS = 400;
+
+/**
+ * How long the page has to be off screen before a still of it is drawn in its place (ms).
+ *
+ * Shorter hides - a press on the resize handle, a menu's first unplaced frame - are over before
+ * a capture could land, and drawing one would only flash it. Past this, the capture (a few ms
+ * measured) arrives well inside the hide it covers.
+ */
+const STILL_DELAY_MS = 50;
 
 /** A conversation with no browser yet, and what the bar draws while one is being asked for. */
 const NO_PAGE: BrowserPaneState = {
@@ -94,6 +110,8 @@ export function BrowserPane({
   // everywhere. The pane says as much; see CookieImporter for what scoping it would take.
   const [cookies, setCookies] = useState<CookieImportState>(NO_COOKIES);
   const address = useRef<HTMLInputElement | null>(null);
+  // The page as it last looked, drawn in the hole while the page is held off screen.
+  const [still, setStill] = useState<string | null>(null);
 
   useEffect(() => {
     void window.b4m.browser.cookies.getState().then(setCookies);
@@ -101,15 +119,19 @@ export function BrowserPane({
   }, []);
 
   const report = useCallback(
-    (bounds: BrowserPaneBounds | null) => {
-      void window.b4m.browser.setPane({ sessionId, bounds }).then(setState);
-    },
+    (bounds: BrowserPaneBounds | null) => window.b4m.browser.setPane({ sessionId, bounds }).then(setState),
     [sessionId]
   );
 
   // A conversation switch must not leave the previous one's address in the bar for as long as
   // the first report of the new one is in flight.
-  useEffect(() => setState(NO_PAGE), [sessionId]);
+  useEffect(() => {
+    setState(NO_PAGE);
+    setStill(null);
+  }, [sessionId]);
+
+  // A still of another tab is a lie about this one.
+  useEffect(() => setStill(null), [state.activeTabId]);
 
   /** A rejection from main - a scheme refused, a page already gone - is the bar's error to draw. */
   const drive = useCallback((work: Promise<BrowserPaneState>) => {
@@ -180,6 +202,7 @@ export function BrowserPane({
     const element = ref.current;
     if (!element || !sessionId) return null;
     const rect = element.getBoundingClientRect();
+    reservePageArea(rect);
     if (rect.width < 1 || rect.height < 1) return null;
     const hidden = suspendedRef.current || live.current.resizing;
     if (hidden || coveredByOverlay(rect, overlayRects(Array.from(document.body.children), ROOT_ID))) {
@@ -193,12 +216,29 @@ export function BrowserPane({
     let frames = 0;
     let pending = 0;
     let backstop: ReturnType<typeof setTimeout> | undefined;
+    let stillTimer: ReturnType<typeof setTimeout> | undefined;
+    // Bumped by every report, so a capture or a show that resolves late cannot touch a newer one.
+    let generation = 0;
 
     const push = () => {
       const bounds = measure();
       if (last !== undefined && sameBounds(bounds, last)) return;
+      const wasShowing = last != null;
       last = bounds;
-      report(bounds);
+      const current = ++generation;
+      clearTimeout(stillTimer);
+      // Dropped only once main has the page back up, or the column would blink empty between.
+      const shown = report(bounds);
+      if (bounds) {
+        void shown.then(() => current === generation && setStill(null));
+        return;
+      }
+      if (!wasShowing || !sessionId) return;
+      stillTimer = setTimeout(() => {
+        void window.b4m.browser
+          .freezeFrame({ sessionId })
+          .then(frame => current === generation && frame && setStill(frame));
+      }, STILL_DELAY_MS);
     };
 
     const tick = () => {
@@ -245,6 +285,9 @@ export function BrowserPane({
       window.removeEventListener('resize', settle);
       if (pending) cancelAnimationFrame(pending);
       clearTimeout(backstop);
+      clearTimeout(stillTimer);
+      generation++;
+      reservePageArea(null);
       unsubscribe();
       // Whatever replaces this - another conversation, a closed pane, another screen - the page
       // must be off the window before it draws, or it is left floating over whatever is there.
@@ -371,7 +414,24 @@ export function BrowserPane({
         onGo={go}
         onCookieState={setCookies}
       />
-      <Box ref={ref} sx={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center' }}>
+      <Box ref={ref} sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'grid', placeItems: 'center' }}>
+        {still && (
+          <Box
+            component="img"
+            src={still}
+            alt=""
+            data-testid="chat-browser-pane-still"
+            sx={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              objectPosition: 'left top',
+              pointerEvents: 'none',
+            }}
+          />
+        )}
         {!state.url && (
           <Stack spacing={0.5} alignItems="center" sx={{ px: 3, textAlign: 'center' }}>
             <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-browser-pane-empty">

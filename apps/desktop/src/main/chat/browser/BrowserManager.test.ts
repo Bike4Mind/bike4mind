@@ -26,7 +26,7 @@ const contents = vi.hoisted(() => {
     loads: [] as Array<{ id: number; url: string }>,
     load: (_url: string): Promise<void> => Promise.resolve(),
     script: (): Promise<unknown> => Promise.resolve(null),
-    capture: (): Promise<unknown> => Promise.resolve({ isEmpty: () => true }),
+    capture: (..._args: unknown[]): Promise<unknown> => Promise.resolve({ isEmpty: () => true }),
     emit(event: string, ...args: unknown[]) {
       for (const handler of state.handlers.get(event) ?? []) handler({}, ...args);
     },
@@ -68,7 +68,7 @@ vi.mock('electron', () => {
         return contents.load(url);
       },
       executeJavaScript: () => contents.script(),
-      capturePage: () => contents.capture(),
+      capturePage: (...args: unknown[]) => contents.capture(...args),
       stop: () => {
         contents.stops += 1;
         contents.loadingMainFrame = false;
@@ -103,7 +103,14 @@ vi.mock('electron', () => {
     },
     WebContentsView: class {
       webContents: ReturnType<typeof makeContents> | undefined = makeContents(this);
-      setBounds = () => undefined;
+      bounds: unknown;
+      visible = true;
+      setBounds = (bounds: unknown) => {
+        this.bounds = bounds;
+      };
+      setVisible = (visible: boolean) => {
+        this.visible = visible;
+      };
     },
     session: {
       fromPartition: () => ({
@@ -534,5 +541,112 @@ describe('BrowserManager tabs', () => {
     press(2, 'KeyW');
     await vi.waitFor(() => expect(tabIds()).toEqual([1]));
     expect(press(1, 'KeyA')).not.toHaveBeenCalled();
+  });
+});
+
+describe('BrowserManager holding the pane for an overlay', () => {
+  type Manager = InstanceType<typeof BrowserManager>;
+  type View = { visible: boolean; bounds: unknown };
+  const view = (page: unknown) => (page as { view: View }).view;
+  const shown = (manager: Manager) => (manager as unknown as { shown: unknown }).shown;
+  const bounds = { x: 1440, y: 40, width: 560, height: 760 };
+  const jpeg = { isEmpty: () => false, toJPEG: (quality: number) => Buffer.from(`jpeg@${quality}`) };
+
+  let manager: Manager;
+  let window: InstanceType<typeof BrowserWindow>;
+  const context = () => manager.context('s', async () => undefined);
+
+  beforeEach(() => {
+    contents.handlers.clear();
+    contents.url = 'http://localhost:3080/';
+    contents.capture = () => Promise.resolve(jpeg);
+    manager = new BrowserManager();
+    window = new BrowserWindow();
+  });
+
+  it('hides the page where it is rather than parking it at the tool viewport', async () => {
+    const page = await context().page();
+    manager.setPane(window, 's', bounds);
+    expect(view(page)).toMatchObject({ visible: true, bounds });
+
+    manager.setPane(window, 's', null);
+    expect(view(page)).toMatchObject({ visible: false, bounds });
+    expect(shown(manager)).toBe(page);
+
+    manager.setPane(window, 's', bounds);
+    expect(view(page).visible).toBe(true);
+  });
+
+  it('captures the held active tab without putting it back on screen', async () => {
+    await context().page();
+    const active = await context().newTab();
+    manager.setPane(window, 's', bounds);
+    manager.setPane(window, 's', null);
+    const capture = vi.fn((..._args: unknown[]) => Promise.resolve(jpeg));
+    contents.capture = capture;
+
+    await expect(manager.freezeFrame(window, 's')).resolves.toBe(
+      `data:image/jpeg;base64,${Buffer.from('jpeg@80').toString('base64')}`
+    );
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(capture.mock.calls[0][1]).toEqual({ stayHidden: true });
+    expect(shown(manager)).toBe(active);
+    expect(view(active).visible).toBe(false);
+  });
+
+  it('has no still for a page that is on screen, or for another window or conversation', async () => {
+    await context().page();
+    manager.setPane(window, 's', bounds);
+    await expect(manager.freezeFrame(window, 's')).resolves.toBeNull();
+
+    manager.setPane(window, 's', null);
+    await expect(manager.freezeFrame(new BrowserWindow(), 's')).resolves.toBeNull();
+    await expect(manager.freezeFrame(window, 'other')).resolves.toBeNull();
+  });
+
+  it('drops a still whose hold ended while it was being captured', async () => {
+    await context().page();
+    manager.setPane(window, 's', bounds);
+    manager.setPane(window, 's', null);
+    let finish: (image: unknown) => void = () => undefined;
+    contents.capture = () => new Promise(resolve => (finish = resolve));
+
+    const still = manager.freezeFrame(window, 's');
+    manager.setPane(window, 's', bounds);
+    finish(jpeg);
+    await expect(still).resolves.toBeNull();
+  });
+
+  it('gives null for a page that painted nothing, or whose capture failed', async () => {
+    await context().page();
+    manager.setPane(window, 's', bounds);
+    manager.setPane(window, 's', null);
+    contents.capture = () => Promise.resolve({ isEmpty: () => true });
+    await expect(manager.freezeFrame(window, 's')).resolves.toBeNull();
+    contents.capture = () => Promise.reject(new Error('gone'));
+    await expect(manager.freezeFrame(window, 's')).resolves.toBeNull();
+  });
+
+  it('parks the old tab on a switch during the hold and shows the new one only when it ends', async () => {
+    const first = await context().page();
+    manager.setPane(window, 's', bounds);
+    manager.setPane(window, 's', null);
+
+    const second = await context().newTab();
+    expect(view(first)).toMatchObject({ visible: true, bounds: { x: 0, y: 0, width: 1280, height: 800 } });
+    expect(shown(manager)).toBeUndefined();
+    await expect(manager.freezeFrame(window, 's')).resolves.toBeNull();
+
+    manager.setPane(window, 's', bounds);
+    expect(shown(manager)).toBe(second);
+    expect(view(second)).toMatchObject({ visible: true, bounds });
+  });
+
+  it('parks the page when the request names another conversation, as before', async () => {
+    const page = await context().page();
+    manager.setPane(window, 's', bounds);
+    manager.setPane(window, 'other', null);
+    expect(shown(manager)).toBeUndefined();
+    expect(view(page)).toMatchObject({ visible: true, bounds: { x: 0, y: 0, width: 1280, height: 800 } });
   });
 });

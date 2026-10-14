@@ -31,6 +31,7 @@ import type {
 import type { CookieImportRequest } from '@shared/browserCookies';
 import {
   IPC_CHANNELS,
+  type BrowserFreezeFrameRequest,
   type BrowserGoAction,
   type BrowserGoRequest,
   type BrowserNavigateRequest,
@@ -631,6 +632,11 @@ export function registerChat(auth: AuthService): RegisteredChat {
     const sessionId = typeof request?.sessionId === 'string' ? request.sessionId : null;
     if (!window) return NO_PAGE;
     return browser.setPane(window, sessionId, paneBounds(request?.bounds));
+  });
+  ipcMain.handle(IPC_CHANNELS.browserFreezeFrame, (event, request: BrowserFreezeFrameRequest) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window || typeof request?.sessionId !== 'string') return null;
+    return browser.freezeFrame(window, request.sessionId);
   });
 
   // The url bar. Its requests name a conversation rather than being implied by the open pane,

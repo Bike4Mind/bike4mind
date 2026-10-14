@@ -175,6 +175,11 @@ export const IPC_CHANNELS = {
    */
   browserSetPane: 'browser:set-pane',
   /**
+   * A still of the page the pane is holding off screen, for the renderer to draw in its place.
+   * Renderer -> main.
+   */
+  browserFreezeFrame: 'browser:freeze-frame',
+  /**
    * Open what the user typed in the pane's url bar. Renderer -> main.
    *
    * The USER's navigation, not the agent's, so it goes nowhere near the tool approval gate -
@@ -312,6 +317,11 @@ export interface BrowserTabSummary {
 }
 
 export type BrowserPageStateEvent = BrowserPaneState & { sessionId: string };
+
+/** Which conversation's held page to capture. */
+export interface BrowserFreezeFrameRequest {
+  sessionId: string;
+}
 
 /** Which conversation's browser to send to `url`. The url is resolved again in main. */
 export interface BrowserNavigateRequest {
@@ -611,6 +621,11 @@ export interface DesktopApi {
   browser: {
     /** Draw this conversation's page at these bounds, or nothing. Returns what the bar draws. */
     setPane(request: BrowserPaneRequest): Promise<BrowserPaneState>;
+    /**
+     * The page held off screen since the last null-bounds report, as an image data URL, or null
+     * when nothing is held or it painted nothing.
+     */
+    freezeFrame(request: BrowserFreezeFrameRequest): Promise<string | null>;
     /** Open a url the user typed. Rejects with a reason for a scheme that is refused. */
     navigate(request: BrowserNavigateRequest): Promise<BrowserPaneState>;
     go(request: BrowserGoRequest): Promise<BrowserPaneState>;
