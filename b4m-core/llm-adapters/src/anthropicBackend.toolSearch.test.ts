@@ -283,6 +283,36 @@ describe.each(THINKING_MODES)('AnthropicBackend tool search stream (thinking %s)
     expect(sent.at(-1)?.content.map(b => b.tool_use_id)).toEqual(['toolu_1', 'toolu_2']);
   });
 
+  it('replays each assistant turn before its own tool_result across two sequential tool rounds', async () => {
+    const getWeather = tool('get_weather', { defer_loading: true });
+    const { backend, captured } = buildBackend([
+      searchThenCallTurn(thinking, [{ id: 'toolu_A', name: 'get_weather' }]),
+      searchThenCallTurn(thinking, [{ id: 'toolu_B', name: 'get_weather' }]),
+      finalTurn,
+    ]);
+
+    await backend.complete(model, [{ role: 'user', content: 'weather?' }], options([getWeather]), collect().cb);
+
+    expect(getWeather.toolFn).toHaveBeenCalledTimes(2);
+    const assistantTurn = (toolUseId: string) => [
+      ...(thinking ? [{ type: 'thinking', thinking: 'search first', signature: 'sig' }] : []),
+      { type: 'text', text: 'Let me search.' },
+      { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: searchInput },
+      searchResult,
+      { type: 'tool_use', id: toolUseId, name: 'get_weather', input: { city: 'Oslo' } },
+    ];
+    const userTurn = (toolUseId: string) => ({
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'ok' }],
+    });
+    expect((captured[2].messages as unknown[]).slice(-4)).toEqual([
+      { role: 'assistant', content: assistantTurn('toolu_A') },
+      userTurn('toolu_A'),
+      { role: 'assistant', content: assistantTurn('toolu_B') },
+      userTurn('toolu_B'),
+    ]);
+  });
+
   it('reports only the tool_use call to a caller that executes tools itself', async () => {
     const { backend } = buildBackend([searchThenCallTurn(thinking, [{ id: 'toolu_1', name: 'get_weather' }])]);
     const { infos, cb, providerBlocks } = collect();
@@ -313,12 +343,24 @@ describe('AnthropicBackend tool search replay', () => {
     ];
     const { backend, captured } = buildBackend([turn, finalTurn]);
 
+    const history: IMessage[] = [{ role: 'user', content: 'weather?' }];
+
     await backend.complete(
       ChatModels.CLAUDE_5_OPUS,
-      [{ role: 'user', content: 'weather?' }],
+      history,
       { stream: true, reasoningEffort: 'low', tools: [tool('get_weather')], providerTools: [searchTool] },
       collect().cb
     );
+
+    // The wire sanitizer also drops empty text, so pin the stored turn the replay is built from.
+    const stored = history.at(-2)?.content as Array<Record<string, unknown>>;
+    expect(stored.map(b => b.type)).toEqual([
+      'redacted_thinking',
+      'text',
+      'server_tool_use',
+      'tool_search_tool_result',
+      'tool_use',
+    ]);
 
     const replay = (captured[1].messages as Array<{ content: Array<Record<string, unknown>> }>).at(-2);
     expect(replay?.content.map(b => b.type)).toEqual([

@@ -14,7 +14,7 @@ import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constant
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
 import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
-import { CompletionProviderBlockEventSchema } from './cliCompletions';
+import { CompletionProviderBlockEventSchema, ResponseFormatSchema } from './cliCompletions';
 
 // Schemas for actions sent over the WebSocket connection.
 
@@ -92,23 +92,7 @@ export const CliCompletionRequestAction = z.object({
       maxTokens: z.number().optional(),
       stream: z.boolean().optional(),
       tools: z.array(z.unknown()).optional(),
-      // structured-output contract. Mirrors ResponseFormatSchema in
-      // schemas/cliCompletions.ts. Defined inline here to avoid an import cycle
-      // between actions.ts and cliCompletions.ts.
-      response_format: z
-        .discriminatedUnion('type', [
-          z.object({ type: z.literal('text') }),
-          z.object({
-            type: z.literal('json_schema'),
-            json_schema: z.object({
-              name: z.string(),
-              description: z.string().optional(),
-              schema: z.record(z.string(), z.any()),
-              strict: z.boolean().optional().default(true),
-            }),
-          }),
-        ])
-        .optional(),
+      response_format: ResponseFormatSchema.optional(),
     })
     .optional(),
 });
