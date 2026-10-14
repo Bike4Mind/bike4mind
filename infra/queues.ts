@@ -248,7 +248,7 @@ const fabFileBucketNotification = fabFileBucket.notify({
     {
       name: 'uploadComplete',
       function: {
-        handler: 'apps/client/server/s3/objectCreated.func',
+        handler: 'apps/workers/src/s3/objectCreated.func',
         runtime: 'nodejs24.x',
         link: [...allSecrets, websocketApi, fabFileChunkQueue, fabFileBucket],
         permissions: [
