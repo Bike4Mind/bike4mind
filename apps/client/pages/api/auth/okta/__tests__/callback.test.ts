@@ -121,6 +121,10 @@ import handler from '@pages/api/auth/okta/callback';
 const STATE = 'state-token';
 const CODE = 'auth-code';
 
+// baseApi is mocked away, so the handler sees a logger only when the test supplies one; a real
+// request carries req.logger. A shared stub keeps the pass-through assertions addressable.
+const reqLogger = { log: vi.fn(), warn: vi.fn() };
+
 function makeReqRes() {
   const { req, res } = createMocks({
     method: 'GET',
@@ -129,6 +133,7 @@ function makeReqRes() {
     headers: { host: 'localhost:3000', 'user-agent': 'vitest', cookie: 'b4m_okta_pkce=pkce-verifier' },
     url: '/api/auth/okta/callback',
   });
+  Object.assign(req, { logger: reqLogger });
   return { req: req as any, res: res as any };
 }
 
@@ -208,11 +213,13 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     // New provider link: tokenVersion incremented to invalidate other sessions.
     expect(mockUpdateOne).toHaveBeenCalledWith({ _id: 'u2' }, expect.objectContaining({ $inc: { tokenVersion: 1 } }));
     // ...and the paired AuthSession revoke fires, or opaque refresh tokens would survive the bump.
-    expect(mockRevokeAllUserSessions).toHaveBeenCalledWith(
-      'u2',
-      {},
-      { db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository } }
-    );
+    // The adapters must be the exact repository instances and a logger, not a look-alike object.
+    expect(mockRevokeAllUserSessions).toHaveBeenCalledTimes(1);
+    expect(mockRevokeAllUserSessions.mock.calls[0].slice(0, 2)).toEqual(['u2', {}]);
+    const adapters = mockRevokeAllUserSessions.mock.calls[0][2];
+    expect(adapters.db.authSessions).toBe(authSessionRepository);
+    expect(adapters.db.realtimeConnections).toBe(realtimeConnectionRepository);
+    expect(adapters.logger).toBe(reqLogger);
     expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2', {});
     expect(mockEndConnections).toHaveBeenCalledWith({ userId: 'u2', sessionsOnly: true });
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
@@ -229,6 +236,8 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
     expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2', {});
     expect(mockEndConnections).toHaveBeenCalledTimes(1);
+    // The prune's failure is reported, not swallowed silently.
+    expect(reqLogger.warn).toHaveBeenCalled();
   });
 
   it('exempts a same-identity refresh from the gate (mismatch allowed on re-login)', async () => {
