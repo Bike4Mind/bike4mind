@@ -140,7 +140,7 @@ export function renderBundleLoaderShell(): string {
   iframe{border:0;display:block;width:100%;height:100vh;color-scheme:normal;background:#fff}
   #b4m-msg{display:none;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;
            max-width:540px;margin:18vh auto 0;padding:0 1.25rem;text-align:center;line-height:1.6}
-  @media (prefers-color-scheme: dark){html,body{background:#12121c;color:#e6e6f0}a{color:#8ab4ff}}
+  @media (prefers-color-scheme: dark){html,body{background:#0f0f1a;color:#e6e6f0}a{color:#8ab4ff}}
 </style>
 </head>
 <body>

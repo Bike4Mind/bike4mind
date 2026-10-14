@@ -111,7 +111,7 @@ describe('renderBundleLoaderShell', () => {
   it('pairs the dark text color with a dark page background', () => {
     expect(shell).toContain(':root{color-scheme:light dark}');
     expect(shell).toMatch(/html,body\{[^}]*background:#fff;color:#1a1a2e\}/);
-    expect(shell).toMatch(/prefers-color-scheme: dark\)\{html,body\{background:#12121c;color:#e6e6f0\}/);
+    expect(shell).toMatch(/prefers-color-scheme: dark\)\{html,body\{background:#0f0f1a;color:#e6e6f0\}/);
   });
 
   it('keeps the bundle iframe on the light scheme and a white backdrop', () => {
