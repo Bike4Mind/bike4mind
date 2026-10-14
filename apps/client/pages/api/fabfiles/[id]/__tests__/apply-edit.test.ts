@@ -108,14 +108,30 @@ describe('apply-edit version retention', () => {
 
 // edit.ts runs the same claim-then-delete sequence behind an LLM call too heavy to mock here, so
 // pin the order in its source: a delete hoisted above the claim check would destroy history on a lost claim.
-describe('edit.ts claim-then-delete order', () => {
+describe('edit.ts version retention wiring', () => {
+  const source = readFileSync(new URL('../edit.ts', import.meta.url), 'utf8');
+  // From the opener to the first line that closes the statement: a regex that scans on past the call would match a neighbour.
+  const statementFrom = (opener: string) => {
+    const start = source.indexOf(opener);
+    expect(start).toBeGreaterThan(-1);
+    return source.slice(start, source.indexOf('\n', source.indexOf(');', start)));
+  };
+
   it('deletes trimmed versions only after the lost-claim throw', () => {
-    const source = readFileSync(new URL('../edit.ts', import.meta.url), 'utf8');
     const claimCheck = source.indexOf('if (!claimed)');
     const lostClaimThrow = source.indexOf("throw new BadRequestError('File was modified", claimCheck);
     const deleteCall = source.indexOf('await deleteDroppedVersions(');
     expect(claimCheck).toBeGreaterThan(-1);
     expect(lostClaimThrow).toBeGreaterThan(claimCheck);
     expect(deleteCall).toBeGreaterThan(lostClaimThrow);
+  });
+
+  it('passes the admin cap into appendEditedVersion', () => {
+    expect(source).toMatch(/const maxEditedVersions = await getAiEditVersionRetention\(\);/);
+    expect(statementFrom('appendEditedVersion({')).toMatch(/\n\s+maxEditedVersions,\n/);
+  });
+
+  it('deletes exactly the dropped versions appendEditedVersion returned', () => {
+    expect(source).toContain('await deleteDroppedVersions(droppedVersions);');
   });
 });

@@ -45,6 +45,43 @@ describe('deleteStoredObjects', () => {
     expect(storage.files.delete.mock.calls.map(([key]) => key)).toEqual(['v1.docx', 'v2.docx', 'v3.docx']);
   });
 
+  it('logs and carries on when a retained version fails, and still removes filePath', async () => {
+    const storage = buckets();
+    storage.files.delete.mockImplementation(async (key: string) => {
+      if (key === 'v1.docx') throw new Error('S3 unavailable');
+    });
+    logger.warn.mockClear();
+
+    await expect(
+      deleteStoredObjects(
+        [{ id: 'f1', filePath: 'v3.docx', versions: [version('v1.docx'), version('v3.docx')] }],
+        storage,
+        logger
+      )
+    ).resolves.toBeUndefined();
+
+    expect(storage.files.delete.mock.calls.map(([key]) => key)).toEqual(['v1.docx', 'v3.docx']);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('retained version'),
+      expect.objectContaining({ fileId: 'f1', key: 'v1.docx' })
+    );
+  });
+
+  it('rejects when the current filePath fails to delete', async () => {
+    const storage = buckets();
+    storage.files.delete.mockImplementation(async (key: string) => {
+      if (key === 'v3.docx') throw new Error('S3 unavailable');
+    });
+
+    await expect(
+      deleteStoredObjects(
+        [{ id: 'f1', filePath: 'v3.docx', versions: [version('v1.docx'), version('v3.docx')] }],
+        storage,
+        logger
+      )
+    ).rejects.toThrow('S3 unavailable');
+  });
+
   it('keeps a generated copy that a forked or cloned notebook still shows', async () => {
     const storage = buckets(['s1', 's-fork']);
 

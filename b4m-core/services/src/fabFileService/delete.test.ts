@@ -148,7 +148,7 @@ describe('deleteFabFile', () => {
       expect(mockAdapter.storage.delete).not.toHaveBeenCalled();
     });
 
-    it('deletes every distinct version key, then the current filePath last', async () => {
+    it('deletes every distinct version key, then the current filePath', async () => {
       const v = (version: number, filePath: string) => ({
         version,
         filePath,
@@ -181,7 +181,7 @@ describe('deleteFabFile', () => {
       expect(mockAdapter.onDeleteComplete).toHaveBeenCalledWith(edited, 1024);
     });
 
-    it('still attempts every key but rejects without a refund when one key delete fails', async () => {
+    describe('when a storage delete fails for an AI-edited file', () => {
       const v = (version: number, filePath: string) => ({
         version,
         filePath,
@@ -189,26 +189,48 @@ describe('deleteFabFile', () => {
         mimeType: 'x',
         createdAt: new Date(0),
       });
-      const edited = {
+      const edited = () => ({
         ...mockFabFile,
         filePath: 'files/u/f/v3_report.docx',
         versions: [v(1, 'uploads/report.docx'), v(2, 'files/u/f/v2_report.docx'), v(3, 'files/u/f/v3_report.docx')],
+      });
+      const failOn = (failingKey: string) => {
+        const file = edited();
+        mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(file);
+        mockAdapter.db.fabFiles.update.mockResolvedValue(file);
+        mockAdapter.onDeleteComplete = vi.fn().mockResolvedValue(undefined);
+        mockAdapter.storage.delete.mockImplementation(async (key: string) => {
+          if (key === failingKey) throw new Error('S3 unavailable');
+        });
       };
-      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(edited);
-      mockAdapter.db.fabFiles.update.mockResolvedValue(edited);
-      mockAdapter.onDeleteComplete = vi.fn().mockResolvedValue(undefined);
-      mockAdapter.storage.delete.mockImplementation(async (key: string) => {
-        if (key === 'uploads/report.docx') throw new Error('S3 unavailable');
+
+      it('still refunds quota and attempts every key when a retained version fails', async () => {
+        failOn('uploads/report.docx');
+
+        await expect(deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter)).resolves.toMatchObject({
+          action: 'deleted',
+        });
+
+        expect(mockAdapter.storage.delete.mock.calls.map(([key]) => key)).toEqual([
+          'uploads/report.docx',
+          'files/u/f/v2_report.docx',
+          'files/u/f/v3_report.docx',
+        ]);
+        expect(mockAdapter.onDeleteComplete).toHaveBeenCalledTimes(1);
       });
 
-      await expect(deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter)).rejects.toThrow('S3 unavailable');
+      it('rejects without a refund when the current filePath fails, after trying the versions', async () => {
+        failOn('files/u/f/v3_report.docx');
 
-      expect(mockAdapter.storage.delete.mock.calls.map(([key]) => key)).toEqual([
-        'uploads/report.docx',
-        'files/u/f/v2_report.docx',
-        'files/u/f/v3_report.docx',
-      ]);
-      expect(mockAdapter.onDeleteComplete).not.toHaveBeenCalled();
+        await expect(deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter)).rejects.toThrow('S3 unavailable');
+
+        expect(mockAdapter.storage.delete.mock.calls.map(([key]) => key)).toEqual([
+          'uploads/report.docx',
+          'files/u/f/v2_report.docx',
+          'files/u/f/v3_report.docx',
+        ]);
+        expect(mockAdapter.onDeleteComplete).not.toHaveBeenCalled();
+      });
     });
 
     it('still deletes version keys when the file has no filePath', async () => {
