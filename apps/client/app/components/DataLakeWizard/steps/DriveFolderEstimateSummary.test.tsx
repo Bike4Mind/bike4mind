@@ -13,6 +13,7 @@ const query = vi.hoisted(() => ({
     data?: Record<string, unknown>;
     isLoading: boolean;
     isError: boolean;
+    error?: unknown;
   },
 }));
 vi.mock('@client/app/hooks/data/useDriveFolderEstimate', async importOriginal => ({
@@ -93,6 +94,33 @@ describe('DriveFolderEstimateSummary', () => {
     renderSummary();
     expect(screen.getByTestId('drive-estimate-unavailable')).toBeInTheDocument();
     expect(screen.queryByTestId('drive-estimate-summary')).toBeNull();
+  });
+
+  it('shows the server message when the estimate fails with a reconnect 400', () => {
+    query.current = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: {
+        isAxiosError: true,
+        response: { status: 400, data: { error: 'Google Drive access was revoked - reconnect required' } },
+      },
+    };
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-unavailable')).toHaveTextContent(
+      'Google Drive access was revoked - reconnect required'
+    );
+  });
+
+  it('asks to try again shortly when the estimate is rate limited', () => {
+    query.current = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { isAxiosError: true, response: { status: 429, data: { error: 'Too many requests' } } },
+    };
+    renderSummary();
+    expect(screen.getByTestId('drive-estimate-unavailable')).toHaveTextContent('try again shortly');
   });
 
   it('shows partial counts, not "could not estimate", for a truncated walk already over quota', () => {

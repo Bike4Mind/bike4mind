@@ -22,8 +22,9 @@ export function driveWorstCaseBytes(e: DriveFolderEstimate): number {
  * The wizard's Drive commit decision, shared by DataLakeWizardModal (which blocks on it) and
  * DriveFolderEstimateSummary (which explains it), so the two cannot disagree.
  *
- * Known bytes are a floor even on a truncated estimate, so they can always block; a pending or
- * failed estimate counts as 0 and never locks the user out - the sync stays the boundary. Only a
+ * Known bytes are a floor even on a truncated estimate, so they can always block. A pending estimate
+ * holds the commit until it settles; a failed one counts as 0 and never locks the user out - the
+ * sync stays the boundary. Only a
  * commit that carries bytes is judged, so a user already over quota is not blocked by one that
  * sends none. The worst case only warns, and only on a complete estimate.
  */

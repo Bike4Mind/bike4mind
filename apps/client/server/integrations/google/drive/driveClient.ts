@@ -371,11 +371,14 @@ export class DriveListingIncompleteError extends Error {
  * are returned - omitting them silently drops shared-drive items (a bug that passes unit tests
  * and fails in prod). The recursive tree-walk and content download/export are layered on in the
  * ingest job (issue C); this is the read primitive the smoke test and ingest both build on.
+ *
+ * `onPage` receives each page's files as it lands (before any page-cap or deadline throw) and may
+ * return `false` to stop paginating early.
  */
 export async function listFolderChildren(
   drive: drive_v3.Drive,
   folderId: string,
-  { deadlineMs }: { deadlineMs?: number } = {}
+  { deadlineMs, onPage }: { deadlineMs?: number; onPage?: (page: DriveFile[]) => boolean | void } = {}
 ): Promise<DriveFile[]> {
   // Defense-in-depth: never interpolate an unvalidated id into the query (callers should also
   // validate at their trust boundary).
@@ -399,6 +402,7 @@ export async function listFolderChildren(
       })
     );
 
+    const pageFiles: DriveFile[] = [];
     for (const f of res.data.files ?? []) {
       // Skip anything missing an id/name/mimeType - it isn't a usable ingest candidate. Logged
       // rather than dropped quietly: all three are in the requested `fields`, so this should never
@@ -418,8 +422,12 @@ export async function listFolderChildren(
       if (f.createdTime) file.createdTime = f.createdTime;
       if (f.md5Checksum) file.md5Checksum = f.md5Checksum;
       if (f.size != null) file.size = Number(f.size);
-      files.push(file);
+      pageFiles.push(file);
     }
+    files.push(...pageFiles);
+    // Delivered before the cap/deadline throws below so a caller keeps the pages already listed.
+    // Returning false stops pagination.
+    if (onPage?.(pageFiles) === false) return files;
 
     pageToken = res.data.nextPageToken ?? undefined;
     pages++;

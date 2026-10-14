@@ -72,7 +72,9 @@ export default function DataLakeWizardModal() {
   const currentUser = useUser(s => s.currentUser);
   const setFileBrowserOpen = useFileBrowser(s => s.setOpen);
   const uploadBytes = plannedUploadBytes(allFiles, config.conflictResolution);
-  const { data: driveEstimate } = useDriveFolderEstimate(pendingDriveFolder?.driveFolderId);
+  const { data: driveEstimate, isLoading: driveEstimateLoading } = useDriveFolderEstimate(
+    pendingDriveFolder?.driveFolderId
+  );
   // Drive bytes are debited to the connecting user, not the org: must stay in sync with the
   // checkStorageLimit call in the Drive lake worker (driveLakeIngest).
   const {
@@ -135,6 +137,7 @@ export default function DataLakeWizardModal() {
           hasSource &&
           !exceedsStorage &&
           !driveOverCandidateCap &&
+          !driveEstimateLoading &&
           (!!targetLake || isValidDataLakeSlug(config.name)) &&
           effectivePrefix.length >= MIN_TAG_PREFIX_LENGTH &&
           !isReservedTagPrefix(effectivePrefix) &&

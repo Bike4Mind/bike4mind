@@ -1,10 +1,12 @@
 import { Alert, Typography } from '@mui/joy';
 import prettyBytes from 'pretty-bytes';
+import { isAxiosError } from 'axios';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useUser } from '@client/app/contexts/UserContext';
 import { plannedUploadBytes } from '@client/app/hooks/data/dataLakeUploadPipeline';
 import { driveCommitGate, useDriveFolderEstimate } from '@client/app/hooks/data/useDriveFolderEstimate';
 import { getStorageQuota } from '@client/app/utils/storageQuota';
+import { getServerErrorField } from '@client/app/utils/error';
 
 /**
  * What the picked Drive folder will bring in, on the Configure summary. The blocking decisions
@@ -15,7 +17,7 @@ export default function DriveFolderEstimateSummary({ driveFolderId }: { driveFol
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const conflictResolution = useDataLakeWizardStore(s => s.config.conflictResolution);
   const currentUser = useUser(s => s.currentUser);
-  const { data: estimate, isLoading, isError } = useDriveFolderEstimate(driveFolderId);
+  const { data: estimate, isLoading, isError, error } = useDriveFolderEstimate(driveFolderId);
   const gate = driveCommitGate(
     getStorageQuota(currentUser),
     plannedUploadBytes(allFiles, conflictResolution),
@@ -36,6 +38,24 @@ export default function DriveFolderEstimateSummary({ driveFolderId }: { driveFol
         This Drive folder has more than {estimate.candidateCap.toLocaleString()} files, over the limit for one sync.
         Split it into subfolders and connect them separately.
       </Alert>
+    );
+  }
+
+  if (isError && isAxiosError(error) && error.response?.status === 429) {
+    return (
+      <Typography level="body-sm" color="neutral" data-testid="drive-estimate-unavailable">
+        Too many estimate requests; try again shortly. The sync still enforces your storage limit.
+      </Typography>
+    );
+  }
+
+  const reconnectMessage =
+    isError && isAxiosError(error) && error.response?.status === 400 ? getServerErrorField(error) : undefined;
+  if (reconnectMessage) {
+    return (
+      <Typography level="body-sm" color="neutral" data-testid="drive-estimate-unavailable">
+        {reconnectMessage}
+      </Typography>
     );
   }
 

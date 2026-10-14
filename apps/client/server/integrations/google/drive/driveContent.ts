@@ -319,29 +319,36 @@ export async function estimateFolder(
     if (visited.size >= maxFolders) return stop('folder_cap');
     visited.add(id);
 
-    let children: DriveFile[];
+    let overCap = false;
     try {
-      children = await listFolderChildren(drive, id, { deadlineMs });
+      await listFolderChildren(drive, id, {
+        deadlineMs,
+        onPage: page => {
+          for (const child of page) {
+            if (isFolder(child)) {
+              queue.push(child.id);
+              continue;
+            }
+            if (seen.has(child.id)) continue;
+            seen.add(child.id);
+            estimate.fileCount++;
+            if (driveIngestSkipReason(child.size, maxFileSize)) estimate.overSizeLimitCount++;
+            else if (!driveIngestMimeType(child)) estimate.unsupportedCount++;
+            else if (child.size != null) estimate.knownBytes += child.size;
+            else estimate.unknownSizeCount++;
+          }
+          if (estimate.fileCount > MAX_INGEST_CANDIDATES) {
+            overCap = true;
+            return false;
+          }
+        },
+      });
     } catch (e) {
       if (e instanceof DriveListingIncompleteError) return stop(e.reason);
       if (isDriveRateLimitError(e)) return stop('rate_limited');
       throw e;
     }
-
-    for (const child of children) {
-      if (isFolder(child)) {
-        queue.push(child.id);
-        continue;
-      }
-      if (seen.has(child.id)) continue;
-      seen.add(child.id);
-      estimate.fileCount++;
-      if (driveIngestSkipReason(child.size, maxFileSize)) estimate.overSizeLimitCount++;
-      else if (!driveIngestMimeType(child)) estimate.unsupportedCount++;
-      else if (child.size != null) estimate.knownBytes += child.size;
-      else estimate.unknownSizeCount++;
-    }
-    if (estimate.fileCount > MAX_INGEST_CANDIDATES) return stop('candidate_cap');
+    if (overCap) return stop('candidate_cap');
   }
 
   return estimate;

@@ -438,6 +438,47 @@ describe('estimateFolder', () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it('keeps the pages already listed when a deadline stops a folder mid-listing', async () => {
+    vi.useFakeTimers();
+    const deadlineMs = Date.now() + 1000;
+    const list = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(deadlineMs + 1);
+        return {
+          data: {
+            files: [sized('a', 'a.txt', 'text/plain', 10), sized('b', 'b.txt', 'text/plain', 20)],
+            nextPageToken: 'more',
+          },
+        };
+      })
+      .mockResolvedValueOnce({ data: { files: [sized('c', 'c.txt', 'text/plain', 30)] } });
+    const drive = { files: { list } } as unknown as drive_v3.Drive;
+    const e = await estimateFolder(drive, 'root', opts({ deadlineMs }));
+    expect(e).toMatchObject({ truncated: true, truncatedReason: 'deadline', fileCount: 2, knownBytes: 30 });
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it('flags a single folder that crosses the candidate cap mid-listing and stops listing it', async () => {
+    const pageSize = 1000;
+    const pages = Math.ceil((MAX_INGEST_CANDIDATES + 1) / pageSize) + 3;
+    let page = 0;
+    const list = vi.fn(async () => {
+      const start = page * pageSize;
+      page++;
+      return {
+        data: {
+          files: Array.from({ length: pageSize }, (_, i) => file(`f${start + i}`, `${start + i}.txt`, 'text/plain')),
+          nextPageToken: page < pages ? 'more' : undefined,
+        },
+      };
+    });
+    const drive = { files: { list } } as unknown as drive_v3.Drive;
+    const e = await estimateFolder(drive, 'root', opts());
+    expect(e).toMatchObject({ truncated: true, truncatedReason: 'candidate_cap', overCandidateCap: true });
+    expect(list).toHaveBeenCalledTimes(Math.ceil((MAX_INGEST_CANDIDATES + 1) / pageSize));
+  });
+
   it('stops at maxFolders with what it has so far', async () => {
     const { drive } = mockTreeDrive({
       root: [sized('a', 'a.txt', 'text/plain', 7), folder('sub', 'sub')],

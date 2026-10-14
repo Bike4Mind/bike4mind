@@ -152,6 +152,27 @@ describe('listFolderChildren', () => {
     expect(list).toHaveBeenCalledTimes(1);
   });
 
+  it('stops paginating when onPage returns false, after delivering that page', async () => {
+    const { drive, list } = mockDrive([
+      { files: [{ id: '1', name: 'a.txt', mimeType: 'text/plain' }], nextPageToken: 'p2' },
+      { files: [{ id: '2', name: 'b.txt', mimeType: 'text/plain' }] },
+    ]);
+    const onPage = vi.fn(() => false);
+    const files = await listFolderChildren(drive, 'FOLDER_X', { onPage });
+    expect(files.map(f => f.id)).toEqual(['1']);
+    expect(onPage).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it('delivers a page to onPage before the deadline throw', async () => {
+    const { drive } = mockDrive([{ files: [{ id: '1', name: 'a.txt', mimeType: 'text/plain' }], nextPageToken: 'p2' }]);
+    const onPage = vi.fn();
+    await expect(listFolderChildren(drive, 'FOLDER_X', { deadlineMs: Date.now() - 1, onPage })).rejects.toBeInstanceOf(
+      DriveListingIncompleteError
+    );
+    expect(onPage).toHaveBeenCalledWith([{ id: '1', name: 'a.txt', mimeType: 'text/plain' }]);
+  });
+
   it('does not apply a deadline when the folder fits on one page', async () => {
     const { drive } = mockDrive([{ files: [{ id: '1', name: 'a.txt', mimeType: 'text/plain' }] }]);
     await expect(listFolderChildren(drive, 'FOLDER_X', { deadlineMs: Date.now() - 1 })).resolves.toHaveLength(1);

@@ -563,10 +563,26 @@ describe('DataLakeWizardModal - Drive-only create', () => {
       refreshUser: () => Promise.resolve(),
     });
 
-  // A pending estimate carries no bytes, so it never locks out a user already over quota - the
-  // sync stays the boundary.
-  it('is not blocked by a storage limit while the folder estimate is pending', () => {
+  // A pending estimate holds Create until it settles, so a folder over the file cap cannot slip
+  // through before its estimate lands.
+  it('holds Create while the folder estimate is pending', () => {
     driveEstimate.current = { data: undefined, isLoading: true, isError: false };
+    userUsing(0);
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+    const commitBtn = screen.getByTestId('wizard-start-upload-btn');
+
+    expect(commitBtn).toBeDisabled();
+    commitBtn.click();
+    expect(driveCommitMutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('drive-estimate-loading')).toBeInTheDocument();
+  });
+
+  // A failed estimate carries no bytes, so it never locks out a user already over quota - the
+  // sync stays the boundary.
+  it('is not blocked by a storage limit when the folder estimate failed', () => {
+    driveEstimate.current = { data: undefined, isLoading: false, isError: true };
     userUsing(2_000_000);
     seedDriveOnly({ step: 'config' });
 
@@ -576,7 +592,6 @@ describe('DataLakeWizardModal - Drive-only create', () => {
     expect(commitBtn).toBeEnabled();
     commitBtn.click();
     expect(driveCommitMutate).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('drive-estimate-loading')).toBeInTheDocument();
   });
 
   it('blocks Create and sync when the folder known bytes alone exceed the quota, and shows the numbers', () => {
