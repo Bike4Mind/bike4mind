@@ -101,7 +101,7 @@ describe('SidenavNav feature rows', () => {
     useFeatureEnabledMock.mockReturnValue(true);
     renderNav();
 
-    for (const key of ['files', 'projects', 'published', 'agents', 'hearth']) {
+    for (const key of ['files', 'projects', 'published', 'skill-market', 'agents', 'hearth']) {
       expect(screen.getByTestId(`sidenav-nav-${key}`)).toBeInTheDocument();
     }
   });

@@ -657,6 +657,8 @@
   },
   "skills": {
     "title": "Skills",
-    "command_palette_description": "Manage reusable instruction templates"
+    "command_palette_description": "Manage reusable instruction templates",
+    "market_title": "Skill Market",
+    "market_command_palette_description": "Browse, import and publish community skills"
   }
 }
