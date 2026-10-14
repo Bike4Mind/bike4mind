@@ -16,7 +16,8 @@
 
 // ponytail: first HOSTED prod release carrying the stamp was prod-2026-10-07-b (08:50Z); rounded up
 // a day on purpose - too late only refunds a few already-stamped-era rows, too early would skip real
-// refunds. A deployment that picked the stamp up later (a self-host install) sees it as too early.
+// refunds. A HOSTED deployment that picked the stamp up after the cutoff is the "too early" case:
+// its charged-but-unstamped rows would read as uncharged.
 export const STORAGE_CHARGE_STAMP_CUTOFF = new Date('2026-10-08T00:00:00Z');
 
 /**
