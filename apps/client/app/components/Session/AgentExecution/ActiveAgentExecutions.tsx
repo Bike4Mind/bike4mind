@@ -2,9 +2,12 @@
  * ActiveAgentExecutions - renders one IterationStream for each in-flight or
  * recently-finished agent execution in the current session.
  *
- * Mounted by SessionContainer above SessionBottom so the iteration stream
- * appears between the chat history and the input bar. Executions are scoped
- * by sessionId so unrelated parallel runs in other sessions don't bleed in.
+ * Rendered in SessionMiddle's ChatHistory footer so the iteration stream
+ * appears below the chat history. Executions are scoped by sessionId so
+ * unrelated parallel runs in other sessions don't bleed in. The footer
+ * remounts when ChatHistory swaps its empty fallback for Virtuoso, so this
+ * component must not own mount-time side effects - the reconnect probe lives
+ * in useSessionReconnectProbe, called by SessionMiddle.
  *
  * Active runs always render. Completed/failed/aborted runs linger so the
  * user sees the final answer/error without needing scrollback; the next
@@ -12,11 +15,10 @@
  * `clearForSession(sessionId)` from the send-message hook.
  */
 
-import { FC, useEffect, useMemo, useRef } from 'react';
+import { FC, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { Box } from '@mui/joy';
 import { useAgentExecutionStore, selectExecutionIdsForSession } from '@client/app/stores/useAgentExecutionStore';
-import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
 import ReplyStatus from '@client/app/components/common/ReplyStatus';
 import IterationStream from './IterationStream';
 import { STARTING_COPY } from './loadingCopy';
@@ -29,31 +31,6 @@ interface ActiveAgentExecutionsProps {
 }
 
 const ActiveAgentExecutions: FC<ActiveAgentExecutionsProps> = ({ sessionId }) => {
-  const { reconnect } = useAgentExecutionDispatch();
-
-  // Mount-time reconnect: on session change, ask the server whether
-  // an in-flight execution exists for this session. The server replies with
-  // `reconnect_result`, which the subscriber pipes into the store via
-  // `hydrateFromReconnect` - that stamps the sessionId onto the execution so
-  // it shows up below. No-op when `found: false`.
-  //
-  // The reconnect effect depends ONLY on `sessionId`. `reconnect` is read
-  // through a ref because the dispatcher's identity is stable today
-  // (memoised over `sendJsonMessage`) but a future upstream change could
-  // make it churn - putting `reconnect` in the deps would then fire
-  // reconnect on every render, each call enqueueing another
-  // `pendingReconnects` entry and scrambling the FIFO matching with
-  // `reconnect_result` events. The sync effect keeps the ref current
-  // without writing during render.
-  const reconnectRef = useRef(reconnect);
-  useEffect(() => {
-    reconnectRef.current = reconnect;
-  }, [reconnect]);
-  useEffect(() => {
-    if (!sessionId) return;
-    reconnectRef.current(sessionId);
-  }, [sessionId]);
-
   // Memoize the selector factory so its identity is stable across renders -
   // otherwise zustand re-runs the scan+sort on every store change (e.g. each
   // `iteration_step`), even though `useShallow` keeps the output stable.

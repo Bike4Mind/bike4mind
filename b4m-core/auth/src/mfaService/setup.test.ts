@@ -52,5 +52,6 @@ describe('verifyMFASetup', () => {
     expect(persisted.mfa!.backupCodes).toEqual(BACKUP_CODES);
     expect(persisted.mfa!.failedAttempts).toBe(0);
     expect(persisted.mfa!.lastFailedAttempt).toBeUndefined();
+    expect(persisted.mfa!.lastUsedAt).toBeInstanceOf(Date);
   });
 });

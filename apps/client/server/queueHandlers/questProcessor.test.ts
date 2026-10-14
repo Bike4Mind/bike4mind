@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
+const mockProcess = vi.hoisted(() => vi.fn());
+
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
 // slackQuestProcessor.failureNotice.test.ts, which already proves this import chain resolves
@@ -46,7 +48,7 @@ vi.mock('@bike4mind/services/llm', async () => {
   return {
     ...actual,
     ChatCompletionProcess: class {
-      process = vi.fn();
+      process = mockProcess;
     },
   };
 });
@@ -65,6 +67,26 @@ vi.mock('@bike4mind/database', async () => {
 
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 
+vi.mock('@server/videoGenerations/buildVideoToolConfig', () => ({
+  buildVideoToolConfig: vi.fn(async () => ({ usableModels: ['test-video'], createJob: vi.fn() })),
+}));
+
+describe('questProcessor getVideoToolConfigResolver', () => {
+  it('offers no video resolver on an API-key turn', async () => {
+    const { getVideoToolConfigResolver } = await import('./questProcessor');
+    expect(getVideoToolConfigResolver('key-1', 'u1')).toBeUndefined();
+  }, 120_000);
+
+  it('offers a video resolver on a session turn', async () => {
+    const { getVideoToolConfigResolver } = await import('./questProcessor');
+    const { buildVideoToolConfig } = await import('@server/videoGenerations/buildVideoToolConfig');
+    const resolver = getVideoToolConfigResolver(undefined, 'u1');
+    expect(resolver).toBeTypeOf('function');
+    await resolver?.();
+    expect(buildVideoToolConfig).toHaveBeenCalledWith('u1', expect.anything());
+  }, 120_000);
+});
+
 describe('questProcessor getStaticOptions', () => {
   it('wires the save_content_to_data_lake audit adapters', async () => {
     // The handler's transitive import graph (services + database + slack) is heavy enough
@@ -79,5 +101,26 @@ describe('questProcessor getStaticOptions', () => {
     expect(db.lakeMembershipRemovals).toBeDefined();
     expect(db.lakeConfigChangeEvents).toBeDefined();
     expect(db.lakeMembershipChangeEvents).toBeDefined();
+  }, 120_000);
+});
+
+describe('processQuest', () => {
+  it('forwards the queued authOrigin and apiKeyId to process() unchanged', async () => {
+    const { processQuest } = await import('./questProcessor');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+    const params = {
+      userId: 'user-1',
+      sessionId: 'session-1',
+      questId: 'quest-1',
+      params: {},
+      authOrigin: 'apiKey',
+      apiKeyId: 'k1',
+    };
+
+    await processQuest(params as never, logger as never);
+
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }) })
+    );
   }, 120_000);
 });

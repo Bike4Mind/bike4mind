@@ -36,6 +36,7 @@ function toDomainEvent(doc: IHearthEventDoc): HearthEvent {
       questId: doc.refs?.questId,
       externalId: doc.refs?.externalId,
     },
+    origin: doc.origin,
     createdAt: doc.createdAt,
   };
 }
@@ -81,6 +82,7 @@ export class MongoHearthStore implements HearthStore {
         human: input.human,
         machine: input.machine,
         refs: input.refs,
+        origin: input.origin,
       });
       return toDomainEvent(doc);
     } catch (err) {
@@ -236,6 +238,15 @@ export const hearthRepository = {
     if (!Types.ObjectId.isValid(channelId)) return null;
     return HearthChannel.findOne({
       _id: new Types.ObjectId(channelId),
+      userId: new Types.ObjectId(userId),
+    });
+  },
+
+  /** Returns the actor only if it belongs to the user; null otherwise. */
+  async getOwnedActor(userId: string, actorId: string): Promise<IHearthActorDoc | null> {
+    if (!Types.ObjectId.isValid(actorId)) return null;
+    return HearthActor.findOne({
+      _id: new Types.ObjectId(actorId),
       userId: new Types.ObjectId(userId),
     });
   },

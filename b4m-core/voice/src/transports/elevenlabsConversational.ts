@@ -4,10 +4,29 @@ import type { CostEstimate, CreateSessionInput, CreateSessionResult, EndSessionR
 export interface ElevenLabsTransportConfig {
   apiKey: string;
   agentId: string;
-  /** Pessimistic per-minute USD cost upper bound for voice + LLM. Default 0.20. */
+  /** Pessimistic per-minute USD cost upper bound for voice + LLM. Default ELEVENLABS_CONVERSATIONAL_USD_PER_MINUTE. */
   usdPerMinuteUpperBound?: number;
   /** Override fetch for tests. */
   fetchImpl?: typeof fetch;
+}
+
+/** Default pessimistic per-minute USD cost of a call (voice + LLM). */
+export const ELEVENLABS_CONVERSATIONAL_USD_PER_MINUTE = 0.2;
+
+/**
+ * Credit cost of a call of `maxDurationSeconds`. The transport's estimateCost (which sizes the
+ * up-front hold) and the per-minute rate shown on the voice start control both derive from this,
+ * so the displayed price cannot drift from what is billed.
+ */
+export function estimateElevenLabsConversationalCost(
+  maxDurationSeconds: number,
+  usdPerMinute: number = ELEVENLABS_CONVERSATIONAL_USD_PER_MINUTE
+): CostEstimate {
+  const minutes = maxDurationSeconds / 60;
+  return {
+    voiceMinutesUpperBound: minutes,
+    creditsToReserve: usdToCredits(minutes * usdPerMinute),
+  };
 }
 
 const SIGNED_URL_ENDPOINT = 'https://api.elevenlabs.io/v1/convai/conversation/get-signed-url';
@@ -34,7 +53,7 @@ export interface ElevenLabsClientBootstrap {
 }
 
 export function createElevenLabsConversationalTransport(config: ElevenLabsTransportConfig): IVoiceTransport {
-  const usdPerMinute = config.usdPerMinuteUpperBound ?? 0.2;
+  const usdPerMinute = config.usdPerMinuteUpperBound ?? ELEVENLABS_CONVERSATIONAL_USD_PER_MINUTE;
   const fetchImpl = config.fetchImpl ?? fetch;
 
   return {
@@ -74,11 +93,7 @@ export function createElevenLabsConversationalTransport(config: ElevenLabsTransp
     },
 
     estimateCost(maxDurationSeconds: number): CostEstimate {
-      const minutes = maxDurationSeconds / 60;
-      return {
-        voiceMinutesUpperBound: minutes,
-        creditsToReserve: usdToCredits(minutes * usdPerMinute),
-      };
+      return estimateElevenLabsConversationalCost(maxDurationSeconds, usdPerMinute);
     },
   };
 }

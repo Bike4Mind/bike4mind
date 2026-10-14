@@ -5,7 +5,7 @@ import { OpenAIBackend, toProviderEndUserId, type CompletionInfo } from '@bike4m
 import { getFirecrawlConfig } from '../../../../apiKeyService';
 import { createFirecrawlApp } from '../webfetch/firecrawlApp';
 import { plainFetchScrape, isPdfUrl } from '../webfetch/plainFetch';
-import { resolveWebSearchProvider } from '../websearch';
+import { resolveWebSearchProviders, searchWithHedge } from '../websearch';
 import { parseTolerantJson } from './parseJson';
 
 // Shape the planner prompt asks the model to return (inside an `analysis` envelope).
@@ -159,7 +159,7 @@ export async function performDeepResearch(
   // a keyless plain fetch when Firecrawl is not configured (self-host). Error only when there is no
   // way to search at all.
   const firecrawlApp = createFirecrawlApp(await getFirecrawlConfig({ db: context.db }));
-  const provider = await resolveWebSearchProvider({ db: context.db });
+  const [provider, backup] = await resolveWebSearchProviders({ db: context.db });
 
   if (!provider && !firecrawlApp) {
     log('🔬 Deep Research: no web-search provider or Firecrawl configured');
@@ -198,7 +198,8 @@ export async function performDeepResearch(
       }
     : async (query: string) => {
         if (!provider) return []; // unreachable: guarded above, but narrows the type
-        const results = await provider.search(query);
+        // 3 matches the providers' own default result count.
+        const { results } = await searchWithHedge(provider, backup, query, 3);
         return results.map(r => ({ url: r.url, title: r.title, description: r.snippet, type: 'web_url' }));
       };
 

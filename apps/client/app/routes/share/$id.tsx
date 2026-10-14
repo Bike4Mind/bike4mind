@@ -12,6 +12,7 @@ import HubIconIcon from '@mui/icons-material/Hub';
 import {
   Avatar,
   Box,
+  Button,
   Divider,
   IconButton,
   LinearProgress,
@@ -38,11 +39,43 @@ const DOCUMENT_ICONS = {
   Project: <HubIconIcon />,
 };
 
+const StatusModal = ({
+  testId,
+  title,
+  body,
+  actionTestId,
+  actionLabel,
+  onAction,
+  onClose,
+}: {
+  testId: string;
+  title: string;
+  body: string;
+  actionTestId: string;
+  actionLabel: string;
+  onAction: () => void;
+  onClose: () => void;
+}) => (
+  <Modal open sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }} onClose={onClose}>
+    <Sheet data-testid={testId} sx={{ minHeight: '200px', width: '420px', padding: '20px' }}>
+      <ModalClose variant="plain" sx={{ m: 1 }} />
+      <Box display={'flex'} flexDirection={'column'} gap={2}>
+        <Typography level={'h3'}>{title}</Typography>
+        <Typography level={'body-md'}>{body}</Typography>
+        <Button data-testid={actionTestId} onClick={onAction}>
+          {actionLabel}
+        </Button>
+      </Box>
+    </Sheet>
+  </Modal>
+);
+
 const SharePage = () => {
   const [loading, setLoading] = React.useState<boolean>(false);
   const navigate = useNavigate();
   const { id } = useParams({ strict: false });
   const { currentUser } = useUser();
+  const goHome = () => navigate({ to: '/' });
 
   // Parse multiple IDs from URL (comma-separated)
   const inviteIds = React.useMemo(() => {
@@ -59,17 +92,27 @@ const SharePage = () => {
     queryKey: ['invites', 'multiple', inviteIds.sort()],
     queryFn: async () => {
       const results = await Promise.allSettled(inviteIds.map(inviteId => fetchInvite(inviteId)));
-      return results
-        .map((result, index) => ({
-          id: inviteIds[index],
-          invite: result.status === 'fulfilled' ? result.value : null,
-        }))
-        .filter(item => item.invite !== null);
+      const isPastExpiry = (inv: { expiresAt?: Date | string | null }) =>
+        !!inv.expiresAt && new Date(inv.expiresAt).getTime() <= Date.now();
+      const items = results.flatMap((r, i) =>
+        r.status === 'fulfilled' && r.value && r.value !== 'expired' && !isPastExpiry(r.value)
+          ? [{ id: inviteIds[i], invite: r.value }]
+          : []
+      );
+      const expired = results.some(
+        r => r.status === 'fulfilled' && r.value && (r.value === 'expired' || isPastExpiry(r.value))
+      );
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (!items.length && !expired && failed) {
+        console.error('Failed to load invite', failed.reason);
+        throw failed.reason;
+      }
+      return { items, expired };
     },
     enabled: inviteIds.length > 0,
   });
 
-  const invites = query.data || [];
+  const invites = query.data?.items ?? [];
   const isMultiple = invites.length > 1;
 
   // Check if any invite is user's own
@@ -104,19 +147,47 @@ const SharePage = () => {
           action === 'accept' ? acceptInvite.mutateAsync(item.id) : refuseInvite.mutateAsync(item.id)
         )
       );
-      navigate({ to: '/' });
+      goHome();
     } finally {
       setLoading(false);
     }
   };
 
-  if (invites.length === 0) return null;
+  if (query.isLoading) return null;
+  if (query.isError) {
+    return (
+      <StatusModal
+        testId="share-error-modal"
+        title="Couldn't load this invite"
+        body="Something went wrong. Please try again."
+        actionTestId="share-error-retry-btn"
+        actionLabel="Retry"
+        onAction={() => query.refetch()}
+        onClose={goHome}
+      />
+    );
+  }
+  if (invites.length === 0) {
+    const expired = query.data?.expired;
+    const kind = expired ? 'expired' : 'unavailable';
+    return (
+      <StatusModal
+        testId={`share-${kind}-modal`}
+        title={expired ? 'This invite has expired' : 'This invite is no longer available'}
+        body={
+          expired
+            ? 'Ask the person who shared it to send you a new one.'
+            : 'It may have expired, been revoked, or already been used.'
+        }
+        actionTestId={`share-${kind}-home-btn`}
+        actionLabel="Go home"
+        onAction={goHome}
+        onClose={goHome}
+      />
+    );
+  }
   return (
-    <Modal
-      open
-      sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}
-      onClose={() => navigate({ to: '/' })}
-    >
+    <Modal open sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }} onClose={goHome}>
       <Sheet sx={{ minHeight: '200px', width: '420px', padding: '20px' }}>
         <ModalClose variant="plain" sx={{ m: 1 }} />
         {query.isFetching ? (

@@ -14,11 +14,14 @@ import {
   Select,
   Stack,
   Textarea,
+  ToggleButtonGroup,
   Typography,
 } from '@mui/joy';
 import type {
   IDataLakeResearchConfigDocument,
   IDataLakeResearchRunDocument,
+  ResearchPreset,
+  ResearchPresetId,
   ResearchRunTotals,
   ResearchScheduleCadence,
   ResearchScheduleOutcome,
@@ -35,7 +38,10 @@ import {
   RESEARCH_MAX_RESULTS_DEFAULT,
   RESEARCH_MAX_RESULTS_LIMIT,
   RESEARCH_MIN_RELEVANCE_DEFAULT,
+  RESEARCH_PRESET_IDS,
+  RESEARCH_PRESETS,
   RESEARCH_RECENCY_DAYS_LIMIT,
+  RESEARCH_RELEVANCE_MODEL_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
   RESEARCH_SCHEDULE_CADENCES,
@@ -53,6 +59,8 @@ export interface DataLakeResearchPanelProps {
   pendingProposals?: number;
   /** Relevance-judge models, already ordered and labelled by `researchJudgeModelOptions`. */
   modelOptions: ResearchModelOption[];
+  /** True while the model catalog is still being fetched, so an empty `modelOptions` is not yet a verdict. */
+  modelsLoading?: boolean;
   /** The "no model chosen" option's label, naming what the run falls back to. */
   defaultModelLabel?: string;
   isCreating?: boolean;
@@ -255,6 +263,103 @@ const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   cadence: draft.cadence,
   reviewBacklogLimit: parseNumber(draft.reviewBacklogLimit, RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
+
+const PRESET_LABEL: Record<ResearchPresetId, string> = {
+  quick: 'Quick',
+  standard: 'Standard',
+  deep: 'Deep',
+};
+
+/**
+ * A preset's model as the draft holds it: '' (the default judge) when this deployment does not offer
+ * it. While the catalog is still loading nothing can be ruled out, so the preset's model is kept; a
+ * catalog that failed to load or came back empty offers nothing.
+ */
+const presetDraftModel = (
+  preset: ResearchPreset,
+  offered: ReadonlyMap<string, string>,
+  modelsLoading: boolean
+): string => (preset.model && (modelsLoading || offered.has(preset.model)) ? preset.model : '');
+
+const applyPreset = (
+  draft: ConfigDraft,
+  id: ResearchPresetId,
+  offered: ReadonlyMap<string, string>,
+  modelsLoading: boolean
+): ConfigDraft => {
+  // Re-picking the preset already in effect must not rewrite "1" as "1.00" and read as an unsaved edit.
+  if (matchingPreset(draft, offered, modelsLoading) === id) return draft;
+  const preset = RESEARCH_PRESETS[id];
+  return {
+    ...draft,
+    model: presetDraftModel(preset, offered, modelsLoading),
+    maxResults: String(preset.maxResults),
+    maxProposals: String(preset.maxProposals),
+    costCeilingUsd: microUsdToUsdDraftInput(preset.costCeilingMicroUsd),
+  };
+};
+
+/**
+ * The preset whose levers the draft would save, or null for Custom. Compared on what `draftToInput`
+ * would submit, so "0.050" and "0.05" are the same ceiling and a blank model is the default judge.
+ */
+const matchingPreset = (
+  draft: ConfigDraft,
+  offered: ReadonlyMap<string, string>,
+  modelsLoading: boolean
+): ResearchPresetId | null => {
+  const input = draftToInput(draft);
+  const judge = input.model || RESEARCH_RELEVANCE_MODEL_DEFAULT;
+  return (
+    RESEARCH_PRESET_IDS.find(id => {
+      const preset = RESEARCH_PRESETS[id];
+      return (
+        judge === (presetDraftModel(preset, offered, modelsLoading) || RESEARCH_RELEVANCE_MODEL_DEFAULT) &&
+        input.maxResults === preset.maxResults &&
+        input.maxProposals === preset.maxProposals &&
+        input.costCeilingMicroUsd === preset.costCeilingMicroUsd
+      );
+    }) ?? null
+  );
+};
+
+/** Whether a lever no preset sets differs from a new config's, so opening it folded would hide a saved choice. */
+const hasNonPresetLeverSet = (draft: ConfigDraft): boolean => {
+  const pick = ({
+    recencyDays,
+    minRelevance,
+    allowedDomains,
+    blockedDomains,
+    proposedTags,
+    reviewBacklogLimit,
+    cadence,
+  }: ResearchConfigInput) =>
+    JSON.stringify([
+      recencyDays,
+      minRelevance,
+      allowedDomains,
+      blockedDomains,
+      proposedTags,
+      // Only rendered with a schedule, so it cannot be the reason to unfold an unscheduled config.
+      cadence === 'off' ? null : reviewBacklogLimit,
+    ]);
+  return pick(draftToInput(draft)) !== pick(draftToInput(emptyDraft()));
+};
+
+const presetSummary = (
+  id: ResearchPresetId,
+  offered: ReadonlyMap<string, string>,
+  modelsLoading: boolean,
+  defaultModelLabel: string
+): string => {
+  const preset = RESEARCH_PRESETS[id];
+  const model = presetDraftModel(preset, offered, modelsLoading);
+  return (
+    `${model ? (offered.get(model) ?? model) : defaultModelLabel} judge \u00b7 up to ` +
+    `${pluralize(preset.maxResults, 'search result')} and ${pluralize(preset.maxProposals, 'proposal')} ` +
+    `per run \u00b7 ${formatCeiling(preset.costCeilingMicroUsd)} ceiling`
+  );
+};
 
 const RUN_STATUS_COLOR = {
   queued: 'neutral',
@@ -459,6 +564,7 @@ export function DataLakeResearchPanel({
   error,
   pendingProposals,
   modelOptions,
+  modelsLoading = false,
   defaultModelLabel = 'Default',
   isCreating,
   savingConfigId,
@@ -474,6 +580,7 @@ export function DataLakeResearchPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ConfigDraft>(emptyDraft);
   const [draftBaseline, setDraftBaseline] = useState<ConfigDraft>(emptyDraft);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   // Bumped each time the form opens, so a save settling late can tell whether its own session is still
   // the one on screen. `editingId` cannot: every create is '', and re-editing a row reuses its id.
   const formSession = useRef(0);
@@ -503,17 +610,24 @@ export function DataLakeResearchPanel({
     }
     return latest;
   }, [runs]);
-  const setField = (field: keyof ConfigDraft) => (value: string) => setDraft(prev => ({ ...prev, [field]: value }));
+  const setField = (field: keyof ConfigDraft) => (value: string) => {
+    setDraft(prev => ({ ...prev, [field]: value }));
+    // Only advanced fields are validated; pinning the section open stops it folding the moment an error is fixed.
+    if (field !== 'name' && field !== 'query') setAdvancedOpen(true);
+  };
 
   const openCreate = () => {
     setDraft(emptyDraft());
     setDraftBaseline(emptyDraft());
+    setAdvancedOpen(false);
     setEditingId('');
     formSession.current += 1;
   };
   const openEdit = (config: IDataLakeResearchConfigDocument) => {
-    setDraft(draftFromConfig(config));
-    setDraftBaseline(draftFromConfig(config));
+    const loaded = draftFromConfig(config);
+    setDraft(loaded);
+    setDraftBaseline(loaded);
+    setAdvancedOpen(matchingPreset(loaded, modelLabelById, modelsLoading) === null || hasNonPresetLeverSet(loaded));
     setEditingId(config.id);
     formSession.current += 1;
   };
@@ -562,6 +676,14 @@ export function DataLakeResearchPanel({
   // A saved model this picker no longer lists (retired, disabled, filtered) must still render as
   // selected, or the Select shows blank and a save silently keeps a model nobody can see.
   const orphanModelId = draft.model && !modelLabelById.has(draft.model) ? draft.model : null;
+  const activePreset = matchingPreset(draft, modelLabelById, modelsLoading);
+  // Every validated field lives in the advanced section, so an error must never be folded out of sight.
+  const hasErrors = Object.keys(errors).length > 0;
+  // An orphan is only a verdict once the catalog has loaded; before that it would unfold and then refold.
+  const showAdvanced = advancedOpen || hasErrors || (!!orphanModelId && !modelsLoading);
+  const presetSummaryText = activePreset
+    ? presetSummary(activePreset, modelLabelById, modelsLoading, defaultModelLabel)
+    : 'Custom settings. Adjust them under Advanced settings.';
 
   return (
     <Stack spacing={2} data-testid="datalake-research-panel">
@@ -740,31 +862,6 @@ export function DataLakeResearchPanel({
             </FormControl>
 
             <FormControl size="sm">
-              <FormLabel>Relevance model</FormLabel>
-              <Select
-                value={draft.model}
-                onChange={(_e, value) => setField('model')(value ?? '')}
-                slotProps={{ button: { 'data-testid': 'datalake-research-model-select' } }}
-              >
-                <Option value="">{defaultModelLabel}</Option>
-                {orphanModelId && (
-                  <Option value={orphanModelId} disabled>
-                    {`${orphanModelId} (not offered for research)`}
-                  </Option>
-                )}
-                {modelOptions.map(option => (
-                  <Option key={option.id} value={option.id}>
-                    {option.label}
-                  </Option>
-                ))}
-              </Select>
-              <FormHelperText>
-                Judges each search result before it is fetched. Models are listed in recommended order, not by price. A
-                cheaper model costs less per run and reads less carefully.
-              </FormHelperText>
-            </FormControl>
-
-            <FormControl size="sm">
               <FormLabel>Schedule</FormLabel>
               <Select
                 value={draft.cadence}
@@ -784,164 +881,245 @@ export function DataLakeResearchPanel({
               </FormHelperText>
             </FormControl>
 
-            {draft.cadence !== 'off' && (
-              <FormControl size="sm" error={!!errors.reviewBacklogLimit}>
-                <FormLabel>Pause scheduled runs at</FormLabel>
-                <Input
-                  type="number"
-                  value={draft.reviewBacklogLimit}
-                  onChange={e => setField('reviewBacklogLimit')(e.target.value)}
-                  endDecorator="pending proposals"
-                  slotProps={{
-                    input: {
-                      'data-testid': 'datalake-research-review-backlog-input',
-                      min: 1,
-                      max: RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
-                    },
-                  }}
-                />
-                <FormHelperText>
-                  {errors.reviewBacklogLimit ??
-                    `Scheduled runs skip while the review queue is at or above this many pending proposals. ` +
-                      `1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}. Run now is never blocked by this.`}
-                </FormHelperText>
-              </FormControl>
-            )}
-
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-              <FormControl size="sm" sx={{ flex: 1 }} error={!!errors.maxResults}>
-                <FormLabel>Search results</FormLabel>
-                <Input
-                  type="number"
-                  value={draft.maxResults}
-                  onChange={e => setField('maxResults')(e.target.value)}
-                  slotProps={{
-                    input: {
-                      'data-testid': 'datalake-research-max-results-input',
-                      min: 1,
-                      max: RESEARCH_MAX_RESULTS_LIMIT,
-                    },
-                  }}
-                />
-                <FormHelperText>{errors.maxResults ?? `Up to ${RESEARCH_MAX_RESULTS_LIMIT}`}</FormHelperText>
-              </FormControl>
-
-              <FormControl size="sm" sx={{ flex: 1 }} error={!!errors.maxProposals}>
-                <FormLabel>Proposals per run</FormLabel>
-                <Input
-                  type="number"
-                  value={draft.maxProposals}
-                  onChange={e => setField('maxProposals')(e.target.value)}
-                  slotProps={{
-                    input: {
-                      'data-testid': 'datalake-research-max-proposals-input',
-                      min: 1,
-                      max: RESEARCH_MAX_PROPOSALS_LIMIT,
-                    },
-                  }}
-                />
-                <FormHelperText>{errors.maxProposals ?? `Up to ${RESEARCH_MAX_PROPOSALS_LIMIT}`}</FormHelperText>
-              </FormControl>
-            </Stack>
-
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-              <FormControl size="sm" sx={{ flex: 1 }} error={!!errors.recencyDays}>
-                <FormLabel>Only results from the last</FormLabel>
-                <Input
-                  type="number"
-                  placeholder="Any age"
-                  value={draft.recencyDays}
-                  onChange={e => setField('recencyDays')(e.target.value)}
-                  endDecorator="days"
-                  slotProps={{
-                    input: {
-                      'data-testid': 'datalake-research-recency-input',
-                      min: 1,
-                      max: RESEARCH_RECENCY_DAYS_LIMIT,
-                    },
-                  }}
-                />
-                <FormHelperText>{errors.recencyDays ?? 'Leave blank for no recency limit.'}</FormHelperText>
-              </FormControl>
-
-              <FormControl size="sm" sx={{ flex: 1 }} error={!!errors.minRelevance}>
-                <FormLabel>Minimum relevance</FormLabel>
-                <Input
-                  type="number"
-                  value={draft.minRelevance}
-                  onChange={e => setField('minRelevance')(e.target.value)}
-                  slotProps={{
-                    input: { 'data-testid': 'datalake-research-min-relevance-input', min: 0, max: 1, step: 0.05 },
-                  }}
-                />
-                <FormHelperText>
-                  {errors.minRelevance ?? '0 to 1. Below this, a result is never fetched or proposed.'}
-                </FormHelperText>
-              </FormControl>
-            </Stack>
-
-            <FormControl size="sm" error={!!errors.costCeilingUsd}>
-              <FormLabel>Cost ceiling</FormLabel>
-              <Input
-                type="number"
-                value={draft.costCeilingUsd}
-                onChange={e => setField('costCeilingUsd')(e.target.value)}
-                startDecorator="$"
-                slotProps={{
-                  input: {
-                    'data-testid': 'datalake-research-cost-ceiling-input',
-                    min: 0,
-                    max: costCeilingLimitUsd,
-                    step: 0.01,
-                  },
-                }}
-              />
-              <FormHelperText>
-                {errors.costCeilingUsd ??
-                  `Judgement spend for one run. The run stops when it would exceed this. Maximum $${microUsdToUsdInput(
-                    RESEARCH_COST_CEILING_MICRO_USD_LIMIT
-                  )}.`}
-              </FormHelperText>
-            </FormControl>
-
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-              <FormControl size="sm" sx={{ flex: 1 }}>
-                <FormLabel>Only these sites</FormLabel>
-                <Textarea
-                  minRows={2}
-                  placeholder="example.com"
-                  value={draft.allowedDomains}
-                  onChange={e => setField('allowedDomains')(e.target.value)}
-                  slotProps={{ textarea: { 'data-testid': 'datalake-research-allowed-input' } }}
-                />
-                <FormHelperText>One per line, subdomains included. Leave blank to allow any site.</FormHelperText>
-              </FormControl>
-
-              <FormControl size="sm" sx={{ flex: 1 }}>
-                <FormLabel>Never these sites</FormLabel>
-                <Textarea
-                  minRows={2}
-                  placeholder="example.net"
-                  value={draft.blockedDomains}
-                  onChange={e => setField('blockedDomains')(e.target.value)}
-                  slotProps={{ textarea: { 'data-testid': 'datalake-research-blocked-input' } }}
-                />
-                <FormHelperText>One per line, subdomains included. Wins over the allow list.</FormHelperText>
-              </FormControl>
-            </Stack>
-
             <FormControl size="sm">
-              <FormLabel>Tags to propose</FormLabel>
-              <Input
-                placeholder="research, weekly"
-                value={draft.proposedTags}
-                onChange={e => setField('proposedTags')(e.target.value)}
-                slotProps={{ input: { 'data-testid': 'datalake-research-tags-input' } }}
-              />
-              <FormHelperText>
-                Shown on each proposal as suggestions only. Approving applies the lake tag, not these.
-              </FormHelperText>
+              <FormLabel>Depth and cost</FormLabel>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                <ToggleButtonGroup
+                  size="sm"
+                  value={activePreset}
+                  onChange={(_e, value) => {
+                    if (!value) return;
+                    setDraft(prev => applyPreset(prev, value, modelLabelById, modelsLoading));
+                  }}
+                  data-testid="datalake-research-preset-picker"
+                >
+                  {RESEARCH_PRESET_IDS.map(id => (
+                    <Button key={id} value={id} data-testid={`datalake-research-preset-${id}`}>
+                      {PRESET_LABEL[id]}
+                    </Button>
+                  ))}
+                </ToggleButtonGroup>
+                <Button
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  onClick={() => setAdvancedOpen(true)}
+                  data-testid="datalake-research-customize-btn"
+                >
+                  Customize
+                </Button>
+              </Stack>
+              <FormHelperText data-testid="datalake-research-preset-summary">{presetSummaryText}</FormHelperText>
             </FormControl>
+
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              aria-expanded={showAdvanced}
+              aria-controls="datalake-research-advanced"
+              aria-disabled={hasErrors}
+              onClick={() => {
+                if (!hasErrors) setAdvancedOpen(!showAdvanced);
+              }}
+              sx={{ alignSelf: 'flex-start' }}
+              data-testid="datalake-research-advanced-toggle"
+            >
+              {showAdvanced ? 'Hide advanced settings' : 'Advanced settings'}
+            </Button>
+
+            <Stack
+              id="datalake-research-advanced"
+              spacing={1.5}
+              hidden={!showAdvanced}
+              // Stack's own display:flex would otherwise win over the hidden attribute.
+              sx={{ display: showAdvanced ? 'flex' : 'none' }}
+              data-testid="datalake-research-advanced"
+            >
+              <FormControl size="sm">
+                <FormLabel>Relevance model</FormLabel>
+                <Select
+                  value={draft.model}
+                  onChange={(_e, value) => setField('model')(value ?? '')}
+                  slotProps={{ button: { 'data-testid': 'datalake-research-model-select' } }}
+                >
+                  <Option value="">{defaultModelLabel}</Option>
+                  {orphanModelId && (
+                    <Option value={orphanModelId} disabled>
+                      {`${orphanModelId} (not offered for research)`}
+                    </Option>
+                  )}
+                  {modelOptions.map(option => (
+                    <Option key={option.id} value={option.id}>
+                      {option.label}
+                    </Option>
+                  ))}
+                </Select>
+                <FormHelperText>
+                  Judges each search result before it is fetched. Models are listed in recommended order, not by price.
+                  A cheaper model costs less per run and reads less carefully.
+                </FormHelperText>
+              </FormControl>
+
+              {draft.cadence !== 'off' && (
+                <FormControl size="sm" error={!!errors.reviewBacklogLimit}>
+                  <FormLabel>Pause scheduled runs at</FormLabel>
+                  <Input
+                    type="number"
+                    value={draft.reviewBacklogLimit}
+                    onChange={e => setField('reviewBacklogLimit')(e.target.value)}
+                    endDecorator="pending proposals"
+                    slotProps={{
+                      input: {
+                        'data-testid': 'datalake-research-review-backlog-input',
+                        min: 1,
+                        max: RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
+                      },
+                    }}
+                  />
+                  <FormHelperText>
+                    {errors.reviewBacklogLimit ??
+                      `Scheduled runs skip while the review queue is at or above this many pending proposals. ` +
+                        `1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}. Run now is never blocked by this.`}
+                  </FormHelperText>
+                </FormControl>
+              )}
+
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+                <FormControl size="sm" error={!!errors.maxResults} sx={{ flex: 1 }}>
+                  <FormLabel>Search results</FormLabel>
+                  <Input
+                    type="number"
+                    value={draft.maxResults}
+                    onChange={e => setField('maxResults')(e.target.value)}
+                    slotProps={{
+                      input: {
+                        'data-testid': 'datalake-research-max-results-input',
+                        min: 1,
+                        max: RESEARCH_MAX_RESULTS_LIMIT,
+                      },
+                    }}
+                  />
+                  <FormHelperText>{errors.maxResults ?? `Up to ${RESEARCH_MAX_RESULTS_LIMIT}`}</FormHelperText>
+                </FormControl>
+
+                <FormControl size="sm" error={!!errors.maxProposals} sx={{ flex: 1 }}>
+                  <FormLabel>Proposals per run</FormLabel>
+                  <Input
+                    type="number"
+                    value={draft.maxProposals}
+                    onChange={e => setField('maxProposals')(e.target.value)}
+                    slotProps={{
+                      input: {
+                        'data-testid': 'datalake-research-max-proposals-input',
+                        min: 1,
+                        max: RESEARCH_MAX_PROPOSALS_LIMIT,
+                      },
+                    }}
+                  />
+                  <FormHelperText>{errors.maxProposals ?? `Up to ${RESEARCH_MAX_PROPOSALS_LIMIT}`}</FormHelperText>
+                </FormControl>
+              </Stack>
+
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+                <FormControl size="sm" error={!!errors.recencyDays} sx={{ flex: 1 }}>
+                  <FormLabel>Only results from the last</FormLabel>
+                  <Input
+                    type="number"
+                    placeholder="Any age"
+                    value={draft.recencyDays}
+                    onChange={e => setField('recencyDays')(e.target.value)}
+                    endDecorator="days"
+                    slotProps={{
+                      input: {
+                        'data-testid': 'datalake-research-recency-input',
+                        min: 1,
+                        max: RESEARCH_RECENCY_DAYS_LIMIT,
+                      },
+                    }}
+                  />
+                  <FormHelperText>{errors.recencyDays ?? 'Leave blank for no recency limit.'}</FormHelperText>
+                </FormControl>
+
+                <FormControl size="sm" error={!!errors.minRelevance} sx={{ flex: 1 }}>
+                  <FormLabel>Minimum relevance</FormLabel>
+                  <Input
+                    type="number"
+                    value={draft.minRelevance}
+                    onChange={e => setField('minRelevance')(e.target.value)}
+                    slotProps={{
+                      input: { 'data-testid': 'datalake-research-min-relevance-input', min: 0, max: 1, step: 0.05 },
+                    }}
+                  />
+                  <FormHelperText>
+                    {errors.minRelevance ?? '0 to 1. Below this, a result is never fetched or proposed.'}
+                  </FormHelperText>
+                </FormControl>
+              </Stack>
+
+              <FormControl size="sm" error={!!errors.costCeilingUsd}>
+                <FormLabel>Cost ceiling</FormLabel>
+                <Input
+                  type="number"
+                  value={draft.costCeilingUsd}
+                  onChange={e => setField('costCeilingUsd')(e.target.value)}
+                  startDecorator="$"
+                  slotProps={{
+                    input: {
+                      'data-testid': 'datalake-research-cost-ceiling-input',
+                      min: 0,
+                      max: costCeilingLimitUsd,
+                      step: 0.01,
+                    },
+                  }}
+                />
+                <FormHelperText>
+                  {errors.costCeilingUsd ??
+                    `Judgement spend for one run. The run stops when it would exceed this. Maximum $${microUsdToUsdInput(
+                      RESEARCH_COST_CEILING_MICRO_USD_LIMIT
+                    )}.`}
+                </FormHelperText>
+              </FormControl>
+
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+                <FormControl size="sm" sx={{ flex: 1 }}>
+                  <FormLabel>Only these sites</FormLabel>
+                  <Textarea
+                    minRows={2}
+                    placeholder="example.com"
+                    value={draft.allowedDomains}
+                    onChange={e => setField('allowedDomains')(e.target.value)}
+                    slotProps={{ textarea: { 'data-testid': 'datalake-research-allowed-input' } }}
+                  />
+                  <FormHelperText>One per line, subdomains included. Leave blank to allow any site.</FormHelperText>
+                </FormControl>
+
+                <FormControl size="sm" sx={{ flex: 1 }}>
+                  <FormLabel>Never these sites</FormLabel>
+                  <Textarea
+                    minRows={2}
+                    placeholder="example.net"
+                    value={draft.blockedDomains}
+                    onChange={e => setField('blockedDomains')(e.target.value)}
+                    slotProps={{ textarea: { 'data-testid': 'datalake-research-blocked-input' } }}
+                  />
+                  <FormHelperText>One per line, subdomains included. Wins over the allow list.</FormHelperText>
+                </FormControl>
+              </Stack>
+
+              <FormControl size="sm">
+                <FormLabel>Tags to propose</FormLabel>
+                <Input
+                  placeholder="research, weekly"
+                  value={draft.proposedTags}
+                  onChange={e => setField('proposedTags')(e.target.value)}
+                  slotProps={{ input: { 'data-testid': 'datalake-research-tags-input' } }}
+                />
+                <FormHelperText>
+                  Shown on each proposal as suggestions only. Approving applies the lake tag, not these.
+                </FormHelperText>
+              </FormControl>
+            </Stack>
 
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
               <Button

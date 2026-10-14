@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { userHasMFAConfigured } from './utils';
-import type { IUserDocument } from '@bike4mind/common';
+import { clearFailedAttempts, userHasMFAConfigured } from './utils';
+import type { IMFAConfig, IUserDocument } from '@bike4mind/common';
 
 const user = (mfa: unknown) => ({ mfa }) as unknown as IUserDocument;
 
@@ -17,5 +17,27 @@ describe('userHasMFAConfigured', () => {
     expect(userHasMFAConfigured(user({ totpEnabled: false }))).toBe(false);
     expect(userHasMFAConfigured(user(null))).toBe(false);
     expect(userHasMFAConfigured(user(undefined))).toBe(false);
+  });
+});
+
+describe('clearFailedAttempts', () => {
+  it('resets lockout state and preserves secrets', () => {
+    const mfa = {
+      totpEnabled: true,
+      totpSecret: 'SECRET',
+      backupCodes: ['h1', 'h2'],
+      failedAttempts: 3,
+      lastFailedAttempt: new Date(),
+      lockedUntil: new Date(Date.now() + 60_000),
+    } as unknown as IMFAConfig;
+
+    const result = clearFailedAttempts(mfa);
+
+    expect(result.failedAttempts).toBe(0);
+    expect(result.lastFailedAttempt).toBeUndefined();
+    expect(result.lockedUntil).toBeUndefined();
+    expect(result.totpSecret).toBe('SECRET');
+    expect(result.backupCodes).toEqual(['h1', 'h2']);
+    expect(mfa.failedAttempts).toBe(3);
   });
 });

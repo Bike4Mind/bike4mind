@@ -66,7 +66,7 @@ vi.mock('@client/services/operationsModelService', () => ({
 
 import { handler } from '@workers/cron/scheduler';
 import { registerTaskScheduler } from './taskScheduler';
-import { dispatch } from '@server/queueHandlers/researchEngineQueue';
+import { dispatch } from '@workers/queueHandlers/researchEngineQueue';
 
 const context = { awsRequestId: 'test-request', functionName: 'test-scheduler', functionVersion: '1' } as Context;
 const user = { id: 'user-1' };

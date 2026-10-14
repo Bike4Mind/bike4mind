@@ -10,7 +10,7 @@ export type AudioGenMode = 'tts' | 'sound-effects';
  * "accessible anytime" so any future generation entry point can read the
  * current selections without prop-drilling.
  *
- * Durable user preferences (preferredVoice, saveGeneratedAudio) are NOT mirrored
+ * Durable user preferences (preferredVoice) are NOT mirrored
  * here - they live on the backend (UserContext / UserSettingsContext). An empty
  * `voice` means "fall back to the user's preferredVoice / provider default",
  * resolved at the call site so this store never clones backend state.

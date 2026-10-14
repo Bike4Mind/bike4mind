@@ -213,6 +213,13 @@ describe('organizationService - update', () => {
     );
   });
 
+  it('rejects a fractional per-member cap', async () => {
+    await expect(
+      update(mockAdminUser as IUserDocument, { id: 'org1', maxCreditsPerMember: 12.5 }, mockAdapters)
+    ).rejects.toThrow();
+    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
   it('clears the per-member cap to null (not undefined) so $set actually unsets it', async () => {
     // Regression: `?? undefined` left the old cap in place because BSON drops undefined from
     // `$set`, so a "set null" PUT silently no-oped. The cleared cap MUST persist as null.

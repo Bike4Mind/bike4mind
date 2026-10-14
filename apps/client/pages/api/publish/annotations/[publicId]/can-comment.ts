@@ -2,7 +2,13 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { optionalAuth } from '@server/middlewares/optionalAuth';
 import { PublishedArtifact } from '@bike4mind/database';
 import type { CanCommentResponse, CommentPolicy, PublishVisibility } from '@bike4mind/common';
-import { checkVisibility, canAnnotate, toPublishUser, requestHasGateProof } from '@server/services/publish';
+import {
+  checkVisibility,
+  canAnnotate,
+  toPublishUser,
+  requestHasGateProof,
+  loadLiveOwner,
+} from '@server/services/publish';
 
 /**
  * GET /api/publish/annotations/[publicId]/can-comment - the PER-VIEWER comment
@@ -37,7 +43,8 @@ const handler = baseApi({ auth: false })
     const doc = await PublishedArtifact.findOne({ publicId, deletedAt: null })
       .select('publicId visibility ownerId scopeId commentPolicy accessGate')
       .lean<Omit<ArtifactGateLean, 'accessGate'> & { accessGate?: ArtifactGateLean['accessGate'] }>();
-    if (!doc) return res.status(404).json({ error: 'Not found' });
+    // Same owner check as the serve route and the list: a page that 404s answers nothing here either.
+    if (!doc || !(await loadLiveOwner(doc.ownerId))) return res.status(404).json({ error: 'Not found' });
     const artifact: ArtifactGateLean = { ...doc, accessGate: doc.accessGate ?? null };
 
     const publishUser = toPublishUser(req.user);

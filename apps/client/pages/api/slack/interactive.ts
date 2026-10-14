@@ -39,11 +39,18 @@ import {
   refreshAppHomeForAdmin,
   IMAGE_GEN_MODEL_ACTION_ID,
   getImageModelDisplayName,
+  parseConfirmationButtonValue,
   type ViewSubmissionPayload,
   type ViewSubmissionResponse,
 } from '@bike4mind/slack';
 import { JIRA_DELETE_ATTACHMENT, CONFLUENCE_DELETE_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
-import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import {
+  executePendingAction,
+  cancelPendingActionOnQuest,
+  isPendingActionRequester,
+  MCP_DISABLED_MESSAGE,
+} from '@server/utils/pendingActionExecutor';
+import { isFeatureEnabled } from '@server/middlewares/featureFlag';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
@@ -677,11 +684,11 @@ async function handleInteractiveAction(
         }
         // Execute and send result via response_url for reliable update
         if (response_url) {
-          const confirmResult = await handleConfirmAction(dbUser, action.value);
+          const confirmResult = await handleConfirmAction(dbUser, parseConfirmationButtonValue(action.value));
           await sendSlackResponse(response_url, confirmResult);
           return {}; // Empty response since we sent via response_url
         }
-        return await handleConfirmAction(dbUser, action.value);
+        return await handleConfirmAction(dbUser, parseConfirmationButtonValue(action.value));
 
       case 'cancel_action':
         // Handle cancel button click - use response_url for reliable update
@@ -697,11 +704,11 @@ async function handleInteractiveAction(
           };
         }
         if (response_url) {
-          const cancelResult = await handleCancelAction(dbUser, action.value);
+          const cancelResult = await handleCancelAction(dbUser, parseConfirmationButtonValue(action.value));
           await sendSlackResponse(response_url, cancelResult);
           return {}; // Empty response since we sent via response_url
         }
-        return await handleCancelAction(dbUser, action.value);
+        return await handleCancelAction(dbUser, parseConfirmationButtonValue(action.value));
 
       case 'modal_confirm_att_del': {
         Logger.info('[Slack Interactive] Modal delete button clicked', {
@@ -1184,7 +1191,7 @@ async function handleImageModelSelection(
   }
 
   // Verify the clicking user owns this image generation request
-  if (pendingImgParams.userId && pendingImgParams.userId !== dbUser.id) {
+  if (pendingImgParams.userId !== dbUser.id) {
     logger.warn('🎨 [IMAGE-GEN] Unauthorized model picker click', {
       questId,
       questOwner: pendingImgParams.userId,
@@ -1266,10 +1273,20 @@ async function handleImageModelSelection(
   };
 }
 
+// Ephemeral and not replace_original, so a bystander's click leaves the requester's card intact.
+const NOT_REQUESTER_RESPONSE = {
+  text: '\u274C Only the person who requested this action can confirm or cancel it.',
+  replace_original: false,
+  response_type: 'ephemeral',
+} as const;
+
 /**
  * Handle confirm button click - execute the action from questId
  */
-async function handleConfirmAction(dbUser: any, questId: string): Promise<any> {
+async function handleConfirmAction(
+  dbUser: any,
+  { questId, pendingActionTs }: { questId: string; pendingActionTs?: number }
+): Promise<any> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-confirm' } });
 
   logger.info('[Slack Interactive] Processing confirm action', {
@@ -1277,7 +1294,15 @@ async function handleConfirmAction(dbUser: any, questId: string): Promise<any> {
     questId,
   });
 
-  const result = await executePendingAction(questId, dbUser, logger);
+  if (!(await isPendingActionRequester(questId, dbUser.id))) {
+    logger.warn('[Slack Interactive] Confirm clicked by someone other than the requester', {
+      userId: dbUser.id,
+      questId,
+    });
+    return NOT_REQUESTER_RESPONSE;
+  }
+
+  const result = await executePendingAction(questId, dbUser, logger, pendingActionTs);
 
   return {
     text: result.success ? result.message : `❌ ${result.message}`,
@@ -1289,13 +1314,24 @@ async function handleConfirmAction(dbUser: any, questId: string): Promise<any> {
 /**
  * Handle cancel button click - clears pendingAction from the Quest
  */
-async function handleCancelAction(_dbUser: any, questId: string): Promise<any> {
+async function handleCancelAction(
+  dbUser: any,
+  { questId, pendingActionTs }: { questId: string; pendingActionTs?: number }
+): Promise<any> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-cancel' } });
 
-  const result = await cancelPendingActionOnQuest(questId, logger);
+  if (!(await isPendingActionRequester(questId, dbUser.id))) {
+    logger.warn('[Slack Interactive] Cancel clicked by someone other than the requester', {
+      userId: dbUser.id,
+      questId,
+    });
+    return NOT_REQUESTER_RESPONSE;
+  }
+
+  const result = await cancelPendingActionOnQuest(questId, logger, pendingActionTs);
 
   return {
-    text: `👍 ${result.message}`,
+    text: `${result.success ? '\u{1F44D}' : '\u274C'} ${result.message}`,
     replace_original: true,
     response_type: 'in_channel',
   };
@@ -1312,6 +1348,10 @@ async function handleAttachmentDownload(
   _responseUrl?: string
 ): Promise<any> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-attachment-download' } });
+
+  if (!(await isFeatureEnabled('EnableMCPServer'))) {
+    return { text: `\u274C ${MCP_DISABLED_MESSAGE}`, response_type: 'ephemeral' };
+  }
 
   if (!buttonValue) {
     return {
@@ -1688,6 +1728,10 @@ async function handleAttachmentDeleteFromModal(
 // any: dbUser is IUserDocument from Mongoose, matching handleAttachmentDownload's signature
 async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefined): Promise<Record<string, unknown>> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-attachment-delete' } });
+
+  if (!(await isFeatureEnabled('EnableMCPServer'))) {
+    return { text: `\u274C ${MCP_DISABLED_MESSAGE}`, response_type: 'ephemeral' };
+  }
 
   if (!buttonValue) {
     return {

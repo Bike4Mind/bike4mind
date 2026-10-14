@@ -59,6 +59,22 @@ describe('fab-file bucket notebook export lifecycle', () => {
     expect(rulePrefix).toBe(reserved);
   });
 
+  it('keeps the generated-audio offload rule on the shared prefix, reserved and present in compose', () => {
+    const offloadRule =
+      LIFECYCLE_BLOCK.split(/(?=\bid:\s*')/).find(r => r.startsWith("id: 'expire-generated-audio-offload'")) ?? '';
+    const offloadRulePrefix = offloadRule.match(/prefix:\s*'([^']+)'/)?.[1];
+    const literal = read('b4m-core/common/src/generatedAudio.ts').match(
+      /GENERATED_AUDIO_OFFLOAD_PREFIX = '([^']+)'/
+    )?.[1];
+
+    expect(literal).toBeDefined();
+    expect(offloadRulePrefix).toBe(literal);
+    expect(read('compose.selfhost.yaml')).toContain(`--prefix "${literal}"`);
+    expect(CREATE_FAB_FILE_SOURCE).toMatch(
+      /RESERVED_FAB_FILE_KEY_PREFIXES = \[[^\]]*GENERATED_AUDIO_OFFLOAD_PREFIX[^\]]*\]/
+    );
+  });
+
   it('expires exports after 1 day, never before the signed URL handed out for them', () => {
     const signedUrlSeconds = Number(STORE_EXPORT_FILE_BODY.match(/getSignedUrl\(path,\s*(\d+)\)/)?.[1]);
 

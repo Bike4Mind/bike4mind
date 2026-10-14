@@ -76,6 +76,7 @@ const makeAdapters = (opts?: {
   },
   logger: { warn: vi.fn() },
   metrics: { recordTagsApplySkipped: vi.fn().mockResolvedValue(undefined) },
+  serializeClaim: vi.fn(<T>(claim: () => Promise<T>) => claim()),
 });
 
 describe('applyTaxonomySuggestions', () => {
@@ -240,6 +241,36 @@ describe('applyTaxonomySuggestions', () => {
     expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 0 });
     const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
     expect(updates[0].tags).toHaveLength(2);
+  });
+
+  // The route binds serializeClaim to a lake-touching transaction; the batch-wide tag write must
+  // run after it returns, or one transaction would span every file in the batch.
+  it('claims the batch inside serializeClaim and writes the tags only after it returns', async () => {
+    const order: string[] = [];
+    const adapters = makeAdapters();
+    adapters.serializeClaim.mockImplementation(async <T>(claim: () => Promise<T>) => {
+      order.push('enter');
+      const result = await claim();
+      order.push('exit');
+      return result;
+    });
+    adapters.db.batches.setTaxonomyStatusIfActive.mockImplementation(async (_id: string, from: string[]) => {
+      order.push(`claim:${from.join()}`);
+      return batch({ taxonomyStatus: 'applying' });
+    });
+    adapters.db.fabFiles.bulkUpdateTags.mockImplementation(async (updates: unknown[]) => {
+      order.push('write');
+      return updates.length;
+    });
+
+    await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(order.slice(0, 4)).toEqual(['enter', 'claim:ready', 'exit', 'write']);
   });
 
   it('rejects a non-owner, non-admin caller', async () => {

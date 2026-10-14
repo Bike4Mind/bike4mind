@@ -86,6 +86,18 @@ describe('assertContractConventions', () => {
     });
   });
 
+  describe('303 redirects', () => {
+    it('rejects a 303 that does not declare noBody', () => {
+      const responses = { ...contract().responses, 303: { description: 'Redirect.' } as ResponseSpec };
+      expect(() => assertContractConventions([contract({ responses })])).toThrow(/status 303 must declare noBody/);
+    });
+
+    it('accepts a 303 that declares noBody', () => {
+      const responses = { ...contract().responses, 303: { description: 'Redirect.', noBody: true } as ResponseSpec };
+      expect(() => assertContractConventions([contract({ responses })])).not.toThrow();
+    });
+  });
+
   describe('exemptions', () => {
     it('lets a published endpoint keep an off-table status with a stated reason', () => {
       const responses = { ...contract().responses, 402: errorResponse() };
@@ -377,6 +389,27 @@ describe('assertContractConventions', () => {
     // conditions as a classified 422, which the status table and envelope gates cover.
     it('does not apply to a non-streaming contract', () => {
       expect(() => assertContractConventions([contract()])).not.toThrow();
+    });
+
+    it('accepts a stream that also declares pre-stream JSON error statuses', () => {
+      const withPreStream = contract({
+        streaming: true,
+        responses: {
+          200: { description: 'SSE stream.', schema: streamEvent(conformingFrame) },
+          401: errorResponse(),
+          429: errorResponse({ headers: { 'Retry-After': 'Seconds to wait.' } }),
+          503: errorResponse(),
+        },
+      });
+      expect(() => assertContractConventions([withPreStream])).not.toThrow();
+    });
+
+    it('still requires the in-band frame on a stream that declares pre-stream statuses', () => {
+      const responses = {
+        200: { description: 'SSE stream.', schema: z.object({ type: z.literal('content'), text: z.string() }) },
+        401: errorResponse(),
+      };
+      expect(() => assertContractConventions([contract({ streaming: true, responses })])).toThrow(/stream-error-frame/);
     });
   });
 

@@ -947,6 +947,11 @@ describe('handoff', () => {
       expect(isLlmUnavailableError(new Error('Request timed out: ETIMEDOUT'))).toBe(true);
     });
 
+    it('detects sanitized provider 5xx error frames', () => {
+      expect(isLlmUnavailableError(new Error('Model provider returned an error (upstream 529)'))).toBe(true);
+      expect(isLlmUnavailableError(new Error('Model provider returned an error (upstream 400)'))).toBe(false);
+    });
+
     it('detects upstream 5xx errors in the ServerLlmBackend wrapper form', () => {
       // This is the actual format thrown by packages/cli/src/llm/ServerLlmBackend.ts
       // when the server returns a 5xx response.

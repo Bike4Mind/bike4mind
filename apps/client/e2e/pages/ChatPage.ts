@@ -207,7 +207,8 @@ export class ChatPage extends BasePage {
       const chip = this.aiMessage.last().getByTestId('credits-used');
       await chip.waitFor({ state: 'visible', timeout: 15_000 });
       const text = await chip.innerText();
-      const match = text.match(/\d+/);
+      // The chip reads "1,234 credits"; drop the grouping commas before parsing.
+      const match = text.replace(/,/g, '').match(/\d+/);
       return match ? parseInt(match[0]) : null;
     } catch (err) {
       console.debug('[getCreditsUsed] credits chip not found:', (err as Error).message);

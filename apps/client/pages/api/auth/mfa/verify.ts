@@ -2,9 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
-import { issueBrowserSession } from '@server/auth/issueSession';
-import { grantTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
-import { logAuthAudit } from '@server/utils/authAudit';
+import { completeMfaLogin } from '@server/auth/completeMfaLogin';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import * as z from 'zod';
 
@@ -53,43 +51,13 @@ const handler = baseApi() // Now requires authentication
         // `result.user`) would wipe the select:false totpSecret/backupCodes.
         const result = await mfaService.verifyMFA({ user: freshUser, token: cleanToken }, userRepository);
 
-        // Generate FULL access tokens (remove mfaPending) for login completion
-        const tokenUserId = result.user.id;
-        // No mfaPending: MFA is satisfied, so mint a full session.
-        const { accessToken } = await issueBrowserSession(req, res, tokenUserId, {
-          createdVia: 'mfa',
-          tokenVersion: result.user.tokenVersion ?? 0,
-        });
-        const tokens = { accessToken };
-
-        // "Remember this device": grant only on a genuine second-factor pass, so the trust
-        // can never be established by anything weaker than the challenge it later skips.
-        // Best-effort - the login already succeeded, so a failed grant must not 500 it; the
-        // user simply gets challenged again next time.
-        let deviceRemembered = false;
-        if (rememberDevice) {
-          try {
-            if (await trustedDevicesAllowed()) {
-              const device = await grantTrustedDevice(req, res, tokenUserId);
-              deviceRemembered = !!device;
-              if (device) {
-                await logAuthAudit(req, {
-                  userId: tokenUserId,
-                  event: 'trusted_device_granted',
-                  metadata: { deviceId: device.id, label: device.label, expiresAt: device.expiresAt.toISOString() },
-                });
-              }
-            }
-          } catch (err) {
-            req.logger?.error('Trusted-device grant failed after successful MFA verification', err);
-          }
-        }
+        const { accessToken, deviceRemembered } = await completeMfaLogin(req, res, result.user, { rememberDevice });
 
         res.json({
           verified: true,
           usedBackupCode: result.usedBackupCode,
           deviceRemembered,
-          ...tokens,
+          accessToken,
           user: redactUserSecretsForSelf(result.user),
         });
       } catch (error: unknown) {
@@ -107,7 +75,7 @@ const handler = baseApi() // Now requires authentication
           });
         }
 
-        const remainingAttempts = 3 - (updatedUser?.mfa?.failedAttempts ?? 0);
+        const remainingAttempts = mfaService.MAX_FAILED_ATTEMPTS - (updatedUser?.mfa?.failedAttempts ?? 0);
         const errMessage = error instanceof Error ? error.message : 'MFA verification failed';
         res.status(400).json({
           error: errMessage,

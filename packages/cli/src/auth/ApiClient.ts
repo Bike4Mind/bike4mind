@@ -1,4 +1,6 @@
-import axios, { isAxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios';
+import axios, { isAxiosError, type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
+import { Readable } from 'node:stream';
+import { isProviderKeyFailure } from './providerKeyFailure';
 import { ConfigStore } from '../storage/ConfigStore';
 import { OAuthClient } from './OAuthClient';
 import { logger } from '../utils/Logger';
@@ -115,6 +117,12 @@ export class ApiClient {
         // API-key auth has no refresh token to rotate, so a 401 is terminal - skip
         // the JWT refresh dance and let the caller surface it.
         if (this.apiKey) {
+          return Promise.reject(error);
+        }
+
+        // Pass a provider-key 401 through untouched, including on the post-refresh retry, so
+        // it is not mistaken for a revoked session.
+        if (error.response?.status === 401 && isProviderKeyFailure(error.response.data)) {
           return Promise.reject(error);
         }
 
@@ -256,6 +264,35 @@ export class ApiClient {
     return this.client;
   }
 
+  get baseURL(): string {
+    return this.client.defaults.baseURL ?? '';
+  }
+
+  /**
+   * A `fetch` over the axios instance, handed to `@bike4mind/sdk` so SDK calls get the same credential
+   * injection, timeout and refresh-on-401 as get/post. An HTTP error status resolves as a Response (the SDK
+   * maps it); auth, network and timeout failures still throw the interceptor / axios errors. A request that
+   * accepts `text/event-stream` streams its body; anything else is buffered.
+   */
+  readonly fetch = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
+    const headers = Object.fromEntries(new Headers(init.headers));
+    try {
+      const response = await this.client.request({
+        url: input instanceof Request ? input.url : String(input),
+        method: init.method ?? 'GET',
+        headers,
+        data: init.body ?? undefined,
+        signal: init.signal ?? undefined,
+        responseType: /text\/event-stream/i.test(headers.accept ?? '') ? 'stream' : 'arraybuffer',
+        ...(init.redirect && init.redirect !== 'follow' ? { maxRedirects: 0 } : {}),
+      });
+      return toFetchResponse(response);
+    } catch (error) {
+      if (isAxiosError(error) && error.response) return toFetchResponse(error.response);
+      throw error;
+    }
+  };
+
   /**
    * Check if user is authenticated
    */
@@ -302,4 +339,19 @@ export class ApiClient {
       return !(err instanceof SessionRevokedError);
     }
   }
+}
+
+function toFetchResponse(response: AxiosResponse): Response {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(response.headers)) {
+    if (value !== undefined && value !== null)
+      headers.set(name, Array.isArray(value) ? value.join(', ') : String(value));
+  }
+  const nullBody = [101, 204, 205, 304].includes(response.status);
+  const body: ConstructorParameters<typeof Response>[0] = nullBody
+    ? null
+    : response.data instanceof Readable
+      ? (Readable.toWeb(response.data) as ReadableStream<Uint8Array>)
+      : response.data;
+  return new Response(body, { status: response.status, statusText: response.statusText, headers });
 }

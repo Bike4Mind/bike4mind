@@ -20,7 +20,7 @@ const result = (overrides: Partial<RunResult> = {}, metrics: Partial<RunResult['
     skippedSources: [],
     diff: [],
     droppedRecords: [],
-    absence: { sighted: [], missed: [], frozenBackends: [] },
+    absence: { sighted: [], missed: [], frozenBackends: [], frozenProfileIds: [] },
     ...overrides,
     metrics: {
       ModelsDiscovered: 3,

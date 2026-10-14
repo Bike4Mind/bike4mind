@@ -18,6 +18,10 @@ const USER_SPECIFIC_LS_KEYS = [
   // 'help-chat'). Holds the last 50 messages, so leaving it behind carried one identity's
   // conversation into the next session on a shared browser.
   'help-chat',
+  // LLMContext's persisted store ('llm-settings'). It holds the picked text model, so leaving it
+  // behind handed the previous identity's model (often the priciest one) to the next account on
+  // the same browser, which a fresh account then billed until access checks swapped it out.
+  'llm-settings',
 ];
 
 /**

@@ -133,6 +133,20 @@ describe('UserPermissions - Custom Tags', () => {
     expect(screen.queryByText('opti')).not.toBeInTheDocument();
   });
 
+  it('hides the questmaster-pro grant tag but keeps the QuestMaster cohort tag as a removable custom tag', () => {
+    render(
+      <UserPermissions
+        user={baseUser({ tags: ['questmaster-pro', 'QuestMaster'] })}
+        editedFields={{}}
+        onFieldChange={noop}
+        handleUserLevelButtonChange={noop}
+      />,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.queryByTestId('remove-tag-questmaster-pro')).not.toBeInTheDocument();
+    expect(screen.getByTestId('remove-tag-QuestMaster')).toBeInTheDocument();
+  });
+
   it('shows a RETIRED tier tag (opti-compute) as a removable custom-tag chip', () => {
     // #1237 retired optihashi:compute, so `opti-compute` no longer maps to an entitlement and is no
     // longer a managed tag. It renders as a removable chip like any freeform tag - the deliberate,

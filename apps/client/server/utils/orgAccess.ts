@@ -4,11 +4,13 @@
  * Shared utility for verifying user access to organization resources.
  * Used by org-scoped API endpoints (webhooks, GitHub connection, etc.)
  *
- * Three tiers, widest last. State which one you mean at every call site; picking the wrong one
+ * Five tiers, widest last. State which one you mean at every call site; picking the wrong one
  * either leaks across a tenant boundary or breaks a members' screen:
- * - `verifyOrgOwner`      - owner only
- * - `verifyOrgAccess`     - owner or manager
- * - `verifyOrgMembership` - any member (shareable ACL)
+ * - `verifyOrgOwner`           - owner only
+ * - `verifyOrgAccess`          - owner or manager
+ * - `verifyOrgAdminRead`       - owner, manager or appointed admin (reads only)
+ * - `verifyOrgMemberOrManager` - any member, or the manager without a membership row (reads only)
+ * - `verifyOrgMembership`      - any member (shareable ACL)
  *
  * Security:
  * - Returns NotFoundError for both missing and unauthorized (prevents enumeration)
@@ -16,11 +18,20 @@
  */
 
 import { organizationRepository } from '@bike4mind/database/infra';
-import type { IUserDocument } from '@bike4mind/common';
+import { canAdministerOrganization, type AdministrableOrg, type IUserDocument } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { isValidObjectId } from '@server/utils/objectId';
 import { resolveActiveOrg } from './resolveActiveOrg';
 import type { Request } from 'express';
+
+/**
+ * The one owner / manager / platform-admin predicate behind `verifyOrgAccess` (the write gate) and
+ * `verifyOrgAdminRead`'s `canManage`, so the read tier's answer cannot drift from what the write
+ * routes accept. Delegates to the common predicate the roster services also use.
+ */
+function canManageOrg(user: { id: string; isAdmin: boolean }, org: AdministrableOrg) {
+  return canAdministerOrganization(user, org);
+}
 
 /**
  * Verify user has update access to the organization
@@ -37,27 +48,14 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
     throw new BadRequestError('Invalid organization ID');
   }
 
-  // Admin users have access to all organizations
-  if (user.isAdmin) {
-    const org = await organizationRepository.findById(orgId);
-    if (!org) {
-      throw new NotFoundError('Organization not found');
-    }
-    return org;
-  }
-
-  // For non-admin users, check if they are owner or manager
   const org = await organizationRepository.findById(orgId);
   if (!org) {
     throw new NotFoundError('Organization not found');
   }
 
-  // Check if user is owner or manager (has update access)
-  const isOwner = org.userId === user.id;
-  const isManager = org.managerId === user.id;
-
-  if (!isOwner && !isManager) {
-    // Return same error for not found and not authorized (prevent enumeration)
+  // Platform admins pass for every org; everyone else must be its owner or manager. Same error for
+  // not found and not authorized (prevents enumeration).
+  if (!canManageOrg(user, org)) {
     throw new NotFoundError('Organization not found');
   }
 
@@ -65,9 +63,39 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
 }
 
 /**
+ * Read-tier sibling of `verifyOrgAccess` for status surfaces an appointed org admin may see but not
+ * operate: admits the owner, the manager, an appointed admin (`adminUserIds`) and a platform admin.
+ * That is the same set `findIdsWithAdminRights` and `canManageLake` resolve from the user's side, read
+ * here off the org document because the org is already in hand: an appointed admin is matched on
+ * `adminUserIds` alone, unlike `isOrgOwnerOrCurrentAdmin` (`b4m-core/common/src/constants/organization.ts`),
+ * which also requires a current `users[]` row. Never use it to guard a write - `canManage` is the
+ * `verifyOrgAccess` answer, so a caller can render the write controls only for who may use them.
+ *
+ * Non-oracular like its siblings: a missing org and an unrelated caller both answer NotFoundError.
+ */
+export async function verifyOrgAdminRead(user: { id: string; isAdmin: boolean }, orgId: string) {
+  if (!orgId || !isValidObjectId(orgId)) {
+    throw new BadRequestError('Invalid organization ID');
+  }
+
+  const org = await organizationRepository.findById(orgId);
+  if (!org) {
+    throw new NotFoundError('Organization not found');
+  }
+
+  const canManage = canManageOrg(user, org);
+  const isAppointedAdmin = (org.adminUserIds ?? []).some(adminId => String(adminId) === user.id);
+  if (!canManage && !isAppointedAdmin) {
+    throw new NotFoundError('Organization not found');
+  }
+
+  return { org, canManage };
+}
+
+/**
  * Verify the caller OWNS the organization, returning the organization document.
  *
- * The strictest of the three tiers in this file - owner only, where `verifyOrgAccess` also admits
+ * The strictest of the four tiers in this file - owner only, where `verifyOrgAccess` also admits
  * the manager and `verifyOrgMembership` admits any member. Use it wherever only the party that
  * owns the org may act: billing writes (committing the org to a charge, or changing what it pays)
  * and org-level integration wiring (`integrations/slack/*`, where connecting or disconnecting a
@@ -151,6 +179,33 @@ export async function verifyOrgMembership(user: IUserDocument, orgId: string) {
 }
 
 /**
+ * Read-tier sibling of `verifyOrgMembership` that also admits the Team manager (and a platform
+ * admin) without a membership row, for status surfaces a manager sees beside the roster they
+ * administer, such as the Team's plan. Same answer as `organizationService.get`, so the two cannot
+ * disagree about who may open a Team. Never use it to guard a write.
+ *
+ * The membership lookup runs first, so the common member path stays a single query; the manager
+ * fallback costs one more only for callers the shareable ACL rejected. Non-oracular: a missing org
+ * and an unrelated caller both answer NotFoundError.
+ */
+export async function verifyOrgMemberOrManager(user: IUserDocument, orgId: string) {
+  if (!orgId || !isValidObjectId(orgId)) {
+    throw new BadRequestError('Invalid organization ID');
+  }
+
+  const member = await organizationRepository.shareable.findAccessibleById(user, orgId);
+  if (member) {
+    return member;
+  }
+
+  const org = await organizationRepository.findById(orgId);
+  if (!org || !canManageOrg(user, org)) {
+    throw new NotFoundError('Organization not found');
+  }
+  return org;
+}
+
+/**
  * Resolve the organization to bill for an AI action from a client-supplied value, rejecting any org
  * the caller is not a member of. This is the trust boundary for the LLM/media routes, which
  * otherwise pass `req.body.organizationId` through to the debit unverified.
@@ -166,11 +221,11 @@ export async function verifyOrgMembership(user: IUserDocument, orgId: string) {
  *
  * The IMPLICIT own-org fallback (`undefined` request) is different: the caller did not choose it,
  * so a stale `organizationId` pointer must degrade to personal scope rather than 403-lock the
- * caller out of a route they could always reach. Stale pointers already exist in the data (the
- * `deleteOrganization` and `assignManager` paths leave them), so validating the fallback through
- * the same gate and catching a non-member/missing rejection matches `chat.ts`: billing is never an
- * automatic consequence of the home-org field. Security holds either way - a non-member org is
- * never billed; the fallback just bills personally instead of failing the request.
+ * caller out of a route they could always reach. Stale pointers exist in the data (written before
+ * `deleteOrganization` cleared them, and still left by `assignManager`), so validating the fallback
+ * through the same gate and catching a non-member/missing rejection matches `chat.ts`: billing is
+ * never an automatic consequence of the home-org field. Security holds either way - a non-member
+ * org is never billed; the fallback just bills personally instead of failing the request.
  */
 export async function resolveBillingOrgId(
   // Accept any authenticated request shape: the LLM/media routes type `req` with a narrowed `Params`

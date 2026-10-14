@@ -1,3 +1,4 @@
+import { isFabFileTypeFilter } from '@bike4mind/common';
 import { ISearchFabFilesParams } from '@client/app/hooks/data/fabFiles';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { Search } from '@mui/icons-material';
@@ -28,7 +29,7 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
       ...value,
       filters: {
         ...(value?.filters || {}),
-        type: val === 'all' ? undefined : (val as any),
+        type: isFabFileTypeFilter(val) ? val : undefined,
       },
     });
   };

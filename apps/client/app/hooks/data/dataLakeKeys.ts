@@ -35,6 +35,12 @@ export const dataLakeKeys = {
    * `data-lakes` prefix on purpose, so a rename or visibility change still refreshes it.
    */
   preauthorizableFor: (userId: string) => ['data-lakes', 'preauthorizable-for', userId] as const,
+  /**
+   * The slug a create with `name` would get in `orgId`'s scope (GET /api/data-lakes/slug-preview).
+   * Under the `data-lakes` prefix so a create or delete invalidating `list` refreshes it.
+   */
+  slugPreview: (name: string, orgId: string | undefined, tagPrefix?: string) =>
+    ['data-lakes', 'slug-preview', name, orgId, tagPrefix ?? null] as const,
   /** One lake's owner-facing access & membership view (GET /api/data-lakes/:id/access). */
   access: (dataLakeId: string) => ['data-lakes', 'access', dataLakeId] as const,
   /**
@@ -100,6 +106,10 @@ export const dataLakeKeys = {
    *  a build is running. */
   lakeMemory: (dataLakeId: string) => ['dataLakeMemory', dataLakeId] as const,
   tagCounts: (source: DataLakeBrowseSource) => ['dataLakeTagCounts', source] as const,
+  /** The tree for the selected lakes only (`?lakeId=`). Under `tagCountsRoot`, so every tag-count
+   *  invalidation reaches it; ids sorted so selection order does not split the cache. */
+  tagCountsScoped: (source: DataLakeBrowseSource, lakeIds: readonly string[]) =>
+    ['dataLakeTagCounts', source, 'scoped', ...[...lakeIds].sort()] as const,
   tagCountsRoot: ['dataLakeTagCounts'] as const,
   articles: (source: DataLakeBrowseSource, params?: DataLakeArticlesParams) =>
     ['dataLakeArticles', source, params] as const,
@@ -141,6 +151,10 @@ export const dataLakeKeys = {
     ['dataLakeFindings', dataLakeId, filters ?? {}] as const,
   /** Invalidation prefix covering every filter variant of one lake's findings. */
   findingsOf: (dataLakeId: string) => ['dataLakeFindings', dataLakeId] as const,
+  /** One lake's files the connected source holds but the sync refused (GET /api/data-lakes/:id/skipped-files). */
+  skippedFiles: (dataLakeId: string | null) => ['dataLakeSkippedFiles', dataLakeId] as const,
+  /** Invalidation prefix covering one lake's skipped-file pages; same key, since the list has no filters. */
+  skippedFilesOf: (dataLakeId: string) => ['dataLakeSkippedFiles', dataLakeId] as const,
   /**
    * One file's current tag names under one lake's prefix
    * (GET /api/data-lakes/:id/files/:fabFileId/tags). Seeds the retag editor: a tag write is

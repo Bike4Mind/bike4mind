@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-01T13:25:52.203Z",
-  "notice": "Fallback defaults last maintained on 2026-10-01. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-10-13T08:32:30.420Z",
+  "notice": "Fallback defaults last maintained on 2026-10-13. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -243,7 +243,7 @@
         "vendor": "anthropic",
         "backend": "anthropic",
         "type": "text",
-        "name": "Claude 4.5 Haiku",
+        "name": "Claude Haiku 4.5",
         "contextWindow": 200000,
         "maxOutputTokens": 64000,
         "canStream": true,
@@ -264,6 +264,41 @@
       }
     },
     {
+      "modelId": "claude-haiku-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-haiku-5-5",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude Haiku 5.5",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's fastest model. Claude Haiku 5.5 targets high-volume, latency-sensitive work such as classification, extraction, routing and subagents, with adaptive thinking and a 1M-token context window.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 3,
+        "releaseDate": "2026-10-07"
+      }
+    },
+    {
       "modelId": "claude-opus-4-1-20250805",
       "ownedGroups": [
         "identity",
@@ -278,7 +313,7 @@
         "vendor": "anthropic",
         "backend": "anthropic",
         "type": "text",
-        "name": "Claude 4.1 Opus",
+        "name": "Claude Opus 4.1",
         "contextWindow": 200000,
         "maxOutputTokens": 32000,
         "canStream": true,
@@ -314,7 +349,7 @@
         "vendor": "anthropic",
         "backend": "anthropic",
         "type": "text",
-        "name": "Claude 4 Opus",
+        "name": "Claude Opus 4",
         "contextWindow": 200000,
         "maxOutputTokens": 32000,
         "canStream": true,
@@ -350,7 +385,7 @@
         "vendor": "anthropic",
         "backend": "anthropic",
         "type": "text",
-        "name": "Claude 4.5 Opus",
+        "name": "Claude Opus 4.5",
         "contextWindow": 200000,
         "maxOutputTokens": 64000,
         "canStream": true,
@@ -386,7 +421,7 @@
         "vendor": "anthropic",
         "backend": "anthropic",
         "type": "text",
-        "name": "Claude 4.6 Opus",
+        "name": "Claude Opus 4.6",
         "contextWindow": 1000000,
         "maxOutputTokens": 128000,
         "canStream": true,
@@ -422,7 +457,7 @@
         "vendor": "anthropic",
         "backend": "anthropic",
         "type": "text",
-        "name": "Claude 4.7 Opus",
+        "name": "Claude Opus 4.7",
         "contextWindow": 1000000,
         "maxOutputTokens": 128000,
         "canStream": true,
@@ -459,7 +494,7 @@
         "vendor": "anthropic",
         "backend": "anthropic",
         "type": "text",
-        "name": "Claude 4.8 Opus",
+        "name": "Claude Opus 4.8",
         "contextWindow": 1000000,
         "maxOutputTokens": 128000,
         "canStream": true,
@@ -496,7 +531,7 @@
         "vendor": "anthropic",
         "backend": "anthropic",
         "type": "text",
-        "name": "Claude 5 Opus",
+        "name": "Claude Opus 5",
         "contextWindow": 1000000,
         "maxOutputTokens": 128000,
         "canStream": true,
@@ -510,11 +545,46 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "Anthropic's latest flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
+        "description": "Anthropic's previous flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
         "logoFile": "Anthropic_logo.png",
         "rank": 0,
         "isSlowModel": true,
         "releaseDate": "2026-07-24"
+      }
+    },
+    {
+      "modelId": "claude-opus-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-opus-5-5",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude Opus 5.5",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's latest flagship model. Claude 5.5 Opus delivers adaptive extended thinking, coding, and agentic capabilities at a lower price than Claude 5 Opus.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true
       }
     },
     {
@@ -532,7 +602,7 @@
         "vendor": "anthropic",
         "backend": "anthropic",
         "type": "text",
-        "name": "Claude 4 Sonnet",
+        "name": "Claude Sonnet 4",
         "contextWindow": 200000,
         "maxOutputTokens": 16384,
         "canStream": true,
@@ -568,7 +638,7 @@
         "vendor": "anthropic",
         "backend": "anthropic",
         "type": "text",
-        "name": "Claude 4.5 Sonnet",
+        "name": "Claude Sonnet 4.5",
         "contextWindow": 200000,
         "maxOutputTokens": 16384,
         "canStream": true,
@@ -603,7 +673,7 @@
         "vendor": "anthropic",
         "backend": "anthropic",
         "type": "text",
-        "name": "Claude 4.6 Sonnet",
+        "name": "Claude Sonnet 4.6",
         "contextWindow": 200000,
         "maxOutputTokens": 16384,
         "canStream": true,
@@ -638,7 +708,7 @@
         "vendor": "anthropic",
         "backend": "anthropic",
         "type": "text",
-        "name": "Claude 5 Sonnet",
+        "name": "Claude Sonnet 5",
         "contextWindow": 1000000,
         "maxOutputTokens": 128000,
         "canStream": true,
@@ -1501,6 +1571,111 @@
       }
     },
     {
+      "modelId": "global.anthropic.claude-fable-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-fable-5",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude Fable 5",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude Fable 5 model via AWS Bedrock for complex, long-running agentic tasks.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-fable-5-1",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-fable-5-1",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude Fable 5.1",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude Fable 5.1 model via AWS Bedrock for complex, long-running agentic tasks.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-haiku-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-haiku-5-5",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude Haiku 5.5",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude Haiku 5.5 via AWS Bedrock, built for high-volume, latency-sensitive work, with adaptive thinking and a 1M-token context window.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 3,
+        "releaseDate": "2026-10-07"
+      }
+    },
+    {
       "modelId": "global.anthropic.claude-opus-4-5-20251101-v1:0",
       "ownedGroups": [
         "identity",
@@ -1515,7 +1690,7 @@
         "vendor": "anthropic",
         "backend": "bedrock",
         "type": "text",
-        "name": "Claude 4.5 Opus",
+        "name": "Claude Opus 4.5",
         "contextWindow": 200000,
         "maxOutputTokens": 64000,
         "canStream": true,
@@ -1551,7 +1726,7 @@
         "vendor": "anthropic",
         "backend": "bedrock",
         "type": "text",
-        "name": "Claude 4.6 Opus",
+        "name": "Claude Opus 4.6",
         "contextWindow": 1000000,
         "maxOutputTokens": 128000,
         "canStream": true,
@@ -1587,7 +1762,7 @@
         "vendor": "anthropic",
         "backend": "bedrock",
         "type": "text",
-        "name": "Claude 4.7 Opus",
+        "name": "Claude Opus 4.7",
         "contextWindow": 1000000,
         "maxOutputTokens": 128000,
         "canStream": true,
@@ -1624,7 +1799,7 @@
         "vendor": "anthropic",
         "backend": "bedrock",
         "type": "text",
-        "name": "Claude 4.8 Opus",
+        "name": "Claude Opus 4.8",
         "contextWindow": 1000000,
         "maxOutputTokens": 128000,
         "canStream": true,
@@ -1638,12 +1813,82 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "Anthropic's latest flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
+        "description": "Anthropic's previous flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
         "logoFile": "Anthropic_logo.png",
         "rank": 1,
         "isSlowModel": true,
         "trainingCutoff": "2026-01-01",
         "releaseDate": "2026-05-28"
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-opus-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-opus-5",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude Opus 5",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude 5 Opus model via AWS Bedrock for coding, reasoning, and agentic tasks.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-opus-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-opus-5-5",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude Opus 5.5",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude 5.5 Opus model via AWS Bedrock for coding, reasoning, and agentic tasks.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true
       }
     },
     {
@@ -1661,7 +1906,7 @@
         "vendor": "anthropic",
         "backend": "bedrock",
         "type": "text",
-        "name": "Claude 4.6 Sonnet",
+        "name": "Claude Sonnet 4.6",
         "contextWindow": 200000,
         "maxOutputTokens": 16384,
         "canStream": true,
@@ -1696,7 +1941,7 @@
         "vendor": "anthropic",
         "backend": "bedrock",
         "type": "text",
-        "name": "Claude 5 Sonnet",
+        "name": "Claude Sonnet 5",
         "contextWindow": 1000000,
         "maxOutputTokens": 128000,
         "canStream": true,
@@ -1715,6 +1960,40 @@
         "rank": 1,
         "trainingCutoff": "2026-01-01",
         "releaseDate": "2026-07-01"
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-sonnet-5-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-sonnet-5-5",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude Sonnet 5.5",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude 5.5 Sonnet model via AWS Bedrock, with adaptive extended thinking and a 1M-token context window.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1
       }
     },
     {
@@ -2480,7 +2759,7 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "GPT-5.6 Terra - the balanced GPT-5.6 variant. Strong reasoning and vision at mid-tier cost, a reliable workhorse for everyday professional tasks.",
+        "description": "GPT-5.6 Terra - the balanced GPT-5.6 variant. Strong reasoning and vision, priced between Sol and Luna, a reliable workhorse for everyday professional tasks.",
         "logoFile": "OpenAI_Logo.svg",
         "rank": 1,
         "trainingCutoff": "2026-01-01",
@@ -3467,66 +3746,6 @@
       }
     },
     {
-      "modelId": "sora-2",
-      "ownedGroups": [
-        "identity",
-        "limits",
-        "modalities",
-        "lifecycle",
-        "presentation"
-      ],
-      "patch": {
-        "id": "sora-2",
-        "vendor": "openai",
-        "backend": "openai",
-        "type": "video",
-        "name": "Sora",
-        "contextWindow": 10000,
-        "maxOutputTokens": 10000,
-        "canStream": false,
-        "supportsVision": false,
-        "supportsTools": false,
-        "supportsImageVariation": false,
-        "lifecycle": {
-          "status": "deprecated",
-          "deprecationDate": "2026-09-24"
-        },
-        "description": "OpenAI's Sora video generation model. Creates high-quality videos from text prompts with durations of 4, 8, or 12 seconds.",
-        "logoFile": "OpenAI_Logo.svg",
-        "rank": 1
-      }
-    },
-    {
-      "modelId": "sora-2-pro",
-      "ownedGroups": [
-        "identity",
-        "limits",
-        "modalities",
-        "lifecycle",
-        "presentation"
-      ],
-      "patch": {
-        "id": "sora-2-pro",
-        "vendor": "openai",
-        "backend": "openai",
-        "type": "video",
-        "name": "Sora Pro",
-        "contextWindow": 10000,
-        "maxOutputTokens": 10000,
-        "canStream": false,
-        "supportsVision": false,
-        "supportsTools": false,
-        "supportsImageVariation": false,
-        "lifecycle": {
-          "status": "deprecated",
-          "deprecationDate": "2026-09-24"
-        },
-        "description": "OpenAI's premium Sora video generation model. Produces the highest quality videos with enhanced detail, coherence, and visual fidelity.",
-        "logoFile": "OpenAI_Logo.svg",
-        "rank": 0
-      }
-    },
-    {
       "modelId": "transcribe",
       "ownedGroups": [
         "identity",
@@ -3663,7 +3882,7 @@
         "vendor": "anthropic",
         "backend": "bedrock",
         "type": "text",
-        "name": "Claude 4.5 Haiku",
+        "name": "Claude Haiku 4.5",
         "contextWindow": 200000,
         "maxOutputTokens": 64000,
         "canStream": true,
@@ -3698,7 +3917,7 @@
         "vendor": "anthropic",
         "backend": "bedrock",
         "type": "text",
-        "name": "Claude 4.1 Opus",
+        "name": "Claude Opus 4.1",
         "contextWindow": 200000,
         "maxOutputTokens": 8192,
         "canStream": true,
@@ -3734,7 +3953,7 @@
         "vendor": "anthropic",
         "backend": "bedrock",
         "type": "text",
-        "name": "Claude 4 Opus",
+        "name": "Claude Opus 4",
         "contextWindow": 200000,
         "maxOutputTokens": 8192,
         "canStream": true,
@@ -3770,7 +3989,7 @@
         "vendor": "anthropic",
         "backend": "bedrock",
         "type": "text",
-        "name": "Claude 4 Sonnet",
+        "name": "Claude Sonnet 4",
         "contextWindow": 200000,
         "maxOutputTokens": 64000,
         "canStream": true,
@@ -3805,7 +4024,7 @@
         "vendor": "anthropic",
         "backend": "bedrock",
         "type": "text",
-        "name": "Claude 4.5 Sonnet",
+        "name": "Claude Sonnet 4.5",
         "contextWindow": 200000,
         "maxOutputTokens": 64000,
         "canStream": true,

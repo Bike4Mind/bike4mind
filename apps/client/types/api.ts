@@ -63,6 +63,7 @@ export const CreateSessionRequestSchema = z.object({
   // Marks `retrievalTags` as a deliberate selection: an empty one then scopes the lake-memory card
   // to no lake at all instead of widening to every entitled lake (see resolveLakeMemoryScope).
   lakeScopeExplicit: z.boolean().optional(),
+  includeLibraryFiles: z.boolean().optional(),
   // Resolved from the lake by the create route (resolveLakeSessionDefaults) so the merged create
   // params carry it through to core; declared here for the shared type only. The route strips a
   // client-sent value whenever `dataLakeId` is set, leaving the lake authoritative; a session that
@@ -124,17 +125,16 @@ const DATE_OR_DATETIME = z.union([z.iso.date(), z.iso.datetime({ offset: true })
 });
 
 export const NotebookExportRequestSchema = z.object({
-  includeKnowledge: z.boolean().optional().prefault(true),
-  includeArtifacts: z.boolean().optional().prefault(true),
-  includeTools: z.boolean().optional().prefault(true),
-  includeAgents: z.boolean().optional().prefault(true),
-  anonymize: z.boolean().optional().prefault(false),
-  includeMetadata: z.boolean().optional().prefault(true),
-  includeImages: z.boolean().optional().prefault(true),
+  includeKnowledge: z.boolean().prefault(true),
+  includeArtifacts: z.boolean().prefault(true),
+  includeTools: z.boolean().prefault(true),
+  includeAgents: z.boolean().prefault(true),
+  anonymize: z.boolean().prefault(false),
+  includeMetadata: z.boolean().prefault(true),
+  includeImages: z.boolean().prefault(true),
   maxFileSize: z
     .number()
     .positive()
-    .optional()
     .prefault(10 * 1024 * 1024), // 10MB default
   // These feed `_id: { $in: ... }` on ObjectId-keyed SessionModel. Rejecting a non-hex entry here
   // names the offending index; getSessionsToExport also refuses the batch, but only as a whole.
@@ -163,9 +163,9 @@ export const NotebookCurateRequestSchema = z.object({
     .array(z.string().regex(OBJECT_ID, 'must be a 24-character hex session id'))
     .min(1, 'At least one session ID is required')
     .max(50, 'Maximum 50 sessions per curation request'),
-  curationType: CurationTypeSchema.optional().prefault(CurationType.TRANSCRIPT),
+  curationType: CurationTypeSchema.prefault(CurationType.TRANSCRIPT),
   artifactTypes: z.array(CurationArtifactTypeSchema).optional(),
-  exportFormat: ExportFormatSchema.optional().prefault('markdown'),
+  exportFormat: ExportFormatSchema.prefault('markdown'),
   customNotebookName: z.string().optional(),
 });
 
@@ -176,13 +176,20 @@ export const NotebookDownloadRequestSchema = z.object({
     .array(z.string().regex(OBJECT_ID, 'must be a 24-character hex session id'))
     .min(1, 'At least one session ID is required')
     .max(50, 'Maximum 50 sessions per download'),
-  format: ExportFormatSchema.optional().prefault('markdown'),
-  downloadAsZip: z.boolean().optional().prefault(false), // If true, zip all files together
+  format: ExportFormatSchema.prefault('markdown'),
+  downloadAsZip: z.boolean().prefault(false), // If true, zip all files together
 });
 
+export const MAX_EMAIL_RECIPIENTS = 20;
+export const MAX_EMAIL_RECIPIENTS_ERROR = `Maximum ${MAX_EMAIL_RECIPIENTS} recipients per email`;
+export const MAX_EMAIL_MESSAGE_LENGTH = 5000;
+
 const BaseEmailRequestSchema = z.object({
-  recipients: z.array(z.email()).min(1, 'At least one recipient email is required'),
-  message: z.string().optional(),
+  recipients: z
+    .array(z.email())
+    .min(1, 'At least one recipient email is required')
+    .max(MAX_EMAIL_RECIPIENTS, MAX_EMAIL_RECIPIENTS_ERROR),
+  message: z.string().max(MAX_EMAIL_MESSAGE_LENGTH).optional(),
 });
 
 // sessionIds/fileIds below are loose by design, not an oversight - see the comment above
@@ -194,7 +201,7 @@ export const EmailSendRequestSchema = z.discriminatedUnion('type', [
       .array(z.string().min(1))
       .min(1, 'At least one session ID is required')
       .max(50, 'Maximum 50 sessions per email'),
-    format: ExportFormatSchema.optional().prefault('markdown'),
+    format: ExportFormatSchema.prefault('markdown'),
   }),
   BaseEmailRequestSchema.extend({
     type: z.literal('files'),

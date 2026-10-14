@@ -65,7 +65,9 @@ services:
 
   # S3-compatible object storage. The app uses the AWS S3 SDK pointed at this endpoint.
   minio:
-    image: minio/minio
+    build:
+      context: ./selfhost/minio
+      dockerfile: Dockerfile.minio
     command: server /data --console-address ":9001"
     # Credentials come from .env.selfhost (no literals in this file). The
     # .env.selfhost.example ships the conventional local default (minioadmin);
@@ -112,7 +114,9 @@ services:
   # FabFile rule also expires noncurrent versions, which unversioned MinIO buckets never have).
   # If you point object storage at a different S3 backend, add equivalent rules there.
   createbuckets:
-    image: minio/mc
+    build:
+      context: ./selfhost/minio
+      dockerfile: Dockerfile.mc
     depends_on:
       minio:
         condition: service_healthy
@@ -130,7 +134,8 @@ services:
         [ -n "$$HISTORY_IMPORT_BUCKET" ] && mc event add "local/$$HISTORY_IMPORT_BUCKET" arn:minio:sqs::primary:webhook --event put --ignore-existing || true;
         { [ -n "$$PUBLISHED_ARTIFACTS_BUCKET" ] && { mc ilm rule ls "local/$$PUBLISHED_ARTIFACTS_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 7 --prefix "drafts/" "local/$$PUBLISHED_ARTIFACTS_BUCKET"; }; };
         { [ -n "$$HISTORY_IMPORT_BUCKET" ] && { mc ilm rule ls "local/$$HISTORY_IMPORT_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 7 "local/$$HISTORY_IMPORT_BUCKET"; }; };
-        { [ -n "$$FAB_FILE_BUCKET" ] && { mc ilm rule ls "local/$$FAB_FILE_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 1 --prefix "exports/" "local/$$FAB_FILE_BUCKET"; }; }; true
+        { [ -n "$$FAB_FILE_BUCKET" ] && { mc ilm rule ls "local/$$FAB_FILE_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 1 --prefix "exports/" "local/$$FAB_FILE_BUCKET"; }; };
+        { [ -n "$$FAB_FILE_BUCKET" ] && { mc ilm rule ls "local/$$FAB_FILE_BUCKET" 2>/dev/null | grep -q "generated-audio-offload/" || mc ilm rule add --expire-days 1 --prefix "generated-audio-offload/" "local/$$FAB_FILE_BUCKET"; }; }; true
 
   # SQS-compatible queue. Queues are predeclared in elasticmq.conf; the URL
   # format there matches the *_QUEUE URLs in .env.selfhost.example.

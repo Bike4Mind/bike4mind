@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { IModalDocument, IUserActivityCounterDocument } from '@bike4mind/common';
+import { filterModals } from '../modalHelpers';
+import { releaseNoteToModal } from '../releaseNoteSlides';
 
 /**
  * Helper function that mirrors the sort logic from WhatsNewSliderModal component.
@@ -329,6 +331,30 @@ describe('WhatsNewSliderModal', () => {
       const uniqueIds = new Set(ids);
 
       expect(uniqueIds.size).toBe(2); // All IDs should be unique
+    });
+  });
+
+  describe('mixed release-note and hand-authored slides', () => {
+    it('shows both kinds under the whats-new tag, newest first', () => {
+      const handAuthored = {
+        ...createMockModal('m1', new Date('2026-02-01'), 0),
+        tags: ['whats-new'],
+      } as IModalDocument;
+      const releaseNote = releaseNoteToModal({
+        id: 'rn1',
+        release_tag: 'v2.0.0',
+        headline: 'Release',
+        summary: 'Summary',
+        published_at: '2026-03-01T00:00:00.000Z',
+        items: [],
+      });
+      const user = { id: 'u1' } as Parameters<typeof filterModals>[1];
+
+      const slides = sortModalsByDate(
+        filterModals([handAuthored, releaseNote], user, [], ['whats-new']) as IModalDocument[]
+      );
+
+      expect(slides.map(s => s._id)).toEqual(['release-note:rn1', 'm1']);
     });
   });
 });

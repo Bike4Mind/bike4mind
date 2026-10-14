@@ -1,8 +1,10 @@
-import { Box, Typography, Modal, ModalDialog, ModalClose, Divider, useTheme } from '@mui/joy';
-import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
+import { Box, Typography, Modal, ModalDialog, ModalClose, Divider, Link, useTheme } from '@mui/joy';
+import { useNavigate } from '@tanstack/react-router';
+import CreditIcon from '../svgs/icons/CreditIcon';
 import dayjs from 'dayjs';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import PaymentButton from '../Credits/PaymentButton';
+import { formatCreditAmount, purchaseCreditsAriaLabel } from '@client/app/utils/formatCredits';
 import { TransactionType } from '@client/lib/credits/types';
 import { FC, useCallback } from 'react';
 import { toast } from 'sonner';
@@ -10,7 +12,7 @@ import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useGetCreditTransactions } from '@client/app/hooks/data/credits';
 import { ICreditTransaction } from '@bike4mind/common';
 import { useTranslation } from 'react-i18next';
-import { LOW_CREDITS_THRESHOLD } from '../Session/CreditButton';
+import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import {
   brand,
   brandAlpha,
@@ -53,14 +55,18 @@ const CreditsModal = ({ open, onClose }: CreditsModalProps) => {
         }}
       >
         <ModalClose className="credits-modal-close" />
-        {open && <CreditsModalContent transactions={getTransactions.data || []} />}
+        {open && <CreditsModalContent transactions={getTransactions.data || []} onClose={onClose} />}
       </ModalDialog>
     </Modal>
   );
 };
 
-const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ transactions }) => {
+const CreditsModalContent: FC<{ transactions: ICreditTransaction[]; onClose: () => void }> = ({
+  transactions,
+  onClose,
+}) => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const handlePaymentComplete = useCallback(
     (credits: number) => {
       toast.success(t('credits_modal.purchase_success', { credits }));
@@ -75,7 +81,8 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
 
   // Hide credit packages when selected account is an organization
   const canPurchaseCredits = !selectedAccount || selectedAccount.personal;
-  const isLowCredits = currentCredits < LOW_CREDITS_THRESHOLD;
+  const lowCreditsThreshold = useLowCreditsThreshold();
+  const isLowCredits = currentCredits < lowCreditsThreshold;
   const noCredits = currentCredits <= 0;
   const color = noCredits ? 'danger' : isLowCredits ? 'warning' : 'neutral';
   const safeMode = mode === 'dark' || mode === 'light' ? mode : 'light';
@@ -188,8 +195,8 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
               gap: '8px',
             }}
           >
-            <Bike4MindIcon size={'24'} fill={style[safeMode].color} />
-            {currentCredits.toLocaleString()}
+            <CreditIcon sx={{ fontSize: 24, color: style[safeMode].color }} />
+            {formatCreditAmount(currentCredits)}
           </Typography>
         </Box>
       </Box>
@@ -256,8 +263,8 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
                 className="credits-modal-package-credits"
                 sx={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '24px' }}
               >
-                <Bike4MindIcon size={'32'} fill={theme.palette.subscription?.creditsModal.iconFill} />
-                {pkg.credits.toLocaleString()}
+                <CreditIcon sx={{ fontSize: 32, color: theme.palette.subscription?.creditsModal.iconFill }} />
+                {formatCreditAmount(pkg.credits)}
               </Box>
               <Typography
                 className="credits-modal-package-description"
@@ -275,6 +282,7 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
               <PaymentButton
                 transactionType={TransactionType.Package}
                 packageId={pkg.id}
+                ariaLabel={purchaseCreditsAriaLabel(pkg.credits, pkg.price)}
                 onPayment={() => handlePaymentComplete(pkg.credits)}
               />
             </Box>
@@ -342,6 +350,20 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
           })}
         >
           {t('credits_modal.history_title')}
+          <Typography level="body-sm" sx={{ fontWeight: 400, mt: 0.5 }}>
+            {t('credits_modal.history_usage_hint', 'This lists purchases only.')}{' '}
+            <Link
+              component="button"
+              type="button"
+              data-testid="credits-modal-see-usage-link"
+              onClick={() => {
+                onClose();
+                void navigate({ to: '/profile', search: { tab: 'usage' } });
+              }}
+            >
+              {t('credits_modal.see_usage', 'See usage')}
+            </Link>
+          </Typography>
         </Box>
         <Box
           className="credits-modal-transactions-list"
@@ -374,8 +396,8 @@ const CreditsModalContent: FC<{ transactions: ICreditTransaction[] }> = ({ trans
                   className="credits-modal-transaction-credits"
                   sx={{ width: '25%', display: 'flex', alignItems: 'center', gap: '8px' }}
                 >
-                  <Bike4MindIcon size={'18'} />
-                  {transaction.credits.toLocaleString()}
+                  <CreditIcon sx={{ fontSize: 18, color: 'var(--Icon-color)' }} />
+                  {formatCreditAmount(transaction.credits)}
                 </Box>
                 <Box className="credits-modal-transaction-date" sx={{ width: '25%' }}>
                   {dayjs(new Date(transaction.createdAt).toLocaleDateString()).format('MMMM DD, YYYY')}

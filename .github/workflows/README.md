@@ -51,9 +51,10 @@ For detailed setup instructions, security considerations, and troubleshooting, s
 
 This used to run as scheduled GitHub Actions workflows (`generate-whats-new-modal-staging.yml`,
 `generate-whats-new-modal-production.yml`, `generate-whats-new-modal-reusable.yml`), which have
-since been removed. The batching, filtering, and PR/commit collection they did now run as an
-SST cron job instead: see `infra/cron.ts` (`whatsNewGenerationCron`) and
-`apps/client/server/services/whatsNewDataCollector.ts`.
+since been removed, and so has the daily SST cron that replaced them. Release notes are now
+generated per production release: `prod-release.yml` enqueues a job with
+`packages/scripts/src/releaseNotes/releaseNotesEnqueue.ts`, handled by
+`apps/workers/src/queueHandlers/releaseNotes.ts`.
 
 ## Fork Behavior
 

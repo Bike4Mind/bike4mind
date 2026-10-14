@@ -12,6 +12,9 @@ import { questRepository, sessionRepository } from '@bike4mind/database';
  * This also covers legacy (pre-fix) keys: they are in `quest.images` too, so the check protects
  * historical images without any key-format migration. A key that no quest references (a truly
  * orphaned key) is inaccessible - a generated image is only reachable through the chat that made it.
+ *
+ * Its owner-only twin for edit_image inputs is resolveOwnedGeneratedImageUrl (@bike4mind/services);
+ * keep the two lookups in sync.
  */
 export async function userCanAccessGeneratedImage(imageKey: string, userId: string): Promise<boolean> {
   if (!imageKey || !userId) return false;

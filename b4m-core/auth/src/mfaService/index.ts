@@ -5,3 +5,4 @@ export * from './regenerateBackupCodes';
 export * from './forceReset';
 export * from './status';
 export * from './utils';
+export * from './passkey';

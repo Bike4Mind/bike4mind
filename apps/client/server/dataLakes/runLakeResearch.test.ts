@@ -8,7 +8,7 @@ const h = vi.hoisted(() => ({
   findLakeById: vi.fn(),
   findUserById: vi.fn(),
   findOrgById: vi.fn(),
-  resolveWebSearchProvider: vi.fn(),
+  resolveWebSearchProviders: vi.fn(),
   executeResearchRun: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   getAvailableModels: vi.fn(),
@@ -50,8 +50,10 @@ vi.mock('@bike4mind/services', () => ({
   },
   recordOperationalUsage: h.recordOperationalUsage,
 }));
-vi.mock('@bike4mind/services/llm', () => ({
-  resolveWebSearchProvider: h.resolveWebSearchProvider,
+// The real searchWithHedge runs, so the failover test exercises the same hedge chat uses.
+vi.mock('@bike4mind/services/llm', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services/llm')>()),
+  resolveWebSearchProviders: h.resolveWebSearchProviders,
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: h.getAvailableModels }));
 // fetchAndParseURL comes from fab-pipeline, not utils: the lint rule `no-restricted-imports` routes
@@ -99,7 +101,7 @@ beforeEach(() => {
   h.findLakeById.mockResolvedValue({ id: 'lake-1', createdByUserId: 'owner-1' });
   h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: null });
   h.findOrgById.mockResolvedValue(null);
-  h.resolveWebSearchProvider.mockResolvedValue({ name: 'serpapi', search: vi.fn(async () => []) });
+  h.resolveWebSearchProviders.mockResolvedValue([{ name: 'serpapi', search: vi.fn(async () => []) }, null]);
   h.getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
   h.getAvailableModels.mockResolvedValue([{ id: 'gpt-4.1-mini', backend: 'openai' }]);
   h.executeResearchRun.mockResolvedValue({
@@ -440,10 +442,151 @@ describe('runLakeResearch', () => {
     );
   });
 
+  describe('web search failover', () => {
+    const searchOnce = () => {
+      let hits: unknown;
+      h.executeResearchRun.mockImplementation(
+        async (_l: unknown, _r: string, ports: { search: (q: string, n: number, d?: number) => Promise<unknown> }) => {
+          hits = await ports.search('q', 5, 30);
+          return { totals: emptyResearchRunTotals(), spentMicroUsd: 0, stopReason: 'exhausted' };
+        }
+      );
+      return () => hits;
+    };
+    const timedOutLead = () => ({
+      name: 'serpapi',
+      search: vi.fn(async () => {
+        throw new Error('Web search timed out: SerpAPI did not respond within 10s (tried 2 times)');
+      }),
+    });
+
+    it('takes candidates from the backup when the lead times out', async () => {
+      const backup = {
+        name: 'searxng',
+        search: vi.fn(async () => [{ title: 'Backup', url: 'https://backup.example', snippet: 's' }]),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([timedOutLead(), backup]);
+      const hits = searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(hits()).toEqual([{ title: 'Backup', url: 'https://backup.example', snippet: 's' }]);
+      expect(backup.search).toHaveBeenCalledWith('q', 5, expect.objectContaining({ recencyDays: 30 }));
+      expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'completed' }));
+    });
+
+    it('maps lead hits to candidates when no backup is configured', async () => {
+      const lead = {
+        name: 'searxng',
+        search: vi.fn(async () => [
+          { title: 'Lead', url: 'https://lead.example', snippet: 's', thumbnail: 'https://lead.example/t.png' },
+        ]),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([lead, null]);
+      const hits = searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(lead.search).toHaveBeenCalledWith('q', 5, { recencyDays: 30 });
+      expect(hits()).toEqual([{ title: 'Lead', url: 'https://lead.example', snippet: 's' }]);
+    });
+
+    it('logs the query, serving provider, levers, hit count and hostnames for the run', async () => {
+      const backup = {
+        name: 'searxng',
+        search: vi.fn(async () => [
+          { title: 'A', url: 'https://arxiv.org/abs/1', snippet: 's' },
+          { title: 'B', url: 'https://www.ieee.org/x', snippet: 's' },
+        ]),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([timedOutLead(), backup]);
+      searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect((logger as unknown as { log: ReturnType<typeof vi.fn> }).log).toHaveBeenCalledWith(
+        '[lakeResearch] search',
+        {
+          runId: 'run-1',
+          provider: 'searxng',
+          query: 'q',
+          maxResults: 5,
+          recencyDays: 30,
+          hits: 2,
+          hosts: ['arxiv.org', 'www.ieee.org'],
+        }
+      );
+    });
+
+    it('logs at most ten hostnames, passes an unparseable url through raw, and names the lead when it serves', async () => {
+      const lead = {
+        name: 'serpapi',
+        search: vi.fn(async () =>
+          Array.from({ length: 12 }, (_, i) => ({
+            title: `T${i}`,
+            url: i === 2 ? 'not a url' : `https://h${i}.example/p`,
+            snippet: 's',
+          }))
+        ),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([lead, null]);
+      searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      const call = (logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.find(
+        ([msg]) => msg === '[lakeResearch] search'
+      );
+      expect(call?.[1]).toMatchObject({ provider: 'serpapi', hits: 12 });
+      const hosts = (call?.[1] as { hosts: string[] }).hosts;
+      expect(hosts).toHaveLength(10);
+      expect(hosts[2]).toBe('not a url');
+      expect(hosts[0]).toBe('h0.example');
+    });
+
+    it('logs the query and rethrows when every provider fails', async () => {
+      const failing = (message: string) => ({
+        name: 'p',
+        search: vi.fn(async () => {
+          throw new Error(message);
+        }),
+      });
+      h.resolveWebSearchProviders.mockResolvedValue([failing('lead down'), failing('backup down')]);
+      searchOnce();
+
+      await expect(runLakeResearch('run-1', logger)).rejects.toThrow(/Web search failed on both providers/);
+
+      expect((logger as unknown as { error: ReturnType<typeof vi.fn> }).error).toHaveBeenCalledWith(
+        '[lakeResearch] search failed',
+        expect.objectContaining({
+          runId: 'run-1',
+          query: 'q',
+          maxResults: 5,
+          recencyDays: 30,
+          error: expect.stringMatching(/Web search failed on both providers/),
+        })
+      );
+    });
+
+    it('fails the run naming both providers when both fail', async () => {
+      const backup = {
+        name: 'searxng',
+        search: vi.fn(async () => {
+          throw new Error('SearXNG returned 502');
+        }),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([timedOutLead(), backup]);
+      searchOnce();
+
+      await expect(runLakeResearch('run-1', logger)).rejects.toThrow(/Web search failed on both providers/);
+      expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'failed' }));
+    });
+  });
+
   describe('terminal operator faults settle rather than throw', () => {
     // Throwing would burn the SQS deliveries and a DLQ entry on a message that can never succeed.
     it('names what an administrator must do when web search is unconfigured', async () => {
-      h.resolveWebSearchProvider.mockResolvedValue(null);
+      h.resolveWebSearchProviders.mockResolvedValue([null, null]);
 
       expect(await runLakeResearch('run-1', logger)).toEqual({ claimed: true });
       expect(h.settleRun).toHaveBeenCalledWith(
@@ -597,6 +740,17 @@ describe('runLakeResearch', () => {
         title: 'A page',
         text: 'body text',
       });
+    });
+
+    it('passes the post-redirect url through for the title check', async () => {
+      expect(
+        await fetchVia({
+          title: 'A page',
+          textContent: 'body',
+          mimeType: 'text/plain',
+          finalUrl: 'https://example.com/final',
+        })
+      ).toEqual({ title: 'A page', text: 'body', finalUrl: 'https://example.com/final' });
     });
 
     // For a PDF, textContent is the raw buffer and the chunker extracts with a PDF parser - hashing

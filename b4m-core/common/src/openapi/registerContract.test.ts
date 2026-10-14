@@ -4,6 +4,7 @@ import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { registerContract } from './registerContract';
 import type { EndpointContract } from '../api-contract';
+import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
 
 // Own module graph per vitest test file, so this fixture registration is the only
 // thing on `registry` here - it never touches the real spec built in document.test.ts.
@@ -41,17 +42,19 @@ const contract: EndpointContract = {
  * undeclared dependency for a type only these tests need.
  */
 type FixtureOperation = {
+  security?: unknown;
   parameters?: { name: string; in: string; required?: boolean; description?: string; schema?: { type?: unknown } }[];
+  requestBody?: { required?: boolean };
   responses?: Record<string, unknown>;
 };
 
-function getOperation(document: unknown, path: string): FixtureOperation {
+function getOperation(document: unknown, path: string, method = 'get'): FixtureOperation {
   const paths = (document as { paths?: unknown }).paths;
   const pathItem = typeof paths === 'object' && paths !== null ? (paths as Record<string, unknown>)[path] : undefined;
   const operation =
-    typeof pathItem === 'object' && pathItem !== null ? (pathItem as Record<string, unknown>).get : undefined;
+    typeof pathItem === 'object' && pathItem !== null ? (pathItem as Record<string, unknown>)[method] : undefined;
   if (typeof operation !== 'object' || operation === null) {
-    throw new Error(`Expected GET ${path} to be registered in the generated document`);
+    throw new Error(`Expected ${method.toUpperCase()} ${path} to be registered in the generated document`);
   }
   return operation as FixtureOperation;
 }
@@ -143,5 +146,63 @@ describe('registerContract - queryParams', () => {
     });
     const op = getOperation(generated, '/api/v1/fixture-query-only');
     expect(op.responses?.['422']).toBeDefined();
+  });
+
+  it('documents an optional request body when the contract permits omission', () => {
+    const optionalBody: EndpointContract = {
+      ...contract,
+      method: 'post',
+      operationId: 'createFixtureOptionalBody',
+      path: '/api/v1/fixture-optional-body',
+      pathParams: undefined,
+      queryParams: undefined,
+      request: z.object({ value: z.string().optional() }).default({}),
+      requestBodyRequired: false,
+    };
+    registerContract(optionalBody);
+    const generated = new OpenApiGeneratorV31(registry.definitions).generateDocument({
+      openapi: '3.1.0',
+      info: { title: 'fixture', version: '0.0.0' },
+    });
+
+    expect(getOperation(generated, optionalBody.path, 'post').requestBody).toMatchObject({ required: false });
+  });
+
+  it('documents a public contract with an explicit empty security list', () => {
+    expect(operation.security).toEqual([]);
+  });
+});
+
+describe('registerContract - streaming contracts', () => {
+  // A stream validates and authenticates before it opens, so these are real HTTP statuses.
+  it('documents the pre-stream 401, scope 403 and validation 422 on an authenticated streaming contract', () => {
+    const streaming: EndpointContract = {
+      method: 'post',
+      path: '/api/v1/fixture-stream',
+      operationId: 'createFixtureStream',
+      summary: 'Streaming fixture',
+      auth: 'apiKeyOrJwt',
+      scopes: [ApiKeyScope.AI_CHAT],
+      request: z.object({ prompt: z.string() }),
+      streaming: true,
+      responses: {
+        200: { description: 'SSE stream.', contentType: 'text/event-stream', schema: z.object({ text: z.string() }) },
+      },
+    };
+    registerContract(streaming);
+    const generated = new OpenApiGeneratorV31(registry.definitions).generateDocument({
+      openapi: '3.1.0',
+      info: { title: 'fixture', version: '0.0.0' },
+    });
+    const op = getOperation(generated, '/api/v1/fixture-stream', 'post');
+
+    const errorResponse = {
+      content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+    };
+    expect(op.responses?.['401']).toMatchObject(errorResponse);
+    expect(op.responses?.['403']).toMatchObject({
+      content: { 'application/json': { schema: { $ref: '#/components/schemas/ScopeForbiddenResponse' } } },
+    });
+    expect(op.responses?.['422']).toMatchObject(errorResponse);
   });
 });

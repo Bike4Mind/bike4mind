@@ -56,14 +56,17 @@ describe('createFabFile — unsupported file-type gating', () => {
 describe('createFabFile - reserved key prefix', () => {
   // exports/ in the fab-file bucket is reaped after 1 day, so a durable file stored there would
   // be deleted while its FabFile record survives.
-  it.each(['exports', 'exports/', 'exports/nested'])('rejects prefix %j', async prefix => {
-    const deps = adapters();
-    await expect(
-      createFabFile('u1', { ...base, fileName: 'notes.txt', mimeType: 'text/plain', prefix }, deps)
-    ).rejects.toThrow(/reserved/);
-    expect(deps.storage.upload).not.toHaveBeenCalled();
-    expect(deps.db.fabFiles.create).not.toHaveBeenCalled();
-  });
+  it.each(['exports', 'exports/', 'exports/nested', 'generated-audio-offload', 'generated-audio-offload/nested'])(
+    'rejects prefix %j',
+    async prefix => {
+      const deps = adapters();
+      await expect(
+        createFabFile('u1', { ...base, fileName: 'notes.txt', mimeType: 'text/plain', prefix }, deps)
+      ).rejects.toThrow(/reserved/);
+      expect(deps.storage.upload).not.toHaveBeenCalled();
+      expect(deps.db.fabFiles.create).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(['curated-notebooks', 'modals', 'exportsx'])('still accepts prefix %j', prefix => {
     const parsed = createFabFileSchema.safeParse({ ...base, fileName: 'notes.txt', mimeType: 'text/plain', prefix });

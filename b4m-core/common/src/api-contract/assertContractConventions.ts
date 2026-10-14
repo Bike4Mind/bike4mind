@@ -25,7 +25,7 @@ import type { ConventionRule, EndpointContract, ResponseSpec } from './types';
  * cannot be aliased the way a URL or a field can, so an endpoint choosing 402
  * must fail here rather than quietly doubling the vocabulary.
  */
-const ALLOWED_STATUSES = new Set([200, 201, 202, 204, 400, 401, 403, 404, 409, 413, 422, 429, 500, 502, 503]);
+const ALLOWED_STATUSES = new Set([200, 201, 202, 204, 303, 400, 401, 403, 404, 409, 413, 422, 429, 500, 502, 503]);
 
 /** The one version root for new public endpoints (CONVENTIONS.md section 3). */
 const VERSION_ROOT = '/api/v1/';
@@ -120,11 +120,11 @@ const FOREIGN_CLASSIFIER_PROBE = 'not_a_shared_classifier';
 /**
  * Does a streaming contract's 200 body carry a TYPED in-band error frame?
  *
- * A streaming endpoint's failures cannot be HTTP statuses once headers are
- * flushed, so its `error` event is the whole error surface - and the >= 400
- * envelope gate above never sees it. Without this, a stream could publish its
- * classifier as a bare `z.string()`, which is what drove callers to regex the
- * prose `message` instead (the defect this rule closes).
+ * Failures before the stream opens are ordinary >= 400 responses and go through the envelope
+ * gate below. Failures after it opens cannot be statuses, so the `error` event is their whole
+ * error surface - and that gate never sees it. Without this, a stream could publish its
+ * classifier as a bare `z.string()`, which is what drove callers to regex the prose `message`
+ * instead (the defect this rule closes).
  *
  * Structural, like the envelope check: an `error`-typed variant with a required
  * `message` string and an optional classifier drawn from the shared vocabulary
@@ -270,8 +270,8 @@ export function assertContractConventions(contracts: readonly EndpointContract[]
       );
     }
 
-    // A streaming endpoint reports every post-header failure in-band, so its 200
-    // event schema carries the error surface the >= 400 gate below cannot reach.
+    // Pre-stream failures are ordinary >= 400 responses (gated below); everything after the
+    // stream opens is in-band, so the 200 event schema carries that part of the error surface.
     if (contract.streaming) {
       const stream = contract.responses[200];
       if (!stream?.schema || !carriesTypedStreamErrorFrame(stream.schema)) {
@@ -311,6 +311,15 @@ export function assertContractConventions(contracts: readonly EndpointContract[]
           'status-table',
           `status ${status} is not in the shared status table.`,
           'Map the condition onto a table status so one condition means one status across the surface.'
+        );
+      }
+
+      if (status === 303 && !('noBody' in spec && spec.noBody)) {
+        fail(
+          contract,
+          'status-table',
+          'status 303 must declare noBody: true.',
+          'A redirect carries no body; set noBody and a Location header.'
         );
       }
 

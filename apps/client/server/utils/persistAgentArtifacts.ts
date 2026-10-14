@@ -18,6 +18,7 @@
  * guard of its own.
  */
 import type { ArtifactType } from '@bike4mind/common';
+import type { artifactService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 // Deliberately the CLIENT parser, not `@bike4mind/utils` (which the other server
@@ -41,6 +42,7 @@ import {
 // They stay because the barrel was already reachable from `agentExecute.ts` five other ways, so
 // nothing gets heavier either way; the injectable deps still earn their keep for test isolation.
 import { resolveAgentArtifactGate } from './artifactGate';
+import { createLazyArtifactSourceRefsGuard } from './artifactSourceRefsGuards';
 
 /** Upper bound on rows written per run; excess is dropped and logged, never silent. */
 export const MAX_AGENT_ARTIFACTS_PER_RUN = 25;
@@ -136,7 +138,7 @@ export interface PersistAgentArtifactsDeps {
    * count, not a boolean: a partially-successful first write must still be
    * completable by a later one (see the gate in `persistAgentArtifacts`).
    */
-  countQuestArtifacts: (questId: string) => Promise<number>;
+  countQuestArtifacts: (questId: string, userId: string) => Promise<number>;
   /**
    * Remove the content/version rows left behind by a `create` that died partway.
    * Only ever called once the artifacts row has been confirmed ABSENT, so
@@ -145,7 +147,14 @@ export interface PersistAgentArtifactsDeps {
   clearPartialArtifact: (artifactId: string) => Promise<void>;
 }
 
-function defaultDeps(): PersistAgentArtifactsDeps {
+/** `sourceRefsGuard` defaults to a per-run lazy guard that loads the acting user on first use. */
+function defaultDeps(sourceRefsGuard?: artifactService.ArtifactSourceRefsGuard): PersistAgentArtifactsDeps {
+  const guard =
+    sourceRefsGuard ??
+    createLazyArtifactSourceRefsGuard(async userId => {
+      const { userRepository } = await import('@bike4mind/database');
+      return userRepository.findById(userId);
+    });
   // Dynamic imports (same reason as the eventBus import in persistRunAsQuest):
   // keep the barrels off this module's import graph so it stays cheap to load.
   return {
@@ -166,6 +175,7 @@ function defaultDeps(): PersistAgentArtifactsDeps {
       const { artifactRepository, artifactContentRepository, artifactVersionRepository } =
         await import('@bike4mind/database');
       await artifactService.create(userId, payload, {
+        assertSourceRefsAccessible: guard,
         db: {
           // any: mirrors pages/api/artifacts/index.ts - the concrete Mongoose
           // repositories are structurally compatible with the service's
@@ -176,12 +186,14 @@ function defaultDeps(): PersistAgentArtifactsDeps {
         },
       });
     },
-    countQuestArtifacts: async questId => {
+    countQuestArtifacts: async (questId, userId) => {
       const { artifactRepository } = await import('@bike4mind/database');
       // Deliberately NOT filtered on deletedAt: a row the user deleted still
       // means this quest was already processed, and a repeat terminal write
-      // must not resurrect it.
-      return artifactRepository.count({ sourceQuestId: questId });
+      // must not resurrect it. Scoped to the run's user: `sourceQuestId` is
+      // caller-supplied on the create endpoint, so another user's rows carrying
+      // this quest id must not satisfy the gate and suppress this run's write.
+      return artifactRepository.count({ sourceQuestId: questId, userId });
     },
     clearPartialArtifact: async artifactId => {
       const { ArtifactContent, ArtifactVersion } = await import('@bike4mind/database');
@@ -228,9 +240,11 @@ export async function persistAgentArtifacts(args: {
   enableArtifacts?: boolean;
   logger: Logger;
   deps?: PersistAgentArtifactsDeps;
+  /** Injection point for the storage-layer integration script, whose fixture ids are not real documents. */
+  sourceRefsGuard?: artifactService.ArtifactSourceRefsGuard;
 }): Promise<void> {
   const { replyText, questId, questCreatedAtMs, sessionId, userId, executionId, enableArtifacts, logger } = args;
-  const deps = args.deps ?? defaultDeps();
+  const deps = args.deps ?? defaultDeps(args.sourceRefsGuard);
 
   try {
     const payloads = buildAgentArtifactPayloads({ replyText, questId, questCreatedAtMs, sessionId });
@@ -275,7 +289,7 @@ export async function persistAgentArtifacts(args: {
     // never be retried - trading the duplicate-row bug for a silent-loss one.
     // Comparing against what this invocation would write lets an incomplete
     // quest be completed, while a complete one still short-circuits.
-    const alreadyPersisted = await deps.countQuestArtifacts(questId);
+    const alreadyPersisted = await deps.countQuestArtifacts(questId, userId);
     if (alreadyPersisted >= capped.length) {
       logger.info('[Artifacts] quest already fully persisted - skipping duplicate terminal write', {
         executionId,

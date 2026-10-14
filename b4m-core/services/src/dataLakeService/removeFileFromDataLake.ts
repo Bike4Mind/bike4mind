@@ -32,6 +32,16 @@ export interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters,
     };
 }
 
+export interface RemoveFileFromDataLakeOptions extends MembershipOriginOptions {
+  /**
+   * Skip the stats recompute; the caller owes ONE `recomputeLakeStats` after its loop. For a bulk
+   * caller inside a transaction, where a lake-wide aggregate per removal can outrun the transaction's
+   * lifetime and holds the lake-doc write lock the whole time. The result then carries the lake's
+   * last-known counts with `statsUpdated: false`.
+   */
+  deferStatsRecompute?: boolean;
+}
+
 /**
  * Removes a single file from a data lake by clearing EVERY membership signal the read path
  * honors: the lake's datalake: meta-tag and any tag carrying the lake's fileTagPrefix.
@@ -105,7 +115,7 @@ export const removeFileFromDataLake = async (
   dataLakeId: string,
   fabFileId: string,
   { db, logger }: RemoveFileFromDataLakeAdapters,
-  opts: MembershipOriginOptions = {}
+  { deferStatsRecompute = false, ...opts }: RemoveFileFromDataLakeOptions = {}
 ): Promise<{
   success: true;
   fileCount: number;
@@ -129,6 +139,8 @@ export const removeFileFromDataLake = async (
   // Reported rather than only logged (#2245): a BULK caller removes N files sharing one 30-minute
   // undo window, so "which of these can still be re-added" is the difference between an accurate
   // undo affordance and one that silently does nothing. A single-file caller can ignore it.
+  // Both catches here hold only OUTSIDE a transaction. The single-file routes run this inside
+  // `withTransaction`, where a failed write aborts the transaction and the removal rolls back with it.
   let restoreTokenMinted = false;
   try {
     const removedAt = new Date();
@@ -160,6 +172,7 @@ export const removeFileFromDataLake = async (
     totalChunkedChars: lake.totalChunkedChars ?? 0,
   };
   let statsUpdated = false;
+  if (deferStatsRecompute) return { success: true, ...stats, restoreTokenMinted, statsUpdated };
   try {
     stats = await recomputeLakeStats(lake, { db, logger });
     statsUpdated = true;

@@ -3,7 +3,7 @@ import type { Context, SQSEvent } from 'aws-lambda';
 import type { Logger } from '@bike4mind/observability';
 
 const { dispatch } = vi.hoisted(() => ({ dispatch: vi.fn() }));
-vi.mock('@server/queueHandlers/lakeMemoryExtraction', () => ({ dispatch }));
+vi.mock('@workers/queueHandlers/lakeMemoryExtraction', () => ({ dispatch }));
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
 
 const logger = { warn: vi.fn() } as unknown as Logger;

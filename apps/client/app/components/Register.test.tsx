@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
@@ -27,6 +28,11 @@ vi.mock('@client/app/hooks/data/mfa', () => ({
   useVerifyMFA: () => ({ mutateAsync: mocks.mutateAsync, isPending: false }),
   useSetupMFA: () => ({ mutateAsync: mocks.mutateAsync, isPending: false }),
   useVerifyMFASetup: () => ({ mutateAsync: mocks.mutateAsync, isPending: false }),
+}));
+vi.mock('@client/app/hooks/data/passkeys', () => ({
+  useVerifyPasskeyMFA: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  describePasskeyMfaError: () => 'Passkey verification failed',
+  passkeysSupported: () => false,
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ setCurrentUser: mocks.setCurrentUser, currentUser: null }),
@@ -90,5 +96,58 @@ describe('Register', () => {
       expect(link).toHaveAttribute('target', '_blank');
       expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     }
+  });
+});
+
+describe('Register - field errors and rate limiting', () => {
+  it('ties the inline email error to the input with aria-describedby and role=alert', async () => {
+    const user = userEvent.setup();
+    renderRegister();
+
+    const input = within(screen.getByTestId('register-email-input')).getByRole('textbox');
+    await user.type(input, 'not-an-email');
+    await user.tab();
+
+    const alert = screen.getByTestId('register-email-error');
+    expect(alert).toHaveAttribute('role', 'alert');
+    expect(alert).toHaveTextContent('auth.fieldErrors.invalidEmail');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(input).toHaveAttribute('aria-describedby', alert.id);
+  });
+
+  it('ties the inline username error to the input with aria-describedby and role=alert', async () => {
+    const user = userEvent.setup();
+    renderRegister();
+
+    const input = within(screen.getByTestId('register-username-input')).getByRole('textbox');
+    await user.type(input, 'bad name!');
+    await user.tab();
+
+    const alert = screen.getByTestId('register-username-error');
+    expect(alert).toHaveAttribute('role', 'alert');
+    expect(alert).toHaveTextContent('auth.fieldErrors.invalidUsername');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(input).toHaveAttribute('aria-describedby', alert.id);
+  });
+
+  it('shows an alert and disables Continue with a countdown when the code request is rate limited', async () => {
+    const user = userEvent.setup();
+    mocks.sendOTC.mockRejectedValueOnce({
+      message: 'Rate limit exceeded. Try again in 573 seconds',
+      code: 'CLIENT_ERROR_429',
+      retryAfterSeconds: 573,
+    });
+    renderRegister();
+
+    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
+    await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
+    await user.click(screen.getByTestId('register-submit-btn'));
+
+    const alert = await screen.findByTestId('register-rate-limit-alert');
+    expect(alert).toHaveAttribute('role', 'alert');
+    expect(screen.getByTestId('register-submit-btn')).toBeDisabled();
+    expect(screen.getByTestId('register-submit-btn')).toHaveTextContent('auth.retryIn');
   });
 });

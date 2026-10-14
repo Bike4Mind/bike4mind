@@ -188,6 +188,11 @@ ArtifactSchema.index({ deletedAt: 1 }); // Soft delete queries
 // `index: true` (see CLAUDE.md) - declaring it in both places is what produced
 // a duplicate-index warning at model load.
 ArtifactSchema.index({ sourceQuestId: 1 });
+// Public v1 artifact list (listOwnedBeforeId): equality on owner and live, then the _id keyset
+// (scanned in reverse for newest first).
+// Pre-built by 20260921235993_ensure-artifact-owned-keyset-index rather than left to autoIndex: prod
+// runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
+ArtifactSchema.index({ userId: 1, deletedAt: 1, _id: 1 });
 
 // Text search index for title and description
 ArtifactSchema.index(
@@ -299,6 +304,31 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
     );
   }
 
+  /**
+   * One newest-first page of the live artifacts a user owns, for the public list. Shares are left to
+   * the by-id read. Content and sharing fields are not loaded.
+   */
+  async listOwnedBeforeId(userId: string, { beforeId, limit }: { beforeId?: string; limit: number }) {
+    const conditions: Record<string, unknown> = { userId, deletedAt: null };
+    if (beforeId !== undefined) {
+      if (!mongoose.isObjectIdOrHexString(beforeId)) throw new Error(`Invalid artifact cursor id: ${beforeId}`);
+      conditions._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
+    }
+
+    const result = await this.model
+      .find(conditions)
+      .select(
+        'id type title description version versionTag status tags sessionId projectId visibility createdAt updatedAt'
+      )
+      .sort({ _id: -1 })
+      .limit(limit + 1)
+      .lean()
+      .exec();
+
+    const hasMore = result.length > limit;
+    return { data: result.slice(0, limit), hasMore };
+  }
+
   // Implement artifact-specific methods
   async findByType(type: string, filter: Record<string, unknown> = {}) {
     return this.find({ ...filter, type, deletedAt: null });
@@ -379,14 +409,22 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
    * wrote. Projected and batched: QuestMaster v5 calls this once per graph read
    * to attach a node's artifacts, so it must not be an N+1 and must not drag
    * `content` (which is the whole artifact body) across for a chip label.
+   *
+   * Scoped to `userId` because `sourceQuestId` is caller-supplied on the public
+   * create endpoint: without it, another user with update access to the quest's
+   * session could have their own artifact joined onto that quest's node. A run's
+   * artifacts are always written under the run's user (see persistAgentArtifacts).
    */
   async findByQuestIds(
-    questIds: string[]
+    questIds: string[],
+    userId: string
   ): Promise<Array<{ id: string; type: string; title: string; sourceQuestId: string }>> {
     if (!questIds.length) return [];
+    // A JS caller omitting userId would otherwise query `userId: undefined`, which strictQuery can strip.
+    if (!userId) throw new Error('findByQuestIds requires a userId');
     return this.model
       .find(
-        { sourceQuestId: { $in: questIds }, deletedAt: null },
+        { sourceQuestId: { $in: questIds }, userId, deletedAt: null },
         { _id: 0, id: 1, type: 1, title: 1, sourceQuestId: 1 }
       )
       .sort({ createdAt: 1 })

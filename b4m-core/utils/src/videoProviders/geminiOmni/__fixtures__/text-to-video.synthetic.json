@@ -1,0 +1,122 @@
+{
+  "scenario": "text-to-video.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built from the Task 4 wire facts: submit = recorded background submit (W1/W2); poll_terminal = recorded sync-created interaction GET (W7); download = recorded direct 200 (W10). poll_first repeats the submit shape (assumed). Replace with a recording.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions",
+        "body": {
+          "model": "gemini-omni-1.1-flash",
+          "input": "A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking.",
+          "background": true,
+          "response_format": {
+            "type": "video",
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "resolution": "720p",
+            "duration": "3s"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "id": "v1_synthetic-text-to-video",
+          "status": "in_progress",
+          "created": "2026-10-06T12:00:00Z",
+          "updated": "2026-10-06T12:00:00Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/interactions/v1_synthetic-text-to-video"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "id": "v1_synthetic-text-to-video",
+          "status": "in_progress",
+          "created": "2026-10-06T12:00:00Z",
+          "updated": "2026-10-06T12:00:05Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/interactions/v1_synthetic-text-to-video"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "id": "v1_synthetic-text-to-video",
+          "status": "completed",
+          "created": "2026-10-06T12:00:00Z",
+          "updated": "2026-10-06T12:00:40Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash",
+          "steps": [
+            {
+              "signature": "<redacted:signature 4820 chars>",
+              "type": "thought"
+            },
+            {
+              "content": [
+                {
+                  "uri": "https://generativelanguage.googleapis.com/v1beta/files/synthetic-text-to-video:download",
+                  "mime_type": "video/mp4",
+                  "type": "video"
+                }
+              ],
+              "type": "model_output"
+            }
+          ],
+          "usage": {
+            "output_tokens_by_modality": [
+              {
+                "modality": "video",
+                "tokens": 17376
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "download",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/files/synthetic-text-to-video:download"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "video/mp4"
+        }
+      }
+    }
+  ]
+}

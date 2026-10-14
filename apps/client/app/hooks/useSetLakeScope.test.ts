@@ -33,7 +33,7 @@ describe('useSetLakeScope', () => {
     // overwrite the server's - re-adding removed files and fanning them out to projects - from
     // what the user experienced as ticking a checkbox.
     expect(updateSession).toHaveBeenCalledWith(
-      { id: 's1', lakeScope: ['datalake:research', 'datalake:legal'] },
+      { id: 's1', lakeScope: ['datalake:research', 'datalake:legal'], includeLibraryFilesChoice: false },
       expect.objectContaining({ onError: expect.any(Function) })
     );
   });
@@ -45,9 +45,16 @@ describe('useSetLakeScope', () => {
     act(() => result.current([]));
 
     expect(updateSession).toHaveBeenCalledWith(
-      { id: 's1', lakeScope: null },
+      { id: 's1', lakeScope: null, includeLibraryFilesChoice: false },
       expect.objectContaining({ onError: expect.any(Function) })
     );
+  });
+
+  it('keeps a library choice the chat already made', () => {
+    currentSession = { ...currentSession, includeLibraryFiles: true };
+    const { result } = renderHook(() => useSetLakeScope());
+    act(() => result.current(['datalake:research']));
+    expect(updateSession).toHaveBeenCalledWith({ id: 's1', lakeScope: ['datalake:research'] }, expect.anything());
   });
 
   it('updates the cached session optimistically, so the picker reflects the choice at once', () => {

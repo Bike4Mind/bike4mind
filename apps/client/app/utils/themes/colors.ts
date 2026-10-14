@@ -246,6 +246,8 @@ export const brandAlpha = {
     50: alpha(brand[400], 0.5), // #335F7080 / rgba(51, 95, 112, 0.5)
     60: alpha(brand[400], 0.6), // #335F7099 / rgba(51, 95, 112, 0.6)
     70: alpha(brand[400], 0.7), // #335F70B3 / rgba(51, 95, 112, 0.7)
+    90: alpha(brand[400], 0.9), // #335F70E6 / rgba(51, 95, 112, 0.9)
+    95: alpha(brand[400], 0.95), // #335F70F2 / rgba(51, 95, 112, 0.95)
   },
 
   // brand[500] (#3b82f6) with opacity - Main brand blue for gradients and shadows

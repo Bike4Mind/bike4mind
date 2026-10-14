@@ -36,14 +36,15 @@ const PREMIUM_TOOL_MAP = 'premium-generated/premiumLlmTools.generated';
  * real break (a moved or misspelled handler) and fails the test.
  *
  * The rule itself - every tool-capable handler carries `toolRuntimeAssets()` - deliberately
- * does NOT exempt them: `overwatchAnalytics`, `optihashiRunCompletion` and `bobRunWorker` are
- * configured in this repo (infra/queues.ts) and so are this repo's to guard.
+ * does NOT exempt them: `overwatchAnalytics`, `optihashiRunCompletion`, `bobRunWorker` and
+ * `libreoncologyAudioRender` are configured in this repo (infra/queues.ts) and so are this
+ * repo's to guard.
  */
 const OVERLAY_HANDLER_PREFIX = 'apps/client/server/premium-generated/';
 
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts'];
 
-/** tsconfig `paths` from apps/client, which is where every Lambda handler lives. */
+/** tsconfig `paths` into apps/client, which apps/workers handlers also reach through the @server/* bridge. */
 const CLIENT_ALIASES: ReadonlyArray<readonly [string, string]> = [
   ['@server/', path.join(CLIENT_DIR, 'server')],
   ['@pages/', path.join(CLIENT_DIR, 'pages')],
@@ -104,7 +105,7 @@ function reachesPremiumToolMap(entryFile: string): boolean {
 type HandlerDeclaration = {
   /** infra file the declaration lives in, e.g. "agentExecutor.ts". */
   infraFile: string;
-  /** SST handler string, e.g. "apps/client/server/queueHandlers/agentExecutor.handler". */
+  /** SST handler string, e.g. "apps/workers/src/queueHandlers/agentExecutor.handler". */
   handler: string;
   /** Source of the object literal declaring it, so `copyFiles` can be checked on it. */
   config: string;
@@ -372,33 +373,33 @@ describe('the infra handler scan', () => {
   it('does not lose declarations to a regex literal containing a quote', () => {
     const source = [
       "const sanitize = (value: string) => value.replace(/'/g, '');",
-      "const worker = { handler: 'apps/client/server/queueHandlers/agentExecutor.handler' };",
+      "const worker = { handler: 'apps/workers/src/queueHandlers/agentExecutor.handler' };",
     ].join('\n');
 
     expect(scanHandlerDeclarations(source, 'synthetic.ts').map(declaration => declaration.handler)).toEqual([
-      'apps/client/server/queueHandlers/agentExecutor.handler',
+      'apps/workers/src/queueHandlers/agentExecutor.handler',
     ]);
   });
 
   it('does not lose declarations to a regex literal containing braces', () => {
     const source = [
       'const isAccountId = (id: string) => /^\\d{12}$/.test(id);',
-      "const worker = { handler: 'apps/client/server/queueHandlers/agentExecutor.handler' };",
+      "const worker = { handler: 'apps/workers/src/queueHandlers/agentExecutor.handler' };",
     ].join('\n');
 
     expect(scanHandlerDeclarations(source, 'synthetic.ts').map(declaration => declaration.handler)).toEqual([
-      'apps/client/server/queueHandlers/agentExecutor.handler',
+      'apps/workers/src/queueHandlers/agentExecutor.handler',
     ]);
   });
 
   it('still reads a division expression as ordinary code', () => {
     const source = [
       'const share = total / count / 2;',
-      "const worker = { handler: 'apps/client/server/queueHandlers/agentExecutor.handler' };",
+      "const worker = { handler: 'apps/workers/src/queueHandlers/agentExecutor.handler' };",
     ].join('\n');
 
     expect(scanHandlerDeclarations(source, 'synthetic.ts').map(declaration => declaration.handler)).toEqual([
-      'apps/client/server/queueHandlers/agentExecutor.handler',
+      'apps/workers/src/queueHandlers/agentExecutor.handler',
     ]);
   });
 
@@ -431,7 +432,7 @@ describe('Lambdas that can execute the premium tool set', () => {
     // edge - a generated stub is `export * from '@bike4mind/premium-<x>/...'`, so the walk
     // ends there and the handler is skipped as unreachable rather than as exempt. Overlay
     // bundles therefore still need their own guard in the overlay repo. Checked at the time
-    // of writing: none of the three overlay handlers reaches the tool map.
+    // of writing: none of the four overlay handlers reaches the tool map.
     const missing = handlerDeclarations
       .filter(declaration => {
         const entry = resolveSourceFile(path.join(REPO_ROOT, declaration.handler.split('.').slice(0, -1).join('.')));
@@ -458,7 +459,7 @@ describe('Lambdas that can execute the premium tool set', () => {
       })
       .map(declaration => declaration.handler);
 
-    expect(toolCapable).toContain('apps/client/server/queueHandlers/agentExecutor.handler');
+    expect(toolCapable).toContain('apps/workers/src/queueHandlers/agentExecutor.handler');
     expect(toolCapable).toContain('apps/client/server/queueHandlers/slackQuestProcessor.handler');
   });
 });

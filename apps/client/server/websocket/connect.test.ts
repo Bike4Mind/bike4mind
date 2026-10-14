@@ -21,9 +21,20 @@ vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { verifyToken: (...args: unknown[]) => mockVerifyToken(...args) },
 }));
 
+vi.mock('@bike4mind/services', () => ({
+  isTokenTypeAcceptable: (tokenType: unknown, expected: string) => tokenType === undefined || tokenType === expected,
+  isTokenVersionCurrent: (payloadVersion?: number, userVersion?: number) =>
+    (payloadVersion ?? 0) === (userVersion ?? 0),
+}));
+
 const mockVerifyApiKey = vi.fn();
 vi.mock('@server/cli/auth', () => ({
   verifyApiKey: (...args: unknown[]) => mockVerifyApiKey(...args),
+}));
+
+const mockAssertAccountStateUsable = vi.fn();
+vi.mock('@server/auth/assertAccountStateUsable', () => ({
+  assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
 }));
 
 vi.mock('@server/websocket/utils', () => ({
@@ -50,6 +61,7 @@ describe('websocket connect - token gates', () => {
     mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, save: vi.fn() });
     mockVerifyApiKey.mockRejectedValue(new Error('not an api key'));
     mockConnectionCreate.mockResolvedValue({});
+    mockAssertAccountStateUsable.mockReturnValue(undefined);
   });
 
   it('registers the connection for a current access token', async () => {
@@ -66,6 +78,13 @@ describe('websocket connect - token gates', () => {
 
   it('refuses a relying-party OAuth access token on the realtime socket', async () => {
     mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', kind: 'oauth' });
+
+    await expect(connect()).rejects.toThrow('Invalid authentication token');
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses an mfaPending token on the realtime socket', async () => {
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', mfaPending: true });
 
     await expect(connect()).rejects.toThrow('Invalid authentication token');
     expect(mockConnectionCreate).not.toHaveBeenCalled();
@@ -93,5 +112,14 @@ describe('websocket connect - token gates', () => {
 
     await expect(connect()).resolves.toEqual({ statusCode: 200 });
     expect(mockConnectionCreate).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['ai:chat'] }));
+  });
+
+  it('refuses a blocked account before registering the connection', async () => {
+    mockAssertAccountStateUsable.mockImplementation(() => {
+      throw new Error('blocked');
+    });
+
+    await expect(connect()).rejects.toThrow('blocked');
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
   });
 });

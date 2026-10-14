@@ -4,11 +4,13 @@ import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
 import { acceptsConnectorContent, isLakeIngestable } from '@bike4mind/common';
 import { authorizeLakeDriveAccess } from '@server/integrations/google/drive/authorizeLakeDriveAccess';
-import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
+import { withConnectionId, withLakeConnectorClaim } from '@server/dataLakes/assertLakeConnectorFree';
 import {
   isValidDriveFolderId,
   createDriveClient,
   getFolderAccess,
+  probeConnectedFolder,
+  UNREACHABLE_FOLDER_MESSAGES,
 } from '@server/integrations/google/drive/driveClient';
 import { getValidUserDriveAccessToken } from '@server/integrations/google/drive/common';
 import { decryptToken } from '@server/security/tokenEncryption';
@@ -64,6 +66,44 @@ async function readUserDriveCredential(userId: string): Promise<string> {
 }
 
 /**
+ * A Re-sync of a folder that has gone fails the handler's getFolderAccess probe before any ingest runs, so nothing would
+ * park the connection and its chip would read "Connected" until the next poll. Park it here, but only
+ * on a definite verdict (probeConnectedFolder throws on anything transient) from the connection's own
+ * connector: another manager lacking access proves nothing about the stored grant. A sync in flight
+ * is left alone; its own probe reaches the same verdict.
+ */
+async function parkConnectionIfFolderGone(
+  req: Request,
+  userDrive: ReturnType<typeof createDriveClient>,
+  driveFolderId: string,
+  dataLakeId: string
+): Promise<void> {
+  const connection = await orgGoogleDriveConnectionRepository.findByDriveFolderId(driveFolderId);
+  if (
+    !connection ||
+    connection.targetDataLakeId !== dataLakeId ||
+    connection.connectedBy !== req.user.id ||
+    connection.status !== 'connected' ||
+    connection.disconnectRequestedAt
+  ) {
+    return;
+  }
+  try {
+    const reachability = await probeConnectedFolder(userDrive, driveFolderId);
+    if (reachability.reachable) return;
+    await orgGoogleDriveConnectionRepository.updateHealth(connection.id, {
+      status: 'needs_reconnect',
+      lastError: UNREACHABLE_FOLDER_MESSAGES[reachability.reason],
+    });
+  } catch (e) {
+    // Best-effort: the caller still gets the 403 below, and the next poll's ingest probe retries.
+    req.logger.warn('Google Drive connect: could not mark an unreachable folder for reconnect', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+/**
  * Connect a Google Drive folder to a data lake and enqueue a background ingest (#1589).
  *
  * Creates (or refreshes) the OrgGoogleDriveConnection binding and enqueues by connectionId (202).
@@ -115,10 +155,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     // they don't own - ids appear in shared Drive URLs - and permanently lock out its real owner. Drive
     // 404s a folder the caller can't see, so a successful read IS the ownership proof (uses the user's
     // own credential, not the org copy).
-    const folderAccess = await getFolderAccess(
-      createDriveClient(await getValidUserDriveAccessToken(req.user.id)),
-      driveFolderId
-    );
+    const userDrive = createDriveClient(await getValidUserDriveAccessToken(req.user.id));
+    const folderAccess = await getFolderAccess(userDrive, driveFolderId);
     // A throttle is not an access verdict: without this, Drive rate-limiting the probe would tell the
     // user they have no access to a folder they own, and they would go hunting a permission problem
     // that does not exist (#2395).
@@ -128,6 +166,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       );
     }
     if (!folderAccess.exists) {
+      await parkConnectionIfFolderGone(req, userDrive, driveFolderId, dataLakeId);
       throw new ForbiddenError('That Google Drive folder does not exist or you do not have access to it.');
     }
     if (!folderAccess.isFolder) {
@@ -168,28 +207,29 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       }
       connectionId = byFolder.id;
     } else {
-      // Only a NEW claim can add a second connector, so the guard lives here and not up with the cheap
-      // gates: a same-folder Re-sync on a lake that already carries a GitHub row must still reach the
-      // reuse branch. Not gated on EnableDataLakeGitHub: with that flag off the client cannot see a
+      // Only a NEW claim can add a second connector, so the lake claim is taken here and not up with the
+      // cheap gates: a same-folder Re-sync on a lake that already carries a GitHub row must still reach
+      // the reuse branch. Not gated on EnableDataLakeGitHub: with that flag off the client cannot see a
       // bound repository, so this is the only thing stopping a second connector.
-      // Drive is exempt here: a second Drive folder on this lake falls to the E11000 catch below, whose
-      // message is more specific than the guard's.
-      await assertLakeConnectorFree(lake.id, { except: 'googleDrive' });
       try {
-        const created = await orgGoogleDriveConnectionRepository.create({
-          ...(owner.kind === 'organization' && {
-            organizationId: owner.organizationId,
-            oauthRefreshToken: userCredential,
-          }),
-          authMode: 'oauth',
-          driveFolderId,
-          folderName,
-          targetDataLakeId: dataLakeId,
-          connectedBy: req.user.id,
-          enabled: true,
-          status: 'connected',
-          connectedAt: new Date(),
-        });
+        const created = await withLakeConnectorClaim(lake.id, 'googleDrive', claimedId =>
+          orgGoogleDriveConnectionRepository.create(
+            withConnectionId(claimedId, {
+              ...(owner.kind === 'organization' && {
+                organizationId: owner.organizationId,
+                oauthRefreshToken: userCredential,
+              }),
+              authMode: 'oauth',
+              driveFolderId,
+              folderName,
+              targetDataLakeId: dataLakeId,
+              connectedBy: req.user.id,
+              enabled: true,
+              status: 'connected',
+              connectedAt: new Date(),
+            })
+          )
+        );
         connectionId = created.id;
         claimedByThisRequest = true;
       } catch (e) {
@@ -236,6 +276,15 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       });
       throw new InternalServerError('Could not queue the Google Drive ingest. Please try again.');
     }
+
+    // Only past the enqueue: a failed one releases a new claim, leaving the lake unbound and its
+    // intent still wanted. Best-effort, since the bind stands without it (see the GitHub connect).
+    await dataLakeRepository.clearPendingConnector(dataLakeId).catch((e: unknown) =>
+      req.logger.warn('Google Drive connect: could not clear the pending connector', {
+        connectionId,
+        error: e instanceof Error ? e.message : String(e),
+      })
+    );
 
     return res.status(202).json({ connectionId, status: 'queued' });
   });

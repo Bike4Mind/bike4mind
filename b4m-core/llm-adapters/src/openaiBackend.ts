@@ -9,10 +9,10 @@ import {
   RESPONSES_API_TOOL_MODELS,
   REASONING_SUPPORTED_MODELS,
   SpeechToTextModels,
-  VideoModels,
   type ModelInfo,
   type ReasoningEffort,
   type CacheUsageStats,
+  type ToolStarted,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
 import { cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
@@ -28,7 +28,7 @@ import type {
 } from 'openai/resources/responses/responses';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
-import { executeToolsBatch } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -107,6 +107,49 @@ const effortMap_GPT5_1_2 = {
   complex: 'medium',
 } as const;
 
+/**
+ * Key-table value meaning "authenticate through OpenAI workload identity federation": the client is
+ * built from OPENAI_IDENTITY_PROVIDER_ID, OPENAI_SERVICE_ACCOUNT_ID and OPENAI_WIF_AUDIENCE, with
+ * the subject token taken from the GitHub Actions OIDC endpoint (the job needs `id-token: write`).
+ */
+export const OPENAI_FEDERATED_KEY = 'federated';
+
+/** A fresh GitHub Actions identity token for `audience`; the SDK calls this again on each exchange. */
+export async function githubActionsIdToken(audience: string): Promise<string> {
+  const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!url || !requestToken) {
+    throw new Error('ACTIONS_ID_TOKEN_REQUEST_URL is not set; the job needs `id-token: write` permission');
+  }
+  const res = await fetch(`${url}&audience=${encodeURIComponent(audience)}`, {
+    headers: { Authorization: `Bearer ${requestToken}` },
+  });
+  if (!res.ok) throw new Error(`GitHub identity token request failed with status ${res.status}`);
+  const body = (await res.json()) as { value?: string };
+  if (!body.value) throw new Error('GitHub identity token response had no value');
+  return body.value;
+}
+
+function federatedOpenAIClient(): OpenAI {
+  const identityProviderId = process.env.OPENAI_IDENTITY_PROVIDER_ID;
+  const serviceAccountId = process.env.OPENAI_SERVICE_ACCOUNT_ID;
+  const audience = process.env.OPENAI_WIF_AUDIENCE;
+  if (!identityProviderId || !serviceAccountId || !audience) {
+    throw new Error(
+      'OPENAI_IDENTITY_PROVIDER_ID, OPENAI_SERVICE_ACCOUNT_ID and OPENAI_WIF_AUDIENCE are required for federated OpenAI auth'
+    );
+  }
+  // apiKey: null keeps an OPENAI_API_KEY in the environment from colliding with workloadIdentity.
+  return new OpenAI({
+    apiKey: null,
+    workloadIdentity: {
+      identityProviderId,
+      serviceAccountId,
+      provider: { tokenType: 'jwt', getToken: () => githubActionsIdToken(audience) },
+    },
+  });
+}
+
 export class OpenAIBackend implements ICompletionBackend {
   private _api: OpenAI;
   private logger: Logger;
@@ -119,7 +162,7 @@ export class OpenAIBackend implements ICompletionBackend {
   private readonly _dispatch = new DispatchModel();
 
   constructor(apiKey: string, logger?: Logger, endUserId?: string) {
-    this._api = new OpenAI({ apiKey });
+    this._api = apiKey === OPENAI_FEDERATED_KEY ? federatedOpenAIClient() : new OpenAI({ apiKey });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
   }
@@ -262,7 +305,8 @@ export class OpenAIBackend implements ICompletionBackend {
         max_tokens: 100000,
         can_stream: true,
         pricing: {
-          200000: { input: 15 / 1000000, output: 60 / 1000000 }, // $15 / 1M Input tokens, $60 / 1M Output tokens
+          // $15 / 1M Input, $60 / 1M Output, $7.50 / 1M cached input (0.5x, not the 0.1x default)
+          200000: { input: 15 / 1_000_000, output: 60 / 1_000_000, cache_read: 7.5 / 1_000_000 },
         },
         supportsVision: true,
         supportsTools: true,
@@ -348,7 +392,8 @@ export class OpenAIBackend implements ICompletionBackend {
         max_tokens: 100000,
         can_stream: true,
         pricing: {
-          200000: { input: 1.1 / 1000000, output: 4.4 / 1000000 }, // $1.10 / 1M Input tokens, $4.40 / 1M Output tokens
+          // $1.10 / 1M Input, $4.40 / 1M Output, $0.55 / 1M cached input (0.5x, not the 0.1x default)
+          200000: { input: 1.1 / 1_000_000, output: 4.4 / 1_000_000, cache_read: 0.55 / 1_000_000 },
         },
         supportsVision: false,
         supportsImageVariation: false,
@@ -397,6 +442,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
+          // Regular list price. OpenAI runs a promotional $4 / $20 ($8 / $30 long context) through at
+          // least 2026-11-21; it is deliberately not carried so the seed does not go stale when it ends.
           272_000: { input: 5.0 / 1_000_000, output: 30.0 / 1_000_000 }, // <=272k: $5.00 / 1M in, $30.00 / 1M out
           1_050_000: { input: 10.0 / 1_000_000, output: 45.0 / 1_000_000 }, // >272k: $10.00 / 1M in, $45.00 / 1M out
         },
@@ -420,8 +467,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          272_000: { input: 2.5 / 1_000_000, output: 15.0 / 1_000_000 }, // <=272k: $2.50 / 1M in, $15.00 / 1M out
-          1_050_000: { input: 5.0 / 1_000_000, output: 22.5 / 1_000_000 }, // >272k: $5.00 / 1M in, $22.50 / 1M out
+          272_000: { input: 2.0 / 1_000_000, output: 12.0 / 1_000_000 }, // <=272k: $2.00 / 1M in, $12.00 / 1M out
+          1_050_000: { input: 4.0 / 1_000_000, output: 18.0 / 1_000_000 }, // >272k: $4.00 / 1M in, $18.00 / 1M out
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -431,7 +478,7 @@ export class OpenAIBackend implements ICompletionBackend {
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-06-23',
         description:
-          'GPT-5.6 Terra - the balanced GPT-5.6 variant. Strong reasoning and vision at mid-tier cost, a reliable workhorse for everyday professional tasks.',
+          'GPT-5.6 Terra - the balanced GPT-5.6 variant. Strong reasoning and vision, priced between Sol and Luna, a reliable workhorse for everyday professional tasks.',
       },
       {
         id: ChatModels.GPT5_6_LUNA,
@@ -443,8 +490,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          272_000: { input: 1.0 / 1_000_000, output: 6.0 / 1_000_000 }, // <=272k: $1.00 / 1M in, $6.00 / 1M out
-          1_050_000: { input: 2.0 / 1_000_000, output: 9.0 / 1_000_000 }, // >272k: $2.00 / 1M in, $9.00 / 1M out
+          272_000: { input: 0.2 / 1_000_000, output: 1.2 / 1_000_000 }, // <=272k: $0.20 / 1M in, $1.20 / 1M out
+          1_050_000: { input: 0.4 / 1_000_000, output: 1.8 / 1_000_000 }, // >272k: $0.40 / 1M in, $1.80 / 1M out
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -941,51 +988,6 @@ export class OpenAIBackend implements ICompletionBackend {
         description:
           "OpenAI's speech-to-text model supporting multiple languages and audio formats. Optimized for transcription and translation tasks.",
       },
-      // OpenAI Video Models (Sora)
-      {
-        id: VideoModels.SORA_2,
-        type: 'video',
-        name: 'Sora',
-        backend: ModelBackend.OpenAI,
-        contextWindow: 10000, // Prompt length limit
-        max_tokens: 10000,
-        can_stream: false,
-        pricing: {
-          // Pricing per video based on duration: 4s = $0.25, 8s = $0.50, 12s = $0.75
-          1: { input: 0.25, output: 0 },
-        },
-        supportsVision: false,
-        supportsTools: false,
-        supportsImageVariation: false,
-        logoFile: 'OpenAI_Logo.svg',
-        rank: 1,
-        // Sora 2 and the Videos API are being removed with no OpenAI replacement. https://platform.openai.com/docs/deprecations
-        deprecationDate: '2026-09-24',
-        description:
-          "OpenAI's Sora video generation model. Creates high-quality videos from text prompts with durations of 4, 8, or 12 seconds.",
-      },
-      {
-        id: VideoModels.SORA_2_PRO,
-        type: 'video',
-        name: 'Sora Pro',
-        backend: ModelBackend.OpenAI,
-        contextWindow: 10000, // Prompt length limit
-        max_tokens: 10000,
-        can_stream: false,
-        pricing: {
-          // Pricing per video based on duration: 4s = $0.50, 8s = $1.00, 12s = $1.50
-          1: { input: 0.5, output: 0 },
-        },
-        supportsVision: false,
-        supportsTools: false,
-        supportsImageVariation: false,
-        logoFile: 'OpenAI_Logo.svg',
-        rank: 0,
-        // Sora 2 Pro and the Videos API are being removed with no OpenAI replacement. https://platform.openai.com/docs/deprecations
-        deprecationDate: '2026-09-24',
-        description:
-          "OpenAI's premium Sora video generation model. Produces the highest quality videos with enhanced detail, coherence, and visual fidelity.",
-      },
     ];
   }
 
@@ -1423,6 +1425,28 @@ export class OpenAIBackend implements ICompletionBackend {
               );
             }
 
+            const requestedToolNames = c.message.tool_calls.flatMap(call =>
+              call.type === 'function' ? [call.function.name] : []
+            );
+            if (shouldEndTurnAfterTools(requestedToolNames, options.tools, c.message.content)) {
+              this.logger.info('[Tool Execution] Ending turn: answer already in hand, only end-of-turn tools ran', {
+                model,
+                toolsExecuted: requestedToolNames,
+              });
+              // Non-streaming never forwarded this round's text, so it rides on the terminal emit.
+              await (artifactGuard?.callback ?? callback)([c.message.content ?? ''], {
+                ...splitCacheInclusiveInput(
+                  accumInputTokens + (response.usage?.prompt_tokens || 0),
+                  totalCacheReadTokens
+                ),
+                outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+                stopReason: 'tool_use',
+              });
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
+            }
+
             // Keep tools available for MCP tools (enables chaining); remove for built-in tools
             // Carry this turn's tokens forward so the terminal recursive call's
             // emits carry the full multi-turn billable total (each OpenAI API
@@ -1509,6 +1533,8 @@ export class OpenAIBackend implements ICompletionBackend {
     // Keep the last non-null finish_reason (mirrors anthropicBackend's stopReason
     // capture) - the terminal chunk of a round carries it, earlier chunks don't.
     let streamFinishReason: string | undefined;
+    // This round's visible answer text, for shouldEndTurnAfterTools.
+    let streamedRoundText = '';
     for await (const chunk of response) {
       chunkCount++;
       const streamedText: string[] = [];
@@ -1545,10 +1571,14 @@ export class OpenAIBackend implements ICompletionBackend {
         }
       }
 
+      const startedTools: ToolStarted[] = [];
       chunk?.choices.forEach((c: ChatCompletionChunk.Choice) => {
         if (!isO1Model) {
           c.delta.tool_calls?.forEach((tool: ChatCompletionChunk.Choice.Delta.ToolCall) => {
             func[tool.index] ||= { parameters: '' };
+            if (!func[tool.index].name && tool.function?.name) {
+              startedTools.push({ name: tool.function.name, id: tool.id ?? func[tool.index].id });
+            }
             func[tool.index].name ||= tool.function?.name;
             func[tool.index].id ||= tool.id;
             func[tool.index].parameters += tool.function?.arguments || '';
@@ -1557,12 +1587,17 @@ export class OpenAIBackend implements ICompletionBackend {
 
         if (c.delta.content) {
           streamedText[c.index] = (streamedText[c.index] || '') + c.delta.content;
+          streamedRoundText += c.delta.content;
         }
 
         if (c.finish_reason) {
           streamFinishReason = c.finish_reason;
         }
       });
+
+      for (const toolStarted of startedTools) {
+        await callback([], { toolStarted });
+      }
 
       // Always call the callback to maintain streaming, even during tool processing.
       // Emit accumulated total + this turn's running tokens so wrappedOnChunk
@@ -1795,6 +1830,23 @@ export class OpenAIBackend implements ICompletionBackend {
             { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
             sanitizedResult
           );
+        }
+
+        const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
+        if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
+          this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
+            model,
+            toolsExecuted: requestedToolNames,
+          });
+          await (artifactGuard?.callback ?? callback)([], {
+            ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+            outputTokens: accumOutputTokens + outputTokens,
+            toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+            cacheStats,
+            stopReason: 'tool_use',
+          });
+          if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+          return;
         }
 
         // Keep tools available for MCP tools (enables chaining); remove for built-in tools.
@@ -2099,12 +2151,22 @@ export class OpenAIBackend implements ICompletionBackend {
     // Named to match the chat streaming path: this turn's cache reads, known only at
     // the terminal Response, so the per-delta emits below carry 0 for it.
     let cachedTokensFromStream = 0;
+    // This round's visible answer text, for shouldEndTurnAfterTools.
+    let streamedRoundText = '';
     for await (const event of stream) {
       if (event.type === 'response.output_text.delta') {
+        streamedRoundText += event.delta;
         await callback([event.delta], {
           ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+        });
+      } else if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
+        await callback([], {
+          ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+          outputTokens: accumOutputTokens + outputTokens,
+          toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+          toolStarted: { name: event.item.name, id: event.item.call_id },
         });
       } else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
         finalResponse = event.response;
@@ -2115,8 +2177,8 @@ export class OpenAIBackend implements ICompletionBackend {
       } else if (event.type === 'error') {
         throw new Error(`OpenAI Responses stream error for ${model}: ${event.message}`);
       }
-      // Every other event (response.output_item.added, response.function_call_arguments.delta,
-      // reasoning summary events, etc.) is intentionally ignored: the terminal Response captured
+      // Every other event (response.function_call_arguments.delta, reasoning summary events,
+      // etc.) is intentionally ignored: the terminal Response captured
       // above carries fully-assembled output items, so function_call arguments and reasoning are
       // read from finalResponse below. Do NOT also accumulate tool arguments from the *.delta
       // events here - that would double-append against the terminal item's complete arguments.
@@ -2257,6 +2319,22 @@ export class OpenAIBackend implements ICompletionBackend {
     }
 
     const anyMcpTool = resolved.some(r => r.isMcpTool);
+
+    const requestedToolNames = functionCalls.map(fc => fc.name);
+    if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
+      this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
+        model,
+        toolsExecuted: requestedToolNames,
+      });
+      await (artifactGuard?.callback ?? callback)([], {
+        ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+        outputTokens: accumOutputTokens + outputTokens,
+        toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+        stopReason: 'tool_use',
+      });
+      if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+      return;
+    }
 
     // Recurse. Tool results are now in `messages`; carry this turn's tokens forward so
     // the terminal emit reports the full multi-turn billable total. Drop tools for the

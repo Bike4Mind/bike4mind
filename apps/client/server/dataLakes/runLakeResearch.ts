@@ -11,7 +11,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { apiKeyService, dataLakeResearchService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
-import { resolveWebSearchProvider } from '@bike4mind/services/llm';
+import { resolveWebSearchProviders, safeHostname, searchWithHedge } from '@bike4mind/services/llm';
 import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -28,6 +28,8 @@ import { lakeConfigAuditDb } from './lakeConfigAuditDb';
  * environment-shaped is here, which is also why this is the only file that has to change when a
  * scheduler (v2) becomes the thing that enqueues a run.
  */
+
+const LOGGED_SEARCH_HOSTS = 10;
 
 /** What the loop reports back, so the handler can log a one-line outcome. */
 export interface ResearchRunOutcome {
@@ -51,9 +53,9 @@ export interface ResearchRunOutcome {
  */
 async function fetchSourceForProposal(url: string, logger: Logger) {
   try {
-    const { title, textContent, mimeType } = await fetchAndParseURL(url, { logger });
+    const { title, textContent, mimeType, finalUrl } = await fetchAndParseURL(url, { logger });
     const isExtractableText = typeof textContent === 'string' && mimeType.startsWith('text/');
-    return { title, text: isExtractableText ? textContent : undefined };
+    return { title, finalUrl, text: isExtractableText ? textContent : undefined };
   } catch (error) {
     // Fail-soft per candidate: a dead link, a 403 or an SSRF refusal costs this one source, never
     // the run. The loop counts it as `fetchFailed` so the total is visible on the run card.
@@ -252,7 +254,7 @@ export async function runLakeResearch(
   let executionSucceeded = false;
 
   try {
-    const provider = await resolveWebSearchProvider(keyAdapters);
+    const [provider, backup] = await resolveWebSearchProviders(keyAdapters);
     if (!provider) {
       // Not thrown: an unconfigured deployment is an operator fact, not a transient fault, and
       // throwing would burn three SQS deliveries and a DLQ entry on a message that can never
@@ -298,7 +300,31 @@ export async function runLakeResearch(
 
     const ports: dataLakeResearchService.ResearchRunPorts = {
       search: async (query, maxResults, recencyDays) => {
-        const hits = await provider.search(query, maxResults, { recencyDays });
+        let outcome: Awaited<ReturnType<typeof searchWithHedge>>;
+        try {
+          outcome = await searchWithHedge(provider, backup, query, maxResults, { recencyDays });
+        } catch (error) {
+          logger.error('[lakeResearch] search failed', {
+            runId,
+            query,
+            maxResults,
+            recencyDays,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+        const { results: hits, servedBy } = outcome;
+        // Hostnames too: a run that proposes nothing stores no provenance, so off-topic hits are
+        // otherwise invisible after the fact.
+        logger.log('[lakeResearch] search', {
+          runId,
+          provider: servedBy.name,
+          query,
+          maxResults,
+          recencyDays,
+          hits: hits.length,
+          hosts: hits.slice(0, LOGGED_SEARCH_HOSTS).map(hit => safeHostname(hit.url)),
+        });
         return hits.map(hit => ({ title: hit.title, url: hit.url, snippet: hit.snippet }));
       },
       judge: candidate =>

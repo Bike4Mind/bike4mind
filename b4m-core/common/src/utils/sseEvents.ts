@@ -1,8 +1,7 @@
 /**
- * Server-Sent Events (SSE) utilities for CLI LLM completions
- * Shared between Next.js API route and Lambda function
+ * SSE event types and helpers for CLI/API completions (ChatCompletion service and CLI client).
  */
-import type { QuestErrorCode } from '../types/entities/SessionTypes';
+import type { CompletionSseErrorCode } from '../schemas/cliCompletions';
 import type { StreamChannel } from './streamVisibility';
 
 export interface SSEContentEvent {
@@ -46,6 +45,14 @@ export interface SSEContentEvent {
    * chunks and whenever the provider reports nothing.
    */
   stopReason?: string;
+  /** See CompletionInfo.toolStarted. First-party only: buildPublicSSEEvent does not forward it. */
+  toolStarted?: ToolStarted;
+}
+
+/** A tool call the model has begun writing; its arguments are still streaming. */
+export interface ToolStarted {
+  name: string;
+  id?: string;
 }
 
 export interface SSEErrorEvent {
@@ -54,11 +61,10 @@ export interface SSEErrorEvent {
   /** Correlation ID for this request, when available. */
   requestId?: string;
   /**
-   * Machine-readable classifier (see QUEST_ERROR_CODES), when the failure is a
-   * recognized billing/policy condition. Absent for unclassified errors - clients
-   * must treat it as optional.
+   * Machine-readable classifier (see COMPLETION_SSE_ERROR_CODES): a billing code or a provider
+   * code. Absent for unclassified errors - clients must treat it as optional.
    */
-  code?: QuestErrorCode;
+  code?: CompletionSseErrorCode;
 }
 
 /**
@@ -105,10 +111,17 @@ export interface CompletionInfo {
   stopReason?: string;
   /**
    * Set when this chunk is NOT the assistant's prose reply - reasoning, or a raw tool
-   * artifact. Public surfaces drop the text of such a frame; first-party surfaces ignore
-   * the field and keep receiving it. See {@link StreamChannel}.
+   * artifact. buildSSEEvent drops the text of a reasoning frame; buildPublicSSEEvent also
+   * drops tool-artifact text. See {@link StreamChannel}.
    */
   channel?: StreamChannel;
+  /**
+   * Set on the frame an adapter emits the moment the provider opens a tool call, long before
+   * the call is complete: a large tool input (a whole file) takes the model tens of seconds to
+   * write, and the finished call in `toolsUsed` arrives only at the end. Lets a client name
+   * what is coming instead of showing a silence. Carries no text.
+   */
+  toolStarted?: ToolStarted;
 }
 
 /**
@@ -116,13 +129,18 @@ export interface CompletionInfo {
  * @param text - Sparse array indexed by the provider's content-block/choice index (may
  *   contain null/undefined/holes). NOT [thinking, response] - see
  *   {@link resolveResponseText} for the real shape. This positional read is kept for
- *   first-party surfaces that already depend on it; public callers use
- *   {@link buildPublicSSEEvent}, which resolves the whole array.
+ *   the authenticated API/CLI streams that already depend on it; anonymous callers use
+ *   {@link buildPublicSSEEvent}, which resolves the whole array. Either way the text of a
+ *   reasoning-tagged frame is dropped.
  * @param info - Completion metadata (tools, usage)
  * @returns SSE event object
  */
 export function buildSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
-  const textContent = text[1] || text[0] || '';
+  // A reasoning-tagged frame is never reply prose, and no caller of this builder (the public
+  // completions API, its WebSocket twin, the CLI) shows it: blank its text so tagged reasoning
+  // never reaches an API consumer. Usage, tools and thinking blocks still ride the frame. Families
+  // that inline reasoning untagged (inlinesReasoningIntoText) are not covered by this.
+  const textContent = info?.channel === 'reasoning' ? '' : text[1] || text[0] || '';
 
   const event: SSEContentEvent = {
     type: info?.toolsUsed && info.toolsUsed.length > 0 ? 'tool_use' : 'content',
@@ -169,6 +187,10 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
 
   if (info?.stopReason) {
     event.stopReason = info.stopReason;
+  }
+
+  if (info?.toolStarted) {
+    event.toolStarted = { name: info.toolStarted.name, id: info.toolStarted.id };
   }
 
   return event;
@@ -245,7 +267,7 @@ export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: 
  * @param code - Machine-readable classifier to attach, when the caller resolved one
  * @returns SSE error event
  */
-export function formatSSEError(error: unknown, requestId?: string, code?: QuestErrorCode): SSEErrorEvent {
+export function formatSSEError(error: unknown, requestId?: string, code?: CompletionSseErrorCode): SSEErrorEvent {
   const message = error instanceof Error ? error.message : 'Internal server error';
   return {
     type: 'error',

@@ -21,11 +21,8 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     const models = await ollama.listModels();
     return res.status(200).json({ models });
   } catch (error: any) {
-    console.error('Error fetching Ollama models:', error);
-    return res.status(500).json({
-      error: 'Failed to fetch Ollama models',
-      details: error.message,
-    });
+    req.logger.error('Error fetching Ollama models:', error);
+    return res.status(500).json({ error: 'Failed to fetch Ollama models' });
   }
 });
 

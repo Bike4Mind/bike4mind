@@ -34,6 +34,7 @@
   },
   "terms_policies": "Terms & Policies",
   "cookie_settings": "Cookie settings",
+  "api_docs": "API Docs",
   "login": "Login",
   "file": "Knowledge",
   "signup": "Sign Up",
@@ -152,10 +153,15 @@
       },
       "members": {
         "title": "Add Members to Project",
-        "subtitle": "Search and select users to add to your project",
+        "subtitle": "Invite people to collaborate on this project",
         "button_label": "Add Members",
-        "search_placeholder": "Search users",
-        "no_members": "Try searching for a user."
+        "search_placeholder": "Enter your teammate's full email address",
+        "no_members": "Enter your teammate's full email address to find or invite them.",
+        "no_results": "No one matches that. Enter their full email address to invite them.",
+        "invite_by_email": "Invite {{email}} by email",
+        "invite_sent": "Invitation sent to {{email}}",
+        "add_members_one": "Add {{count}} member",
+        "add_members_other": "Add {{count}} members"
       },
       "sessions": {
         "title": "Add Notebook to a Project",
@@ -215,6 +221,16 @@
     "backToEmail": "Back to email",
     "checkYourEmail": "Check your email",
     "codeSent": "Verification code sent! Check your email.",
+    "rateLimitedMinutes_one": "Too many code requests. Please try again in {{count}} minute.",
+    "rateLimitedMinutes_other": "Too many code requests. Please try again in {{count}} minutes.",
+    "rateLimitedSeconds_one": "Too many code requests. Please try again in {{count}} second.",
+    "rateLimitedSeconds_other": "Too many code requests. Please try again in {{count}} seconds.",
+    "rateLimitedLater": "Too many code requests. Please try again later.",
+    "rateLimitRetryNow": "That request did not go through. Please try again.",
+    "rateLimitedSupport": "Still stuck? Contact support and we will help you sign in.",
+    "retryIn": "Try again in {{time}}",
+    "passwordlessHint": "Sign-in is passwordless. We will email you a one-time code.",
+    "noPasswordNeeded": "No password needed for email sign-in. We email you a fresh code each time.",
     "codeSentTo": "We sent a code to <email>{{email}}</email>",
     "emailRequired": "Email is required",
     "enterEmail": "Enter your email address",
@@ -234,7 +250,7 @@
     "showPassword": "Show password",
     "enterEmailOrUsername": "Enter email or username",
     "enterPassword": "Enter password",
-    "signInOrCreate": "Sign in or create an account to continue",
+    "signInOrCreate": "Enter your email and we'll send a one-time code to sign in or create an account.",
     "justAMoment": "Just a moment...",
     "fieldErrors": {
       "invalidUsername": "Invalid username",
@@ -287,6 +303,17 @@
     "upload": "Upload Files",
     "long_title": "File Browser"
   },
+  "newChat": "New chat",
+  "a11y": {
+    "advanced_search": "Advanced search and actions",
+    "collapse_sidebar": "Collapse sidebar",
+    "close_files": "Close files",
+    "change_profile_photo": "Change profile photo",
+    "clear_type_filter": "Clear type filter",
+    "previous_page": "Previous page",
+    "next_page": "Next page",
+    "page_number": "Page {{page}}"
+  },
   "view": "View",
   "info": "Info",
   "clone": "Clone",
@@ -297,7 +324,8 @@
     "tooltip": "Profile",
     "collection": "Collection",
     "collections": {
-      "all_types": "All Types"
+      "all_types": "All Types",
+      "type_filter": "Filter by type"
     },
     "users_profile": "{{ name }}'s Profile",
     "storage_used": "Storage Used",
@@ -339,7 +367,7 @@
     "model_pricing": "Model Pricing",
     "text_models": "Text Models",
     "image_models": "Image Models",
-    "pricing_per_1k_tokens": "Pricing shown in credits per 1,000 tokens",
+    "pricing_per_1m_tokens": "Pricing shown in credits per 1,000,000 tokens",
     "pricing_per_generation": "Pricing shown in credits per image generation",
     "model_name": "Model Name",
     "price_tier": "Price Tier",
@@ -589,8 +617,8 @@
   },
   "subscription_modal": {
     "title": "Subscription",
-    "description": "Access every major AI model through one unified interface. Run advanced models like Deepseek R1 privately.",
-    "no_free_tier": "NO FREE TIER - FOCUSED ON PROFESSIONALS.",
+    "description": "Access every major AI model through one unified interface.",
+    "starter_credits": "Every account starts with free credits; subscribe for a monthly allowance.",
     "credits_rollover": "Unused credits roll over for 3 months.",
     "monthly_billing": "Monthly Billing",
     "annual_billing": "Annual Billing",

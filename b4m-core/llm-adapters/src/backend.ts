@@ -14,9 +14,11 @@ import {
   type CacheUsageStats,
   type ResponseFormat,
   type StreamChannel,
+  type ToolStarted,
 } from '@bike4mind/common';
 import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 import type { RecordableToolUse } from './recordToolResult';
+import type { DowngradedToolChoice } from './forcedToolChoice';
 
 /** Maximum number of recursive tool calls to prevent infinite loops */
 export const DEFAULT_MAX_TOOL_CALLS = 10;
@@ -32,6 +34,14 @@ interface IChoiceBase {
   chunkText?: string | null;
   /** Set when chunkText is reasoning rather than reply prose; see StreamChannel. */
   channel?: StreamChannel;
+  /**
+   * Whether chunkText is a tool-call argument fragment. Adapters whose prose shares a choice index
+   * with a tool call must set this; left undefined, a chunk at an index whose tool name is already
+   * known is treated as an argument fragment.
+   * While a tool is streaming, only `false` choices are forwarded to the client as text. An
+   * argument fragment (`true`) must arrive after the choice that carries its `tool` header.
+   */
+  toolArguments?: boolean;
   index: number;
   status: ChoiceStatus;
   statusEndReason?: ChoiceEndReason;
@@ -111,6 +121,13 @@ export interface ICompletionOptionTools {
    * MCP server. Built-in emitters are pinned in common TOOL_ARTIFACT_EMITTERS, which wins.
    */
   artifactType?: string;
+  /**
+   * Fire-and-forget tool whose result the model never needs to read: when a round already
+   * streamed answer text and every tool it called carries this flag, the adapter ends the
+   * turn instead of making the follow-up model call (which would only restate the answer).
+   * Decided by shouldEndTurnAfterTools (executeToolsBatch.ts). Never honored from MCP servers.
+   */
+  endsTurnAfterText?: boolean;
 }
 
 export interface ICompletionOptions {
@@ -162,7 +179,9 @@ export interface ICompletionOptions {
    */
   complexity?: 'simple' | 'contextual' | 'complex';
   /**
-   * Explicit reasoning effort level for OpenAI reasoning models (O1, O3, GPT-5 series)
+   * Explicit reasoning effort level. Read by the OpenAI (reasoning models: O1, O3, GPT-5 series),
+   * Kimi (K3 only), DeepSeek and Anthropic (direct and Bedrock; see planReasoningEffort) backends;
+   * ignored by the others (Gemini, xAI, Ollama). An explicit `thinking`/questMaster request wins on Anthropic.
    * When set, overrides the auto-classification from complexity
    * @see https://platform.openai.com/docs/guides/reasoning
    */
@@ -239,14 +258,20 @@ export interface ICompletionOptions {
       markDelivered: (markup: string) => void;
       flush: () => Promise<void>;
     };
+    /**
+     * A forced tool_choice the model cannot accept, downgraded to `auto` on the first turn and
+     * re-applied unchanged on every recursive turn (see forcedToolChoice.ts). Anthropic only.
+     * Internal - do not set manually.
+     */
+    downgradedToolChoice?: DowngradedToolChoice;
   };
   /** Provider-agnostic caching strategy configuration */
   cacheStrategy?: ICacheStrategy;
   /**
    * Structured-output contract. When set to `{ type: 'json_schema', ... }`,
-   * native-mode providers (OpenAI) pass the schema through to the API; tool-mode
-   * providers (Anthropic) synthesize a single tool from the schema and force
-   * `tool_choice: { type: 'tool', name }`; best-effort providers (Bedrock, Gemini,
+   * native-mode providers (OpenAI, and Anthropic models without forced tool use) pass the
+   * schema through to the API; tool-mode providers (Anthropic) synthesize a single tool from
+   * the schema and force `tool_choice: { type: 'tool', name }`; best-effort providers (Bedrock, Gemini,
    * xAI, Ollama) inject a "respond with JSON matching this schema" instruction.
    * The selected mode is reported back via `CompletionInfo.responseFormatMode`
    * so callers can decide whether to post-validate.
@@ -308,6 +333,8 @@ export type CompletionInfo = {
    * instead of scanning content for markers that are themselves model text.
    */
   channel?: StreamChannel;
+  /** A tool call the provider has just opened; see CompletionInfo.toolStarted in @bike4mind/common. */
+  toolStarted?: ToolStarted;
   inputTokens?: number;
   outputTokens?: number;
   creditsUsed?: number;
@@ -338,7 +365,8 @@ export type CompletionInfo = {
   cacheCreationInputTokens?: number;
   /**
    * How the backend honored `responseFormat`:
-   * - 'native': provider's native structured-output API (OpenAI's response_format)
+   * - 'native': provider's native structured-output API (OpenAI's response_format,
+   *   Anthropic's output_config.format)
    * - 'tool_use': synthesized tool with forced tool_choice (Anthropic)
    * - 'best-effort': prompt-only instruction (Bedrock, Gemini, xAI, Ollama)
    * Surfaced to the caller via the `X-B4M-Response-Format-Mode` SSE field so

@@ -16,7 +16,7 @@ import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
-import { executeToolsBatch } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -62,14 +62,12 @@ export class XAIBackend implements ICompletionBackend {
         max_tokens: 128000,
         can_stream: true,
         pricing: {
-          // Tiered on prompt size. <= 200K: $2 / 1M in, $6 / 1M out, $0.50 / 1M cache read.
-          // > 200K: $4 / 1M in, $12 / 1M out, $1 / 1M cache read.
-          // The docs page publishes only the base rates; the 200K threshold and the
-          // long-context and cache-read rates come from GET /v1/language-models
-          // (long_context_threshold, *_long_context, cached_prompt_text_token_price).
+          // Tiered on prompt size. <= 200K: $2 / 1M in, $6 / 1M out, $0.30 / 1M cache read.
+          // > 200K: $4 / 1M in, $12 / 1M out, $0.60 / 1M cache read. Cache read is 0.15x input,
+          // not the 0.1x default; the docs page lists all three rates per tier.
           // @see https://docs.x.ai/developers/models
-          200000: { input: 2 / 1000000, output: 6 / 1000000, cache_read: 0.5 / 1000000 },
-          500000: { input: 4 / 1000000, output: 12 / 1000000, cache_read: 1 / 1000000 },
+          200000: { input: 2 / 1000000, output: 6 / 1000000, cache_read: 0.3 / 1000000 },
+          500000: { input: 4 / 1000000, output: 12 / 1000000, cache_read: 0.6 / 1000000 },
         },
         can_think: true,
         supportsVision: true,
@@ -542,6 +540,26 @@ export class XAIBackend implements ICompletionBackend {
               }
             }
 
+            const roundText = c.message.content || '';
+            const requestedToolNames = c.message.tool_calls.flatMap(toolCall =>
+              toolCall.type === 'function' ? [toolCall.function.name] : []
+            );
+            if (shouldEndTurnAfterTools(requestedToolNames, options.tools, roundText)) {
+              this.logger.info('[Tool Execution] Ending turn: only end-of-turn tools ran', {
+                model,
+                toolsExecuted: requestedToolNames,
+              });
+              // Text is not emitted before tools in this path, so it rides on the terminal frame.
+              await (artifactGuard?.callback ?? callback)([roundText], {
+                toolsUsed,
+                inputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
+                outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                stopReason: 'tool_use',
+              });
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
+            }
+
             // One recursive call after all tools - keep tools for chaining.
             // Carry this turn's tokens forward so the terminal recursive call
             // emits the full multi-turn billable total to cb.
@@ -616,6 +634,8 @@ export class XAIBackend implements ICompletionBackend {
     // Keep the last non-null finish_reason (mirrors anthropicBackend's stopReason
     // capture) - the terminal chunk of a round carries it, earlier chunks don't.
     let streamFinishReason: string | undefined;
+    // This round's answer text (not reasoning), for shouldEndTurnAfterTools.
+    let streamedRoundText = '';
 
     for await (const chunk of response) {
       const streamedText: string[] = [];
@@ -649,6 +669,7 @@ export class XAIBackend implements ICompletionBackend {
         // Handle end of reasoning content
         if (isInThinkingBlock && c.delta.content && !(c.delta as any).reasoning_content) {
           isInThinkingBlock = false;
+          streamedRoundText += c.delta.content;
           streamedText[c.index] = reasoningEscaper.flush() + '</think>' + (c.delta.content || '');
           return;
         }
@@ -663,6 +684,7 @@ export class XAIBackend implements ICompletionBackend {
 
         if (func.length > 0) return;
 
+        streamedRoundText += c.delta.content || '';
         streamedText[c.index] = c.delta.content || '';
       });
 
@@ -842,6 +864,22 @@ export class XAIBackend implements ICompletionBackend {
               observation
             );
           }
+        }
+
+        const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
+        if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
+          this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
+            model,
+            toolsExecuted: requestedToolNames,
+          });
+          await (artifactGuard?.callback ?? callback)([], {
+            toolsUsed,
+            inputTokens: accumInputTokens + inputTokens,
+            outputTokens: accumOutputTokens + outputTokens,
+            stopReason: 'tool_use',
+          });
+          if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+          return;
         }
 
         // Keep tools available for all tool types to enable chaining

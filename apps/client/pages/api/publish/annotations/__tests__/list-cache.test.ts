@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const dbMocks = vi.hoisted(() => ({
   artifactLean: vi.fn(),
   annotationLean: vi.fn(),
+  loadLiveOwner: vi.fn(),
 }));
 
 // The route chains .get(...).post(...), so .get must return the GET handler with a
@@ -40,6 +41,7 @@ vi.mock('@server/services/publish', () => ({
   authorDisplayName: () => 'User',
   toAnnotationDto: (a: unknown) => a,
   requestHasGateProof: () => false,
+  loadLiveOwner: dbMocks.loadLiveOwner,
 }));
 
 import handler from '../[publicId]';
@@ -81,6 +83,7 @@ describe('GET annotations list - cache posture', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     dbMocks.annotationLean.mockResolvedValue([]);
+    dbMocks.loadLiveOwner.mockResolvedValue({ name: 'Owner' });
   });
 
   it('shared-caches an open-public list briefly, with no stale-while-revalidate', async () => {
@@ -131,6 +134,24 @@ describe('GET annotations list - cache posture', () => {
 
     expect(res.statusCode).toBe(200);
     expect(cacheControl(res)).toBe('private, no-store');
+  });
+
+  it('404s when the owner account is gone, banned or suspended', async () => {
+    dbMocks.artifactLean.mockResolvedValue({
+      publicId: 'pub1',
+      visibility: 'public',
+      ownerId: 'o1',
+      scopeId: 's1',
+      commentPolicy: 'open',
+      accessGate: null,
+    });
+    dbMocks.loadLiveOwner.mockResolvedValue(null);
+
+    const res = await run();
+
+    expect(res.statusCode).toBe(404);
+    expect(dbMocks.loadLiveOwner).toHaveBeenCalledWith('o1');
+    expect(dbMocks.annotationLean).not.toHaveBeenCalled();
   });
 
   it('leaves a 404 non-cacheable so it cannot poison the shared key', async () => {

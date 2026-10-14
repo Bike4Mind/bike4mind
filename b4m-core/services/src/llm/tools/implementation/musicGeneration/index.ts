@@ -3,7 +3,6 @@ import {
   DEFAULT_MUSIC_LENGTH_MS,
   DEFAULT_MUSIC_MODEL_ID,
   extensionFromMimeType,
-  KnowledgeType,
   MAX_MUSIC_LENGTH_MS,
   MIN_MUSIC_LENGTH_MS,
   MusicGenerationVendor,
@@ -11,7 +10,7 @@ import {
 import { aiMusicService } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
-import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
+import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
 import { ToolDefinition } from '../../base/types';
 
 // Single provider for now; the vendor factory (aiMusicService) is open for more.
@@ -103,17 +102,17 @@ export const musicGenerationTool: ToolDefinition = {
       // browser <audio> element can play it.
       const storedPath = await context.imageGenerateStorage.upload(audio, filename, { ContentType: contentType });
 
-      // Keep a browsable copy in the Knowledge Base (best-effort). AUDIO type so it is
-      // never chunked/vectorized/attached to a completion.
-      await persistGeneratedFileAsFabFile(context, {
-        fileName: `generated-music-${filename.slice(0, 8)}.${ext}`,
-        mimeType: contentType,
-        content: audio,
-        type: KnowledgeType.AUDIO,
-        tags: [
-          { name: 'generated', strength: 1 },
-          { name: 'music', strength: 1 },
-        ],
+      // Browsable copy in the user's files; the upload above is what the player streams.
+      await saveGeneratedAssetFromTool(context, {
+        bytes: audio,
+        contentType,
+        generation: {
+          generator: 'music',
+          provider: PROVIDER,
+          modelId,
+          prompt,
+          durationSeconds: lengthMs / 1000,
+        },
       });
 
       // Reserve + record the charge now that generation succeeded (host settles

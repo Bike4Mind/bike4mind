@@ -69,7 +69,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
     // The gate has to be INSIDE the callback: a revoke that commits mid-request collides with this
     // write on the lake doc, and the retry must re-read the grants rather than reuse the stale set.
     const data = await withTransaction(async () => {
-      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
+      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrantsById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
 
@@ -98,7 +98,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
     // The gate has to be INSIDE the callback: a revoke that commits mid-request collides with this
     // write on the lake doc, and the retry must re-read the grants rather than reuse the stale set.
     const data = await withTransaction(async () => {
-      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
+      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrantsById(id, ctx, {
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
 

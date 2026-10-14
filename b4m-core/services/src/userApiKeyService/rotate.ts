@@ -1,12 +1,12 @@
 import { ApiKeyScope, IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
 import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
-import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
 import { resolveOwnedApiKey } from './resolveOwnedApiKey';
 import { assertNoScopeEscalation } from './assertNoScopeEscalation';
 import { generateCallbackSigningSecret } from './callbackSigningSecret';
+import { computeKeyDigest } from './keyDigest';
 
 const rotateUserApiKeySchema = z.object({
   keyId: z.string(),
@@ -45,20 +45,20 @@ export interface RotateUserApiKeyResult {
 /**
  * Generate a new secure API key maintaining the same prefix format
  */
-function generateNewApiKey(): { key: string; keyPrefix: string; keyHash: string } {
+function generateNewApiKey(): { key: string; keyPrefix: string; keyDigest: string } {
   const randomPart = randomBytes(16).toString('hex'); // 32 chars
   const key = `b4m_live_${randomPart}`;
   const keyPrefix = key.substring(0, KEY_PREFIX_LENGTH);
-  const keyHash = bcrypt.hashSync(key, 12);
+  const keyDigest = computeKeyDigest(key);
 
-  return { key, keyPrefix, keyHash };
+  return { key, keyPrefix, keyDigest };
 }
 
 /**
  * Rotate a key's secret, scoped by resolveOwnedApiKey (the key's minter, or an
  * admin of the org it is billed to).
  *
- * Rotation RE-OWNS the key to whoever rotated it. Previously only `keyHash` and
+ * Rotation RE-OWNS the key to whoever rotated it. Previously only the secret and
  * `keyPrefix` were rewritten, never `userId` - so an org admin rotating a
  * teammate's org-billed key walked away with a plaintext credential that
  * authenticated as that teammate. Re-owning keeps the org-admin capability (the
@@ -117,15 +117,19 @@ export const rotateUserApiKey = async (
     );
   }
 
-  const { key, keyPrefix, keyHash } = generateNewApiKey();
+  const { key, keyPrefix, keyDigest } = generateNewApiKey();
 
-  apiKey.keyHash = keyHash;
+  apiKey.keyDigest = keyDigest;
   apiKey.keyPrefix = keyPrefix;
   if (reOwned) {
     apiKey.userId = userId;
   }
 
-  await db.userApiKeys.update({ id: apiKey.id, keyHash, keyPrefix, ...(reOwned ? { userId } : {}) });
+  // A legacy key's bcrypt hash goes too, so nothing of the rotated-away secret can authenticate.
+  await db.userApiKeys.update(
+    { id: apiKey.id, keyDigest, keyPrefix, ...(reOwned ? { userId } : {}) },
+    { unset: ['keyHash'] }
+  );
 
   const callbackSigningSecret = reOwned ? generateCallbackSigningSecret() : undefined;
   if (callbackSigningSecret) {

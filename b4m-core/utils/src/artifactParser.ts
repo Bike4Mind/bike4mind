@@ -1,5 +1,11 @@
 import { Logger } from '@bike4mind/observability';
-import { ArtifactOperation, ArtifactType, mapMimeTypeToArtifactType, matchArtifactBlocks } from '@bike4mind/common';
+import {
+  type ArtifactBlockMatch,
+  ArtifactOperation,
+  ArtifactType,
+  mapMimeTypeToArtifactType,
+  matchArtifactBlocks,
+} from '@bike4mind/common';
 
 // Value is anchored to its own quote kind so a double-quoted value can contain
 // apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
@@ -63,22 +69,32 @@ export function isSvgGraphicallyEmpty(svg: string): boolean {
 }
 
 /**
- * Parses Claude-style artifact syntax from text content
- *
- * Example syntax:
- * <artifact identifier="todo-app" type="application/vnd.ant.react" title="Todo List App">
- * // React component code here
- * </artifact>
+ * How extractArtifactBlocks resolves a block whose `type` attribute is missing or unknown.
+ *  - 'none': drop the block. The server persistence path (parseArtifacts below) uses this,
+ *    so only typed blocks reach promptMeta.artifacts.
+ *  - 'language-then-code': try the `language` attribute, then fall back to 'code', and
+ *    default `language` to 'text'. The client render path uses this so no block is lost.
  */
-export function parseArtifacts(content: string): ArtifactParseResult {
+export type ArtifactTypeFallback = 'none' | 'language-then-code';
+
+export interface ExtractArtifactBlocksOptions {
+  typeFallback?: ArtifactTypeFallback;
+}
+
+/**
+ * Every `<artifact ...>...</artifact>` block in `content`, in source order, with its
+ * attributes resolved and its position kept so callers can strip or replace the tag.
+ * Shared by this module's parseArtifacts and the client's (apps/client/app/utils/artifactParser.ts),
+ * which differ only in `typeFallback` and in what they do with the tags afterwards.
+ */
+export function extractArtifactBlocks(content: string, options: ExtractArtifactBlocksOptions = {}): ParsedArtifact[] {
+  const fallback = options.typeFallback ?? 'none';
   const artifacts: ParsedArtifact[] = [];
-  let cleanedContent = content;
 
   for (const block of matchArtifactBlocks(content)) {
     const { index: startIndex, fullMatch, attrs: attributesString, body: artifactContent } = block;
     const endIndex = startIndex + fullMatch.length;
 
-    // Parse attributes
     const attributes: Record<string, string> = {};
     let attrMatch;
     ATTRIBUTE_REGEX.lastIndex = 0;
@@ -88,33 +104,49 @@ export function parseArtifacts(content: string): ArtifactParseResult {
       attributes[key] = doubleQuoted ?? singleQuoted;
     }
 
-    // Determine artifact type and operation
-    const mimeType = attributes.type || '';
     const identifier = attributes.identifier;
     const title = attributes.title || 'Untitled Artifact';
-    const language = attributes.language;
+    let language = attributes.language;
 
-    // Map MIME type to our artifact type
-    const artifactType = mapMimeTypeToArtifactType(mimeType);
+    let artifactType = mapMimeTypeToArtifactType(attributes.type || '');
+    if (fallback === 'language-then-code') {
+      if (!artifactType && language) artifactType = mapLanguageToArtifactType(language);
+      if (!artifactType) artifactType = 'code';
+      language = language || 'text';
+    }
+    if (!artifactType) continue;
 
-    // Determine operation (create for new, update for existing with same identifier)
+    // An identifier seen on an earlier kept block makes this one an update.
     const operation: ArtifactOperation =
       identifier && artifacts.some(a => a.identifier === identifier) ? 'update' : 'create';
 
-    if (artifactType) {
-      artifacts.push({
-        fullMatch,
-        identifier,
-        type: artifactType,
-        language,
-        title,
-        content: artifactContent.trim(),
-        operation,
-        startIndex,
-        endIndex,
-      });
-    }
+    artifacts.push({
+      fullMatch,
+      identifier,
+      type: artifactType,
+      language,
+      title,
+      content: artifactContent.trim(),
+      operation,
+      startIndex,
+      endIndex,
+    });
   }
+
+  return artifacts;
+}
+
+/**
+ * Parses Claude-style artifact syntax from text content
+ *
+ * Example syntax:
+ * <artifact identifier="todo-app" type="application/vnd.ant.react" title="Todo List App">
+ * // React component code here
+ * </artifact>
+ */
+export function parseArtifacts(content: string): ArtifactParseResult {
+  const artifacts = extractArtifactBlocks(content);
+  let cleanedContent = content;
 
   // Remove artifact tags from content (in reverse order to maintain indices)
   artifacts
@@ -132,6 +164,68 @@ export function parseArtifacts(content: string): ArtifactParseResult {
 }
 
 // mapMimeTypeToArtifactType is the single source of truth in @bike4mind/common.
+
+/**
+ * Maps a `language` attribute to an artifact type, for extractArtifactBlocks'
+ * 'language-then-code' fallback when the MIME type maps to nothing.
+ */
+export function mapLanguageToArtifactType(language: string): ArtifactType | null {
+  const normalized = language.toLowerCase().trim();
+
+  // React/JSX
+  if (normalized === 'jsx' || normalized === 'tsx' || normalized === 'react') {
+    return 'react';
+  }
+
+  // JavaScript/TypeScript
+  if (normalized === 'javascript' || normalized === 'js' || normalized === 'typescript' || normalized === 'ts') {
+    return 'code';
+  }
+
+  // Python
+  if (normalized === 'python' || normalized === 'py') {
+    return 'python';
+  }
+
+  // Other programming languages
+  if (
+    normalized === 'java' ||
+    normalized === 'cpp' ||
+    normalized === 'c++' ||
+    normalized === 'c' ||
+    normalized === 'rust' ||
+    normalized === 'go' ||
+    normalized === 'golang' ||
+    normalized === 'ruby' ||
+    normalized === 'rb' ||
+    normalized === 'php' ||
+    normalized === 'swift' ||
+    normalized === 'kotlin' ||
+    normalized === 'csharp' ||
+    normalized === 'cs' ||
+    normalized === 'c#'
+  ) {
+    return 'code';
+  }
+
+  // Markup languages
+  if (normalized === 'html' || normalized === 'xhtml') {
+    return 'html';
+  }
+  if (normalized === 'svg') {
+    return 'svg';
+  }
+  if (normalized === 'markdown' || normalized === 'md') {
+    return 'code';
+  }
+
+  // Specialized visualizations
+  if (normalized === 'mermaid') {
+    return 'mermaid';
+  }
+
+  return null;
+}
 
 // Linear anchor checks for the fenced-code detectors below. Each detector used to
 // encode a content requirement inside a `(?:.*\n)*?ANCHOR(?:\n.*)*?` regex that
@@ -414,13 +508,55 @@ export function markToolEchoes(content: string, isToolEcho: (body: string) => bo
   return transformCodeBlocks(content, { isToolEcho }, true);
 }
 
+const normalizeWhitespace = (value: string): string => value.trim().replace(/\s+/g, ' ');
+
+// Single-line only: the body lines of a multi-line `accDescr {` block still count.
+const MERMAID_DEDUPE_IGNORED_LINE = /^(?:title|accTitle|accDescr)\b|^%%/;
+
+/** Dedupe form of a mermaid body: title, accessibility and comment lines dropped, whitespace normalized. */
+const mermaidDedupeLines = (value: string): string[] =>
+  value.split('\n').filter(line => !MERMAID_DEDUPE_IGNORED_LINE.test(line.trim()));
+const normalizeMermaid = (value: string): string => normalizeWhitespace(mermaidDedupeLines(value).join('\n'));
+
+/**
+ * Protects every complete artifact span from the detectors and collects normalized mermaid bodies.
+ * A span wrapping a tool-output placeholder is not protected itself, but artifacts inside it still are.
+ */
+function protectArtifactSpans(content: string, mask: ToolOutputMask): { masked: string; mermaidBodies: Set<string> } {
+  const mermaidBodies = new Set<string>();
+  const spans: Array<[number, number]> = [];
+  // restore() is single-pass, so a span wrapping an already-protected region cannot itself be protected;
+  // the scan descends into it instead, so an inner artifact sharing its closer is still found.
+  const holdsPlaceholder = (block: ArtifactBlockMatch) => mask.holds(block.fullMatch);
+  for (const block of matchArtifactBlocks(content, holdsPlaceholder)) {
+    const type = Array.from(block.attrs.matchAll(ATTRIBUTE_REGEX))
+      .filter(m => m[1] === 'type')
+      .pop();
+    if ((type?.[2] ?? type?.[3]) === 'application/vnd.ant.mermaid') mermaidBodies.add(normalizeMermaid(block.body));
+    if (holdsPlaceholder(block)) continue;
+    // Ordered and disjoint: the scan only resumes inside a block that does not become a span.
+    spans.push([block.index, block.index + block.fullMatch.length]);
+  }
+
+  let masked = '';
+  let copiedTo = 0;
+  for (const [start, end] of spans) {
+    masked += content.slice(copiedTo, start) + mask.protect(content.slice(start, end));
+    copiedTo = end;
+  }
+  return { masked: masked + content.slice(copiedTo), mermaidBodies };
+}
+
 function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions, echoOnly: boolean): string {
   const mask = maskToolOutputRegions(content);
-  content = mask.masked;
+  const spans = protectArtifactSpans(mask.masked, mask);
+  content = spans.masked;
+  const { mermaidBodies } = spans;
+  const isDuplicateMermaid = (text: string) => mermaidBodies.size > 0 && mermaidBodies.has(normalizeMermaid(text));
   const { isToolEcho } = options;
   // Echoed spans become marked fences, protected at once so later passes skip them too.
-  // A span that holds a placeholder wraps protected tool output; promoting it would put that
-  // output back inside an artifact when restore runs.
+  // A span that holds a placeholder wraps a protected region (tool output or an existing artifact);
+  // promoting it would put that region back inside a new artifact when restore runs.
   const { holds } = mask;
   const echoFence = (lang: string, body: string, whole: string, start: number, end: number): string | null =>
     isToolEcho?.(body)
@@ -512,7 +648,7 @@ ${codeContent.trim()}
 
   // Detect Mermaid code blocks and mixed content.
   content = replaceMermaidFences(content, (fullMatch, codeContent) => {
-    if (echoOnly || holds(codeContent)) return fullMatch;
+    if (echoOnly || holds(codeContent) || isDuplicateMermaid(codeContent)) return fullMatch;
     // Clean and validate the Mermaid syntax
     const { isValid, cleanedContent, errors } = validateMermaidSyntax(codeContent);
 
@@ -529,40 +665,28 @@ ${codeContent.trim()}
     }
   });
 
-  // Also handle raw Mermaid content (no code blocks) mixed with other content,
-  // e.g. when an LLM outputs raw Mermaid plus code blocks.
-  const rawMermaidRegex =
-    /((?:^|\n)(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|gantt|pie|mindmap)[\s\S]*?)(?=\n```|$)/gm;
+  content = promoteToolCallJsonArtifact(content, holds, { fence: echoFence, only: echoOnly });
 
-  content = content.replace(rawMermaidRegex, (fullMatch, mermaidContent) => {
-    // Skip if this is already inside a code block or artifact
-    if (echoOnly || holds(fullMatch) || fullMatch.includes('```') || fullMatch.includes('<artifact')) {
-      return fullMatch;
-    }
-
-    const { isValid, cleanedContent } = validateMermaidSyntax(mermaidContent);
-
-    if (isValid && cleanedContent.trim()) {
-      const diagramType = extractMermaidDiagramType(cleanedContent);
-      const identifier = `mermaid-${diagramType}`;
-      const title = `${diagramType.charAt(0).toUpperCase() + diagramType.slice(1)} Diagram`;
-
-      return `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">${cleanedContent}</artifact>`;
-    } else {
-      // If validation fails, return original content
-      return fullMatch;
-    }
-  });
-
-  content = promoteToolCallJsonArtifact(content, echoFence, echoOnly, holds);
-
-  content = promoteBareHtmlDocument(content, echoFence, echoOnly, holds);
+  content = promoteBareHtmlDocument(content, holds, { fence: echoFence, only: echoOnly });
 
   return mask.restore(content);
 }
 
 /** Returns the protected marked fence when the span is a tool echo, else null. */
-type EchoFence = (lang: string, body: string, whole: string, start: number, end: number) => string | null;
+export type EchoFence = (lang: string, body: string, whole: string, start: number, end: number) => string | null;
+
+/**
+ * Tool-echo handling for the promoters below. Only this module's convert pass passes one;
+ * the client calls them without it, since it never sees tool output and relies on the
+ * fences marked here.
+ */
+export interface EchoMarking {
+  fence: EchoFence;
+  /** Mark echoes but promote nothing else (markToolEchoes). */
+  only: boolean;
+}
+
+const NO_ECHO: EchoMarking = { fence: () => null, only: false };
 
 /**
  * Promotes an artifact that a small local model emitted as a hallucinated tool
@@ -579,16 +703,15 @@ type EchoFence = (lang: string, body: string, whole: string, start: number, end:
  * model that merely SHOWS such tool-call JSON as an example from having it
  * swallowed and re-rendered as an artifact.
  *
- * Recognition must stay identical to the twin in apps/client/app/utils/artifactParser.ts.
- * Only this copy marks tool echoes; the client never sees tool output and relies on the
- * fences marked here.
+ * Also called by the client's convertCodeBlocksToArtifacts (apps/client/app/utils/artifactParser.ts),
+ * without `echo`.
  */
-function promoteToolCallJsonArtifact(
+export function promoteToolCallJsonArtifact(
   content: string,
-  echoFence: EchoFence,
-  echoOnly: boolean,
-  holds: (value: string) => boolean
+  holds: (value: string) => boolean,
+  echo: EchoMarking = NO_ECHO
 ): string {
+  const { fence: echoFence, only: echoOnly } = echo;
   // Fence labels a model uses for a tool call; a ```html fence is handled above.
   // The negative lookahead stops ```tool matching inside ```tool_calls etc.
   const fenceRegex = /```(json|tool_code|tool)(?![a-z0-9_])([\s\S]*?)```/gi;
@@ -677,20 +800,19 @@ function looksLikeHtml(value: string): boolean {
  * raw markup with no code fence and no <artifact> wrapper. Neither parseArtifacts
  * (needs <artifact> tags) nor the fenced detectors catch this shape, so it would
  * otherwise render as raw HTML in the chat (parser gap B). Runs last so the
- * fence/artifact guards see all earlier conversions.
+ * fence/artifact guards see all earlier conversions. Also called by the client's
+ * convertCodeBlocksToArtifacts, without `echo`.
  */
-function promoteBareHtmlDocument(
+export function promoteBareHtmlDocument(
   content: string,
-  echoFence: EchoFence,
-  echoOnly: boolean,
-  holds: (value: string) => boolean
+  holds: (value: string) => boolean,
+  echo: EchoMarking = NO_ECHO
 ): string {
+  const { fence: echoFence, only: echoOnly } = echo;
   // Two forward cursors instead of one <html>...</html> pattern, and guard counts that
   // accumulate over the gap since the previous document instead of re-reading the whole
   // prefix: both of the old shapes re-scanned from the start of the message on every
   // candidate, so this pass cost time quadratic in the message length.
-  // Detection must stay identical to the twin in apps/client/app/utils/artifactParser.ts;
-  // only this copy marks tool echoes.
   const openRegex = /<!DOCTYPE\s+html|<html/gi;
   const closeRegex = /<\/html\s*>/gi;
   let out = '';
@@ -742,7 +864,7 @@ ${doc.trim()}
 /**
  * Extracts component name from React code
  */
-function extractComponentName(code: string): string | null {
+export function extractComponentName(code: string): string | null {
   // Try to find function component name
   const functionMatch = code.match(/function\s+([A-Z][a-zA-Z0-9]*)/);
   if (functionMatch) return functionMatch[1];
@@ -786,7 +908,7 @@ function nextMatchIndex(re: RegExp, text: string, from: number): number {
 // Some artifact attribute parsers are not quote-aware, so any of these characters would
 // corrupt or prematurely close the tag. Falls back to `fallback` when stripping empties
 // the string (e.g. a title that was only quotes).
-function sanitizeHTMLTitle(raw: string | null, fallback: string): string {
+export function sanitizeHTMLTitle(raw: string | null, fallback: string): string {
   const sanitized = (raw ?? '').replace(/[<>"]/g, '').trim();
   return sanitized || fallback;
 }
@@ -814,6 +936,7 @@ export function cleanMermaidSyntax(content: string): string {
   const mermaidLines: string[] = [];
   let foundMermaidStart = false;
   let foundInvalidContent = false;
+  let sequence = false;
 
   for (const line of lines) {
     const trimmedLine = line.trim();
@@ -830,6 +953,7 @@ export function cleanMermaidSyntax(content: string): string {
     if (!foundMermaidStart) {
       if (isMermaidDiagramStart(trimmedLine)) {
         foundMermaidStart = true;
+        sequence = /^sequenceDiagram\b/.test(trimmedLine);
         mermaidLines.push(line);
         continue;
       }
@@ -839,7 +963,7 @@ export function cleanMermaidSyntax(content: string): string {
 
     // If we've started Mermaid content, check if this line is valid Mermaid
     if (foundMermaidStart && !foundInvalidContent) {
-      if (isMermaidSyntax(trimmedLine)) {
+      if (isMermaidSyntax(trimmedLine, sequence)) {
         mermaidLines.push(line);
       } else {
         // Found invalid content, stop processing
@@ -942,10 +1066,24 @@ function isMermaidDiagramStart(line: string): boolean {
   );
 }
 
+// Only valid inside a sequenceDiagram: words like `option` or `title` are ordinary prose elsewhere.
+const SEQUENCE_PATTERNS = [
+  /^(participant|actor)\s+\S/,
+  /^(create\s+(participant|actor)|destroy)\s+\S/,
+  /^box(\s|$)/,
+  // A hyphen joins word runs (`Auth-Service`); in the sender never before `x`, so it cannot also read as
+  // the `-x` arrow, an ambiguity that backtracks quadratically on a long `A-xA-x...` line with no colon.
+  /^[\w.]+(?:-(?!x)[\w.]+)*(?: [\w.]+(?:-(?!x)[\w.]+)*)*\s*(<<-->>|<<->>|-->>|->>|--x|--\)|-->|->|-x|-\))[+-]?\s*[\w.]+(?:-[\w.]+)*(?: [\w.]+(?:-[\w.]+)*)*\s*:/,
+  /^Note\s+(left of|right of|over)\s+\S/,
+  /^(loop|alt|else|opt|par|and|critical|option|break|rect)(\s|$)/,
+  /^(autonumber|activate|deactivate|links?)(\s|$)/,
+  /^(title|accTitle|accDescr)\b/,
+];
+
 /**
- * Checks if a line contains valid Mermaid syntax
+ * Checks if a line contains valid Mermaid syntax. `sequence` also accepts sequence-diagram-only lines.
  */
-export function isMermaidSyntax(line: string): boolean {
+export function isMermaidSyntax(line: string, sequence = false): boolean {
   // Empty lines are valid
   if (!line.trim()) return true;
 
@@ -989,5 +1127,8 @@ export function isMermaidSyntax(line: string): boolean {
   }
 
   // If it matches a valid Mermaid pattern, it's valid
-  return mermaidPatterns.some(pattern => pattern.test(line));
+  return (
+    mermaidPatterns.some(pattern => pattern.test(line)) ||
+    (sequence && SEQUENCE_PATTERNS.some(pattern => pattern.test(line)))
+  );
 }

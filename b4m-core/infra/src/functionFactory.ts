@@ -29,6 +29,15 @@ export interface FunctionDefaultArgs {
 }
 
 /**
+ * A Function's `logging` config when log forwarding is enabled. Disabling it
+ * outright is the separate `false` input handled by `resolveDefaultLogging`.
+ */
+export interface FunctionLogging {
+  retention?: unknown;
+  logGroup?: unknown;
+}
+
+/**
  * Builds the arg fragment shared by virtually every Lambda in product infra.
  * Spread it first so per-function args can still override any field:
  *
@@ -47,6 +56,24 @@ export function buildFunctionDefaults(options: FunctionDefaultsOptions = {}): Fu
     logging: { retention: logRetention },
     environment: { ...environment, ...extraEnvironment },
   };
+}
+
+/**
+ * Applies the stage default to a Function's `logging` config: 1 month on
+ * production, 1 week elsewhere. A config that already sets `retention` or a
+ * `logGroup` is returned unchanged - SST rejects those two together, and a
+ * custom log group owns its own retention - as is `logging: false`.
+ *
+ * Unrelated to DEFAULT_LOG_RETENTION, the shorter default buildFunctionDefaults
+ * bakes into product Lambdas: an explicit retention always wins here, so the
+ * two cannot conflict.
+ */
+export function resolveDefaultLogging<T extends FunctionLogging>(
+  logging: T | false | undefined,
+  stage: string
+): T | false | { retention: '1 month' | '1 week' } {
+  if (logging === false || logging?.logGroup || logging?.retention) return logging;
+  return { ...logging, retention: stage === 'production' ? '1 month' : '1 week' };
 }
 
 /**

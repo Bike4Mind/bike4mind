@@ -29,10 +29,10 @@ import RestoreIcon from '@mui/icons-material/Restore';
 import ReplayIcon from '@mui/icons-material/Replay';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import TreeRowLabel from '@client/app/components/datalake/TreeRowLabel';
+import LakeOwnerIcon from '@client/app/components/datalake/LakeOwnerIcon';
 import LakeDraftChip from '@client/app/components/datalake/LakeDraftChip';
 import { isDraftLake } from '@client/app/components/datalake/lakeVisibility';
 import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
@@ -67,7 +67,7 @@ import { RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
-import { satisfiesTagPrefix } from '@bike4mind/common';
+import { countTagPaths, satisfiesTagPrefix } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
 import { normalizePrefix, prefixSegments } from './shared';
 import { EmptyHint, NavLifecycleSection, NavSectionHeader, NavSkeletons } from './navChrome';
@@ -152,15 +152,15 @@ export default function ManagerNav({
   const tree = useMemo(() => {
     if (!activeLake) return [];
     const prefix = normalizePrefix(activeLake.fileTagPrefix);
-    const tagCountMap = new Map<string, number>();
-    for (const file of articles) {
-      for (const tag of file.tags ?? []) {
-        if (tag.name.startsWith(prefix) && !tag.name.startsWith('datalake:')) {
-          tagCountMap.set(tag.name, (tagCountMap.get(tag.name) ?? 0) + 1);
-        }
-      }
-    }
-    return buildTagTree(Array.from(tagCountMap.entries()).map(([tag, count]) => ({ tag, count })));
+    return buildTagTree(
+      countTagPaths(
+        articles.map(file =>
+          (file.tags ?? [])
+            .map(tag => tag.name)
+            .filter(name => name.startsWith(prefix) && !name.startsWith('datalake:'))
+        )
+      )
+    );
   }, [articles, activeLake]);
 
   // Files in the lake with no prefix-matching (non-meta) tag - surfaced under "Uncategorized".
@@ -418,8 +418,10 @@ export default function ManagerNav({
                             <ListItemButton
                               onClick={() => selectLake(lake)}
                               data-testid={`datalake-manager-lake-${lake.id}`}
-                              // pr aligns the count chip with the section headers' chevrons.
-                              sx={{ ...treeRowSx(hoverBg), pr: '12px' }}
+                              // pr aligns the count chip with the section headers' chevrons. The
+                              // chips are flexShrink: 0, so they wrap onto a second line instead of
+                              // squeezing the name down to a few characters.
+                              sx={{ ...treeRowSx(hoverBg), pr: '12px', flexWrap: 'wrap', rowGap: '2px', py: '2px' }}
                             >
                               <FolderOutlinedIcon
                                 sx={{
@@ -428,10 +430,20 @@ export default function ManagerNav({
                                   flexShrink: 0,
                                 }}
                               />
-                              <ListItemContent>
-                                <Typography noWrap sx={rowTypographySx}>
-                                  {lake.name}
-                                </Typography>
+                              <ListItemContent
+                                // 24px = the 16px folder icon + the 8px treeRowSx gap; keep in sync with both, or a
+                                // long name fills the line and wraps the icon above it.
+                                sx={{ flex: '1 1 auto', maxWidth: 'calc(100% - 24px)' }}
+                              >
+                                <Tooltip title={lake.name} size="sm" placement="top-start">
+                                  <Typography
+                                    noWrap
+                                    sx={rowTypographySx}
+                                    data-testid={`datalake-manager-lake-name-${lake.id}`}
+                                  >
+                                    {lake.name}
+                                  </Typography>
+                                </Tooltip>
                               </ListItemContent>
                               {isDraftLake(lake) && <LakeDraftChip testId={`datalake-manager-draft-chip-${lake.id}`} />}
                               {/* Owner marker in the LIST itself, not just the detail pane: the
@@ -440,19 +452,7 @@ export default function ManagerNav({
                                   opening each one. The owner name is already on the row, so this
                                   costs no extra request. */}
                               {lake.isOwn === false && (
-                                <Tooltip
-                                  title={
-                                    lake.ownerDisplayName
-                                      ? `Owned by ${lake.ownerDisplayName}`
-                                      : 'Owned by another user'
-                                  }
-                                  size="sm"
-                                >
-                                  <PersonOutlineIcon
-                                    data-testid={`datalake-manager-owner-icon-${lake.id}`}
-                                    sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
-                                  />
-                                </Tooltip>
+                                <LakeOwnerIcon lake={lake} testId={`datalake-manager-owner-icon-${lake.id}`} />
                               )}
                               {/* Background AI-tag suggestion gates (progress, review, failed) -
                                   an independent clock from ingest, so these can appear well

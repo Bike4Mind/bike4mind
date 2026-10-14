@@ -1,7 +1,13 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
+import { questReplyText, spendCapExceededError } from '@bike4mind/common';
+import { InsufficientCreditsError } from '@bike4mind/services/llm';
+import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
 
 // SST Resource - the internal shared-secret bearer /process checks, plus the WebSocket
 // management endpoint the ws-completions route streams through.
@@ -32,10 +38,13 @@ vi.mock('@server/queueHandlers/questProcessor', () => ({ processQuest: mockProce
 // route (executeCompletion + credit attribution); stubbed so importing the route doesn't drag
 // in real DB models.
 const mockQuestSettleIfUnfinished = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockQuestFindById = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+const mockConnectDB = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockMongoose = vi.hoisted(() => ({ connection: { readyState: 1 } }));
 vi.mock('@bike4mind/database', () => ({
-  connectDB: vi.fn().mockResolvedValue(undefined),
-  mongoose: { connection: { readyState: 1 } },
-  questRepository: { settleIfUnfinished: mockQuestSettleIfUnfinished },
+  connectDB: mockConnectDB,
+  mongoose: mockMongoose,
+  questRepository: { settleIfUnfinished: mockQuestSettleIfUnfinished, findById: mockQuestFindById },
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue({ id: 'key1', name: 'Test Key' }) },
   adminSettingsRepository: {},
   apiKeyRepository: {},
@@ -60,8 +69,10 @@ vi.mock('@bike4mind/services', () => ({
   categorizeToolError: mockCategorizeToolError,
 }));
 
-vi.mock('@bike4mind/services/llm', async () => {
+vi.mock('@bike4mind/services/llm', async importOriginal => {
   const { z } = await import('zod');
+  const { isOperatorFault, InsufficientCreditsError } =
+    await importOriginal<typeof import('@bike4mind/services/llm')>();
   return {
     QuestStartBodySchema: z.object({
       questId: z.string(),
@@ -69,6 +80,9 @@ vi.mock('@bike4mind/services/llm', async () => {
       userId: z.string(),
       message: z.string().min(1),
     }),
+    resolveQuestErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
+    isOperatorFault,
+    InsufficientCreditsError,
   };
 });
 
@@ -100,10 +114,13 @@ vi.mock('@bike4mind/observability', () => ({
   },
 }));
 
-vi.mock('@bike4mind/utils', () => ({ registerProcessErrorHandlers: vi.fn() }));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  registerProcessErrorHandlers: vi.fn(),
+}));
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
-import { createApp, drainInFlight } from './server';
+import { createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
@@ -187,7 +204,21 @@ describe('ChatCompletion /process', () => {
       status: 'stopped',
       type: 'error',
       reply: GENERIC_PROCESSING_FAILURE_REPLY,
+      replies: [GENERIC_PROCESSING_FAILURE_REPLY],
     });
+  });
+
+  // The poll body derives `reply` from visible slots, so a failure written only to `reply` would be
+  // hidden behind the partial answer that had already streamed.
+  it('appends the failure to already-streamed slots so the poll body still reports it', async () => {
+    mockQuestFindById.mockResolvedValueOnce({ replies: ['<think>plan</think>', 'Partial answer'] });
+    mockProcessQuest.mockRejectedValueOnce(new Error('boom'));
+    await post(VALID_BODY, { authorization: AUTH });
+
+    await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+    const patch = mockQuestSettleIfUnfinished.mock.calls[0][1];
+    expect(patch.replies).toEqual(['Partial answer', GENERIC_PROCESSING_FAILURE_REPLY]);
+    expect(questReplyText(patch)).toBe(`Partial answer${GENERIC_PROCESSING_FAILURE_REPLY}`);
   });
 
   // Operator-facing signal: a quest-processing failure must emit a metric even though the user
@@ -200,18 +231,24 @@ describe('ChatCompletion /process', () => {
 
     await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
     expect(mockCategorizeToolError).toHaveBeenCalledWith('boom');
-    expect(mockEmitMetrics).toHaveBeenCalledWith('Lumina5/Quests', [
+    expect(mockEmitMetrics).toHaveBeenCalledWith(QUESTS_NAMESPACE, [
       expect.objectContaining({
-        name: 'ProcessingFailed',
+        name: QUEST_METRICS.ProcessingFailed,
         value: 1,
         unit: StandardUnit.Count,
         dimensions: { Stage: 'test' },
       }),
       expect.objectContaining({
-        name: 'ProcessingFailed',
+        name: QUEST_METRICS.ProcessingFailed,
         value: 1,
         unit: StandardUnit.Count,
         dimensions: { Stage: 'test', ErrorClass: 'internal_error' },
+      }),
+      expect.objectContaining({
+        name: 'ProcessingFailed',
+        value: 1,
+        unit: StandardUnit.Count,
+        dimensions: { Stage: 'test', Surface: '/process' },
       }),
     ]);
   });
@@ -286,6 +323,54 @@ describe('ChatCompletion SIGTERM drain', () => {
   });
 });
 
+describe('ChatCompletion drain window vs ECS stopTimeout', () => {
+  // infra/ imports SST globals ($app, aws), so it cannot be imported into a node test - scan the
+  // source instead. The drain timer starts after SIGTERM and ECS sends SIGKILL at stopTimeout, so
+  // a window equal to stopTimeout can never fire and the drain-expiry error is unreachable.
+  const infraSource = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../../../infra/chatCompletion.ts'),
+    'utf8'
+  );
+
+  it('keeps DRAIN_TIMEOUT_MS at least 5s under the ECS stopTimeout', () => {
+    // Strip comment lines before matching so a stale `// def.stopTimeout = 120` cannot
+    // satisfy (or duplicate) the assignment and make the guard pass vacuously. The regex is
+    // also anchored to the assignment (`def.stopTimeout = N`), not a bare `stopTimeout = N`.
+    const infraCode = infraSource
+      .split('\n')
+      .filter(line => !line.trimStart().startsWith('//'))
+      .join('\n');
+    const matches = [...infraCode.matchAll(/def\.stopTimeout\s*=\s*(\d+)/g)];
+    expect(matches).toHaveLength(1);
+    const stopTimeoutMs = Number(matches[0][1]) * 1000;
+    expect(DRAIN_TIMEOUT_MS).toBeLessThanOrEqual(stopTimeoutMs - 5_000);
+  });
+});
+
+describe('ChatCompletion Dockerfile PID 1', () => {
+  // The drain in server.ts only runs if PID 1 waits on SIGTERM and lets server.ts's own
+  // handler run. A package-manager wrapper (`pnpm exec`) exits immediately; the tsx CLI
+  // relays SIGTERM but SIGKILLs the script if it does not ack within ~30ms (a blocked
+  // event loop cannot). `node --import tsx` keeps tsx in-process, so node runs the handler.
+  const dockerfileSource = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../Dockerfile.chatcompletion'),
+    'utf8'
+  );
+
+  it('makes node PID 1 with tsx as an in-process loader', () => {
+    // Docker uses the LAST CMD, so read that one - an earlier CMD is dead config.
+    const cmdLines = [...dockerfileSource.matchAll(/^CMD\s+(.+)$/gm)].map(m => m[1]);
+    expect(cmdLines.length).toBeGreaterThan(0);
+    // JSON.parse also enforces exec (array) form: a shell-form `CMD node ...` is not a JSON array.
+    const cmd = JSON.parse(cmdLines[cmdLines.length - 1]) as string[];
+    expect(cmd[0]).toBe('node');
+    expect(cmd).toContain('--import');
+    expect(cmd).toContain('tsx');
+    // An ENTRYPOINT would become PID 1 instead of the CMD, hiding a wrapper.
+    expect(dockerfileSource).not.toMatch(/^ENTRYPOINT\b/m);
+  });
+});
+
 describe('ChatCompletion /api/ai/v1/completions', () => {
   const VALID_COMPLETION = { model: 'claude-test', messages: [{ role: 'user', content: 'hi' }] };
 
@@ -296,24 +381,28 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
       body: JSON.stringify(body),
     });
 
-  it('streams an SSE error and does not execute when both API key and JWT auth fail', async () => {
+  it('returns 401 JSON and does not execute when both API key and JWT auth fail', async () => {
     mockAuth.verifyApiKey.mockRejectedValue(new Error('No API key provided'));
     mockAuth.verifyJwtToken.mockRejectedValue(new Error('No authorization token provided'));
 
     const res = await postCompletion(VALID_COMPLETION);
-    // The SSE stream is established (200 + headers written) before auth runs, so the failure
-    // is delivered as an in-stream error event rather than an HTTP error status.
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toContain('text/event-stream');
-    const text = await res.text();
-    expect(text).toContain('Authentication failed');
+    expect(res.status).toBe(401);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(await res.json()).toEqual({
+      error: 'Authentication failed. Provide a valid API key or JWT token.',
+      request_id: res.headers.get('x-request-id'),
+    });
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('streams an SSE error on an invalid request body (no execution)', async () => {
+  it('returns 422 JSON on an invalid request body (no execution)', async () => {
     const res = await postCompletion({ messages: [] }); // missing required `model`
-    const text = await res.text();
-    expect(text).toContain('Invalid request body');
+    expect(res.status).toBe(422);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    const body = (await res.json()) as { error: string; request_id: string };
+    expect(body.error).toMatch(/^Validation error/);
+    expect(body.error).toContain('model');
+    expect(body.request_id).toBe(res.headers.get('x-request-id'));
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
@@ -325,11 +414,13 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
       rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
     });
     mockAuth.checkApiKeyRateLimitOrThrow.mockResolvedValue({});
-    mockExecuteCompletion.mockImplementation(async ({ onChunk }) => {
+    mockExecuteCompletion.mockImplementation(async ({ onReady, onChunk }) => {
+      await onReady?.();
       await onChunk(['Hello', null], { outputTokens: 5 });
     });
 
     const res = await postCompletion(VALID_COMPLETION, { 'x-api-key': 'b4m_test' });
+    expect(res.headers.get('content-type')).toContain('text/event-stream');
     const text = await res.text();
 
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
@@ -346,7 +437,8 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     mockAuth.verifyApiKey.mockRejectedValue(new Error('No API key provided'));
     mockAuth.verifyJwtToken.mockResolvedValue({ id: 'u2', email: null, username: null, user: {} });
     mockAuth.checkRateLimit.mockResolvedValue(undefined);
-    mockExecuteCompletion.mockImplementation(async ({ onChunk }) => {
+    mockExecuteCompletion.mockImplementation(async ({ onReady, onChunk }) => {
+      await onReady?.();
       await onChunk(['hi', null]);
     });
 
@@ -371,7 +463,8 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
       rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
     });
     mockAuth.checkApiKeyRateLimitOrThrow.mockResolvedValue({});
-    mockExecuteCompletion.mockImplementation(async ({ onChunk }) => {
+    mockExecuteCompletion.mockImplementation(async ({ onReady, onChunk }) => {
+      await onReady?.();
       await onChunk(['Hello', null], { outputTokens: 5 });
     });
 
@@ -461,6 +554,7 @@ describe('ChatCompletion /api/ai/v1/ws-completions', () => {
     const res = await postWsCompletion(VALID_WS_COMPLETION);
     expect(res.status).toBe(401);
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
   });
 
   it('returns 400 on an invalid body (missing requestId)', async () => {
@@ -526,5 +620,47 @@ describe('ChatCompletion /api/ai/v1/ws-completions', () => {
     const sent = await waitForAction('cli_completion_error');
     const errorMsg = sent.find(msg => msg.action === 'cli_completion_error');
     expect(errorMsg).toMatchObject({ requestId: REQUEST_ID });
+
+    await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
+    expect(mockEmitMetrics.mock.calls[0][1]).toContainEqual(
+      expect.objectContaining({ name: 'ProcessingFailed', dimensions: { Stage: 'test', Surface: 'cli-ws' } })
+    );
+  });
+
+  it('does not count a billing rejection on the cli-ws surface', async () => {
+    authAsApiKeyUser();
+    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }]);
+    mockExecuteCompletion.mockRejectedValue(new InsufficientCreditsError('out of credits', 'insufficient_credits'));
+
+    await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
+    await waitForAction('cli_completion_error');
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
+  });
+
+  it('does not count a spend-cap rejection on the cli-ws surface', async () => {
+    authAsApiKeyUser();
+    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }]);
+    mockExecuteCompletion.mockRejectedValue(spendCapExceededError('cap hit'));
+
+    await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
+    await waitForAction('cli_completion_error');
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
+  });
+
+  it('counts a pre-completion failure on the cli-ws surface', async () => {
+    mockMongoose.connection.readyState = 0;
+    mockConnectDB.mockRejectedValueOnce(new Error('mongo unreachable'));
+    try {
+      const res = await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
+      expect(res.status).toBe(500);
+    } finally {
+      mockMongoose.connection.readyState = 1;
+    }
+
+    await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
+    expect(mockEmitMetrics.mock.calls[0][1]).toContainEqual(
+      expect.objectContaining({ name: 'ProcessingFailed', dimensions: { Stage: 'test', Surface: 'cli-ws' } })
+    );
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 });

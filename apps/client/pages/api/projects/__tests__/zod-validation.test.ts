@@ -64,10 +64,10 @@ describe('POST /api/projects -- Zod validation', () => {
     expect(createProject).not.toHaveBeenCalled();
   });
 
-  it('rejects a missing description with ZodError', async () => {
+  it('accepts a project with no description', async () => {
     const { req, res } = makeReq({ name: 'My Project' });
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(ZodError);
-    expect(createProject).not.toHaveBeenCalled();
+    await mockRefs.postHandler!(req, res);
+    expect(createProject).toHaveBeenCalledOnce();
   });
 
   it('strips unknown keys before they reach the service', async () => {

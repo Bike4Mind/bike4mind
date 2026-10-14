@@ -6,6 +6,7 @@ import { weatherTool } from './implementation/weather';
 import { imageGenerationTool } from './implementation/imageGeneration';
 import { musicGenerationTool } from './implementation/musicGeneration';
 import { audioGenerationTool } from './implementation/audioGeneration';
+import { videoGenerationTool } from './implementation/videoGeneration';
 import { webSearchTool } from './implementation/websearch';
 import { webFetchTool } from './implementation/webfetch';
 import { wolframAlphaTool } from './implementation/wolfram_alpha';
@@ -66,7 +67,6 @@ export type SlackLlmTools =
   | 'share_curated_file'
   | 'notebook_new'
   | 'notebook_status'
-  | 'confirm_pending_action'
   | 'cancel_pending_action';
 export { setShowUserQuestionFn };
 export type {
@@ -77,6 +77,7 @@ export type {
   UserQuestionAnswer,
 } from './implementation/askUserQuestion';
 
+export { isVideoToolConfig, type VideoToolConfig } from './implementation/videoGeneration';
 export type { Searcher, SearchResult, ContentExtractionResult } from './implementation/deepResearch';
 
 /**
@@ -106,6 +107,7 @@ export const b4mTools = {
   edit_image: imageEditTool,
   music_generation: musicGenerationTool,
   audio_generation: audioGenerationTool,
+  video_generation: videoGenerationTool,
   web_search: webSearchTool,
   web_fetch: webFetchTool,
   wolfram_alpha: wolframAlphaTool,
@@ -171,3 +173,7 @@ export const b4mTools = {
  * tool map explicitly.
  */
 export { generateTools, generateMcpTools, generateMcpToolsFromCache } from './toolGenerators';
+
+// Shared "confirmed empty" guard so the chat path (ToolBuilder) and agent path (loadAgentMcpTools) cannot drift.
+export { MCP_EMPTY_TOOL_FETCH_TTL_MS, shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';
+export type { McpToolSchema } from './mcpToolFetchCache';

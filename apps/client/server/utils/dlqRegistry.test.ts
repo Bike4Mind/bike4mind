@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // vi.hoisted runs before vi.mock hoisting, making mockDlqUrls available in the factory
 const mockDlqUrls = vi.hoisted(() => ({
@@ -7,9 +9,9 @@ const mockDlqUrls = vi.hoisted(() => ({
   'image-generation': 'https://sqs.us-east-2.amazonaws.com/123456789/imageGenerationDLQ',
   'image-edit': 'https://sqs.us-east-2.amazonaws.com/123456789/imageEditDLQ',
   'generation-callback': 'https://sqs.us-east-2.amazonaws.com/123456789/generationCallbackQueueDLQ',
-  'video-generation': 'https://sqs.us-east-2.amazonaws.com/123456789/videoGenerationDLQ',
+  'generation-job': 'https://sqs.us-east-2.amazonaws.com/123456789/generationJobDLQ',
   'research-engine': 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueueDLQ',
-  'whats-new-generation': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueueDLQ',
+  'release-notes': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueueDLQ',
   'whats-new-highlights': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewHighlightsQueueDLQ',
   'notebook-curation': 'https://sqs.us-east-2.amazonaws.com/123456789/notebookCurationQueueDLQ',
   'agent-proactive-message': 'https://sqs.us-east-2.amazonaws.com/123456789/agentProactiveMessageQueueDLQ',
@@ -31,6 +33,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'agent-continuation': 'https://sqs.us-east-2.amazonaws.com/123456789/agentContinuationQueueDLQ',
   'optihashi-run-completion': 'https://sqs.us-east-2.amazonaws.com/123456789/optihashiRunCompletionQueueDLQ',
   'bob-run': 'https://sqs.us-east-2.amazonaws.com/123456789/bobRunQueueDLQ',
+  'libreoncology-audio-render': 'https://sqs.us-east-2.amazonaws.com/123456789/libreoncologyAudioRenderQueueDLQ',
   'data-lake-cleanup': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeCleanupQueueDLQ',
   'data-lake-research': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeResearchQueueDLQ',
   'data-lake-taxonomy': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeTaxonomyQueueDLQ',
@@ -48,7 +51,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   imageGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/imageGenerationQueue',
   imageEditQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/imageEditQueue',
   generationCallbackQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generationCallbackQueue',
-  videoGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/videoGenerationQueue',
+  generationJobQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generationJobQueue',
   researchEngineQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueue',
   whatsNewGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueue',
   whatsNewHighlightsQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewHighlightsQueue',
@@ -72,6 +75,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   agentContinuationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/agentContinuationQueue',
   optihashiRunCompletionQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/optihashiRunCompletionQueue',
   bobRunQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/bobRunQueue',
+  libreoncologyAudioRenderQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/libreoncologyAudioRenderQueue',
   dataLakeCleanupQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeCleanupQueue',
   dataLakeResearchQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeResearchQueue',
   dataLakeTaxonomyQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeTaxonomyQueue',
@@ -95,9 +99,9 @@ import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './d
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
-    it('returns all 38 DLQ entries', () => {
+    it('returns all 39 DLQ entries', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(38);
+      expect(registry).toHaveLength(39);
     });
 
     it('each entry has required fields', () => {
@@ -174,5 +178,21 @@ describe('dlqRegistry', () => {
       // @ts-expect-error testing runtime behavior with invalid name
       expect(() => getSourceQueueUrl('nonExistentQueue')).toThrow('Missing source queue URL for: nonExistentQueue');
     });
+  });
+});
+
+describe('dlqUrls Linkable', () => {
+  // The mock above cannot catch a key renamed on one side only; read the real infra/web.ts instead.
+  it('exposes a URL under every registry label, and nothing else', () => {
+    const webTs = readFileSync(fileURLToPath(new URL('../../../../infra/web.ts', import.meta.url)), 'utf8');
+    const block = webTs.slice(webTs.indexOf("new sst.Linkable('dlqUrls'"));
+    const properties = block.slice(block.indexOf('{'), block.indexOf('\n});'));
+    const linkableKeys = [...properties.matchAll(/^\s+'([a-z0-9-]+)':/gm)].map(m => m[1]).sort();
+
+    expect(linkableKeys).toEqual(
+      getDlqRegistry()
+        .map(entry => entry.label)
+        .sort()
+    );
   });
 });

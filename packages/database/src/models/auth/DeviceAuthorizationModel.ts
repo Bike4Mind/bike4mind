@@ -1,4 +1,4 @@
-import { IMongoDocument, IBaseRepository } from '@bike4mind/common';
+import { IMongoDocument, IBaseRepository, OAUTH_DEVICE_CLIENT_IDS, OAuthDeviceClientId } from '@bike4mind/common';
 import mongoose, { Schema, model, Model } from 'mongoose';
 import crypto from 'crypto';
 import BaseRepository from '@bike4mind/db-core';
@@ -17,6 +17,13 @@ export function digestDeviceCode(deviceCode: string): string {
 export interface IDeviceAuthorizationDocument extends IMongoDocument {
   deviceCode: string; // SHA-256 digest of the raw device code (see digestDeviceCode)
   userCode: string; // Plain text: "WXYZ-1234"
+  /**
+   * Which client asked (see OAUTH_DEVICE_CLIENT_IDS). The browser approval
+   * screen names it, and the token endpoint binds redemption to it per RFC 8628
+   * s3.4. Optional only because rows created before this field existed are still
+   * readable until their 10-minute TTL elapses; every new row sets it.
+   */
+  clientId?: OAuthDeviceClientId;
   status: 'pending' | 'approved' | 'denied' | 'expired' | 'consumed';
   userId: string | null;
   expiresAt: Date; // 10 minutes from creation
@@ -34,6 +41,7 @@ const DeviceAuthorizationSchema = new Schema<IDeviceAuthorizationDocument>(
   {
     deviceCode: { type: String, required: true },
     userCode: { type: String, required: true, unique: true },
+    clientId: { type: String, required: true, enum: [...OAUTH_DEVICE_CLIENT_IDS] },
     status: {
       type: String,
       enum: ['pending', 'approved', 'denied', 'expired', 'consumed'],

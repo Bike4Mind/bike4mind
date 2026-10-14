@@ -14,6 +14,8 @@ const mockRefs = vi.hoisted(() => ({
   deleteHandler: null as null | ((req: any, res: any) => unknown),
   searchArgs: undefined as unknown[] | undefined,
   deleteManyArgs: undefined as unknown[] | undefined,
+  findFilters: [] as unknown[],
+  unpublishArgs: undefined as unknown[] | undefined,
   updateManyArgs: undefined as unknown[] | undefined,
   updateManyOptions: undefined as unknown,
   baseApiOptions: undefined as unknown,
@@ -38,7 +40,15 @@ const fabFileDocs = vi.hoisted(() => [{ filePath: 'a/one.png' }, { filePath: 'b/
 
 vi.mock('@bike4mind/database', () => {
   class FabFile {
-    static find = () => ({ select: () => ({ session: async () => fabFileDocs }) });
+    static find = (filter: unknown) => {
+      mockRefs.findFilters.push(filter);
+      return {
+        select: () => ({
+          session: async () => fabFileDocs,
+          lean: async () => fabFileDocs.map((doc, i) => ({ ...doc, _id: `file-${i}` })),
+        }),
+      };
+    };
     // Mirrors the real soft-delete plugin static: it settles to a plain Promise, not a
     // chainable Query, so calling `.session()` on the return value throws in production
     // (see softDeletePlugin in b4m-core/db-core/src/utils/mongo.ts). Session must be
@@ -88,6 +98,12 @@ vi.mock('@bike4mind/services', () => ({
 
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn(), delete: vi.fn() }) }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: (...args: unknown[]) => {
+    mockRefs.unpublishArgs = args;
+    return Promise.resolve({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
+  },
+}));
 const accessibleFilter = vi.hoisted(() => ({ __accessibleFilter: true }));
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => accessibleFilter }) }));
 
@@ -183,6 +199,8 @@ function invokeDelete() {
 describe('DELETE /api/files', () => {
   beforeEach(() => {
     mockRefs.deleteManyArgs = undefined;
+    mockRefs.findFilters = [];
+    mockRefs.unpublishArgs = undefined;
     mockRefs.updateManyArgs = undefined;
     mockRefs.updateManyOptions = undefined;
   });
@@ -205,6 +223,19 @@ describe('DELETE /api/files', () => {
     expect(deleteFilter.$and[0]).toBe(accessibleFilter);
     expect(deleteFilter.$and[1]).toEqual({ userId: 'user-1' });
     expect(mockRefs.deleteManyArgs?.[1]).toEqual({ session: { __fakeSession: true } });
+  });
+
+  it("takes down the caller's pages published from the files it owns", async () => {
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    // Only the owner-scoped arm feeds the takedown: a file shared IN keeps its owner's pages.
+    const firstFind = mockRefs.findFilters[0] as { $and: unknown[] };
+    expect(firstFind.$and[0]).toBe(accessibleFilter);
+    expect(firstFind.$and[1]).toEqual({ userId: 'user-1' });
+    expect(mockRefs.unpublishArgs?.[0]).toBe('user-1');
+    expect(mockRefs.unpublishArgs?.[1]).toEqual({ kind: 'fabfile', fabFileIds: ['file-0', 'file-1'] });
   });
 
   it('unshares files owned by others rather than deleting them', async () => {

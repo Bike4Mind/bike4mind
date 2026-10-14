@@ -102,3 +102,46 @@ describe('handleCommand("/llm") - composer preferences on the wire', () => {
     expect(body.params).not.toHaveProperty('agentMode');
   });
 });
+
+// The `/new` composer's Agents panel only updates local `workBenchAgents`; those ids have to ride
+// the first turn (the one that creates the session) or the selection is silently dropped. They are
+// session-creation inputs, so they must be top-level and must NOT also nest inside `params`.
+describe('handleLLMCommand - workbench agentIds on a new-session turn (GH #2600)', () => {
+  beforeEach(() => {
+    post.mockReset();
+    post.mockResolvedValue({ data: { quest: { id: 'quest-1' }, session: { id: 'session-1' } } });
+  });
+
+  it('sends agentIds at the top level when there is no current session', async () => {
+    await handleLLMCommand({ ...baseArgs(), currentSession: null, agentIds: ['a1'] });
+
+    const body = llmRequestBody();
+    expect(body.agentIds).toEqual(['a1']);
+    expect(body.params).not.toHaveProperty('agentIds');
+  });
+
+  it('omits agentIds for an existing session (only applies on create)', async () => {
+    await handleLLMCommand({ ...baseArgs(), currentSession: { id: 'session-1' }, agentIds: ['a1'] });
+
+    expect(llmRequestBody()).not.toHaveProperty('agentIds');
+  });
+
+  it('omits an empty agentIds list rather than sending []', async () => {
+    await handleLLMCommand({ ...baseArgs(), currentSession: null, agentIds: [] });
+
+    expect(llmRequestBody()).not.toHaveProperty('agentIds');
+  });
+
+  it('carries agentIds through handleCommand("/llm") for a new session', async () => {
+    await handleCommand({ '/llm': handleLLMCommand }, {
+      ...baseArgs(),
+      currentSession: null,
+      command: '/llm',
+      agentIds: ['a1', 'a2'],
+    } as unknown as Parameters<typeof handleCommand>[1]);
+
+    const body = llmRequestBody();
+    expect(body.agentIds).toEqual(['a1', 'a2']);
+    expect(body.params).not.toHaveProperty('agentIds');
+  });
+});

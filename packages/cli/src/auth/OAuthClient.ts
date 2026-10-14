@@ -1,4 +1,5 @@
 import axios, { type AxiosInstance } from 'axios';
+import type { OAuthDeviceClientId } from '@bike4mind/common';
 
 export interface DeviceFlowResponse {
   device_code: string;
@@ -34,7 +35,9 @@ export interface TokenError {
  */
 export class OAuthClient {
   private apiClient: AxiosInstance;
-  private readonly clientId = 'b4m-cli';
+  // Typed against the server allowlist so dropping this id there fails this build rather than
+  // this client's logins (see OAUTH_DEVICE_CLIENT_IDS).
+  private readonly clientId: OAuthDeviceClientId = 'b4m-cli';
 
   constructor(baseURL: string = 'http://localhost:3000') {
     this.apiClient = axios.create({

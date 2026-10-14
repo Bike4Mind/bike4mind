@@ -3,7 +3,7 @@ import { Dropdown, MenuButton, Menu, MenuItem, ListDivider, IconButton, Tooltip 
 import type { SxProps } from '@mui/joy/styles/types';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
-import { toast } from 'react-hot-toast';
+import { toast } from 'sonner';
 import { marked } from 'marked';
 import { Document, Paragraph, TextRun, Packer, Table, TableRow, TableCell, WidthType } from 'docx';
 import { renderMarkdownToStyledHtml } from '@client/app/utils/markdownToStyledHtml';

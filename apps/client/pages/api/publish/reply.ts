@@ -4,6 +4,12 @@ import { Quest, PublishedArtifact, Session } from '@bike4mind/database';
 import { PublishReplyRequestSchema, type PublishResult, type CitableSource, visibleReplyText } from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, checkPublishQuota, type PublishUser } from '@server/services/publish';
 import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
+import {
+  REPLY_TITLE_MAX,
+  replyFirstLine,
+  stripInlineMarkdown,
+  truncateAtWord,
+} from '@server/services/publish/plainTitle';
 
 /**
  * POST /api/publish/reply - publish a single assistant reply as a public viewer
@@ -187,27 +193,26 @@ const handler = baseApi().post(async (req, res) => {
 });
 
 /**
- * First non-empty markdown line (stripped of leading #/*), capped, as a title. Embedded
+ * First non-empty markdown line (stripped of leading #/* and inline markdown), capped, as a title. Embedded
  * `<artifact>` blocks are removed first so a reply that LEADS with an artifact doesn't take
  * the raw `<artifact ...>` wrapper tag as its title (#708); if the reply is nothing but an
- * artifact, fall back to the artifact's own title attribute.
+ * artifact, fall back to the artifact's own title attribute. Serve's displayReplyTitle
+ * (server/services/publish/plainTitle.ts) recognizes rows this cut before it stripped markers.
  */
 export function deriveTitle(markdown: string): string {
-  const { artifacts, cleanedContent } = parseArtifactsWithFallback(markdown);
-  const firstLine = cleanedContent
-    .split('\n')
-    .map(l => l.trim())
-    .find(Boolean);
+  const firstLine = replyFirstLine(markdown);
   if (firstLine) {
-    const cleaned = firstLine
-      .replace(/^#+\s*/, '')
-      .replace(/^[*_>-]+\s*/, '')
-      .slice(0, 120);
+    const cleaned = truncateAtWord(
+      stripInlineMarkdown(firstLine.slice(0, REPLY_TITLE_MAX * 4).replace(/^#+\s*/, '')).replace(/^[*_>-]+\s*/, ''),
+      REPLY_TITLE_MAX
+    );
     if (cleaned) return cleaned;
   }
-  const named = artifacts.find(a => a.title && a.title !== 'Untitled Artifact');
-  return named?.title?.slice(0, 120) || 'Shared reply';
+  const named = parseArtifactsWithFallback(markdown).artifacts.find(a => a.title && a.title !== 'Untitled Artifact');
+  return (named?.title && truncateAtWord(named.title, REPLY_TITLE_MAX)) || 'Shared reply';
 }
+
+export { truncateAtWord };
 
 export const config = {
   api: { externalResolver: true },

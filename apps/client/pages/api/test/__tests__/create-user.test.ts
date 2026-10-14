@@ -118,4 +118,29 @@ describe('POST /api/test/create-user', () => {
       expect(json).toHaveBeenCalledWith(expect.objectContaining({ accessToken: 'at', refreshToken: 'rt' }));
     });
   });
+
+  describe('includePredefinedTags', () => {
+    const tagsFor = async (over: Record<string, unknown>) => {
+      const { res, status } = makeRes();
+      await handler(makeReq(over) as never, res);
+      expect(status).toHaveBeenCalledWith(201);
+      return h.createUser.mock.calls[0][0].tags;
+    };
+
+    it('prepends the predefined tags when the flag is omitted', async () => {
+      expect(await tagsFor({ tags: ['extra'] })).toEqual(['seed-tag', 'extra']);
+    });
+
+    it('keeps only the passed tags when the flag is false', async () => {
+      expect(await tagsFor({ includePredefinedTags: false, tags: ['Customer', 'Opti'] })).toEqual(['Customer', 'Opti']);
+    });
+
+    it('yields no tags when the flag is false and none are passed', async () => {
+      expect(await tagsFor({ includePredefinedTags: false })).toEqual([]);
+    });
+
+    it('keeps the default for a non-boolean "false"', async () => {
+      expect(await tagsFor({ includePredefinedTags: 'false', tags: ['extra'] })).toEqual(['seed-tag', 'extra']);
+    });
+  });
 });

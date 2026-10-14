@@ -7,7 +7,7 @@ import {
   isLocalImageBackendAvailable,
   isLocalEmbedderAvailable,
   type ToolAvailability,
-} from '@bike4mind/services/llm';
+} from '@bike4mind/services/llm/toolAvailability';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { resolveEffectiveEmbeddingModel } from '@server/embeddings/effectiveEmbeddingModel';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';

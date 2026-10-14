@@ -29,11 +29,11 @@ on:
         description: 'AI model to test'
         type: choice
         options:
-          - Claude 4.8 Opus
-          - Claude 4.7 Opus
-          - Claude 4.6 Opus
-          - Claude 4.6 Sonnet
-          - Claude 4.5 Haiku
+          - Claude Opus 4.8
+          - Claude Opus 4.7
+          - Claude Opus 4.6
+          - Claude Sonnet 4.6
+          - Claude Haiku 4.5
           - GPT-5.5
           - GPT-5.4
           - GPT-5.4 Mini
@@ -42,7 +42,7 @@ on:
           - GPT-5.2
           - GPT-5 Nano
           - GPT-4.1 Mini
-        default: Claude 4.6 Opus
+        default: Claude Opus 4.6
       run_full_matrix:
         description: 'Run the full matrix (all specs × the latest GPT and latest Claude available in the AI settings modal) instead of a single cell'
         type: boolean

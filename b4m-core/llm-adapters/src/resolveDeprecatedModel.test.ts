@@ -162,8 +162,6 @@ const UNMAPPED_LEGACY: ReadonlySet<string> = new Set<string>([
   'gpt-image-1',
   'gpt-image-1-mini',
   'gpt-image-1.5',
-  'sora-2',
-  'sora-2-pro',
   'claude-3-5-haiku-20241022',
   'us.anthropic.claude-3-5-haiku-20241022-v1:0',
   'gemini-1.5-flash',

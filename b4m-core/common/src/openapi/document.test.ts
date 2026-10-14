@@ -61,7 +61,7 @@ describe('buildOpenApiDocument', () => {
     expect(completions.requestBody.content['application/json'].schema).toEqual(ref('createCompletionRequest'));
     expect(tools.requestBody.content['application/json'].schema).toEqual(ref('executeToolRequest'));
     // 4xx references the shared error envelope; tools 500 returns the full result body.
-    expect(completions.responses['400'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    expect(completions.responses['400'].content['application/json'].schema).toEqual(ref('createCompletionResponse400'));
     expect(tools.responses['400'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
     expect(tools.responses['200'].content['application/json'].schema).toEqual(ref('executeToolResponse200'));
     expect(tools.responses['500'].content['application/json'].schema).toEqual(ref('executeToolResponse500'));
@@ -97,16 +97,13 @@ describe('buildOpenApiDocument', () => {
   it('documents tools 401/429 and JWT-only code samples (matches the JWT-only handler)', () => {
     expect(tools.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
     expect(tools.responses['429'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
-    // completions surfaces auth/rate errors as in-band SSE, so it must NOT declare HTTP 401/429.
-    expect(completions.responses['401']).toBeUndefined();
-    expect(completions.responses['429']).toBeUndefined();
     // Tools code samples must show a JWT bearer, never a b4m_live_ API key.
     const toolsCurl = tools['x-codeSamples'].find((s: { lang: string }) => s.lang === 'curl').source as string;
     expect(toolsCurl).toContain('Bearer <access_token>');
     expect(toolsCurl).not.toContain('b4m_live_');
   });
 
-  it('auto-injects 401 (and 403 for scoped ops) on non-streaming authenticated endpoints', () => {
+  it('auto-injects 401 (and 403 for scoped ops) on authenticated endpoints, streaming included', () => {
     // Guards the central auth-response injection in registerContract. chatContract
     // declares neither 401 nor 403 itself, so both come purely from the injection;
     // dropping it silently narrows /api/chat's published spec and generated SDKs
@@ -114,11 +111,24 @@ describe('buildOpenApiDocument', () => {
     expect(chat.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
     // The scope 403 extends the envelope with the route's required scopes (apiKeyAuth.ts).
     expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('ScopeForbiddenResponse'));
-    // Streaming completions opens the stream first, so auth/scope failures are
-    // in-band SSE events - it must NOT declare HTTP 401/403 even though it is
-    // authenticated and scoped.
-    expect(completions.responses['401']).toBeUndefined();
-    expect(completions.responses['403']).toBeUndefined();
+    // Completions authenticates before it opens its stream, so it gets the same pair.
+    expect(completions.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    expect(completions.responses['403'].content['application/json'].schema).toEqual(ref('ScopeForbiddenResponse'));
+  });
+
+  it('documents every pre-stream completions failure as a JSON error with a real status', () => {
+    const json = (status: string) => completions.responses[status].content['application/json'].schema;
+    expect(json('400')).toEqual(ref('createCompletionResponse400'));
+    expect(doc.components.schemas.createCompletionResponse400.properties.errorCode.enum).toEqual(['unknown_model']);
+    expect(json('413')).toEqual(ref('ErrorResponse'));
+    expect(json('422')).toEqual(ref('createCompletionResponse422'));
+    expect(doc.components.schemas.createCompletionResponse422.properties.errorCode).toBeDefined();
+    expect(json('429')).toEqual(ref('ErrorResponse'));
+    expect(completions.responses['429'].headers['Retry-After']).toBeDefined();
+    expect(json('500')).toEqual(ref('ErrorResponse'));
+    expect(json('503')).toEqual(ref('createCompletionResponse503'));
+    expect(doc.components.schemas.createCompletionResponse503.properties.errorCode).toBeDefined();
+    expect(completions.responses['402']).toBeUndefined();
   });
 
   it('publishes a declared scope 403 as ScopeForbiddenResponse, keeping its own description', () => {
@@ -167,6 +177,24 @@ describe('buildOpenApiDocument', () => {
       expect(source).toContain('\nB4M_REQUEST_BODY');
       expect(source).not.toContain("-d '");
     }
+  });
+
+  it('sends a request body in code samples only when the operation declares one', () => {
+    const sessionPath = doc.paths['/api/sessions/{id}'];
+    const sources = (op: typeof completions) =>
+      op['x-codeSamples'].map((s: { source: string }) => s.source) as string[];
+    // DELETE and GET declare no requestBody, so no sample sends Content-Type or a `{}` body.
+    for (const op of [sessionPath.delete, sessionPath.get]) {
+      expect(op.requestBody).toBeUndefined();
+      for (const source of sources(op)) {
+        expect(source).not.toContain('Content-Type');
+        expect(source).not.toContain('B4M_REQUEST_BODY');
+        expect(source).not.toContain('JSON.stringify');
+        expect(source).not.toContain('json=');
+      }
+    }
+    // PUT on the same path declares one, so its samples still carry it.
+    for (const source of sources(sessionPath.put)) expect(source).toContain('knowledgeIds');
   });
 
   it('sources the code-sample URL from the same env as servers() (B4M_OPENAPI_PROD_URL)', () => {
@@ -221,6 +249,43 @@ describe('buildOpenApiDocument', () => {
     expect(new Set(publishedHeaders)).toEqual(new Set(expectedHeaders));
     const describedHeaders = [...doc.info.description.matchAll(/`(X-RateLimit-[A-Za-z-]+)`/g)].map(m => m[1]);
     expect(new Set(describedHeaders)).toEqual(new Set(expectedHeaders));
+    // 401/403 and the streaming completions endpoint carry no rate-limit headers.
+    const rateLimitsStart = doc.info.description.indexOf('## Rate limits');
+    const rateLimitsEnd = doc.info.description.indexOf('## Credits');
+    expect(rateLimitsStart).toBeGreaterThanOrEqual(0);
+    expect(rateLimitsEnd).toBeGreaterThan(rateLimitsStart);
+    expect(doc.info.description.slice(rateLimitsStart, rateLimitsEnd)).not.toMatch(/every response/i);
+  });
+
+  it('names the poll target of every operation that answers 202 in the Async jobs section', () => {
+    const description: string = doc.info.description;
+    const asyncStart = description.indexOf('## Async jobs');
+    const asyncEnd = description.indexOf('## Versioning');
+    // A renamed heading would make indexOf return -1 and slice() silently return a
+    // truncated tail; the assertions below would then check the wrong text.
+    expect(asyncStart).toBeGreaterThanOrEqual(0);
+    expect(asyncEnd).toBeGreaterThan(asyncStart);
+    const asyncJobs = description.slice(asyncStart, asyncEnd);
+    const queued = Object.entries(doc.paths as Record<string, Record<string, { responses?: object }>>)
+      .filter(([, item]) => Object.values(item).some(op => op.responses && '202' in op.responses))
+      .map(([path]) => path);
+    expect(queued.length).toBeGreaterThan(0);
+    for (const path of queued) {
+      expect(asyncJobs).toContain(`GET ${path}/{id}`);
+    }
+  });
+
+  it('states the shared 400-vs-422 split and the provider_rejected note in the Errors section', () => {
+    const description: string = doc.info.description;
+    const errorsStart = description.indexOf('## Errors');
+    const errorsEnd = description.indexOf('## Async jobs');
+    expect(errorsStart).toBeGreaterThanOrEqual(0);
+    expect(errorsEnd).toBeGreaterThan(errorsStart);
+    const errors = description.slice(errorsStart, errorsEnd);
+    expect(errors).toContain('malformed JSON body is `400`');
+    expect(errors).toContain('fails schema validation is `422`');
+    expect(errors).toContain('`errorCode: "provider_rejected"`');
+    expect(errors).toContain('your API key itself was accepted');
   });
 
   it('gives every tag used by an operation a top-level description', () => {
@@ -262,6 +327,13 @@ describe('buildOpenApiDocument', () => {
     expect(doc.components.schemas.synthesizeSpeechResponse413.properties.name).toBeUndefined();
   });
 
+  it('documents the oversized-audio 303 as a bodiless redirect with a Location header', () => {
+    const redirect = doc.paths['/api/ai/tts'].post.responses['303'];
+    expect(redirect).toBeDefined();
+    expect(redirect.content).toBeUndefined();
+    expect(redirect.headers.Location).toBeDefined();
+  });
+
   it('publishes the WINDOWED rate-limit header names the middleware actually sets', () => {
     // The unwindowed spelling is what the spec used to publish; nothing sets it,
     // so a client coding against it reads undefined.
@@ -289,6 +361,7 @@ describe('buildOpenApiDocument', () => {
       ['/api/sessions/{id}', 'put'],
       ['/api/v1/me', 'get'],
       ['/api/v1/credits', 'get'],
+      ['/api/v1/models', 'get'],
     ];
     for (const [path, method] of baseApiServed) {
       const headers = doc.paths[path][method].responses['200'].headers;

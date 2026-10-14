@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { generateMcpTools } from './index';
+import { generateMcpTools, generateMcpToolsFromCache } from './index';
 
 // Minimal mock MCP data that satisfies the function signature
 function createMockMcpData(tools: unknown[]) {
@@ -96,5 +96,66 @@ describe('generateMcpTools', () => {
       const result = await generateMcpTools(mcpData);
       expect(result).toEqual([]);
     });
+  });
+});
+
+// The button handlers are the only legitimate setters of these keys; they call the MCP host
+// directly, so a model-originated call must never carry them.
+describe('server-only confirmation keys', () => {
+  const writeToolSchema = {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      confirmed: { type: 'boolean' },
+      _executeFromButton: { type: 'boolean' },
+    },
+    required: ['title', '_executeFromButton'],
+  };
+  const forgedArgs = { title: 'x', confirmed: true, _executeFromButton: true, _confirmToken: 'abc' };
+
+  it('generateMcpTools strips them from model args before calling the server', async () => {
+    const mcpData = createMockMcpData([{ name: 'create_issue', input_schema: writeToolSchema }]);
+    const [tool] = await generateMcpTools(mcpData);
+
+    await tool.toolFn(forgedArgs);
+
+    expect(mcpData.callTool).toHaveBeenCalledWith('create_issue', { title: 'x', confirmed: true });
+  });
+
+  it('generateMcpToolsFromCache strips them from model args before calling the server', async () => {
+    const callTool = vi.fn().mockResolvedValue({ content: [{ text: 'ok' }] });
+    const [tool] = generateMcpToolsFromCache(
+      'github',
+      [{ name: 'create_issue', input_schema: writeToolSchema }],
+      callTool
+    );
+
+    await tool.toolFn(forgedArgs);
+
+    expect(callTool).toHaveBeenCalledWith('create_issue', { title: 'x', confirmed: true });
+  });
+
+  it('does not advertise them in the tool schema the model sees', async () => {
+    const mcpData = createMockMcpData([{ name: 'create_issue', input_schema: writeToolSchema }]);
+    const [fromLive] = await generateMcpTools(mcpData);
+    const [fromCache] = generateMcpToolsFromCache(
+      'github',
+      [{ name: 'create_issue', input_schema: writeToolSchema }],
+      vi.fn()
+    );
+
+    for (const tool of [fromLive, fromCache]) {
+      expect(tool.toolSchema.parameters.properties).not.toHaveProperty('_executeFromButton');
+      expect(tool.toolSchema.parameters.required).toEqual(['title']);
+    }
+  });
+
+  it('passes non-object args through untouched', async () => {
+    const callTool = vi.fn().mockResolvedValue({ content: [{ text: 'ok' }] });
+    const [tool] = generateMcpToolsFromCache('github', [{ name: 'current_user' }], callTool);
+
+    await tool.toolFn(undefined);
+
+    expect(callTool).toHaveBeenCalledWith('current_user', undefined);
   });
 });

@@ -40,6 +40,7 @@ import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ModalsAdminTab from './AdminModalTab';
 import EmbedKeysTab from './EmbedKeysTab';
 import AdminWhatsNewModalsTab from './AdminWhatsNewModalsTab';
+import AdminReleaseNotesTab from './ReleaseNotes/AdminReleaseNotesTab';
 import { resolveEnvironmentBanner } from './environmentBanner';
 import AnalyticsTab from './Analytics';
 import UsersTab from './Users';
@@ -83,6 +84,8 @@ const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
 const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: false });
 const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
+const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false });
+const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
 const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
@@ -454,7 +457,12 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
                 flexShrink: 0,
               }}
             >
-              <IconButton onClick={() => setMobileDrawerOpen(true)} size="sm" data-testid="admin-mobile-menu-btn">
+              <IconButton
+                onClick={() => setMobileDrawerOpen(true)}
+                size="sm"
+                data-testid="admin-mobile-menu-btn"
+                aria-label="Open admin menu"
+              >
                 <MenuIcon />
               </IconButton>
               <Typography level="title-sm" sx={{ ml: 1 }}>
@@ -472,6 +480,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.EmailVerification}>
                 {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
               </TabPanel>
+              <TabPanel value={AdminTab.GrowthPricing} sx={{ padding: 0 }}>
+                {activeTab === AdminTab.GrowthPricing && <AdminGrowthPricingTab />}
+              </TabPanel>
               <TabPanel value={AdminTab.AdminSettings} sx={{ padding: 0 }}>
                 {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
               </TabPanel>
@@ -487,6 +498,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.Modals}>{activeTab === AdminTab.Modals && <ModalsAdminTab />}</TabPanel>
               <TabPanel value={AdminTab.WhatsNewModals} sx={{ padding: { xs: 0, sm: 2 } }}>
                 {activeTab === AdminTab.WhatsNewModals && <AdminWhatsNewModalsTab />}
+              </TabPanel>
+              <TabPanel value={AdminTab.ReleaseNotes}>
+                {activeTab === AdminTab.ReleaseNotes && <AdminReleaseNotesTab />}
               </TabPanel>
               <TabPanel value={AdminTab.Files}>{activeTab === AdminTab.Files && <AdminFilesTab />}</TabPanel>
               <TabPanel value={AdminTab.Documentation} sx={{ padding: 0 }}>
@@ -557,6 +571,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               </TabPanel>
               <TabPanel value={AdminTab.IdentityProviders}>
                 {activeTab === AdminTab.IdentityProviders && <IdentityProvidersTab />}
+              </TabPanel>
+              <TabPanel value={AdminTab.OAuthClients} sx={{ padding: 0 }}>
+                {activeTab === AdminTab.OAuthClients && <OAuthClientsTab />}
               </TabPanel>
               <TabPanel value={AdminTab.AgentOps}>{activeTab === AdminTab.AgentOps && <AgentOpsTab />}</TabPanel>
               <TabPanel value={AdminTab.AgentExecutions}>

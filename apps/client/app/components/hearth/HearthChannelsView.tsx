@@ -204,6 +204,11 @@ export default function HearthChannelsView() {
                       {event.actorName ?? event.actorId}
                     </Typography>
                     <ActorKindBadge kind={event.actorKind} testId="hearth-event-actor-kind-chip" />
+                    {event.origin === 'api-key' || event.origin === 'gateway' ? (
+                      <Chip size="sm" variant="outlined" color="neutral" data-testid="hearth-event-origin-chip">
+                        {event.origin === 'gateway' ? 'via gateway' : 'via API key'}
+                      </Chip>
+                    ) : null}
                     <Typography level="body-xs" sx={{ opacity: 0.6 }}>
                       #{event.seq} {'\u00B7'} {new Date(event.createdAt).toLocaleTimeString()}
                     </Typography>

@@ -1,6 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { DriveConnectionStatus } from '@client/app/hooks/data/driveConnectionDisplay';
+import type { DriveConnectionStatus, DriveSyncSchedule } from '@client/app/hooks/data/driveConnectionDisplay';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { invalidateLakeFileQueries } from '@client/app/hooks/data/invalidateLakeFileQueries';
 
@@ -16,6 +16,9 @@ export type LakeDriveConnection = {
   lastError: string | null;
   lastUsedAt: string | null;
   connectedAt: string | null;
+  /** When the last sync run ended, whatever started it. `lastUsedAt` is the last Drive API call, not a sync. */
+  lastPolledAt: string | null;
+  syncSchedule: DriveSyncSchedule;
   /** How many documents this connection has ingested into the lake - disconnecting deletes all of them. */
   fileCount: number;
   /** A disconnect was accepted and its file purge is running in the background. */
@@ -24,14 +27,18 @@ export type LakeDriveConnection = {
   disconnectStalled: boolean;
 };
 
-/** Start the personal Google Drive OAuth flow by sending the browser to Google's consent screen. */
-export async function startGoogleDriveConnect(): Promise<void> {
+/**
+ * Start the personal Google Drive OAuth flow by sending the browser to Google's consent screen.
+ * `onBeforeRedirect` gets the server-issued authorize URL first and must not throw.
+ */
+export async function startGoogleDriveConnect(onBeforeRedirect?: (authUrl: string) => void): Promise<void> {
   const response = await api.post<{ authUrl: string }>('/api/google-drive/connect');
+  onBeforeRedirect?.(response.data.authUrl);
   window.location.href = response.data.authUrl;
 }
 
 export function useConnectGoogleDrive() {
-  return useMutation({ mutationFn: startGoogleDriveConnect });
+  return useMutation({ mutationFn: () => startGoogleDriveConnect() });
 }
 
 export type DriveDisconnectImpact = { affectedOrgConnections: number; affectedPersonalConnections: number };
@@ -84,31 +91,53 @@ export function driveConnectionPollInterval(connection: LakeDriveConnection | nu
 /**
  * The current Drive connection feeding a lake (null when none, including a personal lake - the
  * route resolves 200 with a null connection for those rather than 404). `isError` is therefore a
- * genuine failure: the lake doesn't exist, or the caller lacks org owner/manager access.
+ * genuine failure: the lake doesn't exist, or the caller has no standing on its org.
  */
 export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
+  const options = useLakeDriveConnectionOptions(dataLakeId, enabled);
+  return useQuery({ ...options, select: response => response.connection });
+}
+
+/**
+ * Whether the caller may connect, re-sync or disconnect the lake's Drive folder. The status read also
+ * admits an appointed org admin, who can see the connection but not operate it, so the controls key
+ * off this. Shares useLakeDriveConnection's query; a payload without the flag reads as `false`, so a dropped field fails closed.
+ */
+export function useLakeDriveCanManage(dataLakeId?: string, enabled = true) {
+  const options = useLakeDriveConnectionOptions(dataLakeId, enabled);
+  return useQuery({ ...options, select: response => response.canManage === true });
+}
+
+type LakeDriveConnectionResponse = { connection: LakeDriveConnection | null; canManage: boolean };
+
+function useLakeDriveConnectionOptions(dataLakeId: string | undefined, enabled: boolean) {
   const queryClient = useQueryClient();
-  return useQuery({
+  return {
     queryKey: dataLakeKeys.driveConnection(dataLakeId),
     // `enabled` lets a caller skip a request it already knows the answer to: a lake with no
     // `organizationId` always resolves `connection: null`, so a caller that already has that field
     // can skip the round trip entirely rather than firing it for a known answer.
     enabled: !!dataLakeId && enabled,
-    queryFn: async () => {
-      const response = await api.get<{ connection: LakeDriveConnection | null }>(
-        `/api/data-lakes/${dataLakeId}/drive-connection`
-      );
+    queryFn: async (): Promise<LakeDriveConnectionResponse> => {
+      const response = await api.get<LakeDriveConnectionResponse>(`/api/data-lakes/${dataLakeId}/drive-connection`);
       const next = response.data.connection;
       // The purge runs in the background after a disconnect, so the lake's file lists only go
       // stale as it progresses; refresh them whenever a disconnecting read shows files removed.
-      const previous = queryClient.getQueryData<LakeDriveConnection | null>(dataLakeKeys.driveConnection(dataLakeId));
+      const previous = queryClient.getQueryData<LakeDriveConnectionResponse>(
+        dataLakeKeys.driveConnection(dataLakeId)
+      )?.connection;
       if (dataLakeId && previous?.disconnecting && (!next || next.fileCount !== previous.fileCount)) {
         void invalidateLakeFileQueries(queryClient, dataLakeId);
       }
-      return next;
+      // A finished sync is when the not-ingested list changes (skips recorded, ingests cleared).
+      if (dataLakeId && previous?.status === 'syncing' && next?.status !== 'syncing') {
+        void queryClient.invalidateQueries({ queryKey: dataLakeKeys.skippedFilesOf(dataLakeId) });
+      }
+      return response.data;
     },
-    refetchInterval: query => (enabled ? driveConnectionPollInterval(query.state.data) : false),
-  });
+    refetchInterval: (query: { state: { data?: LakeDriveConnectionResponse } }) =>
+      enabled ? driveConnectionPollInterval(query.state.data?.connection) : false,
+  };
 }
 
 /** Connect a Drive folder to a lake and enqueue ingest (POST /api/data-lakes/drive-sync). */

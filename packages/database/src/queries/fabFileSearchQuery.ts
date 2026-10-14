@@ -4,7 +4,9 @@ import {
   LEGACY_CHUNK_STALL_NOTES,
   normalizeTagPrefix,
   type DataLakeMembershipScope,
+  type FabFileTypeFilter,
 } from '@bike4mind/common';
+import { isObjectIdOrHexString } from 'mongoose';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { buildFilenameMarkerRegex } from '@bike4mind/utils/retrievalExclusion';
 import { USE_DOCUMENTDB } from '../utils/documentdb-compat';
@@ -105,9 +107,7 @@ export const STOP_WORDS = new Set([
 export { escapeRegex };
 
 /** Map file type filter to MongoDB mimeType query condition */
-export function getMimeTypeFilter(
-  type: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio'
-): Record<string, unknown> {
+export function getMimeTypeFilter(type: FabFileTypeFilter): Record<string, unknown> {
   switch (type) {
     case 'text':
       return { mimeType: 'text/plain' };
@@ -135,6 +135,8 @@ export function getMimeTypeFilter(
       return { mimeType: { $in: CODE_FILE_MIME_TYPES } };
     case 'audio':
       return { mimeType: { $regex: '^audio/' } };
+    case 'video':
+      return { mimeType: { $regex: '^video/' } };
   }
 }
 
@@ -164,6 +166,11 @@ export function buildOwnershipConditions(
      * (assertLakeAccess), so matching the unique meta-tag without the ownership arms is safe.
      */
     restrictToDataLake?: boolean;
+    /**
+     * File ids admitted under `restrictToDataLake` alongside the lake arms, each still required to
+     * pass the caller's own/shared/group access: the files attached to a library-off chat.
+     */
+    admitFileIds?: string[];
     /**
      * One arm per accessible lake's membership scope - the SAME predicate the whole-lake writes
      * use, so any caller of this builder (the single-lake browse, and retrieval) lists/matches
@@ -247,6 +254,12 @@ export function buildOwnershipConditions(
   // In lake-scoped mode, start with NO broad ownership arms - only the lake tag/prefix arms
   // below select files, so a single-lake view can't fall back to "all files the user owns".
   const conditions: object[] = options?.restrictToDataLake ? [] : [...baseAccess];
+
+  // Attached ids come from request bodies; a malformed one would make the whole query throw a CastError.
+  const admitFileIds = options?.admitFileIds?.filter(id => isObjectIdOrHexString(id)) ?? [];
+  if (options?.restrictToDataLake && admitFileIds.length) {
+    conditions.push({ $and: [{ _id: { $in: admitFileIds } }, { $or: baseAccess }] });
+  }
 
   conditions.push(
     ...buildLakeArms({
@@ -334,15 +347,12 @@ export function buildLakeArms(options: {
   return arms;
 }
 
-export type FabFileFilterType =
-  'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
-
 export interface FabFileSearchParams {
   userId: string;
   search: string;
   filters: {
     tags?: string[];
-    type?: FabFileFilterType;
+    type?: FabFileTypeFilter;
     shared?: boolean;
     curated?: boolean;
     fileIds?: string[];
@@ -367,6 +377,8 @@ export interface FabFileSearchParams {
     lakeMemberships?: DataLakeMembershipScope[];
     /** Single-lake view: return only this lake's files, not all owned files - see buildOwnershipConditions. */
     restrictToDataLake?: boolean;
+    /** See buildOwnershipConditions.admitFileIds. */
+    admitFileIds?: string[];
     /**
      * Treat the restrictToFileIds allow-list as the SOLE authorization: skip the
      * ownership/sharing predicate entirely, so files curated into a server-resolved
@@ -387,11 +399,8 @@ export interface FabFileSearchParams {
     /** When true, restrict results to vectorized files only (excludes unvectorized). */
     vectorizedOnly?: boolean;
     /**
-     * Narrow to the files carrying NO tag under ANY of these lake prefixes - what the browse
-     * surfaces render as an "Uncategorized" bucket. One prefix for a single-lake browser; the
-     * whole accessible set for a MERGED tree, where a file categorized under any one lake is
-     * reachable through that lake's branch and only a file categorized under none of them is
-     * invisible.
+     * Narrow to the files carrying NO tag under ANY of these lake prefixes - what a single-lake
+     * browser renders as its "Uncategorized" bucket.
      *
      * NARROWING only, ANDed above the access arms: it never widens the scope. It must therefore
      * be paired with `restrictToDataLake`, or it returns every non-lake file the caller owns
@@ -522,6 +531,7 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
       dataLakeTags: options.dataLakeTags,
       dataLakeTagPrefixes: options.dataLakeTagPrefixes,
       restrictToDataLake: options.restrictToDataLake,
+      admitFileIds: options.admitFileIds,
       lakeMemberships: options.lakeMemberships,
     });
     andConditions.push({ $or: ownershipConds });

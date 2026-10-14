@@ -5,11 +5,14 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  COMPLETION_SSE_ERROR_CODES,
   CompletionRequestSchema,
+  CompletionSseErrorEventSchema,
   CompletionToolSchema,
   ResponseFormatSchema,
   normalizeCompletionRequest,
 } from './cliCompletions';
+import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 
 describe('ResponseFormatSchema', () => {
   it('accepts text mode', () => {
@@ -162,6 +165,20 @@ describe('CompletionRequestSchema', () => {
     expect(out.temperature).toBe(0.2);
     expect(out.max_tokens).toBe(512);
     expect(out.tools).toHaveLength(1);
+  });
+});
+
+describe('CompletionRequestSchema model length', () => {
+  const messages = [{ role: 'user', content: 'hi' }];
+
+  it('accepts a model id of exactly 256 characters', () => {
+    expect(CompletionRequestSchema.safeParse({ model: 'm'.repeat(256), messages }).success).toBe(true);
+  });
+
+  it('rejects a model id over 256 characters on the model field', () => {
+    const result = CompletionRequestSchema.safeParse({ model: 'm'.repeat(257), messages });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map(i => i.path)).toEqual([['model']]);
   });
 });
 
@@ -372,5 +389,53 @@ describe('normalizeCompletionRequest', () => {
     const normalized = normalizeCompletionRequest(parsed);
     expect(normalized.options?.temperature).toBe(0);
     expect(normalized.options?.maxTokens).toBe(0);
+  });
+});
+
+describe('CompletionRequestSchema options.reasoningEffort', () => {
+  const base = { model: 'm', messages: [{ role: 'user', content: 'hi' }] };
+
+  it('keeps reasoningEffort on options', () => {
+    const parsed = CompletionRequestSchema.parse({ ...base, options: { reasoningEffort: 'low' } });
+    expect(parsed.options?.reasoningEffort).toBe('low');
+  });
+
+  it('leaves reasoningEffort absent when not sent', () => {
+    const parsed = CompletionRequestSchema.parse({ ...base, options: { temperature: 0.2 } });
+    expect(parsed.options).not.toHaveProperty('reasoningEffort');
+  });
+
+  it('rejects an unknown effort value', () => {
+    expect(() => CompletionRequestSchema.parse({ ...base, options: { reasoningEffort: 'turbo' } })).toThrow();
+  });
+});
+
+describe('CompletionSseErrorEventSchema', () => {
+  it('accepts the provider classifiers alongside the billing ones', () => {
+    for (const code of [
+      'insufficient_credits',
+      'spend_cap_exceeded',
+      'provider_error',
+      'provider_rejected',
+      'content_blocked',
+    ]) {
+      expect(CompletionSseErrorEventSchema.safeParse({ type: 'error', message: 'm', code }).success).toBe(true);
+    }
+  });
+
+  it('rejects a code outside the frame vocabulary', () => {
+    const frame = { type: 'error', message: 'm', code: 'provider_not_configured' };
+    expect(CompletionSseErrorEventSchema.safeParse(frame).success).toBe(false);
+  });
+
+  // QUEST_ERROR_CODES is persisted on quests; the frame widens its own copy instead.
+  it('leaves the persisted quest vocabulary unwidened', () => {
+    expect([...QUEST_ERROR_CODES]).toEqual(['insufficient_credits', 'spend_cap_exceeded']);
+    expect([...COMPLETION_SSE_ERROR_CODES]).toEqual([
+      ...QUEST_ERROR_CODES,
+      'provider_error',
+      'provider_rejected',
+      'content_blocked',
+    ]);
   });
 });

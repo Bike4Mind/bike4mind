@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { feedbackRollupRoute, dataLakesRoute, newRoute } from './router';
+import {
+  billingRoute,
+  feedbackRollupRoute,
+  dataLakesRoute,
+  newRoute,
+  notebooksIndexRoute,
+  router,
+  subscriptionsIndexRoute,
+} from './router';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 
 // validateSearch is what makes a bare /feedback/rollup URL load at all (see the route's own
@@ -61,5 +69,70 @@ describe('Data Lake article deep link keeps ?passage=', () => {
       thrown = e;
     }
     expect(thrown).toMatchObject({ options: { to: '/new', search: { article: 'f1' } } });
+  });
+});
+
+describe('QA status routes', () => {
+  const chain = (path: string) => router.matchRoutes(path, {}).map(m => m.routeId);
+
+  it.each(['/status', '/status/runs/abc', '/status/tests/a%2Fb'])('%s renders outside the notebook layout', path => {
+    const ids = chain(path);
+    expect(ids).toContain('/qa-status-layout');
+    expect(ids).not.toContain('/layout');
+  });
+
+  it('keeps regular app pages inside the notebook layout', () => {
+    expect(chain('/new')).toContain('/layout');
+  });
+});
+
+describe('Video studio route', () => {
+  it('renders /studio/video inside the notebook layout', () => {
+    const ids = router.matchRoutes('/studio/video', {}).map(match => match.routeId);
+    expect(ids).toContain('/layout');
+    expect(ids.some(id => id.endsWith('/studio/video'))).toBe(true);
+  });
+});
+
+describe('billingRoute forwards /billing/<view> to the modal deep link', () => {
+  const forwardOf = (view: string) => {
+    try {
+      (billingRoute.options.beforeLoad as (ctx: unknown) => unknown)({ params: { view } });
+    } catch (thrown) {
+      return (thrown as { options: { href?: string; replace?: boolean } }).options;
+    }
+    throw new Error('expected beforeLoad to redirect');
+  };
+
+  it.each([
+    ['credits', '/new?billing=credits'],
+    ['plans', '/new?billing=plans'],
+    ['bogus', '/new'],
+  ])('/billing/%s -> %s', (view, href) => {
+    expect(forwardOf(view)).toMatchObject({ href, replace: true });
+  });
+});
+
+describe('guessed index URLs redirect instead of 404ing', () => {
+  const redirectOf = (route: { options: { beforeLoad?: unknown } }) => {
+    try {
+      (route.options.beforeLoad as (ctx: unknown) => unknown)({});
+    } catch (thrown) {
+      return (thrown as { options: { to?: string; href?: string; replace?: boolean } }).options;
+    }
+    throw new Error('expected beforeLoad to redirect');
+  };
+
+  it('/notebooks -> the app home', () => {
+    expect(redirectOf(notebooksIndexRoute)).toMatchObject({ to: '/', replace: true });
+  });
+
+  it('/subscriptions -> the plans modal', () => {
+    expect(redirectOf(subscriptionsIndexRoute)).toMatchObject({ href: '/new?billing=plans', replace: true });
+  });
+
+  it.each(['/notebooks', '/subscriptions'])('%s matches its redirect route, not the 404', path => {
+    const ids = router.matchRoutes(path).map(m => m.routeId);
+    expect(ids.some(id => id.endsWith(path))).toBe(true);
   });
 });

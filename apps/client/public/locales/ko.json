@@ -531,7 +531,7 @@
   },
   "subscription_modal": {
     "title": "구독",
-    "description": "하나의 통합 인터페이스를 통해 모든 주요 AI 모델에 접근하세요. Deepseek R1과 같은 고급 모델을 개인적으로 실행하세요.",
+    "description": "하나의 통합 인터페이스를 통해 모든 주요 AI 모델에 접근하세요.",
     "no_free_tier": "무료 계층 없음 - 전문가에 중점을 둡니다.",
     "credits_rollover": "사용하지 않은 크레딧은 3개월 동안 유효합니다.",
     "monthly_billing": "월별 청구",

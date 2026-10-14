@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { UnauthorizedError, ForbiddenError } from '@server/utils/errors';
+import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@server/utils/errors';
 
 vi.mock('@server/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
@@ -49,14 +49,22 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
 }));
 
 import jwt from 'jsonwebtoken';
-import { checkRateLimit, verifyApiKey, verifyJwtToken, verifyEmbedApiKey, verifyEmbedKeyById } from './auth';
+import {
+  checkApiKeyRateLimitOrThrow,
+  checkRateLimit,
+  verifyApiKey,
+  verifyJwtToken,
+  verifyEmbedApiKey,
+  verifyEmbedKeyById,
+} from './auth';
 import { cacheService, userApiKeyService } from '@bike4mind/services';
 import { User } from '@bike4mind/database';
-import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
+import { checkApiKeyRateLimit, extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 
 const userId = 'user-abc';
 const key = `rate-limit:ws-auth:${userId}`;
+const desktopKey = `rate-limit:ws-auth:desktop:${userId}`;
 const HOUR_MS = 60 * 60_000;
 
 describe('checkRateLimit (JWT per-user rate limiter)', () => {
@@ -138,6 +146,36 @@ describe('checkRateLimit (JWT per-user rate limiter)', () => {
         await checkRateLimit(userId, 'cli');
       }
       await expect(checkRateLimit(userId, 'cli')).rejects.toThrow(/Rate limit exceeded/);
+    });
+
+    // Seeded rather than looped: the boundary is the only interesting call, and 6000 serial
+    // awaits to reach it cost more than they prove.
+    const seedDesktop = (value: number) => cacheStore.set(desktopKey, { value, expiresAt: Date.now() + 3_600_000 });
+
+    it('carries the desktop app to 6000, where source api alone would stop at 100', async () => {
+      seedDesktop(5999);
+      await expect(checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' })).resolves.toBeUndefined();
+      await expect(checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' })).rejects.toThrow(
+        /Rate limit exceeded/
+      );
+    });
+
+    it('counts the desktop app on its own bucket, so a busy desktop cannot lock the CLI out', async () => {
+      seedDesktop(5999);
+      await checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' });
+
+      // The raised ceiling must not be spent on the counter the CLI and every other JWT surface
+      // read, or a desktop session past 1000 would exhaust that user's CLI budget.
+      expect(cacheStore.get(key)).toBeUndefined();
+      await expect(checkRateLimit(userId, 'cli')).resolves.toBeUndefined();
+      expect(cacheStore.get(key)!.value).toBe(1);
+    });
+
+    it('keeps the 100 cap for any other API client', async () => {
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId, 'api', { client: 'my-script/1.0' });
+      }
+      await expect(checkRateLimit(userId, 'api', { client: 'my-script/1.0' })).rejects.toThrow(/Rate limit exceeded/);
     });
   });
 
@@ -284,11 +322,13 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
     it('rejects a banned owner even with accepted policy and a current tokenVersion', async () => {
       vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', isBanned: true }));
       await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('User not found or banned');
+      await expect(verifyJwtToken(sign('u1'))).rejects.toBeInstanceOf(UnauthorizedError);
     });
 
     it('rejects a chargeback/dispute-pending owner', async () => {
       vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', disputePending: true }));
       await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('dispute resolution');
+      await expect(verifyJwtToken(sign('u1'))).rejects.toBeInstanceOf(ForbiddenError);
     });
 
     it('rejects a content-policy-suspended owner', async () => {
@@ -296,6 +336,7 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
         mockUser({ aupAcceptedVersion: 'v1', moderation: { status: 'suspended' } })
       );
       await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('suspended for repeated content-policy');
+      await expect(verifyJwtToken(sign('u1'))).rejects.toBeInstanceOf(ForbiddenError);
     });
 
     it('accepts a usable account (not banned, disputed, or suspended)', async () => {
@@ -478,5 +519,82 @@ describe('api-key account-state gates (mirrors apiKeyAuth)', () => {
   it('refuses a key whose owner no longer exists', async () => {
     vi.mocked(User.findById).mockResolvedValue(null);
     await expect(verifyApiKey({})).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('verifyApiKey scope gate', () => {
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_somekey');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      isValid: true,
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.EMBED_CHAT],
+      rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    });
+  });
+
+  it('throws a ForbiddenError naming the scopes the endpoint accepts', async () => {
+    const rejection = verifyApiKey({}, { requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] });
+    await expect(rejection).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { required_scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] },
+    });
+    await expect(rejection).rejects.toThrow('requires ai:chat or ai:generate');
+  });
+});
+
+describe('rate-limit errors carry their status and retry window', () => {
+  beforeEach(() => {
+    cacheStore.clear();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('checkRateLimit throws a TooManyRequestsError with retryAfter in seconds', async () => {
+    vi.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    for (let i = 0; i < 100; i++) {
+      await checkRateLimit(userId);
+    }
+    vi.setSystemTime(new Date(Date.now() + 45 * 60_000));
+
+    const rejection = checkRateLimit(userId);
+    await expect(rejection).rejects.toBeInstanceOf(TooManyRequestsError);
+    await expect(rejection).rejects.toMatchObject({ statusCode: 429, additionalInfo: { retryAfter: 900 } });
+    await expect(rejection).rejects.toThrow(/^Rate limit exceeded/);
+  });
+
+  it('checkApiKeyRateLimitOrThrow throws a TooManyRequestsError carrying retryAfter and the rate-limit headers', async () => {
+    const headers = {
+      'X-RateLimit-Limit-Minute': 10,
+      'X-RateLimit-Remaining-Minute': 0,
+      'X-RateLimit-Reset-Minute': 1767225612,
+      'X-RateLimit-Limit-Day': 100,
+      'X-RateLimit-Remaining-Day': 50,
+      'X-RateLimit-Reset-Day': 1767312000,
+    };
+    vi.mocked(checkApiKeyRateLimit).mockResolvedValue({
+      allowed: false,
+      error: 'Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.',
+      retryAfter: 12,
+      limitType: 'minute',
+      headers,
+    });
+    const info = {
+      keyId: 'k1',
+      userId: 'u1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    };
+
+    const rejection = checkApiKeyRateLimitOrThrow(info, { endpoint: '/api/ai/v1/completions', method: 'POST' });
+    await expect(rejection).rejects.toBeInstanceOf(TooManyRequestsError);
+    await expect(rejection).rejects.toMatchObject({
+      statusCode: 429,
+      additionalInfo: { retryAfter: 12, rateLimitHeaders: headers },
+    });
+    await expect(rejection).rejects.toThrow('Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.');
   });
 });

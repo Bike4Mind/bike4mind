@@ -4,20 +4,11 @@ import type {
   DataLakeSpendNotificationScope,
 } from '@bike4mind/common';
 
-/**
- * Minimal HTML escaper for values interpolated into a lake-related email body (a lake or member
- * name is user-supplied). Exported for reuse by other lake emails (notifyKeptPersonalLakeShares.ts).
- * Local rather than reusing the app-layer escaper (viewerSecurity.ts) - this module lives in
- * b4m-core/services, which cannot import apps/client code.
- */
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+import { escapeHtml, wrapEmail } from '../notificationEmail';
+
+// Re-exported so existing lake importers and the public dataLakeService namespace keep working.
+export { escapeHtml };
+export const wrapLakeEmail = wrapEmail;
 
 /** Integer micro-USD -> a human dollar figure, one shared formatter so no call site divides ad hoc. */
 export function formatMicroUsd(microUsd: number): string {
@@ -36,19 +27,10 @@ export interface SpendNotificationEmailContent {
   html: string;
 }
 
-/**
- * Shared shell for a lake-related email: a div wrapping the body plus a small grey footer line.
- * Exported for reuse by other lake emails (notifyKeptPersonalLakeShares.ts), whose body has no
- * lake-name header - that part stays local to `wrap` below.
- */
-export function wrapLakeEmail(bodyHtml: string, footerText: string): string {
-  return `<div>${bodyHtml}<p style="color:#666;font-size:12px">${footerText}</p></div>`;
-}
-
 const FOOTER_TEXT = 'You are receiving this because you own or administer this data lake.';
 
 function wrap(lakeNameEscaped: string, bodyHtml: string): string {
-  return wrapLakeEmail(`<p><strong>${lakeNameEscaped}</strong></p>${bodyHtml}`, FOOTER_TEXT);
+  return wrapEmail(`<p><strong>${lakeNameEscaped}</strong></p>${bodyHtml}`, FOOTER_TEXT);
 }
 
 /**

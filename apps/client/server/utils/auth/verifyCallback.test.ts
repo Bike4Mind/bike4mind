@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { AuthStrategy } from '@bike4mind/common';
+import { AuthStrategy, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { ACCOUNT_LINK_VERIFICATION_REQUIRED, ACCOUNT_LINK_EMAIL_MISMATCH } from './oauthAccountLink';
 import { ForbiddenError } from '@server/utils/errors';
 
@@ -7,6 +7,7 @@ const mockFindOne = vi.fn();
 const mockUpdateOne = vi.fn();
 const mockCreate = vi.fn();
 const mockRevokeAllByUserId = vi.fn();
+const mockUserRepositoryUpdate = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   User: {
@@ -15,6 +16,37 @@ vi.mock('@bike4mind/database', () => ({
     create: (...args: unknown[]) => mockCreate(...args),
   },
   authSessionRepository: { revokeAllByUserId: (...args: unknown[]) => mockRevokeAllByUserId(...args) },
+  adminSettingsRepository: {},
+  creditTransactionRepository: {},
+  creditLotRepository: {},
+  organizationRepository: {},
+  userRepository: { update: (...args: unknown[]) => mockUserRepositoryUpdate(...args) },
+}));
+
+const mockReleasePending = vi.fn();
+const mockShouldBlockDisposableEmail = vi.fn();
+const mockAddCredits = vi.fn();
+const mockApplyPartnerRuleMembership = vi.fn();
+vi.mock('@bike4mind/services', () => ({
+  userService: {
+    releasePendingFreeCredits: (...args: unknown[]) => mockReleasePending(...args),
+    shouldBlockDisposableEmail: (...args: unknown[]) => mockShouldBlockDisposableEmail(...args),
+  },
+  creditService: { addCredits: (...args: unknown[]) => mockAddCredits(...args) },
+  organizationService: {
+    applyPartnerRuleMembership: (...args: unknown[]) => mockApplyPartnerRuleMembership(...args),
+  },
+}));
+
+// The real signupDomainGrant helper runs; only its rule lookup and side-effect leaves are stubbed.
+const mockPartnerGrant = vi.fn();
+vi.mock('@server/entitlements/partnerRules', () => ({
+  partnerSignupGrantForEmail: (...args: unknown[]) => mockPartnerGrant(...args),
+}));
+vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
+vi.mock('@server/organizations/notifySeatCeilingRaised', () => ({
+  notifySeatCeilingRaised: vi.fn(),
+  notifyPartnerSignupBlockedAtCapacity: vi.fn(),
 }));
 
 vi.mock('@server/auth/requireNonSystemUser', () => ({
@@ -45,6 +77,32 @@ beforeEach(() => {
   mockCreate.mockReset();
   mockRevokeAllByUserId.mockReset();
   mockRevokeAllByUserId.mockResolvedValue(0);
+  mockUserRepositoryUpdate.mockReset();
+  mockUserRepositoryUpdate.mockResolvedValue(undefined);
+  mockReleasePending.mockReset();
+  mockReleasePending.mockImplementation(async (user: { tags?: string[] | null }) =>
+    user.tags?.includes(PENDING_FREE_CREDITS_TAG)
+      ? {
+          released: true,
+          creditsGranted: 100,
+          currentCredits: 100,
+          patch: { tags: user.tags.filter(tag => tag !== PENDING_FREE_CREDITS_TAG), pendingCreditGrant: null },
+        }
+      : { released: false, creditsGranted: 0, currentCredits: null, patch: {} }
+  );
+  mockShouldBlockDisposableEmail.mockReset();
+  mockShouldBlockDisposableEmail.mockResolvedValue(false);
+  mockAddCredits.mockReset();
+  mockAddCredits.mockResolvedValue({ currentCredits: 500 });
+  mockApplyPartnerRuleMembership.mockReset();
+  mockApplyPartnerRuleMembership.mockResolvedValue({ added: true, reason: 'added' });
+  mockPartnerGrant.mockReset();
+  mockPartnerGrant.mockResolvedValue({
+    matched: false,
+    entitlements: new Set(),
+    signupCredits: 0,
+    organizationId: null,
+  });
   // Open by default so the pre-existing create-path tests keep exercising creation.
   mockIsOpenRegistrationAllowed.mockReset();
   mockIsOpenRegistrationAllowed.mockResolvedValue(true);
@@ -929,5 +987,248 @@ describe('verifyCallback - invite gate on federated first login', () => {
 
     expect(user).toBeTruthy();
     expect(mockCreate).toHaveBeenCalled();
+  });
+});
+
+describe('verifyCallback - starter credits on OAuth signup', () => {
+  const verifiedProfile = {
+    id: 'provider-id-1',
+    displayName: 'Pat Smith',
+    emails: [{ value: 'pat@example.com', verified: true }],
+  };
+
+  beforeEach(() => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockImplementationOnce(async (doc: Record<string, unknown>) => ({ _id: 'new-id', ...doc }));
+  });
+
+  it.each([AuthStrategy.Google, AuthStrategy.Github])(
+    'creates a new %s user tagged pending-free-credits, then releases and persists the grant',
+    async strategy => {
+      const { err, user } = await runStandard(strategy, verifiedProfile);
+
+      expect(err).toBeNull();
+      expect(user).toBeDefined();
+      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ tags: [PENDING_FREE_CREDITS_TAG] }));
+      expect(mockReleasePending).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'new-id', tags: [PENDING_FREE_CREDITS_TAG] }),
+        expect.objectContaining({ reason: 'OAuth signup (provider-verified email)' })
+      );
+      expect(mockUserRepositoryUpdate).toHaveBeenCalledWith({ id: 'new-id', tags: [], pendingCreditGrant: null });
+    }
+  );
+
+  it('does not tag or grant for an enterprise SSO strategy', async () => {
+    const { err } = await runStandard(AuthStrategy.SAML, verifiedProfile);
+
+    expect(err).toBeNull();
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
+    expect(mockReleasePending).not.toHaveBeenCalled();
+  });
+
+  it('does not tag or grant when the account has no email', async () => {
+    const { err } = await runStandard(AuthStrategy.Github, { id: 'gh-1', username: 'noemail' });
+
+    expect(err).toBeNull();
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
+    expect(mockReleasePending).not.toHaveBeenCalled();
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+  });
+
+  it('does not tag or grant a disposable email the shared gate blocks', async () => {
+    mockShouldBlockDisposableEmail.mockResolvedValue(true);
+
+    const { err } = await runStandard(AuthStrategy.Google, verifiedProfile);
+
+    expect(err).toBeNull();
+    expect(mockShouldBlockDisposableEmail).toHaveBeenCalledWith('pat@example.com', expect.anything());
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
+    expect(mockReleasePending).not.toHaveBeenCalled();
+  });
+
+  it('withholds the grant but completes the login when the eligibility check throws', async () => {
+    mockShouldBlockDisposableEmail.mockRejectedValue(new Error('settings down'));
+
+    const { err, user } = await runStandard(AuthStrategy.Google, verifiedProfile);
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
+    expect(mockReleasePending).not.toHaveBeenCalled();
+  });
+
+  it('keeps the tag (no tag-strip write) and completes the login when the grant fails', async () => {
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+
+    const { err, user } = await runStandard(AuthStrategy.Google, verifiedProfile);
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ tags: [PENDING_FREE_CREDITS_TAG] }));
+    expect(mockUserRepositoryUpdate).not.toHaveBeenCalled();
+  });
+
+  it('completes the login when persisting the tag removal fails', async () => {
+    mockUserRepositoryUpdate.mockRejectedValue(new Error('db down'));
+
+    const { err, user } = await runStandard(AuthStrategy.Google, verifiedProfile);
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+  });
+});
+
+describe('verifyCallback - unverified provider email on OAuth signup', () => {
+  beforeEach(() => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockImplementationOnce(async (doc: Record<string, unknown>) => ({ _id: 'new-id', ...doc }));
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      entitlements: new Set(['optihashi:pro']),
+      signupCredits: 1000,
+      organizationId: 'org-1',
+    });
+  });
+
+  it.each([
+    ['verified:false', [{ value: 'victim@example.com', verified: false }]],
+    ['no verified field', [{ value: 'victim@example.com' }]],
+  ])('grants and releases nothing when the Google email is %s', async (_label, emails) => {
+    const { err } = await runStandard(AuthStrategy.Google, { id: 'google-sub-1', displayName: 'Vic', emails });
+
+    expect(err).toBeNull();
+    const createdDoc = mockCreate.mock.calls[0][0];
+    expect(createdDoc).not.toHaveProperty('email');
+    expect(createdDoc).not.toHaveProperty('tags');
+    expect(mockShouldBlockDisposableEmail).not.toHaveBeenCalled();
+    expect(mockReleasePending).not.toHaveBeenCalled();
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
+  });
+});
+
+describe('verifyCallback - partner domain grant on OAuth signup', () => {
+  const partnerProfile = {
+    id: 'provider-id-2',
+    displayName: 'Dee Partner',
+    emails: [{ value: 'dee@partner.example', verified: true }],
+  };
+
+  beforeEach(() => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockImplementationOnce(async (doc: Record<string, unknown>) => ({ _id: 'new-id', ...doc }));
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      entitlements: new Set(['optihashi:pro']),
+      signupCredits: 1000,
+      organizationId: 'org-1',
+    });
+  });
+
+  it.each([AuthStrategy.Google, AuthStrategy.Github, AuthStrategy.SAML])(
+    'grants the domain credits and partner org membership to a new %s user',
+    async strategy => {
+      const { err } = await runStandard(strategy, partnerProfile);
+
+      expect(err).toBeNull();
+      expect(mockPartnerGrant).toHaveBeenCalledWith('dee@partner.example', true);
+      expect(mockAddCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerId: 'new-id', credits: 1000, transactionId: 'domain-grant-credits:new-id' }),
+        expect.objectContaining({ db: expect.objectContaining({ creditLots: expect.anything() }) })
+      );
+      expect(mockApplyPartnerRuleMembership).toHaveBeenCalledWith(
+        { userId: 'new-id', organizationId: 'org-1' },
+        expect.anything()
+      );
+    }
+  );
+
+  it('completes the login when the domain credit grant and membership both fail', async () => {
+    mockAddCredits.mockRejectedValue(new Error('ledger down'));
+    mockApplyPartnerRuleMembership.mockRejectedValue(new Error('org store down'));
+
+    const { err, user } = await runStandard(AuthStrategy.Google, partnerProfile);
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+  });
+
+  it('completes the login when the partner rule lookup fails', async () => {
+    mockPartnerGrant.mockRejectedValue(new Error('rules down'));
+
+    const { err, user } = await runStandard(AuthStrategy.Google, partnerProfile);
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+});
+
+describe('verifyCallback - pending free credits on account link', () => {
+  const linkProfile = {
+    id: 'google-sub-link',
+    emails: [{ value: 'owner@example.com', verified: true }],
+  };
+
+  it('releases and persists a pending grant when the link promotes emailVerified', async () => {
+    stage2Hit({
+      _id: 'u-pending',
+      email: 'owner@example.com',
+      emailVerified: false,
+      hasUsablePassword: false,
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: 250,
+      authProviders: [],
+    });
+
+    const { err, user } = await runStandard(AuthStrategy.Google, linkProfile);
+
+    expect(err).toBeNull();
+    expect((user as { emailVerified?: boolean }).emailVerified).toBe(true);
+    expect(mockReleasePending).toHaveBeenCalledWith(
+      { id: 'u-pending', tags: ['Customer', PENDING_FREE_CREDITS_TAG], pendingCreditGrant: 250 },
+      expect.objectContaining({ reason: 'OAuth account link (email verified)' })
+    );
+    expect(mockUserRepositoryUpdate).toHaveBeenCalledWith({
+      id: 'u-pending',
+      tags: ['Customer'],
+      pendingCreditGrant: null,
+    });
+  });
+
+  it('does not release on a plain link of an already-verified account', async () => {
+    stage2Hit({
+      _id: 'u-verified',
+      email: 'owner@example.com',
+      emailVerified: true,
+      hasUsablePassword: true,
+      tags: [PENDING_FREE_CREDITS_TAG],
+      authProviders: [],
+    });
+
+    const { err } = await runStandard(AuthStrategy.Google, linkProfile);
+
+    expect(err).toBeNull();
+    expect(mockReleasePending).not.toHaveBeenCalled();
+  });
+
+  it('completes the link when the release throws', async () => {
+    mockReleasePending.mockRejectedValue(new Error('credit service down'));
+    stage2Hit({
+      _id: 'u-pending',
+      email: 'owner@example.com',
+      emailVerified: false,
+      hasUsablePassword: false,
+      tags: [PENDING_FREE_CREDITS_TAG],
+      authProviders: [],
+    });
+
+    const { err, user } = await runStandard(AuthStrategy.Google, linkProfile);
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockUserRepositoryUpdate).not.toHaveBeenCalled();
   });
 });

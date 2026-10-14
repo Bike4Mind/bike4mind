@@ -113,6 +113,7 @@ describe('ChatCompletionInvoke retry path session binding', () => {
       [
         'agentIds',
         'fabFileIds',
+        'fallbackInfo',
         'id',
         'images',
         'prompt',
@@ -125,5 +126,25 @@ describe('ChatCompletionInvoke retry path session binding', () => {
         'type',
       ].sort()
     );
+  });
+
+  it('clears a stale fallbackInfo from a prior attempt on retry', async () => {
+    const { invoke, questsUpdate } = makeHarness({
+      id: 'quest-1',
+      sessionId: SESSION,
+      fallbackInfo: {
+        primaryModel: 'test-model',
+        primaryModelName: 'Test Model',
+        fallbackModel: 'other-model',
+        fallbackModelName: 'Other Model',
+        timestamp: Date.now(),
+      },
+    });
+
+    await invoke.invoke({ body: body as never, userId: 'user-A' });
+
+    // Without this, a retry that answers with the same model it originally requested would
+    // still show the prior attempt's "answered by <fallback>" note.
+    expect(questsUpdate).toHaveBeenCalledWith(expect.objectContaining({ fallbackInfo: null }), expect.anything());
   });
 });

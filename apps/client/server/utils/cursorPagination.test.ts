@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeCursor, encodeCursor, paginateById } from './cursorPagination';
+import { decodeCursor, decodeTimeIdCursor, encodeCursor, encodeTimeIdCursor, paginateById } from './cursorPagination';
 
 const items = ['c', 'a', 'e', 'b', 'd'].map(id => ({ id }));
 
@@ -65,5 +65,26 @@ describe('cursorPagination', () => {
     const input = [...items];
     paginateById(input, { limit: 2, scope: 'lakes' });
     expect(input.map(i => i.id)).toEqual(['c', 'a', 'e', 'b', 'd']);
+  });
+});
+
+describe('time-id cursors', () => {
+  const at = new Date('2026-02-03T04:05:06.007Z');
+  const id = '65a000000000000000000001';
+
+  it('round-trips a timestamp and ObjectId for the same scope', () => {
+    const decoded = decodeTimeIdCursor(encodeTimeIdCursor('feed', { at, id }), 'feed');
+    expect(decoded).toEqual({ at, id });
+  });
+
+  it.each([
+    ['another scope', encodeTimeIdCursor('other', { at, id })],
+    ['no separator', encodeCursor('feed', id)],
+    ['a non-ObjectId id', encodeCursor('feed', `${at.toISOString()}|abc`)],
+    ['an invalid timestamp', encodeCursor('feed', `nope|${id}`)],
+    ['a non-canonical timestamp', encodeCursor('feed', `2026-02-03|${id}`)],
+    ['extra segments', encodeCursor('feed', `${at.toISOString()}|${id}|x`)],
+  ])('rejects %s with a 422', (_label, cursor) => {
+    expect(() => decodeTimeIdCursor(cursor, 'feed')).toThrow(expect.objectContaining({ statusCode: 422 }));
   });
 });

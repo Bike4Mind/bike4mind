@@ -26,6 +26,11 @@ import type { AgentStep } from '@bike4mind/agents';
  * true)`, whose word-boundary waste compounds per line, so any chars/width
  * estimate runs short exactly when the terminal is narrow. If the truncation in
  * MessageItem is ever relaxed, this module has to go back to measuring.
+ *
+ * The `rows` budget is what App leaves over: the viewport minus its fixed chrome
+ * (LIVE_CHROME_ROWS), queued messages and the measured height of any open
+ * prompt, which renders on top of the trace. LIVE_CHROME_ROWS documents the
+ * cases that budget does not cover.
  */
 
 /** Rows the trace Box spends on the "N earlier steps" hint and its bottom margin. */

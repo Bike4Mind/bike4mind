@@ -18,6 +18,8 @@ vi.mock('@server/middlewares/csrfProtection', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+const mockEmitFunnelEvent = vi.fn().mockResolvedValue(true);
+vi.mock('@server/analytics/funnel', () => ({ emitFunnelEvent: (...a: any[]) => mockEmitFunnelEvent(...a) }));
 vi.mock('@server/utils/auditLog', () => ({
   logAuditEvent: vi.fn(),
   EmailAuditEvents: {
@@ -53,8 +55,12 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockVerifyEmailToken = vi.fn();
 const mockAddCredits = vi.fn();
+const mockReleasePending = vi.fn();
 vi.mock('@bike4mind/services', () => ({
-  userService: { verifyEmailToken: (...a: any[]) => mockVerifyEmailToken(...a) },
+  userService: {
+    verifyEmailToken: (...a: unknown[]) => mockVerifyEmailToken(...a),
+    releasePendingFreeCredits: (...a: unknown[]) => mockReleasePending(...a),
+  },
   creditService: { addCredits: (...a: any[]) => mockAddCredits(...a) },
 }));
 
@@ -66,7 +72,11 @@ import handler from '@pages/api/email/verify';
 // one-product grant, not two.)
 const DOMAIN_EMAIL = 'staff@bike4mind.com';
 const NON_DOMAIN_EMAIL = 'nobody@example.com';
-const EXPECTED_DOMAIN_CREDITS = signupCreditsForEmail(DOMAIN_EMAIL, true);
+// Pinned literal (not derived from the registry, which would make the assertions circular):
+// the optihashi:pro grant pays 250,000. This path resolves the literal domain keys only (no
+// implication expansion), so the implied questmaster:pro credit is not in play here - the
+// implied-key de-dup is pinned in the registry test.
+const EXPECTED_DOMAIN_CREDITS = 250_000;
 
 function makeReqRes() {
   const { req, res } = createMocks({ method: 'POST' });
@@ -90,7 +100,22 @@ function mockUser(overrides: { email?: string; tags?: string[]; pendingCreditGra
 
 const domainGrantCall = () =>
   mockAddCredits.mock.calls.find(([p]) => p.transactionId === 'domain-grant-credits:user-1');
-const flatGrantCall = () => mockAddCredits.mock.calls.find(([p]) => p.transactionId === 'verify-grant:user-1');
+// The flat-grant arithmetic (amount resolution, transactionId) is covered in
+// userService/freeCredits.test.ts; this fake honours the same contract at the handler seam.
+const FLAT_GRANT_AMOUNT = 1000;
+function fakeReleasePending(user: { tags?: string[]; pendingCreditGrant?: number | null }) {
+  if (!user.tags?.includes(PENDING_FREE_CREDITS_TAG)) {
+    return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
+  }
+  return {
+    released: true,
+    creditsGranted: user.pendingCreditGrant ?? FLAT_GRANT_AMOUNT,
+    currentCredits: null,
+    patch: { tags: user.tags.filter(t => t !== PENDING_FREE_CREDITS_TAG), pendingCreditGrant: null },
+  };
+}
+const flatGrantCall = () =>
+  mockReleasePending.mock.calls.find(([user]) => user.tags?.includes(PENDING_FREE_CREDITS_TAG));
 
 describe('/api/email/verify — domain-grant signup credits', () => {
   beforeEach(() => {
@@ -98,6 +123,7 @@ describe('/api/email/verify — domain-grant signup credits', () => {
     mockVerifyEmailToken.mockResolvedValue(undefined);
     mockUpdate.mockResolvedValue(undefined);
     mockAddCredits.mockResolvedValue({});
+    mockReleasePending.mockImplementation(async user => fakeReleasePending(user));
     mockFindBySettingName.mockResolvedValue({ settingValue: 1000 });
     mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
   });
@@ -106,7 +132,7 @@ describe('/api/email/verify — domain-grant signup credits', () => {
     // Guards the rest of the suite: if bike4mind.com ever stops conferring the
     // product, these assertions would silently pass on 0 credits. Single-product
     // (optihashi:pro) since the Q/Work tier fold; was 500_000 (two products).
-    expect(EXPECTED_DOMAIN_CREDITS).toBe(250_000);
+    expect(signupCreditsForEmail(DOMAIN_EMAIL, true)).toBe(EXPECTED_DOMAIN_CREDITS);
   });
 
   it('grants domain-grant signup credits to a verified domain user with NO pending-free-credits tag', async () => {
@@ -122,14 +148,20 @@ describe('/api/email/verify — domain-grant signup credits', () => {
       expect.objectContaining({
         ownerId: 'user-1',
         ownerType: CreditHolderType.User,
-        credits: EXPECTED_DOMAIN_CREDITS,
+        credits: 250_000,
         type: 'generic_add',
         transactionId: 'domain-grant-credits:user-1',
       })
     );
-    // No pending tag -> the flat defaultFreeCredits grant must NOT fire.
-    expect(flatGrantCall()).toBeFalsy();
-    expect(mockFindBySettingName).not.toHaveBeenCalled();
+    // No pending tag -> nothing is released: no tag-strip write, and only the domain grant
+    // counts toward credits_granted.
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockEmitFunnelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'credits_granted',
+        metadata: expect.objectContaining({ amount: EXPECTED_DOMAIN_CREDITS }),
+      })
+    );
   });
 
   it('does NOT grant domain credits to a verified non-domain user', async () => {
@@ -150,9 +182,7 @@ describe('/api/email/verify — domain-grant signup credits', () => {
 
     expect(res._getStatusCode()).toBe(200);
     // Both grants fire, each with its own stable transactionId (distinct -> additive).
-    expect(flatGrantCall()?.[0]).toEqual(
-      expect.objectContaining({ credits: 1000, transactionId: 'verify-grant:user-1' })
-    );
+    expect(flatGrantCall()).toBeTruthy();
     expect(domainGrantCall()?.[0]).toEqual(
       expect.objectContaining({ credits: EXPECTED_DOMAIN_CREDITS, transactionId: 'domain-grant-credits:user-1' })
     );
@@ -167,11 +197,8 @@ describe('/api/email/verify — domain-grant signup credits', () => {
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(flatGrantCall()?.[0]).toEqual(
-      expect.objectContaining({ credits: 500, transactionId: 'verify-grant:user-1' })
-    );
-    // The defaultFreeCredits setting is not consulted when a pending amount travels on the doc...
-    expect(mockFindBySettingName).not.toHaveBeenCalled();
+    // The pending amount travels on the user doc into the service...
+    expect(flatGrantCall()?.[0]).toEqual(expect.objectContaining({ id: 'user-1', pendingCreditGrant: 500 }));
     // ...and the tag and the pending amount are cleared together.
     expect(mockUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-1', tags: [], pendingCreditGrant: null })
@@ -240,5 +267,62 @@ describe('/api/email/verify — domain-grant signup credits', () => {
     expect(res._getStatusCode()).toBe(200);
     // 0 credits -> no domain grant credit call at all, and definitely not the env 250k.
     expect(domainGrantCall()).toBeFalsy();
+  });
+});
+
+describe('/api/email/verify - funnel events', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockVerifyEmailToken.mockResolvedValue(undefined);
+    mockUpdate.mockResolvedValue(undefined);
+    mockAddCredits.mockResolvedValue({});
+    mockReleasePending.mockImplementation(async user => fakeReleasePending(user));
+    mockFindBySettingName.mockResolvedValue({ settingValue: 1000 });
+    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
+  });
+
+  const funnelEvents = () => mockEmitFunnelEvent.mock.calls.map(([c]) => [c.event, c.metadata]);
+
+  it('reports email_verified and the summed credits_granted for both grants', async () => {
+    mockUser({ email: DOMAIN_EMAIL, tags: [PENDING_FREE_CREDITS_TAG] });
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(funnelEvents()).toEqual([
+      ['email_verified', { method: 'link' }],
+      ['credits_granted', { amount: 1000 + EXPECTED_DOMAIN_CREDITS, source: 'signup', method: 'link' }],
+    ]);
+    expect(mockEmitFunnelEvent.mock.calls[0][0].user).toEqual(expect.objectContaining({ id: 'user-1' }));
+  });
+
+  it('reports no credits_granted when nothing was granted', async () => {
+    mockUser({ email: NON_DOMAIN_EMAIL, tags: [] });
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(funnelEvents()).toEqual([['email_verified', { method: 'link' }]]);
+  });
+
+  it('leaves a failed grant out of the credits_granted amount', async () => {
+    mockUser({ email: NON_DOMAIN_EMAIL, tags: [PENDING_FREE_CREDITS_TAG] });
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(funnelEvents()).toEqual([['email_verified', { method: 'link' }]]);
+  });
+
+  it('reports nothing when the token does not verify', async () => {
+    mockUser({ email: NON_DOMAIN_EMAIL, tags: [] });
+    mockVerifyEmailToken.mockRejectedValue(new Error('Token has expired'));
+    const { req, res } = makeReqRes();
+
+    await Promise.resolve(handler(req, res)).catch(() => {});
+
+    expect(mockEmitFunnelEvent).not.toHaveBeenCalled();
   });
 });

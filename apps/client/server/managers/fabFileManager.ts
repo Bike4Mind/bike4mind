@@ -48,7 +48,7 @@ export const generateNewFabFile = (data: IFabFile): IFabFile => {
 // Current callers of THIS function, and where each one gates:
 //   pages/api/files/generate-presigned-url.ts - MaxFileSize and the quota, per file
 //   pages/api/files/generate-presigned-urls-batch.ts - MaxFileSize per file, quota on the batch total
-//   server/queueHandlers/lakeIngestShared.ts (ingestLakeFile) - its callers, driveLakeIngest.ts and
+//   apps/workers/src/queueHandlers/lakeIngestShared.ts (ingestLakeFile) - its callers, driveLakeIngest.ts and
 //     githubLakeSlice.ts, each gate MaxFileSize per file and the quota on a running accepted-bytes total
 //
 // Scoped to this function only - it says nothing about doors that skip it and call

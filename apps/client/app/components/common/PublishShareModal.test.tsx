@@ -513,6 +513,14 @@ describe('PublishShareModal — search-engine listing is opt-in', () => {
     expect(toggle.checked).toBe(false);
   });
 
+  it('keeps the switch from shrinking beside the long helper text on a narrow viewport', () => {
+    renderModal();
+    expect(getComputedStyle(screen.getByTestId('publish-share-discoverable-switch')).flexShrink).toBe('0');
+    const textColumn = getComputedStyle(screen.getByTestId('publish-share-discoverable-text'));
+    expect(textColumn.flexGrow).toBe('1');
+    expect(textColumn.minWidth).toBe('0px');
+  });
+
   it('tells the user a public link stays out of search engines by default', () => {
     renderModal();
     // The public warning must say what "public" does NOT mean - this is the exact
@@ -663,5 +671,21 @@ describe('PublishShareModal — search-engine listing is opt-in', () => {
     expect(apiPatch).not.toHaveBeenCalledWith(expect.stringContaining('/api/publish/artifacts/'), {
       discoverable: true,
     });
+  });
+});
+
+describe('PublishShareModal - plain-language copy', () => {
+  it('labels the default option in plain words with no warning glyph', () => {
+    render(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={vi.fn()} title="My artifact" defaultVisibility="public" />
+      </Wrapper>
+    );
+    const option = screen.getByTestId('publish-share-visibility-public');
+    expect(option.textContent).toContain('Anyone with the link');
+    expect(document.body.textContent).not.toContain('\u26a0');
+    expect(document.body.textContent).not.toContain('List in search engines');
+    // The gate options name the same secret the passphrase option asks for.
+    expect(document.body.textContent).not.toContain('passcode');
   });
 });

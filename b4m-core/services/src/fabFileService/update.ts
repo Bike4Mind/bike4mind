@@ -181,7 +181,7 @@ export const updateFabFile = async (
     systemPriority: params.system && params.systemPriority === undefined ? 999 : params.systemPriority,
     updatedAt: new Date(),
   };
-  const updatedFabFile: Partial<IFabFileDocument> = { ...fabFile, ...changes };
+  const updatedFabFile: IFabFileDocument = { ...fabFile, ...changes };
 
   // An edit (rename/tag/notes/etc.) must not echo back a working GET url for an image
   // that isn't clean (pending scan) or was quarantined (blocked) by upload moderation.

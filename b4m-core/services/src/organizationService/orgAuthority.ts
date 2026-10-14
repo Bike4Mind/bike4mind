@@ -1,31 +1,9 @@
-import type { IOrganization, IUserDocument } from '@bike4mind/common';
+import type { AdministrableOrg } from '@bike4mind/common';
 
-/** The actor slice an administration decision needs - resolved from auth, never from the body. */
-export type OrgAuthorityActor = Pick<IUserDocument, 'id'> & { isAdmin?: boolean | null };
-
-/** The organization slice an administration decision needs. */
-export type AdministrableOrg = Pick<IOrganization, 'userId'> & { managerId?: string | null };
-
-/**
- * May this actor administer the organization's roster - add or remove members?
- *
- * Deliberately NARROWER than `shareable.findAccessibleById`, which is a MEMBERSHIP ACL: it admits
- * anyone in `users[]` holding `read`, and `addMember` only ever grants `[Permission.read]`, so
- * every ordinary member satisfied it and could therefore enroll arbitrary accounts. Roster
- * administration is a billing-owner / manager / platform-admin decision, not a member one.
- *
- * `userId` and `managerId` are declared `String` on the organization schema (unlike the User-side
- * `organizationId` pointer, which is an ObjectId), so a strict comparison is correct here.
- *
- * The one predicate for this question: `addMember` and `revokeAccess` must agree on who may change
- * the roster, or one side of the membership lifecycle admits principals the other refuses. It
- * mirrors the route-layer `verifyOrgAccess` (apps/client/server/utils/orgAccess.ts), which asks the
- * same question of client-supplied org ids and must stay in sync with it.
- */
-export function canAdministerOrganization(actor: OrgAuthorityActor, organization: AdministrableOrg): boolean {
-  if (actor.isAdmin) return true;
-  return organization.userId === actor.id || (!!organization.managerId && organization.managerId === actor.id);
-}
+// The roster-administration predicate lives in @bike4mind/common so the client can gate its
+// controls on the same answer the server enforces.
+export { canAdministerOrganization } from '@bike4mind/common';
+export type { AdministrableOrg, OrgAuthorityActor } from '@bike4mind/common';
 
 /** The organization slice a membership decision needs: the roster plus its privileged principals. */
 export type OrgMembershipRoster = AdministrableOrg & { users?: { userId: string }[] };
@@ -50,6 +28,9 @@ export type OrgMembershipRoster = AdministrableOrg & { users?: { userId: string 
  * No platform-admin arm: this reports a factual relationship to the roster, not authority. A
  * caller that wants "admin may act anyway" must say so itself, so the two ideas cannot be
  * conflated at a billing gate, where an admin's involvement should not change whose pool is spent.
+ *
+ * The repository's `setMemberMaxCredits` encodes the same three tiers as a Mongo `$or` and must
+ * stay in sync with this.
  */
 export function isCurrentOrgMember(organization: OrgMembershipRoster, userId: string): boolean {
   if (organization.userId === userId) return true;

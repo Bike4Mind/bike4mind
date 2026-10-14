@@ -82,6 +82,7 @@ const TagModal = ({ open, onClose, selectedItems, combinedSessions, onTagged }: 
                     variant="soft"
                     endDecorator={
                       <IconButton
+                        aria-label="Remove tag"
                         size="sm"
                         variant="plain"
                         color="neutral"

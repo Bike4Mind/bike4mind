@@ -30,8 +30,7 @@ import { emitMetric } from '@server/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { Resource } from 'sst';
-import { z } from 'zod';
-import type { LiveOpsTriageJobMessage } from '@server/utils/liveopsTriageJobMessage';
+import { LiveOpsTriageJobMessageSchema, type LiveOpsTriageJobMessage } from '@server/utils/liveopsTriageJobMessage';
 
 // Register global handlers to absorb transient network errors (TypeError: terminated)
 // that escape try/catch via orphaned undici promises.
@@ -41,16 +40,6 @@ const CLOUDWATCH_NAMESPACE = 'Lumina5/LiveOpsTriage';
 const CIRCUIT_BREAKER_THRESHOLD = 5; // Auto-disable after 5 consecutive failures
 const IDEMPOTENCY_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 const PROGRESS_UPDATE_INTERVAL_MS = 2000; // Throttle progress updates
-
-// Schema validation for SQS messages
-const LiveOpsTriageJobMessageSchema = z.object({
-  configId: z.string().min(1),
-  configName: z.string().min(1),
-  dispatchedAt: z.number(),
-  source: z.enum(['cron', 'manual']),
-  dryRun: z.boolean().optional(),
-  lookbackHours: z.number().int().min(1).max(168).optional(),
-});
 
 export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Context, logger: Logger) => {
   const stage = Resource.App.stage;

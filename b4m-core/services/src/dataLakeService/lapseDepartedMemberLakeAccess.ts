@@ -13,7 +13,8 @@ export interface LapseDepartedMemberLakeAccessAdapters extends LakeConfigAuditAd
     // `update` carries phase 2's actor stamp. It is also what makes the lake DOCUMENT a write both
     // this path and `transferLakeOwnership` touch for the same lake, which is what a transaction
     // needs in order to detect the two colliding - see the serialization note on phase 2.
-    dataLakes: Pick<IDataLakeRepository, 'findByOrganizationId' | 'update'>;
+    // `touchIfStable` is phase 1's equivalent for a lapsed manage grant (see `lapseOwnGrants`).
+    dataLakes: Pick<IDataLakeRepository, 'findByOrganizationId' | 'update' | 'touchIfStable'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes' | 'upsertGrant'>;
   };
 }
@@ -164,6 +165,13 @@ async function lapseOwnGrants(
   // a Mongo transaction carries does not accept concurrent operations.
   for (const grant of lapsing) {
     await db.dataLakeAccessGrants.upsertGrant({ ...grant, expiresAt: now });
+    // A lapsed manage grant must collide with a manage write the member has in flight, and only a
+    // shared lake-doc write does that (WRITE-TIME RESIDUAL on `canManageLake`). A touch, not an actor
+    // stamp: a lapse changes who may reach the lake, not its configuration. A reader cannot manage,
+    // so its lapse touches nothing and leaves the lake's stranded clock alone.
+    if (grant.role === 'owner' || grant.role === 'curator') {
+      await db.dataLakes.touchIfStable(grant.dataLakeId);
+    }
     // Role on BOTH sides of the diff (rather than `undefined`, as the manual revoke door passes):
     // what moved is the expiry, so the row reads as "this access lapsed" and not "this grant was
     // deleted" - the distinction the expire-not-delete choice exists to preserve.

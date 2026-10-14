@@ -5,6 +5,7 @@ import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
   Group,
@@ -48,7 +49,11 @@ const adapters = {
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
-  await mongoose.connect(replSet.getUri());
+  // No assertion here depends on a schema index, so skip the builds and settle the collection
+  // creates before the first transaction. See settleAutoIndexBuilds in createMongoServer.ts for the
+  // pool deadlock this avoids.
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -60,6 +65,8 @@ afterEach(async () => {
 
 const rawOrg = (id: string) => Organization.collection.findOne({ _id: new mongoose.Types.ObjectId(id) });
 const rawGroup = (id: string) => Group.collection.findOne({ _id: new mongoose.Types.ObjectId(id) });
+const pointerOf = async (userId: string) =>
+  (await User.collection.findOne({ _id: new mongoose.Types.ObjectId(userId) }))?.organizationId ?? null;
 
 const seed = async () => {
   const owner = await User.create({
@@ -69,6 +76,7 @@ const seed = async () => {
     hasUsablePassword: false,
   });
   const org = await Organization.create({ name: 'Acme', userId: owner.id, users: [] });
+  await User.updateOne({ _id: owner._id }, { $set: { organizationId: String(org._id) } });
   const group = await Group.create({
     name: 'Sales',
     description: 'd',
@@ -81,8 +89,25 @@ const seed = async () => {
     password: null,
     hasUsablePassword: false,
     groups: [String(group._id)],
+    organizationId: String(org._id),
   });
-  return { owner, orgId: String(org._id), groupId: String(group._id), memberId: member.id };
+  // Points at a different org, so the pointer reset must leave it alone.
+  const otherOrg = await Organization.create({ name: 'Other', userId: owner.id, users: [] });
+  const bystander = await User.create({
+    name: 'Bystander',
+    username: `bystander-${Math.random().toString(36).slice(2, 10)}`,
+    password: null,
+    hasUsablePassword: false,
+    organizationId: String(otherOrg._id),
+  });
+  return {
+    owner,
+    orgId: String(org._id),
+    groupId: String(group._id),
+    memberId: member.id,
+    otherOrgId: String(otherOrg._id),
+    bystanderId: bystander.id,
+  };
 };
 
 describe('deleteOrganization - transaction participation (replica set)', () => {
@@ -110,15 +135,20 @@ describe('deleteOrganization - transaction participation (replica set)', () => {
     expect(org!.deletedAt ?? null).toBeNull();
     expect(group!.deletedAt ?? null).toBeNull();
     expect((await User.findById(memberId))?.groups).toEqual([groupId]);
+    expect(String(await pointerOf(owner.id))).toBe(orgId);
+    expect(String(await pointerOf(memberId))).toBe(orgId);
   });
 
-  it('commits the org soft-delete, the group soft-delete and the member purge together', async () => {
-    const { owner, orgId, groupId, memberId } = await seed();
+  it('commits the org soft-delete, the group soft-delete, the member purge and the pointer reset together', async () => {
+    const { owner, orgId, groupId, memberId, otherOrgId, bystanderId } = await seed();
 
     await withTransaction(() => organizationService.deleteOrganization(owner as any, { id: orgId }, adapters as any));
 
     expect((await rawOrg(orgId))?.deletedAt).toBeInstanceOf(Date);
     expect((await rawGroup(groupId))?.deletedAt).toBeInstanceOf(Date);
     expect((await User.findById(memberId))?.groups).toEqual([]);
+    expect(await pointerOf(owner.id)).toBeNull();
+    expect(await pointerOf(memberId)).toBeNull();
+    expect(String(await pointerOf(bystanderId))).toBe(otherOrgId);
   });
 });

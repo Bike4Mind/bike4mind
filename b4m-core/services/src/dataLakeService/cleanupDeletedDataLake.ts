@@ -6,11 +6,13 @@ import type {
   IDataLakeResearchConfigRepository,
   IDataLakeResearchRunRepository,
   ILakeMembershipDecisionRepository,
+  ILakeSkippedFileRepository,
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
   IFabFileChunkRepository,
 } from '@bike4mind/common';
+import { isLegalHoldError } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
@@ -20,6 +22,10 @@ import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { strictIndexRemove, type RetrievalIndexPort } from './ports';
 
 interface CleanupDeletedDataLakeAdapters {
+  purgeClaimId?: string;
+  // Optional for existing callers of the published service. Queue consumers must supply both adapters.
+  beginPurge?: () => Promise<boolean>;
+  deleteFileAndChunks?: (id: string) => Promise<void>;
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'delete' | 'find'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'removeAllForLake'>;
@@ -33,6 +39,8 @@ interface CleanupDeletedDataLakeAdapters {
      * are lake-scoped, and a host that never wired the repair has no rows to sweep.
      */
     lakeMembershipDecisions?: Pick<ILakeMembershipDecisionRepository, 'deleteForLake'>;
+    /** Optional like the rows above: the not-ingested list is lake-scoped, see ILakeSkippedFile. */
+    lakeSkippedFiles?: Pick<ILakeSkippedFileRepository, 'deleteForLake'>;
     /**
      * Optional for the same reason again: research configs and their run history (#1682) are
      * lake-scoped, and a host that never wired the producer has no rows to sweep.
@@ -150,6 +158,9 @@ export const cleanupDeletedDataLake = async (
   dataLakeId: string,
   {
     db,
+    beginPurge,
+    purgeClaimId,
+    deleteFileAndChunks,
     retrievalIndex,
     shredMemory,
     releaseDriveConnection,
@@ -164,7 +175,11 @@ export const cleanupDeletedDataLake = async (
     // Already gone - idempotent success.
     return;
   }
-  if (!(await resolveCanManageLake(existing, actor, { db }))) {
+  const validResumeClaim = purgeClaimId === undefined || (typeof purgeClaimId === 'string' && purgeClaimId.length > 0);
+  const resumesStartedGeneration =
+    beginPurge && validResumeClaim && existing.purgeStartedAt && existing.purgeClaimId === purgeClaimId;
+  // A started generation may have removed its own grants; its atomic claim still gates every retry.
+  if (!resumesStartedGeneration && !(await resolveCanManageLake(existing, actor, { db }))) {
     throw new BadRequestError('You do not have permission to clean up this data lake');
   }
   // 'purging' is the normal arrival state since #1744 - the route claims it at accept time, before
@@ -175,6 +190,10 @@ export const cleanupDeletedDataLake = async (
   // dlqRegistry) decorative, and DLQ replay is the whole recovery story for a stuck purge.
   if (existing.status !== 'purging' && existing.status !== 'deleted') {
     throw new BadRequestError('Data lake must be soft-deleted before cleanup');
+  }
+
+  if (beginPurge && !(await beginPurge())) {
+    throw new BadRequestError('Cleanup generation no longer owns this data lake');
   }
 
   await warnOnPrefixCollision(db, existing, logger);
@@ -216,26 +235,8 @@ export const cleanupDeletedDataLake = async (
   // tagged mid-sweep - leaving its chunks behind and its index entry unrequested. It survives
   // this run instead, which is the recoverable direction.
   //
-  // Each file's row goes first and its own chunks immediately after, in the SAME iteration (#2583).
-  // Rows-then-chunks is the ordering that matters: chunks-then-row used to leave an interruption
-  // between the two stranding a ROW with a stale vectorizedChunkCount over zero real chunks -
-  // unretrievable, but every counter-based health surface reported it vectorized. This order fails
-  // the other, harmless way: an interruption orphans chunk rows, unreachable without their file
-  // (no chunk carries a lake or tag field). Nothing sweeps those yet - #2539 is a different
-  // population, chunks whose `fabFileId` is a serialized document rather than an id.
-  //
-  // PAIRING the two per id is what keeps the sweep retry-safe, and it is why this is not a bulk
-  // `hardDeleteByIds` followed by a separate chunk fan-out. `fileIds` is derived from the rows
-  // themselves, so once they are all gone a DLQ retry re-enters at `findIdsByDataLakeTag` with an
-  // EMPTY list and the chunk sweep becomes a permanent no-op - a whole lake's chunks leaked, with
-  // no id list left anywhere that names them. Paired, the ids this run has not reached yet are
-  // still resolvable on replay, so a run that dies mid-fan-out resumes where it stopped and the
-  // docstring's "a DLQ retry re-runs it" stays true. The irreducible window is one file wide.
-  //
-  // Chunked so a large lake doesn't fan out unbounded (Lambda timeout/memory); both writes are
-  // no-ops on already-purged data, so a replay over a partially-swept lake is harmless. Chunk
-  // deletion covers soft-deleted files too, since the id list is resolved before any hard delete.
-  //
+  // Production retains each row until its final chunk batch commits, keeping unfinished files resolvable.
+  // The fallback preserves the published service contract; it does not provide that recovery guarantee.
   // The findings sweep is GLOBAL (`deleteForPurgedDocuments`), not lake-scoped. These rows are
   // about to be destroyed everywhere, but a file can carry two lakes' meta-tags - there is no
   // exclusivity check on `addFileToLake`, and the membership filter's arms have no "no other
@@ -303,8 +304,24 @@ export const cleanupDeletedDataLake = async (
           await storage.delete(currentKey);
         }
       }
-      await db.fabFiles.hardDeleteOneById(id);
-      await db.fabFileChunks.deleteManyByFabFileId(id);
+      // Legal-hold errors are permanent; re-throwing would DLQ-loop forever. Skip and log.
+      // The catch wraps both branches: the production worker injects deleteFileAndChunks
+      // (see dataLakeCleanup.ts), and that path also throws on a blocked file.
+      // All other errors are treated as transient and re-thrown for DLQ retry (see comment above).
+      try {
+        if (deleteFileAndChunks) {
+          await deleteFileAndChunks(id);
+        } else {
+          await db.fabFiles.hardDeleteOneById(id);
+          await db.fabFileChunks.deleteManyByFabFileId(id);
+        }
+      } catch (err) {
+        if (isLegalHoldError(err)) {
+          logger?.warn('[dataLake] skipping blocked file in sweep (legal hold)', { fabFileId: id });
+          return;
+        }
+        throw err;
+      }
     },
     async slice => {
       if (storage) {
@@ -369,6 +386,9 @@ export const cleanupDeletedDataLake = async (
   // per-document sweep: the rows carry ids, a file name and a curator's note rather than document
   // prose, so unlike 4f this is tidiness, not retention. Idempotent.
   await db.dataLakeCorpusActions?.deleteForLake(dataLakeId);
+
+  // 4h. And the not-ingested list: names and paths of source files the lake never held. Idempotent.
+  await db.lakeSkippedFiles?.deleteForLake(dataLakeId);
 
   // 5. Delete the lake record last, so a mid-sweep failure leaves it recoverable/re-runnable.
   await db.dataLakes.delete(dataLakeId);

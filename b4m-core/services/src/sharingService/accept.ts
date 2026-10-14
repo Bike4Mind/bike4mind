@@ -100,13 +100,19 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   // minted before the flag and before that resolution landed have no recipients to check against,
   // so they now fail closed here and have to be re-sent. Once every named recipient has accepted,
   // `pending` is empty and the `remaining <= 0` check above blocks further accepts anyway.
-  if (!isLinkOnlyInvite(invite) && !invite.recipients?.pending?.includes(user.email)) {
+  //
+  // Case-insensitive: a Project invite to an address with no account stores it lowercased, while an
+  // SSO signup stores the provider's casing verbatim (the listing in InviteModel already matches
+  // case-insensitively, so without this the invitee sees an invite they cannot accept).
+  const email = user.email.toLowerCase();
+  const isEmail = (entry: string) => entry.toLowerCase() === email;
+  if (!isLinkOnlyInvite(invite) && !invite.recipients?.pending?.some(isEmail)) {
     throw new ForbiddenError('This invite was not sent to your account');
   }
 
   if (invite.recipients) {
-    invite.recipients.pending = invite.recipients.pending?.filter(p => p !== user.email);
-    invite.recipients.refused = invite.recipients.refused?.filter(p => p !== user.email);
+    invite.recipients.pending = invite.recipients.pending?.filter(p => !isEmail(p));
+    invite.recipients.refused = invite.recipients.refused?.filter(p => !isEmail(p));
     invite.recipients.accepted.push(user.email);
   }
 

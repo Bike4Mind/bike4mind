@@ -23,7 +23,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 
 const BUCKETS_SOURCE = readFileSync(path.join(REPO_ROOT, 'infra/buckets.ts'), 'utf8');
 const HANDLER_SOURCE = readFileSync(
-  path.join(REPO_ROOT, 'apps/client/server/queueHandlers/orgFeedbackSummary.ts'),
+  path.join(REPO_ROOT, 'apps/workers/src/queueHandlers/orgFeedbackSummary.ts'),
   'utf8'
 );
 const MODEL_SOURCE = readFileSync(
