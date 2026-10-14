@@ -106,6 +106,16 @@ describe('prepareWireTools', () => {
     expect(refusal(() => prepareWireTools([custom('a')], echoed, OPENAI)).errorCode).toBe('tool_search_unsupported');
   });
 
+  it('refuses a server tool that is not a tool search tool', () => {
+    const webSearch = {
+      serverTool: { type: 'web_search_20250305', name: 'web_search', max_uses: 50 },
+    } as unknown as CompletionTool;
+    expect(refusal(() => prepareWireTools([webSearch], hi, DIRECT))).toEqual({
+      errorCode: 'tool_search_unsupported',
+      status: 400,
+    });
+  });
+
   it('refuses a request where every tool is deferred and no server tool is sent', () => {
     expect(
       refusal(() =>

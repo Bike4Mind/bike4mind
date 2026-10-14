@@ -9,6 +9,7 @@ import {
   type CompletionTool,
   type CompletionToolErrorCode,
   type CompletionsToolCapabilityModel,
+  ToolSearchServerToolSchema,
   type IMessage,
   type ToolSearchServerTool,
 } from '@bike4mind/common';
@@ -63,8 +64,16 @@ export function prepareWireTools(
   const customTools: CompletionCustomTool[] = [];
   const serverTools: ToolSearchServerTool[] = [];
   for (const tool of tools ?? []) {
-    if (isCompletionServerTool(tool)) serverTools.push(tool.serverTool);
-    else customTools.push(tool);
+    if (isCompletionServerTool(tool)) {
+      const parsed = ToolSearchServerToolSchema.safeParse(tool.serverTool);
+      if (!parsed.success) {
+        throw toolSearchError(
+          'serverTool must be a tool search server tool (tool_search_tool_regex_20251119 or tool_search_tool_bm25_20251119; see ToolSearchServerToolSchema).',
+          'tool_search_unsupported'
+        );
+      }
+      serverTools.push(parsed.data);
+    } else customTools.push(tool);
   }
 
   const { referencedTools, echoesToolSearchBlocks } = scanMessages(messages);

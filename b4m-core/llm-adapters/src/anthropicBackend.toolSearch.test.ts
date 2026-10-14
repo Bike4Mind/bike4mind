@@ -254,6 +254,7 @@ describe.each(THINKING_MODES)('AnthropicBackend tool search stream (thinking %s)
     const { cb, providerBlocks } = collect();
 
     await backend.complete(model, [{ role: 'user', content: 'weather in Oslo?' }], options([getWeather]), cb);
+    expect(captured[0].thinking).toEqual(thinking ? { type: 'adaptive' } : { type: 'disabled' });
 
     expect(providerBlocks()).toEqual([
       {
