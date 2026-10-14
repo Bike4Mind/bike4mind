@@ -155,6 +155,16 @@ describe('settlePublication - re-publish rewrites the existing record in place',
     expect(opts.upsert).toBe(false);
   });
 
+  it('clears discoverable when a re-publish leaves public, and leaves it alone on a public re-publish', async () => {
+    mocks.findOneLean.mockResolvedValue(existingRow({ visibility: 'public' }));
+    await settlePublication(input({ visibility: 'private' }));
+    expect(writeCall()[1].$set).toMatchObject({ visibility: 'private', discoverable: false });
+
+    mocks.findOneAndUpdate.mockClear();
+    await settlePublication(input({ visibility: 'public' }));
+    expect(writeCall()[1].$set).not.toHaveProperty('discoverable');
+  });
+
   it("quota replaces the row's OLD tier and scope, not the requested ones", async () => {
     mocks.findOneLean.mockResolvedValue(existingRow({ tier: 'organization', scopeId: 'org1' }));
     await settlePublication(input());

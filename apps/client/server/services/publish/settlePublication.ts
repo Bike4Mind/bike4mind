@@ -92,6 +92,9 @@ export async function settlePublication(input: SettlePublicationInput) {
         scopeId,
         title: input.title,
         visibility,
+        // Same de-arm as PATCH /artifacts/[id]: indexing only counts while open-public, so leaving
+        // it clears the flag rather than letting a later public re-publish silently re-arm it.
+        ...(visibility !== 'public' && { discoverable: false }),
         lastPublishedBy: ownerId,
         source,
         storageKeyPrefix: '',
