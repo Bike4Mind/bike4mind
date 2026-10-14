@@ -557,6 +557,7 @@ describe('PublishShareModal — search-engine listing is opt-in', () => {
     // next time someone widens the artifact back to public.
     renderModal();
     fireEvent.click(screen.getByTestId('publish-share-discoverable-toggle'));
+    expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(true);
 
     fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
     expect(screen.queryByTestId('publish-share-discoverable-toggle')).toBeNull();
@@ -578,6 +579,7 @@ describe('PublishShareModal — search-engine listing is opt-in', () => {
     expect(screen.queryByTestId('publish-share-discoverable-toggle')).toBeNull();
 
     fireEvent.click(radio('none')!);
+    expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(true);
   });
 
   const publishAndWait = async (props: Partial<React.ComponentProps<typeof PublishShareModal>> = {}) => {
@@ -760,7 +762,7 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     apiGet.mockImplementation((url: string) =>
       Promise.resolve(
         url.endsWith('/share-token')
-          ? { data: { shareToken: 't' } }
+          ? { data: { shareToken: 'tok-zq9' } }
           : {
               data: {
                 artifact: {
@@ -777,7 +779,7 @@ describe('PublishShareModal - reopening an already-published reply', () => {
     await waitFor(() => expect(radio('private')?.checked).toBe(true));
     expect(radio('public')?.checked).toBe(false);
     expect((screen.getByTestId('publish-share-comments-toggle') as HTMLInputElement).checked).toBe(true);
-    expect(((await screen.findByTestId('publish-share-token-url')) as HTMLInputElement).value).toContain('t');
+    expect(((await screen.findByTestId('publish-share-token-url')) as HTMLInputElement).value).toContain('/a/tok-zq9');
     // The gate control only renders while public; switching there shows the seeded gate.
     fireEvent.click(screen.getByTestId('publish-share-visibility-public'));
     const domains = (await screen.findByTestId('publish-share-gate-domains')) as HTMLInputElement;
