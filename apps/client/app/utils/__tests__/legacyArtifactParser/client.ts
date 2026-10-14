@@ -1,6 +1,6 @@
 // Frozen copy of the pre-merge artifact pass at commit 3d0dee5ce. Test-only: it backs the
-// old-vs-new parity harness (../artifactParityHarness.test.ts). Delete after the merged
-// pass has baked.
+// old-vs-new parity harness (../artifactParityHarness.test.ts). Delete together with the
+// harness once a release has shipped the merged pass with no artifact-detection regressions.
 
 import {
   type ArtifactParseResult,

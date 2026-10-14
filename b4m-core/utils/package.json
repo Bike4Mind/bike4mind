@@ -269,6 +269,8 @@
     "zod": "^4.6.6"
   },
   "devDependencies": {
+    "@babel/standalone": "^8.0.4",
+    "@types/babel__standalone": "^7.1.9",
     "@types/lodash": "^4.17.24",
     "@types/mime-types": "^3.0.1",
     "esbuild": "0.28.1",
