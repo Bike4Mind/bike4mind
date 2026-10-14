@@ -1,6 +1,7 @@
 import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import type { PublishScopeTier, PublishSourceKind } from '@bike4mind/common';
 import { resolveRouterDistributionId } from '@server/security/wafSharedHelpers';
+import type { MinimalLogger } from './minimalLogger';
 import { buildPublishUrlPath } from './paths';
 
 /**
@@ -84,11 +85,6 @@ function getRouterDistributionId(logger?: MinimalLogger): string | undefined {
     logger?.warn(`[PUBLISH] CDN invalidation skipped — ${err instanceof Error ? err.message : String(err)}`);
     return undefined;
   }
-}
-
-interface MinimalLogger {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
 }
 
 /** Invalidate a published page's CDN paths so a removed page stops serving immediately. Never throws. */

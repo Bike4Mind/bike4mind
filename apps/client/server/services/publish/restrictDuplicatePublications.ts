@@ -6,11 +6,7 @@ import {
   type PublishVisibility,
 } from '@bike4mind/common';
 import { invalidatePublishCdn, toCacheTarget } from './invalidatePublishCdn';
-
-interface MinimalLogger {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
-}
+import type { MinimalLogger } from './minimalLogger';
 
 export interface DuplicateKeeper {
   _id: unknown;

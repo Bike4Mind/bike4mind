@@ -3,12 +3,8 @@ import { PublishedArtifact } from '@bike4mind/database';
 import type { CitableSource, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import { checkPublishQuota } from './checkPublishQuota';
 import { invalidatePublishCdn, toCacheTarget } from './invalidatePublishCdn';
+import type { MinimalLogger } from './minimalLogger';
 import { restrictDuplicatePublications } from './restrictDuplicatePublications';
-
-interface MinimalLogger {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
-}
 
 export type SettleSource =
   { kind: 'reply'; sessionId: string; messageId: string } | { kind: 'fabfile'; fabFileId: string };
