@@ -64,8 +64,6 @@ type StartFn = Parameters<typeof SpawnSuggestionTray>[0]['onStart'];
 interface Handlers {
   onStart: Mock<StartFn>;
   onDismiss: Mock<(suggestionId: string) => Promise<SpawnSuggestionResult>>;
-  onClear: Mock<(suggestionId: string) => void>;
-  onOpenSession: Mock<(sessionId: string) => void>;
   onSend: Mock<(text: string) => void>;
 }
 
@@ -73,8 +71,6 @@ function handlers(): Handlers {
   return {
     onStart: vi.fn<StartFn>(async () => ok(BASE)),
     onDismiss: vi.fn(async (_suggestionId: string) => ok(BASE)),
-    onClear: vi.fn<(suggestionId: string) => void>(),
-    onOpenSession: vi.fn<(sessionId: string) => void>(),
     onSend: vi.fn<(text: string) => void>(),
   };
 }
@@ -85,13 +81,7 @@ function render(suggestions: ChatSpawnSuggestion[], on: Handlers, streaming = fa
   act(() => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <SpawnSuggestionTray
-          suggestions={suggestions}
-          onStart={on.onStart}
-          onDismiss={on.onDismiss}
-          onClear={on.onClear}
-          onOpenSession={on.onOpenSession}
-        />
+        <SpawnSuggestionTray suggestions={suggestions} onStart={on.onStart} onDismiss={on.onDismiss} />
         <Composer
           sessionId="s1"
           disabled={false}
@@ -212,29 +202,18 @@ describe('SpawnSuggestionTray', () => {
     expect(host?.querySelector('[data-testid="spawn-suggestion-conflict-prompt"]')).toBeNull();
   });
 
-  it('draws a started suggestion as a row that opens the child', async () => {
-    const on = handlers();
-    render(
-      [
-        {
-          ...BASE,
-          status: 'started',
-          started: {
-            sessionId: 'child-1',
-            title: 'Tidy imports',
-            placement: 'worktree',
-            branch: 'agent/x',
-            edited: false,
-          },
-        },
-      ],
-      on
-    );
-    expect(byTestId('spawn-suggestion-started').textContent).toContain('Started');
-    await click('spawn-suggestion-open-link');
-    expect(on.onOpenSession).toHaveBeenCalledWith('child-1');
-    await click('spawn-suggestion-clear-btn');
-    expect(on.onClear).toHaveBeenCalledWith('s1');
+  it('draws only pending suggestions, so a started one leaves the tray', () => {
+    const started: ChatSpawnSuggestion = {
+      ...BASE,
+      id: 's2',
+      status: 'started',
+      started: { sessionId: 'child-1', title: 'Tidy imports', placement: 'worktree', branch: 'agent/x', edited: false },
+    };
+    render([BASE, started, { ...BASE, id: 's3', status: 'dismissed' }], handlers());
+    expect(host?.querySelectorAll('[data-testid="spawn-suggestion-card"]')).toHaveLength(1);
+
+    render([started], handlers());
+    expect(host?.querySelector('[data-testid="spawn-suggestion-tray"]')).toBeNull();
   });
 
   it('leaves the composer sending while a card is pending and a reply is running', () => {

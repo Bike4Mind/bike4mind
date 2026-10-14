@@ -1430,8 +1430,6 @@ export interface ChatSpawnSuggestion {
   dismissedBy?: 'user' | 'assistant';
   /** A user outcome the model has not been told yet; cleared when the next turn carries it. */
   unreported?: boolean;
-  /** The user closed the "Started" row, so the tray no longer draws it. */
-  cleared?: boolean;
 }
 
 export interface ChatSpawnSuggestionStart {

@@ -55,12 +55,12 @@ describe('SessionStore spawn suggestions', () => {
     expect((await store.spawnSuggestions(sessionId))[0]?.unreported).toBe(true);
   });
 
-  it('forgets a started row the user closed once it is reported', async () => {
-    await store.changeSpawnSuggestions(sessionId, () => [suggestion('a', { status: 'started' })]);
-    const after = await store.changeSpawnSuggestions(sessionId, current =>
-      current.map(entry => ({ ...entry, cleared: true }))
-    );
-    expect(after).toEqual([]);
+  it('caps reported starts at the newest 20 and never drops a pending one', async () => {
+    const started = Array.from({ length: 25 }, (_, index) => suggestion(`s${index}`, { status: 'started' }));
+    const after = await store.changeSpawnSuggestions(sessionId, () => [suggestion('p'), ...started]);
+    expect(after).toHaveLength(21);
+    expect(after?.[0]?.id).toBe('p');
+    expect(after?.[1]?.id).toBe('s5');
   });
 
   it('drops pending suggestions on archive and keeps the started ones', async () => {
