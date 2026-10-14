@@ -16,7 +16,7 @@ import { dispatch as githubLakeRevokeDispatch } from '@workers/queueHandlers/git
 import { dispatch as imageGenerationDispatch } from '@workers/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@workers/queueHandlers/imageEdit';
 import { dispatch as generationCallbackDispatch } from '@workers/queueHandlers/generationCallback';
-import { dispatch as generationJobDispatch } from '@server/queueHandlers/generationJob';
+import { dispatch as generationJobDispatch } from '@workers/queueHandlers/generationJob';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';
@@ -31,11 +31,13 @@ import { registerTelemetryCleanup } from './telemetryCleanup';
 import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
 import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerCreditLotSweep } from './creditLotSweep';
+import { registerVoiceHoldSweep } from './voiceHoldSweep';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerGenerationJobSweep } from './generationJobSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
 import { registerGitHubLakeReconcile } from './githubLakeReconcile';
+import { registerLakeConnectorOrphanReap } from './lakeConnectorOrphanReap';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@server/s3/chunkRescueSweep';
 import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
@@ -104,10 +106,12 @@ async function main() {
   registerGenerationJobSweep(worker);
   registerLakeHealthSweep(worker);
   registerGitHubLakeReconcile(worker);
+  registerLakeConnectorOrphanReap(worker);
   registerTelemetryCleanup(worker);
   registerApiKeyBaselineCalculation(worker);
   registerLakeInconsistencySweep(worker);
   registerCreditLotSweep(worker);
+  registerVoiceHoldSweep(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,

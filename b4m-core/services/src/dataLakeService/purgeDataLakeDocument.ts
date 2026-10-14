@@ -9,6 +9,7 @@ import type {
   ILakeConfigChangeEventRepository,
   ISessionRepository,
 } from '@bike4mind/common';
+import { isLegalHoldError } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
@@ -287,14 +288,26 @@ export const purgeDataLakeDocument = async (
     // Atomic, and it answers whether THIS call removed the row. Two concurrent purges both find the
     // gates open and both see the object-store delete succeed (deleting an absent key is a no-op),
     // so without this claim both would refund the owner's quota for the same bytes.
-    deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
+    // Legal-hold errors are permanent; catch them so the caller gets a clean false return
+    // rather than an opaque 500. The file is on legal hold and must not be removed.
+    try {
+      deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
+    } catch (err) {
+      if (isLegalHoldError(err)) {
+        logger?.warn('[dataLake] blocked file cannot be purged (legal hold)', { fabFileId: file.id });
+        // deletedByThisCall stays false: no quota refund, no onPurged - intentional.
+      } else {
+        throw err;
+      }
+    }
 
     // Once the row is gone there is no retry door left (the file has already vanished from the
     // owner's Files list), so this must not throw: an uncaught failure here would skip `onPurged`
     // below and silently cost the owner their quota refund with no symptom to chase. Log and fall
     // through to the read-back instead, same as the storage-delete failure above - chunksRemaining
     // and verified report the gap truthfully, and onPurged still runs off `deletedByThisCall`.
-    try {
+    // Guard: if the legal-hold catch fired, the row was NOT deleted; skip chunk sweep entirely.
+    if (deletedByThisCall) try {
       await db.fabFileChunks.deleteManyByFabFileId(file.id);
     } catch (error) {
       logger?.error('[dataLake] permanent deletion removed the row but could not delete its chunks', {

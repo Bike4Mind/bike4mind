@@ -3,6 +3,7 @@ import {
   HTTPError,
   InternalServerError,
   UnprocessableEntityError,
+  isOAuthClientIdShape,
   redactUserSecretsForSelf,
 } from '@bike4mind/common';
 import {
@@ -15,6 +16,7 @@ import {
   pendingOtcTokenRepository,
   authSessionRepository,
   passkeyCredentialRepository,
+  oauthClientRepository,
 } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
@@ -50,6 +52,11 @@ interface PendingTokenPayload {
 }
 
 const MAX_PENDING_OTC_ATTEMPTS = 5;
+
+// Attribution only: a malformed value is dropped rather than rejected so it can never fail a signup.
+function parseSourceClientId(value: unknown): string | undefined {
+  return isOAuthClientIdShape(value) ? value : undefined;
+}
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
@@ -347,6 +354,7 @@ const handler = baseApi({ auth: false })
           // client collects both before submitting (register form, or the inline username step).
           acceptedPolicyVersion,
           ageAttestation,
+          sourceClientId: parseSourceClientId(req.body.sourceClientId),
           metadata: req.body.clientData
             ? {
                 loginTime: new Date(),
@@ -370,6 +378,7 @@ const handler = baseApi({ auth: false })
             registrationInvites: registrationInviteRepository,
             subscribers: subscriberRepository,
             creditTransactions: creditTransactionRepository,
+            oauthClients: oauthClientRepository,
             creditLots: creditLotRepository,
           },
           logger: req.logger,

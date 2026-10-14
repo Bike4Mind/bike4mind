@@ -1,5 +1,6 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
-import type { ImageModerationIncident as ImageModerationIncidentData } from '@bike4mind/common';
+import type { ImageModerationIncident as ImageModerationIncidentData, IncidentReviewStatus } from '@bike4mind/common';
+import { INCIDENT_REVIEW_STATUSES } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
@@ -38,6 +39,10 @@ const ImageModerationIncidentSchema = new Schema(
         confidence: { type: Number, required: true },
       },
     ],
+    // Absent on pre-Q3 incidents; treated as 'pending_review' by all queries.
+    reviewStatus: { type: String, enum: INCIDENT_REVIEW_STATUSES, required: false },
+    // Populated when reviewStatus === 'reported'. The CyberTipline report ID returned by NCMEC.
+    ncmecReportId: { type: String, required: false },
   },
   {
     timestamps: true,
@@ -50,10 +55,15 @@ const ImageModerationIncidentSchema = new Schema(
 // Indexes (per MongoDB Index Guidelines)
 ImageModerationIncidentSchema.index({ userId: 1, createdAt: -1 }); // per-user history
 ImageModerationIncidentSchema.index({ createdAt: -1 }); // moderation queue
+// Admin triage queue: absent reviewStatus (pre-Q3) sorts alongside 'pending_review' via $in query.
+ImageModerationIncidentSchema.index({ reviewStatus: 1, createdAt: 1 });
 
 export const ImageModerationIncident =
   (mongoose.models.ImageModerationIncident as mongoose.Model<IImageModerationIncidentDocument>) ||
   model<IImageModerationIncidentDocument>('ImageModerationIncident', ImageModerationIncidentSchema);
+
+// A confirmed_csam claim older than this is treated as a stuck submission, not a live one.
+export const STALE_CONFIRMED_CSAM_MS = 10 * 60 * 1000;
 
 export class ImageModerationIncidentRepository extends BaseRepository<IImageModerationIncidentDocument> {
   constructor(model: Model<IImageModerationIncidentDocument>) {
@@ -78,6 +88,101 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    */
   async record(input: ImageModerationIncidentData): Promise<IImageModerationIncidentDocument> {
     return this.model.create(input);
+  }
+
+  /** Returns unreviewed incidents (reviewStatus absent or 'pending_review'), oldest first. */
+  async findPendingReview(limit: number): Promise<IImageModerationIncidentDocument[]> {
+    return this.model
+      .find({ reviewStatus: { $in: ['pending_review', null] } })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /**
+   * Returns incidents stuck in 'confirmed_csam' for longer than staleAfterMs (default 10 min).
+   * These are claims where the NCMEC HTTP call had an unknown outcome (timeout, network error)
+   * and the verdict route deliberately left the incident unclaimed for human verification.
+   * The admin should check NCMEC before retrying to avoid duplicate CyberTip submissions.
+   */
+  async findStaleConfirmedCsam(
+    limit: number,
+    staleAfterMs = STALE_CONFIRMED_CSAM_MS
+  ): Promise<IImageModerationIncidentDocument[]> {
+    const cutoff = new Date(Date.now() - staleAfterMs);
+    return this.model
+      .find({ reviewStatus: 'confirmed_csam', updatedAt: { $lt: cutoff } })
+      .sort({ updatedAt: 1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /**
+   * Atomically claim an incident for NCMEC submission. Transitions from absent/pending_review
+   * to 'confirmed_csam'. Only one concurrent request can succeed for a given incident; all
+   * others get null, preventing duplicate NCMEC filings.
+   */
+  async claimForNcmecSubmission(id: string): Promise<IImageModerationIncidentDocument | null> {
+    return this.model.findOneAndUpdate(
+      { _id: id, reviewStatus: { $in: ['pending_review', null] } },
+      { $set: { reviewStatus: 'confirmed_csam' } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Transition an incident to a terminal reviewStatus. `ncmecReportId` is set when
+   * `status === 'reported'`. Returns null if the transition is disallowed:
+   * - always blocked when already 'reported' (idempotency)
+   * - also blocked from 'confirmed_csam' when targeting 'false_positive', to prevent a
+   *   concurrent false_positive verdict from overriding an in-flight NCMEC submission.
+   */
+  async updateReviewStatus(
+    id: string,
+    status: IncidentReviewStatus,
+    ncmecReportId?: string
+  ): Promise<IImageModerationIncidentDocument | null> {
+    const update: Record<string, unknown> = { reviewStatus: status };
+    if (ncmecReportId) update.ncmecReportId = ncmecReportId;
+    const excluded = status === 'false_positive' ? ['reported', 'confirmed_csam'] : ['reported'];
+    return this.model.findOneAndUpdate({ _id: id, reviewStatus: { $nin: excluded } }, { $set: update }, { new: true });
+  }
+
+  /**
+   * Admin recovery action for incidents stuck in 'confirmed_csam' after an unknown NCMEC
+   * outcome. Transitions only from a stale 'confirmed_csam' (same threshold as
+   * findStaleConfirmedCsam), so a live in-flight submission cannot be resolved under it.
+   * Returns null if the incident is not in that state (wrong state, not found, still fresh,
+   * or concurrent resolution).
+   *
+   *   { status: 'reported', ncmecReportId }  -- operator confirmed the tip was received
+   *   { status: 'pending_review' }           -- operator confirmed nothing was filed; requeue.
+   *                                             Refused when an ncmecReportId is stored: that
+   *                                             report must be finalized, not filed again.
+   */
+  async resolveConfirmedCsam(
+    id: string,
+    target: { status: 'reported'; ncmecReportId: string } | { status: 'pending_review' },
+    staleAfterMs = STALE_CONFIRMED_CSAM_MS
+  ): Promise<IImageModerationIncidentDocument | null> {
+    const update: Record<string, unknown> = { reviewStatus: target.status };
+    if (target.status === 'reported') update.ncmecReportId = target.ncmecReportId;
+    const filter: Record<string, unknown> = {
+      _id: id,
+      reviewStatus: 'confirmed_csam',
+      updatedAt: { $lt: new Date(Date.now() - staleAfterMs) },
+    };
+    if (target.status === 'pending_review') filter.ncmecReportId = null;
+    return this.model.findOneAndUpdate(filter, { $set: update }, { new: true });
+  }
+
+  /**
+   * Persist a known reportId on a confirmed_csam incident without changing reviewStatus.
+   * Called when /finish fails after a successful /submit: the reportId is known and should
+   * be stored so an admin can use 'mark_reported' to finalize within NCMEC's 24-hour window.
+   */
+  async setNcmecReportId(id: string, ncmecReportId: string): Promise<void> {
+    await this.model.updateOne({ _id: id, reviewStatus: 'confirmed_csam' }, { $set: { ncmecReportId } });
   }
 }
 

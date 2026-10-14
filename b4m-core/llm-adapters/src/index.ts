@@ -19,6 +19,7 @@ import type { ApiKeyTable, BackendGateContext } from './backendGate';
 import { catalogLifecycles } from './deprecationHorizon';
 import { toProviderEndUserId } from './endUserId';
 import { mergeCatalog } from './mergeCatalog';
+import { alignRouteTwinNames } from './routeTwinNames';
 import { buildSupersededIndex, catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
@@ -481,6 +482,8 @@ export const getAvailableModels = async (
     }
   }
 
+  merged = await alignRouteTwinNames(merged);
+
   // Overlay versioned catalog prices when the app wired a provider.
   let priced = merged;
   if (_priceRowsProvider) {
@@ -555,6 +558,7 @@ export * from './dispatchModel';
 export * from './dispatchResolver';
 export * from './endUserId';
 export * from './mergeCatalog';
+export * from './routeTwinNames';
 
 // Implementations:
 export * from './anthropicBackend';
@@ -598,6 +602,7 @@ export {
   getFullToolResult,
   type FullToolResult,
 } from './recordToolResult';
+export * from './reasoningEfforts';
 export * from './resolveDeprecatedModel';
 export * from './deprecationHorizon';
 export * from './staleReferences';

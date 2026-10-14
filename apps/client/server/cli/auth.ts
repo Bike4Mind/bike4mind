@@ -378,12 +378,17 @@ const JWT_RATE_LIMIT_DEFAULT = 100;
 const JWT_RATE_WINDOW_MS = 60 * 60_000; // 1 hour
 
 /**
- * A counter kept apart from the shared per-user one. Callers without a bucket
- * share a single counter across every surface, so a CLI/agent session running
- * at its 1000 cap would exhaust a 100-cap endpoint on the same account. A public
- * endpoint that documents its own budget needs its own bucket.
+ * A counter kept apart from the shared per-user one. Callers without a bucket share a single
+ * counter across every surface, so a session running at a 1000 cap would exhaust a 100-cap
+ * endpoint on the same account. A public endpoint that documents its own budget needs its own
+ * bucket.
+ *
+ * - `ws` holds the 100-cap WebSocket handlers (tool execution, agent execute, keep relay,
+ *   cc-agent auth).
+ * - `completions` holds the sources whose cap is above the default (`cli`, `agent`); it is
+ *   derived from `source`, so the unbucketed counter only ever carries 100-cap sources.
  */
-export type JwtRateLimitBucket = 'tools' | 'desktop';
+export type JwtRateLimitBucket = 'tools' | 'desktop' | 'ws' | 'completions';
 
 /**
  * Per-client caps for first-party clients that run a client-side tool loop against the
@@ -415,6 +420,11 @@ function getJwtRateLimit(source?: CompletionSource): number {
   return JWT_RATE_LIMIT_BY_SOURCE[source] ?? JWT_RATE_LIMIT_DEFAULT;
 }
 
+/** Sources raised above the default cap must not spend the counter the 100-cap sources read. */
+function bucketForSource(source?: CompletionSource): JwtRateLimitBucket | undefined {
+  return getJwtRateLimit(source) > JWT_RATE_LIMIT_DEFAULT ? 'completions' : undefined;
+}
+
 function jwtRateLimitKey(userId: string, bucket?: JwtRateLimitBucket): string {
   return bucket ? `rate-limit:ws-auth:${bucket}:${userId}` : `rate-limit:ws-auth:${userId}`;
 }
@@ -441,7 +451,7 @@ export async function checkRateLimit(
   // One match drives both: an explicit bucket still wins, but a client-matched cap always
   // brings its own counter with it.
   const byClient = matchClient(options.client);
-  const key = jwtRateLimitKey(userId, options.bucket ?? byClient?.bucket);
+  const key = jwtRateLimitKey(userId, options.bucket ?? byClient?.bucket ?? bucketForSource(source));
   const adapters = { db: { caches: cacheRepository } };
   const limit = byClient?.limit ?? getJwtRateLimit(source);
 

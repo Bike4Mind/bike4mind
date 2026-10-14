@@ -59,6 +59,7 @@ const MOVED_MODULES = [
       'fabFileChunk',
       'fabFileVectorize',
       'generationCallback',
+      'generationJob',
       'githubLakeIngest',
       'githubLakeRevoke',
       'githubLakeSlice',

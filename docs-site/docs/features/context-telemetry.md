@@ -72,7 +72,7 @@ All telemetry data is **automatically deleted after 90 days**. There is no way t
 ## Your Rights
 
 - **Opt out at any time** — Switch to "None" and all historical data is immediately deleted
-- **Export your data** — Click "Export My Data" next to the telemetry level buttons to download a JSON file of all your telemetry records
+- **Export your data** - Click "Export telemetry data" next to the telemetry level buttons to download a JSON file of all your telemetry records. This does not include your notebooks or files; use **Export All** on the Notebooks and Knowledge Files cards in General settings for those
 - **Right to erasure** — Handled automatically when you opt out; no need to contact support
 
 ## Legal Basis

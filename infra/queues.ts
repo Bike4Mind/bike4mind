@@ -922,8 +922,9 @@ const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    // fabFileBucket for the uploads; the queue itself for deadline, rate-limit and claim-loser re-enqueues.
-    link: [...allSecrets, fabFileBucket, githubLakeIngestQueue],
+    // fabFileBucket for the uploads; the queue itself for deadline, rate-limit and claim-loser re-enqueues;
+    // githubLakeRevokeQueue because retiring a lakeless connection can defer a failed uninstall there.
+    link: [...allSecrets, fabFileBucket, githubLakeIngestQueue, githubLakeRevokeQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1022,7 +1023,7 @@ const generationJobQueue = new sst.aws.Queue('generationJobQueue', {
 });
 const generationJobQueueSubscription = generationJobQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/generationJob.dispatch',
+    handler: 'apps/workers/src/queueHandlers/generationJob.dispatch',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '2048 MB',

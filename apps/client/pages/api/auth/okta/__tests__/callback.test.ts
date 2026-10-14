@@ -40,6 +40,11 @@ vi.mock('@server/auth/oktaOidcClient', () => ({
   fetchUserInfo: (...a: any[]) => mockFetchUserInfo(...a),
 }));
 
+const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/utils/auth/oauthSourceTag', () => ({
+  stampOAuthSourceTag: (...a: unknown[]) => mockStampSourceTag(...a),
+}));
+
 // State token verification.
 const mockVerifyState = vi.fn();
 vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: (...a: any[]) => mockVerifyState(...a) }));
@@ -605,5 +610,31 @@ describe('/api/auth/okta/callback - IDP email-domain bind', () => {
     expect(mockFindOne).toHaveBeenCalledWith({
       authProviders: { $elemMatch: { strategy: AuthStrategy.Okta, id: 'okta-sst' } },
     });
+  });
+});
+
+describe('/api/auth/okta/callback - OAuth client source tag', () => {
+  it('stamps a newly created account with the clientId from the verified state', async () => {
+    mockVerifyState.mockReturnValue({ valid: true, payload: { idpId: 'idp-1', clientId: 'b4m_sat_0123abcd' } });
+    await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-new', email: 'new@example.com', email_verified: true, name: 'New User' },
+    });
+    expect(mockStampSourceTag).toHaveBeenCalledWith('new-user', 'b4m_sat_0123abcd');
+  });
+
+  it('never stamps an existing account that signs in through a client', async () => {
+    mockVerifyState.mockReturnValue({ valid: true, payload: { idpId: 'idp-1', clientId: 'b4m_sat_0123abcd' } });
+    await runCallback({
+      user: {
+        id: 'old-user',
+        _id: 'old-user',
+        tokenVersion: 0,
+        isBanned: false,
+        authProviders: [{ strategy: AuthStrategy.Okta, id: 'okta-sub-default', oktaIdentityProviderId: 'idp-1' }],
+      },
+      userInfo: { sub: 'okta-sub-default', email: 'old@example.com', email_verified: true, name: 'Old User' },
+    });
+    expect(mockStampSourceTag).not.toHaveBeenCalled();
   });
 });

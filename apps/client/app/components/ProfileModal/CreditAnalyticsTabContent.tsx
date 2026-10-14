@@ -30,11 +30,12 @@ import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy/styles';
 import { useTranslation } from 'react-i18next';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
-import { ModelBackend, ModelInfo, resolveModelName, usdToCredits } from '@bike4mind/common';
-import { dedupePricingRows, textModelPriceCells } from './modelPricingRows';
+import { ModelBackend, ModelInfo, usdToCredits } from '@bike4mind/common';
+import { bedrockChipLabels, dedupePricingRows, textModelPriceCells } from './modelPricingRows';
+import { aggregateUsageByModel } from './usageByModel';
 import SectionContainer from './SectionContainer';
 import { TYPE } from './settingsStyles';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import { computeBurnStats, MIN_DAYS_FOR_PROJECTION } from './creditBurnRate';
 
@@ -133,16 +134,10 @@ const CreditAnalyticsTabContent: React.FC = () => {
       balance: currentUser?.currentCredits,
     });
 
-    const modelUsageMap: Record<string, number> = {};
-
-    allDeductTransactions.forEach(transaction => {
-      const modelName = resolveModelName(transaction);
-
-      if (!modelUsageMap[modelName]) {
-        modelUsageMap[modelName] = 0;
-      }
-      modelUsageMap[modelName] += Math.abs(transaction.credits);
-    });
+    const modelUsageMap = aggregateUsageByModel(allDeductTransactions, [
+      ...accessibleTextModels,
+      ...accessibleImageModels,
+    ]);
 
     // Aggregate transactions by day for each type
     const purchaseDailyData = new Map<string, { x: string; y: number }>();
@@ -441,7 +436,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
       daysRemaining,
       observedDays,
     };
-  }, [transactions, timePeriod, viewMode, theme.palette, currentUser]);
+  }, [transactions, timePeriod, viewMode, theme.palette, currentUser, accessibleTextModels, accessibleImageModels]);
 
   // Tooltip text for days remaining, adjusted based on selected time period
   // Only when a projection would otherwise exist: no burn or no balance is N/A, not "too early".
@@ -520,11 +515,13 @@ const CreditAnalyticsTabContent: React.FC = () => {
     },
   };
 
-  const { textModels, imageModels } = useMemo(() => {
+  const { textModels, imageModels, textBedrockChips } = useMemo(() => {
     const byName = (a: ModelInfo, b: ModelInfo) => a.name.localeCompare(b.name);
+    const textRows = dedupePricingRows(accessibleTextModels).sort(byName);
     return {
-      textModels: dedupePricingRows(accessibleTextModels).sort(byName),
+      textModels: textRows,
       imageModels: dedupePricingRows(accessibleImageModels).sort(byName),
+      textBedrockChips: bedrockChipLabels(textRows),
     };
   }, [accessibleTextModels, accessibleImageModels]);
 
@@ -633,7 +630,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                   />
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: '4px' }}>
-                  <Bike4MindIcon size="20" />
+                  <CreditIcon sx={{ fontSize: 20, color: 'var(--Icon-color)' }} />
                   <Typography level={TYPE.statValue} sx={{ color: 'text.primary' }}>
                     {currentUser?.currentCredits?.toLocaleString() || 0}
                   </Typography>
@@ -653,7 +650,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                   />
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: '4px' }}>
-                  <Bike4MindIcon size="20" />
+                  <CreditIcon sx={{ fontSize: 20, color: 'var(--Icon-color)' }} />
                   <Typography level={TYPE.statValue} sx={{ color: 'text.primary' }}>
                     {Math.max(0, Math.round(burnRate)).toLocaleString()}
                   </Typography>
@@ -1114,7 +1111,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                             </Typography>
                             {model.backend === ModelBackend.Bedrock && (
                               <Chip size="sm" variant="soft" data-testid={`model-pricing-bedrock-${model.id}`}>
-                                AWS Bedrock
+                                {textBedrockChips.get(model.id)}
                               </Chip>
                             )}
                             {model.description && (
@@ -1134,13 +1131,13 @@ const CreditAnalyticsTabContent: React.FC = () => {
                           <td>{renderPriceTier(model)}</td>
                           <td>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <Bike4MindIcon size="14" />
+                              <CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />
                               <Typography level="body-sm">{inputCost}</Typography>
                             </Box>
                           </td>
                           <td>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <Bike4MindIcon size="14" />
+                              <CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />
                               <Typography level="body-sm">{outputCost}</Typography>
                             </Box>
                           </td>
@@ -1240,7 +1237,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
                           <td>{renderPriceTier(model)}</td>
                           <td>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <Bike4MindIcon size="14" />
+                              <CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />
                               <Typography level="body-sm">{inputCost}</Typography>
                             </Box>
                           </td>

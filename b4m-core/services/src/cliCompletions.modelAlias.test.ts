@@ -59,7 +59,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 import { BadRequestError, ChatModels } from '@bike4mind/common';
 import { executeCompletion } from './cliCompletions';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
-import { isModelProviderConfigured } from '@bike4mind/llm-adapters';
+import { getAvailableModels, isModelProviderConfigured } from '@bike4mind/llm-adapters';
 
 function buildDb() {
   const users = {
@@ -116,9 +116,24 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
     const { db } = buildDb();
 
     const rejection = executeCompletion({ ...baseParams, model: 'not-a-real-model', db });
-    await expect(rejection).rejects.toThrow('Failed to create LLM backend for model: not-a-real-model');
+    await expect(rejection).rejects.toThrow(
+      "Unknown model 'not-a-real-model'. List the models you can call with GET /api/v1/models."
+    );
     await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
+    await expect(rejection).rejects.toMatchObject({ additionalInfo: { errorCode: 'unknown_model' } });
     expect(isModelProviderConfigured).not.toHaveBeenCalled();
+  });
+
+  it("names the caller's id, not the alias-resolved id, in the unknown_model message", async () => {
+    vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ openai: 'openai-key' } as never);
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([]);
+    const { db } = buildDb();
+
+    const rejection = executeCompletion({ ...baseParams, model: 'gpt-4.1', db });
+    await expect(rejection).rejects.toThrow(
+      "Unknown model 'gpt-4.1'. List the models you can call with GET /api/v1/models."
+    );
+    await expect(rejection).rejects.toMatchObject({ additionalInfo: { errorCode: 'unknown_model' } });
   });
 
   it("raises a retryable 503 provider_not_configured when the catalogued model's provider has no key", async () => {
@@ -133,14 +148,27 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
     });
   });
 
-  it('raises a plain 400 when the provider key is present but the model is not available to the caller', async () => {
+  it("names the caller's bare alias, not the dated id, in the provider_not_configured 503", async () => {
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([]);
+    const { db } = buildDb();
+
+    await expect(executeCompletion({ ...baseParams, model: 'gpt-4.1', db })).rejects.toMatchObject({
+      statusCode: 503,
+      message: 'Failed to create LLM backend for model: gpt-4.1',
+      additionalInfo: { errorCode: 'provider_not_configured' },
+    });
+  });
+
+  it('raises a 400 unknown_model when the provider key is present but the model is not available to the caller', async () => {
     vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ gemini: 'gemini-key' } as never);
     const { db } = buildDb();
 
     const rejection = executeCompletion({ ...baseParams, model: ChatModels.GEMINI_2_5_FLASH, db });
     await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
-    await expect(rejection).rejects.toThrow(`Failed to create LLM backend for model: ${ChatModels.GEMINI_2_5_FLASH}`);
-    await expect(rejection).rejects.not.toHaveProperty('additionalInfo.errorCode');
+    await expect(rejection).rejects.toThrow(
+      `Unknown model '${ChatModels.GEMINI_2_5_FLASH}'. List the models you can call with GET /api/v1/models.`
+    );
+    await expect(rejection).rejects.toMatchObject({ additionalInfo: { errorCode: 'unknown_model' } });
   });
 
   it('raises a retryable 503 for a Bedrock model on self-host without BEDROCK_AWS_* credentials', async () => {
@@ -201,7 +229,7 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
     const { db } = buildDb();
 
     await expect(executeCompletion({ ...baseParams, model: 'constructor', db })).rejects.toThrow(
-      'Failed to create LLM backend for model: constructor'
+      "Unknown model 'constructor'. List the models you can call with GET /api/v1/models."
     );
   });
 });

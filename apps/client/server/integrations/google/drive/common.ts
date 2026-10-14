@@ -65,6 +65,8 @@ export async function revokeToken(accessToken: string) {
   await oauth2Client.revokeToken(accessToken);
 }
 
+const REVOKE_TIMEOUT_MS = 10_000;
+
 /** Outcome of a grant revocation attempt. `already_invalid` and `revoked` both mean nothing is live at Google. */
 export type RevokeOutcome = 'revoked' | 'already_invalid' | 'no_credential' | 'failed';
 
@@ -106,7 +108,12 @@ export async function revokeDriveGrant(
   }
 
   try {
-    await revokeToken(token);
+    // revokeToken takes no timeout and retries, so bound it: callers run inline in a Lambda request.
+    const timeout = AbortSignal.timeout(REVOKE_TIMEOUT_MS);
+    await Promise.race([
+      revokeToken(token),
+      new Promise<never>((_, reject) => timeout.addEventListener('abort', () => reject(timeout.reason))),
+    ]);
     console.log(`[googleDrive] revoked grant at Google (${context})`);
     return 'revoked';
   } catch (e) {

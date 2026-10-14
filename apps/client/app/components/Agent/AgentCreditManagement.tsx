@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Typography, FormControl, FormLabel, Radio, RadioGroup, Stack, Input, Button, Divider } from '@mui/joy';
-import Bike4MindIcon from '../svgs/icons/Bike4MindIcon';
+import CreditIcon from '../svgs/icons/CreditIcon';
 import { CREDIT_SOURCE } from '../../constants/agentForm';
 import { api } from '../../contexts/ApiContext';
 import { toast } from 'sonner';
@@ -265,7 +265,7 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
 
               <Typography level="body-sm" sx={{ display: 'flex', color: 'text.primary', alignItems: 'center', gap: 1 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0, flex: 'none' }}>
-                  <Bike4MindIcon size="12" fill="var(--joy-palette-text-tertiary)" />
+                  <CreditIcon sx={{ fontSize: 12, color: 'text.tertiary' }} />
                 </Box>
                 {userCredits.toLocaleString()}
               </Typography>
@@ -344,7 +344,7 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
 
               <Typography level="body-sm" sx={{ display: 'flex', color: 'text.primary', alignItems: 'center', gap: 1 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0, flex: 'none' }}>
-                  <Bike4MindIcon size="12" fill="var(--joy-palette-text-tertiary)" />
+                  <CreditIcon sx={{ fontSize: 12, color: 'text.tertiary' }} />
                 </Box>
                 {displayedCredits.toLocaleString()}
               </Typography>
@@ -369,7 +369,7 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
                 type="number"
                 value={transferAmount || ''}
                 placeholder="Enter amount to transfer"
-                startDecorator={<Bike4MindIcon size="12" fill="var(--joy-palette-text-tertiary)" />}
+                startDecorator={<CreditIcon sx={{ fontSize: 12, color: 'text.tertiary' }} />}
                 sx={{
                   border: '1px solid',
                   borderColor: 'border.input',

@@ -297,17 +297,15 @@ export const formatCustomSlackMessage = (
 
   // Quick Summary Section
   const activeModels = userActivity.topModels?.length || 0;
-  const activeUsers24h = userActivity.topUsers?.length || 0;
-
-  // Calculate DAU/WAU metrics
-  const dau = activeUsers24h; // Daily Active Users from last 24h
-  const wau = userActivity.totalUniqueUsers || 0; // Weekly Active Users from last 7 days
+  // externalUsers is the uncapped distinct non-staff count for the window (unlike topUsers, capped at 20)
+  const dau = userActivity.externalUsers || 0;
+  const wau = userActivity.weeklyActiveUsers || 0; // distinct non-staff users over the trailing 7 days
   const dauWauRatioNum = wau > 0 ? (dau / wau) * 100 : 0;
   const dauWauRatio = dauWauRatioNum.toFixed(1);
   const engagementHealth = dauWauRatioNum > 40 ? '🟢' : dauWauRatioNum > 25 ? '🟡' : dauWauRatioNum > 10 ? '🟠' : '🔴';
 
   sections.push('\n📊 *24-Hour Snapshot*');
-  sections.push(`• Active Users: *${activeUsers24h}* users`);
+  sections.push(`• Active Users (24h, excl. staff): *${dau}* users`);
   sections.push(`• Models Used: *${activeModels}* different models`);
   sections.push(
     `• Health Score: ${getHealthIndicator(overallChange)} ${overallChange > 0 ? '↑' : overallChange < 0 ? '↓' : '→'} ${Math.abs(overallChange).toFixed(1)}% from last week`
@@ -442,7 +440,9 @@ export const formatCustomSlackMessage = (
     });
 
     if (userActivity.topUsers.length > 10) {
-      sections.push(`\n  _...and ${userActivity.topUsers.length - 10} more active users_`);
+      sections.push(
+        `\n  _...and ${userActivity.topUsers.length - 10} more in the top ${userActivity.topUsers.length}_`
+      );
     }
   } else {
     sections.push('_No user activity recorded in the last 24 hours_');
@@ -451,7 +451,7 @@ export const formatCustomSlackMessage = (
   sections.push('\n───────────────────────────');
 
   // User activity summary
-  sections.push('\n📈 *User Engagement Overview (7 Days)*');
+  sections.push('\n📈 *User Engagement Overview (24H)*');
 
   const internalPercentage =
     userActivity.totalUniqueUsers > 0

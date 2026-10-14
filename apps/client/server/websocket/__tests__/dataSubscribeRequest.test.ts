@@ -75,7 +75,9 @@ vi.mock('@server/websocket/subscriptionScopes', () => ({
 }));
 
 vi.mock('@server/utils/errors', () => ({
+  ForbiddenError: class ForbiddenError extends Error {},
   NotFoundError: class NotFoundError extends Error {},
+  UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 
 vi.mock('@server/websocket/utils', () => ({
@@ -115,6 +117,7 @@ vi.mock('sst', () => ({
 import { func } from '../dataSubscribeRequest';
 import { Project, User } from '@bike4mind/database';
 import { inviteSubscriptionScope } from '@server/websocket/subscriptionScopes';
+import { ForbiddenError, UnauthorizedError } from '@server/utils/errors';
 
 const baseEvent = (accessToken = 'token-123') => ({
   requestContext: { connectionId: 'conn-1' },
@@ -244,6 +247,34 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
       fields: { reply: 1 },
     });
   });
+});
+
+describe('dataSubscribeRequest WS handler - account state', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', tokenVersion: undefined });
+    // Set here rather than inherited from an earlier describe's mock state.
+    mockSessionFind.mockResolvedValue([]);
+    mockQuerySubscriptionFindOneAndUpdate.mockResolvedValue({ id: 'sub-doc-1' });
+  });
+
+  it.each([
+    ['a banned account', { isBanned: true }, UnauthorizedError],
+    ['a dispute-pending account', { disputePending: true }, ForbiddenError],
+    ['a moderation-suspended account', { moderation: { status: 'suspended' } }, ForbiddenError],
+  ])(
+    'refuses a subscribe from %s before resolving or persisting the subscription',
+    async (_label, state, errorClass) => {
+      (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', ...state });
+
+      await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(errorClass);
+      expect(mockSessionFind).not.toHaveBeenCalled();
+      expect(mockQuerySubscriptionFindOneAndUpdate).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('dataSubscribeRequest WS handler - filters on withheld fields', () => {

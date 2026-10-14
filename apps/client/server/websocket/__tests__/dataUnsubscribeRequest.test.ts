@@ -42,7 +42,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@server/utils/errors', () => ({
+  ForbiddenError: class ForbiddenError extends Error {},
   NotFoundError: class NotFoundError extends Error {},
+  UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 
 vi.mock('sst', () => ({
@@ -54,6 +56,7 @@ vi.mock('sst', () => ({
 }));
 
 import { func } from '../dataUnsubscribeRequest';
+import { ForbiddenError, UnauthorizedError } from '@server/utils/errors';
 
 const baseEvent = (accessToken = 'token-123') => ({
   requestContext: { connectionId: 'conn-1' },
@@ -119,6 +122,27 @@ describe('dataUnsubscribeRequest WS handler - rotation grace window', () => {
     mockFindById.mockResolvedValue(null);
 
     await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toThrow();
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('dataUnsubscribeRequest WS handler - account state', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'user-1' });
+    mockUpdateOne.mockResolvedValue({ acknowledged: true });
+  });
+
+  it.each([
+    ['a banned account', { isBanned: true }, UnauthorizedError],
+    ['a dispute-pending account', { disputePending: true }, ForbiddenError],
+    ['a moderation-suspended account', { moderation: { status: 'suspended' } }, ForbiddenError],
+  ])('refuses an unsubscribe from %s without touching the subscription', async (_label, state, errorClass) => {
+    mockFindById.mockResolvedValue({ id: 'user-1', ...state });
+
+    await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(errorClass);
     expect(mockUpdateOne).not.toHaveBeenCalled();
   });
 });

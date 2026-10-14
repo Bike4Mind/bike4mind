@@ -30,6 +30,26 @@
         "default": "./dist/artifactParser.cjs"
       }
     },
+    "./toolOutputResultScan": {
+      "import": {
+        "types": "./dist/toolOutputResultScan.d.mts",
+        "default": "./dist/toolOutputResultScan.mjs"
+      },
+      "require": {
+        "types": "./dist/toolOutputResultScan.d.cts",
+        "default": "./dist/toolOutputResultScan.cjs"
+      }
+    },
+    "./importStatements": {
+      "import": {
+        "types": "./dist/importStatements.d.mts",
+        "default": "./dist/importStatements.mjs"
+      },
+      "require": {
+        "types": "./dist/importStatements.d.cts",
+        "default": "./dist/importStatements.cjs"
+      }
+    },
     "./artifactElision": {
       "import": {
         "types": "./dist/artifactElision.d.mts",
@@ -215,13 +235,13 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@aws-sdk/client-apigatewaymanagementapi": "^3.1080.0",
-    "@aws-sdk/client-bedrock-runtime": "^3.1080.0",
-    "@aws-sdk/client-lambda": "^3.1080.0",
-    "@aws-sdk/client-rekognition": "^3.1080.0",
-    "@aws-sdk/client-s3": "^3.1080.0",
-    "@aws-sdk/client-sqs": "^3.1080.0",
-    "@aws-sdk/s3-request-presigner": "^3.1080.0",
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.1150.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1150.0",
+    "@aws-sdk/client-lambda": "^3.1150.0",
+    "@aws-sdk/client-rekognition": "^3.1150.0",
+    "@aws-sdk/client-s3": "^3.1150.0",
+    "@aws-sdk/client-sqs": "^3.1150.0",
+    "@aws-sdk/s3-request-presigner": "^3.1150.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
@@ -249,6 +269,8 @@
     "zod": "^4.6.6"
   },
   "devDependencies": {
+    "@babel/standalone": "^8.0.4",
+    "@types/babel__standalone": "^7.1.9",
     "@types/lodash": "^4.17.24",
     "@types/mime-types": "^3.0.1",
     "esbuild": "0.28.1",

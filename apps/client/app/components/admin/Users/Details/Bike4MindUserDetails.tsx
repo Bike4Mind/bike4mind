@@ -3,7 +3,7 @@ import { EditedFieldsState } from '@client/app/components/admin/Users/Views/Full
 import { IUserDocument, storageLimitToBytes } from '@bike4mind/common';
 import { computeStoragePercent } from '@client/app/components/admin/Users/Views/storageUtils';
 import GroupAddIcon from '@mui/icons-material/GroupAdd';
-import MonetizationOnIcon from '@mui/icons-material/MonetizationOn';
+import { CreditIcon } from '@client/app/components/svgs/icons/CreditIcon';
 import SdStorageIcon from '@mui/icons-material/SdStorage';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import { Input, Stack, Tooltip, LinearProgress, Typography, Box, Button, Textarea, FormHelperText } from '@mui/joy';
@@ -113,7 +113,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
 
         <Tooltip title="Credits">
           <Stack direction="row" spacing={2} sx={{ alignItems: 'center', padding: '0px 16px 0px 8px', width: '100%' }}>
-            <MonetizationOnIcon />
+            <CreditIcon />
             <Input
               key={`credits-${userKey}`}
               sx={{

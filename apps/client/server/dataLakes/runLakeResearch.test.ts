@@ -27,6 +27,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: {},
   lakeConfigChangeEventRepository: {},
   usageEventRepository: {},
+  creditTransactionRepository: {},
   userRepository: { findById: h.findUserById },
   organizationRepository: { findById: h.findOrgById },
   dataLakeRepository: { findById: h.findLakeById },
@@ -311,11 +312,29 @@ describe('runLakeResearch', () => {
           feature: 'operations',
           provider: 'openai',
           model: 'gpt-4.1-mini',
+          // The ACTUAL spend, not the run's ceiling.
           costUsd: 800 / 1_000_000,
-          bypassCreditBilling: true,
+          forceCreditBilling: true,
         }),
         expect.anything()
       );
+      // The deduct path is all-or-nothing on these three: without them wired, recordOperationalUsage
+      // silently degrades to recorded-only and the owner's balance never moves.
+      expect(h.recordOperationalUsage.mock.calls[0][1]).toMatchObject({
+        db: {
+          creditTransactions: expect.anything(),
+          users: expect.anything(),
+          organizations: expect.anything(),
+        },
+      });
+    });
+
+    // The debit alone cannot cover the balance - a run started below its ceiling must not debit at
+    // all, which is what makes the startResearchRun pre-flight the thing that bounds cross-run spend.
+    it('no longer bypasses credit billing', async () => {
+      await runLakeResearch('run-1', logger);
+
+      expect(h.recordOperationalUsage.mock.calls[0][0].bypassCreditBilling).toBeUndefined();
     });
 
     // The fallback default model is not necessarily in the deployment's own catalog (it is a

@@ -1,4 +1,5 @@
 import z from 'zod';
+import { generatedAssetSaveSkippedReasonSchema } from './generatedAsset';
 
 /**
  * Wire model shared by every endpoint that returns generated audio (TTS, music,
@@ -21,33 +22,24 @@ export type GeneratedAudioEncoding = z.infer<typeof generatedAudioEncodingSchema
 /** Request fields every generated-audio endpoint accepts; spread into each request schema. */
 export const generatedAudioRequestFields = {
   encoding: generatedAudioEncodingSchema.optional(),
-  /**
-   * When true, the result is throwaway (e.g. the Settings voice audition) and is
-   * never saved to the file browser, regardless of the saveGeneratedAudio preference.
-   */
+  /** When true, the result is throwaway (e.g. the Settings voice audition) and is never saved to the file browser. */
   preview: z.boolean().optional(),
 };
 
 /**
- * Why a browsable copy of generated audio was not kept. Saving is best-effort and
- * never fatal (the caller was already billed for the bytes it is being handed), so
- * this is reported alongside a successful response rather than as an error.
+ * Why a browsable copy of generated audio was not kept, reported alongside a successful response rather
+ * than as an error. The same reasons as every other generated asset.
  */
-export const audioSaveSkippedReasonSchema = z.enum(['storage_limit', 'file_too_large', 'error']);
+export const audioSaveSkippedReasonSchema = generatedAssetSaveSkippedReasonSchema;
 
 export type AudioSaveSkippedReason = z.infer<typeof audioSaveSkippedReasonSchema>;
 
 /**
- * Whether generated audio gets a browsable copy in the user's files. The one gate
- * for every producer - the HTTP routes and the LLM chat tools - so an opt-out
- * holds everywhere. `preview` is a per-call opt-out for throwaway audio.
+ * Whether generated audio gets a browsable copy in the user's files. Generated output is always kept;
+ * `preview` is the one per-call exemption, for throwaway audio.
  */
-export function shouldPersistGeneratedAudio(params: {
-  userId: string | undefined;
-  saveGeneratedAudio: boolean | undefined;
-  preview?: boolean;
-}): boolean {
-  return Boolean(params.userId) && !params.preview && (params.saveGeneratedAudio ?? true);
+export function shouldPersistGeneratedAudio(params: { userId: string | undefined; preview?: boolean }): boolean {
+  return Boolean(params.userId) && !params.preview;
 }
 
 /**

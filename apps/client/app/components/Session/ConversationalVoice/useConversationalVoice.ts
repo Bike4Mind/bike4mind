@@ -63,6 +63,52 @@ let activeSessionId: string | null = null;
 // credit-burning WebSocket the UI can no longer reach.
 let startGen = 0;
 
+// Notebook the newest live start() targets (undefined sessionId = a fresh notebook), and whether its
+// first bootstrap has succeeded. Cleared whenever that call ends: end(), a failed mic check, a failed
+// bootstrap, a terminal transport failure and a terminal disconnect.
+// A superseded bootstrap skips its own /end only when the newer call is on the same notebook, since
+// /end is keyed by notebook.
+let liveStart: { sessionId?: string; bootstrapped: boolean } | null = null;
+
+// Notebooks whose superseded bootstrap left its hold for a newer same-notebook bootstrap still in
+// flight: the server settles the prior hold only when that bootstrap succeeds. A success drops its
+// entry; a failed first start or end() sends /end for every entry, since nothing else will.
+const deferredSettles = new Set<string>();
+
+function settleDeferredHolds(): void {
+  const ids = [...deferredSettles];
+  deferredSettles.clear();
+  void queueSettle(...ids);
+}
+
+// /end settles whatever hold its notebook has open, so one landing after a restart's /sessions
+// would settle the new call's hold. Every /end goes through this chain and start() waits for it
+// before bootstrapping. allSettled keeps a failed /end from stalling later ones.
+let pendingSettles: Promise<unknown> = Promise.resolve();
+
+// Caps how long the chain waits on one link (ms). The `api` client has no request timeout and the
+// SDK's endSession() can hang; an unbounded link would block every later start() until reload. The
+// underlying work keeps running in the background past the cap.
+const SETTLE_CHAIN_LINK_TIMEOUT_MS = 5_000;
+
+function boundForChain(work: Promise<unknown>): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cap = new Promise<void>(resolve => {
+    timer = setTimeout(resolve, SETTLE_CHAIN_LINK_TIMEOUT_MS);
+  });
+  return Promise.race([work, cap]).finally(() => clearTimeout(timer));
+}
+
+function queueSettle(...ids: (string | null)[]): Promise<unknown> {
+  const toSettle = ids.filter((id): id is string => id !== null);
+  if (toSettle.length > 0) {
+    pendingSettles = pendingSettles.then(() =>
+      Promise.allSettled(toSettle.map(id => boundForChain(reconcileVoiceSession(id))))
+    );
+  }
+  return pendingSettles;
+}
+
 // Bounded auto-reconnect after an abnormal disconnect (network drop - common on
 // mobile when Wi-Fi<->cellular handoff or a signal dip kills the WebSocket). We
 // re-establish against the SAME B4M session id, so server-side conversation
@@ -80,10 +126,11 @@ function clearReconnectTimer(): void {
   }
 }
 
-// Reconcile the up-front credit reservation down to the actual call duration.
-// Best-effort: a failure just leaves the upfront hold in place - it must never
-// block teardown or surface an error to the user. Safe to call more than once
-// (the endpoint is idempotent), so both end() and a natural onDisconnect use it.
+// Reconcile the up-front credit reservation down to the call's connected time (a call that never
+// connected costs nothing). Called on every end after a successful bootstrap: hang-up, natural
+// disconnect, and each terminal failure. Best-effort: a failure leaves the hold to the server's
+// voiceHoldSweep (apps/workers/src/cron/voiceHoldSweep.ts), and it must never block teardown or
+// surface an error to the user. Safe to call more than once (the endpoint is idempotent).
 async function reconcileVoiceSession(sessionId: string | null): Promise<void> {
   if (!sessionId) return;
   try {
@@ -118,6 +165,31 @@ function stopHeartbeat(): void {
   }
 }
 
+// Probe the microphone BEFORE bootstrapping: the bootstrap reserves credits, and a browser with no
+// (or a denied) mic would otherwise reserve them for a call that can never connect. The tracks are
+// released at once; the SDK reopens the mic itself.
+async function ensureMicrophone(): Promise<void> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw Object.assign(new Error('Microphone access is unavailable in this browser context.'), {
+      name: window.isSecureContext ? 'NotSupportedError' : 'SecurityError',
+    });
+  }
+  // Where the Permissions API answers, skip the probe unless the user would be prompted: on
+  // browsers that do not persist a grant (Safari/iOS) a probe plus the SDK's own open prompts twice.
+  let state: PermissionState | undefined;
+  try {
+    state = (await navigator.permissions?.query({ name: 'microphone' as PermissionName }))?.state;
+  } catch {
+    // microphone is not a queryable permission in every browser - fall through to the probe
+  }
+  if (state === 'denied') {
+    throw Object.assign(new Error('Microphone permission denied'), { name: 'NotAllowedError' });
+  }
+  if (state === 'granted') return;
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  stream.getTracks().forEach(track => track.stop());
+}
+
 function formatSessionsError(err: unknown): string {
   if (axios.isAxiosError(err)) {
     const status = err.response?.status;
@@ -145,6 +217,12 @@ function formatConnectError(err: unknown): string {
   }
   if (name === 'NotReadableError') {
     return 'Microphone is busy (in use by another app). Close other audio apps and retry.';
+  }
+  if (name === 'SecurityError') {
+    return 'Microphone access needs a secure (https) connection. Open the site over https and retry.';
+  }
+  if (name === 'NotSupportedError') {
+    return 'This browser does not support microphone access. Try a current Chrome, Edge, Firefox or Safari.';
   }
   return `Failed to open voice connection: ${err instanceof Error ? err.message : String(err)}`;
 }
@@ -213,18 +291,47 @@ async function establishConnection(
       scheduleReconnect(set, myGen, ctx);
       return;
     }
+    // Reconnects exhausted: the original connect's hold is still open, so settle it. A failed first
+    // bootstrap reserved nothing, and activeSessionId is still null then, but it also settled no
+    // prior hold, so a superseded same-notebook bootstrap must now settle its own.
+    const sid = activeSessionId;
     activeSessionId = null;
+    liveStart = null;
+    settleDeferredHolds();
     set({
       phase: 'error',
       errorMessage: `Failed to ${isReconnect ? 'reconnect' : 'create'} voice session: ${formatSessionsError(err)}`,
     });
+    void queueSettle(sid);
     return;
   }
 
-  // Superseded during the /sessions request - don't open a connection we'd orphan.
-  if (isStale()) return;
+  // Any successful bootstrap settled the notebook's prior hold server-side.
+  const resolvedId = bootstrap.session?.id ?? null;
+  if (resolvedId) deferredSettles.delete(resolvedId);
 
-  activeSessionId = bootstrap.session?.id ?? null;
+  // Superseded during the /sessions request - don't open a connection we'd orphan. A first
+  // bootstrap already reserved credits, and end() ran before the id was known, so settle it here.
+  // A bootstrap that created its own notebook is always settled: no other call can know that id.
+  // When a newer start() targets the same notebook, /end could settle that call's hold instead:
+  // skip once its bootstrap has succeeded (that settled the prior hold, and the live call's own /end
+  // covers the notebook), otherwise defer to the outcome of that bootstrap.
+  if (isStale()) {
+    const newerSameNotebook = liveStart !== null && resolvedId !== null && liveStart.sessionId === resolvedId;
+    if (isReconnect || !resolvedId) return;
+    if (isNewSession || !newerSameNotebook) {
+      void queueSettle(resolvedId);
+    } else if (!liveStart?.bootstrapped) {
+      deferredSettles.add(resolvedId);
+    }
+    return;
+  }
+
+  activeSessionId = resolvedId;
+  if (!isReconnect) {
+    if (liveStart) liveStart.bootstrapped = true;
+    settleDeferredHolds();
+  }
   // Only the first connect drives the requesting->connecting->navigate flow; a
   // reconnect stays in the 'reconnecting' phase until onConnect flips it.
   if (!isReconnect) {
@@ -268,6 +375,7 @@ async function establishConnection(
         }
         const sid = activeSessionId;
         activeSessionId = null;
+        liveStart = null;
         set({
           phase: 'ended',
           mode: null,
@@ -275,7 +383,7 @@ async function establishConnection(
             ? { errorMessage: details.message || 'Voice connection lost. Tap to start again.' }
             : {}),
         });
-        void reconcileVoiceSession(sid);
+        void queueSettle(sid);
       },
       onError: message => {
         if (isStale()) return;
@@ -310,8 +418,14 @@ async function establishConnection(
       scheduleReconnect(set, myGen, ctx);
       return;
     }
+    // The bootstrap above reserved credits (or kept the original hold on a reconnect); settle it
+    // now rather than leave the whole reservation to the sweep.
+    const sid = activeSessionId;
     activeSessionId = null;
+    liveStart = null;
+    clearReconnectTimer();
     set({ phase: 'error', errorMessage: formatConnectError(err) });
+    void queueSettle(sid);
   }
 }
 
@@ -327,7 +441,21 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     clearReconnectTimer();
     reconnectAttempts = 0;
     const myGen = ++startGen;
+    liveStart = { sessionId, bootstrapped: false };
     set({ phase: 'requesting-session', errorMessage: null, mode: null, lastUserMessage: null });
+    try {
+      await ensureMicrophone();
+    } catch (err) {
+      if (myGen !== startGen) return;
+      liveStart = null;
+      settleDeferredHolds();
+      set({ phase: 'error', errorMessage: formatConnectError(err) });
+      return;
+    }
+    // Ended during the permission prompt: nothing was reserved, and nothing should be.
+    if (myGen !== startGen) return;
+    await pendingSettles;
+    if (myGen !== startGen) return;
     await establishConnection(set, myGen, { sessionId, reasoningModelId, onSessionResolved }, false);
   },
 
@@ -337,6 +465,8 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     // triggers) now see a changed generation and no-op, so reconciliation happens
     // exactly once - here.
     startGen++;
+    liveStart = null;
+    settleDeferredHolds();
     clearReconnectTimer();
     stopHeartbeat();
     reconnectAttempts = 0;
@@ -345,13 +475,9 @@ export const useConversationalVoiceStore = create<ConversationalVoiceState>(set 
     conversation = null;
     activeSessionId = null;
     set({ phase: 'ended', mode: null });
-    if (conv) {
-      try {
-        await conv.endSession();
-      } catch {
-        // already torn down
-      }
-    }
-    await reconcileVoiceSession(sid);
+    // Chained synchronously so a restart issued before the transport closes still waits for this /end.
+    const closed = conv ? boundForChain(conv.endSession().catch(() => {})) : Promise.resolve();
+    pendingSettles = pendingSettles.then(() => closed);
+    await queueSettle(sid);
   },
 }));

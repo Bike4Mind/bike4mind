@@ -44,6 +44,7 @@ import { applyOAuthSignupDomainGrant, releaseOAuthPendingFreeCredits } from '@se
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -454,6 +455,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       Logger.debug('[Okta Callback] Created new user:', user.id);
       // Never reaches /api/email/verify, so the verified domain's grant runs here (no flat grant for Okta).
       if (emailForNewAccount) await applyOAuthSignupDomainGrant(user.id, emailForNewAccount);
+      await stampOAuthSourceTag(user.id, stateResult.payload.clientId);
     }
 
     // Parity with verifyCallback.ts, which omits the password hash from the user
