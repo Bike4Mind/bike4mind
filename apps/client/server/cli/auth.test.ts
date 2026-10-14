@@ -190,6 +190,15 @@ describe('checkRateLimit (JWT per-user rate limiter)', () => {
       expect(cacheStore.get(`rate-limit:ws-auth:tools:${userId}`)!.value).toBe(1);
     });
 
+    it('keeps the ws bucket apart from a completions session at its cap', async () => {
+      for (let i = 0; i < 1000; i++) {
+        await checkRateLimit(userId, 'cli');
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'ws' })).resolves.toBeUndefined();
+      expect(cacheStore.get(key)!.value).toBe(1000);
+      expect(cacheStore.get(`rate-limit:ws-auth:ws:${userId}`)!.value).toBe(1);
+    });
+
     it('applies the source cap to the bucketed counter', async () => {
       for (let i = 0; i < 100; i++) {
         await checkRateLimit(userId, undefined, { bucket: 'tools' });
