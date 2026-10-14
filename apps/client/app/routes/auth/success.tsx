@@ -51,9 +51,11 @@ const AuthSuccessPage = () => {
       }
 
       if (mfa && userId) {
-        // Never trade a live session for a pending one: the handoff sets no cookie, so an
-        // already signed-in browser keeps its session and simply moves on.
-        if (currentUser?.id) {
+        // Same identity rule as the token path below: a handoff for a different user never
+        // replaces the signed-in one. A same-user handoff proceeds; the challenge mints a fresh
+        // session.
+        if (currentUser?.id && currentUser.id !== userId) {
+          console.warn('[auth/success] Ignoring MFA handoff for a different user than the active session');
           applyRedirect(router.history, redirectTo);
           return;
         }

@@ -487,7 +487,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // consumer social sign-in.
     const secondFactor: SecondFactorOutcome = idp
       ? { kind: 'satisfied', trustedDevice: null }
-      : await resolveSecondFactor(req, user);
+      : await resolveSecondFactor(req, user, { origin: { strategy: AuthStrategy.Okta, createdVia: 'okta' } });
     if (secondFactor.kind !== 'satisfied') {
       const handoff = mfaHandoffFragment({
         mfaToken: secondFactor.mfaToken,

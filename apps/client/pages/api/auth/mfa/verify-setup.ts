@@ -4,6 +4,7 @@ import { mfaService, userService } from '@bike4mind/services';
 import { userRepository, authSessionRepository, passkeyCredentialRepository } from '@bike4mind/database';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { logSecondFactorSignIn, readSignInOrigin } from '@server/auth/signInSecondFactor';
 import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import * as z from 'zod';
@@ -76,6 +77,10 @@ const handler = baseApi()
         const tokens = { accessToken };
 
         await logAuthAudit(req, { userId: result.user.id, event: 'mfa_enrolled' });
+        // Enrollment that finishes a sign-in (enforceMFA) is that sign-in's login; enrolling
+        // from an existing session carries no origin and is not.
+        const signInOrigin = readSignInOrigin(req.user);
+        if (signInOrigin) await logSecondFactorSignIn(req, result.user.id, signInOrigin);
 
         setupBody = {
           success: result.success,

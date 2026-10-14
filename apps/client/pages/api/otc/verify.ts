@@ -211,7 +211,9 @@ const handler = baseApi({ auth: false })
       }
 
       // --- SECOND FACTOR --- (a remembered device skips the challenge, never enrollment)
-      const secondFactor = await resolveSecondFactor(req, existingUser);
+      const secondFactor = await resolveSecondFactor(req, existingUser, {
+        origin: { strategy: 'otc', createdVia: 'otc' },
+      });
       if (secondFactor.kind === 'challenge') {
         return res.status(200).json({
           mfaRequired: true,

@@ -24,7 +24,8 @@ export type MfaLoginResult = { accessToken: string; user: IUserDocument };
 type MfaChallengeOptions = {
   /** Runs once the full session is stored; set the current user and navigate from here. */
   onComplete: (result: MfaLoginResult) => void;
-  /** Runs after the user abandons the challenge and the pending token is dropped. */
+  /** Runs after the challenge ends without a session (abandoned, or enrollment could not
+   *  start) and the pending token is dropped. */
   onCancel?: (mode: MfaChallengeMode) => void;
   /** Offer "remember this device" (verification only; MFAModal hides it during setup). */
   allowRememberDevice?: boolean;
@@ -73,6 +74,12 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     setSetupData(null);
   };
 
+  const endWithoutSession = (mode: MfaChallengeMode) => {
+    useAccessToken.getState().resetTokens();
+    reset();
+    onCancel?.(mode);
+  };
+
   const finish = (data: unknown) => {
     const result = toMfaLoginResult(data);
     resetRefreshCoordinator();
@@ -97,8 +104,10 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
       setOpen(true);
     } catch (setupError: unknown) {
       toast.error((readErrorData(setupError)?.error as string) || (setupError as Error).message || 'MFA setup failed');
-      useAccessToken.getState().resetTokens();
-      reset();
+      // Ends the sign-in like a cancel: the caller must leave its waiting state, and a consumed
+      // first-factor nonce (OTC) cannot be resumed anyway. `challenge` state has not updated
+      // within this call, so the mode is passed explicitly.
+      endWithoutSession('setup');
     }
   };
 
@@ -113,12 +122,6 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
       );
     } catch (verifyError: unknown) {
       const errorData = readErrorData(verifyError);
-      if (errorData?.forceLogout) {
-        useAccessToken.getState().forceLogoutTokens();
-        reset();
-        toast.error((errorData.error as string) || 'Too many failed attempts. Please try again.');
-        return;
-      }
       const baseError = (errorData?.error as string) || (verifyError as Error).message || 'MFA verification failed';
       const attemptsInfo = errorData?.attemptsRemaining ? ` (${errorData.attemptsRemaining} attempts remaining)` : '';
       setError(baseError + attemptsInfo);
@@ -135,12 +138,7 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     }
   };
 
-  const handleCancel = () => {
-    const mode = challenge?.mode ?? 'verify';
-    useAccessToken.getState().resetTokens();
-    reset();
-    onCancel?.(mode);
-  };
+  const handleCancel = () => endWithoutSession(challenge?.mode ?? 'verify');
 
   const mode = challenge?.mode ?? 'verify';
   const passkeyAvailable = !!challenge?.passkeyAvailable;
@@ -168,5 +166,5 @@ export function useMfaChallenge({ onComplete, onCancel, allowRememberDevice = fa
     passkeyLoading: verifyPasskeyMFA.isPending,
   };
 
-  return { begin, modalProps, isActive: challenge !== null };
+  return { begin, modalProps };
 }

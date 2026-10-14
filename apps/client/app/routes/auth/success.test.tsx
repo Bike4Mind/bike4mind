@@ -87,7 +87,7 @@ const { mockBeginMfa, mfaOptions } = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/useMfaChallenge', () => ({
   useMfaChallenge: (options: MfaChallengeOptions) => {
     mfaOptions.current = options;
-    return { begin: mockBeginMfa, modalProps: {}, isActive: false };
+    return { begin: mockBeginMfa, modalProps: {} };
   },
 }));
 
@@ -273,8 +273,18 @@ describe('AuthSuccessPage', () => {
       expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { error } });
     });
 
-    it('leaves an already signed-in browser on its session', async () => {
+    it('runs the challenge for the same user, since it mints a fresh session', async () => {
       mockCurrentUser = { id: 'u1' };
+      mockParseAuthParams.mockReturnValue(MFA_PARAMS);
+
+      render(<AuthSuccessPage />);
+
+      await waitFor(() => expect(mockBeginMfa).toHaveBeenCalled());
+      expect(mockApplyRedirect).not.toHaveBeenCalled();
+    });
+
+    it('refuses a handoff for a different user than the signed-in one', async () => {
+      mockCurrentUser = { id: 'other' };
       mockParseAuthParams.mockReturnValue(MFA_PARAMS);
 
       render(<AuthSuccessPage />);

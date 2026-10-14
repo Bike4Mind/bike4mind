@@ -1,14 +1,22 @@
 import type { Request } from 'express';
 import jwt from 'jsonwebtoken';
-import type { IUserDocument } from '@bike4mind/common';
+import { AuthEvents, type AuthSessionCreatedVia, type AuthStrategy, type IUserDocument } from '@bike4mind/common';
 import { adminSettingsRepository, passkeyCredentialRepository, type ITrustedDeviceDocument } from '@bike4mind/database';
 import { mfaService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
 import { Config } from '@server/utils/config';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { logEvent } from '@server/utils/analyticsLog';
 
 const MFA_PENDING_TOKEN_TTL = '10m';
+
+/**
+ * Where a sign-in that owes a second factor started. Carried in the mfaPending token (and
+ * surfaced as `req.user.mfaSignIn` by verifyJwtPayload) so the route that finally mints the
+ * session - completeMfaLogin or verify-setup - audits the login and attributes the session.
+ */
+export type SignInOrigin = { strategy: AuthStrategy | 'local' | 'otc'; createdVia: AuthSessionCreatedVia };
 
 /**
  * What a sign-in still owes after its first factor:
@@ -25,9 +33,16 @@ export type SecondFactorOutcome =
   | { kind: 'challenge'; mfaToken: string; passkeyAvailable: boolean }
   | { kind: 'enroll'; mfaToken: string };
 
-/** Schema-aware read: the stored value may be a boolean or a legacy string. */
+/**
+ * Schema-aware read: the stored value may be a boolean or a legacy string. Uncached, like
+ * trustedDevicesAllowed: turning enforcement on must bind every instance at once, not after
+ * the settings cache expires (MFA disable reads this too).
+ */
 export async function readEnforceMfa(): Promise<boolean> {
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { skipCache: true, names: ['enforceMFA'] }
+  );
   return getSettingsValue('enforceMFA', settings) === true;
 }
 
@@ -42,18 +57,18 @@ export async function readEnforceMfa(): Promise<boolean> {
 export async function resolveSecondFactor(
   req: Pick<Request, 'headers'>,
   user: IUserDocument,
-  { honourTrustedDevice = true }: { honourTrustedDevice?: boolean } = {}
+  { origin, honourTrustedDevice = true }: { origin: SignInOrigin; honourTrustedDevice?: boolean }
 ): Promise<SecondFactorOutcome> {
   if (mfaService.userHasMFAConfigured(user)) {
     const trustedDevice =
       honourTrustedDevice && (await trustedDevicesAllowed()) ? await consumeTrustedDevice(req, user.id) : null;
     if (trustedDevice) return { kind: 'satisfied', trustedDevice };
     const passkeyAvailable = (await passkeyCredentialRepository.countByUser(user.id)) > 0;
-    return { kind: 'challenge', mfaToken: signMfaPendingToken(user), passkeyAvailable };
+    return { kind: 'challenge', mfaToken: signMfaPendingToken(user, origin), passkeyAvailable };
   }
 
   if (await readEnforceMfa()) {
-    return { kind: 'enroll', mfaToken: signMfaPendingToken(user) };
+    return { kind: 'enroll', mfaToken: signMfaPendingToken(user, origin) };
   }
   return { kind: 'satisfied', trustedDevice: null };
 }
@@ -89,9 +104,43 @@ export async function logSignInSuccess(
 
 // Access token only, never a refresh token: /api/auth/refreshToken has no mfaPending check,
 // so a pending refresh token would mint a full session without the second factor.
-function signMfaPendingToken(user: Pick<IUserDocument, 'id' | 'tokenVersion'>): string {
-  return jwt.sign({ id: user.id, mfaPending: true, tokenVersion: user.tokenVersion ?? 0 }, Config.JWT_SECRET, {
-    algorithm: 'HS256',
-    expiresIn: MFA_PENDING_TOKEN_TTL,
-  });
+function signMfaPendingToken(user: Pick<IUserDocument, 'id' | 'tokenVersion'>, origin: SignInOrigin): string {
+  return jwt.sign(
+    {
+      id: user.id,
+      mfaPending: true,
+      tokenVersion: user.tokenVersion ?? 0,
+      signInStrategy: origin.strategy,
+      signInVia: origin.createdVia,
+    },
+    Config.JWT_SECRET,
+    { algorithm: 'HS256', expiresIn: MFA_PENDING_TOKEN_TTL }
+  );
+}
+
+/** The origin a pending sign-in carries, if the request is one (see verifyJwtPayload). */
+export function readSignInOrigin(user: unknown): SignInOrigin | undefined {
+  return (user as { mfaSignIn?: SignInOrigin } | undefined)?.mfaSignIn;
+}
+
+/**
+ * The login records for a sign-in completed by its second factor, which the first-factor
+ * route could not write because it minted no session. Best-effort, like the direct paths.
+ */
+export async function logSecondFactorSignIn(
+  // any: same reason as logAuthAudit - route handlers narrow the Request generics differently.
+  req: Request<any, any, any, any, any>,
+  userId: string,
+  origin: SignInOrigin
+): Promise<void> {
+  await logEvent({
+    userId,
+    type: AuthEvents.LOGIN,
+    metadata: {
+      strategy: origin.strategy,
+      ip: req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown',
+      userAgent: req.headers['user-agent'] || 'unknown',
+    },
+  }).catch(err => req.logger?.error('Second-factor sign-in analytics log failed', err));
+  await logSignInSuccess(req, { userId, strategy: origin.strategy, trustedDevice: null });
 }

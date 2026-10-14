@@ -129,6 +129,11 @@ describe('/api/otc/verify - trusted device', () => {
     const body = res._getJSONData();
     expect(body.mfaRequired).toBe(true);
     expect(body.refreshToken).toBeUndefined();
+    expect(mockJwtSign).toHaveBeenCalledWith(
+      expect.objectContaining({ mfaPending: true, signInStrategy: 'otc', signInVia: 'otc' }),
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('skips the MFA challenge and mints a full session for a live trusted device', async () => {

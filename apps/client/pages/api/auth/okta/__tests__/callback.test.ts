@@ -689,6 +689,9 @@ describe('/api/auth/okta/callback - second factor', () => {
     const res = await runCallback({ user: existingUser, userInfo });
 
     expect(mockResolveSecondFactor).toHaveBeenCalledTimes(1);
+    expect(mockResolveSecondFactor).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      origin: { strategy: 'okta', createdVia: 'okta' },
+    });
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success/);
     expect(res._getRedirectUrl()).toContain('#mfaToken=pending-tok&userId=u-mfa&mfa=verify&passkey=1');
     expect(res._getRedirectUrl()).not.toContain('#token=');

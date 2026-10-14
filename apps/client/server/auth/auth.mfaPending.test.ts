@@ -61,4 +61,9 @@ describe('auth middleware: mfaPending allowlist', () => {
     // to a pending token: the account could never finish its first sign-in.
     expect((await requestAsMfaPending('/api/auth/mfa/setup', {})).status).toBe(200);
   });
+
+  it('does not widen access for a pending token whose user has not accepted the policies', async () => {
+    // The consent exemption exists only for the enrollment route; everything else stays blocked.
+    expect((await requestAsMfaPending('/api/users/u1', {})).blocked).toBe(true);
+  });
 });

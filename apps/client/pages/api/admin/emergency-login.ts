@@ -82,7 +82,10 @@ const handler = baseApi({ auth: false })
         throw new UnauthorizedError('Invalid credentials');
       }
       // A remembered device never skips it here, so the outcome is always a challenge.
-      const secondFactor = await resolveSecondFactor(req, user, { honourTrustedDevice: false });
+      const secondFactor = await resolveSecondFactor(req, user, {
+        origin: { strategy: 'local', createdVia: 'emergency' },
+        honourTrustedDevice: false,
+      });
       if (secondFactor.kind !== 'challenge') {
         throw new Error(`Emergency login expected an MFA challenge, got ${secondFactor.kind}`);
       }

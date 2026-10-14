@@ -142,4 +142,40 @@ describe('verifyJwtPayload', () => {
     const [, user] = done.mock.calls[0];
     expect((user as { oauthGrant?: unknown }).oauthGrant).toBeUndefined();
   });
+
+  describe('pending sign-in origin', () => {
+    const origin = { signInStrategy: 'google', signInVia: 'oauth' };
+
+    it('surfaces the origin claims as mfaSignIn on a pending token', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
+      const done = vi.fn();
+
+      await verifyJwtPayload({ id: 'user-1', tokenVersion: 0, mfaPending: true, ...origin }, done);
+
+      expect(done).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({ mfaPending: true, mfaSignIn: { strategy: 'google', createdVia: 'oauth' } })
+      );
+    });
+
+    it('ignores origin claims on a token that is not pending', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
+      const done = vi.fn();
+
+      await verifyJwtPayload({ id: 'user-1', tokenVersion: 0, ...origin }, done);
+
+      const [, user] = done.mock.calls[0];
+      expect((user as { mfaSignIn?: unknown }).mfaSignIn).toBeUndefined();
+    });
+
+    it('sets no origin on a pending token that lacks one (a pre-upgrade token)', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
+      const done = vi.fn();
+
+      await verifyJwtPayload({ id: 'user-1', tokenVersion: 0, mfaPending: true }, done);
+
+      const [, user] = done.mock.calls[0];
+      expect((user as { mfaSignIn?: unknown }).mfaSignIn).toBeUndefined();
+    });
+  });
 });

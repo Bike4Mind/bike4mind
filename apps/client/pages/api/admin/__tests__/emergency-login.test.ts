@@ -84,6 +84,7 @@ describe('POST /api/admin/emergency-login', () => {
       accessToken: 'pending-tok',
     });
     expect(mockResolveSecondFactor).toHaveBeenCalledWith(expect.anything(), mockRefs.userDoc, {
+      origin: { strategy: 'local', createdVia: 'emergency' },
       honourTrustedDevice: false,
     });
     expect(mockIssueBrowserSession).not.toHaveBeenCalled();

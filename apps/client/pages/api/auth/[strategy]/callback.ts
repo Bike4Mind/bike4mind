@@ -198,7 +198,7 @@ const handler = baseApi({ auth: false })
 
         // Consumer social sign-in proves the provider account, not the user's own second
         // factor, so an enrolled factor is always challenged (and enforceMFA enrollment owed).
-        const secondFactor = await resolveSecondFactor(req, user);
+        const secondFactor = await resolveSecondFactor(req, user, { origin: { strategy, createdVia: 'oauth' } });
         if (secondFactor.kind !== 'satisfied') {
           const handoff = mfaHandoffFragment({
             mfaToken: secondFactor.mfaToken,

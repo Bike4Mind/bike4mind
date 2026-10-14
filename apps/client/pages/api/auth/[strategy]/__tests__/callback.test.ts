@@ -353,6 +353,16 @@ describe('[strategy]/callback - second factor gate', () => {
     expect(mockLogSignInSuccess).not.toHaveBeenCalled();
   });
 
+  it('tells the second-factor step where the sign-in started so its completion can be audited', async () => {
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    await runCallback(null, { id: 'u-mfa', isBanned: false }, undefined);
+
+    expect(mockResolveSecondFactor).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      origin: { strategy: 'github', createdVia: 'oauth' },
+    });
+  });
+
   it('omits the passkey flag when the challenged user has no passkey', async () => {
     mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
 
