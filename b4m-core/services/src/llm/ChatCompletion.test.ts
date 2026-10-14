@@ -3272,6 +3272,7 @@ describe('ChatCompletionProcess', () => {
           await cb(['partial from primary'], {
             inputTokens: primaryInputTokens,
             outputTokens: primaryOutputTokens,
+            turnUsage: [{ inputTokens: primaryInputTokens, outputTokens: primaryOutputTokens }],
           });
           throw new Error('ServiceUnavailableException: Bedrock is unable to process your request');
         }),
@@ -3353,6 +3354,9 @@ describe('ChatCompletionProcess', () => {
       const tokenUsage = updateCall[0].promptMeta.tokenUsage;
       expect(tokenUsage.actualInputTokens).toBe(fallbackInputTokens);
       expect(tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
+      // The primary's per-request breakdown is discarded with it: the fallback reported
+      // only aggregates, so it prices on those (100 * 10/1M + 50 * 30/1M), not on 999/999.
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.0025, 6);
     });
 
     it('saves a turn that switched models and still failed without claiming the fallback answered', async () => {
@@ -4917,6 +4921,86 @@ describe('ChatCompletionProcess', () => {
       expect(fullyCached.settledBasis).toBe('provider');
       expect(fullyCached.estimatedCost).toBeCloseTo(0.0033, 6);
       expect(fullyCached.cacheReadInputTokens).toBe(3000);
+    });
+    describe('long-context tiers', () => {
+      const perM = (usd: number) => usd / 1_000_000;
+      // Shaped like gemini-3.1-pro-preview: the long rate applies above 200K per request.
+      const tieredModel = {
+        id: ChatModels.GPT4,
+        type: 'text',
+        name: 'Tiered',
+        backend: ModelBackend.OpenAI,
+        max_tokens: 100,
+        contextWindow: 1_048_576,
+        pricing: {
+          200_000: { input: perM(2), output: perM(12) },
+          1_048_576: { input: perM(4), output: perM(18) },
+        },
+        supportsImageVariation: false,
+      };
+
+      const settle = async (localInputTokens: number, info: Record<string, unknown>) => {
+        mockDb.quests.update.mockClear();
+        mockedCalculateTotalTokenLength.mockResolvedValue(localInputTokens);
+        mockTokenizer.countTokens.mockResolvedValue(40);
+        mockedUsdToCredits.mockImplementation(realUsdToCredits);
+        mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['Hi!'], info);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([tieredModel]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+        await service.process({
+          body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+          logger: mockLogger,
+        });
+        const updateCall = mockDb.quests.update.mock.calls.find(
+          ([arg]: [any]) => arg?.promptMeta?.tokenUsage?.estimatedCost !== undefined
+        );
+        return updateCall[0].promptMeta.tokenUsage;
+      };
+
+      it('prices a tool loop request by request instead of on the summed prompt', async () => {
+        const turn = { inputTokens: 80_000, outputTokens: 1_000 };
+        const usage = await settle(100, { inputTokens: 240_000, outputTokens: 3_000, turnUsage: [turn, turn, turn] });
+        expect(usage.settledBasis).toBe('provider');
+        // 240K * $2/M + 3K * $12/M; the summed 240K would have picked the long tier ($1.014).
+        expect(usage.estimatedCost).toBeCloseTo(0.516, 10);
+      });
+
+      it('tiers a cached request on its whole prompt and bills only the crossing turn at the long rate', async () => {
+        const turns = [
+          { inputTokens: 150_000, outputTokens: 1_000 },
+          { inputTokens: 20_000, cacheReadInputTokens: 190_000, outputTokens: 1_000 },
+        ];
+        const usage = await settle(100, {
+          inputTokens: 170_000,
+          cacheReadInputTokens: 190_000,
+          outputTokens: 2_000,
+          turnUsage: turns,
+        });
+        const first = 150_000 * perM(2) + 1_000 * perM(12);
+        const second = 20_000 * perM(4) + 190_000 * perM(4) * 0.1 + 1_000 * perM(18);
+        expect(usage.estimatedCost).toBeCloseTo(first + second, 10);
+      });
+
+      it('tiers the local estimate on the whole prompt, not the cache-discounted remainder', async () => {
+        // Partial provider usage -> local basis. 250K local prompt, 200K of it cache reads.
+        const usage = await settle(250_000, { cacheReadInputTokens: 200_000 });
+        expect(usage.settledBasis).toBe('local');
+        // (250K - 200K * 0.9) * $4/M + 40 * $18/M, on the >200K tier.
+        expect(usage.estimatedCost).toBeCloseTo(70_000 * perM(4) + 40 * perM(18), 10);
+      });
     });
   });
 
