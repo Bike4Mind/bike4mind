@@ -2,7 +2,7 @@
  * Tests for mcpCircuitBreakers service
  *
  * Covers: breaker registry, isCircuitBreakerFailure classifier, getBreaker singleton,
- * getAllBreakerStates, resetBreaker.
+ * per-tenant isolation and LRU bounding, getAllBreakerStates, resetBreaker.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -19,8 +19,20 @@ import {
   resetBreaker,
   isCircuitBreakerFailure,
   classifyOperation,
+  MAX_TRACKED_BREAKERS,
+  CircuitBreakerError,
 } from './mcpCircuitBreakers';
+import type { CircuitBreaker } from '@bike4mind/utils';
 import { AxiosError } from 'axios';
+
+async function tripBreaker(breaker: CircuitBreaker): Promise<void> {
+  while (breaker.getState().state !== 'OPEN') {
+    await breaker.execute(() => Promise.reject(new Error('ECONNRESET'))).catch(() => undefined);
+  }
+}
+
+const TENANT_A = 'tenant-a';
+const TENANT_B = 'tenant-b';
 
 // Helper to create mock Axios errors
 function createAxiosError(status: number, code?: string): AxiosError {
@@ -151,41 +163,103 @@ describe('mcpCircuitBreakers', () => {
 
   describe('getBreaker', () => {
     it('should return the same instance for the same server name and op type', () => {
-      const breaker1 = getBreaker('test-singleton', 'read');
-      const breaker2 = getBreaker('test-singleton', 'read');
+      const breaker1 = getBreaker(TENANT_A, 'test-singleton', 'read');
+      const breaker2 = getBreaker(TENANT_A, 'test-singleton', 'read');
       expect(breaker1).toBe(breaker2);
     });
 
     it('should return different instances for different server names', () => {
-      const breaker1 = getBreaker('test-a', 'read');
-      const breaker2 = getBreaker('test-b', 'read');
+      const breaker1 = getBreaker(TENANT_A, 'test-a', 'read');
+      const breaker2 = getBreaker(TENANT_A, 'test-b', 'read');
       expect(breaker1).not.toBe(breaker2);
     });
 
     it('should return different instances for read vs write on same server', () => {
-      const readBreaker = getBreaker('test-rw', 'read');
-      const writeBreaker = getBreaker('test-rw', 'write');
+      const readBreaker = getBreaker(TENANT_A, 'test-rw', 'read');
+      const writeBreaker = getBreaker(TENANT_A, 'test-rw', 'write');
       expect(readBreaker).not.toBe(writeBreaker);
     });
 
     it('should default to read when no operationType specified', () => {
-      const defaultBreaker = getBreaker('test-default');
-      const readBreaker = getBreaker('test-default', 'read');
+      const defaultBreaker = getBreaker(TENANT_A, 'test-default');
+      const readBreaker = getBreaker(TENANT_A, 'test-default', 'read');
       expect(defaultBreaker).toBe(readBreaker);
     });
 
     it('should create a breaker with the given name', () => {
-      const breaker = getBreaker('test-named', 'read');
+      const breaker = getBreaker(TENANT_A, 'test-named', 'read');
       const state = breaker.getState();
       expect(state.state).toBe('CLOSED');
       expect(state.failureCount).toBe(0);
     });
   });
 
+  describe('per-tenant isolation', () => {
+    it('gives each tenant its own breaker for the same server and op type', () => {
+      expect(getBreaker(TENANT_A, 'iso-distinct', 'read')).not.toBe(getBreaker(TENANT_B, 'iso-distinct', 'read'));
+    });
+
+    it("leaves tenant B's calls flowing after tenant A trips its breaker", async () => {
+      const tenantABreaker = getBreaker(TENANT_A, 'iso-trip', 'read');
+      await tripBreaker(tenantABreaker);
+
+      await expect(getBreaker(TENANT_A, 'iso-trip', 'read').execute(async () => 'a')).rejects.toThrow();
+      await expect(getBreaker(TENANT_B, 'iso-trip', 'read').execute(async () => 'b')).resolves.toBe('b');
+    });
+
+    it('names the breaker by server:op only, keeping the tenant out of the metric dimension', async () => {
+      const breaker = getBreaker(TENANT_A, 'iso-name', 'write');
+      await tripBreaker(breaker);
+
+      const rejection = await breaker.execute(async () => 'unreachable').catch((error: unknown) => error);
+      expect(rejection).toBeInstanceOf(CircuitBreakerError);
+      expect((rejection as CircuitBreakerError).circuitBreakerName).toBe('iso-name:write');
+    });
+  });
+
+  describe('LRU bounding', () => {
+    it('evicts the least recently used breaker once the cap is exceeded', () => {
+      // Fill to the cap first so breakers left by earlier tests cannot absorb the evictions.
+      for (let i = 0; i < MAX_TRACKED_BREAKERS; i++) getBreaker(`lru-pre-${i}`, 'lru', 'read');
+
+      const touched = getBreaker('lru-touched', 'lru', 'read');
+      const oldest = getBreaker('lru-oldest', 'lru', 'read');
+      getBreaker('lru-touched', 'lru', 'read');
+      // Evicts the remaining pre-fill, then exactly one more: the least recently used of the two.
+      for (let i = 0; i < MAX_TRACKED_BREAKERS - 1; i++) getBreaker(`lru-filler-${i}`, 'lru', 'read');
+
+      expect(getBreaker('lru-touched', 'lru', 'read')).toBe(touched);
+      expect(getBreaker('lru-oldest', 'lru', 'read')).not.toBe(oldest);
+    });
+  });
+
+  describe('getAllBreakerStates across tenants', () => {
+    it("reports the worst tenant's state under the server:op key", async () => {
+      getBreaker(TENANT_B, 'agg-worst', 'read');
+      await tripBreaker(getBreaker(TENANT_A, 'agg-worst', 'read'));
+
+      expect(getAllBreakerStates()['agg-worst:read'].state).toBe('OPEN');
+    });
+  });
+
+  describe('resetBreaker across tenants', () => {
+    it('resets the server breaker for every tenant', async () => {
+      const tenantABreaker = getBreaker(TENANT_A, 'reset-all-tenants', 'read');
+      const tenantBBreaker = getBreaker(TENANT_B, 'reset-all-tenants', 'read');
+      await tripBreaker(tenantABreaker);
+      await tripBreaker(tenantBBreaker);
+
+      resetBreaker('reset-all-tenants');
+
+      expect(tenantABreaker.getState().state).toBe('CLOSED');
+      expect(tenantBBreaker.getState().state).toBe('CLOSED');
+    });
+  });
+
   describe('getAllBreakerStates', () => {
     it('should return states for all created breakers with compound keys', () => {
-      getBreaker('states-a', 'read');
-      getBreaker('states-b', 'write');
+      getBreaker(TENANT_A, 'states-a', 'read');
+      getBreaker(TENANT_A, 'states-b', 'write');
       const states = getAllBreakerStates();
       expect(states['states-a:read']).toBeDefined();
       expect(states['states-b:write']).toBeDefined();
@@ -195,7 +269,7 @@ describe('mcpCircuitBreakers', () => {
 
   describe('resetBreaker', () => {
     it('should reset an existing breaker to CLOSED using compound key', async () => {
-      const breaker = getBreaker('test-reset-compound', 'read');
+      const breaker = getBreaker(TENANT_A, 'test-reset-compound', 'read');
 
       // Trip the breaker by causing failures
       for (let i = 0; i < 5; i++) {
@@ -212,8 +286,8 @@ describe('mcpCircuitBreakers', () => {
     });
 
     it('should reset both read and write breakers when given a plain server name', async () => {
-      const readBreaker = getBreaker('test-reset-both', 'read');
-      const writeBreaker = getBreaker('test-reset-both', 'write');
+      const readBreaker = getBreaker(TENANT_A, 'test-reset-both', 'read');
+      const writeBreaker = getBreaker(TENANT_A, 'test-reset-both', 'write');
 
       // Trip the read breaker
       for (let i = 0; i < 5; i++) {
@@ -356,7 +430,7 @@ describe('mcpCircuitBreakers', () => {
 
   describe('getBreaker config overrides', () => {
     it('should create write breakers with stricter thresholds', async () => {
-      const writeBreaker = getBreaker('test-write-strict', 'write');
+      const writeBreaker = getBreaker(TENANT_A, 'test-write-strict', 'write');
 
       // Write breaker has failureThreshold of 3 (vs 5 for read)
       const failFn = vi.fn().mockRejectedValue(new Error('server error'));
@@ -371,7 +445,7 @@ describe('mcpCircuitBreakers', () => {
     });
 
     it('should create read breakers with standard thresholds', async () => {
-      const readBreaker = getBreaker('test-read-standard', 'read');
+      const readBreaker = getBreaker(TENANT_A, 'test-read-standard', 'read');
 
       const failFn = vi.fn().mockRejectedValue(new Error('server error'));
       // 3 failures should NOT trip the read breaker (threshold is 5)

@@ -75,6 +75,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 vi.stubEnv('IS_LOCAL', 'true');
 
 import { invokeMcpHandler } from './invokeMcpHandler';
+import { UNATTRIBUTED_MCP_TENANT } from './mcpTenantKey';
 
 // Mock breaker whose execute() runs the given function
 function createMockBreaker() {
@@ -156,8 +157,18 @@ describe('invokeMcpHandler circuit breaker', () => {
       await invokeMcpHandler(payload);
 
       expect(mockClassifyOperation).toHaveBeenCalledWith('callTool', undefined);
-      expect(mockGetBreaker).toHaveBeenCalledWith('github', 'read');
+      expect(mockGetBreaker).toHaveBeenCalledWith(UNATTRIBUTED_MCP_TENANT, 'github', 'read');
       expect(mockBreaker.execute).toHaveBeenCalledOnce();
+    });
+
+    it("should key the breaker by the calling user's tenant", async () => {
+      const payload = { name: 'github', action: 'callTool', userId: 'user-1', params: {} } as Parameters<
+        typeof invokeMcpHandler
+      >[0];
+
+      await invokeMcpHandler(payload);
+
+      expect(mockGetBreaker).toHaveBeenCalledWith('user-1', 'github', 'read');
     });
 
     it('should pass "write" op type for write operations', async () => {
@@ -172,7 +183,7 @@ describe('invokeMcpHandler circuit breaker', () => {
       await invokeMcpHandler(payload);
 
       expect(mockClassifyOperation).toHaveBeenCalledWith('callTool', 'create_issue');
-      expect(mockGetBreaker).toHaveBeenCalledWith('github', 'write');
+      expect(mockGetBreaker).toHaveBeenCalledWith(UNATTRIBUTED_MCP_TENANT, 'github', 'write');
     });
 
     it('should pass "read" op type for read operations', async () => {
@@ -187,7 +198,7 @@ describe('invokeMcpHandler circuit breaker', () => {
       await invokeMcpHandler(payload);
 
       expect(mockClassifyOperation).toHaveBeenCalledWith('callTool', 'get_issue');
-      expect(mockGetBreaker).toHaveBeenCalledWith('github', 'read');
+      expect(mockGetBreaker).toHaveBeenCalledWith(UNATTRIBUTED_MCP_TENANT, 'github', 'read');
     });
 
     it('should convert CircuitBreakerError to user-friendly message', async () => {
