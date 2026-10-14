@@ -107,6 +107,48 @@ describe('AnthropicBackend - stream ending before message_stop', () => {
     expect(infos.at(-1)?.stopReason).toBe('aborted');
   });
 
+  it('forwards the turn usage it did receive, cache included, when an aborted stream ends early', async () => {
+    const backend = buildBackend([
+      [
+        messageStart,
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Partial' } },
+        {
+          type: 'message_delta',
+          delta: { stop_reason: null },
+          usage: {
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_input_tokens: 5000,
+            cache_creation_input_tokens: 200,
+          },
+        },
+      ],
+    ]);
+    const { infos, cb: record } = collect();
+    const controller = new AbortController();
+    const cb: typeof record = async (chunk, info) => {
+      await record(chunk, info);
+      if (chunk.includes('Partial')) controller.abort();
+    };
+
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'hi' }],
+      { stream: true, abortSignal: controller.signal },
+      cb
+    );
+
+    const last = infos.at(-1)!;
+    expect(last.stopReason).toBe('aborted');
+    // The provider billed the cached prompt; dropping it would settle the call far too low.
+    expect(last.cacheReadInputTokens).toBe(5000);
+    expect(last.cacheCreationInputTokens).toBe(200);
+    expect(last.turnUsage).toEqual([
+      { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 5000, cacheCreationInputTokens: 200 },
+    ]);
+  });
+
   it('does not execute a tool call collected from a stream that ended early', async () => {
     let toolRan = false;
     const backend = buildBackend([
