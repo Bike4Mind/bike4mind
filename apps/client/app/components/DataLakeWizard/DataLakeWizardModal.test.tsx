@@ -78,6 +78,19 @@ vi.mock('@client/app/hooks/data/settings', () => ({
   useEffectiveEmbeddingModel: () => undefined,
 }));
 
+// The Drive folder estimate is a ~20s server walk; each test sets the query state it needs.
+const driveEstimate = vi.hoisted(() => ({
+  current: { data: undefined, isLoading: false, isError: false } as {
+    data?: Record<string, unknown>;
+    isLoading: boolean;
+    isError: boolean;
+  },
+}));
+vi.mock('@client/app/hooks/data/useDriveFolderEstimate', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/hooks/data/useDriveFolderEstimate')>()),
+  useDriveFolderEstimate: () => driveEstimate.current,
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
@@ -523,13 +536,38 @@ describe('DataLakeWizardModal - Drive-only create', () => {
   afterEach(() => {
     useDataLakeWizardStore.getState().resetWizard();
     useUser.setState({ currentUser: null });
+    driveEstimate.current = { data: undefined, isLoading: false, isError: false };
   });
 
-  // Nothing uploads on this path (uploadBytes is 0), so a user already over quota must still be
-  // able to create-and-sync - the block exists to stop bytes the server would refuse, and this
-  // commit sends none.
-  it('is not blocked by a storage limit the commit sends no bytes against', () => {
-    useUser.setState({ currentUser: { currentStorageSize: 1_000_000, storageLimit: 1 } as IUserDocument });
+  const estimate = (over: Record<string, unknown> = {}) => ({
+    data: {
+      folderId: 'FOLDER1',
+      fileCount: 3,
+      knownBytes: 0,
+      unknownSizeCount: 0,
+      overSizeLimitCount: 0,
+      unsupportedCount: 0,
+      truncated: false,
+      overCandidateCap: false,
+      maxFileSizeBytes: 100 * 1024 * 1024,
+      candidateCap: 20000,
+      ...over,
+    },
+    isLoading: false,
+    isError: false,
+  });
+  // 1 MB limit, stored in MB like the real user document.
+  const userUsing = (currentStorageSize: number) =>
+    useUser.setState({
+      currentUser: { currentStorageSize, storageLimit: 1 } as IUserDocument,
+      refreshUser: () => Promise.resolve(),
+    });
+
+  // A pending estimate carries no bytes, so it never locks out a user already over quota - the
+  // sync stays the boundary.
+  it('is not blocked by a storage limit while the folder estimate is pending', () => {
+    driveEstimate.current = { data: undefined, isLoading: true, isError: false };
+    userUsing(1_000_000);
     seedDriveOnly({ step: 'config' });
 
     renderModal();
@@ -538,6 +576,62 @@ describe('DataLakeWizardModal - Drive-only create', () => {
     expect(commitBtn).toBeEnabled();
     commitBtn.click();
     expect(driveCommitMutate).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('drive-estimate-loading')).toBeInTheDocument();
+  });
+
+  it('blocks Create and sync when the folder known bytes alone exceed the quota, and shows the numbers', () => {
+    driveEstimate.current = estimate({ knownBytes: 2_000_000 });
+    userUsing(0);
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+    const commitBtn = screen.getByTestId('wizard-start-upload-btn');
+
+    expect(commitBtn).toBeDisabled();
+    commitBtn.click();
+    expect(driveCommitMutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('storage-limit-exceeded-alert')).toHaveTextContent(
+      'The Drive folder holds at least 2 MB'
+    );
+  });
+
+  it('warns but allows the commit when only the unknown-size worst case would exceed the quota', () => {
+    driveEstimate.current = estimate({ knownBytes: 100_000, unknownSizeCount: 1 });
+    userUsing(0);
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeEnabled();
+    expect(screen.getByTestId('drive-estimate-worst-case-warning')).toBeInTheDocument();
+    expect(screen.queryByTestId('storage-limit-exceeded-alert')).toBeNull();
+  });
+
+  it('blocks a mixed commit whose local and Drive bytes exceed the quota together but not apart', () => {
+    driveEstimate.current = estimate({ knownBytes: 600_000 });
+    userUsing(0);
+    seedDriveOnly({ step: 'config' });
+    useDataLakeWizardStore.setState(state => ({
+      allFiles: [
+        { relativePath: 'a.txt', size: 600_000, type: 'text/plain', excluded: false, isDuplicate: false },
+      ] as never,
+      config: { ...state.config, conflictResolution: 'skip' },
+    }));
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeDisabled();
+    expect(screen.getByTestId('storage-limit-exceeded-alert')).toBeInTheDocument();
+  });
+
+  it('blocks a folder over the per-sync file cap, which the sync would refuse whole', () => {
+    driveEstimate.current = estimate({ fileCount: 20001, truncated: true, overCandidateCap: true });
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeDisabled();
+    expect(screen.getByTestId('drive-estimate-over-cap')).toBeInTheDocument();
   });
 
   it('advances past the source step on a Drive folder alone, with no files', () => {
