@@ -74,6 +74,14 @@ import { validateUserCredits as validateImageUserCredits } from './tools/base/ut
 import { getQuestErrorCode } from '@bike4mind/common';
 import { recordGeneratedImages } from './recordGeneratedImages';
 
+// Bounded wait at the mask gate for a scan still in flight: the client's on-demand call returned
+// 'pending', or the S3 event owns the claim ('scanning'). Both values are in ms.
+const MODERATION_WAIT_MS = 12_000;
+const MODERATION_POLL_INTERVAL_MS = 750;
+
+const isModerationInFlight = (f: { moderationStatus?: string | null }) =>
+  f.moderationStatus === 'pending' || f.moderationStatus === 'scanning';
+
 export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
   questId: z.string(),
@@ -402,6 +410,32 @@ export class ImageEditService {
     });
   }
 
+  /**
+   * Re-reads a still-scanning file (through the same access-scoped lookup as the initial load)
+   * until it leaves 'pending'/'scanning' or the budget runs out. Returns the last row seen, so the
+   * caller's fail-closed gate decides: a timeout hands back a still-in-flight row, not a 'clean' one.
+   * A mask that vanished or is no longer accessible returns null.
+   */
+  private async waitForModerationScan(
+    file: IFabFileDocument,
+    access: { userId: string; userGroups?: string[]; lakeAccess?: AttachmentLakeAccess }
+  ): Promise<IFabFileDocument | null> {
+    const deadline = Date.now() + MODERATION_WAIT_MS;
+    let current = file;
+    while (isModerationInFlight(current) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, MODERATION_POLL_INTERVAL_MS));
+      const [refreshed] = await this.db.fabFiles.findAccessibleInIds(
+        [file.id as string],
+        { userId: access.userId, userGroups: access.userGroups },
+        access.lakeAccess
+      );
+      // A mask that vanished or is no longer accessible is unavailable, not still being scanned.
+      if (!refreshed) return null;
+      current = refreshed;
+    }
+    return current;
+  }
+
   public async process({ body, logger }: { body: z.infer<typeof ImageEditBodySchema>; logger: Logger }) {
     const {
       sessionId,
@@ -618,13 +652,32 @@ export class ImageEditService {
       });
 
       // Pick the first image-type fab file to send as the edit source.
-      const fileImage = fabFiles.find(file => file.mimeType.startsWith('image'));
+      let fileImage = fabFiles.find(file => file.mimeType.startsWith('image'));
 
       // An explicit workbench upload used as the edit mask must not be fed into generation
       // while it's held (pending scan) or blocked. Checked once here, before the per-model
       // branches below each call `fabFileStorage.getSignedUrl` on it.
+      //
+      // Normally already 'clean' from the client's on-demand scan; otherwise the scan is still in
+      // flight under that call ('pending') or the S3 event ('scanning'), so wait for the verdict
+      // here. Still fail-closed: not 'clean' by the deadline is rejected.
+      if (fileImage && isModerationInFlight(fileImage)) {
+        const waited = await this.waitForModerationScan(fileImage, {
+          userId,
+          userGroups: user.groups ?? undefined,
+          lakeAccess,
+        });
+        if (!waited) throw new BadRequestError('The uploaded image is not available');
+        fileImage = waited;
+      }
       if (fileImage && !isImageServeable(fileImage)) {
-        throw new BadRequestError('The uploaded image is not available (moderation pending or blocked)');
+        throw new BadRequestError(
+          isModerationInFlight(fileImage)
+            ? 'The uploaded image is still being scanned. Please try again in a few seconds.'
+            : fileImage.moderationStatus === 'blocked'
+              ? 'The uploaded image is not available (blocked by moderation)'
+              : 'The uploaded image is not available'
+        );
       }
 
       let service: BFLImageService | GeminiImageService | OpenAIImageService;

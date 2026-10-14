@@ -829,6 +829,115 @@ describe('ImageEditService.process mask access (#3069)', () => {
     expect(quest.reply).toBe('stop-after-dispatch');
     expect(quest.status).toBe('done');
   });
+
+  describe('mask still being moderation-scanned', () => {
+    const withStatus = (moderationStatus: string) => ({ ...maskFile, moderationStatus });
+    // First call is the access-scoped load in process(); later calls are the gate's re-reads.
+    const sequence = (statuses: string[]) => {
+      let call = 0;
+      return () => [withStatus(statuses[Math.min(call++, statuses.length - 1)])];
+    };
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const runWithTimers = async (opts: Parameters<typeof run>[0]) => {
+      vi.useFakeTimers();
+      const pending = run(opts);
+      await vi.advanceTimersByTimeAsync(20_000);
+      return pending;
+    };
+
+    it('waits for a pending mask to turn clean, then dispatches the edit', async () => {
+      const { getSignedUrl, findAccessibleInIds } = await runWithTimers({
+        reachable: sequence(['pending', 'pending', 'clean']),
+      });
+
+      expect(findAccessibleInIds).toHaveBeenCalledTimes(3);
+      expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
+      expect(editSpy).toHaveBeenCalled();
+    });
+
+    it('re-reads through the same access-scoped lookup, with the same lake access', async () => {
+      const lakeAccess = { dataLakeTags: ['datalake:acme'] };
+      const { findAccessibleInIds } = await runWithTimers({
+        reachable: sequence(['pending', 'clean']),
+        lakeAccess,
+      });
+
+      expect(findAccessibleInIds).toHaveBeenNthCalledWith(
+        1,
+        ['mask1'],
+        { userId: 'user1', userGroups: undefined },
+        lakeAccess
+      );
+      expect(findAccessibleInIds).toHaveBeenNthCalledWith(
+        2,
+        ['mask1'],
+        { userId: 'user1', userGroups: undefined },
+        lakeAccess
+      );
+    });
+
+    it('fails closed with a retry message when the scan outlasts the wait', async () => {
+      const { quest, getSignedUrl, findAccessibleInIds } = await runWithTimers({ reachable: sequence(['pending']) });
+
+      // Initial load plus one re-read per 750ms across the 12s budget.
+      expect(findAccessibleInIds.mock.calls.length).toBeGreaterThanOrEqual(16);
+      expect(getSignedUrl).not.toHaveBeenCalled();
+      expect(editSpy).not.toHaveBeenCalled();
+      expect(quest.type).toBe('error');
+      expect(quest.reply).toContain('still being scanned');
+    });
+
+    it('fails fast, without polling, when the mask is already blocked', async () => {
+      const { quest, findAccessibleInIds } = await run({ reachable: sequence(['blocked']) });
+
+      expect(findAccessibleInIds).toHaveBeenCalledTimes(1);
+      expect(editSpy).not.toHaveBeenCalled();
+      expect(quest.reply).toContain('blocked by moderation');
+    });
+
+    it("waits through 'scanning', the state a mask is in when the S3 event owns the claim", async () => {
+      const { getSignedUrl, findAccessibleInIds } = await runWithTimers({
+        reachable: sequence(['scanning', 'scanning', 'clean']),
+      });
+
+      expect(findAccessibleInIds).toHaveBeenCalledTimes(3);
+      expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
+      expect(editSpy).toHaveBeenCalled();
+    });
+
+    it("fails closed with the retry message when a 'scanning' mask outlasts the wait", async () => {
+      const { quest, findAccessibleInIds } = await runWithTimers({ reachable: sequence(['scanning']) });
+
+      expect(findAccessibleInIds.mock.calls.length).toBeGreaterThanOrEqual(16);
+      expect(editSpy).not.toHaveBeenCalled();
+      expect(quest.type).toBe('error');
+      expect(quest.reply).toContain('still being scanned');
+    });
+
+    it('stops polling and fails closed when the mask disappears mid-wait', async () => {
+      let call = 0;
+      const { quest, findAccessibleInIds } = await runWithTimers({
+        reachable: () => (call++ === 0 ? [withStatus('pending')] : []),
+      });
+
+      expect(findAccessibleInIds).toHaveBeenCalledTimes(2);
+      expect(editSpy).not.toHaveBeenCalled();
+      expect(quest.type).toBe('error');
+      expect(quest.reply).toContain('not available');
+      expect(quest.reply).not.toContain('still being scanned');
+    });
+
+    it('reports blocked, not retry, when the scan resolves to blocked mid-wait', async () => {
+      const { quest } = await runWithTimers({ reachable: sequence(['pending', 'blocked']) });
+
+      expect(editSpy).not.toHaveBeenCalled();
+      expect(quest.reply).toContain('blocked by moderation');
+    });
+  });
 });
 
 describe('ImageEditService.validateUserCredits (per-member cap)', () => {

@@ -102,9 +102,10 @@ export interface ModerateUploadedFileResult {
  * Any OTHER error (detector unavailable, transient Rekognition 5xx/throttle, download
  * failure) is rethrown rather than mapped to 'blocked' - turning a transient failure into a
  * permanent false-block would strand a benign image behind scary policy copy with no
- * recovery path. The caller (objectCreated's S3 event handler) lets the throw propagate so
- * S3 retries the whole handler; the file stays `moderationStatus: 'pending'` (held,
- * fail-closed, recoverable) until either a retry succeeds or retries exhaust.
+ * recovery path. objectCreated's S3 event handler lets the throw propagate so S3 retries
+ * the whole handler; the file stays `moderationStatus: 'pending'` (held, fail-closed,
+ * recoverable) until either a retry succeeds or retries exhaust. The on-demand route
+ * (pages/api/files/[id]/moderate.ts) instead catches it, releases its claim and reports 'pending'.
  *
  * The one deliberate exception is an unsupported format (`UnsupportedImageFormatError`):
  * a format neither Rekognition nor jimp can process is a deterministic, not transient,
@@ -171,8 +172,9 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
       return { moderationStatus: 'blocked', correctedMimeType, blockReason: 'unsupported_format' };
     }
     // Not a confirmed block or unsupported format (e.g. detector unavailable, throttling,
-    // download failure) - rethrow so the S3 event retries instead of permanently
-    // false-blocking a benign image.
+    // download failure) - rethrow so the caller can retry instead of permanently false-blocking a
+    // benign image: objectCreated lets it propagate so S3 retries; the on-demand route releases its
+    // claim and reports 'pending'.
     logger.warn(`[Q2b] uploaded image ${fabFileId} scan failed transiently, will retry: ${(err as Error).message}`);
     throw err;
   }
