@@ -34,6 +34,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: () => h.routeHandler }));
+// email/change mounts CSRF ahead of the gate; let it pass so the ordering under test is reached.
+vi.mock('@server/middlewares/csrfProtection', () => ({
+  csrfProtection: () => (_req: unknown, _res: unknown, next: Next) => next(),
+}));
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: Next) => {
     h.rateLimitSpy();
@@ -43,12 +47,15 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 vi.mock('@bike4mind/database', () => ({
   authSessionRepository: { findBySid: h.findBySid },
   passkeyCredentialRepository: {},
+  passkeyChallengeRepository: {},
   userRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({ mfaService: {} }));
 
 import regenerateBackupCodes from '@pages/api/auth/mfa/regenerate-backup-codes';
 import mfaSetup from '@pages/api/auth/mfa/setup';
+import passkeyRegisterOptions from '@pages/api/auth/mfa/passkey/register-options';
+import emailChange from '@pages/api/email/change';
 
 type RunRoute = (req: unknown, res: unknown) => Promise<{ error?: unknown }>;
 
@@ -69,6 +76,8 @@ beforeEach(() => {
 describe.each([
   ['POST /api/auth/mfa/regenerate-backup-codes', regenerateBackupCodes as unknown as RunRoute],
   ['POST /api/auth/mfa/setup', mfaSetup as unknown as RunRoute],
+  ['POST /api/auth/mfa/passkey/register-options', passkeyRegisterOptions as unknown as RunRoute],
+  ['POST /api/email/change', emailChange as unknown as RunRoute],
 ])('%s: step-up gate runs ahead of the rate limit', (_name, route) => {
   it('does not spend the rate limit on a request bounced for verification', async () => {
     h.findBySid.mockResolvedValue(sessionSteppedUpAt(null));
