@@ -474,8 +474,8 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_5_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_5_OPUS,
   ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
-  // Haiku 5.5 (probed on Bedrock): temperature!=1 and top_k return 400, and temperature and top_p cannot be
-  // sent together; omitting all three returns 200
+  // Haiku 5.5 (probed on Bedrock): temperature 0.2 and top_k return 400 ("deprecated"), temperature and top_p
+  // cannot be sent together; omitting all three returns 200
   ChatModels.CLAUDE_5_5_HAIKU,
   ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
   // Moonshot pins temperature and top_p on every current Kimi and documents them
