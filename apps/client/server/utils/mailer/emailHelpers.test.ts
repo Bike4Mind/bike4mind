@@ -1,23 +1,13 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { escapeHtml, escapeHtmlAttr, buildEmailLogoImg } from './emailHelpers';
+import { escapeHtml, buildEmailLogoImg } from './emailHelpers';
 
 describe('escapeHtml', () => {
   it('escapes ampersands, angle brackets and both quote styles', () => {
     expect(escapeHtml(`<b>x</b> & "y" 'z'`)).toBe('&lt;b&gt;x&lt;/b&gt; &amp; &quot;y&quot; &#39;z&#39;');
   });
 
-  it('is the same function as escapeHtmlAttr', () => {
-    expect(escapeHtmlAttr).toBe(escapeHtml);
-  });
-});
-
-describe('escapeHtmlAttr', () => {
-  it('escapes the HTML-significant characters', () => {
-    expect(escapeHtmlAttr('a & b < c > d "e"')).toBe('a &amp; b &lt; c &gt; d &quot;e&quot;');
-  });
-
   it('leaves a plain string untouched', () => {
-    expect(escapeHtmlAttr('Acme AI')).toBe('Acme AI');
+    expect(escapeHtml('Acme AI')).toBe('Acme AI');
   });
 });
 

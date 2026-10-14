@@ -4,7 +4,7 @@ import { render, screen, within, waitFor, act, fireEvent } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
+import { CURRENT_POLICY_VERSION, USERNAME_RULES_MESSAGE } from '@bike4mind/common';
 import en from '@client/app/locales/en.json';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
@@ -223,6 +223,25 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     // Only the code-verify call happened - no registration attempt without acceptance.
     expect(mocks.verifyOTC).toHaveBeenCalledTimes(1);
     expect(mocks.setCurrentUser).not.toHaveBeenCalled();
+  });
+
+  it('shows the username rules inline and makes no server call for an invalid username', async () => {
+    const user = userEvent.setup();
+    mocks.verifyOTC.mockResolvedValueOnce({
+      registrationRequired: true,
+      email: 'new@test.com',
+      pendingToken: 'ptok-2',
+    });
+
+    renderLogin();
+    await advanceToUsernameStep(user);
+    await user.type(textboxIn('login-register-username-input'), '---');
+    await user.click(checkboxIn('login-register-aup-tos-checkbox'));
+    await user.click(checkboxIn('login-register-age-checkbox'));
+    await user.click(screen.getByTestId('login-register-username-btn'));
+
+    expect(await screen.findByTestId('login-register-username-error')).toHaveTextContent(USERNAME_RULES_MESSAGE);
+    expect(mocks.verifyOTC).toHaveBeenCalledTimes(1);
   });
 
   it('retries with the RE-ISSUED pending token after a failed registration (nonce rotation)', async () => {

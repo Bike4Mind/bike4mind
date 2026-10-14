@@ -39,6 +39,7 @@ function makeAdapters(startingCredits: number, { withCreditTransactions = true }
       findByIdWithPassword: vi.fn().mockImplementation(async () => target),
       update,
       existsOtherUserWithUsername: vi.fn().mockResolvedValue(false),
+      existsOtherUserWithEmail: vi.fn().mockResolvedValue(false),
       setModerationStatus: vi.fn().mockResolvedValue(undefined),
       incrementCredits,
     },
@@ -398,6 +399,45 @@ describe('adminUpdateUser - username changes', () => {
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, username: ' New Name ' }, adapters);
 
     expect(update.mock.calls[0][0].username).toBe('New Name');
+  });
+});
+
+describe('adminUpdateUser - email changes', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('writes the email trimmed and lowercased after checking availability', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.email = 'old@x.com';
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, email: ' New@X.com ' }, adapters);
+
+    expect(adapters.db.users.existsOtherUserWithEmail).toHaveBeenCalledWith('new@x.com', TARGET_ID);
+    expect(update.mock.calls[0][0].email).toBe('new@x.com');
+  });
+
+  it('rejects an address another account holds with a 409', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.email = 'old@x.com';
+    adapters.db.users.existsOtherUserWithEmail.mockResolvedValue(true);
+
+    const error = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, email: 'taken@x.com' }, adapters).catch(
+      (caught: unknown) => caught
+    );
+
+    expect(error).toMatchObject({ statusCode: 409, message: 'That email address is already in use.' });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('maps a duplicate-key error on email from the write to the same 409', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.email = 'old@x.com';
+    update.mockRejectedValue(Object.assign(new Error('E11000'), { code: 11000, keyPattern: { email: 1 } }));
+
+    const error = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, email: 'new@x.com' }, adapters).catch(
+      (caught: unknown) => caught
+    );
+
+    expect(error).toMatchObject({ statusCode: 409, message: 'That email address is already in use.' });
   });
 });
 

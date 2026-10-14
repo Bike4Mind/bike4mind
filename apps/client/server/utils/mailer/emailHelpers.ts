@@ -37,9 +37,6 @@ export const escapeHtml = (value: string): string =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-/** Alias of {@link escapeHtml} for attribute call sites. */
-export const escapeHtmlAttr = escapeHtml;
-
 /**
  * Build the brand logo `<img>` for transactional emails, with both `alt` and `src` HTML-escaped.
  * Centralizes logo markup + escaping previously duplicated across ~13 email builders with

@@ -11,7 +11,8 @@ import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
 import { z } from 'zod';
 
 const ChangeEmailRequestSchema = z.object({
-  newEmail: z.email(),
+  // Normalized before the format check so a padded address is not rejected for its whitespace.
+  newEmail: z.string().trim().toLowerCase().pipe(z.email()),
 });
 
 // Requires authentication - users change their own email

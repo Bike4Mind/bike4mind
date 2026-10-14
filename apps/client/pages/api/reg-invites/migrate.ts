@@ -1,4 +1,4 @@
-import { RegInviteEvents, requireEnv } from '@bike4mind/common';
+import { RegInviteEvents, requireEnv, sanitizeUsername } from '@bike4mind/common';
 import { organizationService, userService } from '@bike4mind/services';
 import { withTransaction } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
@@ -7,7 +7,8 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
-import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
+import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
+import { randomUUID } from 'crypto';
 import { z } from 'zod';
 
 const migrateRequestSchema = z.object({
@@ -22,14 +23,6 @@ const migrateRequestSchema = z.object({
   sendEmail: z.boolean(),
   orgId: z.string().optional(),
 });
-
-const escapeHtml = (text: string): string =>
-  text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;');
 
 function buildMigrationEmailBody(userName: string, loginLink: string): string {
   const brand = process.env.APP_NAME || '';
@@ -81,7 +74,7 @@ const handler = baseApi().post(async (req, res) => {
       let userEmail: string;
 
       if (!existingUser) {
-        const username = name.replace(/\s/g, '');
+        const username = sanitizeUsername(name) || `user-${randomUUID().slice(0, 8)}`;
         const newUser = await userService.createUser(
           {
             username,

@@ -339,16 +339,16 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
 
   // An anchored case-insensitive regex instead of .collation(): DocumentDB has no collation
   // support (see documentdb-compat.ts), so this is the one form that matches the same rows on
-  // both engines. Soft-deleted rows count, because the unique index still covers them.
+  // both engines. The \s* anchors also match legacy rows stored with surrounding whitespace. Soft-deleted rows count, because the unique index still covers them.
   private async existsOtherUserWithValue(
     field: 'email' | 'username',
     value: string,
     excludeUserId: string | undefined
   ): Promise<boolean> {
-    const normalized = value.trim();
+    const normalized = value.normalize('NFC').trim();
     if (!normalized) return false;
     const filter: Record<string, unknown> = {
-      [field]: { $regex: `^${escapeRegExp(normalized)}$`, $options: 'i' },
+      [field]: { $regex: `^\\s*${escapeRegExp(normalized)}\\s*$`, $options: 'i' },
     };
     if (excludeUserId) filter._id = { $ne: excludeUserId };
     return (await this.model.exists(filter)) !== null;

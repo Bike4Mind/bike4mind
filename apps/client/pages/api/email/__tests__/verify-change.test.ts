@@ -138,4 +138,16 @@ describe('POST /api/email/verify-change', () => {
       req.logger
     );
   });
+
+  it('audits the normalized pending address', async () => {
+    h.findByPendingEmailToken.mockResolvedValue({ id: 'user-1', email: 'old@b.test', pendingEmail: ' New@B.test ' });
+    h.verifyEmailChange.mockResolvedValue(undefined);
+
+    await run();
+
+    expect(h.logAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'success', newEmail: 'new@b.test' }),
+      expect.anything()
+    );
+  });
 });

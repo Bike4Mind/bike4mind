@@ -29,6 +29,12 @@ describe('UserModel.existsOtherUserWithEmail', () => {
     expect(await userRepository.existsOtherUserWithEmail('.*')).toBe(false);
   });
 
+  it('matches a stored value that carries surrounding whitespace', async () => {
+    await User.collection.insertOne({ username: 'padded', name: 'Pad', email: ' bob@x.com' });
+
+    expect(await userRepository.existsOtherUserWithEmail('bob@x.com')).toBe(true);
+  });
+
   it('returns false for a blank input', async () => {
     await User.create({ username: 'pat', name: 'Pat', email: 'pat@example.com' });
 
@@ -44,5 +50,11 @@ describe('UserModel.existsOtherUserWithUsername', () => {
     expect(await userRepository.existsOtherUserWithUsername('JANE DOE')).toBe(true);
     expect(await userRepository.existsOtherUserWithUsername('jane doe', String(self._id))).toBe(false);
     expect(await userRepository.existsOtherUserWithUsername('Jane.Doe', String(self._id))).toBe(true);
+  });
+
+  it('compares the input NFC-normalized', async () => {
+    await User.create({ username: 'Jos\u00e9', name: 'Jose', email: 'jose@example.com' });
+
+    expect(await userRepository.existsOtherUserWithUsername('Jose\u0301')).toBe(true);
   });
 });

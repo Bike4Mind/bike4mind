@@ -1,4 +1,5 @@
-import { connectDB, User } from '@bike4mind/database';
+import { connectDB } from '@bike4mind/db-core';
+import { User } from '@bike4mind/database';
 import { Resource } from 'sst';
 import { Config } from '../utils/config';
 import { findCaseInsensitiveCollisions, renderCollisionGroups, type UserIdentityRow } from './userCaseDupesReport';
@@ -20,7 +21,10 @@ async function main() {
   const dbUri = Config.MONGODB_URI;
   if (!dbUri) throw new Error('MONGODB_URI is required');
   const stage = Resource.App.stage;
-  await connectDB(dbUri.replace('%STAGE%', stage));
+  // db-core connectDB with autoIndex/autoCreate off: the @bike4mind/database wrapper seeds catalog
+  // rows on connect and a checkout ahead of the stage would build indexes, neither of which a
+  // read-only report may do.
+  await connectDB(dbUri.replace('%STAGE%', stage), undefined, { autoIndex: false, autoCreate: false });
 
   console.log(`Checking case-insensitive users.email / users.username collisions on stage="${stage}"...`);
 

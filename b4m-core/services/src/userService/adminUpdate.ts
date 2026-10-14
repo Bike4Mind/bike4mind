@@ -5,8 +5,10 @@ import {
   toUserUpdatePartial,
   validateUsernameChange,
   writeUserUpdate,
+  EMAIL_IN_USE_MESSAGE,
 } from './update';
 import {
+  ConflictError,
   CreditHolderType,
   ICreditTransactionRepository,
   IOrganizationDocument,
@@ -25,7 +27,7 @@ import { entersBlockedState } from './accountState';
 export const adminUpdateUserSchema = updateUserSchema.extend({
   id: z.string(),
   // Admins can directly update email addresses without verification
-  email: z.email().optional(),
+  email: z.string().trim().toLowerCase().pipe(z.email()).optional(),
   role: z.string().optional().nullable(),
   isAdmin: z.boolean().optional(),
   // Admin-only: `tags` was removed from the base self-service schema because it
@@ -127,6 +129,11 @@ export async function adminUpdateUser(
     throw new Error('User not found');
   }
   await validateUsernameChange(user, params, db.users);
+  if (params.email !== undefined && params.email !== user.email) {
+    if (await db.users.existsOtherUserWithEmail(params.email, user.id)) {
+      throw new ConflictError(EMAIL_IN_USE_MESSAGE);
+    }
+  }
 
   // Route a `currentCredits` change through the audited ledger when the adapter
   // is wired; its atomic `$inc` is the sole owner of the balance. The ledger runs

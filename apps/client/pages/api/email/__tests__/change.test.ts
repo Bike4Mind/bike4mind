@@ -78,4 +78,18 @@ describe('POST /api/email/change templates', () => {
     expect(verification.body).toContain('from <strong>old&amp;co@b.test</strong> to <strong>new@b.test</strong>');
     expect(verification.body).not.toContain('<b>x</b>');
   });
+
+  it('normalizes a padded, mixed-case address before it reaches the service', async () => {
+    h.requestEmailChange.mockResolvedValue(undefined);
+
+    await h.handler!(
+      { body: { newEmail: 'New@X.com ' }, user, ip: '127.0.0.1', headers: {}, logger: { error: vi.fn() } },
+      { json: vi.fn() }
+    );
+
+    expect(h.requestEmailChange).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', newEmail: 'new@x.com' }),
+      expect.anything()
+    );
+  });
 });

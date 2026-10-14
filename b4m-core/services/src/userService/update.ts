@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { isDuplicateKeyErrorOn } from './duplicateKeyError';
 
 export const USERNAME_TAKEN_MESSAGE = 'That username is taken.';
+export const EMAIL_IN_USE_MESSAGE = 'That email address is already in use.';
 
 export const updateUserSchema = z.object({
   name: z.string().optional(),
@@ -194,7 +195,7 @@ export async function validateUsernameChange(
   }
 }
 
-/** Run a user write, reporting a lost race on the username unique index as the same 409. */
+/** Run a user write, reporting a lost race on the username or email unique index as the same 409. */
 export async function writeUserUpdate(
   users: Pick<IUserRepository, 'update'>,
   write: Partial<IUserDocument> & { id: string }
@@ -204,6 +205,9 @@ export async function writeUserUpdate(
   } catch (error) {
     if (isDuplicateKeyErrorOn(error, 'username')) {
       throw new ConflictError(USERNAME_TAKEN_MESSAGE);
+    }
+    if (isDuplicateKeyErrorOn(error, 'email')) {
+      throw new ConflictError(EMAIL_IN_USE_MESSAGE);
     }
     throw error;
   }

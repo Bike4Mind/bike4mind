@@ -38,7 +38,7 @@ const handler = baseApi({ auth: false })
       }
 
       const oldEmail = user.email;
-      const newEmail = user.pendingEmail;
+      const newEmail = user.pendingEmail?.trim().toLowerCase();
 
       try {
         // Verify the token and complete the email change. The sign-in identity moved, so every

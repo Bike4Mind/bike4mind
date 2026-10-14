@@ -42,7 +42,7 @@ import { useBrandingSettings, usePublicConfig } from '@client/app/hooks/data/set
 import { gray, brand } from '@client/app/utils/themes/colors';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { getWebsiteUrl, WEBSITE_URL } from '@client/config/general';
-import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
+import { CURRENT_POLICY_VERSION, USERNAME_RULES_MESSAGE, usernameSchema } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
 import {
@@ -99,6 +99,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // Username collected when a verified code belongs to an email with no account yet
   // (the login form doubling as inline registration - see handleRegisterUsernameSubmit).
   const [username, setUsername] = useState('');
+  const [usernameError, setUsernameError] = useState<string | null>(null);
   // Abuse gate on the inline path too: registerUser rejects creation unless
   // the current policy version + age attestation are sent, so both must be collected here;
   // the checkboxes gate the Create account button.
@@ -458,11 +459,18 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // the account. A brand-new user has no MFA, so this returns a logged-in session.
   const handleRegisterUsernameSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const uname = username.trim();
-    if (!uname) {
+    if (!username.trim()) {
       toast.error('Please enter a username');
       return;
     }
+    // Checked before any server call: the code is single-use-ish, so a rejected username must not
+    // burn an attempt.
+    const parsedUsername = usernameSchema.safeParse(username);
+    if (!parsedUsername.success) {
+      setUsernameError(USERNAME_RULES_MESSAGE);
+      return;
+    }
+    const uname = parsedUsername.data;
     // The button is disabled until both boxes are checked, but Enter-key implicit form
     // submission can bypass a disabled submit button - and acceptedPolicyVersion is sent
     // unconditionally below, so the handler must enforce the acceptance itself.
@@ -559,6 +567,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     setEmail('');
     setOtcCode('');
     setUsername('');
+    setUsernameError(null);
     setAcceptPolicies(false);
     setConfirmAdult(false);
     setPendingToken(null);
@@ -1013,13 +1022,25 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     type="text"
                     placeholder="Choose a username"
                     value={username}
-                    onChange={e => setUsername(e.target.value)}
+                    onChange={e => {
+                      setUsername(e.target.value);
+                      setUsernameError(null);
+                    }}
                     autoComplete="username"
                     fullWidth
                     autoFocus
                     disabled={isVerifying}
                     sx={{ ...inputStyles, '--Input-minHeight': '48px' }}
                   />
+                  {usernameError && (
+                    <FormHelperText
+                      role="alert"
+                      data-testid="login-register-username-error"
+                      sx={{ color: 'danger.plainColor' }}
+                    >
+                      {usernameError}
+                    </FormHelperText>
+                  )}
                 </FormControl>
 
                 {/* Abuse gate: same acceptance controls as /register - the

@@ -13,7 +13,7 @@ describe('usernameSchema', () => {
     expect(usernameSchema.parse('  bob  ')).toBe('bob');
   });
 
-  it.each(['', '   ', '<b>x</b>', 'bob@example.com', 'a+b', 'tab\tname', 'line\nbreak', 'emoji \u{1F600}'])(
+  it.each(['', '   ', '<b>x</b>', 'bob@example.com', 'a+b', 'emoji \u{1F600}', '\u0301', '-', '...', "' _ ."])(
     'rejects %j with the rules message',
     value => {
       const result = usernameSchema.safeParse(value);
@@ -21,6 +21,18 @@ describe('usernameSchema', () => {
       expect(result.error?.issues[0].message).toBe(USERNAME_RULES_MESSAGE);
     }
   );
+
+  it('turns NBSP and other whitespace into single plain spaces', () => {
+    expect(usernameSchema.parse('\u00a0Jane\u00a0\u00a0Doe\t')).toBe('Jane Doe');
+    expect(usernameSchema.parse('line\nbreak')).toBe('line break');
+  });
+
+  it('normalizes composed and decomposed spellings to the same value', () => {
+    const composed = usernameSchema.parse('Jos\u00e9');
+    const decomposed = usernameSchema.parse('Jose\u0301');
+    expect(decomposed).toBe(composed);
+    expect(composed).toBe('Jos\u00e9');
+  });
 
   it('enforces the length cap', () => {
     expect(usernameSchema.safeParse('a'.repeat(USERNAME_MAX_LENGTH)).success).toBe(true);
@@ -54,5 +66,22 @@ describe('sanitizeUsername', () => {
       const result = sanitizeUsername(raw);
       expect(usernameSchema.safeParse(result).success).toBe(true);
     }
+  });
+});
+
+describe('sanitizeUsername letter-or-digit rule', () => {
+  it('returns an empty string when only punctuation or a combining mark remains', () => {
+    expect(sanitizeUsername('---')).toBe('');
+    expect(sanitizeUsername('\u0301')).toBe('');
+    expect(sanitizeUsername('<<>>')).toBe('');
+  });
+
+  it('applies NFC and converts NBSP', () => {
+    expect(sanitizeUsername('Jose\u0301\u00a0Perez')).toBe('Jos\u00e9 Perez');
+  });
+
+  it('produces values the schema accepts', () => {
+    const value = sanitizeUsername('  a<b>c   d ');
+    expect(usernameSchema.safeParse(value).success).toBe(true);
   });
 });
