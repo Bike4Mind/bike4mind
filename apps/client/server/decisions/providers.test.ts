@@ -1,6 +1,13 @@
 import type { Logger } from '@bike4mind/observability';
-import { describe, expect, it, vi } from 'vitest';
-import { buildDecisionProviders, selectDecisionProviderKey } from './providers';
+import { modelDiscoveryService } from '@bike4mind/services';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildDecisionProviders, resolveCallableDecisionProviders, selectDecisionProviderKey } from './providers';
+
+const { getEffectiveLLMApiKeys } = vi.hoisted(() => ({ getEffectiveLLMApiKeys: vi.fn() }));
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return { ...actual, apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys } };
+});
 
 type Keys = Parameters<typeof selectDecisionProviderKey>[1];
 
@@ -34,5 +41,32 @@ describe('selectDecisionProviderKey', () => {
     expect(selectDecisionProviderKey('openai', keys)).toBe('sk-openai');
     expect(selectDecisionProviderKey('typesafe', keys)).toBe('ts-key');
     expect(selectDecisionProviderKey('test', keys)).toBe('test-key');
+  });
+});
+
+describe('resolveCallableDecisionProviders', () => {
+  const logger = {} as Logger;
+  beforeEach(() => getEffectiveLLMApiKeys.mockReset());
+
+  it('keeps only the providers the caller has a usable key for', async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-openai', typesafe: undefined });
+    const callable = await resolveCallableDecisionProviders('user-1', ['openai', 'typesafe'], logger);
+    expect([...callable]).toEqual(['openai']);
+    expect(getEffectiveLLMApiKeys).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats an expired key as missing, as a decision request would', async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({
+      openai: modelDiscoveryService.EXPIRED_KEY_SENTINEL,
+      typesafe: 'ts-key',
+    });
+    const callable = await resolveCallableDecisionProviders('user-1', ['openai', 'typesafe'], logger);
+    expect([...callable]).toEqual(['typesafe']);
+  });
+
+  it('always keeps the test provider and skips the key lookup when it is the only one', async () => {
+    const callable = await resolveCallableDecisionProviders('user-1', ['test'], logger);
+    expect([...callable]).toEqual(['test']);
+    expect(getEffectiveLLMApiKeys).not.toHaveBeenCalled();
   });
 });

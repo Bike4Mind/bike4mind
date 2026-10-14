@@ -5,7 +5,7 @@ import {
   type DecisionModelId,
   type ListDecisionModelsResponse,
 } from '@bike4mind/common';
-import { getDecisionProviderRegistry } from '@server/decisions/providers';
+import { getDecisionProviderRegistry, resolveCallableDecisionProviders } from '@server/decisions/providers';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@server/middlewares/rateLimit';
 
@@ -35,8 +35,14 @@ const toDecisionModel = (id: DecisionModelId): DecisionModel => {
 const handler = nextRouteForContract(listDecisionModelsContract, {
   exemptReadsFromDailyRateLimit: true,
   rateLimit: rateLimit({ limit: 60, windowMs: 60_000, bucket: 'GET /api/v1/decision-models' }),
-}).get(async (_req, res) => {
-  const body: ListDecisionModelsResponse = { models: getDecisionProviderRegistry().models().map(toDecisionModel) };
+}).get(async (req, res) => {
+  const ids = getDecisionProviderRegistry().models();
+  const providers = [...new Set(ids.map(id => getDecisionModelCapabilities(id).provider))];
+  // A model whose provider has no usable key for this caller would only answer 503 provider_not_configured.
+  const callable = await resolveCallableDecisionProviders(req.user.id, providers, req.logger);
+  const body: ListDecisionModelsResponse = {
+    models: ids.filter(id => callable.has(getDecisionModelCapabilities(id).provider)).map(toDecisionModel),
+  };
   return res.json(body);
 });
 

@@ -12,15 +12,20 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
   },
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
-const { registeredModels } = vi.hoisted(() => ({ registeredModels: { value: ['gpt-6-luna'] as string[] } }));
+const { registeredModels, callableProviders } = vi.hoisted(() => ({
+  registeredModels: { value: ['gpt-6-luna'] as string[] },
+  callableProviders: { value: ['openai', 'typesafe', 'test'] as string[] },
+}));
 vi.mock('@server/decisions/providers', () => ({
   getDecisionProviderRegistry: () => ({ models: () => registeredModels.value }),
+  resolveCallableDecisionProviders: vi.fn(async () => new Set(callableProviders.value)),
 }));
 
 import handler from '../decision-models';
 
 const listModels = async () => {
   const { req, res } = createMocks({ method: 'GET' });
+  Object.assign(req, { user: { id: 'user-1' }, logger: {} });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return ListDecisionModelsResponseSchema.parse(res._getJSONData());
 };
@@ -39,11 +44,20 @@ describe('GET /api/v1/decision-models', () => {
   });
 
   it('lists only the registered models, in the public wire shape', async () => {
-    const { req, res } = createMocks({ method: 'GET' });
-    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
-
-    const body = ListDecisionModelsResponseSchema.parse(res._getJSONData());
+    const body = await listModels();
     expect(body.models.map(model => model.id)).toEqual(['gpt-6-luna']);
     expect(body.models[0]).toMatchObject({ object: 'decision_model', provider: 'openai', alias_of: null });
+  });
+
+  it('hides the models of a provider the caller has no key for', async () => {
+    registeredModels.value = ['gpt-6-luna', 'jev-1.13.0', 'jev-latest'];
+    callableProviders.value = ['openai'];
+    expect((await listModels()).models.map(model => model.id)).toEqual(['gpt-6-luna']);
+
+    callableProviders.value = ['openai', 'typesafe'];
+    expect((await listModels()).models.map(model => model.id)).toEqual(['gpt-6-luna', 'jev-1.13.0', 'jev-latest']);
+
+    registeredModels.value = ['gpt-6-luna'];
+    callableProviders.value = ['openai', 'typesafe', 'test'];
   });
 });

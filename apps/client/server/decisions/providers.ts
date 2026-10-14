@@ -80,16 +80,37 @@ export const selectDecisionProviderKey = (
   }
 };
 
+const loadEffectiveKeys = (userId: string, logger: Logger): Promise<EffectiveKeys> =>
+  apiKeyService.getEffectiveLLMApiKeys(
+    userId,
+    { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
+    { logger }
+  );
+
 export const resolveDecisionProviderKey = async (
   userId: string,
   provider: DecisionProviderId,
   logger: Logger
 ): Promise<string | null> => {
   if (provider === 'test') return selectDecisionProviderKey(provider, {} as EffectiveKeys) ?? null;
-  const keys = await apiKeyService.getEffectiveLLMApiKeys(
-    userId,
-    { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
-    { logger }
+  return usableApiKey(selectDecisionProviderKey(provider, await loadEffectiveKeys(userId, logger)));
+};
+
+/**
+ * The providers this caller has a usable key for, read with one key lookup. Must agree with
+ * resolveDecisionProviderKey: a provider listed here is one a decision request can be served by.
+ */
+export const resolveCallableDecisionProviders = async (
+  userId: string,
+  providers: readonly DecisionProviderId[],
+  logger: Logger
+): Promise<ReadonlySet<DecisionProviderId>> => {
+  const needsKeys = providers.some(provider => provider !== 'test');
+  const keys = needsKeys ? await loadEffectiveKeys(userId, logger) : undefined;
+  return new Set(
+    providers.filter(
+      provider =>
+        provider === 'test' || (keys !== undefined && usableApiKey(selectDecisionProviderKey(provider, keys)) !== null)
+    )
   );
-  return usableApiKey(selectDecisionProviderKey(provider, keys));
 };
