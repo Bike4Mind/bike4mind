@@ -7,7 +7,7 @@ import { searchListings, type MarketSearchParams, type MarketSort } from '@serve
 const SORTS = new Set<MarketSort>(['relevance', 'top', 'imports', 'new', 'updated']);
 
 /** GET /api/skills/market - browse and search approved listings visible to the caller. */
-const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
   const { q, scope, tags, tools, minRating, sort, page = '1', limit = '24' } = req.query;
 
   const params: MarketSearchParams = {

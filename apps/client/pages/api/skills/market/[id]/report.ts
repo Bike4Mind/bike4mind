@@ -24,7 +24,7 @@ const bodySchema = z.object({
  * hidden from the market until an admin restores or delists it (mirrors app-store takedown
  * queues). Rate-limited per user so one account can't flood the queue across many listings.
  */
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: 10, windowMs: 60 * 60 * 1000, bucket: 'skill-market-report' }))
   .post(async (req, res) => {
     const userId = req.user!.id;

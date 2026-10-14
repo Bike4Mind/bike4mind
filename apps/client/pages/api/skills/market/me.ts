@@ -7,7 +7,7 @@ import { memberOrgIdsFor } from '@server/skillMarket/market';
  * GET /api/skills/market/me - what the market UI needs about the caller: the organizations they
  * can publish to and browse, and whether they review anything (shows the Review queue entry).
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   const userId = req.user!.id;
   const [orgIds, adminOrgIds] = await Promise.all([
     memberOrgIdsFor(userId),

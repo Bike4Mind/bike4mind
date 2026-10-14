@@ -4,7 +4,7 @@ import { SkillListing, SkillListingVersion } from '@bike4mind/database';
 import { serializeListing } from '@server/skillMarket/market';
 
 /** GET /api/skills/market/mine - the caller's listings with their recent versions, findings and review notes. */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   const listings = await SkillListing.find({ authorUserId: req.user!.id, deletedAt: null })
     .sort({ createdAt: -1 })
     .limit(100);

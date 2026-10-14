@@ -15,7 +15,7 @@ const QUEUE_LIMIT = 100;
  * (super-admin only) lists the pre-market global-read skills for a read-only audit - they are not
  * auto-revoked.
  */
-const handler = baseApi().get<Request<{}, {}, {}, { filter?: string }>>(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: string }>>(async (req, res) => {
   const actor: MarketActor = { id: req.user!.id, isAdmin: req.user!.isAdmin };
   const adminOrgIds = await organizationRepository.findIdsAdministeredBy(actor.id);
   if (!actor.isAdmin && adminOrgIds.length === 0) throw new ForbiddenError('Reviewers only');

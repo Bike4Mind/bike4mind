@@ -27,7 +27,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * first version for the safety scan. Responds with the listing and the scanned version, so the
  * dialog can show the verdict inline.
  */
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(...submitRateLimits())
   .post(async (req, res) => {
     const user = req.user!;

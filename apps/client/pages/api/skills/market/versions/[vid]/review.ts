@@ -22,7 +22,7 @@ const bodySchema = z.discriminatedUnion('action', [
  * POST /api/skills/market/versions/[vid]/review - approve or reject a held version, or mark a
  * sampled auto-approved version as audited. Approve/reject are CAS-guarded (409 when superseded).
  */
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const actor = { id: req.user!.id, isAdmin: req.user!.isAdmin };
   const versionId = String(req.query.vid);
   const body = bodySchema.parse(req.body);

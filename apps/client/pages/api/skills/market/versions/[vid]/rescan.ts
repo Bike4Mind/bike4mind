@@ -7,7 +7,7 @@ import { rescanVersion } from '@server/skillMarket/submitVersion';
 import { getOperationsClassifierLlm } from '@server/skillMarket/classifySkill';
 
 /** POST /api/skills/market/versions/[vid]/rescan - the author retries a scan that errored or stalled. */
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(...submitRateLimits())
   .post(async (req, res) => {
     const user = req.user!;

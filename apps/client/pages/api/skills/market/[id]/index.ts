@@ -6,7 +6,7 @@ import { ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/common'
 import { findListing } from '@server/skillMarket/market';
 import { buildListingDetail } from '@server/skillMarket/detail';
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   /** GET /api/skills/market/[id]?token= - listing detail; `token` unlocks an unlisted listing. */
   .get<Request<{}, {}, {}, { id: string; token?: string }>>(async (req, res) => {
     const listing = await findListing(String(req.query.id));

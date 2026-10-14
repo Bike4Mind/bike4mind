@@ -6,7 +6,7 @@ import { NotFoundError, type ISkillListing } from '@bike4mind/common';
 import { buildListingDetail } from '@server/skillMarket/detail';
 
 /** GET /api/skills/market/by-token/[token] - open an unlisted listing from its share link (signed-in only). */
-const handler = baseApi().get<Request<{}, {}, {}, { token: string }>>(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { token: string }>>(async (req, res) => {
   const token = String(req.query.token);
   // Shape check before the lookup so junk never reaches the query; real tokens are 32 base64url chars.
   if (!/^[A-Za-z0-9_-]{32}$/.test(token)) throw new NotFoundError('Listing not found');

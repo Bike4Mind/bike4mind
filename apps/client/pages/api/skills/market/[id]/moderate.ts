@@ -19,7 +19,7 @@ const bodySchema = z.discriminatedUnion('action', [
  * by moderators" warning. Restore clears a report-threshold hide (dismissing its reports) or
  * reverses a delist when the listing still has an approved version.
  */
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const actor = { id: req.user!.id, isAdmin: req.user!.isAdmin };
   const body = bodySchema.parse(req.body);
   const listing = await findListing(String(req.query.id));

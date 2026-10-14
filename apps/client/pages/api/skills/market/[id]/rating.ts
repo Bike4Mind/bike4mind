@@ -19,7 +19,7 @@ const bodySchema = z.object({
  * "one per user" come from that row's unique index. The aggregate moves by the delta from the
  * row's pre-image, so an edit never double-counts.
  */
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: 30, windowMs: 60 * 60 * 1000, bucket: 'skill-market-rating' }))
   .put(async (req, res) => {
     const userId = req.user!.id;

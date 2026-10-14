@@ -14,7 +14,7 @@ const bodySchema = z.object({ tags: z.array(z.string()).optional() });
  * version. It is scanned and tiered like the first one; until it is approved, everyone keeps
  * seeing and importing the previous approved version.
  */
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(...submitRateLimits())
   .post(async (req, res) => {
     const user = req.user!;

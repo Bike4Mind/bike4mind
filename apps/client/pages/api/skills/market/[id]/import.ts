@@ -39,7 +39,7 @@ async function suggestName(userId: string, name: string): Promise<string | undef
  * user-scoped skill (or refresh an earlier copy). Pending or rejected content can never reach an
  * importer: the snapshot is read through `currentApprovedVersionId` only.
  */
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: 60, windowMs: 60 * 60 * 1000, bucket: 'skill-market-import' }))
   .post(async (req, res) => {
     const userId = req.user!.id;
