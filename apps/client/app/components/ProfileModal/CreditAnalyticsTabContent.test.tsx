@@ -38,7 +38,13 @@ const hoisted = vi.hoisted(() => ({
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@nivo/line', () => ({ ResponsiveLine: () => null }));
-vi.mock('@nivo/pie', () => ({ ResponsivePie: () => null }));
+const pie = vi.hoisted(() => ({ data: [] as unknown[] }));
+vi.mock('@nivo/pie', () => ({
+  ResponsivePie: ({ data }: { data: unknown[] }) => {
+    pie.data = data;
+    return null;
+  },
+}));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: hoisted.currentUser }),
 }));
@@ -80,6 +86,28 @@ describe('CreditAnalyticsTabContent model pricing', () => {
     expect(within(nano).getByText(formatCreditsPer1M(0.1 * CREDITS_PER_USD_COST))).toBeTruthy();
     expect(within(nano).getByText(formatCreditsPer1M(0.4 * CREDITS_PER_USD_COST))).toBeTruthy();
     expect(screen.getByText('credits.pricing_per_1m_tokens')).toBeTruthy();
+  });
+});
+
+describe('CreditAnalyticsTabContent usage by model', () => {
+  afterEach(() => {
+    hoisted.transactions = [];
+  });
+
+  it('labels the pie with display names and one slice per model across backend ids', () => {
+    const now = Date.now();
+    hoisted.transactions = [
+      { type: 'text_generation_usage', credits: -100, createdAt: new Date(now - 3_600_000), model: 'claude-opus-5-5' },
+      {
+        type: 'text_generation_usage',
+        credits: -50,
+        createdAt: new Date(now - 3_600_000),
+        model: 'global.anthropic.claude-opus-5-5',
+      },
+    ];
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+
+    expect(pie.data).toEqual([{ id: 'Claude Opus 5.5', label: 'Claude Opus 5.5', value: 150 }]);
   });
 });
 

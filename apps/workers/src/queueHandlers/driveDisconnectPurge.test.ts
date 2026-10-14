@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
     async (): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null> => null
   ),
   connTouchDisconnect: vi.fn(async () => true),
+  deleteSkipsForSource: vi.fn(async () => 0),
   findFiles: vi.fn(async (): Promise<unknown[]> => []),
   findOrphans: vi.fn(async (): Promise<unknown[]> => []),
   userFindById: vi.fn(async (id: string) => ({ id })),
@@ -50,6 +51,7 @@ vi.mock('@bike4mind/database', () => ({
     findLiveNonMembersByDriveConnectionId: h.findOrphans,
   },
   fabFileChunkRepository: {},
+  lakeSkippedFileRepository: { deleteForSource: h.deleteSkipsForSource },
   dataLakeFindingRepository: {},
   sessionRepository: {},
   userRepository: { findById: h.userFindById },
@@ -111,6 +113,7 @@ describe('driveDisconnectPurge consumer', () => {
       async () => (calls.push('recompute'), { fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 })
     );
     h.releaseDriveConnection.mockImplementationOnce(async () => (calls.push('release'), true));
+    h.deleteSkipsForSource.mockImplementationOnce(async () => (calls.push('skips'), 0));
 
     await run();
 
@@ -123,7 +126,9 @@ describe('driveDisconnectPurge consumer', () => {
     expect(adapters.db.dataLakeFindings).toBeDefined();
     // Through the revoking seam, and only once every file is gone: the row is the retry anchor.
     expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', orgAOwner);
-    expect(calls).toEqual(['purge', 'recompute', 'release']);
+    // The folder's not-ingested list goes with it, before the release drops the retry anchor.
+    expect(h.deleteSkipsForSource).toHaveBeenCalledWith('lake1', 'google_drive');
+    expect(calls).toEqual(['purge', 'recompute', 'skips', 'release']);
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 

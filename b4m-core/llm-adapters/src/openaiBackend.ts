@@ -305,7 +305,8 @@ export class OpenAIBackend implements ICompletionBackend {
         max_tokens: 100000,
         can_stream: true,
         pricing: {
-          200000: { input: 15 / 1000000, output: 60 / 1000000 }, // $15 / 1M Input tokens, $60 / 1M Output tokens
+          // $15 / 1M Input, $60 / 1M Output, $7.50 / 1M cached input (0.5x, not the 0.1x default)
+          200000: { input: 15 / 1_000_000, output: 60 / 1_000_000, cache_read: 7.5 / 1_000_000 },
         },
         supportsVision: true,
         supportsTools: true,
@@ -391,7 +392,8 @@ export class OpenAIBackend implements ICompletionBackend {
         max_tokens: 100000,
         can_stream: true,
         pricing: {
-          200000: { input: 1.1 / 1000000, output: 4.4 / 1000000 }, // $1.10 / 1M Input tokens, $4.40 / 1M Output tokens
+          // $1.10 / 1M Input, $4.40 / 1M Output, $0.55 / 1M cached input (0.5x, not the 0.1x default)
+          200000: { input: 1.1 / 1_000_000, output: 4.4 / 1_000_000, cache_read: 0.55 / 1_000_000 },
         },
         supportsVision: false,
         supportsImageVariation: false,
@@ -440,6 +442,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
+          // Regular list price. OpenAI runs a promotional $4 / $20 ($8 / $30 long context) through at
+          // least 2026-11-21; it is deliberately not carried so the seed does not go stale when it ends.
           272_000: { input: 5.0 / 1_000_000, output: 30.0 / 1_000_000 }, // <=272k: $5.00 / 1M in, $30.00 / 1M out
           1_050_000: { input: 10.0 / 1_000_000, output: 45.0 / 1_000_000 }, // >272k: $10.00 / 1M in, $45.00 / 1M out
         },
@@ -463,8 +467,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          272_000: { input: 2.5 / 1_000_000, output: 15.0 / 1_000_000 }, // <=272k: $2.50 / 1M in, $15.00 / 1M out
-          1_050_000: { input: 5.0 / 1_000_000, output: 22.5 / 1_000_000 }, // >272k: $5.00 / 1M in, $22.50 / 1M out
+          272_000: { input: 2.0 / 1_000_000, output: 12.0 / 1_000_000 }, // <=272k: $2.00 / 1M in, $12.00 / 1M out
+          1_050_000: { input: 4.0 / 1_000_000, output: 18.0 / 1_000_000 }, // >272k: $4.00 / 1M in, $18.00 / 1M out
         },
         supportsVision: true,
         supportsImageVariation: false,
@@ -486,8 +490,8 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          272_000: { input: 1.0 / 1_000_000, output: 6.0 / 1_000_000 }, // <=272k: $1.00 / 1M in, $6.00 / 1M out
-          1_050_000: { input: 2.0 / 1_000_000, output: 9.0 / 1_000_000 }, // >272k: $2.00 / 1M in, $9.00 / 1M out
+          272_000: { input: 0.2 / 1_000_000, output: 1.2 / 1_000_000 }, // <=272k: $0.20 / 1M in, $1.20 / 1M out
+          1_050_000: { input: 0.4 / 1_000_000, output: 1.8 / 1_000_000 }, // >272k: $0.40 / 1M in, $1.80 / 1M out
         },
         supportsVision: true,
         supportsImageVariation: false,

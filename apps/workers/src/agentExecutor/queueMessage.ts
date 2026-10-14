@@ -16,7 +16,7 @@ export interface ExecutionTarget {
 }
 
 // Must stay in sync with the claimExecution calls in processExecution and processSubagentDispatch
-// (apps/client/server/queueHandlers/agentExecutor.ts).
+// (apps/workers/src/queueHandlers/agentExecutor.ts).
 const START_STATUSES: AgentExecutionStatus[] = ['pending'];
 const CONTINUATION_STATUSES: AgentExecutionStatus[] = ['continuing', 'awaiting_subagent', 'awaiting_dag_children'];
 const OBJECT_ID = /^[a-f\d]{24}$/i;

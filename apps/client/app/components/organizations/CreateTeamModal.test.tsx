@@ -60,7 +60,8 @@ describe('CreateTeamModal', () => {
       </TestWrapper>
     );
 
-    expect(screen.getByText(/Team size must be between 3 and 7/)).toBeTruthy();
+    expect(screen.getByText(/covers up to 3 people, so a smaller team pays the same/)).toBeTruthy();
+    expect(screen.getByText(/up to 7, at the per-person price/)).toBeTruthy();
   });
 
   describe('with seat settings that change after mount', () => {
@@ -172,16 +173,17 @@ describe('CreateTeamModal', () => {
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
-  it('exempts the development create path from the Team plan gate', async () => {
-    vi.stubEnv('NODE_ENV', 'development');
-    vi.resetModules();
-    const devCreate = vi.fn().mockResolvedValue({});
-    vi.doMock('@client/app/hooks/data/subscriptions', () => ({
-      useSubscribeTeamPlan: () => ({ mutateAsync: (...args: unknown[]) => mutateAsync(...args), isPending: false }),
-      useCreateTeamDev: () => ({ mutateAsync: devCreate, isPending: false }),
-    }));
-    try {
-      teamPlan.available = false;
+  describe('in development', () => {
+    const devCreate = vi.fn();
+
+    const renderDevModal = async () => {
+      vi.stubEnv('NODE_ENV', 'development');
+      vi.resetModules();
+      devCreate.mockReset().mockResolvedValue({});
+      vi.doMock('@client/app/hooks/data/subscriptions', () => ({
+        useSubscribeTeamPlan: () => ({ mutateAsync: (...args: unknown[]) => mutateAsync(...args), isPending: false }),
+        useCreateTeamDev: () => ({ mutateAsync: devCreate, isPending: false }),
+      }));
       const { default: DevModal, useCreateTeamModal: useDevModal } = await import('./CreateTeamModal');
       useDevModal.setState({ isOpen: true });
       render(
@@ -189,19 +191,40 @@ describe('CreateTeamModal', () => {
           <DevModal />
         </TestWrapper>
       );
+    };
+
+    afterEach(() => {
+      vi.doUnmock('@client/app/hooks/data/subscriptions');
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it('applies the Team plan gate to the dev create path when enableTeamPlan is off', async () => {
+      teamPlan.available = false;
+      await renderDevModal();
+
+      expect(screen.getByTestId('create-team-unavailable').textContent).toBe('Team plans are not available right now.');
+      await userEvent.setup({ delay: null }).type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      const submit = screen.getByTestId('create-team-submit-btn');
+      expect(submit.hasAttribute('disabled')).toBe(true);
+      submit.click();
+      expect(devCreate).not.toHaveBeenCalled();
+      expect(mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it('creates the team through the dev endpoint, not Stripe, when enableTeamPlan is on', async () => {
+      await renderDevModal();
 
       expect(screen.queryByTestId('create-team-unavailable')).toBeNull();
-      expect(screen.getByTestId('create-team-size-value').hasAttribute('disabled')).toBe(false);
       const user = userEvent.setup({ delay: null });
       await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+      const seats = Number(sizeValue());
       await user.click(screen.getByTestId('create-team-submit-btn'));
 
       await waitFor(() => expect(devCreate).toHaveBeenCalledTimes(1));
+      expect(devCreate).toHaveBeenCalledWith({ name: 'Rocket Squad', seats });
       expect(mutateAsync).not.toHaveBeenCalled();
-    } finally {
-      vi.doUnmock('@client/app/hooks/data/subscriptions');
-      vi.unstubAllEnvs();
-    }
+    });
   });
 
   it('keeps the missing-price error alongside the unavailable message', () => {
@@ -282,7 +305,8 @@ describe('CreateTeamModal', () => {
       await typeSize(text);
 
       expect(screen.getByTestId('create-team-size-value-error').textContent).toBe('Must be between 3 and 7');
-      expect(screen.queryByText(/Team size must be between/)).toBeNull();
+      // The flat-price note stays up, so a smaller team learns why the floor is fine for them.
+      expect(screen.getByText(/One flat price covers up to 3 people/)).toBeTruthy();
       expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
 
       await user.tab();

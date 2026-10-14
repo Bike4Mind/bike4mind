@@ -29,8 +29,8 @@ export interface NodeArtifact {
  * Only artifacts owned by the graph's user are joined. Graphs are owner-only
  * and their runs execute as that owner, so the run's own artifacts always
  * match. Rows other users stamped with the same quest id through the
- * caller-supplied `sourceQuestId` on the create endpoint (including session
- * sharees, whom that endpoint allows) are not the run's output and stay off
+ * caller-supplied `sourceQuestId` on create (including session sharees,
+ * whom the source-ref check allows) are not the run's output and stay off
  * the node.
  *
  * One batched query for the whole graph, projected to id/type/title - a

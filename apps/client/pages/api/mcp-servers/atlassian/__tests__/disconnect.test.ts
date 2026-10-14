@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   findOwnSub: vi.fn(),
   deleteSub: vi.fn(),
   findOneAndDelete: vi.fn(),
+  revokeAtlassian: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -35,6 +36,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/database/ai', () => ({ McpServer: { findOneAndDelete: h.findOneAndDelete } }));
 vi.mock('@bike4mind/common', () => ({ McpServerName: { Atlassian: 'atlassian' } }));
+vi.mock('@server/integrations/jira/revokeAtlassianGrant', () => ({ revokeAtlassianGrant: h.revokeAtlassian }));
 vi.mock('@server/integrations/jira/atlassianConfig', () => ({
   getAtlassianOAuthConfig: vi.fn().mockResolvedValue({}),
 }));
@@ -75,6 +77,15 @@ describe('DELETE /api/mcp-servers/atlassian/disconnect', () => {
     expect(h.deleteConfig).toHaveBeenCalledWith('jcfg-1');
     expect(h.deleteSub).not.toHaveBeenCalled();
     expect(h.update).toHaveBeenLastCalledWith({ id: 'user-1', atlassianConnect: null });
+  });
+
+  it('revokes the refresh token first, then the access token', async () => {
+    h.findById.mockResolvedValue({
+      atlassianConnect: { accessToken: 'enc-access', refreshToken: 'enc-refresh', resources: [] },
+    });
+    await h.handlers.delete({ user: { id: 'user-2' } }, makeRes());
+    expect(h.revokeAtlassian).toHaveBeenNthCalledWith(1, 'enc-refresh', 'user user-2');
+    expect(h.revokeAtlassian).toHaveBeenNthCalledWith(2, 'enc-access', 'user user-2');
   });
 
   it('still disconnects the user when they have no own subscription', async () => {

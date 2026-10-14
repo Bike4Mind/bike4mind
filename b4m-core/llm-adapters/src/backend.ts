@@ -180,7 +180,8 @@ export interface ICompletionOptions {
   complexity?: 'simple' | 'contextual' | 'complex';
   /**
    * Explicit reasoning effort level. Read by the OpenAI (reasoning models: O1, O3, GPT-5 series),
-   * Kimi (K3 only) and DeepSeek backends; ignored by the others (Anthropic, Gemini, Bedrock, xAI, Ollama).
+   * Kimi (K3 only), DeepSeek and Anthropic (direct and Bedrock; see planReasoningEffort) backends;
+   * ignored by the others (Gemini, xAI, Ollama). An explicit `thinking`/questMaster request wins on Anthropic.
    * When set, overrides the auto-classification from complexity
    * @see https://platform.openai.com/docs/guides/reasoning
    */

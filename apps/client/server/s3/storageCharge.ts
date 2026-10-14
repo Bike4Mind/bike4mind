@@ -1,4 +1,5 @@
-import { FabFile, userRepository } from '@bike4mind/database';
+import { changeStorageSize, FabFile, userRepository } from '@bike4mind/database';
+import type { IUserDocument } from '@bike4mind/common';
 import type { ClientSession, Types } from 'mongoose';
 
 /**
@@ -21,6 +22,23 @@ export const claimStorageCharge = async (
     session ? { session } : {}
   );
   return res.modifiedCount > 0;
+};
+
+/**
+ * Charges an uploaded object's `size` bytes to `user` once per write, through claimStorageCharge.
+ * Mutates `user` only; the caller saves it in the same `session`. Shared by the hosted S3 event
+ * (objectCreated.ts) and the self-host MinIO webhook (pages/api/internal/s3/object-created.ts).
+ */
+export const chargeUploadedObject = async (
+  fabFileId: Types.ObjectId | string,
+  user: IUserDocument,
+  size: number,
+  uploadedAt: Date,
+  session: ClientSession
+): Promise<boolean> => {
+  if (!(await claimStorageCharge(fabFileId, uploadedAt, session))) return false;
+  await changeStorageSize(user, size);
+  return true;
 };
 
 /**

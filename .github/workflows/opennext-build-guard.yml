@@ -26,6 +26,7 @@ on:
       - apps/client/open-next.config.ts
       - apps/client/package.json
       - package.json
+      - pnpm-workspace.yaml
       - pnpm-lock.yaml
       - scripts/check-opennext-build.mjs
       - scripts/__tests__/check-opennext-build.test.mjs

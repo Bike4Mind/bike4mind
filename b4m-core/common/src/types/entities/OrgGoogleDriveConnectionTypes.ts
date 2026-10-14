@@ -310,6 +310,14 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   findDueForPoll(cutoff: Date, limit: number): Promise<IOrgGoogleDriveConnectionDocument[]>;
 
   /**
+   * Up to `limit` connections whose targetDataLakeId names no DataLake document, regardless of enabled
+   * or status. A soft-deleted lake keeps its document, so only a missing one makes an orphan. The
+   * orphan reaper's scan: such a row would otherwise hold its unique driveFolderId claim forever.
+   * Excludes credentials.
+   */
+  findOrphaned(limit: number): Promise<IOrgGoogleDriveConnectionDocument[]>;
+
+  /**
    * Load a connection WITH its encrypted credential, scoped to its owner.
    * The owner is REQUIRED so this accessor cannot hand one tenant's Google credential to another.
    * SECURITY: server-side only; decrypt before use; never expose in a response.

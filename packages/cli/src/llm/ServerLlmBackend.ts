@@ -140,9 +140,9 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   }
 
   /**
-   * Map a streaming-request (pre-stream) failure to a clear Error: the axios
-   * 403-with-HTML-error-page case, other HTTP statuses, and common network / auth
-   * errors. Abort and ERR_CANCELED are handled by the caller, not here.
+   * Map a streaming-request (pre-stream) failure to a clear Error: the server's JSON error
+   * envelope (message plus errorCode), an HTML error page on a 403, other HTTP statuses, and
+   * common network / auth errors. Abort and ERR_CANCELED are handled by the caller, not here.
    */
   private toStreamingRequestError(error: unknown): Error {
     logger.error('LLM completion failed', error);
@@ -155,6 +155,13 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
           url: this.completionsEndpoint,
         })}`
       );
+
+      const body = error.body;
+      if (body && typeof body === 'object' && typeof (body as Record<string, unknown>).error === 'string') {
+        const detail = error.errorCode ? `${error.message} (${error.errorCode})` : error.message;
+        // isLlmUnavailableError (utils/handoff.ts) matches this prefix to fall back on a 5xx.
+        return new Error(error.status >= 500 ? `Request failed with status ${error.status}: ${detail}` : detail);
+      }
 
       if (error.status === 403 && error.body) {
         const responseText = typeof error.body === 'string' ? error.body : JSON.stringify(error.body);

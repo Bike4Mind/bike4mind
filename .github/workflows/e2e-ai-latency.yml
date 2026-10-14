@@ -819,6 +819,7 @@ jobs:
           QA_SUITE: AI Latency
           QA_ENV: ${{ steps.config.outputs.env_label }}
           QA_TRIGGER: ${{ steps.trigger.outputs.label }}
+          QA_LATENCY_BREACH: ${{ steps.aggregate.outputs.latency_breach }}
         run: node qa-src/scripts/qa-report.mjs --results-dir downloaded-results --latency-dir downloaded-results
 
       - name: Send Slack notification

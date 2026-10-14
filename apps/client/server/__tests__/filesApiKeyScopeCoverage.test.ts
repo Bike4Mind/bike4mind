@@ -28,6 +28,7 @@ const EXPECTED_GATES: Record<string, string> = {
   'presigned-url.ts': 'FILES_READ_SCOPES',
   'search.ts': 'FILES_READ_SCOPES',
   'tags/counts.ts': 'FILES_READ_SCOPES',
+  '[id]/moderate.ts': 'FILES_WRITE_SCOPES',
   '[id]/upload.ts': 'FILES_WRITE_SCOPES',
   'bulk-delete.ts': 'FILES_WRITE_SCOPES',
   'chunk.ts': 'FILES_WRITE_SCOPES',
