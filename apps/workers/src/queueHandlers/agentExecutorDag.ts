@@ -60,9 +60,8 @@ export function makeDagDispatcher(args: {
     /** The parent's credential-scope tool denials, inherited so a node cannot regain a tool the key was denied. */
     scopeDeniedTools?: string[];
     /**
-     * The parent's live permission lists (mutated in place as the user remembers decisions),
-     * copied onto each node at creation: a node cannot pause for approval, so
-     * `processSubagentDispatch` refuses any tool call these lists do not allow.
+     * The parent's permission lists, copied onto each node at creation: a node cannot pause for
+     * approval, so `processSubagentDispatch` refuses any tool call these lists do not allow.
      */
     approvedTools: readonly string[];
     deniedTools: readonly string[];

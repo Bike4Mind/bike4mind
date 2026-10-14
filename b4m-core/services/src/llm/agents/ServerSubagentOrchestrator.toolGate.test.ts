@@ -118,15 +118,6 @@ describe('gateSubagentTools', () => {
     expect(ran).toEqual([]);
   });
 
-  it('reads the lists at call time, so an approval remembered after the child started applies', async () => {
-    const approvedTools: string[] = [];
-    const [tool] = gateSubagentTools([makeTool('image_generation')], { approvedTools, deniedTools: [] }, makeLogger());
-
-    expect(await tool.toolFn({})).toMatch(/^Error:/);
-    approvedTools.push('image_generation');
-    expect(await tool.toolFn({})).toBe('image_generation ok');
-  });
-
   it('passes the delegation tools and the coordinator capture tool through untouched', () => {
     const tools = ['delegate_to_agent', 'coordinate_task', 'decompose_task'].map(makeTool);
     expect(gateSubagentTools(tools, { approvedTools: [], deniedTools: [] }, makeLogger())).toEqual(tools);

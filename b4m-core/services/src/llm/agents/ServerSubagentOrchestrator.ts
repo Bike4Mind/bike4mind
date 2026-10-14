@@ -1,6 +1,6 @@
 import { ReActAgent, selectSubagentTools, humanizeToolName } from '@bike4mind/agents';
 import type { AgentResult, AgentStep, ThoroughnessLevel, ServerAgentDefinition } from '@bike4mind/agents';
-import { classifyToolPermission, getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import { DELEGATION_TOOLS, classifyToolPermission, getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
@@ -14,22 +14,14 @@ export const MAX_SUBAGENT_DEPTH = 3;
 const DEPTH_CAP_DENIED = ['delegate_to_agent'];
 
 /**
- * Tools that pass the child permission gate. The delegation tools pass it exactly as they
- * pass the parent's (`DELEGATION_TOOLS` in apps/workers/.../agentExecutor.sessionToolPolicy.ts
- * - keep in sync); they are not ungated, since each builds its own orchestrator carrying the
- * same `toolPermissions`, so the grandchild's calls are classified in turn. `decompose_task`
- * is coordinate_task's in-memory capture tool (coordinateTask.ts) and touches nothing.
+ * Tools that pass the child permission gate. The delegation tools pass it exactly as they pass
+ * the parent's; they are not ungated, since each builds its own orchestrator carrying the same
+ * `toolPermissions`, so the grandchild's calls are classified in turn. `decompose_task` is
+ * coordinate_task's in-memory capture tool (coordinateTask.ts) and touches nothing.
  */
-const CHILD_GATE_EXEMPT_TOOLS: ReadonlySet<string> = new Set([
-  'delegate_to_agent',
-  'coordinate_task',
-  'decompose_task',
-]);
+const CHILD_GATE_EXEMPT_TOOLS: ReadonlySet<string> = new Set([...DELEGATION_TOOLS, 'decompose_task']);
 
-/**
- * The parent run's tool-permission lists. Held by reference, so an approval the parent
- * remembers mid-run applies to a child's later calls.
- */
+/** The parent run's tool-permission lists, as loaded at the start of its invocation. */
 export type SubagentToolPermissions = {
   approvedTools: readonly string[];
   deniedTools: readonly string[];

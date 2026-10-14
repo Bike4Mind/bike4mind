@@ -1298,9 +1298,9 @@ async function processExecution(
       }
     );
 
-    // Load current approved/denied tools for permission checking. Mutated in place when the
-    // user remembers a decision, and shared by reference with the subagent gate
-    // (`toolPermissions` below), so a child's later calls see the parent's latest lists.
+    // Load current approved/denied tools for permission checking. In-process children are gated
+    // on these same lists (`toolPermissions` below); dispatched children and DAG nodes get a
+    // copy on their row.
     const approvedTools = [...(execution.approvedTools ?? [])];
     const deniedTools = [...(execution.deniedTools ?? [])];
 

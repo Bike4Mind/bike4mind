@@ -155,6 +155,13 @@ export function listDeclaredToolSideEffects(): Readonly<Record<string, ToolSideE
 export type ToolPermissionResult = 'allowed' | 'denied' | 'needs_approval';
 
 /**
+ * The tools that spawn another agent. The agent executor exempts them from its permission gate
+ * (the toolbelt decides whether they are offered at all) and the subagent gate in
+ * ServerSubagentOrchestrator exempts them the same way: the child they spawn is gated in turn.
+ */
+export const DELEGATION_TOOLS = ['delegate_to_agent', 'coordinate_task'] as const;
+
+/**
  * Classify whether a tool can be executed, needs approval, or is denied.
  *
  * Priority:

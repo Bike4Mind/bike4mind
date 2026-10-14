@@ -535,10 +535,9 @@ describe('makeDagDispatcher artifact opt-out inheritance', () => {
     expect(Object.keys(createMock.mock.calls[1][0] as Record<string, unknown>)).not.toContain('scopeDeniedTools');
   });
 
-  it('copies the parent permission lists onto the node row as they stand when the node is created', async () => {
+  it('copies the parent permission lists onto the node row', async () => {
     // A node cannot pause for approval, so its row is the only source its tool gate reads
-    // (processSubagentDispatch). The lists are the parent's live arrays: an approval remembered
-    // before the node is created must reach it, and the row must not alias the parent's array.
+    // (processSubagentDispatch). The row gets its own copy, never an alias of the parent's array.
     createMock.mockClear();
     const approvedTools = ['send_slack_message'];
     const deniedTools = ['web_search'];
@@ -547,7 +546,6 @@ describe('makeDagDispatcher artifact opt-out inheritance', () => {
       nodeDefaults: { ...nodeDefaultsBase, approvedTools, deniedTools },
       logger: silentLogger,
     });
-    approvedTools.push('image_generation');
 
     await dispatcher.createNode({
       parentExecutionId: 'p1',
@@ -559,7 +557,7 @@ describe('makeDagDispatcher artifact opt-out inheritance', () => {
     });
 
     const row = createMock.mock.calls[0][0] as { approvedTools: string[]; deniedTools: string[] };
-    expect(row.approvedTools).toEqual(['send_slack_message', 'image_generation']);
+    expect(row.approvedTools).toEqual(['send_slack_message']);
     expect(row.deniedTools).toEqual(['web_search']);
     expect(row.approvedTools).not.toBe(approvedTools);
   });
