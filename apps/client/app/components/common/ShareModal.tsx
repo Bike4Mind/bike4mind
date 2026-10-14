@@ -694,7 +694,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                   {/* Accepting a notebook link also grants its attached files, but only the ones the
                       inviter holds `share` on (sharingService/accept.ts), hence "allowed to share". */}
                   {isBulkSharingSessions ? (
-                    "Anyone with the link can open these notebooks after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off."
+                    "Anyone with the link can open these notebooks after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off from each notebook's Share menu."
                   ) : !isBulkSharing && type === InviteType.Session ? (
                     "Anyone with the link can open this notebook after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off."
                   ) : (

@@ -162,7 +162,7 @@ describe('ShareModal - By Link tab', () => {
       </TestWrapper>
     );
     expect(screen.getByTestId('share-modal-link-access-note')).toHaveTextContent(
-      "Anyone with the link can open these notebooks after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off."
+      "Anyone with the link can open these notebooks after signing in, along with the attached files you're allowed to share. Links keep working until you turn them off from each notebook's Share menu."
     );
   });
 
