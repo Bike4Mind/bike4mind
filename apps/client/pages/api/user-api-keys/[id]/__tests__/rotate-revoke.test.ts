@@ -184,7 +184,12 @@ describe('POST /api/user-api-keys/[id]/revoke', () => {
     expect(revokeUserApiKey).toHaveBeenCalledWith(
       'admin-user',
       { keyId: 'key-1', reason: 'rotated out' },
-      expect.objectContaining({ db: expect.objectContaining({ organizations: organizationRepository }) })
+      expect.objectContaining({
+        db: expect.objectContaining({
+          organizations: organizationRepository,
+          realtimeConnections: expect.objectContaining({ endConnections: expect.any(Function) }),
+        }),
+      })
     );
   });
 

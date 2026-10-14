@@ -38,6 +38,7 @@ import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { validateAppUrl } from '@server/utils/validators';
 import { encryptSecret } from '@server/security/secretEncryption';
 import { Config } from '@server/utils/config';
+import { authSessionService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from '@server/utils/auth/createOAuthUser';
@@ -436,12 +437,11 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       // ALL: this login's session is minted below, after the revoke, so it is created fresh.
       if (isNewProviderLink) {
         await authSessionRepository.revokeAllByUserId(user.id);
-        // The revoke above already holds; a failed prune is backstopped by the realtime sweep.
-        try {
-          await realtimeConnectionRepository.endConnections({ userId: user.id, sessionsOnly: true });
-        } catch (error) {
-          Logger.warn('[Okta Callback] Failed to end realtime connections', error);
-        }
+        // The revoke above already holds; endRealtimeConnections never throws (the sweep backstops it).
+        await authSessionService.endRealtimeConnections(
+          { userId: user.id, sessionsOnly: true },
+          { db: { realtimeConnections: realtimeConnectionRepository } }
+        );
       }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);
     } else {

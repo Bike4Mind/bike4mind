@@ -1,6 +1,6 @@
 import { ApiKeyStatus } from '@bike4mind/common';
 import { Types } from 'mongoose';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setupMongoTest } from '../../__test__/utils';
 import { AuthSessionModel } from '../auth/AuthSessionModel';
 import { UserApiKey } from '../auth/UserApiKeyModel';
@@ -170,6 +170,26 @@ describe('realtimeConnectionRepository.endConnections', () => {
     expect(await endedIds()).toEqual(['a1']);
   });
 
+  it('marks the rows ended before it pulls their subscribers', async () => {
+    await insertConnection('a1');
+    await insertSubscription('q', ['a1']);
+    const originalUpdateMany = QuerySubscription.updateMany.bind(QuerySubscription);
+    const endedWhenPulled: Promise<string[]>[] = [];
+    vi.spyOn(QuerySubscription, 'updateMany').mockImplementation(((...args: Parameters<typeof originalUpdateMany>) => {
+      endedWhenPulled.push(endedIds());
+      return originalUpdateMany(...args);
+    }) as typeof QuerySubscription.updateMany);
+
+    try {
+      await realtimeConnectionRepository.endConnections({ userId: USER_A });
+    } finally {
+      vi.restoreAllMocks();
+    }
+
+    expect(await Promise.all(endedWhenPulled)).toEqual([['a1']]);
+    expect(await subscriberIds('q')).toBeNull();
+  });
+
   it('is a no-op when nothing matches', async () => {
     await insertConnection('a1');
     await insertSubscription('q', ['a1']);
@@ -243,6 +263,45 @@ describe('realtimeConnectionRepository.reauthenticate', () => {
 
     expect(updated).toBe(false);
     expect((await rawRows())[0]).toMatchObject({ tokenVersion: 0 });
+  });
+
+  it('adopts the sid on a legacy sid-less row', async () => {
+    await insertConnection('a1');
+
+    const updated = await realtimeConnectionRepository.reauthenticate('a1', {
+      tokenVersion: 0,
+      authExpiresAt: at(minutes(60)),
+      sid: 's1',
+    });
+
+    expect(updated).toBe(true);
+    expect((await rawRows())[0]).toMatchObject({ sid: 's1' });
+  });
+
+  it('does not overwrite a sid another session adopted in the meantime', async () => {
+    await insertConnection('a1', { sid: 's-other' });
+
+    const updated = await realtimeConnectionRepository.reauthenticate('a1', {
+      tokenVersion: 5,
+      authExpiresAt: at(minutes(60)),
+      sid: 's1',
+    });
+
+    expect(updated).toBe(false);
+    expect((await rawRows())[0]).toMatchObject({ sid: 's-other', tokenVersion: 0 });
+  });
+
+  it('accepts a reauth that carries the sid the row already has', async () => {
+    await insertConnection('a1', { sid: 's1' });
+
+    const updated = await realtimeConnectionRepository.reauthenticate('a1', {
+      tokenVersion: 2,
+      authExpiresAt: at(minutes(60)),
+      sid: 's1',
+    });
+
+    expect(updated).toBe(true);
+    expect((await rawRows())[0]).toMatchObject({ sid: 's1', tokenVersion: 2 });
   });
 
   it('returns false when the connection row is gone', async () => {
@@ -492,6 +551,91 @@ describe('realtimeConnectionRepository.endExpiredConnections', () => {
   });
 });
 
+describe('realtimeConnectionRepository.endExpiredConnections - reauth in between', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('keeps the subscriptions of a row reauthed between classification and the guarded update', async () => {
+    await insertConnection('racing', { authExpiresAt: at(-minutes(3)) });
+    await insertConnection('lapsed', { authExpiresAt: at(-minutes(3)) });
+    await insertSubscription('q', ['racing', 'lapsed']);
+    const originalUpdateMany = Connection.updateMany.bind(Connection);
+    vi.spyOn(Connection, 'updateMany').mockImplementation(((...args: Parameters<typeof originalUpdateMany>) =>
+      Connection.collection
+        .updateOne({ connectionId: 'racing' }, { $set: { authExpiresAt: at(minutes(30)) } })
+        .then(() => originalUpdateMany(...args))) as unknown as typeof Connection.updateMany);
+
+    const ended = await realtimeConnectionRepository.endExpiredConnections(['racing', 'lapsed'], at(-GRACE_MS));
+
+    expect(ended).toEqual(['lapsed']);
+    expect(await connectionIds()).toEqual(['racing']);
+    expect(await subscriberIds('q')).toEqual(['racing']);
+  });
+});
+
+describe('realtimeConnectionRepository.upsertSubscriber', () => {
+  const identity = { queryId: 'q', collectionName: 'quests', query: { sessionId: 's1' }, fields: { a: 1 } };
+  const subscriber = { endpoint: 'https://ws.example.com/test', connectionId: 'a1', clientId: 'c1' };
+  const entries = async () => (await QuerySubscription.findOne({ queryId: 'q' }).lean())?.subscribers ?? [];
+
+  it('creates the document with the subscriber when none exists', async () => {
+    await realtimeConnectionRepository.upsertSubscriber(identity, subscriber);
+
+    const doc = await QuerySubscription.findOne({ queryId: 'q' }).lean();
+    expect(doc).toMatchObject({ collectionName: 'quests', query: { sessionId: 's1' }, fields: { a: 1 } });
+    expect(doc?.subscribers).toHaveLength(1);
+    expect(doc?.subscribers[0]).toMatchObject({ ...subscriber, attempts: 0 });
+  });
+
+  it('keeps one entry per (connectionId, clientId) and refreshes createdAt and attempts', async () => {
+    await realtimeConnectionRepository.upsertSubscriber(identity, subscriber);
+    await QuerySubscription.collection.updateOne(
+      { queryId: 'q' },
+      { $set: { 'subscribers.0.createdAt': at(-minutes(30)), 'subscribers.0.attempts': 4 } }
+    );
+
+    await realtimeConnectionRepository.upsertSubscriber(identity, subscriber);
+
+    const [only, ...rest] = await entries();
+    expect(rest).toEqual([]);
+    expect(only.attempts).toBe(0);
+    expect(only.createdAt?.getTime()).toBeGreaterThan(at(-minutes(1)).getTime());
+    expect(await QuerySubscription.countDocuments({ queryId: 'q' })).toBe(1);
+  });
+
+  it('adds a separate entry for another client or connection on the same query', async () => {
+    await realtimeConnectionRepository.upsertSubscriber(identity, subscriber);
+    await realtimeConnectionRepository.upsertSubscriber(identity, { ...subscriber, clientId: 'c2' });
+    await realtimeConnectionRepository.upsertSubscriber(identity, { ...subscriber, connectionId: 'a2' });
+
+    expect(await entries()).toHaveLength(3);
+  });
+
+  it('stores one entry when the same subscribe arrives concurrently', async () => {
+    await realtimeConnectionRepository.upsertSubscriber(identity, { ...subscriber, clientId: 'seed' });
+
+    await Promise.all(
+      Array.from({ length: 6 }, () => realtimeConnectionRepository.upsertSubscriber(identity, subscriber))
+    );
+
+    const matching = (await entries()).filter(entry => entry.clientId === 'c1');
+    expect(matching).toHaveLength(1);
+  });
+});
+
+describe('realtimeConnectionRepository.removeConnectionSubscribers', () => {
+  it('pulls only that connection and drops an emptied document', async () => {
+    await insertSubscription('shared', ['a1', 'b1']);
+    await insertSubscription('solo', ['a1']);
+
+    await realtimeConnectionRepository.removeConnectionSubscribers('a1');
+
+    expect(await subscriberIds('shared')).toEqual(['b1']);
+    expect(await subscriberIds('solo')).toBeNull();
+  });
+});
+
 describe('Connection ended-row filtering', () => {
   it('still hides ended rows when a filter names endedAt as undefined', async () => {
     await insertConnection('live');
@@ -507,5 +651,17 @@ describe('Connection ended-row filtering', () => {
 
     expect(await Connection.find({ endedAt: { $exists: true } }).lean()).toEqual([]);
     expect(await Connection.find({}).setOptions({ includeEnded: true }).lean()).toHaveLength(1);
+  });
+
+  it('hides ended rows from findOne and countDocuments unless includeEnded is set', async () => {
+    await insertConnection('live');
+    await insertConnection('ended', { endedAt: at(-minutes(1)) });
+
+    expect(await Connection.findOne({ connectionId: 'ended' }).lean()).toBeNull();
+    expect(
+      await Connection.findOne({ connectionId: 'ended' }).setOptions({ includeEnded: true }).lean()
+    ).not.toBeNull();
+    expect(await Connection.countDocuments({})).toBe(1);
+    expect(await Connection.countDocuments({}).setOptions({ includeEnded: true })).toBe(2);
   });
 });

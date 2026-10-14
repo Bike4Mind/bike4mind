@@ -128,8 +128,8 @@ async function pullSubscribers(connectionIds: readonly string[]): Promise<void> 
 }
 
 /**
- * Pull the connections' subscribers and mark their rows ended (kept, not deleted, so the sweep can
- * still close the sockets). Only live rows are looked up by userId/sid/apiKeyId filters; an
+ * Mark the connections' rows ended (kept, not deleted, so the sweep can still close the sockets),
+ * then pull their subscribers. Only live rows are looked up by userId/sid/apiKeyId filters; an
  * explicit connectionIds filter is trusted as given. Never joins an ambient transaction (see
  * outsideTransaction), even when a revoke calls it from inside withTransaction.
  */
@@ -141,15 +141,16 @@ async function endConnections(filter: RealtimeConnectionFilter): Promise<EndReal
       : ((await outsideTransaction(Connection.find(query)).distinct('connectionId')) as string[]);
   if (connectionIds.length === 0) return { connectionIds: [] };
 
-  // Subscribers first: a crash in between leaves a live row the sweep still finds, never a
-  // subscriber entry whose row is already gone.
-  await pullSubscribers(connectionIds);
+  // Rows first: once a row is ended, a concurrent subscribe re-checks it and backs out
+  // (dataSubscribeRequest), so the pull below cannot be outrun. A crash in between leaves
+  // subscribers on an ended row, which removeOrphanSubscribers pulls.
   const endedAt = new Date();
   for (const ids of chunk(connectionIds)) {
     await outsideTransaction(
       Connection.updateMany({ connectionId: { $in: ids }, endedAt: { $exists: false } }, { $set: { endedAt } })
     );
   }
+  await pullSubscribers(connectionIds);
   return { connectionIds };
 }
 
@@ -167,7 +168,6 @@ async function endExpiredConnections(connectionIds: readonly string[], expiredBe
       'connectionId'
     )) as string[];
     if (candidates.length === 0) continue;
-    await pullSubscribers(candidates);
     await Connection.updateMany(
       { connectionId: { $in: candidates }, endedAt: { $exists: false }, ...stillLapsed },
       { $set: { endedAt: new Date() } }
@@ -175,6 +175,8 @@ async function endExpiredConnections(connectionIds: readonly string[], expiredBe
     const nowEnded = (await Connection.find({ connectionId: { $in: candidates }, endedAt: { $exists: true } })
       .setOptions({ includeEnded: true })
       .distinct('connectionId')) as string[];
+    // Only rows the guarded update ended lose their subscriptions: a row reauthed in between stays live.
+    if (nowEnded.length > 0) await pullSubscribers(nowEnded);
     ended.push(...nowEnded);
   }
   return ended;
@@ -193,6 +195,67 @@ async function deleteEndedConnections(connectionIds: readonly string[]): Promise
   return deleted;
 }
 
+export interface QuerySubscriptionIdentity {
+  queryId: string;
+  collectionName: string;
+  query: Record<string, unknown>;
+  fields?: Record<string, boolean | number>;
+}
+
+export interface QuerySubscriberIdentity {
+  endpoint: string;
+  connectionId: string;
+  clientId: string;
+}
+
+// Bounds the re-check loop in upsertSubscriber; each pass only repeats because a concurrent writer won.
+const UPSERT_SUBSCRIBER_MAX_PASSES = 3;
+
+/**
+ * Register a subscriber on a query, idempotently per (connectionId, clientId): a repeat subscribe
+ * refreshes the existing entry's createdAt and resets its attempts instead of adding a second entry,
+ * so a live re-subscription is never mistaken for a stale one (removeStaleSubscribers) and a change
+ * is delivered once. Writes are guarded so two concurrent subscribes cannot both add the entry.
+ */
+async function upsertSubscriber(
+  subscription: QuerySubscriptionIdentity,
+  subscriber: QuerySubscriberIdentity
+): Promise<void> {
+  const { queryId, collectionName, query, fields } = subscription;
+  const sameSubscriber = { $elemMatch: { connectionId: subscriber.connectionId, clientId: subscriber.clientId } };
+  const entry = () => ({ ...subscriber, attempts: 0, createdAt: new Date() });
+
+  for (let pass = 0; pass < UPSERT_SUBSCRIBER_MAX_PASSES; pass++) {
+    const refreshed = await QuerySubscription.updateOne(
+      { queryId, subscribers: sameSubscriber },
+      { $set: { 'subscribers.$.createdAt': new Date(), 'subscribers.$.attempts': 0 } }
+    );
+    if (refreshed.matchedCount > 0) return;
+
+    const pushed = await QuerySubscription.updateOne(
+      { queryId, subscribers: { $not: sameSubscriber } },
+      { $push: { subscribers: entry() } }
+    );
+    if (pushed.matchedCount > 0) return;
+
+    // Neither matched: the doc is missing, or another writer added this entry since the refresh.
+    // Creating only when absent (an existing doc is left untouched) sends the second case round again.
+    const created = await QuerySubscription.updateOne(
+      { queryId },
+      { $setOnInsert: { collectionName, query, fields, subscribers: [entry()] } },
+      { upsert: true }
+    );
+    if (created.upsertedCount > 0) return;
+  }
+  throw new Error(`realtimeConnectionRepository: could not register subscriber ${subscriber.clientId}`);
+}
+
+/** Pull one connection's subscribers (used to back out a subscribe that raced its connection ending). */
+async function removeConnectionSubscribers(connectionId: string): Promise<void> {
+  assertNonEmptyString('connectionId', connectionId);
+  await pullSubscribers([connectionId]);
+}
+
 /**
  * Re-stamp a connection with a freshly verified access token and drop all its subscriptions, so
  * the client re-subscribes under the new token (and the ACL scope is re-evaluated). Returns false
@@ -202,8 +265,11 @@ async function reauthenticate(
   connectionId: string,
   auth: { tokenVersion: number; authExpiresAt: Date; sid?: string }
 ): Promise<boolean> {
+  // Adopting a sid only succeeds on a row that still has none (or already carries that sid), so a
+  // concurrent adoption by another session is never overwritten.
+  const sidGuard = auth.sid ? { $or: [{ sid: { $exists: false } }, { sid: auth.sid }] } : {};
   const result = await Connection.updateOne(
-    { connectionId, endedAt: { $exists: false } },
+    { connectionId, endedAt: { $exists: false }, ...sidGuard },
     { $set: { ...auth, reauthAt: new Date() } }
   );
   if (result.matchedCount === 0) return false;
@@ -420,6 +486,8 @@ export const realtimeConnectionRepository = {
   endExpiredConnections,
   deleteEndedConnections,
   reauthenticate,
+  upsertSubscriber,
+  removeConnectionSubscribers,
   readSweepPage,
   classifySweepRows,
   removeOrphanSubscribers,

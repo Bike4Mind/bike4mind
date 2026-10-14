@@ -1,6 +1,7 @@
 import { AuthStrategy, IAuthProviders } from '@bike4mind/common';
 import { User, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { authSessionService } from '@bike4mind/services';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { omit } from 'lodash';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
@@ -169,12 +170,11 @@ const authenticateUser = async (
       // login is minted later, in the callback handler, so it is created fresh and unaffected.
       if (isNewProvider) {
         await authSessionRepository.revokeAllByUserId(String(user._id));
-        // The revoke above already holds; a failed prune is backstopped by the realtime sweep.
-        try {
-          await realtimeConnectionRepository.endConnections({ userId: String(user._id), sessionsOnly: true });
-        } catch (error) {
-          console.warn('[verifyCallback] Failed to end realtime connections', error);
-        }
+        // The revoke above already holds; endRealtimeConnections never throws (the sweep backstops it).
+        await authSessionService.endRealtimeConnections(
+          { userId: String(user._id), sessionsOnly: true },
+          { db: { realtimeConnections: realtimeConnectionRepository } }
+        );
       }
 
       const linkedUser = omit(user, ['password']) as typeof user & {

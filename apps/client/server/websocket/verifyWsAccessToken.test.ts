@@ -35,7 +35,7 @@ vi.mock('@server/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 
-import { verifyWsAccessToken } from './verifyWsAccessToken';
+import { verifyWsAccessToken, verifyWsAccessTokenClaims } from './verifyWsAccessToken';
 import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
 
 describe('verifyWsAccessToken', () => {
@@ -138,5 +138,43 @@ describe('verifyWsAccessToken', () => {
     } finally {
       configureSecretsAtRest(undefined);
     }
+  });
+});
+
+describe('verifyWsAccessTokenClaims', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3 });
+    mockAssertAccountStateUsable.mockReturnValue(undefined);
+  });
+
+  it('returns the session id, tokenVersion and expiry (exp seconds converted to a Date in ms)', async () => {
+    const exp = 1_900_000_000;
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', sid: 's1', exp });
+
+    await expect(verifyWsAccessTokenClaims('token-123')).resolves.toEqual({
+      user: { id: 'user-1', tokenVersion: 3 },
+      sid: 's1',
+      tokenVersion: 3,
+      expiresAt: new Date(exp * 1000),
+    });
+  });
+
+  it('treats a non-string sid as absent', async () => {
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', sid: 42, exp: 1_900_000_000 });
+
+    expect((await verifyWsAccessTokenClaims('token-123')).sid).toBeUndefined();
+  });
+
+  it('normalizes a legacy token without version or exp to tokenVersion 0 and no expiry', async () => {
+    mockVerifyToken.mockReturnValue({ id: 'user-1', typ: 'access' });
+    mockFindById.mockResolvedValue({ id: 'user-1' });
+
+    const claims = await verifyWsAccessTokenClaims('token-123');
+
+    expect(claims.tokenVersion).toBe(0);
+    expect(claims.expiresAt).toBeUndefined();
   });
 });

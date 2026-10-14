@@ -15,9 +15,9 @@ import {
   mongoose,
   Organization,
   Project,
-  QuerySubscription,
   Quest,
   QuestMasterPlan,
+  realtimeConnectionRepository,
   User,
 } from '@bike4mind/database';
 import { Session as SessionModel } from '@bike4mind/database/auth';
@@ -246,7 +246,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     .find(scopedQuery, scopedFields ?? undefined)
     .setOptions({ includeDeleted: true, limit: HARD_LIMIT, maxTimeMS: INITIAL_FETCH_MAX_TIME_MS });
   const normalizedQuery = findPromise.getQuery();
-  const subscriber = { endpoint, connectionId, clientId: clientSubscriberId, attempts: 0 };
+  const subscriber = { endpoint, connectionId, clientId: clientSubscriberId };
 
   if (fetchInitialData) {
     let results;
@@ -301,24 +301,20 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     .update(JSON.stringify(scopedFields))
     .digest('base64');
 
-  const result = await QuerySubscription.findOneAndUpdate(
-    { queryId: uniqueQuerySelector },
-    {
-      $addToSet: { subscribers: subscriber },
-      $setOnInsert: {
-        queryId: uniqueQuerySelector,
-        collectionName,
-        query: normalizedQuery,
-        fields: scopedFields,
-      },
-    },
-    { upsert: true, new: true }
+  await realtimeConnectionRepository.upsertSubscriber(
+    { queryId: uniqueQuerySelector, collectionName, query: normalizedQuery, fields: scopedFields },
+    subscriber
   );
-  if (result) {
-    // no-op
-  } else {
-    logger.error(`Failed to subscribe client ${clientSubscriberId} to ${collectionName}`);
-    throw new Error(`Failed to subscribe client ${clientSubscriberId} to ${collectionName}`);
+
+  // A revoke can end the connection while this subscribe is in flight, after its own pull ran but
+  // before this write landed. Re-read the row: if it is gone, back the entry out like the no-row
+  // check above does.
+  if (!(await Connection.findOne({ connectionId }, { _id: 1 }).lean())) {
+    await realtimeConnectionRepository.removeConnectionSubscribers(connectionId);
+    await closeConnection(connectionId, endpoint).catch(error =>
+      logger.warn(`[dataSubscribeRequest] Failed to close ended connection ${connectionId}`, error)
+    );
+    throw new UnauthorizedError('Connection is not registered to this user');
   }
 
   return { statusCode: 200 };

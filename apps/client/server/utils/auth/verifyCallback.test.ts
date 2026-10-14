@@ -30,6 +30,21 @@ const mockShouldBlockDisposableEmail = vi.fn();
 const mockAddCredits = vi.fn();
 const mockApplyPartnerRuleMembership = vi.fn();
 vi.mock('@bike4mind/services', () => ({
+  authSessionService: {
+    endRealtimeConnections: async (
+      filter: unknown,
+      {
+        db,
+      }: { db: { realtimeConnections: { endConnections: (filter: unknown) => Promise<{ connectionIds: string[] }> } } }
+    ) => {
+      // Same contract as the real best-effort wrapper: never throws.
+      try {
+        return (await db.realtimeConnections.endConnections(filter)).connectionIds;
+      } catch {
+        return [];
+      }
+    },
+  },
   userService: {
     releasePendingFreeCredits: (...args: unknown[]) => mockReleasePending(...args),
     shouldBlockDisposableEmail: (...args: unknown[]) => mockShouldBlockDisposableEmail(...args),
@@ -260,6 +275,20 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     // (never checked against tokenVersion) would rotate past the bump and survive.
     expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u1');
     expect(mockEndConnections).toHaveBeenCalledWith({ userId: 'u1', sessionsOnly: true });
+  });
+
+  it('still completes the link when ending realtime connections fails', async () => {
+    mockEndConnections.mockRejectedValue(new Error('prune failed'));
+    stage2Hit({ _id: 'u1', email: 'user@example.com', emailVerified: true, authProviders: [] });
+
+    const { err, user } = await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-real',
+      emails: [{ value: 'user@example.com', verified: true }],
+    });
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u1');
   });
 
   it('refuses when existing provider entry has DIFFERENT sub (impersonation via takeover of same strategy)', async () => {

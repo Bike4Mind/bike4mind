@@ -166,7 +166,8 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // Last subscribe_query frame per subscriptionId, replayed when the server answers a reauth with
   // resubscribe_required. The socket stays open and sendJsonMessage keeps its identity across token
   // refreshes (it reads the token from accessTokenRef), so the hooks' own resubscribe-on-change
-  // effect does not run; this replay is the only resubscribe.
+  // effect does not run; this replay is the only resubscribe on that path. A reconnect is the
+  // opposite: the hooks resubscribe themselves, so onClose clears this map.
   const subscribePayloadsRef = useRef(new Map<string, IMessageDataToServer>());
   const accessTokenRef = useRef(accessToken);
   // Layout effect: runs before any child's passive effect in the same commit, so a subscribe sent
@@ -199,10 +200,13 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // retries on its own backoff if the mint throws - which is why it needs a timeout: a
   // mint that never settles holds readyState at CONNECTING with no retry ever scheduled.
   const getWebsocketUrl = useCallback(async () => {
-    ticketTokenRef.current = accessTokenRef.current;
     const { data } = await api.post<{ ticket: string }>('/api/websocket/ticket', undefined, {
       timeout: WEBSOCKET_TICKET_TIMEOUT_MS,
     });
+    // Read after the POST: its 401 handling may refresh the token, and the ticket carries the
+    // token the request ended up using. Recording the pre-request token would make onOpen send a
+    // needless reauth after every reconnect that follows an expiry.
+    ticketTokenRef.current = useAccessToken.getState().accessToken ?? accessTokenRef.current;
     return `${url}?ticket=${encodeURIComponent(data.ticket)}`;
   }, [url]);
 
@@ -243,6 +247,10 @@ export const WebsocketProvider = ({ children, url }: Props) => {
       const openedThisAttempt = openedThisAttemptRef.current;
       openedThisAttemptRef.current = false;
       chunkReassemblerRef.current?.clear();
+      // A reconnect re-sends every live subscription through its hook (each reacts to the socket
+      // coming back), which re-tracks it. Keeping the old entries would replay them a second time
+      // on a resubscribe_required that follows the reconnect.
+      subscribePayloadsRef.current.clear();
 
       if (
         shouldProbeOnFailedWsConnect({

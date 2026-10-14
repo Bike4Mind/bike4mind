@@ -32,6 +32,25 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: { endConnections: (...a: any[]) => mockEndConnections(...a) },
 }));
 
+// Stand-in for the services barrel (see the issueSession note below) carrying only the best-effort
+// wrapper's contract: it never throws.
+vi.mock('@bike4mind/services', () => ({
+  authSessionService: {
+    endRealtimeConnections: async (
+      filter: unknown,
+      {
+        db,
+      }: { db: { realtimeConnections: { endConnections: (filter: unknown) => Promise<{ connectionIds: string[] }> } } }
+    ) => {
+      try {
+        return (await db.realtimeConnections.endConnections(filter)).connectionIds;
+      } catch {
+        return [];
+      }
+    },
+  },
+}));
+
 // Okta OIDC client: token exchange + userinfo are network calls, fully stubbed.
 const mockGetConfig = vi.fn();
 const mockExchange = vi.fn();
@@ -193,6 +212,18 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2');
     expect(mockEndConnections).toHaveBeenCalledWith({ userId: 'u2', sessionsOnly: true });
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
+  });
+
+  it('still completes the login when ending realtime connections fails', async () => {
+    mockEndConnections.mockRejectedValue(new Error('prune failed'));
+
+    const res = await runCallback({
+      user: { id: 'u2', _id: 'u2', email: 'User@Example.com', emailVerified: true, authProviders: [], tokenVersion: 3 },
+      userInfo: { sub: 'okta-1', email: 'user@example.com', email_verified: true, preferred_username: 'user' },
+    });
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2');
   });
 
   it('exempts a same-identity refresh from the gate (mismatch allowed on re-login)', async () => {

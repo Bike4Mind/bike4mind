@@ -375,7 +375,11 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(mockRevokeUserApiKey).toHaveBeenCalledWith(
       'b4m-user-1',
       expect.objectContaining({ keyId: 'old-key' }),
-      expect.anything()
+      expect.objectContaining({
+        db: expect.objectContaining({
+          realtimeConnections: expect.objectContaining({ endConnections: expect.any(Function) }),
+        }),
+      })
     );
     // revoke happens before mint
     expect(mockRevokeUserApiKey.mock.invocationCallOrder[0]).toBeLessThan(

@@ -69,9 +69,10 @@ const handler = baseApi({ auth: false })
         await authSessionRepository
           .revokeBySid(impersonatedSid)
           .catch(err => req.logger.error('Failed to revoke impersonation session on return to admin', err));
-        await realtimeConnectionRepository
-          .endConnections({ sid: impersonatedSid })
-          .catch(err => req.logger.error('Failed to end impersonation realtime connections on return to admin', err));
+        await authSessionService.endRealtimeConnections(
+          { sid: impersonatedSid },
+          { db: { realtimeConnections: realtimeConnectionRepository }, logger: req.logger }
+        );
       }
     }
 
