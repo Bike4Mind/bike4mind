@@ -1,3 +1,4 @@
+import { signBrowserFileResponse } from '@server/files/signBrowserFileResponse';
 import { IFabFile, KnowledgeType } from '@bike4mind/common';
 import {
   dataLakeRepository,
@@ -10,7 +11,13 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { deleteFileForUser } from '@server/files/deleteFileForUser';
 import { updateFileForUser } from '@server/files/updateFileForUser';
 import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
-import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
+import {
+  assertFilesReadScope,
+  assertFilesWriteScope,
+  FILES_READ_OR_WRITE_SCOPES,
+  FILES_READ_SCOPES,
+} from '@server/files/fileScopes';
+import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
 import { Request } from 'express';
 import { isValidObjectId } from '@server/utils/objectId';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -93,7 +100,10 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
       }
     );
 
-    return res.json(updatedFabFile);
+    if (!holdsApiKeyScope(req, FILES_READ_SCOPES)) {
+      return res.json({ ...updatedFabFile, fileUrl: undefined, fileUrlExpireAt: undefined });
+    }
+    return res.json(await signBrowserFileResponse(updatedFabFile));
   })
   /**
    * Delete FabFile by ID

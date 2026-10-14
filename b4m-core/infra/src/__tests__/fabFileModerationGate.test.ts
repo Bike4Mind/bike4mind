@@ -187,8 +187,12 @@ const ALLOWLIST: Record<string, string> = {
   'apps/client/pages/api/agents/create-from-context.ts':
     'images filtered out (mimeType.startsWith("image/")) before the shared getFileContent extractor is ever called on a file',
 
+  'apps/client/pages/api/files/createFabFile.ts':
+    'DI passthrough to the already-gated fabFileService.createFabFile; browser response signing delegates to signBrowserFileResponse',
+  'apps/client/server/files/signBrowserFileResponse.ts':
+    'DI passthrough to fabFilesService.generateSignedUrl, which applies the shared moderation gate before request-local browser signing',
+
   // --- Upload-only / delete-only: no read path. ---
-  'apps/client/pages/api/files/createFabFile.ts': 'upload-only presigned PUT (getSignedUrl mode "put"), no read',
   'apps/client/server/slack/dataLakeIngestDeps.ts':
     'DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
