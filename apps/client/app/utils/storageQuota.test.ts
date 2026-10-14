@@ -85,7 +85,8 @@ describe('serverStorageLimitMessage', () => {
     expect(serverStorageLimitMessage(axiosError(400, { error: 'x', ...info('file_too_large') }))).toBeUndefined();
   });
 
-  // Deprecated fallback for a server that predates the code on storage refusals.
+  // Deprecated fallback for a server that predates the code on storage refusals; remove with
+  // LEGACY_SERVER_STORAGE_LIMIT_MESSAGE after 2026-11-15.
   it('still surfaces a legacy refusal that carries no code, verbatim', () => {
     expect(serverStorageLimitMessage(axiosError(400, { error: 'File size exceeds storage limit' }))).toBe(
       'File size exceeds storage limit'
