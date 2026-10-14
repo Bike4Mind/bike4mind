@@ -8,14 +8,14 @@ import {
 import type { ToolContext } from '../base/types';
 
 /**
- * Persist a tool-generated file (image, Excel, etc.) as a session-scoped FabFile so it
- * shows up in the Knowledge Base / WorkBench and is downloadable after the run.
+ * Persist a tool-generated non-media file (Excel today) as a session-scoped FabFile so it
+ * shows up in the Knowledge Base / WorkBench and is downloadable after the run. Generated
+ * images go through saveGeneratedAssetFromTool below instead.
  *
  * Why this exists: file-generating tools historically only pushed the generated filename
- * into `quest.images` via `statusUpdate`, which (a) renders fine inline for images but is
- * a broken `<img>` for non-image files like .xlsx, and (b) was never recorded as a FabFile,
- * so nothing the user can browse referenced it - the file was effectively orphaned in the
- * generated-content bucket (observed in prod: agent-generated images lost entirely).
+ * into `quest.images` via `statusUpdate`, which is a broken `<img>` for non-image files like
+ * .xlsx, and was never recorded as a FabFile, so nothing the user can browse referenced it -
+ * the file was effectively orphaned in the generated-content bucket.
  *
  * The session link lives in provenance (`sourceType: TOOL_GENERATED`, `sourceMetadata.sessionId`),
  * NOT the top-level `sessionId`. That field means "notebook summary file": the File Browser search

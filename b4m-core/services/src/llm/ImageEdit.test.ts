@@ -1043,7 +1043,11 @@ describe('ImageEditService quest partial writes', () => {
   const editSpy = vi.fn();
   const promptMeta = { marker: 'meta' };
 
-  const makeService = (questSessionId = 'session1', saveGeneratedAsset?: SaveGeneratedAssetFn) => {
+  const makeService = (
+    questSessionId = 'session1',
+    saveGeneratedAsset: SaveGeneratedAssetFn = vi.fn(async () => ({ saved: true }) as never),
+    dbExtras: Record<string, unknown> = {}
+  ) => {
     const quest: Record<string, unknown> = {
       id: 'quest1',
       sessionId: questSessionId,
@@ -1062,6 +1066,7 @@ describe('ImageEditService quest partial writes', () => {
         users: { findById: vi.fn(async () => richUser) },
         organizations: { findById: vi.fn(async () => null) },
         fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
+        ...dbExtras,
       },
       startImageEditProcess,
       saveGeneratedAsset,
@@ -1169,10 +1174,18 @@ describe('ImageEditService quest partial writes', () => {
   });
 
   describe('saving the edited image to the user files', () => {
-    const arrange = (saveGeneratedAsset: SaveGeneratedAssetFn) => {
+    const arrange = (saveGeneratedAsset: SaveGeneratedAssetFn, dbExtras: Record<string, unknown> = {}) => {
       editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/out.png' });
       vi.mocked(getSettingsValue).mockImplementation(key => (key === 'ImageModerationEnabled' ? false : undefined));
-      return makeService('session1', saveGeneratedAsset);
+      return makeService('session1', saveGeneratedAsset, dbExtras);
+    };
+
+    const arrangeBilled = (saveGeneratedAsset: SaveGeneratedAssetFn) => {
+      const arranged = arrange(saveGeneratedAsset, { creditTransactions: { create: vi.fn() } });
+      vi.mocked(getSettingsValue).mockImplementation(key =>
+        key === 'enforceCredits' ? true : key === 'ImageModerationEnabled' ? false : undefined
+      );
+      return arranged;
     };
 
     it('saves the stored image once, keyed by the generationId', async () => {
@@ -1194,6 +1207,33 @@ describe('ImageEditService quest partial writes', () => {
           jobId: 'gen-1',
         },
       });
+    });
+
+    it('saves nothing when billing fails', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service, update } = arrangeBilled(save);
+      vi.mocked(deductCreditsWithOrgSupport).mockRejectedValueOnce(new Error('billing down'));
+      await process(service, 'gen-1');
+
+      expect(save).not.toHaveBeenCalled();
+      expect(
+        update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error')
+      ).toMatchObject({ reply: 'billing down' });
+    });
+
+    it('saves nothing when the done write fails', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service, update } = arrange(save);
+      update.mockImplementation(async (arg: Record<string, unknown>) => {
+        if ('images' in arg) throw new Error('write failed');
+        return arg;
+      });
+      await process(service, 'gen-1');
+
+      expect(save).not.toHaveBeenCalled();
+      expect(
+        update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error')
+      ).toMatchObject({ reply: 'write failed' });
     });
 
     it('still finishes the quest when the save rejects', async () => {

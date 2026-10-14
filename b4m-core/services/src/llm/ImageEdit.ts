@@ -143,8 +143,8 @@ interface IImageEditServiceOptions {
   /** Storage where the generated images will be stored. */
   storage: BaseStorage;
   fabFileStorage: BaseStorage;
-  /** Keeps the edited image in the user's files. Optional so existing callers/tests keep compiling. */
-  saveGeneratedAsset?: SaveGeneratedAssetFn;
+  /** Keeps the edited image in the user's files. Required so the app factory cannot silently drop it. */
+  saveGeneratedAsset: SaveGeneratedAssetFn;
   /** Lambda function name for image processing (from SST Resource.ImageProcessor.name) */
   imageProcessorLambdaName?: string;
   /** Checks an edited image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
@@ -170,7 +170,7 @@ export class ImageEditService {
   private abilityGetter: IImageEditServiceOptions['abilityGetter'];
   private storage: BaseStorage;
   private fabFileStorage: BaseStorage;
-  private saveGeneratedAsset?: SaveGeneratedAssetFn;
+  private saveGeneratedAsset: SaveGeneratedAssetFn;
   private deleteFabFile: IImageEditServiceOptions['deleteFabFile'];
   private tokenizer: TiktokenTokenizer;
   private imageProcessorLambdaName?: string;
@@ -793,7 +793,7 @@ export class ImageEditService {
 
       const buffer = await downloadImageAsBuffer(result);
       const fileType = await fileTypeFromBuffer(buffer);
-      const filename = `${uuidv4()}.${fileType?.ext}`;
+      const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
 
       await moderateImageOrThrow({
         service: this.imageModerationService,

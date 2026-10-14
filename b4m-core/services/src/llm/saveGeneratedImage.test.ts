@@ -13,13 +13,6 @@ const params = {
 const makeLogger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
 describe('saveGeneratedImage', () => {
-  it('is a no-op when no save function is injected', async () => {
-    const logger = makeLogger();
-    await expect(saveGeneratedImage(undefined, params, logger)).resolves.toBeUndefined();
-    expect(logger.warn).not.toHaveBeenCalled();
-    expect(logger.error).not.toHaveBeenCalled();
-  });
-
   it('passes the params and logger through to the save function', async () => {
     const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
     const logger = makeLogger();

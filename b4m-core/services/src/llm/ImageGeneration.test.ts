@@ -1421,7 +1421,7 @@ describe('ImageGenerationService quest partial writes', () => {
         },
       },
       startImageGenerationProcess: opts.startImageGenerationProcess ?? vi.fn(async () => undefined),
-      saveGeneratedAsset: opts.saveGeneratedAsset,
+      saveGeneratedAsset: opts.saveGeneratedAsset ?? vi.fn(async () => ({ saved: true })),
       logEvent: vi.fn().mockResolvedValue(undefined),
       abilityGetter: vi.fn().mockReturnValue({}),
       storage: { upload: vi.fn().mockResolvedValue('generated/output.png') },
@@ -1662,6 +1662,30 @@ describe('ImageGenerationService quest partial writes', () => {
 
       expect(save).not.toHaveBeenCalled();
       expect(callArgs(update).find(arg => arg.type === 'error')).toMatchObject({ status: 'done' });
+    });
+
+    it('saves nothing when billing fails', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service, update } = arrange(save);
+      enforceCredits(service);
+      vi.mocked(deductCreditsWithOrgSupport).mockRejectedValueOnce(new Error('billing down'));
+      await processEdit(service, 'gen-1');
+
+      expect(save).not.toHaveBeenCalled();
+      expect(callArgs(update).find(arg => arg.type === 'error')).toMatchObject({ reply: 'billing down' });
+    });
+
+    it('saves nothing when the done write fails', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service, update } = arrange(save);
+      update.mockImplementation(async (arg: Record<string, unknown>) => {
+        if ('images' in arg) throw new Error('write failed');
+        return undefined;
+      });
+      await processEdit(service, 'gen-1');
+
+      expect(save).not.toHaveBeenCalled();
+      expect(callArgs(update).find(arg => arg.type === 'error')).toMatchObject({ reply: 'write failed' });
     });
 
     it('still finishes the quest when the save rejects', async () => {

@@ -139,8 +139,9 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   /** Resolved by the API route. Defaults to 'fresh' if absent. */
   intent: PromptIntentSchema.optional(),
   /**
-   * Minted per invoke() and carried on the queue message, so a redelivery saves the same files while a retry of
-   * the quest (same questId) saves new ones. Absent on messages queued before it existed.
+   * Minted per invoke() and carried on the queue message, so a redelivery cannot add duplicate file rows while a
+   * retry of the quest (same questId) saves new ones. It dedupes rows, not content: a redelivery that re-renders
+   * keeps the first run's files while quest.images shows the new render. Absent on messages queued before it existed.
    */
   generationId: z.string().optional(),
 });
@@ -173,8 +174,8 @@ interface IImageGenerationServiceOptions {
   /** Storage where the generated images will be stored. */
   storage: BaseStorage;
   fabFileStorage: BaseStorage;
-  /** Keeps each generated image in the user's files. Optional so existing callers/tests keep compiling. */
-  saveGeneratedAsset?: SaveGeneratedAssetFn;
+  /** Keeps each generated image in the user's files. Required so the app factory cannot silently drop it. */
+  saveGeneratedAsset: SaveGeneratedAssetFn;
   invokeSessionAutoNaming?: (sessionId: string, userId: string) => Promise<void>;
   /**
    * Publish a `session.summarize` event so the summarization Lambda runs after image generation.
@@ -217,7 +218,7 @@ export class ImageGenerationService {
   private abilityGetter: IImageGenerationServiceOptions['abilityGetter'];
   private storage: BaseStorage;
   private fabFileStorage: BaseStorage;
-  private saveGeneratedAsset?: SaveGeneratedAssetFn;
+  private saveGeneratedAsset: SaveGeneratedAssetFn;
   private tokenizer: TiktokenTokenizer;
   private invokeSessionAutoNaming: IImageGenerationServiceOptions['invokeSessionAutoNaming'];
   private invokeSummarizeSession: IImageGenerationServiceOptions['invokeSummarizeSession'];
@@ -1437,7 +1438,7 @@ export class ImageGenerationService {
 
           const buffer = await downloadImageAsBuffer(image);
           const fileType = await fileTypeFromBuffer(buffer);
-          const filename = `${uuidv4()}.${fileType?.ext}`;
+          const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
 
           await moderateImageOrThrow({
             service: this.imageModerationService,

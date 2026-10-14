@@ -133,8 +133,26 @@ describe('image_generation processAndStoreImages moderation gate (agent-tool ser
     expect(mockSaveFromTool).toHaveBeenCalledWith(context, {
       bytes: expect.any(Buffer),
       contentType: 'image/png',
-      generation: { generator: 'image', provider: 'openai', modelId: 'gpt-image-2', prompt: RENDER.prompt },
+      generation: {
+        generator: 'image',
+        provider: 'openai',
+        modelId: 'gpt-image-2',
+        prompt: RENDER.prompt,
+        jobId: expect.any(String),
+      },
     });
+  });
+
+  it('gives each image of a batch its own index-suffixed jobId', async () => {
+    mockCheckImage.mockResolvedValue(undefined);
+    const context = createFakeContext();
+
+    await processAndStoreImages([PNG_DATA_URL, PNG_DATA_URL], context, RENDER);
+
+    const jobIds = mockSaveFromTool.mock.calls.map(call => call[1].generation.jobId as string);
+    expect(jobIds[0]).toMatch(/-0$/);
+    expect(jobIds[1]).toMatch(/-1$/);
+    expect(new Set(jobIds).size).toBe(2);
   });
 
   it('a skipped save still returns the stored images', async () => {

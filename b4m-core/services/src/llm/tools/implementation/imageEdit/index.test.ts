@@ -64,6 +64,13 @@ vi.mock('../../helpers/persistGeneratedFile', async importOriginal => {
   return { ...actual, saveGeneratedAssetFromTool: mockSaveFromTool };
 });
 
+const { mockFileTypeFromBuffer } = vi.hoisted(() => ({ mockFileTypeFromBuffer: vi.fn() }));
+vi.mock('file-type', async importOriginal => {
+  const actual = await importOriginal<typeof import('file-type')>();
+  mockFileTypeFromBuffer.mockImplementation(actual.fileTypeFromBuffer);
+  return { ...actual, fileTypeFromBuffer: mockFileTypeFromBuffer };
+});
+
 const { processAndStoreImage, getImageFromFileId, imageEditTool } = await import('./index');
 
 // 1x1 transparent PNG - downloadImageAsBuffer() short-circuits data: URLs with no network call.
@@ -192,7 +199,12 @@ describe('getImageFromFileId serveability guard (sibling of the upload/edit agen
 });
 
 describe('edit_image processAndStoreImage moderation gate (agent-tool serve-gate bypass)', () => {
-  const EDIT = { prompt: 'make the sky purple', modelId: ImageModels.GPT_IMAGE_2 };
+  const EDIT = {
+    model: 'gpt-image-1-5',
+    provider: 'openai',
+    prompt: 'make the sky purple',
+    modelId: ImageModels.GPT_IMAGE_2,
+  };
 
   beforeEach(() => {
     mockCheckImage.mockReset();
@@ -205,9 +217,7 @@ describe('edit_image processAndStoreImage moderation gate (agent-tool serve-gate
     );
     const context = createFakeContext();
 
-    await expect(processAndStoreImage(PNG_DATA_URL, context, 'gpt-image-1-5', 'openai', EDIT)).rejects.toBeInstanceOf(
-      ImageModerationBlockedError
-    );
+    await expect(processAndStoreImage(PNG_DATA_URL, context, EDIT)).rejects.toBeInstanceOf(ImageModerationBlockedError);
 
     expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
     expect(mockSaveFromTool).not.toHaveBeenCalled();
@@ -217,7 +227,7 @@ describe('edit_image processAndStoreImage moderation gate (agent-tool serve-gate
     mockCheckImage.mockResolvedValue(undefined);
     const context = createFakeContext();
 
-    const result = await processAndStoreImage(PNG_DATA_URL, context, 'gpt-image-1-5', 'openai', EDIT);
+    const result = await processAndStoreImage(PNG_DATA_URL, context, EDIT);
 
     expect(mockCheckImage).toHaveBeenCalledTimes(1);
     expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
@@ -228,13 +238,30 @@ describe('edit_image processAndStoreImage moderation gate (agent-tool serve-gate
     mockCheckImage.mockResolvedValue(undefined);
     const context = createFakeContext();
 
-    await processAndStoreImage(PNG_DATA_URL, context, 'gpt-image-1-5', 'openai', EDIT);
+    await processAndStoreImage(PNG_DATA_URL, context, EDIT);
 
     expect(mockSaveFromTool).toHaveBeenCalledWith(context, {
       bytes: expect.any(Buffer),
       contentType: 'image/png',
-      generation: { generator: 'image', provider: 'openai', modelId: EDIT.modelId, prompt: EDIT.prompt },
+      generation: {
+        generator: 'image',
+        provider: 'openai',
+        modelId: EDIT.modelId,
+        prompt: EDIT.prompt,
+        jobId: expect.any(String),
+      },
     });
+  });
+
+  it('falls back to a .png key and image/png when the file type cannot be sniffed', async () => {
+    mockCheckImage.mockResolvedValue(undefined);
+    mockFileTypeFromBuffer.mockResolvedValueOnce(undefined);
+    const context = createFakeContext();
+
+    await processAndStoreImage(PNG_DATA_URL, context, EDIT);
+
+    expect(vi.mocked(context.imageGenerateStorage.upload).mock.calls[0][1]).toMatch(/\.png$/);
+    expect(mockSaveFromTool).toHaveBeenCalledWith(context, expect.objectContaining({ contentType: 'image/png' }));
   });
 
   it('a skipped save still returns the stored image', async () => {
@@ -242,7 +269,7 @@ describe('edit_image processAndStoreImage moderation gate (agent-tool serve-gate
     mockSaveFromTool.mockResolvedValue({ saved: false, reason: 'storage_limit' });
     const context = createFakeContext();
 
-    const result = await processAndStoreImage(PNG_DATA_URL, context, 'gpt-image-1-5', 'openai', EDIT);
+    const result = await processAndStoreImage(PNG_DATA_URL, context, EDIT);
 
     expect(result).toBe('generated/stored-key.png');
   });
@@ -394,6 +421,7 @@ describe('imageEditTool - credit reservation names the rendered model', () => {
           provider: 'bfl',
           modelId: ImageModels.FLUX_PRO_FILL,
           prompt: 'make it warmer',
+          jobId: expect.any(String),
         },
       })
     );

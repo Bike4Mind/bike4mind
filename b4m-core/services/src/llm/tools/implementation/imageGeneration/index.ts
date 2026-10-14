@@ -103,8 +103,10 @@ export async function processAndStoreImages(
   { model, provider, prompt }: { model: string; provider: string; prompt: string }
 ): Promise<string[]> {
   await context.statusUpdate({}, 'Storing images...');
+  // Unique file names for an n>1 batch, which would otherwise share the Date.now() suffix.
+  const batchId = uuidv4();
   return Promise.all(
-    images.map(async image => {
+    images.map(async (image, index) => {
       const buffer = await downloadImageAsBuffer(image);
       const fileType = await fileTypeFromBuffer(buffer);
       // Default the extension when detection fails: a `${uuid}.undefined` filename would
@@ -124,7 +126,7 @@ export async function processAndStoreImages(
       await saveGeneratedAssetFromTool(context, {
         bytes: buffer,
         contentType: mimeType,
-        generation: { generator: 'image', provider, modelId: model, prompt },
+        generation: { generator: 'image', provider, modelId: model, jobId: `${batchId}-${index}`, prompt },
       });
 
       return path;

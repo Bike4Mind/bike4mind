@@ -15,11 +15,10 @@ export type SaveGeneratedAssetFn = (
  * objectCreated scan clears it, so serving stays gated by isImageServeable.
  */
 export async function saveGeneratedImage(
-  save: SaveGeneratedAssetFn | undefined,
+  save: SaveGeneratedAssetFn,
   params: SaveGeneratedAssetParams,
   logger: Pick<Logger, 'info' | 'warn' | 'error'>
 ): Promise<void> {
-  if (!save) return;
   try {
     const result = await save(params, logger);
     if (!result.saved) {

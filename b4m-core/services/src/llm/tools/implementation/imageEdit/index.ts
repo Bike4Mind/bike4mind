@@ -204,15 +204,13 @@ async function moderateToolImage(
 }
 
 /**
- * `model` is the one the moderation incident records (see the provider note in the tool body); `edit.modelId` is
- * the model that rendered the image, recorded as its provenance in the user's files.
+ * `model` is the one the moderation incident records (see the provider note in the tool body); `modelId` is the
+ * model that rendered the image, recorded as its provenance in the user's files.
  */
 export async function processAndStoreImage(
   imageUrl: string,
   context: ToolContext,
-  model: string,
-  provider: string,
-  edit: { prompt: string; modelId: string }
+  { model, provider, prompt, modelId }: { model: string; provider: string; prompt: string; modelId: string }
 ): Promise<string> {
   const buffer = await downloadImageAsBuffer(imageUrl);
   const fileType = await fileTypeFromBuffer(buffer);
@@ -229,7 +227,7 @@ export async function processAndStoreImage(
   await saveGeneratedAssetFromTool(context, {
     bytes: buffer,
     contentType: mimeType,
-    generation: { generator: 'image', provider, modelId: edit.modelId, prompt: edit.prompt },
+    generation: { generator: 'image', provider, modelId, jobId: uuidv4(), prompt },
   });
 
   return path;
@@ -448,13 +446,12 @@ Please select a supported edit model in your image settings modal.`;
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(
-              editResponse.dataUrl,
-              context,
-              generationModel,
+            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, {
+              model: generationModel,
               provider,
-              { prompt, modelId: bflModel }
-            );
+              prompt,
+              modelId: bflModel,
+            });
 
             return updateQuestAndReturnMarkdown(storedImagePath, context);
           }
@@ -505,13 +502,12 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(
-              editResponse.dataUrl,
-              context,
-              generationModel,
+            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, {
+              model: generationModel,
               provider,
-              { prompt, modelId: editModel }
-            );
+              prompt,
+              modelId: editModel,
+            });
 
             return updateQuestAndReturnMarkdown(storedImagePath, context);
           }
@@ -554,13 +550,12 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(
-              editResponse.dataUrl,
-              context,
-              generationModel,
+            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, {
+              model: generationModel,
               provider,
-              { prompt, modelId: editModel }
-            );
+              prompt,
+              modelId: editModel,
+            });
 
             return updateQuestAndReturnMarkdown(storedImagePath, context);
           }
