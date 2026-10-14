@@ -595,9 +595,15 @@ describe('artifact opt-out producer hops in agentExecutor', () => {
  */
 describe('subagent permission-list producer hops in agentExecutor', () => {
   const source = readFileSync(resolve(__dirname, 'agentExecutor.ts'), 'utf8');
+  const dispatchStart = source.indexOf('async function processSubagentDispatch(');
+  const execPart = source.slice(source.indexOf('async function processExecution('), dispatchStart);
+  const dispatchPart = source.slice(dispatchStart);
+  const toolDepsRe = /const toolDeps: ToolBuilderDeps = \{[\s\S]*?\n {4}\};/;
 
   it('hands the run lists to in-process children through the tool deps', () => {
-    expect(source).toContain('toolPermissions: { approvedTools, deniedTools },');
+    const deps = execPart.match(toolDepsRe);
+    expect(deps, 'processExecution toolDeps literal not found in agentExecutor.ts').not.toBeNull();
+    expect(deps![0]).toContain('toolPermissions: { approvedTools, deniedTools },');
   });
 
   it('copies the run lists onto Lambda-dispatched subagent rows', () => {
@@ -617,6 +623,11 @@ describe('subagent permission-list producer hops in agentExecutor', () => {
     expect(source).toContain(
       'const childToolPermissions = { approvedTools: child.approvedTools ?? [], deniedTools: child.deniedTools ?? [] };'
     );
-    expect(source.match(/toolPermissions: childToolPermissions,/g)).toHaveLength(2);
+    const childDeps = dispatchPart.match(toolDepsRe);
+    expect(childDeps, 'dispatched child toolDeps literal not found in agentExecutor.ts').not.toBeNull();
+    expect(childDeps![0]).toContain('toolPermissions: childToolPermissions,');
+    const orch = dispatchPart.match(/new ServerSubagentOrchestrator\(\{[\s\S]*?\n {4}\}\);/);
+    expect(orch, 'ServerSubagentOrchestrator literal not found in agentExecutor.ts').not.toBeNull();
+    expect(orch![0]).toContain('toolPermissions: childToolPermissions,');
   });
 });
