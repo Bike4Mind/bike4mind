@@ -21,7 +21,11 @@ export const claimStorageCharge = async (
   const pre = await FabFile.findOneAndUpdate(
     { _id: fabFileId, $or: [{ storageChargedAt: null }, { storageChargedAt: { $lt: uploadedAt } }] },
     { $set: { storageChargedAt: uploadedAt, fileSize: size } },
-    { new: false, projection: { fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 }, session }
+    {
+      new: false,
+      projection: { fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 },
+      ...(session ? { session } : {}),
+    }
   );
   return pre ? size - chargedBytes(pre) : null;
 };

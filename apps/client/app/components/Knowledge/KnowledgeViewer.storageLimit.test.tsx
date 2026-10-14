@@ -3,10 +3,13 @@ import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, act, cleanup, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { AxiosError, AxiosHeaders } from 'axios';
 import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
+import { getThemeConfig } from '@client/app/utils/themes';
 
 const FILE_ID = 'file-1';
+const appTheme = extendTheme({ ...getThemeConfig() });
 
 const h = vi.hoisted(() => ({
   post: vi.fn(),
@@ -100,9 +103,11 @@ const axiosError = (status: number, data: unknown) =>
 const renderViewer = async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
-    <QueryClientProvider client={client}>
-      <KnowledgeViewer />
-    </QueryClientProvider>
+    <CssVarsProvider theme={appTheme}>
+      <QueryClientProvider client={client}>
+        <KnowledgeViewer />
+      </QueryClientProvider>
+    </CssVarsProvider>
   );
   await act(async () => {});
 };
