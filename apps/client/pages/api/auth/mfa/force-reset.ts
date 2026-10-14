@@ -30,7 +30,7 @@ const handler = baseApi().post(
     // verification and honours enforceMFA. Ids compare case-insensitively: Mongo resolves an
     // upper-case hex id to the same user.
     if (adminUser.id.toLowerCase() === userId.toLowerCase()) {
-      return res.status(403).json({ error: 'Use /api/auth/mfa/disable to turn off your own MFA.' });
+      return res.status(403).json({ error: 'Use Profile > Settings > Security to turn off your own MFA.' });
     }
 
     let resetBody: unknown;
