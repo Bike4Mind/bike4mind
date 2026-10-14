@@ -375,7 +375,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:githubLakeIngestQueue',
-    '2bdc6234043a61fc50034c81a98f3137c3874a9aac56ac6d7044dc56bf9234f7',
+    '5f3ce84b16696c185dcba949eb89c5a4b8697f12ded52d3ecb963539c6cc6df4',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:githubLakeIngestQueue',
