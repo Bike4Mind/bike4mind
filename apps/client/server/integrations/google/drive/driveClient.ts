@@ -314,6 +314,20 @@ export async function probeConnectedFolder(
 }
 
 /**
+ * Thrown by listFolderChildren when it stops before the last page: `page_cap` when the folder has
+ * more than `maxPages` pages, `deadline` when the caller's `deadlineMs` passed between pages.
+ */
+export class DriveListingIncompleteError extends Error {
+  constructor(
+    readonly reason: 'page_cap' | 'deadline',
+    message: string
+  ) {
+    super(message);
+    this.name = 'DriveListingIncompleteError';
+  }
+}
+
+/**
  * List the immediate children of a Drive folder (one level), following pagination.
  *
  * `supportsAllDrives`/`includeItemsFromAllDrives` are set so items that live in a Shared Drive
@@ -321,7 +335,11 @@ export async function probeConnectedFolder(
  * and fails in prod). The recursive tree-walk and content download/export are layered on in the
  * ingest job (issue C); this is the read primitive the smoke test and ingest both build on.
  */
-export async function listFolderChildren(drive: drive_v3.Drive, folderId: string): Promise<DriveFile[]> {
+export async function listFolderChildren(
+  drive: drive_v3.Drive,
+  folderId: string,
+  { maxPages = MAX_LIST_PAGES, deadlineMs }: { maxPages?: number; deadlineMs?: number } = {}
+): Promise<DriveFile[]> {
   // Defense-in-depth: never interpolate an unvalidated id into the query (callers should also
   // validate at their trust boundary).
   if (!isValidDriveFolderId(folderId)) {
@@ -371,8 +389,14 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
     // Fail loudly rather than silently truncate: a partial answer under "the folder's children"
     // would let ingest drop files while reporting success. Throwing forces the incremental design
     // at the point it belongs (issue C).
-    if (pageToken && pages >= MAX_LIST_PAGES) {
-      throw new Error(`Drive folder ${folderId} exceeded ${MAX_LIST_PAGES} pages; listing is not exhaustive`);
+    if (pageToken && pages >= maxPages) {
+      throw new DriveListingIncompleteError(
+        'page_cap',
+        `Drive folder ${folderId} exceeded ${maxPages} pages; listing is not exhaustive`
+      );
+    }
+    if (pageToken && deadlineMs !== undefined && Date.now() >= deadlineMs) {
+      throw new DriveListingIncompleteError('deadline', `Drive folder ${folderId} listing ran past its deadline`);
     }
   } while (pageToken);
 

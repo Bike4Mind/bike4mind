@@ -194,10 +194,10 @@ import {
   dispatch,
   hasDriveFileChanged,
   classifyDriveChanges,
-  MAX_INGEST_CANDIDATES,
   MAX_INGEST_REDRIVES,
   MAX_INGEST_SLICES,
 } from './driveLakeIngest';
+import { MAX_INGEST_CANDIDATES } from '@server/integrations/google/drive/driveIngestLimits';
 import { DriveWalkTimeBudgetExceededError } from '@server/integrations/google/drive/driveContent';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;

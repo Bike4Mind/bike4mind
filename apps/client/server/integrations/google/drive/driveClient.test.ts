@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { drive_v3 } from '@googleapis/drive';
 import {
   listFolderChildren,
+  DriveListingIncompleteError,
   getFolderAccess,
   isFolder,
   isValidDriveFolderId,
@@ -127,6 +128,31 @@ describe('listFolderChildren', () => {
     const { drive, list } = mockDrive([{ files: [] }]);
     await expect(listFolderChildren(drive, "x' in parents or '1'='1")).rejects.toThrow(/Invalid Drive folder id/);
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it('throws a page_cap DriveListingIncompleteError once maxPages pages still leave a nextPageToken', async () => {
+    const { drive, list } = mockDrive([
+      { files: [], nextPageToken: 'p2' },
+      { files: [], nextPageToken: 'p3' },
+    ]);
+    const err = await listFolderChildren(drive, 'FOLDER_X', { maxPages: 2 }).catch(e => e);
+    expect(err).toBeInstanceOf(DriveListingIncompleteError);
+    expect(err.reason).toBe('page_cap');
+    expect(err.message).toMatch(/listing is not exhaustive/);
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws a deadline DriveListingIncompleteError instead of fetching another page past deadlineMs', async () => {
+    const { drive, list } = mockDrive([{ files: [], nextPageToken: 'p2' }, { files: [] }]);
+    const err = await listFolderChildren(drive, 'FOLDER_X', { deadlineMs: Date.now() - 1 }).catch(e => e);
+    expect(err).toBeInstanceOf(DriveListingIncompleteError);
+    expect(err.reason).toBe('deadline');
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not apply a deadline when the folder fits on one page', async () => {
+    const { drive } = mockDrive([{ files: [{ id: '1', name: 'a.txt', mimeType: 'text/plain' }] }]);
+    await expect(listFolderChildren(drive, 'FOLDER_X', { deadlineMs: Date.now() - 1 })).resolves.toHaveLength(1);
   });
 });
 
