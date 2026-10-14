@@ -20,7 +20,7 @@ export interface ICounterLogDocument extends ICounterLog, IMongoDocument {}
 export interface TopUserResult {
   _id: string;
   userName?: string;
-  email: string;
+  email: string | null;
   interactions: number;
   rankChange?: 'up' | 'down' | 'new' | 'same';
   lastWeekRank?: number | 'new' | '>#20';
