@@ -4939,7 +4939,7 @@ describe('ChatCompletionProcess', () => {
         supportsImageVariation: false,
       };
 
-      const settle = async (localInputTokens: number, info: Record<string, unknown>) => {
+      const settle = async (localInputTokens: number, info: Record<string, unknown>, ...trailing: object[]) => {
         mockDb.quests.update.mockClear();
         mockedCalculateTotalTokenLength.mockResolvedValue(localInputTokens);
         mockTokenizer.countTokens.mockResolvedValue(40);
@@ -4948,6 +4948,7 @@ describe('ChatCompletionProcess', () => {
         mockedGetLlmByModel.mockReturnValue({
           complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
             await cb(['Hi!'], info);
+            for (const frame of trailing) await cb([], frame);
           }),
           getModelInfo: vi.fn().mockResolvedValue([]),
           currentModel: ChatModels.GPT4,
@@ -4975,6 +4976,17 @@ describe('ChatCompletionProcess', () => {
         const usage = await settle(100, { inputTokens: 240_000, outputTokens: 3_000, turnUsage: [turn, turn, turn] });
         expect(usage.settledBasis).toBe('provider');
         // 240K * $2/M + 3K * $12/M; the summed 240K would have picked the long tier ($1.014).
+        expect(usage.estimatedCost).toBeCloseTo(0.516, 10);
+      });
+
+      it('keeps the latched turns when a later frame carries none', async () => {
+        // A toolStarted frame has no usage; it must not drop settlement back to the aggregates.
+        const turn = { inputTokens: 80_000, outputTokens: 1_000 };
+        const usage = await settle(
+          100,
+          { inputTokens: 240_000, outputTokens: 3_000, turnUsage: [turn, turn, turn] },
+          { toolStarted: { name: 'search', id: 't1' } }
+        );
         expect(usage.estimatedCost).toBeCloseTo(0.516, 10);
       });
 
