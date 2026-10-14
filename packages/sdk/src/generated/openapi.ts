@@ -416,7 +416,7 @@ export interface paths {
     };
     /**
      * List the decision models you can use
-     * @description Returns the decision models this deployment serves, with their per-model caps and USD token prices. A floating alias carries `alias_of`; pin the versioned id when you tune thresholds, since a new version can shift probabilities. The catalog is a handful of entries, so it is returned whole, not paginated (as `GET /api/v1/video-models`).
+     * @description Returns the decision models you can call right now, with their per-model caps and USD token prices. A model is listed only when a key for its provider is available to you (your own provider key or one the deployment configures), so the list can differ between callers and grows when a key is added. A floating alias carries `alias_of`; pin the versioned id when you tune thresholds, since a new version can shift probabilities. The catalog is a handful of entries, so it is returned whole, not paginated (as `GET /api/v1/video-models`).
      */
     get: operations['listDecisionModels'];
     put?: never;
@@ -8293,7 +8293,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description The served models. */
+      /** @description The models you can call. */
       200: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
