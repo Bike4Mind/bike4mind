@@ -53,6 +53,8 @@ const handler = baseApi({ auth: false })
         if (refreshToken) setRefreshCookie(res, refreshToken);
         return respond(res, refreshSessionResponseSchema, payload);
       }
+      // Body transport: the chain already advanced, so a schema failure here loses the new refresh
+      // token (cookie transport is safe, Set-Cookie is already on res). Keep these fields permissive.
       return respond(res, refreshSessionResponseSchema, refreshToken ? { ...payload, refreshToken } : payload);
     };
 
