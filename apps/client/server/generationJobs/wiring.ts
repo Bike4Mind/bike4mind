@@ -252,7 +252,8 @@ const loadInputGeneratedImage = async (userId: string, key: string) => {
 
 export const saveToFiles: MusicJobDeps['saveToFiles'] = async params => {
   if (!params.questId) return saveGeneratedAssetToFiles(params, logger);
-  // Linked through the quest's notebook like every in-chat asset, so deleting the notebook takes the video or song too.
+  // Linked through the quest's notebook like every in-chat asset: the link scopes the grants that notebook mints and
+  // lets the generated-copy fork guard tell the owning notebook apart. A notebook delete keeps the file.
   const sessionId = (await questRepository.findById(params.questId))?.sessionId;
   return saveGeneratedAssetToFiles({ ...params, ...(sessionId && { sessionId }) }, logger);
 };

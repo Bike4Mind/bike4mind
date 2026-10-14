@@ -83,8 +83,9 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
 
       await withTransaction(async session => {
         try {
+          // sessionId feeds deleteStoredObjects' fork guard: without it the file's own notebook reads as another's.
           const files = await FabFile.find(ownedFilter)
-            .select('filePath moderationStatus sourceMetadata.generatedCopyKey')
+            .select('filePath moderationStatus sourceMetadata.generatedCopyKey sourceMetadata.sessionId')
             .session(session);
           const user = await User.findById(userId).session(session);
 

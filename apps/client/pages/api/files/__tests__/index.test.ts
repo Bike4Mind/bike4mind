@@ -16,6 +16,7 @@ const mockRefs = vi.hoisted(() => ({
   deleteManyArgs: undefined as unknown[] | undefined,
   storedObjectArgs: undefined as unknown[] | undefined,
   findFilters: [] as unknown[],
+  selectProjections: [] as unknown[],
   unpublishArgs: undefined as unknown[] | undefined,
   updateManyArgs: undefined as unknown[] | undefined,
   updateManyOptions: undefined as unknown,
@@ -47,10 +48,13 @@ vi.mock('@bike4mind/database', () => {
     static find = (filter: unknown) => {
       mockRefs.findFilters.push(filter);
       return {
-        select: () => ({
-          session: async () => fabFileDocs,
-          lean: async () => fabFileDocs.map((doc, i) => ({ ...doc, _id: `file-${i}` })),
-        }),
+        select: (projection: unknown) => {
+          mockRefs.selectProjections.push(projection);
+          return {
+            session: async () => fabFileDocs,
+            lean: async () => fabFileDocs.map((doc, i) => ({ ...doc, _id: `file-${i}` })),
+          };
+        },
       };
     };
     // Mirrors the real soft-delete plugin static: it settles to a plain Promise, not a
@@ -212,6 +216,7 @@ describe('DELETE /api/files', () => {
     mockRefs.deleteManyArgs = undefined;
     mockRefs.storedObjectArgs = undefined;
     mockRefs.findFilters = [];
+    mockRefs.selectProjections = [];
     mockRefs.unpublishArgs = undefined;
     mockRefs.updateManyArgs = undefined;
     mockRefs.updateManyOptions = undefined;
@@ -272,6 +277,24 @@ describe('DELETE /api/files', () => {
     expect(files).toBe(fabFileDocs);
     expect(buckets.files).toMatchObject({ bucket: 'files' });
     expect(buckets.generated).toMatchObject({ storage: { bucket: 'generated' } });
+  });
+
+  // The fork guard compares a reply's notebook with the file's own; a projection without sessionId makes the
+  // file's own notebook look like another's, so every notebook-linked chat copy would be kept.
+  it('selects the notebook link the generated-copy fork guard needs', async () => {
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    const storedObjectProjection = String(mockRefs.selectProjections.at(-1)).split(' ');
+    expect(storedObjectProjection).toEqual(
+      expect.arrayContaining([
+        'filePath',
+        'moderationStatus',
+        'sourceMetadata.generatedCopyKey',
+        'sourceMetadata.sessionId',
+      ])
+    );
   });
 
   it('completes the request without throwing', async () => {
