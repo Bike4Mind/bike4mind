@@ -1,6 +1,6 @@
 import { ChangeEvent, FC, ReactNode } from 'react';
 import { Badge, Box, Button, Input, Typography } from '@mui/joy';
-import { AutoAwesome as PromptBuilderIcon, Tag as TagIcon } from '@mui/icons-material';
+import { AutoAwesomeOutlined as PromptBuilderIcon, Tag as TagIcon } from '@mui/icons-material';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';

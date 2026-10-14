@@ -8,21 +8,20 @@ import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls
 import SiGoogledrive, { defaultColor as SiGoogledriveHex } from '@icons-pack/react-simple-icons/icons/SiGoogledrive';
 import {
   ArrowBack,
-  Bolt as BoltIcon,
+  ElectricBoltOutlined as BoltIcon,
   ChevronRight as ChevronRightIcon,
   ImageOutlined as ImageOutlinedIcon,
   InsertDriveFileOutlined,
   SettingsOutlined as SettingsOutlinedIcon,
   WorkOutline as BriefcaseIcon,
 } from '@mui/icons-material';
-import FolderSharedIcon from '@mui/icons-material/FolderShared';
-import CasinoIcon from '@mui/icons-material/Casino';
-import MenuBookIcon from '@mui/icons-material/MenuBook';
+import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
+import CasinoIcon from '@mui/icons-material/CasinoOutlined';
+import MenuBookIcon from '@mui/icons-material/MenuBookOutlined';
 import {
   Box,
   IconButton,
   List,
-  ListDivider,
   ListItem,
   ListItemButton,
   ListItemDecorator,
@@ -36,18 +35,18 @@ import {
 import axios from 'axios';
 import AddIcon from '@mui/icons-material/Add';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
-import PostAddIcon from '@mui/icons-material/PostAdd';
+import PostAddIcon from '@mui/icons-material/PostAddOutlined';
 import useDrivePicker from 'react-google-drive-picker';
 import { toast } from 'sonner';
-import ScienceIcon from '@mui/icons-material/Science';
-import SmartToyIcon from '@mui/icons-material/SmartToy';
+import ScienceIcon from '@mui/icons-material/ScienceOutlined';
+import SmartToyIcon from '@mui/icons-material/SmartToyOutlined';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { isToolDenied } from '@client/app/utils/toolMapping';
-import { FC, useState, useRef, useEffect } from 'react';
+import { FC, useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { useCreateNewSession, useUpdateSession } from '@client/app/hooks/data/sessions';
@@ -220,8 +219,6 @@ const AttachFileButton = ({
   // Desktop side panel next to the menu (prompt catalog, image options); phones use currentView.
   // Every close path (outside click, a picked item, a new file landing) drops it too.
   const [flyout, setFlyout] = useState<Submenu | null>(null);
-  // Where the upload-settings panel lines up: level with the upload row, not the menu's bottom.
-  const uploadRowRef = useRef<HTMLLIElement>(null);
   const [flyoutTop, setFlyoutTop] = useState<number | null>(null);
   const [wasOpen, setWasOpen] = useState(isOpen);
   if (wasOpen !== isOpen) {
@@ -292,16 +289,27 @@ const AttachFileButton = ({
     setCurrentView('main');
     setFlyout(null);
   };
-  const openSubmenu = (panel: Submenu) => {
+  // `anchor` is the row that opened the panel: the panel starts level with it.
+  const openSubmenu = (panel: Submenu, anchor: Element | null) => {
     if (isMobile) {
       setCurrentView(panel);
       return;
     }
-    const row = uploadRowRef.current?.getBoundingClientRect();
+    const row = anchor?.closest('li')?.getBoundingClientRect();
     const menu = dropdownRef.current?.getBoundingClientRect();
-    setFlyoutTop(panel === 'uploadScope' && row && menu ? row.top - menu.top : null);
+    setFlyoutTop(row && menu ? row.top - menu.top : 0);
     setFlyout(current => (current === panel ? null : panel));
   };
+  // A panel taller than the room below its row moves up just enough to stay on screen. Set on the
+  // element directly: it is a measurement of what just rendered, not state.
+  const flyoutRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = flyoutRef.current;
+    if (!el || flyoutTop === null) return;
+    el.style.top = `${flyoutTop}px`;
+    const overflow = el.getBoundingClientRect().bottom - (window.innerHeight - 8);
+    if (overflow > 0) el.style.top = `${flyoutTop - overflow}px`;
+  }, [flyout, flyoutTop]);
   const uploadScopeOpen = flyout === 'uploadScope' || currentView === 'uploadScope';
 
   const handleOpenPicker = async () => {
@@ -526,7 +534,6 @@ const AttachFileButton = ({
                 {/* Always shown, dimmed like the sidebar's row menu icon (SidenavItem) and full strength
                     on hover or while its panel is open. */}
                 <ListItem
-                  ref={uploadRowRef}
                   sx={{ p: 0 }}
                   endAction={
                     <IconButton
@@ -536,7 +543,7 @@ const AttachFileButton = ({
                       size="sm"
                       variant="plain"
                       color="neutral"
-                      onClick={() => openSubmenu('uploadScope')}
+                      onClick={event => openSubmenu('uploadScope', event.currentTarget)}
                       sx={{
                         '--IconButton-size': '28px',
                         '@media (pointer: coarse)': { '--IconButton-size': '44px' },
@@ -727,8 +734,6 @@ const AttachFileButton = ({
                   </ListItem>
                 )}
 
-                {(isAgentModeFeatureEnabled || isResearchModeFeatureEnabled) && <ListDivider />}
-
                 {/* Agent mode moved here from the composer row. Row and switch both toggle it, and
                     the menu stays open so the new state can be read back. */}
                 {isAgentModeFeatureEnabled && (
@@ -797,8 +802,6 @@ const AttachFileButton = ({
                   </ListItem>
                 )}
 
-                {(isMobile || isBriefcaseEnabled || showDice || showImageOptions) && <ListDivider />}
-
                 {/* Mobile only - Optimize Prompt */}
                 {isMobile && chatInputValue && chatInputValue.trim() !== '' && onOptimizePrompt && (
                   <ListItem sx={{ p: 0 }}>
@@ -826,7 +829,7 @@ const AttachFileButton = ({
                     <ListItemButton
                       data-testid="attach-menu-prompt-catalog-btn"
                       selected={flyout === 'briefcase'}
-                      onClick={() => openSubmenu('briefcase')}
+                      onClick={event => openSubmenu('briefcase', event.currentTarget)}
                       sx={{ color: 'text.primary', m: 0 }}
                     >
                       <ListItemDecorator>
@@ -860,7 +863,7 @@ const AttachFileButton = ({
                     <ListItemButton
                       data-testid="attach-menu-image-options-btn"
                       selected={flyout === 'image'}
-                      onClick={() => openSubmenu('image')}
+                      onClick={event => openSubmenu('image', event.currentTarget)}
                       sx={{ color: 'text.primary', m: 0 }}
                     >
                       <ListItemDecorator>
@@ -957,11 +960,12 @@ const AttachFileButton = ({
 
           {!isMobile && flyout && (
             <Box
+              ref={flyoutRef}
               data-testid="attach-menu-flyout"
               sx={{
                 position: 'absolute',
                 left: 'calc(100% + 4px)',
-                ...(flyoutTop !== null ? { top: flyoutTop } : { bottom: 0 }),
+                top: flyoutTop ?? 0,
                 width: flyout === 'uploadScope' ? '300px' : '340px',
                 maxHeight: '480px',
                 overflow: 'auto',
