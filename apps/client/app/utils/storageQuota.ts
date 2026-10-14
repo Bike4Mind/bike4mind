@@ -1,6 +1,6 @@
 import axios from 'axios';
 import prettyBytes from 'pretty-bytes';
-import type { IUserDocument } from '@bike4mind/common';
+import { describeStorageLimitError, parseStorageLimitErrorInfo, type IUserDocument } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { isImageFile } from './imageResizer';
 
@@ -10,10 +10,9 @@ const DEFAULT_STORAGE_LIMIT_MB = 1000;
 const BYTES_PER_MB = 1_000_000;
 const STORAGE_WARNING_PERCENT = 90;
 
-/** Substring common to both of the server's storage refusals - checkStorageLimit's "File size
- * exceeds storage limit" and checkOrganizationStorageLimit's "Organization storage limit exceeded"
- * (b4m-core/utils/src/user.ts) - matched to surface either verbatim. */
-const SERVER_STORAGE_LIMIT_MESSAGE = 'storage limit';
+/** @deprecated Fallback for a server that predates the `code` on storage refusals (b4m-core/common
+ * StorageLimitError); drop it one release after every deploy returns the code. */
+const LEGACY_SERVER_STORAGE_LIMIT_MESSAGE = 'storage limit';
 
 export interface StorageQuota {
   usedBytes: number;
@@ -116,10 +115,16 @@ export async function checkAttachStorageFresh(file: File): Promise<StorageCheck>
 }
 
 export function storageExceededMessage(check: Extract<StorageCheck, { status: 'exceeds' }>): string {
-  const { quota, uploadBytes, bytesToFree } = check;
-  return (
-    `Not enough storage: you are using ${prettyBytes(quota.usedBytes)} of ${prettyBytes(quota.limitBytes)}, ` +
-    `and this upload needs ${prettyBytes(uploadBytes)}. Free up at least ${prettyBytes(bytesToFree)} to continue.`
+  const { quota, uploadBytes } = check;
+  return describeStorageLimitError(
+    {
+      errorCode: 'storage_limit_exceeded',
+      used_bytes: quota.usedBytes,
+      limit_bytes: quota.limitBytes,
+      requested_bytes: uploadBytes,
+      owner: 'user',
+    },
+    prettyBytes
   );
 }
 
@@ -139,10 +144,12 @@ export class StorageLimitExceededError extends Error {
   }
 }
 
-/** The server's storage-limit refusal message, or undefined when `error` is anything else. */
+/** The user-facing text for the server's storage-limit refusal, or undefined when `error` is anything else. */
 export function serverStorageLimitMessage(error: unknown): string | undefined {
   if (!axios.isAxiosError(error) || error.response?.status !== 400) return undefined;
+  const info = parseStorageLimitErrorInfo(error.response.data);
+  if (info) return info.errorCode === 'file_too_large' ? undefined : describeStorageLimitError(info, prettyBytes);
   const data = error.response.data as { error?: unknown; message?: unknown } | undefined;
   const message = typeof data?.error === 'string' ? data.error : data?.message;
-  return typeof message === 'string' && message.includes(SERVER_STORAGE_LIMIT_MESSAGE) ? message : undefined;
+  return typeof message === 'string' && message.includes(LEGACY_SERVER_STORAGE_LIMIT_MESSAGE) ? message : undefined;
 }
