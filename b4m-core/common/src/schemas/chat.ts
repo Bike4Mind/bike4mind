@@ -328,7 +328,8 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
 
 /**
  * 400 for an upload refused on size or quota. The typed members are optional because the same 400 also
- * covers errors that carry none (an unsupported file type).
+ * covers errors that carry none (an unsupported file type); when `errorCode` is present all five arrive
+ * together, which the endpoint's 400 description states for integrators.
  */
 export const StorageLimitErrorSchema = ApiErrorSchema.extend(StorageLimitErrorInfoSchema.partial().shape);
 
