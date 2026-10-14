@@ -104,6 +104,13 @@ const doneWith = (generateVideoResponse: unknown) => ({
   done: true,
   response: { generateVideoResponse },
 });
+// The recorded likeness-filter reason, for tests that replay the live shape.
+const blockedReasons = (): string[] =>
+  (
+    exchange(FIXTURES.blocked, 'poll_terminal').response.body as {
+      response: { generateVideoResponse: { raiMediaFilteredReasons: string[] } };
+    }
+  ).response.generateVideoResponse.raiMediaFilteredReasons;
 
 describeVideoProviderConformance('VeoVideoProvider', {
   provider: () => new VeoVideoProvider(),
@@ -328,7 +335,7 @@ describe('VeoVideoProvider specifics', () => {
     );
   });
 
-  it('reads the live likeness filter (done, no video, RAI reason) as blocked without marking it billed', async () => {
+  it('reads the live likeness filter (done, no video, RAI count) as blocked without marking it billed', async () => {
     active = FIXTURES.blocked;
     settled = true;
     const result = await new VeoVideoProvider().poll(handleFor(OPERATION), ctx());
@@ -336,11 +343,16 @@ describe('VeoVideoProvider specifics', () => {
     expect(result).not.toHaveProperty('billed');
     const terminal = exchange(FIXTURES.blocked, 'poll_terminal').response.body;
     expect(result.status === 'blocked' && result.raw).toEqual(terminal);
-    expect(JSON.stringify(terminal)).toContain('celebrity or their likenesses');
+    // The fixture under test is the live recording, not a hand-built stand-in: its reason carries provider text,
+    // not the redaction placeholder the synthetic one used.
+    expect(FIXTURES.blocked.synthetic).toBeUndefined();
+    expect(blockedReasons()[0]).not.toMatch(/^<redacted/);
   });
 
   it('reads filter reasons without a count as blocked', async () => {
-    expect(await pollWith(doneWith({ raiMediaFilteredReasons: ['reason'] }))).toMatchObject({ status: 'blocked' });
+    expect(await pollWith(doneWith({ raiMediaFilteredReasons: blockedReasons() }))).toMatchObject({
+      status: 'blocked',
+    });
   });
 
   it('prefers a video over a filter count', async () => {
