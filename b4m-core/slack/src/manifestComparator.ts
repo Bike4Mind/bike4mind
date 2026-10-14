@@ -122,8 +122,9 @@ export function compareManifests(
 ): CompareResult {
   // Brand intentionally NOT threaded here: drift comparison checks slash-command
   // descriptions, shortcut/function presence and function input types, never the
-  // brand-templated copy, so the brand value can't cause false drift. (The live app's brand comes from the admin display name at
-  // creation, which differs from APP_NAME, so passing APP_NAME would be wrong, not just moot.)
+  // brand-templated copy, so the brand value can't cause false drift. (The live app's brand comes
+  // from the admin display name at creation, which differs from APP_NAME, so passing APP_NAME
+  // would be wrong, not just moot.)
   const expected = getControlledManifestFields(baseUrl, { enableWorkflowSteps: options?.enableWorkflowSteps });
   const differences: ManifestDifference[] = [];
 

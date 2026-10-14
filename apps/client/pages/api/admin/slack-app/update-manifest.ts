@@ -9,7 +9,7 @@ import { isSlackUserValidationError } from '@server/integrations/slack/slackExpo
 /**
  * POST /api/admin/slack-app/update-manifest
  * Exports the live manifest, merges our controlled fields, and pushes it back.
- * Only overwrites scopes, events, commands, app_home, interactivity;
+ * Only overwrites scopes, events, commands, app_home, interactivity, workflow-step functions;
  * user-customizable fields (name, description, color) are preserved.
  * Admin-only endpoint.
  */

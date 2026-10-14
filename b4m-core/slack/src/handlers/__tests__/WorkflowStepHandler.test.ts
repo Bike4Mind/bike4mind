@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
+import { getControlledManifestFields } from '@bike4mind/common';
 import {
   WorkflowStepHandler,
   FunctionExecutedEvent,
@@ -853,6 +854,19 @@ describe('WorkflowStepHandler', () => {
       expect(User.findOne).not.toHaveBeenCalled();
     });
   });
+});
+
+describe('workflow step manifest contract', () => {
+  const functions = getControlledManifestFields('https://app.example.com', { enableWorkflowSteps: true }).functions;
+
+  it.each(Object.values(WORKFLOW_STEP_CALLBACKS))(
+    '%s declares the attested user_context input the handler resolves the acting user from',
+    callbackId => {
+      const inputs = functions?.[callbackId]?.input_parameters as Record<string, { type: string }> | undefined;
+      expect(inputs?.user_context?.type).toBe('slack#/types/user_context');
+      expect(Object.values(inputs ?? {}).map(input => input.type)).not.toContain('slack#/types/user_id');
+    }
+  );
 });
 
 describe('resolveActingSlackUserId', () => {
