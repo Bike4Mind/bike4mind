@@ -511,7 +511,11 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
               $group: {
                 _id: '$userId',
                 interactions: { $sum: 1 },
-                email: { $first: { $arrayElemAt: ['$userDetails.email', 0] } },
+                email: {
+                  $first: {
+                    $cond: [{ $gt: [{ $size: '$userDetails' }, 0] }, { $arrayElemAt: ['$userDetails.email', 0] }, null],
+                  },
+                },
               },
             },
             { $sort: { interactions: -1 } },
@@ -637,7 +641,11 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
               $group: {
                 _id: '$userId',
                 interactions: { $sum: 1 },
-                email: { $first: { $arrayElemAt: ['$userDetails.email', 0] } },
+                email: {
+                  $first: {
+                    $cond: [{ $gt: [{ $size: '$userDetails' }, 0] }, { $arrayElemAt: ['$userDetails.email', 0] }, null],
+                  },
+                },
               },
             },
             { $sort: { interactions: -1 } },

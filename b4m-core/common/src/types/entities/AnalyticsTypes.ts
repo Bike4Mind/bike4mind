@@ -11,7 +11,7 @@ export interface FacetResults {
   weeklyActiveUsers?: Array<{ count: number }>;
   topUsers?: Array<{
     _id: string;
-    email: string;
+    email: string | null;
     interactions: number;
     rankChange?: 'up' | 'down' | 'new' | 'same';
     lastWeekRank?: number | 'new' | '>#20';
