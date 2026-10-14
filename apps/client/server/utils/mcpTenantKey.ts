@@ -1,7 +1,8 @@
 /**
- * Calls that carry no userId share this bucket among themselves only, never with an attributed
- * tenant. It deliberately differs from the retired platform-wide 'system' key so stale rows written
- * under that key (expired by the snapshot TTL) are never read back.
+ * Tenant key for calls that carry no userId. Their snapshots are stored under it for reporting, but
+ * invokeMcpHandler never throttles on it or shares a breaker through it, so unattributed callers do
+ * not couple to each other. It differs from the retired platform-wide 'system' key so stale rows
+ * written under that key (expired by the snapshot TTL) are never read back.
  */
 export const UNATTRIBUTED_MCP_TENANT = 'unattributed';
 

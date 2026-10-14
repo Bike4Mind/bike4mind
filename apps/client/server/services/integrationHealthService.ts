@@ -50,8 +50,15 @@ const PROBE_TIMEOUT_MS = 10_000;
  * probe results never feed. Any HTTP response below 500 - including 401/403/404/429 for the
  * missing credential - proves the provider is reachable.
  */
-const PROBE_TARGETS: Record<IntegrationName, { url: string; method: 'GET' | 'POST' }> = {
-  slack: { url: 'https://slack.com/api/api.test', method: 'POST' },
+type ProbeTarget = {
+  url: string;
+  method: 'GET' | 'POST';
+  /** Slack reports its own failures as HTTP 200 with `ok: false`; api.test answers `ok: true` unauthenticated. */
+  requiresOkBody?: boolean;
+};
+
+const PROBE_TARGETS: Record<IntegrationName, ProbeTarget> = {
+  slack: { url: 'https://slack.com/api/api.test', method: 'POST', requiresOkBody: true },
   github: { url: 'https://api.github.com/', method: 'GET' },
   jira: { url: 'https://api.atlassian.com/ex/jira', method: 'GET' },
   confluence: { url: 'https://api.atlassian.com/ex/confluence', method: 'GET' },
@@ -60,7 +67,7 @@ const PROBE_TARGETS: Record<IntegrationName, { url: string; method: 'GET' | 'POS
 const SERVER_ERROR_STATUS = 500;
 
 async function probeReachability(integration: IntegrationName): Promise<ProbeResult> {
-  const { url, method } = PROBE_TARGETS[integration];
+  const { url, method, requiresOkBody } = PROBE_TARGETS[integration];
   const start = Date.now();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
@@ -82,6 +89,20 @@ async function probeReachability(integration: IntegrationName): Promise<ProbeRes
         error: `HTTP ${response.status}`,
         metadata: {},
       };
+    }
+
+    if (requiresOkBody) {
+      const body = (await response.json()) as { ok?: boolean; error?: string };
+      if (!body.ok) {
+        return {
+          integration,
+          status: 'unhealthy',
+          latencyMs,
+          statusCode: response.status,
+          error: body.error || 'ok: false',
+          metadata: {},
+        };
+      }
     }
 
     return {

@@ -8,7 +8,7 @@ import type { IntegrationAuditIntegrationName } from '@bike4mind/database';
 import { INTEGRATION_AUDIT_INTEGRATION_NAMES } from '@bike4mind/database';
 import { recordCircuitBreakerRejection } from '@server/utils/cloudwatch';
 import { persistRateLimitEvents, throttleIfNearRateLimit } from '@server/utils/mcpRateLimitSnapshots';
-import { resolveMcpTenantKey } from '@server/utils/mcpTenantKey';
+import { resolveMcpTenantKey, UNATTRIBUTED_MCP_TENANT } from '@server/utils/mcpTenantKey';
 import { randomUUID } from 'crypto';
 import { Resource } from 'sst';
 
@@ -63,9 +63,14 @@ export async function invokeMcpHandler<T = unknown>(payload: Parameters<typeof l
 
   const { action, name, toolName, id: mcpServerId, userId } = payload;
   const tenantKey = resolveMcpTenantKey(userId);
+  // A call with no user has no tenant to scope shared state to, so it neither reads the throttle
+  // nor shares a breaker - otherwise every unattributed caller would couple to every other.
+  const isAttributed = tenantKey !== UNATTRIBUTED_MCP_TENANT;
 
   // Adaptive throttling: delay if this tenant is near its rate limit
-  await throttleIfNearRateLimit(tenantKey, name, action);
+  if (isAttributed) {
+    await throttleIfNearRateLimit(tenantKey, name, action);
+  }
 
   let auditLogger: IntegrationAuditLogger | null = null;
   try {
@@ -85,21 +90,21 @@ export async function invokeMcpHandler<T = unknown>(payload: Parameters<typeof l
 
   // In-memory circuit breaker: fail-fast when repeated failures detected
   const opType = classifyOperation(action, toolName);
-  const breaker = getBreaker(tenantKey, name, opType);
+  const callMcp = async (): Promise<T> => {
+    const mcpName = (() => {
+      try {
+        return Resource.mcpHandler?.name;
+      } catch {
+        return undefined;
+      }
+    })();
+    return shouldRunLocally() || !mcpName
+      ? ((await localMcpHandler(payload)) as T)
+      : await invokeLambda<T>(payload, tenantKey);
+  };
 
   try {
-    const result = await breaker.execute(async () => {
-      const mcpName = (() => {
-        try {
-          return Resource.mcpHandler?.name;
-        } catch {
-          return undefined;
-        }
-      })();
-      return shouldRunLocally() || !mcpName
-        ? ((await localMcpHandler(payload)) as T)
-        : await invokeLambda<T>(payload, tenantKey);
-    });
+    const result = isAttributed ? await getBreaker(tenantKey, name, opType).execute(callMcp) : await callMcp();
 
     try {
       auditLogger?.success({ toolName, mcpServerName: name });

@@ -57,12 +57,13 @@ vi.mock('@server/integrations/integrationAuditLogger', () => ({
 vi.stubEnv('IS_LOCAL', 'true');
 
 import { invokeMcpHandler } from './invokeMcpHandler';
+import { UNATTRIBUTED_MCP_TENANT } from './mcpTenantKey';
 
 type Payload = Parameters<typeof invokeMcpHandler>[0];
 
 const RESET_IN_MS = 5_000;
 
-function callAs(userId: string, server: string): Promise<unknown> {
+function callAs(userId: string | undefined, server: string): Promise<unknown> {
   return invokeMcpHandler({ name: server, action: 'callTool', toolName: 'get_issue', userId } as Payload);
 }
 
@@ -106,6 +107,18 @@ describe('invokeMcpHandler tenant isolation', () => {
     });
   });
 
+  describe('calls with no user', () => {
+    it('never open a breaker that would block the next unattributed caller', async () => {
+      mockLocalMcpHandler.mockRejectedValue(new Error('ECONNRESET'));
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await callAs(undefined, 'iso-unattributed').catch(() => undefined);
+      }
+
+      mockLocalMcpHandler.mockResolvedValue({ ok: true });
+      await expect(callAs(undefined, 'iso-unattributed')).resolves.toEqual({ ok: true });
+    });
+  });
+
   describe('pre-call rate-limit throttle', () => {
     beforeEach(() => {
       vi.useFakeTimers();
@@ -122,7 +135,7 @@ describe('invokeMcpHandler tenant isolation', () => {
       vi.useRealTimers();
     });
 
-    async function isHeldBack(userId: string): Promise<boolean> {
+    async function isHeldBack(userId: string | undefined): Promise<boolean> {
       let settled = false;
       const pending = callAs(userId, 'github').then(() => {
         settled = true;
@@ -137,6 +150,12 @@ describe('invokeMcpHandler tenant isolation', () => {
     it('throttles only the tenant that exhausted its limit', async () => {
       expect(await isHeldBack('tenant-a')).toBe(true);
       expect(await isHeldBack('tenant-b')).toBe(false);
+    });
+
+    it('never throttles a call with no user on a snapshot stored without one', async () => {
+      snapshots.push({ ...snapshots[0], userId: UNATTRIBUTED_MCP_TENANT });
+
+      expect(await isHeldBack(undefined)).toBe(false);
     });
   });
 });

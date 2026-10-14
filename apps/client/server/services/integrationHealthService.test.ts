@@ -3,7 +3,6 @@ import type { Logger } from '@bike4mind/observability';
 
 const h = vi.hoisted(() => ({
   recordCheck: vi.fn(),
-  createSnapshot: vi.fn(),
   fetch: vi.fn(),
 }));
 
@@ -11,29 +10,25 @@ const h = vi.hoisted(() => ({
 // probe that went looking for a tenant's credential would fail here.
 vi.mock('@bike4mind/database', () => ({
   integrationHealthCheckRepository: { recordCheck: h.recordCheck },
-  rateLimitSnapshotRepository: { create: h.createSnapshot },
   INTEGRATION_HEALTH_INTEGRATIONS: ['slack', 'github', 'jira', 'confluence'],
   INTEGRATION_HEALTH_THRESHOLDS: { LATENCY_WARNING_MS: 2_000, LATENCY_CRITICAL_MS: 5_000 },
 }));
 
 vi.mock('@server/utils/cloudwatch', () => ({
   emitMetrics: vi.fn().mockResolvedValue(undefined),
-  recordCircuitBreakerTransition: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { runAllProbes, runProbe } from './integrationHealthService';
-import { getAllBreakerStates } from './mcpCircuitBreakers';
 
 const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() } as unknown as Logger;
 
 function respondWith(status: number): void {
-  h.fetch.mockResolvedValue(new Response(null, { status }));
+  h.fetch.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status }));
 }
 
 describe('integrationHealthService probes', () => {
   beforeEach(() => {
     h.recordCheck.mockReset().mockImplementation(async (check: unknown) => check);
-    h.createSnapshot.mockReset();
     h.fetch.mockReset();
     vi.stubGlobal('fetch', h.fetch);
   });
@@ -78,12 +73,19 @@ describe('integrationHealthService probes', () => {
     expect(check).toMatchObject({ integration: 'confluence', status: 'unhealthy', error: 'ECONNREFUSED' });
   });
 
-  it('never feeds probe results into per-tenant breakers or rate-limit snapshots', async () => {
-    h.fetch.mockRejectedValue(new Error('ECONNREFUSED'));
+  it('marks Slack unhealthy when api.test answers 200 with ok: false', async () => {
+    h.fetch.mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, error: 'service_unavailable' }), { status: 200 })
+    );
 
-    await runAllProbes(logger);
+    const check = await runProbe('slack');
 
-    expect(getAllBreakerStates()).toEqual({});
-    expect(h.createSnapshot).not.toHaveBeenCalled();
+    expect(check).toMatchObject({ integration: 'slack', status: 'unhealthy', error: 'service_unavailable' });
+  });
+
+  it('marks Slack healthy when api.test answers ok: true', async () => {
+    h.fetch.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    expect(await runProbe('slack')).toMatchObject({ integration: 'slack', status: 'healthy', error: null });
   });
 });
