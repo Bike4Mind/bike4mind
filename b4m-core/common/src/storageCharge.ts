@@ -5,13 +5,18 @@
  * Must stay in sync: `isStorageCharged` and `STORAGE_CHARGED_FILTER` encode the same rule.
  *
  * Charged = stamped by a charge (apps/client/server/s3/storageCharge.ts; a notebook import can stamp
- * a still-`pending` row), or a legacy `complete` row from before every charge stamped - back then
- * the ObjectCreated handler charged every upload it marked `complete`. After the cutoff an unstamped
- * `complete` row (marked uploaded before its event, or a self-host row) was never charged.
+ * a still-`pending` row), or a legacy `complete` row from before the stamping release. That legacy
+ * arm is the HOSTED prod history: there the ObjectCreated handler charged every upload it marked
+ * `complete`. A self-host install's webhook marked rows `complete` without charging them, so its
+ * pre-cutoff rows read as charged here - they over-refund (the counter clamps at 0) and
+ * `sumFileSizeByUserId` counts them; backfill `storageChargedAt` on such an install to make the rule
+ * exact again. After the cutoff an unstamped `complete` row (marked uploaded before its event, or a
+ * self-host row) was never charged.
  */
 
-// ponytail: first prod release carrying the stamp was prod-2026-10-07-b (08:50Z); rounded up a day
-// on purpose - too late only refunds a few already-stamped-era rows, too early would skip real refunds.
+// ponytail: first HOSTED prod release carrying the stamp was prod-2026-10-07-b (08:50Z); rounded up
+// a day on purpose - too late only refunds a few already-stamped-era rows, too early would skip real
+// refunds. A deployment that picked the stamp up later (a self-host install) sees it as too early.
 export const STORAGE_CHARGE_STAMP_CUTOFF = new Date('2026-10-08T00:00:00Z');
 
 /**
