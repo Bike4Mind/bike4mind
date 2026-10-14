@@ -27,7 +27,11 @@ vi.mock('@bike4mind/auth', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/auth')>();
   return {
     ...actual,
-    apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
+    apiKeyService: {
+      ...actual.apiKeyService,
+      getEffectiveLLMApiKeys: vi.fn(async () => ({})),
+      getEffectiveApiKey: vi.fn(async () => 'e-key'),
+    },
   };
 });
 vi.mock('@server/utils/sqs', () => ({ sendToQueue }));
@@ -121,8 +125,9 @@ describe('music provider key selection', () => {
     expect(usableApiKey(selectMusicProviderKey('gemini-lyria', { gemini: 'expired' } as never))).toBeNull();
   });
 
-  it('has no ElevenLabs key until its music adapter lands', () => {
-    expect(selectMusicProviderKey('elevenlabs', { gemini: 'g-key' } as never)).toBeNull();
+  it('maps elevenlabs to the ElevenLabs key, never the Gemini one', () => {
+    expect(selectMusicProviderKey('elevenlabs', { gemini: 'g-key', elevenlabs: 'e-key' } as never)).toBe('e-key');
+    expect(usableApiKey(selectMusicProviderKey('elevenlabs', { gemini: 'g-key' } as never))).toBeNull();
   });
 
   it('throws for a provider id with no mapping', () => {
@@ -131,6 +136,10 @@ describe('music provider key selection', () => {
 
   it('resolves the test provider key through the deps', async () => {
     expect(await getMusicJobDeps().resolveApiKey('test', 'user1')).toBe('test-key');
+  });
+
+  it('resolves the ElevenLabs key through the deps', async () => {
+    expect(await getMusicJobDeps().resolveApiKey('elevenlabs', 'user1')).toBe('e-key');
   });
 });
 
@@ -241,13 +250,13 @@ describe('buildMusicProviders', () => {
     delete process.env.ENABLE_TEST_MUSIC_PROVIDER;
   });
 
-  it('registers Lyria unconditionally', () => {
-    expect(buildMusicProviders().map(provider => provider.id)).toEqual(['gemini-lyria']);
+  it('registers Lyria and ElevenLabs unconditionally', () => {
+    expect(buildMusicProviders().map(provider => provider.id)).toEqual(['gemini-lyria', 'elevenlabs']);
   });
 
   it('adds the test provider only when enabled', () => {
     process.env.ENABLE_TEST_MUSIC_PROVIDER = 'true';
-    expect(buildMusicProviders().map(provider => provider.id)).toEqual(['gemini-lyria', 'test']);
+    expect(buildMusicProviders().map(provider => provider.id)).toEqual(['gemini-lyria', 'elevenlabs', 'test']);
   });
 
   it('builds a registry the catalog-owner check accepts', () => {

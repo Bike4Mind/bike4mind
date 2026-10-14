@@ -1,6 +1,7 @@
 import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/auth';
 import {
+  ApiKeyType,
   BadRequestError,
   isImageServeable,
   isPlaceholderApiKey,
@@ -41,6 +42,7 @@ import {
 } from '@bike4mind/utils';
 import {
   createMusicProviderRegistry,
+  ElevenLabsMusicProvider,
   LyriaMusicProvider,
   TestMusicProvider,
   type MusicProvider,
@@ -98,20 +100,22 @@ export const selectProviderKey = (
   }
 };
 
+type MusicProviderKeys = Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApiKeys>> & {
+  elevenlabs?: string | null;
+};
+
 /** As selectProviderKey, for the music providers. */
 export const selectMusicProviderKey = (
   providerId: MusicProviderId,
-  keys: Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApiKeys>>
+  keys: MusicProviderKeys
 ): string | null | undefined => {
   switch (providerId) {
     case 'test':
       return 'test-key';
     case 'gemini-lyria':
       return keys.gemini;
-    // getEffectiveLLMApiKeys carries no ElevenLabs key (it is read through getEffectiveApiKey), and no
-    // ElevenLabs music adapter is registered yet; that adapter wires its key here.
     case 'elevenlabs':
-      return null;
+      return keys.elevenlabs;
     default: {
       const unhandled: never = providerId;
       throw new Error(`no API key mapping for music provider '${String(unhandled)}'`);
@@ -149,9 +153,9 @@ export const buildProviders = (): VideoProvider[] => {
   return providers;
 };
 
-// Lyria is registered everywhere; a caller can use it only with a resolvable Gemini key.
+// Lyria and ElevenLabs are registered everywhere; a caller can use one only with a resolvable key.
 export const buildMusicProviders = (): MusicProvider[] => {
-  const providers: MusicProvider[] = [new LyriaMusicProvider()];
+  const providers: MusicProvider[] = [new LyriaMusicProvider(), new ElevenLabsMusicProvider()];
   // Set only on non-production stages by infra (TEST_GENERATION_PROVIDER_ENVIRONMENT); never registered in production.
   if (process.env.ENABLE_TEST_MUSIC_PROVIDER === 'true') providers.push(new TestMusicProvider());
   return providers;
@@ -192,8 +196,21 @@ const effectiveKeys = (userId: string) =>
 const resolveApiKey: VideoJobDeps['resolveApiKey'] = async (providerId, userId) =>
   usableApiKey(selectProviderKey(providerId, await effectiveKeys(userId)));
 
+// getEffectiveLLMApiKeys carries no ElevenLabs key: it resolves like the TTS and music chat tools (user key, then
+// the admin demo key), and is read only for an ElevenLabs job.
+const musicProviderKeys = async (providerId: MusicProviderId, userId: string): Promise<MusicProviderKeys> => {
+  const keys = await effectiveKeys(userId);
+  if (providerId !== 'elevenlabs') return keys;
+  const elevenlabs = await apiKeyService.getEffectiveApiKey(
+    userId,
+    { type: ApiKeyType.elevenlabs, nullIfMissing: true },
+    { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
+  );
+  return { ...keys, elevenlabs };
+};
+
 const resolveMusicApiKey: MusicJobDeps['resolveApiKey'] = async (providerId, userId) =>
-  usableApiKey(selectMusicProviderKey(providerId, await effectiveKeys(userId)));
+  usableApiKey(selectMusicProviderKey(providerId, await musicProviderKeys(providerId, userId)));
 
 // Owner-only on purpose for both kinds: the image becomes provider input, and a shared image is not the
 // requester's to send out.
