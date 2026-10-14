@@ -4,12 +4,12 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { briefcasePromptRepository } from '@bike4mind/database';
 import { briefcaseService } from '@bike4mind/services';
-import { BriefcasePromptIdSchema, BriefcasePromptUpdateInput, type ICaller } from '@bike4mind/common';
+import { BriefcasePromptIdSchema, BriefcasePromptUpdateInput, isOAuthSourceTag, type ICaller } from '@bike4mind/common';
 import { Request } from 'express';
 
 const toCaller = (req: Request): ICaller => ({
   id: req.user.id,
-  entitlements: req.user.tags ?? [],
+  entitlements: (req.user.tags ?? []).filter(tag => !isOAuthSourceTag(tag)),
   isAdmin: !!req.user.isAdmin,
   isApiKey: !!req.apiKeyInfo,
 });

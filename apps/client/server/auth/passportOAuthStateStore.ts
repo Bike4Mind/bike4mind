@@ -1,4 +1,5 @@
 import { Request } from 'express';
+import { clientIdFromAuthorizeRedirect } from '@bike4mind/common';
 import OAuth2Strategy from 'passport-oauth2';
 import { createStateToken, verifyStateToken } from './jwtStateStore';
 import { readStateNonceHash } from './oauthFlowCookie';
@@ -51,10 +52,12 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
       // Sanitized client-side before navigation in /auth/success, so passed
       // through opaquely here.
       const redirectTo = typeof req.query?.redirectTo === 'string' ? req.query.redirectTo : undefined;
+      // The OAuth client a signup came through, for its source tag (stampOAuthSourceTag).
+      const clientId = clientIdFromAuthorizeRedirect(redirectTo);
       const nonceHash = (req as unknown as Record<string, unknown>)[OAUTH_NONCE_HASH_REQ_KEY];
       const token = createStateToken(
         { audience: this.audience },
-        redirectTo ? { redirectTo } : undefined,
+        redirectTo ? { redirectTo, ...(clientId ? { clientId } : {}) } : undefined,
         typeof nonceHash === 'string' ? nonceHash : undefined
       );
       cb(null, token);
