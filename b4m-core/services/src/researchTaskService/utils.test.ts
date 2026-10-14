@@ -15,6 +15,7 @@ import {
   IResearchData,
   IResearchTaskScrape,
   IUserDocument,
+  BadRequestError,
   NotFoundError,
   ResearchTaskType,
   ResearchTaskExecutionType,
@@ -327,6 +328,28 @@ describe('findExistingResearchData utils', () => {
             mockLogger
           )
         ).rejects.toThrow(NotFoundError);
+        expect(mockStorage.upload).not.toHaveBeenCalled();
+      });
+
+      it('fails the re-crawl on a non-quota error from the gate rather than keeping the old crawl', async () => {
+        const file = { ...mockFabFile, fileSize: 10 };
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockFabFilesRepo.findById.mockResolvedValue(file);
+        // Only a storage refusal means "over quota, keep the previous crawl"; anything else must
+        // surface, so the whole task fails and retries instead of silently reporting success.
+        mockFabFilesRepo.findChargeState.mockRejectedValue(new BadRequestError('gate failed'));
+
+        await expect(
+          findOrUpdateExistingResearchData(
+            'https://example.com',
+            'x'.repeat(100),
+            'text/markdown',
+            mockResearchTaskWithOrganization,
+            mockUser,
+            adapters,
+            mockLogger
+          )
+        ).rejects.toThrow(BadRequestError);
         expect(mockStorage.upload).not.toHaveBeenCalled();
       });
     });
