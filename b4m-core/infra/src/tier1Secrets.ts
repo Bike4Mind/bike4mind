@@ -238,7 +238,15 @@ export function validateSharedSecret(value: string | undefined): Tier1Validation
  * integration is not wired, which is a legitimate state for a throwaway preview but
  * an anonymous control plane on a stage that serves real traffic.
  */
-export type Tier1Enforcement = 'always' | 'production';
+/**
+ * always     - blocks every stage (core auth/session secrets).
+ * production - blocks production-class stages (dev + production); safe for ingest tokens
+ *              whose unconfigured state opens an unauthenticated write path.
+ * warn       - never blocks; surfaces on the admin page and in deploy output as a warning.
+ *              Use for integrations whose absent state is a disabled feature (the route
+ *              already fails closed with a 503), not a security defect.
+ */
+export type Tier1Enforcement = 'always' | 'production' | 'warn';
 
 export interface Tier1SecretSpec {
   name: string;
@@ -315,6 +323,39 @@ export const TIER1_SECRET_SPECS: readonly Tier1SecretSpec[] = [
       exposure: 'the ingest route it gates accepts unauthenticated writes',
     })
   ),
+  {
+    name: 'NCMEC_ESP_ID',
+    enforcement: 'warn',
+    validate: (value): Tier1ValidationResult => {
+      if (!value) return { isValid: false, status: 'missing', severity: 'error' };
+      if (isCommonPlaceholder(value)) return { isValid: false, status: 'placeholder', severity: 'error' };
+      return { isValid: true, status: 'configured', severity: 'info' };
+    },
+    hint: (stage) => `AWS_PROFILE=<your-profile> pnpm sst secret set NCMEC_ESP_ID "<your-esp-id>" --stage ${stage}`,
+    exposure: 'NCMEC CyberTipline reporting is disabled; confirmed CSAM incidents cannot be submitted',
+  },
+  {
+    name: 'NCMEC_API_KEY',
+    enforcement: 'warn',
+    validate: (value): Tier1ValidationResult => {
+      if (!value) return { isValid: false, status: 'missing', severity: 'error' };
+      if (isCommonPlaceholder(value)) return { isValid: false, status: 'placeholder', severity: 'error' };
+      return { isValid: true, status: 'configured', severity: 'info' };
+    },
+    hint: (stage) => `AWS_PROFILE=<your-profile> pnpm sst secret set NCMEC_API_KEY "<your-api-key>" --stage ${stage}`,
+    exposure: 'NCMEC CyberTipline reporting is disabled; confirmed CSAM incidents cannot be submitted',
+  },
+  {
+    name: 'NCMEC_ESP_EMAIL',
+    enforcement: 'warn',
+    validate: (value): Tier1ValidationResult => {
+      if (!value) return { isValid: false, status: 'missing', severity: 'error' };
+      if (isCommonPlaceholder(value)) return { isValid: false, status: 'placeholder', severity: 'error' };
+      return { isValid: true, status: 'configured', severity: 'info' };
+    },
+    hint: (stage) => `AWS_PROFILE=<your-profile> pnpm sst secret set NCMEC_ESP_EMAIL "<esp-contact@yourdomain.com>" --stage ${stage}`,
+    exposure: 'NCMEC CyberTipline reports will be rejected; the ESP contact email is required by the API',
+  },
 ];
 
 export interface Tier1SecretStatus extends Tier1ValidationResult {
@@ -355,7 +396,7 @@ export function evaluateTier1Secrets(options: EvaluateTier1SecretsOptions): Tier
             message: 'Never set for this stage - resolves to the placeholder default declared in infra/secrets.ts.',
           }
         : spec.validate(value, stage);
-    const enforced = spec.enforcement === 'always' || isProductionStage;
+    const enforced = spec.enforcement === 'always' || (spec.enforcement === 'production' && isProductionStage);
     return {
       ...result,
       name: spec.name,

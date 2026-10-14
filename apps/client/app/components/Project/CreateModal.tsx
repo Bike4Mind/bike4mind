@@ -19,6 +19,7 @@ import ProjectAddSessionsModal from './AddSessionsModal';
 import ProjectAddFilesModal from './AddFilesModal';
 import { useForm } from 'react-hook-form';
 import { IProjectDocument } from '@bike4mind/common';
+import { useNavigate } from '@tanstack/react-router';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 
@@ -41,12 +42,17 @@ const ProjectCreateModal = ({ label, testId = 'new-project-btn' }: { label?: str
     ),
   });
 
+  const navigate = useNavigate();
+  const skipFocusReturnRef = useRef(false);
   const { mutate: createProject, isPending } = useCreateProject({
-    onSuccess: () => {
+    onSuccess: project => {
+      // The new project's page takes focus, so the opener must not steal it back.
+      skipFocusReturnRef.current = true;
       setSelectedSessions([]);
       setSelectedFiles([]);
       setOpen(false);
       reset(defaultValues);
+      navigate({ to: `/projects/${project.id}` });
     },
   });
   const [open, setOpen] = useState(false);
@@ -59,7 +65,8 @@ const ProjectCreateModal = ({ label, testId = 'new-project-btn' }: { label?: str
     if (open) wasOpenRef.current = true;
     else if (wasOpenRef.current) {
       wasOpenRef.current = false;
-      openerRef.current?.focus();
+      if (skipFocusReturnRef.current) skipFocusReturnRef.current = false;
+      else openerRef.current?.focus();
     }
   }, [open]);
 

@@ -203,8 +203,8 @@ jobs:
           permission-pull-requests: write
 
       # Rebuilt from the current main on every failing run. A push happens only
-      # when package.json or pnpm-lock.yaml differ from the branch (a new fix, or
-      # main changing either file), so CI is not re-run for unrelated main commits.
+      # when the manifests or the lockfile differ from the branch (a new fix, or
+      # main changing one of them), so CI is not re-run for unrelated main commits.
       - name: Push auto-fix branch and open or update PR
         id: autofix-pr
         if: steps.recheck.outcome == 'success'
@@ -223,9 +223,9 @@ jobs:
           git config user.email "b4m-release-bot[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git switch -c "$AUTOFIX_BRANCH"
-          git add package.json pnpm-lock.yaml
+          git add package.json pnpm-workspace.yaml pnpm-lock.yaml
           git commit -m "fix(deps): raise overrides past new high/critical advisories"
-          if git fetch --no-tags --depth=1 origin "$AUTOFIX_BRANCH" && git diff --quiet FETCH_HEAD HEAD -- package.json pnpm-lock.yaml; then
+          if git fetch --no-tags --depth=1 origin "$AUTOFIX_BRANCH" && git diff --quiet FETCH_HEAD HEAD -- package.json pnpm-workspace.yaml pnpm-lock.yaml; then
             echo "The auto-fix branch already carries this change; not pushing."
           else
             git push --force origin "HEAD:refs/heads/$AUTOFIX_BRANCH"

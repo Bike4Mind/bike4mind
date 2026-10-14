@@ -306,18 +306,18 @@ const SubscriptionModalContent = () => {
               answersEstimate={formatAnswersEstimate(teamPlanCredits, answerCostReference)}
               interval="month"
               features={[
+                // One flat price covers up to teamMinSeats people, so a pair or trio pays the same: don't present the floor
+                // as a headcount to fill.
                 teamSeatPrice === undefined
-                  ? `${teamMinSeats}-seat minimum`
-                  : `$${centsToDollars(teamSeatPrice).toFixed(2)} per seat per month, ${teamMinSeats}-seat minimum`,
-                `${teamMinSeats} team member accounts included`,
+                  ? `Up to ${teamMinSeats} people at one flat price`
+                  : `Up to ${teamMinSeats} people at one flat price; $${centsToDollars(teamSeatPrice).toFixed(2)} per month for each person after that`,
                 'Shared credit pool with 3-month rollover',
                 'Advanced Projects with RAG & Auto-Summary',
                 'Team workspace & knowledge management',
                 'Automated tagging & organization',
                 'Usage analytics across all models',
                 'Advanced security controls',
-                'Dedicated support channel',
-                'Priority support',
+                'Priority support in a dedicated channel',
               ]}
               actionButton={
                 <Stack gap={1}>

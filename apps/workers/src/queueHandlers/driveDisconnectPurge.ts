@@ -3,6 +3,7 @@ import {
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  lakeSkippedFileRepository,
   orgGoogleDriveConnectionRepository,
   sessionRepository,
   userRepository,
@@ -99,6 +100,7 @@ export async function runDriveDisconnectPurge(
     const orphans = await listDeletableDriveOrphans(lake, connectionId, logger);
     await deleteDriveOrphans(orphans, logger);
   }
+  await lakeSkippedFileRepository.deleteForSource(dataLakeId, 'google_drive');
 
   await releaseDriveConnection(connectionId, owner);
   logger.info('[driveDisconnectPurge] purged every ingested file and released the connection', {

@@ -16,7 +16,8 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
 vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
+const { mockPublish } = vi.hoisted(() => ({ mockPublish: vi.fn() }));
+vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mockPublish } } }));
 vi.mock('@bike4mind/services', () => ({
   userService: { adminDeleteUser: (...a: unknown[]) => mockAdminDeleteUser(...a) },
 }));
@@ -28,6 +29,7 @@ vi.mock('@server/services/purgeDeletedUserData', () => ({
   purgeDeletedUserData: (...a: unknown[]) => mockPurge(...a),
 }));
 
+import { USER_SECRET_FIELDS } from '@bike4mind/common';
 import handler from '../delete';
 
 type DeleteAdapters = { db: { users: { delete: (id: string) => Promise<unknown> } } };
@@ -58,7 +60,34 @@ describe('DELETE /api/users/[id]/delete', () => {
 
     expect(mockRepoDelete).toHaveBeenCalledWith('u1');
     expect(mockPurge).toHaveBeenCalledWith('u1', expect.objectContaining({ deletedBy: 'admin1' }));
-    expect(res._getJSONData()).toEqual({ id: 'u1' });
+    expect(res._getJSONData()).toMatchObject({ id: 'u1' });
+  });
+
+  it('escapes names and email in the admin notification body', async () => {
+    mockAdminDeleteUser.mockImplementation(
+      async (
+        _admin: string,
+        _p: unknown,
+        { mailer }: { mailer: { sendDeleteUserEmail: (to: string[], u: unknown, a: unknown) => Promise<void> } }
+      ) => {
+        await mailer.sendDeleteUserEmail(
+          ['ops@example.com'],
+          { name: '<b>U</b>', email: 'u&x@example.com' },
+          { name: '<i>A</i>' }
+        );
+        return { id: 'u1' };
+      }
+    );
+
+    const { call } = await run();
+    await call;
+
+    const body: string = mockPublish.mock.calls[0][0].body;
+    expect(body).not.toContain('<b>');
+    expect(body).not.toContain('<i>');
+    expect(body).toContain('&lt;b&gt;U&lt;/b&gt;');
+    expect(body).toContain('u&amp;x@example.com');
+    expect(body).toContain('&lt;i&gt;A&lt;/i&gt;');
   });
 
   it('still purges when a notification throws after the delete committed', async () => {
@@ -81,5 +110,18 @@ describe('DELETE /api/users/[id]/delete', () => {
     await expect(call).rejects.toThrow('not authorized');
     expect(mockRepoDelete).not.toHaveBeenCalled();
     expect(mockPurge).not.toHaveBeenCalled();
+  });
+
+  it('returns the serialized user shape with none of the USER_SECRET_FIELDS', async () => {
+    const secrets = Object.fromEntries(USER_SECRET_FIELDS.map(f => [f, 'x']));
+    mockAdminDeleteUser.mockResolvedValue({ id: 'u1', name: 'N', email: 'n@example.com', ...secrets });
+
+    const { res, call } = await run();
+    await call;
+
+    const body = res._getJSONData();
+    expect(body).toMatchObject({ id: 'u1', name: 'N' });
+    expect(body).not.toHaveProperty('email');
+    for (const f of USER_SECRET_FIELDS) expect(body).not.toHaveProperty(f);
   });
 });

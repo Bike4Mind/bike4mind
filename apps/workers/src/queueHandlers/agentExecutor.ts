@@ -110,7 +110,7 @@ import {
   inheritedArtifactFields,
   resolveAgentArtifactEmissionPrompt,
   resolveAgentArtifactGate,
-} from '../utils/artifactGate';
+} from '@server/utils/artifactGate';
 import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
 import {
   shouldWithholdToolCall,

@@ -13,8 +13,14 @@ import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcce
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@server/utils/errors';
 import { z } from 'zod';
+
+/** `additionalInfo` of a rate-limit TooManyRequestsError; transports turn it into response headers. */
+export type RateLimitErrorInfo = {
+  retryAfter?: number;
+  rateLimitHeaders?: Record<string, string | number>;
+};
 
 export interface VerifiedUser {
   id: string;
@@ -245,7 +251,9 @@ export async function verifyApiKey(
 
     if (!hasRequiredScope) {
       const list = requiredScopes.join(' or ');
-      throw new Error(`API key does not have permission for this endpoint (requires ${list})`);
+      throw new ForbiddenError(`API key does not have permission for this endpoint (requires ${list})`, {
+        required_scopes: requiredScopes,
+      });
     }
 
     await assertOwnerAccountUsable(validation.userId);
@@ -330,7 +338,8 @@ export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
  * Check API key rate limits
  * @param apiKeyInfo - API key information including rate limits
  * @param context - Optional context for analytics logging (userId, endpoint, method)
- * @throws Error if rate limit is exceeded
+ * @throws TooManyRequestsError if the limit is exceeded, with `retryAfter` (seconds) and
+ *   `rateLimitHeaders` in additionalInfo for the transport to set as response headers
  * @returns Rate limit headers to include in response
  */
 export async function checkApiKeyRateLimitOrThrow(
@@ -340,7 +349,8 @@ export async function checkApiKeyRateLimitOrThrow(
   const result = await checkApiKeyRateLimit(apiKeyInfo.keyId, apiKeyInfo.rateLimit, context);
 
   if (!result.allowed) {
-    throw new Error(result.error || 'Rate limit exceeded');
+    const info = { retryAfter: result.retryAfter, rateLimitHeaders: result.headers } satisfies RateLimitErrorInfo;
+    throw new TooManyRequestsError(result.error || 'Rate limit exceeded', info);
   }
 
   return result.headers;
@@ -420,6 +430,8 @@ function jwtRateLimitKey(userId: string, bucket?: JwtRateLimitBucket): string {
  * turned the window into a perpetually-sliding lockout - an active user who
  * hit the cap could never recover without going idle for a full hour from
  * their *most recent* request.
+ *
+ * @throws TooManyRequestsError with `additionalInfo.retryAfter` (seconds left in the window)
  */
 export async function checkRateLimit(
   userId: string,
@@ -442,7 +454,8 @@ export async function checkRateLimit(
   if (current >= limit) {
     const ttl = await cacheService.ttl({ key }, adapters);
     const resetSeconds = Math.ceil((ttl > 0 ? ttl : JWT_RATE_WINDOW_MS) / 1000);
-    throw new Error(`Rate limit exceeded. Try again in ${resetSeconds} seconds.`);
+    const info = { retryAfter: resetSeconds } satisfies RateLimitErrorInfo;
+    throw new TooManyRequestsError(`Rate limit exceeded. Try again in ${resetSeconds} seconds.`, info);
   }
 
   // Preserve the remaining window - do NOT reset TTL on increment.

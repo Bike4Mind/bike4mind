@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ModelBackend, type ModelInfo } from '@bike4mind/common';
-import { canonicalModelKey, dedupeModelsForPicker } from './pickerModelDedupe';
+import { canonicalModelKey, dedupeModelsForPicker, splitModelsByRoute } from './pickerModelDedupe';
 
 const model = (id: string, backend: ModelBackend, extra: Partial<ModelInfo> = {}): ModelInfo =>
   ({ id, name: id, backend, type: 'text', contextWindow: 1000, max_tokens: 100, ...extra }) as unknown as ModelInfo;
@@ -178,5 +178,18 @@ describe('dedupeModelsForPicker', () => {
       const models = [model(base, ModelBackend.Gemini), model(variant, ModelBackend.Gemini)];
       expect(ids(dedupeModelsForPicker(models, none, ''))).toEqual([base, variant]);
     });
+  });
+});
+
+describe('splitModelsByRoute', () => {
+  it('separates Bedrock rows from direct rows and keeps each side in order', () => {
+    const { direct, bedrock } = splitModelsByRoute([
+      model('global.anthropic.claude-opus-5-5', ModelBackend.Bedrock),
+      model('claude-opus-5-5', ModelBackend.Anthropic),
+      model('global.anthropic.claude-haiku-5-5', ModelBackend.Bedrock),
+      model('claude-haiku-5-5', ModelBackend.Anthropic),
+    ]);
+    expect(ids(direct)).toEqual(['claude-opus-5-5', 'claude-haiku-5-5']);
+    expect(ids(bedrock)).toEqual(['global.anthropic.claude-opus-5-5', 'global.anthropic.claude-haiku-5-5']);
   });
 });

@@ -44,6 +44,7 @@ import {
   visibleReplyText,
   tokenEstimateMultiplier,
   pairDataLakeTools,
+  isClaudeModelId,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -4314,7 +4315,7 @@ export class ChatCompletionProcess {
         logitBias: logitBias ?? undefined,
         // Pass query complexity for auto-classification of reasoning effort
         complexity: queryComplexity as 'simple' | 'contextual' | 'complex',
-        // Pass explicit user reasoning effort preference (if not 'auto')
+        // Pass explicit user reasoning effort preference (if not 'auto'); withheld from Claude per attempt below
         reasoningEffort: explicitReasoningEffort,
         // Gate on can_think so we never ask a non-thinking model to think:
         // Ollama returns a hard 400 ("does not support thinking") for think:true
@@ -4662,6 +4663,10 @@ export class ChatCompletionProcess {
               messages,
               {
                 ...options,
+                // The preference is set from a selector shown only for OpenAI-style reasoning models, so
+                // it must not retune Claude, whose adapters honour reasoningEffort for the completions API.
+                // Checked per attempt: a fallback can swap a GPT model for a Claude one (and back).
+                reasoningEffort: isClaudeModelId(currentModel.id) ? undefined : options.reasoningEffort,
                 abortSignal: abortController.signal,
                 cacheStrategy,
                 _internal: {

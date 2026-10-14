@@ -1,11 +1,4 @@
-import {
-  adminSettingsRepository,
-  changeStorageSize,
-  dataLakeBatchRepository,
-  FabFile,
-  User,
-  withTransaction,
-} from '@bike4mind/database';
+import { adminSettingsRepository, dataLakeBatchRepository, FabFile, User, withTransaction } from '@bike4mind/database';
 import { isMediaOnlyMimeType } from '@bike4mind/common';
 import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
 import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
@@ -16,7 +9,7 @@ import {
   writeModerationVerdict,
   type ModerationVerdictPatch,
 } from '@server/s3/moderationScan';
-import { claimStorageCharge } from '@server/s3/storageCharge';
+import { chargeUploadedObject } from '@server/s3/storageCharge';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { completedBatchStatus, finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
@@ -168,7 +161,7 @@ export const func = withContext(async (event, context, logger) => {
         moderationStatus = (await writeVerdict(verdictPatch, session)) ? result.moderationStatus : 'pending';
       }
 
-      if (await claimStorageCharge(metadata._id, uploadedAt, session)) changeStorageSize(user, object.size);
+      await chargeUploadedObject(metadata._id, user, object.size, uploadedAt, session);
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
       return user;

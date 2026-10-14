@@ -39,7 +39,7 @@ export const useGetJoinedProjects = (userId: string, options: { enabled?: boolea
 };
 
 export const useCreateProject = (callback?: {
-  onSuccess?: () => void;
+  onSuccess?: (project: IProjectDocument) => void;
   onError?: (error: Error) => void;
   /** Skip the success toast; the caller reports success itself (e.g. after a follow-up request). */
   silentSuccess?: boolean;
@@ -60,7 +60,7 @@ export const useCreateProject = (callback?: {
       if (variables.fileIds?.length) queryClient.invalidateQueries({ queryKey: fabFileKeys.own });
 
       if (!callback?.silentSuccess) toast.success('Project created successfully');
-      callback?.onSuccess?.();
+      callback?.onSuccess?.(project);
     },
     onError: error => {
       if (error instanceof AxiosError) {

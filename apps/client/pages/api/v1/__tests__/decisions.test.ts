@@ -283,6 +283,35 @@ describe('POST /api/v1/decisions', () => {
     expect(settle.mock.calls[0][0]).toBeGreaterThan(0);
   });
 
+  describe('TypeSafe Jev models', () => {
+    const JEV_ANSWERS = [{ type: 'predicate', probability: 0.9 }];
+
+    it('returns the versioned model and settles at the TypeSafe rate with provider typesafe', async () => {
+      registeredModels.value = ['jev-latest'];
+      providerSpy.mockResolvedValueOnce({
+        model: 'jev-1.13.0',
+        answers: JEV_ANSWERS,
+        usage: { inputTokens: 316, outputTokens: 38 },
+      });
+      const { status, body } = await run({ input: 'x', model: 'jev-latest', questions: [QUESTIONS[0]] });
+
+      expect(status).toBe(200);
+      expect(body.model).toBe('jev-1.13.0');
+      expect(resolveKey).toHaveBeenCalledWith('u1', 'typesafe', expect.anything());
+      const [event] = recordUsage.mock.calls[0];
+      expect(event.provider).toBe('typesafe');
+      expect(event.costUsd).toBeCloseTo((316 * 0.042) / 1e6, 10);
+    });
+
+    it('returns 503 provider_not_configured when no TypeSafe key resolves', async () => {
+      registeredModels.value = ['jev-latest'];
+      resolveKey.mockResolvedValue(null);
+      const { status, body } = await run({ input: 'x', model: 'jev-latest', questions: [QUESTIONS[0]] });
+      expect(status).toBe(503);
+      expect(body.errorCode).toBe('provider_not_configured');
+    });
+  });
+
   it('returns 422 insufficient_credits from the credit hold', async () => {
     reserve.mockRejectedValue(insufficientCreditsError('Not enough credits'));
     const { status } = await run({ input: 'x' });

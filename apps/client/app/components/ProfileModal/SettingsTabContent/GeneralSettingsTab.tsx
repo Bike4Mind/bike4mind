@@ -3,7 +3,6 @@ import NotebookExportModal from '@/app/components/ProfileModal/NotebookExportMod
 import NotebookImportModal from '@/app/components/ProfileModal/NotebookImportModal';
 import NotebookCurationModal from '@/app/components/ProfileModal/NotebookCurationModal';
 import ImportHistoryJobsList from '@/app/components/ProfileModal/ImportHistoryJobsList';
-import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useDeleteAllFiles } from '@client/app/hooks/data/fabFiles';
 import { useDeleteAllSessions } from '@client/app/hooks/data/sessions';
@@ -27,6 +26,7 @@ import VoicePreferenceSection from './VoicePreferenceSection';
 import ActiveSessionsSection from './ActiveSessionsSection';
 import ApprovedAppsSection from './ApprovedAppsSection';
 import DocxTemplateSection from './DocxTemplateSection';
+import { DeleteAllKnowledgeFilesConfirm, DeleteAllNotebooksConfirm } from './DeleteAllConfirmModals';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import { useExperimentalFeatureSettings, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup, useCancelMFASetup } from '@client/app/hooks/data/mfa';
@@ -108,14 +108,14 @@ const GeneralSettingsTab = () => {
 
   const deleteAllSessions = useDeleteAllSessions({
     onSuccess: async () => {
-      toggleDeleteAllSessionsModal();
-      toast.success('All sessions deleted');
+      toggleDeleteAllSessionsModal(false);
+      toast.success('All notebooks deleted');
     },
   });
   const deleteAllFiles = useDeleteAllFiles({
     onSuccess: async () => {
-      toggleDeleteAllFilesModal();
-      toast.success('All files deleted');
+      toggleDeleteAllFilesModal(false);
+      toast.success('All knowledge files deleted');
     },
   });
   const downloadAllFiles = useDownload('/api/files/download', 'knowledges.zip');
@@ -602,40 +602,6 @@ const GeneralSettingsTab = () => {
         </Grid>
       </SectionContainer>
 
-      {/* Files Section */}
-      <SectionContainer title="Files">
-        <Grid container spacing={2}>
-          <Grid xs={12} md={6}>
-            <Box
-              sx={theme => ({
-                ...cardSurfaceSx(theme),
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: '12px',
-                height: '100%',
-              })}
-            >
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography level="title-md" sx={{ fontSize: '16px', fontWeight: 500 }}>
-                  Save Generated Audio
-                </Typography>
-                <Typography level="body-sm" sx={{ mt: 0.5 }}>
-                  Keep text-to-speech, sound-effect, and music audio in your files so you can browse and replay it.
-                  Counts toward your storage limit.
-                </Typography>
-              </Box>
-              <Switch
-                data-testid="settings-save-generated-audio-switch"
-                checked={settings.saveGeneratedAudio}
-                onChange={e => updatePreferences({ saveGeneratedAudio: e.target.checked })}
-              />
-            </Box>
-          </Grid>
-        </Grid>
-      </SectionContainer>
-
       <SectionContainer title="Danger zone">
         <Box
           data-testid="settings-danger-zone"
@@ -649,7 +615,10 @@ const GeneralSettingsTab = () => {
             borderRadius: 'md',
           }}
         >
-          <Typography level="body-sm">These can&apos;t be undone. Export first if you want a copy.</Typography>
+          <Typography level="body-sm">
+            These can&apos;t be undone. To keep a copy, first use Export All on the Notebooks and Knowledge Files cards
+            above.
+          </Typography>
           <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
             <Button
               color="danger"
@@ -674,21 +643,17 @@ const GeneralSettingsTab = () => {
       </SectionContainer>
 
       {openDeleteAllSessionsModal && (
-        <ConfirmActionModal
-          title="Delete All Sessions"
-          description="Are you sure you want to delete all sessions? This action cannot be undone."
-          onGoBackward={toggleDeleteAllSessionsModal}
-          onGoForward={() => deleteAllSessions.mutate()}
-          disabledConfirm={deleteAllSessions.isPending}
+        <DeleteAllNotebooksConfirm
+          onCancel={toggleDeleteAllSessionsModal}
+          onConfirm={() => deleteAllSessions.mutate()}
+          pending={deleteAllSessions.isPending}
         />
       )}
       {openDeleteAllFilesModal && (
-        <ConfirmActionModal
-          title="Delete All Files"
-          description="Are you sure you want to delete all files? This action cannot be undone."
-          onGoBackward={toggleDeleteAllFilesModal}
-          onGoForward={() => deleteAllFiles.mutate()}
-          disabledConfirm={deleteAllFiles.isPending}
+        <DeleteAllKnowledgeFilesConfirm
+          onCancel={toggleDeleteAllFilesModal}
+          onConfirm={() => deleteAllFiles.mutate()}
+          pending={deleteAllFiles.isPending}
         />
       )}
       <UploadImportHistoryModal

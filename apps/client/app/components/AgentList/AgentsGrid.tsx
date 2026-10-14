@@ -3,7 +3,7 @@ import { Grid, Card, CardContent, Chip, Typography, Box, Tooltip } from '@mui/jo
 import GraphicEqIcon from '@mui/icons-material/GraphicEq';
 import { useNavigate } from '@tanstack/react-router';
 import { IAgent } from '@bike4mind/common';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import AgentQuickActions from './AgentQuickActions';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { AgentAvatar } from '@client/app/components/Agent/AgentAvatar';
@@ -148,10 +148,7 @@ const AgentsGrid: FC<AgentsGridProps> = ({ agents, currentUserCredits, onAgentDe
                       color: isLowCredits ? 'danger.500' : 'text.tertiary',
                     }}
                   >
-                    <Bike4MindIcon
-                      size="10"
-                      fill={isLowCredits ? 'var(--joy-palette-danger-500)' : 'var(--joy-palette-text-tertiary)'}
-                    />
+                    <CreditIcon sx={{ fontSize: 10, color: isLowCredits ? 'danger.500' : 'text.tertiary' }} />
                     {credits.toLocaleString()}
                   </Typography>
                 </Box>

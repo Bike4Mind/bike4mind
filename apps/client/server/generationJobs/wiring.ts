@@ -3,8 +3,6 @@ import { apiKeyService } from '@bike4mind/auth';
 import {
   isImageServeable,
   isPlaceholderApiKey,
-  KnowledgeType,
-  videoFileExtension,
   type IGenerationJobDocument,
   type IGenerationJobUpdatedAction,
   type VideoProviderId,
@@ -14,20 +12,16 @@ import {
   apiKeyRepository,
   Connection,
   creditTransactionRepository,
-  dataLakeRepository,
-  FabFile,
   fabFileRepository,
   generationJobRepository,
   organizationRepository,
   questRepository,
-  scopedSettingsRepository,
   sessionRepository,
   usageEventRepository,
-  User,
   userRepository,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { fabFilesService, modelDiscoveryService } from '@bike4mind/services';
+import { modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
 import {
   callerOwnsGeneratedImage,
@@ -47,6 +41,7 @@ import {
 import { isValidObjectId } from '@server/utils/objectId';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { sendToQueue } from '@server/utils/sqs';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 
 // Must outlive the worker timeout (5 min, infra/queues.ts generationJobQueue) so two workers never overlap on
@@ -54,12 +49,6 @@ import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage
 const LEASE_MS = 5 * 60_000 + 30_000;
 
 const logger = new Logger({ metadata: { component: 'generationJobs' } });
-
-// createFabFile reports the storage quota and the per-file cap only through BadRequestError messages.
-const SAVE_FAILURE_PATTERNS = {
-  storage_limit: /storage limit/i,
-  file_too_large: /maximum file size/i,
-} as const;
 
 /**
  * Maps the raw value of a provider key to one a provider call may use. getEffectiveLLMApiKeys answers an
@@ -196,73 +185,7 @@ const loadInputGeneratedImage = async (userId: string, key: string) => {
   return { bytes, mimeType };
 };
 
-export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, bytes, contentType, signal }) => {
-  const jobTag = `job:${jobId}`;
-  // A re-run after a lost commit must not store a second copy.
-  const existing = await fabFileRepository.findOne({
-    userId,
-    deletedAt: null,
-    tags: { $elemMatch: { name: jobTag } },
-  });
-  if (existing?.filePath) return { saved: true, fileId: existing.id, s3Key: existing.filePath };
-
-  const extension = videoFileExtension(contentType);
-  if (!extension) {
-    logger.error('provider returned a non-video content type', { jobId, contentType });
-    return { saved: false, reason: 'error' };
-  }
-
-  try {
-    const created = await fabFilesService.createFabFile(
-      userId,
-      {
-        type: KnowledgeType.VIDEO,
-        fileName: `video-${jobId}.${extension}`,
-        mimeType: contentType,
-        contentType,
-        fileSize: bytes.length,
-        content: bytes,
-        prefix: 'generated-video',
-        tags: [
-          { name: 'generated', strength: 1 },
-          { name: 'video', strength: 1 },
-          { name: jobTag, strength: 1 },
-        ],
-      },
-      {
-        db: {
-          adminSettings: adminSettingsRepository,
-          scopedSettings: scopedSettingsRepository,
-          fabFiles: FabFile,
-          users: User,
-          dataLakes: dataLakeRepository,
-        },
-        storage: {
-          upload: (path, content, options) =>
-            getFilesStorage().upload(content, path, { ContentType: options?.ContentType || contentType }, signal),
-          generateSignedUrl: (path, expireInSeconds, type) =>
-            getFilesStorage().getSignedUrl(path, type ?? 'get', { expiresIn: expireInSeconds }),
-        },
-        // The type is the provider's, narrowed to a supported video above; the extension map does not list video
-        // containers (user uploads stay closed), so an extension-first lookup would refuse every clip.
-        mimeTypePrecedence: 'claim-first',
-      }
-    );
-    if (!created.filePath) {
-      logger.error('created video file has no storage path', { jobId, fileId: created.id });
-      return { saved: false, reason: 'error' };
-    }
-    return { saved: true, fileId: created.id, s3Key: created.filePath };
-  } catch (error) {
-    // An aborted step must fail the step (and be retried), not fall back to the generated bucket.
-    if (signal.aborted) throw error;
-    const message = error instanceof Error ? error.message : '';
-    if (SAVE_FAILURE_PATTERNS.storage_limit.test(message)) return { saved: false, reason: 'storage_limit' };
-    if (SAVE_FAILURE_PATTERNS.file_too_large.test(message)) return { saved: false, reason: 'file_too_large' };
-    logger.error('failed to save generated video to files', { jobId, error });
-    return { saved: false, reason: 'error' };
-  }
-};
+export const saveToFiles: VideoJobDeps['saveToFiles'] = params => saveGeneratedAssetToFiles(params, logger);
 
 const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ key, bytes, contentType, signal }) => {
   await getGeneratedImageStorage().upload(bytes, key, { ContentType: contentType }, signal);

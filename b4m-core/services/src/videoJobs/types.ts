@@ -1,4 +1,5 @@
 import type {
+  GeneratedAssetMetadata,
   GenerationJobSource,
   IGenerationJobDocument,
   IGenerationJobRepository,
@@ -13,6 +14,7 @@ import type { VideoProviderRegistry } from '@bike4mind/utils/videoProviders';
 import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
+import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
 /** Whether a resolveApiKey answer may reach a provider: shared by the create-time check and every job step. */
 export const isUsableApiKey = (apiKey: string | null): apiKey is string => !!apiKey && apiKey !== EXPIRED_KEY_SENTINEL;
@@ -28,21 +30,17 @@ export type VideoJobDeps = {
   /** Owner-only for either kind; null for anything the requester cannot use (missing, foreign, malformed). */
   loadInputImage(userId: string, ref: VideoInputImageRef): Promise<{ bytes: Buffer; mimeType: string } | null>;
   /**
-   * Must be idempotent per jobId: the store step can run twice for one job (a crash before its terminal commit),
-   * and the second call must return the first file rather than save a duplicate.
+   * saveGeneratedAsset bound to the user's files. Idempotent per `generation.jobId`, which the store step relies
+   * on: it can run twice for one job (a crash before its terminal commit). An abort of `signal`, the step's
+   * lease-bounded signal, must reject rather than report an ordinary save failure.
    */
   saveToFiles(params: {
     userId: string;
-    jobId: string;
     bytes: Buffer;
     contentType: string;
-    prompt: string;
-    /** The step's lease-bounded signal; an abort must reject, never report an ordinary save failure. */
+    generation: GeneratedAssetMetadata & { jobId: string };
     signal: AbortSignal;
-  }): Promise<
-    | { saved: true; fileId: string; s3Key: string }
-    | { saved: false; reason: 'storage_limit' | 'file_too_large' | 'error' }
-  >;
+  }): Promise<SaveGeneratedAssetResult>;
   saveToGeneratedBucket(params: {
     key: string;
     bytes: Buffer;

@@ -42,6 +42,14 @@ describe('DiscoverableToggle', () => {
     expect(toggle().checked).toBe(true);
   });
 
+  it('keeps the switch from shrinking beside the long helper text on a narrow viewport', () => {
+    renderToggle();
+    expect(getComputedStyle(screen.getByTestId('discoverable-switch')).flexShrink).toBe('0');
+    const textColumn = getComputedStyle(screen.getByTestId('discoverable-text'));
+    expect(textColumn.flexGrow).toBe('1');
+    expect(textColumn.minWidth).toBe('0px');
+  });
+
   it('PATCHes discoverable:true when switched on', async () => {
     renderToggle();
     fireEvent.click(toggle());

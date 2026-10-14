@@ -13,6 +13,7 @@ import {
   useCloneSession,
   useForkSession,
   useSnipSession,
+  useOwnSessionCount,
 } from './sessions';
 import { api } from '@client/app/contexts/ApiContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
@@ -613,5 +614,26 @@ describe('copy-path cache writes', () => {
     expect(dataOf(queryClient, unfilteredKey).map(s => s.id)).toEqual(['main-copy']);
     expect(dataOf(queryClient, optiKey).map(s => s.id)).toEqual(['opti-copy']);
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['sessions', 'own'] });
+  });
+});
+
+describe('useOwnSessionCount', () => {
+  it('reads the count endpoint, and a cached count survives a sessions cache write', async () => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { count: 3 } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useOwnSessionCount(), { wrapper });
+
+    await waitFor(() => expect(result.current.data).toBe(3));
+    expect(get).toHaveBeenCalledWith('/api/sessions/count');
+    // updateAllQueryData walks every ['sessions', ...] entry assuming a list shape; a number
+    // cached under that prefix made `'pages' in 3` throw on every session write.
+    expect(() =>
+      updateSessionsQueryData(queryClient, 'write', { id: 's1', name: 'n' } as ISessionDocument)
+    ).not.toThrow();
+    expect(result.current.data).toBe(3);
+    get.mockRestore();
   });
 });

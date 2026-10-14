@@ -9,7 +9,7 @@ import { apiKeyService, estimateMusicCredits } from '@bike4mind/services';
 import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
@@ -127,21 +127,19 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
 
   recordUsage('ok', creditsCharged, usdCost);
 
-  // Best-effort browsable copy (on by default; opt out via the saveGeneratedAudio
-  // preference or `preview`): a save failure never blocks returning audio the
-  // caller was already charged for.
+  // Best-effort browsable copy, skipped only for a throwaway `preview` call: a
+  // save failure never blocks returning audio the caller was already charged for.
   const save =
-    userId &&
-    shouldPersistGeneratedAudio({ userId, saveGeneratedAudio: req.user?.preferences?.saveGeneratedAudio, preview })
-      ? await persistGeneratedAudio({
-          userId,
-          audio,
-          contentType,
-          format,
-          source: 'music',
-          text: prompt,
-          logger: req.logger,
-        })
+    userId && shouldPersistGeneratedAudio({ userId, preview })
+      ? await saveGeneratedAssetToFiles(
+          {
+            userId,
+            bytes: audio,
+            contentType,
+            generation: { generator: 'music', provider, modelId, prompt, durationSeconds: lengthMs / 1000 },
+          },
+          req.logger
+        )
       : undefined;
 
   return deliverGeneratedAudio(res, { audio, contentType, encoding: encoding ?? 'binary', save, logger: req.logger });
