@@ -1,8 +1,9 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { FabFile, adminSettingsRepository } from '@bike4mind/database';
+import { FabFile, User, adminSettingsRepository, withTransaction } from '@bike4mind/database';
 import { decodeS3Key, findWithRetry } from '@server/s3/utils';
 import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
+import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
@@ -27,7 +28,7 @@ import crypto from 'crypto';
  */
 
 interface MinioS3Record {
-  s3?: { bucket?: { name?: string }; object?: { key?: string } };
+  s3?: { bucket?: { name?: string }; object?: { key?: string; size?: number } };
 }
 
 /**
@@ -59,6 +60,61 @@ const secretOk = (authorizationHeader: string | string[] | undefined): boolean =
   const providedBuf = Buffer.from(provided);
   const expectedBuf = Buffer.from(expected);
   return providedBuf.length === expectedBuf.length && crypto.timingSafeEqual(providedBuf, expectedBuf);
+};
+
+type WebhookLogger = { info: (message: string) => void; warn: (message: string) => void };
+
+/**
+ * Charge the object's bytes to its owner exactly once, gated on the `storageChargedAt` stamp rather
+ * than `status` (see IFabFile.storageChargedAt for why `status` cannot serve here). The stamp and the
+ * charge commit in one transaction, so a crash between them cannot leave a claimed-but-uncharged file
+ * that no redelivery will retry. MinIO delivers at-least-once, so only the invocation that flips the
+ * stamp from null charges.
+ *
+ * Size comes from the notification payload; a payload that omits it falls back to a HEAD of the
+ * object, so the charge reflects the bytes actually stored rather than the client-declared `fileSize`
+ * (which gates quota at presign and can be wrong).
+ */
+const chargeStorageOnce = async (
+  fabFile: { _id: unknown; userId: string },
+  objectKey: string,
+  payloadSize: number | undefined,
+  logger: WebhookLogger
+): Promise<void> => {
+  let size = typeof payloadSize === 'number' && Number.isFinite(payloadSize) ? payloadSize : undefined;
+  if (size === undefined) {
+    size = (await getFilesStorage().getMetadata(objectKey)).size;
+  }
+  if (typeof size !== 'number') {
+    logger.warn(`Could not determine the size of ${objectKey}; leaving storage uncharged`);
+    return;
+  }
+  // const so the narrowing above survives into the transaction callback.
+  const chargeSize = size;
+
+  await withTransaction(async session => {
+    const claimed = await FabFile.findOneAndUpdate(
+      { _id: fabFile._id, storageChargedAt: null },
+      { $set: { storageChargedAt: new Date() } },
+      { session }
+    );
+    if (!claimed) return;
+
+    // A pipeline delta, not changeStorageSize + user.save(): the document write would persist an
+    // ABSOLUTE currentStorageSize and clobber a concurrent increment (lakeIngestShared.ts:216).
+    await User.updateOne(
+      { _id: fabFile.userId },
+      [
+        {
+          $set: {
+            currentStorageSize: { $max: [0, { $add: [{ $ifNull: ['$currentStorageSize', 0] }, chargeSize] }] },
+          },
+        },
+      ],
+      { session }
+    );
+    logger.info(`Charged ${chargeSize} bytes of storage to user ${fabFile.userId} for ${objectKey}`);
+  });
 };
 
 const handler = baseApi({ auth: false }).post(
@@ -134,6 +190,15 @@ const handler = baseApi({ auth: false }).post(
       metadata.status = 'complete';
       await metadata.save();
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
+
+      // Charge the owner for these bytes. Best-effort like the chunk enqueue below: a failure must
+      // not stop the status write or the lake recompute, and a failed charge leaves the stamp unset
+      // so a redelivery retries it.
+      try {
+        await chargeStorageOnce(metadata, objectKey, record.s3?.object?.size, req.logger);
+      } catch (error) {
+        req.logger.error(`Failed to charge storage for ${objectKey}: ${error}`);
+      }
 
       // Mirrors the hosted event: the bytes have landed, so the lakes this file joined can be
       // counted - and, if one is still a draft, activated.

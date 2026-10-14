@@ -3553,6 +3553,12 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
       enum: ['pending', 'complete'] as const,
       default: 'pending',
     },
+    // `null`/absent = this file's bytes are not yet reflected in its owner's currentStorageSize.
+    // The self-host webhook (pages/api/internal/s3/object-created.ts) flips this to a Date as the
+    // atomic claim that gates the charge, so a redelivered notification charges nothing. Kept
+    // separate from `status`: the self-host PUT proxy marks the row complete before the webhook
+    // fires, so `status` cannot distinguish charged from not-yet-charged.
+    storageChargedAt: { type: Date, default: null },
     moderationStatus: {
       type: String,
       enum: ['pending', 'scanning', 'clean', 'blocked'] as const,

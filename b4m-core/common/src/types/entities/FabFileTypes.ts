@@ -411,6 +411,15 @@ export interface IFabFile {
   status?: 'pending' | 'complete';
 
   /**
+   * When this file's bytes were added to its owner's `currentStorageSize`, or `null`/absent while
+   * they have not been. Stamped by the self-host webhook (pages/api/internal/s3/object-created.ts)
+   * as the atomic claim that gates the charge, so an at-least-once redelivery charges nothing.
+   * Separate from `status` on purpose: the self-host PUT proxy marks the row `complete` before
+   * MinIO notifies the webhook, so `status` cannot tell "charged" from "not yet charged".
+   */
+  storageChargedAt?: Date | null;
+
+  /**
    * Content-moderation state for an uploaded file. Gates serving via
    * `isImageServeable` for ALL mime types, not just images - see that function's doc
    * comment. 'scanning' is the atomic-claim interim state: a single invocation

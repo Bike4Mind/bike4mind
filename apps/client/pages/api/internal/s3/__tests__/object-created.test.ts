@@ -3,6 +3,10 @@ import type { Request, Response } from 'express';
 
 const {
   findOneMock,
+  findOneAndUpdateMock,
+  userUpdateOneMock,
+  withTransactionMock,
+  getMetadataMock,
   saveMock,
   getSettingsValueMock,
   sendToQueueMock,
@@ -11,6 +15,11 @@ const {
   notebookDispatchMock,
 } = vi.hoisted(() => ({
   findOneMock: vi.fn(),
+  findOneAndUpdateMock: vi.fn(),
+  userUpdateOneMock: vi.fn(),
+  // Runs the callback with a stand-in session so the claim + charge inside it execute.
+  withTransactionMock: vi.fn(async (fn: (session: unknown) => Promise<unknown>) => fn({})),
+  getMetadataMock: vi.fn(),
   saveMock: vi.fn(),
   getSettingsValueMock: vi.fn(),
   sendToQueueMock: vi.fn(),
@@ -21,7 +30,9 @@ const {
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (h: unknown) => h }) }));
 vi.mock('@bike4mind/database', () => ({
-  FabFile: { findOne: findOneMock },
+  FabFile: { findOne: findOneMock, findOneAndUpdate: findOneAndUpdateMock },
+  User: { updateOne: userUpdateOneMock },
+  withTransaction: withTransactionMock,
   adminSettingsRepository: { getSettingsValue: getSettingsValueMock },
 }));
 vi.mock('@server/s3/utils', () => ({
@@ -29,6 +40,7 @@ vi.mock('@server/s3/utils', () => ({
   findWithRetry: <T>(fn: () => Promise<T>) => fn(),
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: sendToQueueMock }));
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getMetadata: getMetadataMock }) }));
 vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: recomputeUploadedMock,
 }));
@@ -72,6 +84,9 @@ describe('POST /api/internal/s3/object-created', () => {
     getSettingsValueMock.mockResolvedValue(true);
     saveMock.mockResolvedValue(undefined);
     findOneMock.mockResolvedValue({ id: 'ff1', _id: 'ff1', userId: 'u1', status: 'pending', save: saveMock });
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'ff1' }); // charge claim won by default
+    userUpdateOneMock.mockResolvedValue({ matchedCount: 1 });
+    getMetadataMock.mockResolvedValue({ size: 4096 });
   });
   afterEach(() => {
     delete process.env.B4M_SELF_HOST;
@@ -171,6 +186,116 @@ describe('POST /api/internal/s3/object-created', () => {
 });
 
 /**
+ * Storage accounting. Before the fix the fab-file branch flipped `status` to complete and recomputed
+ * its lakes, but never touched the owner's `currentStorageSize`, so self-host quotas drifted low.
+ * `status` cannot gate the charge: the self-host PUT proxy marks the row complete before MinIO
+ * notifies this webhook, so a dedicated `storageChargedAt` stamp is the idempotency gate.
+ */
+describe('POST /api/internal/s3/object-created - storage charge', () => {
+  const reqWithObject = (object: { key: string; size?: number }) =>
+    ({
+      headers: { authorization: 'secret-token' },
+      body: { Records: [{ s3: { object } }] },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    }) as unknown as Request;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.INTERNAL_S3_WEBHOOK_SECRET = 'secret-token';
+    getSettingsValueMock.mockResolvedValue(false);
+    saveMock.mockResolvedValue(undefined);
+    findOneMock.mockResolvedValue({ id: 'ff1', _id: 'ff1', userId: 'u1', status: 'complete', save: saveMock });
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'ff1' });
+    userUpdateOneMock.mockResolvedValue({ matchedCount: 1 });
+    getMetadataMock.mockResolvedValue({ size: 4096 });
+  });
+  afterEach(() => {
+    delete process.env.B4M_SELF_HOST;
+    delete process.env.INTERNAL_S3_WEBHOOK_SECRET;
+  });
+
+  it("charges the object's payload size, not the client-declared fileSize", async () => {
+    // fileSize is client-declared at presign; the payload size is the bytes MinIO actually stored.
+    findOneMock.mockResolvedValue({
+      id: 'ff1',
+      _id: 'ff1',
+      userId: 'u1',
+      status: 'complete',
+      fileSize: 999,
+      save: saveMock,
+    });
+    const res = makeRes();
+
+    await handler(reqWithObject({ key: 'uploads/a.pdf', size: 4096 }), res);
+
+    // The fails-before-fix assertion: today there is no charge call at all.
+    expect(findOneAndUpdateMock).toHaveBeenCalledWith(
+      { _id: 'ff1', storageChargedAt: null },
+      { $set: { storageChargedAt: expect.any(Date) } },
+      { session: {} }
+    );
+    expect(userUpdateOneMock).toHaveBeenCalledTimes(1);
+    expect(userUpdateOneMock).toHaveBeenCalledWith(
+      { _id: 'u1' },
+      [{ $set: { currentStorageSize: { $max: [0, { $add: [{ $ifNull: ['$currentStorageSize', 0] }, 4096] }] } } }],
+      { session: {} }
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('does not double-charge on a redelivered notification', async () => {
+    // A redelivery loses the claim: storageChargedAt is already set, so no charge is issued.
+    findOneAndUpdateMock.mockResolvedValue(null);
+    const res = makeRes();
+
+    await handler(reqWithObject({ key: 'uploads/a.pdf', size: 4096 }), res);
+
+    expect(findOneAndUpdateMock).toHaveBeenCalledTimes(1);
+    expect(userUpdateOneMock).not.toHaveBeenCalled();
+    // The rest of the path still runs, so a redelivery is not a hard error.
+    expect(recomputeUploadedMock).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('falls back to the object HEAD when the payload omits its size', async () => {
+    getMetadataMock.mockResolvedValue({ size: 1234 });
+    const res = makeRes();
+
+    await handler(reqWithObject({ key: 'uploads/a.pdf' }), res);
+
+    expect(getMetadataMock).toHaveBeenCalledWith('uploads/a.pdf');
+    expect(userUpdateOneMock).toHaveBeenCalledWith(
+      { _id: 'u1' },
+      [{ $set: { currentStorageSize: { $max: [0, { $add: [{ $ifNull: ['$currentStorageSize', 0] }, 1234] }] } } }],
+      { session: {} }
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('leaves the stamp unset when the size cannot be resolved, so a redelivery retries', async () => {
+    getMetadataMock.mockResolvedValue({});
+    const res = makeRes();
+
+    await handler(reqWithObject({ key: 'uploads/a.pdf' }), res);
+
+    expect(findOneAndUpdateMock).not.toHaveBeenCalled();
+    expect(userUpdateOneMock).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('still marks the file complete and enqueues when the charge fails', async () => {
+    userUpdateOneMock.mockRejectedValueOnce(new Error('charge failed'));
+    const res = makeRes();
+
+    await handler(reqWithObject({ key: 'uploads/a.pdf', size: 4096 }), res);
+
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+});
+
+/**
  * One MinIO webhook feeds every bucket, but the body above only ever did fab-file work. Hosted
  * wires THREE ObjectCreated notifications (app-files, history-import, and history-import again
  * under the notebooks/ prefix); self-host wired one, so LLM history import and notebook import
@@ -191,6 +316,9 @@ describe('POST /api/internal/s3/object-created - bucket dispatch', () => {
     getSettingsValueMock.mockResolvedValue(true);
     saveMock.mockResolvedValue(undefined);
     findOneMock.mockResolvedValue({ id: 'ff1', _id: 'ff1', userId: 'u1', status: 'pending', save: saveMock });
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'ff1' }); // charge claim won by default
+    userUpdateOneMock.mockResolvedValue({ matchedCount: 1 });
+    getMetadataMock.mockResolvedValue({ size: 4096 });
   });
   afterEach(() => {
     delete process.env.B4M_SELF_HOST;
