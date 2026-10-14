@@ -9,8 +9,8 @@ export type SaveGeneratedAssetFn = (
 
 /**
  * Keeps a generated or edited image from ImageGenerationService / ImageEditService (the queue path behind
- * `/api/v1/image-*` and the in-app image models) in the user's files. Never rejects: the image was already
- * produced and billed, so a failed save is logged and the generation still completes. Called only after the
+ * `/api/v1/image-*` and the in-app image models) in the user's files. Never rejects: it runs once the run has
+ * been delivered and billed, so a failed save is logged and the generation still completes. Called only after the
  * pre-upload moderation gate passed; the FabFile then starts `pending` like any image upload until the
  * objectCreated scan clears it, so serving stays gated by isImageServeable.
  */

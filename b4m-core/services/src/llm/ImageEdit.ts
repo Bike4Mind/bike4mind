@@ -830,25 +830,6 @@ export class ImageEditService {
         model,
       });
 
-      await saveGeneratedImage(
-        this.saveGeneratedAsset,
-        {
-          userId,
-          bytes: buffer,
-          contentType: fileType?.mime ?? 'image/png',
-          generation: {
-            generator: 'image',
-            provider,
-            modelId: model,
-            ...(generationId && { jobId: generationId }),
-            prompt,
-          },
-          sessionId,
-          questId,
-        },
-        logger
-      );
-
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -931,6 +912,26 @@ export class ImageEditService {
           })
           .catch(err => logger.warn('Failed to record usage event', err));
       }
+
+      // Last, so a run that fails anywhere above (quest update, billing) leaves no file.
+      await saveGeneratedImage(
+        this.saveGeneratedAsset,
+        {
+          userId,
+          bytes: buffer,
+          contentType: fileType?.mime ?? 'image/png',
+          generation: {
+            generator: 'image',
+            provider,
+            modelId: model,
+            ...(generationId && { jobId: generationId }),
+            prompt,
+          },
+          sessionId,
+          questId,
+        },
+        logger
+      );
     } catch (error) {
       Logger.globalInstance.log(error);
       quest.reply = (error as Error).message;

@@ -1426,7 +1426,7 @@ export class ImageGenerationService {
         statusMessage: 'Tucking your image into storage...',
       });
 
-      const imagePaths = await Promise.all(
+      const storedImages = await Promise.all(
         images.map(async (image, index) => {
           Logger.globalInstance.debug('[DEBUG] Processing image for storage:', {
             imageUrl: image,
@@ -1468,28 +1468,10 @@ export class ImageGenerationService {
             model,
           });
 
-          await saveGeneratedImage(
-            this.saveGeneratedAsset,
-            {
-              userId,
-              bytes: buffer,
-              contentType: fileType?.mime ?? 'image/png',
-              generation: {
-                generator: 'image',
-                provider: modelInfo.backend,
-                modelId: model,
-                ...(generationId && { jobId: `${generationId}-${index}` }),
-                prompt,
-              },
-              sessionId,
-              questId,
-            },
-            logger
-          );
-
-          return path;
+          return { path, buffer, contentType: fileType?.mime ?? 'image/png' };
         })
       );
+      const imagePaths = storedImages.map(stored => stored.path);
 
       this.addStatusToQuest(quest, 'Adding to the notebook...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
@@ -1627,6 +1609,30 @@ export class ImageGenerationService {
           })
           .catch(err => logger.warn('Failed to record usage event', err));
       }
+
+      // Last, so a run that fails anywhere above (a later image blocked by moderation, billing) leaves no file.
+      await Promise.all(
+        storedImages.map(({ buffer, contentType }, index) =>
+          saveGeneratedImage(
+            this.saveGeneratedAsset,
+            {
+              userId,
+              bytes: buffer,
+              contentType,
+              generation: {
+                generator: 'image',
+                provider: modelInfo.backend,
+                modelId: model,
+                ...(generationId && { jobId: `${generationId}-${index}` }),
+                prompt,
+              },
+              sessionId,
+              questId,
+            },
+            logger
+          )
+        )
+      );
     } catch (error) {
       logger.error('Error processing image generation:', error);
       this.addStatusToQuest(quest, `Error: ${(error as Error).message}`, userId);
