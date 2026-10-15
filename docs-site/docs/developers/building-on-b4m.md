@@ -257,6 +257,19 @@ Every successful exchange **revokes the previous key** minted for the same user 
 
 Revoking your app's access in B4M stops new exchanges wherever the consent check is enforced (hosted B4M, or `OAUTH_AI_TOKEN_ENFORCE_GRANT=true`), but a key already minted stays valid until it expires (up to 15 minutes).
 
+### How usage is charged
+
+Each completion is charged in credits from its provider cost in USD (input and output tokens at the model's price):
+
+```text
+Credits = USD cost × 2000
+```
+
+That is, one credit sells for $0.0006 and covers $0.0005 of provider cost (a 1.2× margin). Self-hosted deployments can change both numbers (`NEXT_PUBLIC_USD_TO_CREDITS_RATE`, `NEXT_PUBLIC_PRICE_MARGIN`), so budget from your deployment's own settings.
+
+- **Before the stream**, B4M places a hold sized from the request, rounded up to whole credits (at least 1). If the balance cannot cover the hold, the request fails with `insufficient_credits`.
+- **At settlement**, the user pays the whole credits plus one extra credit with probability equal to the leftover fraction, so the charge equals the exact cost on average. A $0.0097 call (19.4 credits) charges 19 credits most of the time and 20 the rest.
+
 ## 6. Handle "out of credits"
 
 ### Before you start
