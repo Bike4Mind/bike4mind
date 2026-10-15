@@ -592,7 +592,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
     if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
     if (info?.stopReason) finalStopReason = info.stopReason;
-    for (const t of text) streamedOutputChars += t?.length ?? 0;
+    // Tool-artifact frames carry a tool's own output for a renderer, not the model's, so they are not
+    // output the provider bills on this call.
+    if (info?.channel !== 'tool-artifact') {
+      for (const t of text) streamedOutputChars += t?.length ?? 0;
+    }
 
     if (info?.inputTokens || info?.outputTokens) {
       logger?.debug?.(

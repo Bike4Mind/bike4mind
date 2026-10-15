@@ -132,6 +132,21 @@ describe('executeCompletion - output of a first call cut short before the provid
     expect(final?.outputTokens).toBeGreaterThan(0);
   });
 
+  it('does not count tool-artifact frames as streamed model output', async () => {
+    const controller = new AbortController();
+    emitted.abortMidStream = controller;
+    emitted.frames = [
+      { text: ['p'.repeat(600)], info: {} },
+      // A tool's own output streamed for a renderer; the provider does not bill it as this call's output.
+      { text: ['x'.repeat(6000)], info: { channel: 'tool-artifact' } },
+    ];
+    emitted.info = { ...promptOnly, stopReason: 'aborted' };
+
+    const final = await settle(controller.signal);
+
+    expect(final?.outputTokens).toBe(estimateStreamedOutputTokens(600, 'flat-model'));
+  });
+
   it('bills an estimate of the streamed output when the stream was aborted as degenerate', async () => {
     emitted.info = { ...promptOnly, stopReason: 'degenerate_repetition' };
 
