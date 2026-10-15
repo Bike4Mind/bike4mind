@@ -90,9 +90,6 @@ jobs:
           - os: macos-15
             platform: mac
             arch: arm64
-          - os: macos-15-intel
-            platform: mac
-            arch: x64
           - os: ubuntu-24.04
             platform: linux
             arch: x64
@@ -217,8 +214,8 @@ jobs:
               raise SystemExit('Expected exactly one arm64 DMG')
           version = versions[0]
           expected = {
-              f'Bike4Mind-{version}-arm64.dmg', f'Bike4Mind-{version}-x64.dmg',
-              f'Bike4Mind-{version}-arm64.zip', f'Bike4Mind-{version}-x64.zip',
+              f'Bike4Mind-{version}-arm64.dmg',
+              f'Bike4Mind-{version}-arm64.zip',
               f'Bike4Mind-{version}-x64.AppImage',
           }
           if set(files) != expected:
