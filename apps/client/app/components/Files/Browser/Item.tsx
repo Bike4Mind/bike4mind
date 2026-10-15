@@ -24,6 +24,7 @@ import TableChartIcon from '@mui/icons-material/TableChart';
 import TagIcon from '@mui/icons-material/Tag';
 import TextSnippetIcon from '@mui/icons-material/TextSnippet';
 import VideocamIcon from '@mui/icons-material/Videocam';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import MediaPlayer from '@client/app/components/Media/MediaPlayer';
 import SegmentIcon from '@mui/icons-material/Segment';
 import WarningIcon from '@mui/icons-material/Warning';
@@ -32,12 +33,15 @@ import dayjs from 'dayjs';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import React, { FC, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { useShallow } from 'zustand/react/shallow';
 import { brand, brandAlpha, green, greenAlpha, orange, red } from '@client/app/utils/themes/colors';
 import { useFileBrowserInstance } from './instanceContext';
 import FileBrowserItemActions from './ItemActions';
 import UsernameText from '@client/app/components/common/UsernameText';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useKnowledgeModal } from '@client/app/components/Knowledge/KnowledgeModal';
 
 const ImageThumbnail: FC<{ url: string; fileName: string; size: number }> = ({ url, fileName, size }) => {
   const [error, setError] = useState(false);
@@ -62,6 +66,58 @@ const isPlayableMedia = (file: IFabFileDocument): boolean =>
 const RowMediaPlayer: FC<{ file: IFabFileDocument }> = ({ file }) => (
   <MediaPlayer file={file} preload={isVideoMimeType(file.mimeType) ? 'metadata' : 'none'} hideDownload />
 );
+
+/** A list row is a single line, so a video gets a poster-frame thumbnail that opens the viewer (where it plays)
+ *  rather than an inline player, which would be far taller than the row. Falls back to the icon if it fails to load. */
+const VideoRowThumbnail: FC<{ file: IFabFileDocument; fallback: React.ReactNode }> = ({ file, fallback }) => {
+  const { t } = useTranslation();
+  const [failed, setFailed] = useState(false);
+  const [setFileId, setViewOnly, setOpen] = useKnowledgeModal(
+    useShallow(s => [s.setSelectedFabFileId, s.setViewOnly, s.setOpen])
+  );
+  const url = file.fileUrl || file.presignedUrl;
+
+  if (failed || !url) return <>{fallback}</>;
+
+  const openViewer = (event: React.MouseEvent) => {
+    // The row's own click toggles selection.
+    event.stopPropagation();
+    setFileId(file.id);
+    setViewOnly(false);
+    setOpen(true);
+  };
+
+  return (
+    <Box
+      component="button"
+      type="button"
+      onClick={openViewer}
+      aria-label={t('media_player.play_video', { name: file.fileName })}
+      data-testid="file-browser-item-video-thumbnail"
+      sx={{ position: 'relative', width: '100%', height: '100%', p: 0, border: 0, bgcolor: 'black', cursor: 'pointer' }}
+    >
+      <Box
+        component="video"
+        src={url}
+        preload="metadata"
+        muted
+        playsInline
+        onError={() => setFailed(true)}
+        sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+      />
+      <PlayArrowIcon
+        sx={{
+          position: 'absolute',
+          inset: 0,
+          m: 'auto',
+          // `&&` outranks the list icon column's `& svg` colour rule.
+          '&&': { color: 'common.white' },
+          filter: 'drop-shadow(0 0 2px black)',
+        }}
+      />
+    </Box>
+  );
+};
 
 export const getFileIcon = (file: IFabFileDocument, size: number = 48) => {
   if (isAudioMimeType(file.mimeType)) {
@@ -260,6 +316,8 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
   const { fileName, fileSize, createdAt, chunked, vectorized, isChunking, isVectorizing } = file;
   const { selected, isAdded, editMode, setEditMode, handleClick } = useCommon(file);
   const icon = getFileIcon(file, 20);
+  const playable = isPlayableMedia(file);
+  const isVideo = isVideoMimeType(file.mimeType);
   const { currentUser } = useUser();
   const sharedUsersList = file.users ?? [];
   const isSharedToMe = currentUser != null && file.userId !== currentUser.id;
@@ -301,6 +359,9 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
           background: `linear-gradient(${greenAlpha[800][5]}, ${greenAlpha[800][5]}), ${theme.palette.fileBrowser.item.background}`,
         }),
         minHeight: { xs: 'auto', md: '64px' },
+        // The list is a scrolling flex column: a shrinkable row is squeezed below its content, which then spills
+        // over its neighbours.
+        flexShrink: 0,
         cursor: 'pointer',
         transition: 'all 0.2s ease',
 
@@ -361,7 +422,9 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
           },
         })}
       >
-        {isImageFile(fileName) ? (
+        {playable && isVideo ? (
+          <VideoRowThumbnail file={file} fallback={icon} />
+        ) : isImageFile(fileName) ? (
           isImageServeable(file) && (file.fileUrl || file.presignedUrl) ? (
             <Box
               component="img"
@@ -458,7 +521,7 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
             </Typography>
           </Box>
 
-          {isPlayableMedia(file) && (
+          {playable && !isVideo && (
             // A definite width: this column shrinks to its content, which a 100%-wide audio element has none of.
             <Box sx={{ width: 320, maxWidth: '100%', mt: 1 }}>
               <RowMediaPlayer file={file} />
