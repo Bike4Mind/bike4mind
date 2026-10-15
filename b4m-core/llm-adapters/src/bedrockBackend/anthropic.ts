@@ -324,6 +324,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         rank: 6,
         supportsTools: true,
         trainingCutoff: '2023-08-01',
+        deprecationDate: '2026-09-10',
         description:
           "Anthropic's fast and efficient Claude 3 Haiku model via AWS Bedrock. Good balance of speed and capability with vision support.",
       },

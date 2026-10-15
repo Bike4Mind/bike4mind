@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-15T06:20:45.429Z",
+  "generatedAt": "2026-10-15T07:24:50.287Z",
   "notice": "Fallback defaults last maintained on 2026-10-15. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
@@ -55,7 +55,8 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
-          "status": "active"
+          "status": "deprecated",
+          "deprecationDate": "2026-09-10"
         },
         "description": "Anthropic's fast and efficient Claude 3 Haiku model via AWS Bedrock. Good balance of speed and capability with vision support.",
         "logoFile": "Anthropic_logo.png",
