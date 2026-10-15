@@ -35,6 +35,16 @@ describe('approval mode copy', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
     expect(notes).toMatch(/send data off this computer/i);
     expect(notes).toMatch(/read web, browser, MCP or skill content/i);
+    expect(notes).toMatch(/browsing a site/i);
+  });
+
+  /**
+   * The copy states the gap rather than implying the list is exhaustive: what a shell command
+   * prints does not count as content the reply read, so a page reached with `curl` does not by
+   * itself turn on the asks above.
+   */
+  it('admits that what a command printed is not counted as reading', () => {
+    expect(APPROVAL_MODE_FOOTNOTES.join(' ')).toMatch(/downloaded and printed is not counted/i);
   });
 
   /** The two axes the popover has to keep visibly apart, plus the two scoping rules. */
