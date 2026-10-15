@@ -516,9 +516,16 @@ describe('the browser pane under overlays', () => {
   };
   const still = () => host?.querySelector<HTMLImageElement>('[data-testid="chat-browser-pane-still"]') ?? null;
   /** Past the still's delay, with the capture's promise settled. */
-  const waitForStill = () => act(() => new Promise(resolve => setTimeout(resolve, 80)));
+  const waitForStill = () => act(() => vi.advanceTimersByTimeAsync(80));
+
+  // In production the still's delay is a 50ms timer, and the awaited acts between a layer's coming
+  // and going can take that long on a loaded runner. Only timeouts are faked: frames are scripted above.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
 
   afterEach(() => {
+    vi.useRealTimers();
     for (const layer of layers.splice(0)) layer.remove();
   });
 
@@ -553,19 +560,12 @@ describe('the browser pane under overlays', () => {
   });
 
   it('asks for no still when the page is back within the delay', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    try {
-      mount();
-      const menu = await portal('menu', '<li role="menuitem" tabindex="-1">GPT-5</li>');
-      await remove(menu);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(80);
-      });
-      expect(freezeFrame).not.toHaveBeenCalled();
-      expect(still()).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
+    mount();
+    const menu = await portal('menu', '<li role="menuitem" tabindex="-1">GPT-5</li>');
+    await remove(menu);
+    await waitForStill();
+    expect(freezeFrame).not.toHaveBeenCalled();
+    expect(still()).toBeNull();
   });
 
   it('drops the still when the active tab changes underneath it', async () => {
