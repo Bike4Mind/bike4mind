@@ -52,6 +52,21 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 let ownedFiles: Record<string, unknown>[] = [];
 
+// Applies the projection the route passes to `.select()`, so dropping a field from that projection is
+// caught here rather than only by the projection-string assertion below. Dotted paths are kept nested.
+const project = (doc: Record<string, unknown>, projection: string): Record<string, unknown> => {
+  const out: Record<string, unknown> = {};
+  for (const path of projection.split(' ').filter(Boolean)) {
+    const value = path.split('.').reduce<unknown>((v, k) => (v == null ? undefined : (v as any)[k]), doc);
+    if (value === undefined) continue;
+    const keys = path.split('.');
+    let node = out;
+    for (const key of keys.slice(0, -1)) node = (node[key] ??= {}) as Record<string, unknown>;
+    node[keys[keys.length - 1]] = value;
+  }
+  return out;
+};
+
 const { storageDelete, generatedDelete, selectProjections } = vi.hoisted(() => ({
   storageDelete: vi.fn(),
   generatedDelete: vi.fn(),
@@ -95,7 +110,10 @@ describe('DELETE /api/files scoping', () => {
       .mockReset()
       .mockReturnValue({
         select: (projection: unknown) => ({
-          session: async () => (selectProjections.push(projection), ownedFiles),
+          session: async () => (
+            selectProjections.push(projection),
+            ownedFiles.map(file => project(file, String(projection)))
+          ),
           lean: async () => [{ _id: 'mine' }],
         }),
       } as never);
@@ -150,8 +168,17 @@ describe('DELETE /api/files scoping', () => {
     expect(storageDelete).not.toHaveBeenCalled();
     const projection = String(selectProjections[0]).split(' ');
     expect(projection).toEqual(
-      expect.arrayContaining(['filePath', 'moderationStatus', 'sourceMetadata.generatedCopyKey'])
+      expect.arrayContaining(['filePath', 'moderationStatus', 'blockReason', 'sourceMetadata.generatedCopyKey'])
     );
+  });
+
+  // The route's own projection is what lets the rule tell an unscannable block from a content block.
+  it('frees the bytes of a file blocked only for an unscannable format', async () => {
+    ownedFiles = [{ filePath: 'owned/a.heic', moderationStatus: 'blocked', blockReason: 'unsupported_format' }];
+
+    await run();
+
+    expect(storageDelete).toHaveBeenCalledWith('owned/a.heic');
   });
 
   it('scopes the document delete to files the caller owns', async () => {
