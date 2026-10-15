@@ -1,12 +1,14 @@
 import { Logger } from '@bike4mind/observability';
-import { IAuthSessionRepository, IUserRepository } from '@bike4mind/common';
+import { IAuthSessionRepository, IRealtimeConnectionRepository, IUserRepository } from '@bike4mind/common';
 import { NotFoundError, UnauthorizedError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
 
 interface RevokeSessionsAdapters {
   db: {
     users: Pick<IUserRepository, 'incrementTokenVersion'>;
     authSessions: Pick<IAuthSessionRepository, 'revokeAllByUserId'>;
+    realtimeConnections: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
   logger?: Logger;
 }
@@ -24,6 +26,8 @@ interface RevokeSessionsAdapters {
 export const revokeUserSessions = async (userId: string, { db, logger }: RevokeSessionsAdapters): Promise<number> => {
   const newVersion = await db.users.incrementTokenVersion(userId);
   const revokedSessions = await db.authSessions.revokeAllByUserId(userId);
+  // Every session-authenticated socket was opened under the old version, so all of them end here.
+  await endRealtimeConnections({ userId, sessionsOnly: true }, { db, logger });
   logger?.log('Revoked all sessions for user', userId, 'tokenVersion:', newVersion, 'sessions:', revokedSessions);
   return newVersion;
 };
@@ -35,6 +39,7 @@ interface AdminRevokeSessionsAdapters {
   db: {
     users: Pick<IUserRepository, 'findById' | 'incrementTokenVersion'>;
     authSessions: Pick<IAuthSessionRepository, 'revokeAllByUserId'>;
+    realtimeConnections: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
   logger?: Logger;
 }

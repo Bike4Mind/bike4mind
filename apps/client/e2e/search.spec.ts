@@ -138,8 +138,9 @@ test.describe('File Browser Search', () => {
           }
           return boxes;
         };
+        // scrollWidth/clientWidth round independently, so a fractional-width label that fits can read 1px over.
         return Array.from(el.querySelectorAll('button')).filter(
-          button => button.scrollWidth > button.clientWidth || lineBoxes(button) > 1
+          button => button.scrollWidth > button.clientWidth + 1 || lineBoxes(button) > 1
         ).length;
       });
       expect(badActions).toBe(0);

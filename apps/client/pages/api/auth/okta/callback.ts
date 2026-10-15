@@ -12,7 +12,7 @@
  * @see https://datatracker.ietf.org/doc/rfc7636/
  */
 import { Request, Response } from 'express';
-import { authFailLogRepository, User, authSessionRepository } from '@bike4mind/database';
+import { authFailLogRepository, User, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IAuthProviders } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -38,6 +38,7 @@ import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { validateAppUrl } from '@server/utils/validators';
 import { encryptSecret } from '@server/security/secretEncryption';
 import { Config } from '@server/utils/config';
+import { authSessionService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from '@server/utils/auth/createOAuthUser';
@@ -435,7 +436,14 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       // into a fresh access token stamped with the new version and survives the bump. Safe to revoke
       // ALL: this login's session is minted below, after the revoke, so it is created fresh.
       if (isNewProviderLink) {
-        await authSessionRepository.revokeAllByUserId(user.id);
+        await authSessionService.revokeAllUserSessions(
+          user.id,
+          {},
+          {
+            db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository },
+            logger: req.logger,
+          }
+        );
       }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);
     } else {

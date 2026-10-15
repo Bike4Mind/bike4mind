@@ -5,7 +5,7 @@ import {
   NotFoundError,
   UnprocessableEntityError,
 } from '@bike4mind/common';
-import { authSessionRepository } from '@bike4mind/database';
+import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
@@ -67,7 +67,7 @@ const handler = baseApi()
     }
 
     await authSessionService.revokeSession(sid, {
-      db: { authSessions: authSessionRepository },
+      db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository },
       logger: req.logger,
     });
     await logAuthAudit(req, { userId: req.user.id, event: 'session_revoked', actorUserId: req.user.id });

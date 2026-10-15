@@ -1,16 +1,22 @@
-import type { IGenerationJobDocument } from '@bike4mind/common';
-import { generationJobRepository } from '@bike4mind/database';
+import type { ApiErrorCode, IGenerationJobDocument } from '@bike4mind/common';
 import { getGenerationJobEngine } from '@server/generationJobs/wiring';
+import { ConflictError } from '@server/utils/errors';
 
 /**
  * Requests cancellation of a job the caller owns (resolve it with findOwnGenerationJob first) and returns its
  * current state. A job already storing or terminal cannot be cancelled: the provider has produced (and charged
- * for) the output, so it is reported as is.
+ * for) the output, so it is reported as is. A sync job (music) whose provider call has started is refused with a
+ * 409: the provider bills once the call starts, so reporting it as cancellable would promise a refund that may
+ * never come.
  */
 export async function cancelOwnGenerationJob<T extends IGenerationJobDocument>(job: T): Promise<T> {
-  const current =
-    (await getGenerationJobEngine().requestCancel(job.id)) ?? (await generationJobRepository.findById(job.id));
-  return current && isSameKind(current, job) ? current : job;
+  const outcome = await getGenerationJobEngine().requestCancel(job);
+  if (outcome.status === 'not_cancellable') {
+    throw new ConflictError('The generation is already in progress at the provider and can no longer be cancelled', {
+      errorCode: 'not_cancellable' satisfies ApiErrorCode,
+    });
+  }
+  return outcome.job && isSameKind(outcome.job, job) ? outcome.job : job;
 }
 
 // A job never changes kind; this only carries the caller's narrowed type over to the re-read document.

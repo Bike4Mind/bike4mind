@@ -20,7 +20,12 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { agentRepository, cacheRepository, organizationRepository } from '@bike4mind/database';
+import {
+  agentRepository,
+  cacheRepository,
+  organizationRepository,
+  realtimeConnectionRepository,
+} from '@bike4mind/database';
 import {
   oauthClientRepository,
   userApiKeyRepository,
@@ -203,7 +208,13 @@ const handler = baseApi({ auth: false })
       await userApiKeyService.revokeUserApiKey(
         b4mUserId,
         { keyId: prior.id, reason: 'Superseded by a new federated AI-token exchange' },
-        { db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository } }
+        {
+          db: {
+            userApiKeys: userApiKeyRepository,
+            organizations: organizationRepository,
+            realtimeConnections: realtimeConnectionRepository,
+          },
+        }
       );
     }
 

@@ -1,6 +1,7 @@
 import { AuthStrategy, IAuthProviders } from '@bike4mind/common';
-import { User, authSessionRepository } from '@bike4mind/database';
+import { User, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { authSessionService } from '@bike4mind/services';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { omit } from 'lodash';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
@@ -168,7 +169,11 @@ const authenticateUser = async (
       // link, so gate the revoke on the same condition. Safe to revoke ALL here: the session for THIS
       // login is minted later, in the callback handler, so it is created fresh and unaffected.
       if (isNewProvider) {
-        await authSessionRepository.revokeAllByUserId(String(user._id));
+        await authSessionService.revokeAllUserSessions(
+          String(user._id),
+          {},
+          { db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository } }
+        );
       }
 
       const linkedUser = omit(user, ['password']) as typeof user & {
