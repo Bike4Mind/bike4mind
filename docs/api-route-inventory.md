@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
-| ai | 20 | 4 | 18 | 1 | 0 | 1 | 6 |
+| ai | 20 | 4 | 17 | 2 | 0 | 1 | 6 |
 | analytics | 3 | 0 | 2 | 0 | 0 | 1 | 1 |
 | api-keys | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | app-files | 7 | 0 | 6 | 0 | 0 | 1 | 3 |
@@ -424,7 +424,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
-| `/api/ai/audio-providers` | GET | jwt+key | - | no | - | 1: `hooks/data/audioProviders.ts` |
+| `/api/ai/audio-providers` | GET | jwt | - | no | - | 1: `hooks/data/audioProviders.ts` |
 | `/api/ai/barkeep-chat` | POST | jwt+key | - | no | - | 0 |
 | `/api/ai/classify-intent` | POST | jwt+key | - | no | - | 1: `hooks/useIntentClassifier.ts` |
 | `/api/ai/context-dry-run` | POST | jwt+key | `files:read` | no | - | 1: `hooks/useAttachmentFitWarning.ts` |
