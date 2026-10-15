@@ -134,4 +134,22 @@ describe('SidebarSectionStore', () => {
 
     expect(await readFile(file, 'utf8')).toBe('sentinel');
   });
+
+  it('does not restore stale state when a first read races an update', async () => {
+    const file = await sectionsFile();
+    await new SidebarSectionStore(file, sequentialIds()).create('Work');
+    const store = new SidebarSectionStore(file, sequentialIds());
+
+    const [, created] = await Promise.all([store.read(), store.create('Home')]);
+
+    expect(created.sections.map(section => section.name)).toEqual(['Work', 'Home']);
+    expect((await store.read()).sections.map(section => section.name)).toEqual(['Work', 'Home']);
+  });
+
+  it('treats an inherited property name as an unassigned session', async () => {
+    const store = new SidebarSectionStore(await sectionsFile(), sequentialIds());
+    await store.create('Work');
+
+    expect(await store.move('toString', null)).toEqual({ sections: [{ id: 'section-1', name: 'Work' }], assignments: {} });
+  });
 });

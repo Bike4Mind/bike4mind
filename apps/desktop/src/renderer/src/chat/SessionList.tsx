@@ -147,11 +147,7 @@ const keepMenuOpen = (event: SyntheticEvent) => {
   (event as SyntheticEvent & { defaultMuiPrevented?: boolean }).defaultMuiPrevented = true;
 };
 
-/**
- * The Move to view of a row's menu: every section with a check on the current one, a way out of
- * it, and New section. Shown in place of the main items rather than as a flyout, because Joy has
- * no nested menu and a second Dropdown in a portal would close the first on every click into it.
- */
+/** Shown in place of the main menu items, not as a flyout: Joy has no nested menu. */
 function MoveToItems({
   session,
   userSections,
@@ -392,16 +388,18 @@ const SessionRow = memo(function SessionRow({
                     >
                       Rename
                     </MenuItem>
-                    <MenuItem
-                      onClick={event => {
-                        keepMenuOpen(event);
-                        setMenuView('move');
-                      }}
-                      data-testid="chat-move-session-btn"
-                    >
-                      <Box sx={{ flex: 1 }}>Move to</Box>
-                      <ChevronIcon open={false} />
-                    </MenuItem>
+                    {!session.pinned && !session.archived && (
+                      <MenuItem
+                        onClick={event => {
+                          keepMenuOpen(event);
+                          setMenuView('move');
+                        }}
+                        data-testid="chat-move-session-btn"
+                      >
+                        <Box sx={{ flex: 1 }}>Move to</Box>
+                        <ChevronIcon open={false} />
+                      </MenuItem>
+                    )}
                     <MenuItem onClick={() => actions.toggleArchived(session)} data-testid="chat-archive-session-btn">
                       {session.archived ? 'Unarchive' : 'Archive'}
                     </MenuItem>
@@ -426,6 +424,11 @@ const SessionRow = memo(function SessionRow({
         // Not while renaming, or selecting text in the input would pick the whole row up.
         draggable={!editing}
         onDragStart={event => {
+          // Pinned and archived rows are drawn outside the sections, so a filed one would vanish.
+          if (session.pinned || session.archived) {
+            event.preventDefault();
+            return;
+          }
           event.dataTransfer.effectAllowed = 'move';
           event.dataTransfer.setData(SESSION_DRAG_TYPE, session.id);
           actions.drag(session.id);
@@ -673,7 +676,11 @@ export function SessionList({
   const dragFrame = useRef(0);
   const [nameRequest, setNameRequest] = useState<SectionNameRequest | null>(null);
 
-  const sections = useMemo(() => groupSessions(matching, mode, userSections), [matching, mode, userSections]);
+  const sections = useMemo(() => {
+    const grouped = groupSessions(matching, mode, userSections);
+    // An empty section under a search is only noise; with no query it stays so it can be found.
+    return query.trim() ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
+  }, [matching, mode, userSections, query]);
   const empty =
     sections.pinned.length === 0 &&
     sections.custom.length === 0 &&
@@ -799,7 +806,7 @@ export function SessionList({
     if (!sessionId) return;
     event.preventDefault();
     event.stopPropagation();
-    setDropTarget(null);
+    actions.drag(null);
     if (userSections.assignments[sessionId] !== sectionId) sectionActions.move(sessionId, sectionId);
   };
 
@@ -816,7 +823,7 @@ export function SessionList({
     const sessionId = event.dataTransfer.getData(SESSION_DRAG_TYPE);
     if (!sessionId) return;
     event.preventDefault();
-    setDropTarget(null);
+    actions.drag(null);
     if (userSections.assignments[sessionId] !== undefined) sectionActions.move(sessionId, null);
   };
 

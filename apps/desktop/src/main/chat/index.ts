@@ -46,6 +46,7 @@ import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { SidebarSectionStore } from './SidebarSectionStore';
+import { registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
@@ -533,25 +534,11 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: string) => {
     await service.deleteSession(sessionId);
     await pullRequests.forget(sessionId);
-    await sidebarSections.forgetSession(sessionId);
+    await sidebarSections.forgetSession(sessionId).catch((error: unknown) => {
+      logger.error('Could not drop a deleted session from the sidebar sections', error);
+    });
   });
-  // Strings are checked rather than trusted: anything else would be written to the file as is.
-  const isText = (value: unknown): value is string => typeof value === 'string';
-  ipcMain.handle(IPC_CHANNELS.sidebarGetSections, () => sidebarSections.read());
-  ipcMain.handle(IPC_CHANNELS.sidebarCreateSection, (_event, name: unknown, sessionId: unknown) =>
-    isText(name) ? sidebarSections.create(name, isText(sessionId) ? sessionId : undefined) : sidebarSections.read()
-  );
-  ipcMain.handle(IPC_CHANNELS.sidebarRenameSection, (_event, sectionId: unknown, name: unknown) =>
-    isText(sectionId) && isText(name) ? sidebarSections.rename(sectionId, name) : sidebarSections.read()
-  );
-  ipcMain.handle(IPC_CHANNELS.sidebarDeleteSection, (_event, sectionId: unknown) =>
-    isText(sectionId) ? sidebarSections.remove(sectionId) : sidebarSections.read()
-  );
-  ipcMain.handle(IPC_CHANNELS.sidebarMoveSession, (_event, sessionId: unknown, sectionId: unknown) =>
-    isText(sessionId) && (sectionId === null || isText(sectionId))
-      ? sidebarSections.move(sessionId, sectionId)
-      : sidebarSections.read()
-  );
+  registerSidebarIpc(ipcMain, sidebarSections);
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
     service.send(request.sessionId, request.text, request.attachments)
   );

@@ -28,20 +28,10 @@ function sanitize(stored: z.infer<typeof storedSchema>): SidebarSectionsState {
   return { sections, assignments };
 }
 
-/**
- * The user's sidebar sections and which session sits in each, in userData beside the other
- * app-wide preferences.
- *
- * Not scoped to the backend or account the way sessions are: a section is how the user likes to
- * file their work, and session ids are UUIDs, so an assignment for a session from another scope
- * is simply never drawn. An unreadable file reads as no sections - never as an error the sidebar
- * has to handle - and the next change writes a clean one.
- *
- * Every change goes through one queue, so two clicks that land together cannot each read the
- * same state and have the second write erase the first.
- */
+/** Sections and assignments in userData, unscoped by account; an unreadable file reads as empty. */
 export class SidebarSectionStore {
   private state: SidebarSectionsState | null = null;
+  private loading: Promise<SidebarSectionsState> | null = null;
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
@@ -49,8 +39,14 @@ export class SidebarSectionStore {
     private readonly newId: () => string = randomUUID
   ) {}
 
-  async read(): Promise<SidebarSectionsState> {
-    if (this.state) return this.state;
+  read(): Promise<SidebarSectionsState> {
+    if (this.state) return Promise.resolve(this.state);
+    // One shared load, so a first read racing an update cannot restore state the update replaced.
+    this.loading ??= this.load();
+    return this.loading;
+  }
+
+  private async load(): Promise<SidebarSectionsState> {
     let raw: unknown;
     try {
       raw = JSON.parse(await readFile(this.filePath, 'utf8'));
@@ -58,7 +54,7 @@ export class SidebarSectionStore {
       raw = undefined;
     }
     const parsed = storedSchema.safeParse(raw);
-    this.state = parsed.success ? sanitize(parsed.data) : EMPTY_SIDEBAR_SECTIONS;
+    this.state ??= parsed.success ? sanitize(parsed.data) : EMPTY_SIDEBAR_SECTIONS;
     return this.state;
   }
 
@@ -106,7 +102,7 @@ export class SidebarSectionStore {
     return this.update(state => {
       if (sectionId === null) return withoutSession(state, sessionId);
       if (!state.sections.some(section => section.id === sectionId)) return state;
-      if (state.assignments[sessionId] === sectionId) return state;
+      if (Object.hasOwn(state.assignments, sessionId) && state.assignments[sessionId] === sectionId) return state;
       return { ...state, assignments: { ...state.assignments, [sessionId]: sectionId } };
     });
   }
@@ -139,7 +135,7 @@ export class SidebarSectionStore {
 }
 
 function withoutSession(state: SidebarSectionsState, sessionId: string): SidebarSectionsState {
-  if (!(sessionId in state.assignments)) return state;
+  if (!Object.hasOwn(state.assignments, sessionId)) return state;
   const { [sessionId]: _removed, ...assignments } = state.assignments;
   return { ...state, assignments };
 }
