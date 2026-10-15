@@ -111,6 +111,36 @@ describe('POST /api/mcp/confirm', () => {
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
+  it('matches the selected repository regardless of case but still refuses a different one', async () => {
+    vi.mocked(getSelectedRepositoriesForMcp).mockResolvedValue(['acme/app']);
+
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: {
+        tool: 'create_issue',
+        params: { owner: 'Acme', repo: 'App', title: 't' },
+        ts: pendingActionTs,
+      },
+    } as never);
+    const selected = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+    expect(selected._getStatusCode()).toBe(200);
+    expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
+
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: {
+        tool: 'create_issue',
+        params: { owner: 'Acme', repo: 'Other', title: 't' },
+        ts: pendingActionTs,
+      },
+    } as never);
+    vi.mocked(invokeMcpHandler).mockClear();
+
+    const unselected = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+    expect(unselected._getStatusCode()).toBe(400);
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
   it('returns 409 without claiming when the displayed action was replaced', async () => {
     const res = await post({
       questId: QUEST_ID,
