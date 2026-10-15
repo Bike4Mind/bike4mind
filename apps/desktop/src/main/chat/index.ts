@@ -12,6 +12,7 @@ import {
   shell,
   type WebContents,
 } from 'electron';
+import { RemoteSkillSource } from '@bike4mind/cli/skills';
 import { ChatModels } from '@bike4mind/common';
 import type {
   ChatApprovalAnswer,
@@ -76,7 +77,7 @@ import {
   unusableProjectReason,
 } from './project/git';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
-import { SkillCatalog } from './skills/SkillCatalog';
+import { remoteSkillsKey, SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
@@ -284,7 +285,18 @@ export function registerChat(auth: AuthService): RegisteredChat {
   const access = new AccessStore(join(userData, 'tool-access.json'));
   // Its own file beside tool-access.json, and for the same reason: both record a consent the
   // user gave once and should not be asked for again on every launch.
-  const skills = new SkillCatalog(new ProjectTrustStore(join(userData, 'project-skill-trust.json')));
+  // Account skills are cached per (backend, user) under userData - not in the CLI's shared cache
+  // file - and not at all while signed out, so one account never sees another's.
+  const skills = new SkillCatalog(new ProjectTrustStore(join(userData, 'project-skill-trust.json')), () => {
+    const api = auth.getApiClient();
+    const { environment, user } = auth.getState();
+    if (!api || !user?.id) return null;
+    const key = remoteSkillsKey(environment.url, user.id);
+    return {
+      key,
+      source: new RemoteSkillSource(api, { cacheFilePath: join(userData, 'remote-skills', `${key}.json`) }),
+    };
+  });
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);

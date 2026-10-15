@@ -16,6 +16,7 @@ import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
 import { automaticSummary, displayText, relaySummary } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
+import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { describeReplyCost, formatCreditsSpent } from './statusLine';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
@@ -112,8 +113,8 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
                 /{skill.name}
                 {skill.args ? ` ${skill.args}` : ''}
               </Typography>
-              <Chip size="sm" variant="soft" color={skill.source === 'project' ? 'warning' : 'neutral'}>
-                {skill.source} skill
+              <Chip size="sm" variant="soft" color={skillChipColor(skill.source)}>
+                {skill.source === 'account' ? skillSourceLabel(skill.source) : skill.source} skill
               </Chip>
             </Stack>
             <Box>

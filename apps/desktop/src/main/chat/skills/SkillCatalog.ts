@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import {
@@ -5,8 +6,9 @@ import {
   filterAIVisibleSkills,
   filterUserVisibleSkills,
   type CustomCommand,
+  type RemoteSkillSource,
 } from '@bike4mind/cli/skills';
-import type { SkillSummary, SkillsState } from '@shared/skills';
+import type { SkillSource, SkillSummary, SkillsState } from '@shared/skills';
 import type { ProjectTrustStore } from './ProjectTrustStore';
 
 /**
@@ -18,10 +20,26 @@ import type { ProjectTrustStore } from './ProjectTrustStore';
  * checkout. This class is the desktop's adapter onto it: it decides WHICH root to scan and
  * whether that root is trusted, and turns the result into the summaries the composer draws.
  *
- * Remote `/api/skills` skills are deliberately not wired: the store takes a RemoteSkillSource
- * and none is passed, so the desktop is local-only. Adding them later is a constructor
- * argument, not a rewrite.
+ * The signed-in account's `/api/skills` skills come from the CLI's RemoteSkillSource, handed to
+ * the store, so the local-wins merge and the owner/reserved-name filter are the CLI's too. They
+ * are the user's own, so they load in every posture: no project, untrusted and trusted alike.
  */
+
+/**
+ * The signed-in account's skill source, or null when signed out. Called on every read, so a
+ * sign-out or account switch takes effect on the next one. `key` identifies the account and
+ * keys every cache below.
+ */
+export type RemoteSkills = () => { key: string; source: RemoteSkillSource } | null;
+
+/**
+ * A stable, filename-safe id for one account on one backend. The desktop's remote-skill cache is
+ * a file per key under userData, never the CLI's shared ~/.bike4mind/cache/remote-skills.json,
+ * so neither another account nor another backend can read it.
+ */
+export function remoteSkillsKey(environmentUrl: string, userId: string): string {
+  return createHash('sha256').update(`${environmentUrl}\u0000${userId}`).digest('hex').slice(0, 16);
+}
 
 /**
  * How long a scan is reused before the directories are walked again.
@@ -42,19 +60,22 @@ export class SkillCatalog {
   private readonly cache = new Map<string, Cached>();
   private trustRevision = 0;
 
-  constructor(private readonly trust: ProjectTrustStore) {}
+  constructor(
+    private readonly trust: ProjectTrustStore,
+    private readonly remote: RemoteSkills = () => null
+  ) {}
 
   /**
-   * Bumped by `setTrusted`, and by nothing else.
+   * Moves on a trust decision (`setTrusted`) or a change of signed-in account, and nothing else.
    *
    * The skills a model is SHOWN are snapshotted per session, because the system prompt sits in
    * the provider's cached prefix and must not move between rounds (see SkillsPromptCache). That
    * snapshot would otherwise outlive the one change to this catalog a user makes mid-session and
-   * expects to see: trusting the project they are working in. This counter is what the snapshot
-   * keys on, so a trust decision reaches the next turn and an ordinary skill edit does not.
+   * expects to see: trusting the project they are working in. This is what the snapshot keys on,
+   * so a trust decision or an account switch reaches the next turn and a skill edit does not.
    */
-  get revision(): number {
-    return this.trustRevision;
+  get revision(): string {
+    return `${this.trustRevision}:${this.remote()?.key ?? 'none'}`;
   }
 
   /**
@@ -110,7 +131,8 @@ export class SkillCatalog {
   }
 
   private async load(root: string | null, trusted: boolean): Promise<CustomCommand[]> {
-    const key = `${trusted ? 'trusted' : 'untrusted'}:${root ?? ''}`;
+    const account = this.remote();
+    const key = `${trusted ? 'trusted' : 'untrusted'}:${root ?? ''}:${account?.key ?? 'none'}`;
     const cached = this.cache.get(key);
     if (cached && Date.now() - cached.at < CACHE_MS) return cached.commands;
 
@@ -118,13 +140,13 @@ export class SkillCatalog {
     // process.cwd() - for a packaged Electron app, wherever the user happened to launch it
     // from. The home directory is passed instead, and `setProjectTrusted` is never called for
     // it, so its project directories are not scanned and only ~/.claude/skills loads.
-    const store = new CustomCommandStore(root ?? homedir());
+    const store = new CustomCommandStore(root ?? homedir(), { remoteSource: account?.source });
     // Honestly, not to make a test pass: false for an untrusted root is the whole gate, and
     // false for "no project" is what keeps repo skills out of a Chat session.
     store.setProjectTrusted(trusted);
     await store.loadCommands();
 
-    const commands = store.getAllCommands().filter(command => command.source !== 'remote');
+    const commands = store.getAllCommands();
     this.cache.set(key, { at: Date.now(), commands });
     return commands;
   }
@@ -136,8 +158,13 @@ function toSummary(command: CustomCommand): SkillSummary {
     ...(command.displayName ? { displayName: command.displayName } : {}),
     description: command.description,
     ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
-    // The store only yields 'global' | 'project' here; 'remote' was filtered out above.
-    source: command.source === 'project' ? 'project' : 'global',
+    source: skillSource(command),
     filePath: command.filePath,
   };
+}
+
+/** The renderer's label for where a command came from; `remote` is the signed-in account's. */
+export function skillSource(command: CustomCommand): SkillSource {
+  if (command.source === 'project') return 'project';
+  return command.source === 'remote' ? 'account' : 'global';
 }

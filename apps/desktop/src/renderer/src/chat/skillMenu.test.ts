@@ -54,6 +54,11 @@ describe('matchSkills', () => {
     expect(matchSkills(skills, 'ship the').map(entry => entry.name)).toEqual(['deploy']);
   });
 
+  it('puts account skills after global ones of the same rank', () => {
+    const mixed = [skill('a-web', 'account'), skill('z-local', 'global'), skill('m-repo', 'project')];
+    expect(matchSkills(mixed, '').map(entry => entry.name)).toEqual(['m-repo', 'z-local', 'a-web']);
+  });
+
   it('is case insensitive', () => {
     expect(matchSkills(skills, 'LINT').map(entry => entry.name)).toEqual(['lint']);
   });
