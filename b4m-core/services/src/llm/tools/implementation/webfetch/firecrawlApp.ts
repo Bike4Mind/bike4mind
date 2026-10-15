@@ -53,9 +53,13 @@ export interface FirecrawlClient {
 }
 
 /**
- * Build a FirecrawlApp from resolved config, or null when neither an API key nor a custom API URL
- * is set - the caller then falls back to plain fetch (self-host without Firecrawl). firecrawl-js
+ * Build a Firecrawl client from resolved config, or null when neither an API key nor a custom API
+ * URL is set - the caller then falls back to plain fetch (self-host without Firecrawl). firecrawl-js
  * allows a keyless client when apiUrl targets a self-hosted instance (not api.firecrawl.dev).
+ *
+ * Returns a guarded wrapper, not the raw client: `scrapeUrl` pre-flights the target through the SSRF
+ * guard so every caller inherits it, and only `scrapeUrl`/`search` are exposed (the FirecrawlClient
+ * slice services use).
  */
 export function createFirecrawlApp(config: FirecrawlAppConfig): FirecrawlClient | null {
   if (!config.apiKey && !config.apiUrl) return null;
