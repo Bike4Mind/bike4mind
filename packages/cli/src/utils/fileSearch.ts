@@ -4,6 +4,7 @@ import { AsyncFzf, type FzfResultItem } from 'fzf';
 import { fdir } from 'fdir';
 import ignore from 'ignore';
 import { isPathWithin } from './pathWithin.js';
+import { logger } from './Logger.js';
 
 export interface FileSearchResult {
   path: string; // Relative path from cwd
@@ -25,13 +26,20 @@ function statOrNull(targetPath: string): fs.Stats | null {
 }
 
 /**
+ * Never listed, whatever .gitignore says: VCS internals, installed dependencies,
+ * and nested worktrees (each one a full copy of the repo, so crawling them
+ * multiplies the walk and floods @ results with duplicates).
+ */
+const ALWAYS_IGNORED = ['.git/', 'node_modules/', '.claude/worktrees/'];
+
+const MAX_CRAWL_DEPTH = 10;
+const MAX_CRAWL_ENTRIES = 20000;
+
+/**
  * Load gitignore rules from project root
  */
 function loadIgnoreRules(projectRoot: string): ReturnType<typeof ignore> {
-  const ig = ignore();
-
-  // Always ignore .git
-  ig.add('.git/');
+  const ig = ignore().add(ALWAYS_IGNORED);
 
   // Try to load .gitignore
   const gitignorePath = path.join(projectRoot, '.gitignore');
@@ -48,96 +56,70 @@ function loadIgnoreRules(projectRoot: string): ReturnType<typeof ignore> {
 }
 
 /**
- * Crawl directory and collect files/directories
- * @param projectRoot - The project root directory
- * @param maxDepth - Maximum depth to traverse
- * @param maxFiles - Maximum number of files to collect
- * @param ig - Ignore instance with gitignore rules
- * @returns Array of relative paths
+ * Crawl a directory and collect files and directories (directories end in '/').
+ *
+ * Gitignore rules are applied while walking: ignored directories are pruned, and
+ * ignored entries never count towards maxEntries, so the cap bounds the listing
+ * rather than being spent on entries that get dropped.
+ *
+ * @returns Paths relative to projectRoot, '/'-separated
  */
-function crawlDirectory(
+async function crawlDirectory(
   projectRoot: string,
-  maxDepth: number = 10,
-  maxFiles: number = 20000,
-  ig: ReturnType<typeof ignore>
-): string[] {
-  let fileCount = 0;
-
-  const crawler = new fdir()
-    .withRelativePaths()
-    .withDirs()
-    .withPathSeparator('/')
-    .exclude((dirPath: string) => {
-      // Convert absolute path to relative with trailing slash
-      const relativePath = path.posix.relative(projectRoot, dirPath);
-
-      // Skip root directory check (empty or ".")
-      if (!relativePath || relativePath === '.') {
-        return false;
-      }
-
-      const pathWithSlash = `${relativePath}/`;
-      return ig.ignores(pathWithSlash);
-    })
-    .filter(() => {
-      if (fileCount >= maxFiles) {
-        return false;
-      }
-      fileCount++;
-      return true;
-    });
-
-  if (maxDepth !== undefined) {
-    crawler.withMaxDepth(maxDepth);
-  }
-
-  const paths = crawler.crawl(projectRoot).sync() as string[];
-
-  // Filter out ignored files (directories are already filtered during crawl)
-  return paths.filter(p => {
-    // Skip empty or "." paths
-    if (!p || p === '.') {
-      return true;
-    }
-    return !ig.ignores(p);
-  });
+  ig: ReturnType<typeof ignore>,
+  maxDepth: number = MAX_CRAWL_DEPTH,
+  maxEntries: number = MAX_CRAWL_ENTRIES
+): Promise<string[]> {
+  return (
+    new fdir()
+      .withRelativePaths()
+      .withDirs()
+      .withPathSeparator('/')
+      .withMaxDepth(maxDepth)
+      .withMaxFiles(maxEntries)
+      .exclude((_dirName, dirPath) => {
+        const relativePath = path.relative(projectRoot, dirPath).split(path.sep).join('/');
+        return relativePath !== '' && ig.ignores(`${relativePath}/`);
+      })
+      // fdir also pushes the root itself as '.', which is not a selectable entry
+      // (and 'ignore' throws on it).
+      .filter(relativePath => relativePath !== '.' && !ig.ignores(relativePath))
+      .crawl(projectRoot)
+      .withPromise()
+  );
 }
 
 /**
  * Walk a directory recursively and collect files/directories with metadata
  * @param basePath - The base directory to walk (defaults to cwd)
  * @param maxDepth - Maximum depth to traverse (default: 10)
+ * @param maxEntries - Maximum number of non-ignored entries to collect (default: 20000)
  * @returns Array of FileSearchResult
  */
-export function walkDirectory(basePath: string = process.cwd(), maxDepth: number = 10): FileSearchResult[] {
+export async function walkDirectory(
+  basePath: string = process.cwd(),
+  maxDepth: number = MAX_CRAWL_DEPTH,
+  maxEntries: number = MAX_CRAWL_ENTRIES
+): Promise<FileSearchResult[]> {
   const normalizedBase = path.resolve(basePath);
-  const ig = loadIgnoreRules(normalizedBase);
+  const paths = await crawlDirectory(normalizedBase, loadIgnoreRules(normalizedBase), maxDepth, maxEntries);
+  return paths.map(relativePath => describeEntry(normalizedBase, relativePath));
+}
 
-  const paths = crawlDirectory(normalizedBase, maxDepth, 20000, ig);
-
-  const results: FileSearchResult[] = [];
-
-  for (const relativePath of paths) {
-    const fullPath = path.join(normalizedBase, relativePath);
-
-    try {
-      const stats = fs.statSync(fullPath);
-
-      results.push({
-        path: relativePath,
-        isDirectory: stats.isDirectory(),
-        size: stats.isFile() ? stats.size : undefined,
-      });
-    } catch {
-      // Skip files we can't stat
-      results.push({
-        path: relativePath,
-        isDirectory: false,
-      });
-    }
+/**
+ * Stat a crawled entry for its type and size. An entry that vanished since the
+ * crawl is still returned, as a file without a size.
+ */
+function describeEntry(projectRoot: string, relativePath: string): FileSearchResult {
+  const stats = statOrNull(path.join(projectRoot, relativePath));
+  if (!stats) {
+    return { path: relativePath, isDirectory: false };
   }
-
-  return results;
+  return {
+    path: relativePath,
+    isDirectory: stats.isDirectory(),
+    size: stats.isFile() ? stats.size : undefined,
+  };
 }
 
 /**
@@ -151,44 +133,60 @@ export function formatFileSize(bytes: number): string {
 }
 
 // Cache for file search results
-let cachedFiles: string[] | null = null;
-let cacheTimestamp: number = 0;
+type FileCache = { root: string; files: string[]; timestamp: number };
+let fileCache: FileCache | null = null;
+// One crawl at a time: concurrent callers (the startup warm-up, the first @
+// keystrokes) share it instead of each walking the tree.
+let inFlightCrawl: { root: string; promise: Promise<string[]> } | null = null;
 const CACHE_TTL_MS = 30000; // 30 seconds cache
 
 /**
- * Get cached file list or refresh if stale
+ * Get cached file list or refresh if stale. The crawl is async, so a large tree
+ * never blocks the event loop (and with it, input and rendering).
  */
-function getCachedFiles(projectRoot: string = process.cwd()): string[] {
-  const now = Date.now();
-  if (!cachedFiles || now - cacheTimestamp > CACHE_TTL_MS) {
-    const normalizedBase = path.resolve(projectRoot);
-    const ig = loadIgnoreRules(normalizedBase);
-    cachedFiles = crawlDirectory(normalizedBase, 10, 20000, ig);
-    cacheTimestamp = now;
+async function getCachedFiles(projectRoot: string = process.cwd()): Promise<string[]> {
+  const root = path.resolve(projectRoot);
+  if (fileCache && fileCache.root === root && Date.now() - fileCache.timestamp <= CACHE_TTL_MS) {
+    return fileCache.files;
   }
-  return cachedFiles;
+  if (inFlightCrawl?.root === root) {
+    return inFlightCrawl.promise;
+  }
+
+  const crawl = { root, promise: crawlDirectory(root, loadIgnoreRules(root)) };
+  inFlightCrawl = crawl;
+  try {
+    const files = await crawl.promise;
+    // A crawl superseded by invalidateFileCache() must not repopulate the cache.
+    if (inFlightCrawl === crawl) {
+      fileCache = { root, files, timestamp: Date.now() };
+    }
+    return files;
+  } finally {
+    if (inFlightCrawl === crawl) {
+      inFlightCrawl = null;
+    }
+  }
 }
 
 /**
  * Invalidate the file cache (call when files may have changed)
  */
 export function invalidateFileCache(): void {
-  cachedFiles = null;
-  cacheTimestamp = 0;
+  fileCache = null;
+  inFlightCrawl = null;
 }
 
 /**
  * Warm up the file cache in the background
- * Call this early (e.g., when InputPrompt mounts) to prevent lag on first @ usage
+ * Call this early (e.g., at startup) to prevent lag on first @ usage
  */
 export function warmFileCache(): void {
-  // Asynchronously populate cache if not already cached
-  if (!cachedFiles || Date.now() - cacheTimestamp > CACHE_TTL_MS) {
-    // Use setImmediate to not block the current event loop
-    setImmediate(() => {
-      getCachedFiles();
-    });
-  }
+  getCachedFiles().catch(error => {
+    logger.debug(
+      `[fileSearch] Warming the file cache failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  });
 }
 
 /**
@@ -293,24 +291,12 @@ export async function searchFiles(query: string, maxResults: number = 20): Promi
     return listAbsoluteDirectory(dirToList, filterQuery);
   }
 
-  const files = getCachedFiles(projectRoot);
+  const files = await getCachedFiles(projectRoot);
 
   // If query is empty, return root level items only
   if (!query || query.trim() === '') {
     const rootFiles = files.filter(f => !f.includes('/')).slice(0, maxResults);
-    return rootFiles.map(p => {
-      const fullPath = path.join(projectRoot, p);
-      try {
-        const stats = fs.statSync(fullPath);
-        return {
-          path: p,
-          isDirectory: stats.isDirectory(),
-          size: stats.isFile() ? stats.size : undefined,
-        };
-      } catch {
-        return { path: p, isDirectory: false };
-      }
-    });
+    return rootFiles.map(p => describeEntry(projectRoot, p));
   }
 
   // Use fzf for fuzzy matching
@@ -318,20 +304,7 @@ export async function searchFiles(query: string, maxResults: number = 20): Promi
   const results = await fzf.find(query);
 
   // Take top results and add metadata
-  return results.slice(0, maxResults).map((result: FzfResultItem<string>) => {
-    const p = result.item;
-    const fullPath = path.join(projectRoot, p);
-    try {
-      const stats = fs.statSync(fullPath);
-      return {
-        path: p,
-        isDirectory: stats.isDirectory(),
-        size: stats.isFile() ? stats.size : undefined,
-      };
-    } catch {
-      return { path: p, isDirectory: false };
-    }
-  });
+  return results.slice(0, maxResults).map((result: FzfResultItem<string>) => describeEntry(projectRoot, result.item));
 }
 
 /**
