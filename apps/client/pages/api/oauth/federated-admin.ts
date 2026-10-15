@@ -8,7 +8,9 @@
  * but nothing is minted and nothing is released beyond the boolean, so there is
  * no scope or consent gate. The grant gate still applies (enforced): without it a
  * relying-party client's pool could name any B4M user in `identities[]` and learn
- * whether they are an admin.
+ * whether they are an admin. The grant gate does not cover first-party clients
+ * (the default clientType): on the 'identities' path they can ask about any user
+ * their pool names, as on /api/oauth/ai-token, until OAUTH_AI_TOKEN_REQUIRE_SUB=true.
  *
  * Response: 200 { is_admin: boolean }. A subject that resolves to no B4M user,
  * or to a blocked (banned, suspended, disputed) account, is simply not an admin.
@@ -90,7 +92,8 @@ const handler = baseApi({ auth: false })
     }
     if (federatedIdp.subjectSource !== 'sub') {
       req.logger.warn(
-        `[OAUTH_FEDERATED_ADMIN] client ${client_id} resolves the user from the self-asserted 'identities' claim`
+        `[OAUTH_FEDERATED_ADMIN] would-reject: client ${client_id} uses the self-asserted ` +
+          "'identities' subject source; set OAUTH_AI_TOKEN_REQUIRE_SUB=true to enforce subjectSource='sub'"
       );
     }
 
