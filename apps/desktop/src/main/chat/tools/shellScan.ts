@@ -153,8 +153,7 @@ const ALWAYS_OUTBOUND = new Set(['scp', 'sftp', 'ftp', 'nc', 'ncat', 'netcat', '
 
 // `-K` reads options from a file, which can hold `--data`; the `--url-query` and `--variable`
 // families read one into the URL, and `--expand-*` runs a template over variables.
-const CURL_SENDS =
-  /^(-d|--data.*|-F|--form.*|-T|--upload-file|--json|-K|--config|--url-query|--variable|--expand-.*)$/;
+const CURL_SENDS = /^(-d|--data.*|-F|--form.*|-T|--upload-file|--json|-K|--config|--url-query|--variable|--expand-.*)$/;
 // GNU wget accepts any unambiguous prefix, so `--post-f` means `--post-file`.
 const WGET_SENDS = /^--(post|body)/;
 
@@ -204,6 +203,12 @@ const OPTION_VALUE_WORDS: Record<string, readonly string[]> = {
   bash: ['--rcfile', '--init-file'],
 };
 
+/** Common long options that take no value, so the word after one is not assumed to be its value. */
+const OPTION_FLAG_WORDS: Record<string, readonly string[]> = {
+  node: ['--inspect', '--inspect-brk', '--watch', '--enable-source-maps', '--no-warnings', '--trace-warnings'],
+  bun: ['--watch', '--hot', '--smol'],
+};
+
 /** Shells where -o/-O (and +o/+O) name an option in the next word, leaving the rest of the cluster as flags. */
 const SHELL_OPTION_WORD = new Set(['sh', 'bash', 'dash']);
 
@@ -248,6 +253,8 @@ function plainWord(arg: string | undefined): boolean {
 function interpreterOptions(program: string, args: readonly string[]): string[] {
   const letters = optionValueLetters(program);
   const shellWord = SHELL_OPTION_WORD.has(program);
+  // Shells also take flags as `+e`, which turn an option off rather than ending the options.
+  const plusFlags = INLINE_SCRIPT[program] === DASH_C;
   const options: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -258,10 +265,18 @@ function interpreterOptions(program: string, args: readonly string[]): string[] 
       i += [...arg.slice(1)].filter(letter => letter === 'o' || letter === 'O').length;
       continue;
     }
-    if (!arg.startsWith('-')) break;
+    if (!arg.startsWith('-') && !(plusFlags && arg.startsWith('+'))) break;
     options.push(flagRun(arg, letters));
     if (takesNextArgument(program, arg)) i++;
-    else if (arg.startsWith('--') && arg !== '--' && !arg.includes('=') && plainWord(args[i + 1])) i++;
+    else if (
+      arg.startsWith('--') &&
+      arg !== '--' &&
+      !arg.includes('=') &&
+      !(OPTION_FLAG_WORDS[program] ?? []).includes(arg) &&
+      plainWord(args[i + 1])
+    ) {
+      i++;
+    }
   }
   return options;
 }
@@ -288,9 +303,7 @@ const GIT_OPTION_VALUES = /^--(git-dir|work-tree|namespace)(=|$)/;
  */
 function readsStdin(node: Node): boolean {
   if (
-    node.namedChildren.some(
-      child => child?.type === 'herestring_redirect' || child?.type === 'process_substitution'
-    )
+    node.namedChildren.some(child => child?.type === 'herestring_redirect' || child?.type === 'process_substitution')
   ) {
     return true;
   }
@@ -429,11 +442,7 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   const options = interpreterOptions(program, args);
   const inline = inlineScript ? options.find(arg => inlineScript.test(arg)) : undefined;
   if (inline) return `${program} ${(inlineScript?.exec(inline)?.[0] ?? inline.split('=')[0]).replace(/=$/, '')}`;
-  if (
-    stdin &&
-    STDIN_SCRIPT.test(program) &&
-    args.every(arg => arg.startsWith('-') || STDIN_SCRIPT_ARG.test(arg))
-  ) {
+  if (stdin && STDIN_SCRIPT.test(program) && args.every(arg => arg.startsWith('-') || STDIN_SCRIPT_ARG.test(arg))) {
     return `${program} reading a script from stdin`;
   }
   if ((program === 'npm' || program === 'pnpm' || program === 'yarn') && args.includes('publish')) {
