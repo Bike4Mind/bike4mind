@@ -517,6 +517,137 @@ describe('planCatalogWrites', () => {
     });
   });
 
+  describe('a future deprecation date the model provider does not report', () => {
+    const FUTURE = '2026-10-15';
+    const GROUPS = ['identity', 'limits', 'lifecycle'];
+    const held = (lifecycle: Record<string, unknown>, source: 'discovery' | 'seed' = 'discovery') =>
+      asBase(
+        [],
+        [
+          {
+            ...seedRow(
+              {
+                id: 'gpt-6',
+                vendor: 'openai',
+                backend: 'openai',
+                type: 'text',
+                name: 'GPT-6',
+                contextWindow: 400_000,
+                lifecycle,
+              },
+              GROUPS
+            ),
+            source,
+          } as IModelCatalogRow,
+        ]
+      );
+    const priorDiscoveryGroups = new Map([['gpt-6', GROUPS as never]]);
+    const providerUndated = new Map([['gpt-6', 'openai']]);
+    const litellmDate = {
+      name: 'litellm',
+      kind: 'aggregator' as const,
+      records: [
+        { modelId: 'gpt-6', patch: { lifecycle: { deprecationDate: FUTURE } }, lifecycleEvidence: 'typed' as const },
+      ],
+    };
+
+    it('clears a held future date when the provider reports the model active with no date', () => {
+      const result = plan({
+        base: held({ status: 'active', deprecationDate: FUTURE }),
+        priorDiscoveryGroups,
+        providerUndated,
+        contributions: [{ name: 'openai', kind: 'provider', records: [gpt6()] }, litellmDate],
+      });
+
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'active' });
+      expect(result.rows[0].contributors).toContainEqual({ group: 'lifecycle', source: 'openai' });
+      expect(result.dropped).toContainEqual({
+        source: 'litellm',
+        modelId: 'gpt-6',
+        reason: `held deprecationDate ${FUTURE} cleared: openai reports the model "active" with no deprecation date`,
+      });
+
+      // The next run, with the aggregator still repeating the date, appends nothing.
+      const next = plan({
+        base: asBase(result.rows),
+        priorDiscoveryGroups,
+        providerUndated,
+        contributions: [{ name: 'openai', kind: 'provider', records: [gpt6()] }, litellmDate],
+      });
+      expect(next.rows).toEqual([]);
+      expect(next.dropped).toContainEqual({
+        source: 'litellm',
+        modelId: 'gpt-6',
+        reason: `deprecationDate ${FUTURE} refused: openai reports the model "active" with no deprecation date`,
+      });
+    });
+
+    it('keeps the date when only an aggregator speaks to the lifecycle', () => {
+      const result = plan({
+        base: held({ status: 'active', deprecationDate: FUTURE }),
+        priorDiscoveryGroups,
+        contributions: [
+          { name: 'openai', kind: 'provider', records: [gpt6()] },
+          {
+            name: 'litellm',
+            kind: 'aggregator',
+            records: [
+              {
+                modelId: 'gpt-6',
+                patch: { lifecycle: { status: 'active', deprecationDate: FUTURE } },
+                lifecycleEvidence: 'typed',
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result.rows).toEqual([]);
+    });
+
+    it('keeps a date that has already passed', () => {
+      const result = plan({
+        base: held({ status: 'active', deprecationDate: FUTURE }),
+        priorDiscoveryGroups,
+        providerUndated,
+        runStartedAt: new Date(`${FUTURE}T00:30:00Z`),
+      });
+
+      expect(result.rows).toEqual([]);
+    });
+
+    it('keeps the date of a model held in a sunset status', () => {
+      const result = plan({
+        base: held({ status: 'deprecated', deprecationDate: FUTURE }),
+        priorDiscoveryGroups,
+        providerUndated,
+      });
+
+      expect(result.rows).toEqual([]);
+    });
+
+    it('leaves a date a seed row holds alone', () => {
+      const result = plan({
+        base: held({ status: 'active', deprecationDate: FUTURE }, 'seed'),
+        providerUndated,
+      });
+
+      expect(result.rows).toEqual([]);
+    });
+
+    it('changes nothing when the provider and the catalog already agree', () => {
+      const result = plan({
+        base: held({ status: 'active' }),
+        priorDiscoveryGroups,
+        providerUndated,
+      });
+
+      expect(result.rows).toEqual([]);
+      expect(result.dropped).toEqual([]);
+    });
+  });
+
   it('drops a lifecycle date no status in force can carry', () => {
     const result = plan({
       contributions: [

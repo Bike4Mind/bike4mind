@@ -91,6 +91,11 @@ export interface LifecycleSignals {
   contributions: SourceContribution[];
   /** Every docs lifecycle row this run, allowed through or not; the suggestion channel reads it. */
   docs: Map<string, DocsLifecycleSignal>;
+  /**
+   * Provider name per model a PROVIDER reported this run in a non-sunset status with no
+   * deprecationDate. Docs-tier claims count: catalogWrite only lets this remove a future date.
+   */
+  providerUndated: Map<string, string>;
 }
 
 /**
@@ -112,14 +117,26 @@ export function planLifecycleSignals({ contributions, droppedDocsSources }: Life
   }
 
   const docs = new Map<string, DocsLifecycleSignal>();
+  const providerUndated = new Map<string, string>();
   const sanitized = ordered.map(contribution => ({
     ...contribution,
     records: contribution.records.map(record => {
       const lifecycle = record.patch?.lifecycle;
-      if (!lifecycle || evidenceOf(record) === 'typed') return record;
+      if (!lifecycle) return record;
+      const typed = evidenceOf(record) === 'typed';
       // A parser whose row count moved is not evidence of anything this run, not
       // even of a suggestion: the page it read is not the page it was written for.
-      if (droppedDocsSources?.has(contribution.name)) return withoutLifecycle(record);
+      if (!typed && droppedDocsSources?.has(contribution.name)) return withoutLifecycle(record);
+      if (
+        contribution.kind === 'provider' &&
+        lifecycle.status !== undefined &&
+        !SUNSET_STATUSES.has(lifecycle.status) &&
+        lifecycle.deprecationDate === undefined &&
+        !providerUndated.has(record.modelId)
+      ) {
+        providerUndated.set(record.modelId, contribution.name);
+      }
+      if (typed) return record;
       // Dates with no status are an announcement, and a parsed page announcing
       // one is not a signal: only a stated status moves a model.
       if (lifecycle.status === undefined) return withoutLifecycle(record);
@@ -143,7 +160,7 @@ export function planLifecycleSignals({ contributions, droppedDocsSources }: Life
     }),
   }));
 
-  return { contributions: sanitized, docs };
+  return { contributions: sanitized, docs, providerUndated };
 }
 
 export interface ParserRowShift {
