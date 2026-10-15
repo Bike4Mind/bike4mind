@@ -18,7 +18,8 @@ import { resolveMediaBillingOrgId } from './resolveMediaBillingOrgId';
 const KEY_ORG = '64b000000000000000000001';
 const OTHER_ORG = '64b000000000000000000002';
 
-const user = { id: 'u1', isAdmin: false } as IUserDocument;
+const HOME_ORG = '64b000000000000000000003';
+const user = { id: 'u1', isAdmin: false, organizationId: HOME_ORG } as unknown as IUserDocument;
 const logger = { warn: vi.fn() } as unknown as Logger;
 const orgWithMembers = (...userIds: string[]) => ({
   id: KEY_ORG,
@@ -46,6 +47,7 @@ describe('resolveMediaBillingOrgId', () => {
     ])("bills the key's organization when the body names %s", async (_label, requested) => {
       await expect(resolveMediaBillingOrgId(orgKeyRequest, requested)).resolves.toBe(KEY_ORG);
       expect(mockResolveBillingOrgId).not.toHaveBeenCalled();
+      expect(mockFindById).toHaveBeenCalledWith(KEY_ORG);
     });
 
     it.each([
@@ -66,6 +68,7 @@ describe('resolveMediaBillingOrgId', () => {
         statusCode: 400,
         message: expect.stringMatching(/no longer exists/),
       });
+      expect(mockFindById).toHaveBeenCalledWith(KEY_ORG);
     });
 
     it("refuses with a 400 when the key's holder has left the organization", async () => {
@@ -75,6 +78,7 @@ describe('resolveMediaBillingOrgId', () => {
         statusCode: 400,
         message: expect.stringMatching(/no longer a member/),
       });
+      expect(mockFindById).toHaveBeenCalledWith(KEY_ORG);
     });
 
     it("admits a platform admin off the roster, who mints org keys on a customer org's behalf", async () => {

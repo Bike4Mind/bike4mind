@@ -53,6 +53,10 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
   } = body;
   const callback = await resolveGenerationCallback(req, callbackUrl);
 
+  // Before getOrCreateSession, so a refused payer never leaves behind a new, empty notebook.
+  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
+  const effectiveOrgId = await resolveMediaBillingOrgId(req, invokeParams.organizationId);
+
   const { sessionId, asyncPromises, session } = await getOrCreateSession({
     sessionId: reqSessionId,
     sessionName: sessionName,
@@ -64,9 +68,6 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
   });
 
   try {
-    // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
-    const effectiveOrgId = await resolveMediaBillingOrgId(req, invokeParams.organizationId);
-
     const originalPrompt = body.prompt;
     // 'literal' callers own their prompt (agents, pipelines): skip the resolver entirely so the
     // model receives it unchanged, bar ImageGeneration's truncation to the model's prompt limit; the

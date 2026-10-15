@@ -161,6 +161,8 @@ re-deciding per endpoint:
 | Referenced resource does not exist | `404` | - |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
+| Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
+| Org-billed API key's organization is gone, or its holder has left it | `400` | - (re-mint the key) |
 
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `303`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,
