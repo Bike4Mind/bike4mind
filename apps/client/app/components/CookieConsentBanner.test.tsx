@@ -485,7 +485,7 @@ describe('CookieConsentBanner', () => {
 
       expect(screen.getByText('Cookie settings.')).toBeInTheDocument();
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
-        'You are currently allowing campaign attribution cookies.'
+        'You are currently allowing email marketing (MailerLite) and campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent('Declining reloads the page');
       expect(screen.getByTestId('cookie-consent-cancel-btn')).toBeInTheDocument();
@@ -546,7 +546,7 @@ describe('CookieConsentBanner', () => {
       renderAndReopen();
 
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
-        'You are currently declining campaign attribution cookies.'
+        'You are currently declining email marketing (MailerLite) and campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).not.toHaveTextContent('reloads the page');
 
@@ -615,6 +615,34 @@ describe('CookieConsentBanner', () => {
       expect(screen.getByText(/By clicking/)).toBeInTheDocument();
       expect(screen.queryByText('Cookie settings.')).not.toBeInTheDocument();
       expect(screen.queryByTestId('cookie-consent-cancel-btn')).not.toBeInTheDocument();
+    });
+
+    it('names every configured vendor on the first-run ask', () => {
+      vi.stubEnv('NEXT_PUBLIC_GA_MEASUREMENT_ID', 'G-TEST');
+      vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
+      vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
+      try {
+        renderAndReopen();
+
+        expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
+          'you consent to our use of analytics (Google Analytics), advertising (Meta, Reddit), email marketing (MailerLite) and campaign attribution cookies.'
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('names only the ad vendor whose pixel is configured', () => {
+      vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', '');
+      vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
+      try {
+        renderAndReopen();
+
+        expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent('advertising (Reddit)');
+        expect(screen.getByTestId('cookie-consent-banner')).not.toHaveTextContent('Meta');
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     // The first-run ask is already on screen, so opening it changes nothing visible; focus is
