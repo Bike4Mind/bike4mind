@@ -64,16 +64,23 @@ export class GenerationJobEngine {
   }
 
   async requestCancel(target: Pick<IGenerationJobDocument, 'id' | 'kind'>): Promise<CancelRequestOutcome> {
-    const beforeSubmitOnly = this.handlerFor(target).submitMode === 'sync';
-    const requested = await this.deps.repository.requestCancel(target.id, { beforeSubmitOnly });
-    if (requested) {
-      await this.deps.enqueue(requested.id, 0);
-      return { status: 'requested', job: requested };
-    }
+    const options = { beforeSubmitOnly: this.handlerFor(target).submitMode === 'sync' };
+    const requested = await this.deps.repository.requestCancel(target.id, options);
+    if (requested) return this.cancelRequested(requested);
     const job = await this.deps.repository.findById(target.id);
-    // Still in flight yet refused: only a sync job whose provider call has started.
-    if (job && (job.state === 'pending' || job.state === 'running')) return { status: 'not_cancellable', job };
+    // A sync submit refused the cancel, then retried back to an unsubmitted pending: it is cancellable again.
+    if (job?.state === 'pending' && !job.submitAttemptedAt) {
+      const retried = await this.deps.repository.requestCancel(target.id, options);
+      return retried ? this.cancelRequested(retried) : { status: 'not_cancellable', job };
+    }
+    // Refused while running: only a sync job whose provider call has started.
+    if (job?.state === 'running') return { status: 'not_cancellable', job };
     return { status: 'unchanged', job };
+  }
+
+  private async cancelRequested(job: IGenerationJobDocument): Promise<CancelRequestOutcome> {
+    await this.deps.enqueue(job.id, 0);
+    return { status: 'requested', job };
   }
 
   /**

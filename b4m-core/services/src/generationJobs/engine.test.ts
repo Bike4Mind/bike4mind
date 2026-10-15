@@ -443,6 +443,7 @@ describe('GenerationJobEngine', () => {
       const t = setup({ submitMode: 'sync' });
       const job = await t.create();
       expect(await t.engine.requestCancel(job)).toMatchObject({ status: 'requested' });
+      expect(t.enqueue).toHaveBeenLastCalledWith(job.id, 0);
       expect(await t.engine.step(job.id)).toBe('terminal');
       expect(t.handler.submit).not.toHaveBeenCalled();
       expect(t.repository.jobs.get(job.id)!.state).toBe('cancelled');
@@ -455,6 +456,13 @@ describe('GenerationJobEngine', () => {
       expect(t.handler.submit).not.toHaveBeenCalled();
       expect(t.handler.poll).not.toHaveBeenCalled();
       expect(t.repository.jobs.get(job.id)!.error?.code).toBe('orphaned_submit');
+    });
+
+    it('cancels a job that retried back to pending between the refused cancel and its re-read', async () => {
+      const t = setup({ submitMode: 'sync' });
+      const job = await t.create();
+      vi.spyOn(t.repository, 'requestCancel').mockResolvedValueOnce(null);
+      expect(await t.engine.requestCancel(job)).toMatchObject({ status: 'requested', job: { cancelRequested: true } });
     });
 
     it('a definitive rejection returns the job to pending for the resubmit', async () => {

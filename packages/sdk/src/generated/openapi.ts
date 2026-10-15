@@ -675,7 +675,7 @@ export interface paths {
     put?: never;
     /**
      * Cancel a music generation
-     * @description Requests cancellation and returns the job. A job still `pending` (waiting to start, or to retry) moves to `cancelled` shortly after and its reserved credits are returned. The provider renders a song in one call that cannot be interrupted and is billed once it starts, so a `running` job cannot be cancelled: the request is refused with a 409 (`not_cancellable`), and the job finishes and is charged. A finished job is returned unchanged.
+     * @description Requests cancellation and returns the job. A job still `pending` (waiting to start, or to retry) moves to `cancelled` shortly after and its reserved credits are returned. The provider renders a song in one call that cannot be interrupted and is billed once it starts, so a `running` job cannot be cancelled: the request is refused with a 409 (`not_cancellable`), and the job runs to its end, charged if the song is produced. A finished job is returned unchanged.
      */
     post: operations['cancelMusicGeneration'];
     delete?: never;

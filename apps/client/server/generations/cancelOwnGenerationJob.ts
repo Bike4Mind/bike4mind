@@ -6,7 +6,8 @@ import { ConflictError } from '@server/utils/errors';
  * Requests cancellation of a job the caller owns (resolve it with findOwnGenerationJob first) and returns its
  * current state. A job already storing or terminal cannot be cancelled: the provider has produced (and charged
  * for) the output, so it is reported as is. A sync job (music) whose provider call has started is refused with a
- * 409: it is billed from that moment, and reporting it as still cancellable would promise a refund that never comes.
+ * 409: the provider bills once the call starts, so reporting it as cancellable would promise a refund that may
+ * never come.
  */
 export async function cancelOwnGenerationJob<T extends IGenerationJobDocument>(job: T): Promise<T> {
   const outcome = await getGenerationJobEngine().requestCancel(job);
