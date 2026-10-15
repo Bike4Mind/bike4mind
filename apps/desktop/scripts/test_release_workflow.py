@@ -19,9 +19,9 @@ def job(name):
 class ReleaseWorkflowTest(unittest.TestCase):
     def test_publisher_is_main_only_and_scoped(self):
         publish = job('publish')
-        header, _, steps = publish.partition('    steps:\n')
+        steps = publish.partition('    steps:\n')[2]
         self.assertIn("if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')", publish)
-        self.assertNotIn('permissions:', header)
+        self.assertIsNone(re.search(r'^    permissions:', publish, re.M))
         self.assertIn('repositories: ${{ github.event.repository.name }}', publish)
         self.assertIn('permission-contents: write', publish)
         token = steps.split('- name: Generate release App token', 1)[1].split('- name:', 1)[0]
