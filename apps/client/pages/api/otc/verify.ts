@@ -179,11 +179,16 @@ const handler = baseApi({ auth: false })
         existingUser.emailVerifiedAt = new Date();
         try {
           // Write only the fields set here: a later loginRecords update below writes the same doc,
-          // and a whole-doc write on either would clobber the other's change.
+          // and a whole-doc write on either would clobber the other's change. The verification-link
+          // fields are cleared in the same write: this code just proved the email, so any link still
+          // pending on the account is stale, and a later click would re-run the verified-email grants.
           await userRepository.update({
             id: existingUser.id,
             emailVerified: existingUser.emailVerified,
             emailVerifiedAt: existingUser.emailVerifiedAt,
+            emailVerificationToken: null,
+            emailVerificationExpires: null,
+            emailVerificationSentAt: null,
           });
           // The code just proved email ownership, and later logins skip this branch, so this is
           // the account's one chance at what /api/email/verify would have granted. A failed write
