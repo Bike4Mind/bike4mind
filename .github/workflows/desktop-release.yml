@@ -270,6 +270,18 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ needs.version.outputs.repository-name }}
           permission-contents: write
+      # Fail before reserving a protected source tag that a later failure would strand.
+      - name: Check distribution destination
+        env:
+          SIGNED: ${{ vars.DESKTOP_MAC_SIGNING == 'true' }}
+          GH_TOKEN: ${{ steps.distribution-token.outputs.token }}
+          GH_REPO: ${{ vars.DESKTOP_RELEASE_REPOSITORY }}
+          DISTRIBUTION_REPOSITORY_NAME: ${{ needs.version.outputs.repository-name }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo 'Release App token is required.'; exit 1; fi
+          test "$GH_REPO" = "$GITHUB_REPOSITORY_OWNER/$DISTRIBUTION_REPOSITORY_NAME"
+          test "$SIGNED" = true
+          test "$(gh api "repos/$GH_REPO" --jq .private)" = false
       - name: Reserve protected source version tag
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
@@ -288,12 +300,7 @@ jobs:
           SIGNED: ${{ vars.DESKTOP_MAC_SIGNING == 'true' }}
           GH_TOKEN: ${{ steps.distribution-token.outputs.token }}
           GH_REPO: ${{ vars.DESKTOP_RELEASE_REPOSITORY }}
-          DISTRIBUTION_REPOSITORY_NAME: ${{ needs.version.outputs.repository-name }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then echo 'Release App token is required.'; exit 1; fi
-          test "$GH_REPO" = "$GITHUB_REPOSITORY_OWNER/$DISTRIBUTION_REPOSITORY_NAME"
-          test "$SIGNED" = true
-          test "$(gh api "repos/$GH_REPO" --jq .private)" = false
           printf '\nSource: https://github.com/%s/commit/%s\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> notes/desktop-release-notes.md
           printf '\nmacOS signing and notarization enabled: %s\n' "$SIGNED" >> notes/desktop-release-notes.md
           (cd installers && sha256sum --check SHA256SUMS.txt)

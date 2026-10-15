@@ -90,6 +90,15 @@ class DesktopVersionTest(unittest.TestCase):
         self.commit('fix(desktop): next commit')
         self.assertEqual(select_version(releases, '0.1.0')[:2], ('0.1.1', True))
 
+    def test_withdrawn_release_version_is_not_reused(self):
+        self.commit('fix(desktop): broken build')
+        self.git('tag', 'desktop-v0.1.1')
+        # The rollback procedure marks a broken stable release as a prerelease.
+        self.releases.append({'tag_name': 'desktop-v0.1.1', 'prerelease': True})
+        releases = with_reservations(self.releases, ['desktop-v0.1.0', 'desktop-v0.1.1'])
+        self.commit('fix(desktop): repair broken build')
+        self.assertEqual(select_version(releases, '0.1.0')[:2], ('0.1.2', True))
+
     def test_dependency_update_is_patch(self):
         self.commit('chore(deps): update dependencies', 'pnpm-lock.yaml')
         self.assertEqual(select_version(self.releases, '0.1.0')[:2], ('0.1.1', True))

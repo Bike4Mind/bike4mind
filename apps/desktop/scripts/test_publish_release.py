@@ -7,7 +7,7 @@ import unittest
 
 
 class PublishReleaseTest(unittest.TestCase):
-    def publish(self, state='', fail='', source='example/source'):
+    def publish(self, state='', fail='', source='example/source', tamper=''):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             mock = root / 'gh'
@@ -22,6 +22,8 @@ if args[:2] == ['release', os.environ['FAIL']]: sys.exit(1)
 if args[:2] == ['release', 'download']:
     target = Path(args[args.index('--dir') + 1])
     for asset in Path(os.environ['ASSETS']).iterdir(): shutil.copy(asset, target)
+    if os.environ['TAMPER'] == 'bytes': (target / 'probe.txt').write_text('altered')
+    if os.environ['TAMPER'] == 'extra': (target / 'stray.txt').write_text('stray')
 ''')
             mock.chmod(0o755)
             assets = root / 'installers'
@@ -36,7 +38,7 @@ if args[:2] == ['release', 'download']:
                 env={**os.environ, 'PATH': f'{root}{os.pathsep}{os.environ["PATH"]}',
                      'GH_CALLS': str(calls_file), 'GH_REPO': 'example/dist', 'GITHUB_REPOSITORY': source,
                      'DESKTOP_VERSION': '0.1.1', 'RELEASE_TARGET': 'main',
-                     'STATE': state, 'FAIL': fail, 'ASSETS': str(assets)},
+                     'STATE': state, 'FAIL': fail, 'TAMPER': tamper, 'ASSETS': str(assets)},
             )
             calls = [json.loads(line) for line in calls_file.read_text().splitlines()] if calls_file.exists() else []
             return result.returncode, calls
@@ -65,6 +67,12 @@ if args[:2] == ['release', 'download']:
     def test_failures_never_promote_latest(self):
         for failure in ('upload', 'download'):
             status, calls = self.publish(fail=failure)
+            self.assertNotEqual(status, 0)
+            self.assertFalse(any(call[:2] == ['release', 'edit'] for call in calls))
+
+    def test_unverified_remote_assets_never_promote_latest(self):
+        for tamper in ('bytes', 'extra'):
+            status, calls = self.publish(tamper=tamper)
             self.assertNotEqual(status, 0)
             self.assertFalse(any(call[:2] == ['release', 'edit'] for call in calls))
 

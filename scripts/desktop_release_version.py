@@ -89,6 +89,10 @@ def select_version(releases, baseline, preview='', title='', run=''):
             parts = (major, minor + 1, 0)
         elif level == 1:
             parts = (major, minor, patch + 1)
+        # A withdrawn release (marked prerelease) is not a baseline, but its tag still holds the version.
+        occupied = {release['tag_name'] for release in releases}
+        while level and f'desktop-v{".".join(map(str, parts))}' in occupied:
+            parts = (parts[0], parts[1], parts[2] + 1)
 
     version = '.'.join(map(str, parts))
     if preview:
