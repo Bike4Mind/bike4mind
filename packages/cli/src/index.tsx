@@ -144,7 +144,8 @@ import { WebSocketConnectionManager } from './ws/WebSocketConnectionManager';
 import { setWebSocketToolExecutor, registerFeatureModuleTools, clearFeatureModuleTools } from './llm/ToolRouter';
 import { ApiClient } from './auth/ApiClient';
 import { warmFileCache } from './utils/fileSearch.js';
-import { runBangCommand } from './utils/runBangCommand.js';
+import { runBangCommand, killRunningBangCommands } from './utils/runBangCommand.js';
+import { whenTurnIdle } from './session/whenTurnIdle.js';
 import { isAxiosError } from 'axios';
 import { logger } from './utils/Logger';
 import { startPeonNotifier, emitPeonSessionEnd } from './utils/peonNotifier';
@@ -371,6 +372,7 @@ function CliApp() {
     } catch (err) {
       logger.debug(`[CLEANUP] Shell session reap error: ${err}`);
     }
+    killRunningBangCommands();
 
     // Save session
     const session = useCliStore.getState().session;
@@ -1790,36 +1792,41 @@ function CliApp() {
 
       const { output, isError } = await runBangCommand(command, { cwd: process.cwd() });
 
-      // Read the session after the command: an agent turn may have added messages while it ran.
-      // Both messages land together so the history never holds an unanswered `$ command` turn.
-      const session = useCliStore.getState().session;
-      if (!session) return;
+      // The command runs while the TUI stays live, so an agent turn may have started meanwhile:
+      // append once it ends, reading the session then, and add both messages together so the
+      // history never holds an unanswered `$ command` turn.
+      whenTurnIdle(() => {
+        const session = useCliStore.getState().session;
+        if (!session) return;
 
-      const userMessage: Message = {
-        id: uuidv4(),
-        role: 'user',
-        content: `$ ${command}`,
-        timestamp: new Date().toISOString(),
-      };
+        const userMessage: Message = {
+          id: uuidv4(),
+          role: 'user',
+          content: `$ ${command}`,
+          timestamp: new Date().toISOString(),
+        };
 
-      const assistantMessage: Message = {
-        id: uuidv4(),
-        role: 'assistant',
-        content: isError ? `❌ Error:\n${output}` : output.trim() || '(no output)',
-        timestamp: new Date().toISOString(),
-      };
+        const assistantMessage: Message = {
+          id: uuidv4(),
+          role: 'assistant',
+          content: isError ? `\u274c Error:\n${output}` : output.trim() || '(no output)',
+          timestamp: new Date().toISOString(),
+        };
 
-      // Update session with both messages
-      const updatedSession: Session = {
-        ...session,
-        messages: [...session.messages, userMessage, assistantMessage],
-        updatedAt: new Date().toISOString(),
-      };
+        // Update session with both messages
+        const updatedSession: Session = {
+          ...session,
+          messages: [...session.messages, userMessage, assistantMessage],
+          updatedAt: new Date().toISOString(),
+        };
 
-      setStoreSession(updatedSession);
+        setStoreSession(updatedSession);
 
-      // Auto-save session
-      state.sessionStore.save(updatedSession);
+        // Auto-save session
+        state.sessionStore.save(updatedSession).catch(error => {
+          logger.debug(`[BASH] Session save error: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      });
     },
     // session is read fresh from the store, so it is intentionally not a dependency.
     [state.sessionStore]
