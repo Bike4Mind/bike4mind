@@ -16,6 +16,7 @@ vi.mock('fs', async () => {
       ...actual.promises,
       readFile: vi.fn(),
       writeFile: vi.fn(),
+      rename: vi.fn(),
       mkdir: vi.fn(),
       access: vi.fn(),
       chmod: vi.fn(),
@@ -33,6 +34,8 @@ import { execSync } from 'child_process';
 import {
   fetchLatestVersion,
   checkForUpdate,
+  readCachedUpdate,
+  getStartupUpdateStatus,
   forceCheckForUpdate,
   isNpmPrefixWritable,
   getAutoUpdatePreference,
@@ -43,6 +46,7 @@ import {
 const mockedAxios = vi.mocked(axios.get);
 const mockedReadFile = vi.mocked(fs.readFile);
 const mockedWriteFile = vi.mocked(fs.writeFile);
+const mockedRename = vi.mocked(fs.rename);
 const mockedMkdir = vi.mocked(fs.mkdir);
 const mockedChmod = vi.mocked(fs.chmod);
 const mockedAccess = vi.mocked(fs.access);
@@ -53,6 +57,7 @@ describe('updateChecker', () => {
     vi.clearAllMocks();
     mockedMkdir.mockResolvedValue(undefined);
     mockedWriteFile.mockResolvedValue(undefined);
+    mockedRename.mockResolvedValue(undefined);
     mockedChmod.mockResolvedValue(undefined);
   });
 
@@ -192,6 +197,71 @@ describe('updateChecker', () => {
       const result = await checkForUpdate('0.2.28');
       expect(mockedAxios).toHaveBeenCalledTimes(1);
       expect(result?.updateAvailable).toBe(true);
+    });
+  });
+
+  describe('readCachedUpdate', () => {
+    it('reports a cached newer version without touching the network, however old the cache', async () => {
+      const staleCache = {
+        lastChecked: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+        latestVersion: '0.3.0',
+        currentVersion: '0.2.28',
+      };
+      mockedReadFile.mockResolvedValueOnce(JSON.stringify(staleCache));
+
+      expect(await readCachedUpdate('0.2.28')).toEqual({
+        currentVersion: '0.2.28',
+        latestVersion: '0.3.0',
+        updateAvailable: true,
+      });
+      expect(mockedAxios).not.toHaveBeenCalled();
+    });
+
+    it('returns null when the cache was written by another version', async () => {
+      const cache = { lastChecked: new Date().toISOString(), latestVersion: '0.3.0', currentVersion: '0.2.27' };
+      mockedReadFile.mockResolvedValueOnce(JSON.stringify(cache));
+
+      expect(await readCachedUpdate('0.2.28')).toBeNull();
+      expect(mockedAxios).not.toHaveBeenCalled();
+    });
+
+    it('returns null when there is no cache', async () => {
+      mockedReadFile.mockRejectedValueOnce(new Error('ENOENT'));
+
+      expect(await readCachedUpdate('0.2.28')).toBeNull();
+      expect(mockedAxios).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getStartupUpdateStatus', () => {
+    it('returns the cached result without waiting for the refresh it starts', async () => {
+      const staleCache = {
+        lastChecked: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+        latestVersion: '0.3.0',
+        currentVersion: '0.2.28',
+      };
+      mockedReadFile.mockResolvedValue(JSON.stringify(staleCache));
+      mockedAxios.mockReturnValueOnce(new Promise(() => {})); // registry never answers
+
+      expect(await getStartupUpdateStatus('0.2.28')).toEqual({
+        currentVersion: '0.2.28',
+        latestVersion: '0.3.0',
+        updateAvailable: true,
+      });
+      await vi.waitFor(() => expect(mockedAxios).toHaveBeenCalledTimes(1));
+    });
+
+    it('writes the refreshed cache through a temp file and a rename', async () => {
+      mockedReadFile.mockRejectedValue(new Error('ENOENT'));
+      mockedAxios.mockResolvedValueOnce({ data: { version: '0.3.0' } });
+
+      expect(await getStartupUpdateStatus('0.2.28')).toBeNull();
+
+      await vi.waitFor(() => expect(mockedRename).toHaveBeenCalledTimes(1));
+      const [from, to] = mockedRename.mock.calls[0];
+      expect(mockedWriteFile.mock.calls[0][0]).toBe(from);
+      expect(String(to)).toMatch(/update-check\.json$/);
+      expect(String(from)).not.toBe(String(to));
     });
   });
 

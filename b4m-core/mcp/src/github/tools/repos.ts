@@ -10,8 +10,9 @@ import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { ownerSchema, repoSchema } from '../helpers/schemas.js';
 import { TOOL_LIST_REPOSITORIES, TOOL_GET_REPOSITORY } from '../constants.js';
+import { filterToScope, type RepoScope } from '../repoScope.js';
 
-export function registerRepoTools(server: McpServer) {
+export function registerRepoTools(server: McpServer, scope: RepoScope) {
   // LIST REPOSITORIES - Discover what repositories the user has access to
   server.tool(
     TOOL_LIST_REPOSITORIES,
@@ -39,9 +40,15 @@ export function registerRepoTools(server: McpServer) {
           page: page || 1,
         });
 
+        const repositories = filterToScope(scope, result.data, repo => repo.full_name);
+
         return createSuccessResponse({
-          total_count: result.data.length,
-          repositories: result.data.map(repo => ({
+          total_count: repositories.length,
+          // A page can be emptied by the filter while later pages still hold selected repositories.
+          ...(repositories.length < result.data.length && {
+            excluded_outside_selected_repositories: result.data.length - repositories.length,
+          }),
+          repositories: repositories.map(repo => ({
             full_name: repo.full_name,
             owner: repo.owner.login,
             name: repo.name,

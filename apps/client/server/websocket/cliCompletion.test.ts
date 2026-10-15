@@ -153,6 +153,39 @@ describe('cliCompletion websocket handler', () => {
     );
   });
 
+  it('passes the per-request usage from the final frame to analytics, so each request is priced on its own tier', async () => {
+    const turnUsage = [
+      { inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 150_000 },
+      { inputTokens: 2000, outputTokens: 30, cacheReadInputTokens: 151_000 },
+    ];
+    mockExecuteCompletion.mockImplementation(
+      async ({ onChunk }: { onChunk: (text: string[], info: unknown) => Promise<void> }) => {
+        await onChunk(['partial'], { inputTokens: 1000, outputTokens: 20, turnUsage: turnUsage.slice(0, 1) });
+        await onChunk(['done'], {
+          inputTokens: 3000,
+          outputTokens: 50,
+          cacheReadInputTokens: 301_000,
+          cacheCreationInputTokens: 500,
+          turnUsage,
+        });
+        // A trailing frame without the breakdown must not clear the latched one.
+        await onChunk([''], { stopReason: 'end_turn' });
+      }
+    );
+
+    await run();
+
+    expect(mockLogCompletionAnalytics).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'success',
+        finalInputTokens: 3000,
+        finalCacheReadTokens: 301_000,
+        finalCacheWriteTokens: 500,
+        finalTurnUsage: turnUsage,
+      })
+    );
+  });
+
   it('logs failure analytics with source cli', async () => {
     mockExecuteCompletion.mockRejectedValue(new Error('boom'));
 

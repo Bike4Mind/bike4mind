@@ -77,6 +77,7 @@ describe('POST /api/mcp/confirm', () => {
     expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
     expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
     expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({ _executeFromButton: true });
+    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].userId).toBe('user-1');
     expect(vi.mocked(claimPendingAction).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invokeMcpHandler).mock.invocationCallOrder[0]
     );
@@ -108,6 +109,36 @@ describe('POST /api/mcp/confirm', () => {
 
     expect(res._getStatusCode()).toBe(400);
     expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it('matches the selected repository regardless of case but still refuses a different one', async () => {
+    vi.mocked(getSelectedRepositoriesForMcp).mockResolvedValue(['acme/app']);
+
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: {
+        tool: 'create_issue',
+        params: { owner: 'Acme', repo: 'App', title: 't' },
+        ts: pendingActionTs,
+      },
+    } as never);
+    const selected = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+    expect(selected._getStatusCode()).toBe(200);
+    expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
+
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: {
+        tool: 'create_issue',
+        params: { owner: 'Acme', repo: 'Other', title: 't' },
+        ts: pendingActionTs,
+      },
+    } as never);
+    vi.mocked(invokeMcpHandler).mockClear();
+
+    const unselected = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+    expect(unselected._getStatusCode()).toBe(400);
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 

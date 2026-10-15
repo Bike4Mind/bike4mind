@@ -181,7 +181,7 @@ import {
 import { WorkItemsClient } from './api/WorkItemsClient.js';
 import { PostEditDiagnostics } from './diagnostics/PostEditDiagnostics.js';
 import { buildSkillsPromptSection } from './core/skillsPrompt';
-import { checkForUpdate } from './utils/updateChecker.js';
+import { getStartupUpdateStatus } from './utils/updateChecker.js';
 import { FeatureModuleRegistry } from './features/FeatureModuleRegistry.js';
 import { buildFeatureRegistry } from './features/buildFeatureRegistry.js';
 import { createBuiltinModules } from './features/createBuiltinModules.js';
@@ -4179,19 +4179,13 @@ function CliApp() {
 
 // Banner is rendered alongside startup messages in init()
 
-// Non-blocking update check (best-effort, 3s timeout)
-try {
-  const updateResult = await Promise.race([
-    checkForUpdate(packageJson.version),
-    new Promise<null>(resolve => setTimeout(() => resolve(null), 3000)),
-  ]);
-  if (updateResult?.updateAvailable) {
-    console.log(
-      `\x1b[33m  ⬆ Update available: v${updateResult.currentVersion} → v${updateResult.latestVersion} (run: b4m update)\x1b[0m\n`
-    );
-  }
-} catch {
-  // Silently ignore update check failures
+// Update banner from the cached check only, so first paint never waits on the
+// network; the cache is refreshed in the background for the next launch.
+const cachedUpdate = await getStartupUpdateStatus(packageJson.version);
+if (cachedUpdate?.updateAvailable) {
+  console.log(
+    `\x1b[33m  \u2b06 Update available: v${cachedUpdate.currentVersion} \u2192 v${cachedUpdate.latestVersion} (run: b4m update)\x1b[0m\n`
+  );
 }
 
 // Show dev mode indicator when running via tsx (pnpm dev)
