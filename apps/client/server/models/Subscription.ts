@@ -86,6 +86,14 @@ const SubscriptionSchema = new mongoose.Schema<ISubscription>(
       type: Number,
       required: false,
     },
+    paymentFailureNotifiedInvoiceId: {
+      type: String,
+      required: false,
+    },
+    nonPaymentCancelNotifiedAt: {
+      type: Date,
+      required: false,
+    },
     acquisition: {
       type: new mongoose.Schema(
         {
@@ -199,6 +207,39 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
         }
       )
       .lean({ virtuals: true });
+  }
+
+  async claimPaymentFailureNotice(subscriptionId: string, invoiceId: string): Promise<boolean> {
+    if (!subscriptionId) return false;
+    // `$ne` also matches a row that has never had the field, i.e. the first failure.
+    const { modifiedCount } = await this.model.updateOne(
+      { subscriptionId, paymentFailureNotifiedInvoiceId: { $ne: invoiceId } },
+      { $set: { paymentFailureNotifiedInvoiceId: invoiceId } }
+    );
+    return modifiedCount === 1;
+  }
+
+  async releasePaymentFailureNotice(subscriptionId: string, invoiceId: string): Promise<void> {
+    if (!subscriptionId) return;
+    await this.model.updateOne(
+      { subscriptionId, paymentFailureNotifiedInvoiceId: invoiceId },
+      { $unset: { paymentFailureNotifiedInvoiceId: '' } }
+    );
+  }
+
+  async claimNonPaymentCancelNotice(subscriptionId: string): Promise<boolean> {
+    if (!subscriptionId) return false;
+    // `null` matches both an unset field and an explicit null.
+    const { modifiedCount } = await this.model.updateOne(
+      { subscriptionId, nonPaymentCancelNotifiedAt: null },
+      { $set: { nonPaymentCancelNotifiedAt: new Date() } }
+    );
+    return modifiedCount === 1;
+  }
+
+  async releaseNonPaymentCancelNotice(subscriptionId: string): Promise<void> {
+    if (!subscriptionId) return;
+    await this.model.updateOne({ subscriptionId }, { $unset: { nonPaymentCancelNotifiedAt: '' } });
   }
 
   /**

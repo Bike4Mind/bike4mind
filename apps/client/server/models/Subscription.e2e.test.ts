@@ -326,3 +326,53 @@ describe('findNonTerminalSubscriptionsByOwner', () => {
     expect(found).toEqual([]);
   });
 });
+
+// The once-per-invoice guarantee for payment-failed emails rests on these conditional updates,
+// which the notice service's unit suite mocks out.
+describe('payment failure notice claims', () => {
+  it('lets exactly one caller claim an invoice, and claims a new invoice again', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_claim' }));
+
+    const first = await Promise.all([
+      subscriptionRepository.claimPaymentFailureNotice('sub_claim', 'in_1'),
+      subscriptionRepository.claimPaymentFailureNotice('sub_claim', 'in_1'),
+    ]);
+    expect(first.filter(Boolean)).toHaveLength(1);
+    expect(await subscriptionRepository.claimPaymentFailureNotice('sub_claim', 'in_1')).toBe(false);
+
+    expect(await subscriptionRepository.claimPaymentFailureNotice('sub_claim', 'in_2')).toBe(true);
+  });
+
+  it('releases a claim so the same invoice can be claimed again', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_release' }));
+    await subscriptionRepository.claimPaymentFailureNotice('sub_release', 'in_1');
+
+    await subscriptionRepository.releasePaymentFailureNotice('sub_release', 'in_1');
+
+    expect(await subscriptionRepository.claimPaymentFailureNotice('sub_release', 'in_1')).toBe(true);
+  });
+
+  it('does not release a newer invoice when releasing an older one', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_newer' }));
+    await subscriptionRepository.claimPaymentFailureNotice('sub_newer', 'in_2');
+
+    await subscriptionRepository.releasePaymentFailureNotice('sub_newer', 'in_1');
+
+    expect(await subscriptionRepository.claimPaymentFailureNotice('sub_newer', 'in_2')).toBe(false);
+  });
+
+  it('claims the cancellation notice once, and again after a release', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_cancel' }));
+
+    expect(await subscriptionRepository.claimNonPaymentCancelNotice('sub_cancel')).toBe(true);
+    expect(await subscriptionRepository.claimNonPaymentCancelNotice('sub_cancel')).toBe(false);
+
+    await subscriptionRepository.releaseNonPaymentCancelNotice('sub_cancel');
+    expect(await subscriptionRepository.claimNonPaymentCancelNotice('sub_cancel')).toBe(true);
+  });
+
+  it('claims nothing for a subscription this stage has no row for', async () => {
+    expect(await subscriptionRepository.claimPaymentFailureNotice('sub_missing', 'in_1')).toBe(false);
+    expect(await subscriptionRepository.claimNonPaymentCancelNotice('sub_missing')).toBe(false);
+  });
+});

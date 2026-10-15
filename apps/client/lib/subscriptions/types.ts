@@ -155,6 +155,13 @@ export interface ISubscription {
    * Custom credits per billing cycle. If set, overrides the default credits calculation.
    */
   customCreditsPerCycle?: number;
+  /**
+   * The Stripe invoice the owner was last emailed about a failed renewal for. Stripe fires
+   * `invoice.payment_failed` on every retry, so this is the once-per-invoice claim.
+   */
+  paymentFailureNotifiedInvoiceId?: string;
+  /** When the owner was emailed that dunning cancelled the subscription; the once-only claim. */
+  nonPaymentCancelNotifiedAt?: Date;
 }
 
 /**
@@ -246,4 +253,18 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
   findChangeableUserSubscription(userId: string): Promise<ISubscription | null>;
 
   updateByStripeSubscriptionId(subscriptionId: string, data: Partial<ISubscription>): Promise<ISubscription | null>;
+
+  /**
+   * Atomically claim the right to email the owner about `invoiceId` failing. True for exactly
+   * one caller per invoice, so Stripe's retries and redeliveries send nothing further.
+   */
+  claimPaymentFailureNotice(subscriptionId: string, invoiceId: string): Promise<boolean>;
+
+  /** Undo a claim whose email never went out, so a redelivery of the event can send it. */
+  releasePaymentFailureNotice(subscriptionId: string, invoiceId: string): Promise<void>;
+
+  /** Same contract as claimPaymentFailureNotice, for the one cancelled-for-non-payment email. */
+  claimNonPaymentCancelNotice(subscriptionId: string): Promise<boolean>;
+
+  releaseNonPaymentCancelNotice(subscriptionId: string): Promise<void>;
 }
