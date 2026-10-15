@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { ChatMessage } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageThread } from './MessageThread';
-import { buildThread, LARGEST_REAL_SHAPE, STRESS_SHAPE } from './threadFixture';
+import { buildThread, LARGEST_REAL_SHAPE, STRESS_SHAPE, type ThreadShape } from './threadFixture';
 import { WINDOW_STEP } from './threadWindow';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -51,7 +51,7 @@ class ScriptedObserver {
 const respond = () => undefined;
 const resume = () => undefined;
 
-const SPARSE_STRESS_SHAPE = {
+const SPARSE_STRESS_SHAPE: ThreadShape = {
   ...STRESS_SHAPE,
   previewChars: 100,
   diffEvery: 0,
