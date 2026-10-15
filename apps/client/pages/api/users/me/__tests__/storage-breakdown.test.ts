@@ -36,6 +36,9 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { name: 'fabFiles' },
   dataLakeRepository: { name: 'dataLakes' },
 }));
+vi.mock('@server/dataLakes/toAccessContext', () => ({
+  toAccessContext: async (req: { user: { id: string } }) => ({ userId: req.user.id, isAdmin: false }),
+}));
 vi.mock('@bike4mind/services', () => ({
   userService: { getUserStorageBreakdown: mockRefs.getUserStorageBreakdown },
 }));
@@ -61,7 +64,7 @@ describe('GET /api/users/me/storage-breakdown', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(mockRefs.getUserStorageBreakdown).toHaveBeenCalledWith(
-      'user-1',
+      { userId: 'user-1', isAdmin: false },
       { db: { users: { name: 'users' }, fabFiles: { name: 'fabFiles' }, dataLakes: { name: 'dataLakes' } } },
       { maxTimeMS: STORAGE_BREAKDOWN_MAX_TIME_MS }
     );

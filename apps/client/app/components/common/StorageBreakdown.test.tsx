@@ -125,6 +125,21 @@ describe('StorageBreakdown', () => {
     expect(within(screen.getByTestId('storage-breakdown-row-unaccounted')).getByText('5 MB')).toBeTruthy();
   });
 
+  it('labels a counter below the counted files as such, without a minus sign', async () => {
+    mockRefs.useGetStorageBreakdown.mockReturnValue({
+      data: { ...scenario, totalBytes: 955 * MB, unaccountedBytes: -5 * MB },
+      isLoading: false,
+      isError: false,
+    });
+    renderIt();
+    await userEvent.click(screen.getByTestId('storage-breakdown-toggle-btn'));
+
+    const row = screen.getByTestId('storage-breakdown-row-unaccounted');
+    expect(within(row).getByText('profile.storage_breakdown.overcounted')).toBeTruthy();
+    expect(within(row).getByText('5 MB')).toBeTruthy();
+    expect(within(row).queryByText('profile.storage_breakdown.unaccounted')).toBeNull();
+  });
+
   it('offers a retry when the request fails', async () => {
     const refetch = vi.fn();
     mockRefs.useGetStorageBreakdown.mockReturnValue({ data: undefined, isLoading: false, isError: true, refetch });

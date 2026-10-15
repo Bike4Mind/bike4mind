@@ -1,4 +1,5 @@
 import {
+  AccessContext,
   IDataLakeRepository,
   IFabFileRepository,
   IUserRepository,
@@ -6,6 +7,7 @@ import {
   buildStorageBreakdownBuckets,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
+import { canAccessLake } from '../dataLakeService/assertLakeAccess';
 
 const NAMEABLE_LAKE_STATUSES: ReadonlySet<string> = new Set(['draft', 'active']);
 
@@ -23,10 +25,11 @@ export interface GetUserStorageBreakdownAdapters {
  * from that is reported as `unaccountedBytes` rather than hidden.
  */
 export const getUserStorageBreakdown = async (
-  userId: string,
+  accessContext: AccessContext,
   { db }: GetUserStorageBreakdownAdapters,
   options: { maxTimeMS?: number } = {}
 ): Promise<StorageBreakdownResponse> => {
+  const { userId } = accessContext;
   const user = await db.users.findById(userId);
   if (!user) throw new NotFoundError(`User ${userId} not found`);
 
@@ -34,11 +37,13 @@ export const getUserStorageBreakdown = async (
 
   const lakeIds = [...new Set(buckets.flatMap(bucket => (bucket.lakeId ? [bucket.lakeId] : [])))];
   if (lakeIds.length > 0) {
-    // findByIds is unscoped: name only lakes the caller created and that are still live, so a lake they
-    // lost access to (or one being torn down) is neither disclosed nor offered as a link.
+    // findByIds is unscoped: name only live lakes the caller can still read (the lake manager's own gate,
+    // so an org lake whose Drive a manager connected is named for them), so a lake they lost access to
+    // (or one being torn down) is neither disclosed nor offered as a link. Grants are not loaded, so a
+    // lake reachable only through a grant reads as unavailable.
     const names = new Map(
       (await db.dataLakes.findByIds(lakeIds))
-        .filter(lake => lake.createdByUserId === userId && NAMEABLE_LAKE_STATUSES.has(lake.status))
+        .filter(lake => NAMEABLE_LAKE_STATUSES.has(lake.status) && canAccessLake(lake, accessContext))
         .map(lake => [lake.id, lake.name])
     );
     for (const bucket of buckets) {

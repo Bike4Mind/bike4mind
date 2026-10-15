@@ -137,12 +137,24 @@ const StorageBreakdown: FC<{ overlay?: boolean }> = ({ overlay = false }) => {
               {data.unaccountedBytes !== 0 && (
                 <Box component="li" data-testid="storage-breakdown-row-unaccounted">
                   <Stack direction="row" justifyContent="space-between" gap={1}>
-                    <Typography level="body-sm">{t('profile.storage_breakdown.unaccounted')}</Typography>
+                    <Typography level="body-sm">
+                      {t(
+                        data.unaccountedBytes > 0
+                          ? 'profile.storage_breakdown.unaccounted'
+                          : 'profile.storage_breakdown.overcounted'
+                      )}
+                    </Typography>
                     <Typography level="body-sm" sx={{ fontWeight: 500, flexShrink: 0 }}>
-                      {prettyBytes(data.unaccountedBytes)}
+                      {prettyBytes(Math.abs(data.unaccountedBytes))}
                     </Typography>
                   </Stack>
-                  <Typography level="body-xs">{t('profile.storage_breakdown.unaccounted_hint')}</Typography>
+                  <Typography level="body-xs">
+                    {t(
+                      data.unaccountedBytes > 0
+                        ? 'profile.storage_breakdown.unaccounted_hint'
+                        : 'profile.storage_breakdown.overcounted_hint'
+                    )}
+                  </Typography>
                 </Box>
               )}
             </Stack>

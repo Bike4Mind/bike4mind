@@ -1,5 +1,6 @@
 import { dataLakeRepository, fabFileRepository, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 
@@ -18,7 +19,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: STORAGE_BREAKDOWN_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'storage-breakdown' }))
   .get(async (req, res) => {
     const breakdown = await userService.getUserStorageBreakdown(
-      req.user.id,
+      await toAccessContext(req),
       { db: { users: userRepository, fabFiles: fabFileRepository, dataLakes: dataLakeRepository } },
       { maxTimeMS: STORAGE_BREAKDOWN_MAX_TIME_MS }
     );
