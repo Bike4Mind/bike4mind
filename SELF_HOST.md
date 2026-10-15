@@ -1041,19 +1041,20 @@ It **does not**: enable Mongo authentication, change your MinIO credentials, con
 
 ### Client IP and trusted proxies (`TRUSTED_PROXY_HOPS`)
 
-Per-IP rate limits (sign-in codes, unauthenticated endpoints) and audit records key on the client IP. On self-host the app **ignores every forwarding header by default** - `X-Forwarded-For`, `X-Real-IP`, `True-Client-IP`, `CF-Connecting-IP`, `CloudFront-Viewer-Address` and the rest - because with nothing in front to overwrite them, any client can forge a fresh "source IP" per request and walk straight past those limits. It uses the TCP peer address instead.
+Per-IP rate limits (sign-in codes, unauthenticated endpoints), the SSO failure log behind the IP blocklist, and most audit records key on the client IP. On self-host the app **ignores every forwarding header by default** - `X-Forwarded-For`, `X-Real-IP`, `True-Client-IP`, `CF-Connecting-IP`, `CloudFront-Viewer-Address` and the rest - because with nothing in front to overwrite them, any client can forge a fresh "source IP" per request and walk straight past those limits. It uses the TCP peer address instead.
 
 Behind a reverse proxy that peer is the proxy, so every visitor would share one rate-limit bucket. Tell the app how many proxies sit in front of it:
 
 | Setup | `TRUSTED_PROXY_HOPS` |
 | --- | --- |
-| No proxy (direct `:3000`) | unset (or `0`) |
+| No proxy (direct `:3000`) | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket |
 | Tailscale sidecar (Path A) | unset - tailnet members then share the sidecar's rate-limit bucket, which suits a small private tailnet; whether `tailscale serve` writes `X-Forwarded-For` is not verified, so do not raise it without checking |
 | Bundled Caddy (`compose.caddy.yaml`) | `1` - set for you |
 | Your own single proxy (nginx, Traefik, a cloud load balancer) | `1` |
+| Kubernetes chart via `kubectl port-forward` | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front |
 | A CDN or load balancer in front of your proxy | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For` |
 
-With `N` hops the client IP is the `N`th `X-Forwarded-For` entry counted **from the right** - the one your outermost trusted proxy wrote - so anything a client prepends is ignored. Only `X-Forwarded-For` is read; every proxy you count must append to it. Caddy discards a client-sent `X-Forwarded-For` unless you configure its `trusted_proxies`, so a CDN in front of Caddy also needs `trusted_proxies` set in the Caddyfile. Setting the value higher than your real proxy count lets clients spoof their IP again, and a value that is not a whole number fails every request loudly rather than guessing.
+With `N` hops the client IP is the `N`th `X-Forwarded-For` entry counted **from the right** - the one your outermost trusted proxy wrote - so anything a client prepends is ignored. Only `X-Forwarded-For` is read; every proxy you count must append to it. Caddy discards a client-sent `X-Forwarded-For` unless you configure its `trusted_proxies`, so a CDN in front of Caddy also needs `trusted_proxies` set in the Caddyfile. **Whenever `TRUSTED_PROXY_HOPS` is 1 or more, the app port must be reachable only through the proxy** (loopback-bound, as `compose.caddy.yaml` does, or firewalled): a client that reaches `:3000` directly supplies the whole `X-Forwarded-For` chain itself and can mint a new IP per request. Setting the value higher than your real proxy count lets clients spoof their IP the same way, and a value that is not a whole number fails every request loudly rather than guessing.
 
 ## What you get (and don't)
 
