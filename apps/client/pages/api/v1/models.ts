@@ -28,7 +28,8 @@ const handler = nextRouteForContract(listModelsContract, {
 }).get(async (req, res) => {
   const { limit, cursor } = req.validatedQuery;
   const { models } = await getCallerModelList(req.user.id, req.logger);
-  // Filtered here, not in getCallerModelList: the picker shares that list and shows disabled models greyed out.
+  // Filtered here, not in getCallerModelList: the picker shares that list and keeps a disabled model
+  // when it is the caller's active selection.
   const callable = models.filter(model => !model.disabled);
   const page = paginateById(callable, { limit, cursor, scope: CURSOR_SCOPE });
 
