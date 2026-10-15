@@ -271,9 +271,8 @@ export const createInvite = async (
     name,
     // username of the user who is sharing instead of owner of the file
     username: user.username,
-    // Who minted the invite -- accept.ts's Session arm caps propagated file grants to
-    // what this user actually holds, so an attached file the inviter cannot share
-    // does not silently inherit the invite's permissions.
+    // Who minted the invite. accept.ts re-checks this user's current access on every shareable arm
+    // (refusing or capping the grant) and caps a notebook's propagated file grants to what they hold.
     inviterId: user.id,
     typedRecipients,
   };
