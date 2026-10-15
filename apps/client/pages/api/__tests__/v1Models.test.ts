@@ -292,6 +292,23 @@ describe('GET /api/v1/models', () => {
     expect(secondPage.next_cursor).toBeNull();
   });
 
+  it('ends with a null cursor when every model on the page is disabled', async () => {
+    getCallerModelList.mockResolvedValue({
+      models: [
+        { ...textModel('model-a'), disabled: true },
+        { ...textModel('model-b'), disabled: true },
+      ],
+      supersededModels: [],
+    });
+    const { req, res } = get({ limit: '2' });
+
+    await run(req, res);
+
+    const body = res._getJSONData();
+    expect(body.data).toEqual([]);
+    expect(body.next_cursor).toBeNull();
+  });
+
   it('rejects a cursor minted by another endpoint with a 422', async () => {
     const foreign = Buffer.from(JSON.stringify({ v: 1, s: 'v1.data-lakes', after: 'x' })).toString('base64url');
     const { req, res } = get({ cursor: foreign });
