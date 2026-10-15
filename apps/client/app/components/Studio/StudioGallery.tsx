@@ -1,8 +1,8 @@
-import type { ComponentType } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { Box, Button, CircularProgress, Stack, Typography } from '@mui/joy';
 
-type GalleryQuery = {
-  data: { pages: readonly { data: readonly { id: string }[] }[] } | undefined;
+type GalleryQuery<TItem> = {
+  data: { pages: readonly { data: readonly TItem[] }[] } | undefined;
   isPending: boolean;
   isFetchNextPageError: boolean;
   hasNextPage: boolean;
@@ -10,19 +10,24 @@ type GalleryQuery = {
   fetchNextPage: () => Promise<unknown>;
 };
 
-type StudioGalleryProps = {
+type StudioGalleryProps<TItem extends { id: string }> = {
   // `<testId>`, plus `-loading`, `-error`, `-empty`, `-load-more-error` and `-load-more-btn`.
   testId: string;
   // Plural, lower case: "videos", "songs".
   noun: string;
-  // A modality's infinite list query (useVideoGenerations, useMusicGenerations).
-  query: GalleryQuery;
-  // Reads its own job by id, so websocket patches to one job re-render only its card.
-  Card: ComponentType<{ jobId: string }>;
+  // A modality's infinite list query (useVideoGenerations, useMusicGenerations, useRecentGeneratedAudio).
+  query: GalleryQuery<TItem>;
+  // A job card reads its own job by id, so websocket patches to one job re-render only its card.
+  renderCard: (item: TItem) => ReactNode;
 };
 
-/** A Studio tab's gallery: the user's jobs of one kind, newest first, one card each, paged with "Load more". */
-const StudioGallery = ({ testId, noun, query, Card }: StudioGalleryProps) => {
+/** A Studio tab's gallery: the user's generations of one kind, newest first, one card each, paged with "Load more". */
+const StudioGallery = <TItem extends { id: string }>({
+  testId,
+  noun,
+  query,
+  renderCard,
+}: StudioGalleryProps<TItem>) => {
   const { data, isPending, isFetchNextPageError, hasNextPage, isFetchingNextPage, fetchNextPage } = query;
 
   if (isPending) return <CircularProgress size="sm" data-testid={`${testId}-loading`} />;
@@ -34,9 +39,9 @@ const StudioGallery = ({ testId, noun, query, Card }: StudioGalleryProps) => {
     );
   }
 
-  // A job created after page 1 was fetched shifts the cursor pages, so a later page can repeat a row.
-  const jobIds = [...new Set(data.pages.flatMap(page => page.data.map(job => job.id)))];
-  if (jobIds.length === 0) {
+  // An item created after page 1 was fetched shifts the later pages, so a later page can repeat a row.
+  const items = [...new Map(data.pages.flatMap(page => page.data).map(item => [item.id, item] as const)).values()];
+  if (items.length === 0) {
     return (
       <Typography level="body-sm" data-testid={`${testId}-empty`}>
         {noun.charAt(0).toUpperCase() + noun.slice(1)} you generate will appear here.
@@ -47,8 +52,8 @@ const StudioGallery = ({ testId, noun, query, Card }: StudioGalleryProps) => {
   return (
     <Stack gap={2} data-testid={testId}>
       <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
-        {jobIds.map(jobId => (
-          <Card key={jobId} jobId={jobId} />
+        {items.map(item => (
+          <Fragment key={item.id}>{renderCard(item)}</Fragment>
         ))}
       </Box>
       {isFetchNextPageError && (

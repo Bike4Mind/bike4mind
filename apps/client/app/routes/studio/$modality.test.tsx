@@ -7,6 +7,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 const h = vi.hoisted(() => ({
   models: {} as Record<string, unknown>,
   musicModels: {} as Record<string, unknown>,
+  audioProviders: {} as Record<string, unknown>,
   useDocumentTitle: vi.fn(),
   mutate: vi.fn(),
   musicMutate: vi.fn(),
@@ -25,6 +26,18 @@ vi.mock('@client/app/components/MusicStudio/MusicStudioForm', () => ({
   default: ({ onSubmit }: { onSubmit: (body: CreateMusicGenerationBody) => void }) => (
     <button data-testid="music-form-stub" onClick={() => onSubmit({ model: 'test-music', prompt: 'p' })} />
   ),
+}));
+
+vi.mock('@client/app/hooks/data/audioProviders', () => ({ useAudioProviders: () => h.audioProviders }));
+vi.mock('@client/app/components/AudioStudio/AudioGallery', () => ({
+  SpeechGallery: () => <div data-testid="speech-gallery-stub" />,
+  SoundEffectsGallery: () => <div data-testid="sound-effects-gallery-stub" />,
+}));
+vi.mock('@client/app/components/AudioStudio/useGenerateAudio', () => ({
+  useGenerateAudio: () => ({ generate: vi.fn(), isGenerating: false, result: null }),
+}));
+vi.mock('@client/app/components/Session/AISettings/AudioGenerationSettings', () => ({
+  AudioGenerationSettings: () => <div data-testid="audio-settings-stub" />,
 }));
 
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: h.useDocumentTitle }));
@@ -102,12 +115,14 @@ describe('StudioPage (video)', () => {
 });
 
 describe('StudioPage tabs', () => {
-  it('shows a Video and a Music tab, with the current modality selected', () => {
+  it('shows a tab per modality, with the current modality selected', () => {
     h.models = { data: [rangeModel], isPending: false, isError: false };
     renderPage();
     expect(screen.getByTestId('studio-tab-video')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('studio-tab-music')).toHaveAttribute('aria-selected', 'false');
     expect(screen.getByTestId('studio-tab-music')).toHaveTextContent('Music');
+    expect(screen.getByTestId('studio-tab-speech')).toHaveTextContent('Speech');
+    expect(screen.getByTestId('studio-tab-sound-effects')).toHaveTextContent('Sound effects');
   });
 
   it('navigates to the modality route when another tab is picked', () => {
@@ -157,5 +172,28 @@ describe('StudioPage (music)', () => {
     expect(screen.getByTestId('music-studio-error')).toHaveTextContent(
       'Could not load the music models. Refresh to try again.'
     );
+  });
+});
+
+describe('StudioPage (speech)', () => {
+  it('renders the speech form and recent speech when a speech provider is usable', () => {
+    h.audioProviders = { data: { speech: ['openai'], soundEffects: [] }, isPending: false };
+    renderPage('speech');
+    expect(h.useDocumentTitle).toHaveBeenCalledWith('Speech Studio');
+    expect(screen.getByTestId('speech-studio-page')).toBeInTheDocument();
+    expect(screen.getByTestId('speech-studio-form')).toBeInTheDocument();
+    expect(screen.getByText('Recent speech')).toBeInTheDocument();
+    expect(screen.getByTestId('speech-gallery-stub')).toBeInTheDocument();
+  });
+});
+
+describe('StudioPage (sound effects)', () => {
+  it('says sound effects are unavailable without a provider, and still lists past ones', () => {
+    h.audioProviders = { data: { speech: ['openai'], soundEffects: [] }, isPending: false };
+    renderPage('sound-effects');
+    expect(screen.getByTestId('sound-effects-studio-empty')).toHaveTextContent(
+      'Sound effect generation is not available for your account yet.'
+    );
+    expect(screen.getByTestId('sound-effects-gallery-stub')).toBeInTheDocument();
   });
 });

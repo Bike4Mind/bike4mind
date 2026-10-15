@@ -33,7 +33,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-895 routes: 48 contracted, 9 aliases of another route, 197 with no static caller in `apps/client/app`.
+897 routes: 48 contracted, 9 aliases of another route, 194 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
-| ai | 19 | 4 | 17 | 1 | 0 | 1 | 6 |
+| ai | 20 | 4 | 18 | 1 | 0 | 1 | 6 |
 | analytics | 3 | 0 | 2 | 0 | 0 | 1 | 1 |
 | api-keys | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | app-files | 7 | 0 | 6 | 0 | 0 | 1 | 3 |
@@ -75,7 +75,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | gears | 3 | 0 | 2 | 1 | 0 | 0 | 0 |
 | generated-content | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
 | google-calendar | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
-| google-drive | 5 | 0 | 3 | 2 | 0 | 0 | 1 |
+| google-drive | 6 | 0 | 3 | 3 | 0 | 0 | 1 |
 | groups | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
 | health | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | hearth | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
@@ -140,7 +140,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | user-api-keys | 7 | 0 | 7 | 0 | 0 | 0 | 1 |
 | users | 30 | 0 | 30 | 0 | 0 | 0 | 4 |
-| v1 | 46 | 42 | 41 | 0 | 0 | 5 | 39 |
+| v1 | 46 | 42 | 41 | 0 | 0 | 5 | 36 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -422,6 +422,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
+| `/api/ai/audio-providers` | GET | jwt+key | - | no | - | 1: `hooks/data/audioProviders.ts` |
 | `/api/ai/barkeep-chat` | POST | jwt+key | - | no | - | 0 |
 | `/api/ai/classify-intent` | POST | jwt+key | - | no | - | 1: `hooks/useIntentClassifier.ts` |
 | `/api/ai/context-dry-run` | POST | jwt+key | `files:read` | no | - | 1: `hooks/useAttachmentFitWarning.ts` |
@@ -433,12 +434,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/ai/optimize-input` | POST | jwt+key | - | no | - | 2: `components/Session/RephraseButton.tsx`, `components/Session/SessionBottom/SessionToolbar.tsx` |
 | `/api/ai/rapid-reply` | POST | jwt+key | - | no | - | 1: `components/commands/LLMCommand.tsx` |
 | `/api/ai/refineText` | POST | jwt+key | `ai:generate` | no | - | 1: `hooks/useRefineText.ts` |
-| `/api/ai/sound-effects` | POST | jwt+key | `ai:generate` | yes | - | 1: `components/Files/GenerateAudio/useGenerateAudio.ts` |
+| `/api/ai/sound-effects` | POST | jwt+key | `ai:generate` | yes | - | 1: `components/AudioStudio/useGenerateAudio.ts` |
 | `/api/ai/tavern-conversation` | POST | jwt+key | - | no | - | 0 |
 | `/api/ai/test-realtime-voice` | POST | jwt+key | - | no | - | 0 |
 | `/api/ai/transcribe` | POST | jwt+key | - | no | - | 1: `components/common/VoiceRecordButton.tsx` |
 | `/api/ai/transcribe/init` | POST | jwt+key | - | no | - | 1: `components/common/VoiceRecordButton.tsx` |
-| `/api/ai/tts` | POST | jwt+key | `ai:generate` | yes | - | 2: `components/Files/GenerateAudio/useGenerateAudio.ts`, `components/ProfileModal/SettingsTabContent/VoicePreferenceSection.tsx` |
+| `/api/ai/tts` | POST | jwt+key | `ai:generate` | yes | - | 2: `components/AudioStudio/useGenerateAudio.ts`, `components/ProfileModal/SettingsTabContent/VoicePreferenceSection.tsx` |
 | `/api/ai/v1/tools` | POST | jwt | - | yes | - | 0 |
 | `/api/ai/voice-sessions` | POST | jwt+key | - | no | - | 1: `components/Session/VoiceSessionModal/useVoiceSessionEngine.ts` |
 
@@ -804,6 +805,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/google-drive/callback` | GET | jwt+key | - | no | - | 1: `routes/google-drive/callback.tsx` |
 | `/api/google-drive/connect` | POST | jwt+key | - | no | - | 2: `hooks/data/driveAccessToken.ts`, `hooks/data/googleDrive.ts` |
 | `/api/google-drive/disconnect` | DELETE | jwt+key | - | no | - | 1: `hooks/data/googleDrive.ts` |
+| `/api/google-drive/estimate-folder` | POST | jwt | - | no | - | 1: `hooks/data/useDriveFolderEstimate.ts` |
 | `/api/google-drive/list-folder` | POST | jwt | - | no | - | 0 |
 | `/api/google-drive/token` | GET | jwt | - | no | - | 2: `components/Session/AttachFileButton.tsx`, `hooks/data/driveAccessToken.ts` |
 
@@ -1517,10 +1519,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/image-generations` | POST | jwt+key | `ai:generate` | yes | - | 0 |
 | `/api/v1/me` | GET | jwt+key | `me:read` | yes | - | 0 |
 | `/api/v1/models` | GET | jwt+key | `ai:chat`, `ai:generate` | yes | - | 0 |
-| `/api/v1/music-generations` | GET, POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/music-generations/[id]` | GET | jwt+key | `ai:generate` | yes | - | 0 |
+| `/api/v1/music-generations` | GET, POST | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/musicGenerations.ts` |
+| `/api/v1/music-generations/[id]` | GET | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/musicGenerations.ts` |
 | `/api/v1/music-generations/[id]/cancel` | POST | jwt+key | `ai:generate` | yes | - | 0 |
-| `/api/v1/music-models` | GET | jwt+key | `ai:generate` | yes | - | 0 |
+| `/api/v1/music-models` | GET | jwt+key | `ai:generate` | yes | - | 1: `hooks/data/musicGenerations.ts` |
 | `/api/v1/openapi.deployment.json` | ? | handler | - | no | - | 0 |
 | `/api/v1/openapi.json` | ? | handler | - | no | - | 1: `utils/externalLinks.ts` |
 | `/api/v1/projects` | GET, POST | jwt+key | GET: `projects:read`, `projects:write`; POST: `projects:write` | yes | - | 0 |

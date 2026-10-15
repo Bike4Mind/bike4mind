@@ -30,6 +30,7 @@ import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useGearsNavSignal } from '@client/app/hooks/useVisibleGears';
 import { firstUsableStudioModality } from '@client/app/components/Studio/studioModality';
+import { useAudioProviders } from '@client/app/hooks/data/audioProviders';
 import { useMusicModels } from '@client/app/hooks/data/musicGenerations';
 import { useVideoModels } from '@client/app/hooks/data/videoGenerations';
 import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRewardStyles';
@@ -135,17 +136,20 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // Gears page, so its row could never appear on its own.
 
   const gearsSignal = useGearsNavSignal();
-  // Shown only when a modality's models endpoint (GET /api/v1/video-models, /music-models) lists a model this user
-  // can run, and it opens on that modality's tab, so it never dead-ends.
+  // Shown only when a modality's endpoint (GET /api/v1/video-models, /music-models, /api/ai/audio-providers) lists a
+  // model or provider this user can run, and it opens on that modality's tab, so it never dead-ends.
   const videoModels = useVideoModels();
   const musicModels = useMusicModels();
-  // Decided once both lists have settled, so a fast music answer cannot open Studio on Music while Video is usable.
+  const audioProviders = useAudioProviders();
+  // Decided once every list has settled, so a fast later answer cannot open Studio on a later tab while Video is usable.
   const studioModality =
-    videoModels.isPending || musicModels.isPending
+    videoModels.isPending || musicModels.isPending || audioProviders.isPending
       ? undefined
       : firstUsableStudioModality({
           video: (videoModels.data?.length ?? 0) > 0,
           music: (musicModels.data?.length ?? 0) > 0,
+          speech: (audioProviders.data?.speech.length ?? 0) > 0,
+          'sound-effects': (audioProviders.data?.soundEffects.length ?? 0) > 0,
         });
 
   const closeOnMobile = () => {

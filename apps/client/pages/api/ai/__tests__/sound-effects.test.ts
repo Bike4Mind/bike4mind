@@ -285,7 +285,7 @@ describe('POST /api/ai/sound-effects', () => {
       fileUrl: 'https://signed.example/audio.mp3',
     });
 
-    const { res, promise } = run({ text: 'rain', durationSeconds: 3 });
+    const { res, promise } = run({ text: 'rain', durationSeconds: 3, promptInfluence: 0.6 });
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
@@ -294,7 +294,13 @@ describe('POST /api/ai/sound-effects', () => {
         userId: expect.any(String),
         bytes: expect.any(Buffer),
         contentType: expect.any(String),
-        generation: { generator: 'sound_effect', provider: expect.any(String), prompt: 'rain', durationSeconds: 3 },
+        generation: {
+          generator: 'sound_effect',
+          provider: expect.any(String),
+          prompt: 'rain',
+          durationSeconds: 3,
+          promptInfluence: 0.6,
+        },
       },
       expect.anything()
     );

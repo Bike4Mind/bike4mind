@@ -12,7 +12,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { getErrorMessage } from '@client/app/utils/error';
 import { toPlayableAudio } from '@client/app/utils/generatedAudio';
-import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
+import { useAudioGenSettings, type AudioGenMode } from '@client/app/stores/useAudioGenSettings';
 
 export interface AudioGenerationResult {
   /** Playable URL: a blob: URL for inline audio, or a signed storage URL for audio too large to inline. */
@@ -68,12 +68,12 @@ function parseError(error: unknown): ParsedError {
 }
 
 /**
- * Drives the in-app audio generator (#1055): calls the existing TTS /
- * sound-effects endpoints with the current useAudioGenSettings, exposes a
- * playable result, refreshes the File Browser when audio was persisted, and
- * surfaces the insufficient-credit / no-key / over-quota / too-large states.
+ * Drives Studio's Speech and Sound effects tabs: calls the TTS or sound-effects
+ * endpoint (per `mode`) with the current useAudioGenSettings, exposes a
+ * playable result, refreshes Files when audio was persisted, and surfaces the
+ * insufficient-credit / no-key / over-quota / too-large states.
  */
-export function useGenerateAudio() {
+export function useGenerateAudio(mode: AudioGenMode) {
   const queryClient = useQueryClient();
   const [isGenerating, setIsGenerating] = useState(false);
   const [result, setResult] = useState<AudioGenerationResult | null>(null);
@@ -119,7 +119,7 @@ export function useGenerateAudio() {
         return;
       }
 
-      const { mode, ttsProvider, voice, format, languageCode, durationSeconds, promptInfluence } =
+      const { ttsProvider, voice, format, languageCode, durationSeconds, promptInfluence } =
         useAudioGenSettings.getState();
 
       setIsGenerating(true);
@@ -202,7 +202,7 @@ export function useGenerateAudio() {
         setIsGenerating(false);
       }
     },
-    [notifySaveOutcome, releaseObjectUrl]
+    [mode, notifySaveOutcome, releaseObjectUrl]
   );
 
   return { generate, isGenerating, result, clearResult };
