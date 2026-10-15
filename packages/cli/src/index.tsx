@@ -2005,7 +2005,7 @@ function CliApp() {
     console.log('📝 Generating session handoff...');
     useCliStore.getState().setIsThinking(true);
     try {
-      const result = await state.agent.run(prompt, { maxIterations: 1 });
+      const result = await state.agent.run(prompt, { maxIterations: 1, streamText: false });
       const handoff = parseHandoffResponse(result.finalAnswer);
 
       if (!handoff) {

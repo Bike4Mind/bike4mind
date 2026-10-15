@@ -186,7 +186,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         });
 
         if (compactionPrompt) {
-          const result = await agent.run(compactionPrompt, { maxIterations: 1 });
+          const result = await agent.run(compactionPrompt, { maxIterations: 1, streamText: false });
 
           // Flush decisions/blockers logged in prior turns but not yet synced
           // onto the session, so the compacted session carries current workflow
