@@ -8,15 +8,19 @@ const { mockLoadRedditPixel, mockLoadMetaPixel } = vi.hoisted(() => ({
   mockLoadMetaPixel: vi.fn(),
 }));
 
-vi.mock('@client/app/utils/redditPixel', () => ({
+// Partial, so the real isConfigured checks still decide what the banner names.
+vi.mock('@client/app/utils/redditPixel', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/redditPixel')>()),
   loadRedditPixel: mockLoadRedditPixel,
 }));
 
-vi.mock('@client/app/utils/metaPixel', () => ({
+vi.mock('@client/app/utils/metaPixel', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/metaPixel')>()),
   loadMetaPixel: mockLoadMetaPixel,
 }));
 
 import { CookieConsentBanner, useCookieSettings } from './CookieConsentBanner';
+import { CONSENT_VENDORS } from '../utils/consentVendors';
 import { captureUtmParams, flushUtmCapture } from '../utils/utmCapture';
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => <CssVarsProvider>{children}</CssVarsProvider>;
@@ -641,6 +645,23 @@ describe('CookieConsentBanner', () => {
         expect(mockLoadMetaPixel).toHaveBeenCalledTimes(1);
         expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
         expect(document.getElementById('mailerlite')).not.toBeNull();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('names every vendor in the consent registry once all are configured', () => {
+      vi.stubEnv('NEXT_PUBLIC_GA_MEASUREMENT_ID', 'G-TEST');
+      vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
+      vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
+      try {
+        renderAndReopen();
+
+        const banner = screen.getByTestId('cookie-consent-banner');
+        for (const vendor of CONSENT_VENDORS) {
+          expect(vendor.isConfigured()).toBe(true);
+          expect(banner).toHaveTextContent(vendor.name);
+        }
       } finally {
         vi.unstubAllEnvs();
       }

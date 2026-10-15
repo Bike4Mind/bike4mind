@@ -6,9 +6,7 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { APP_NAME } from '@client/config/general';
-import { loadMetaPixel } from '@client/app/utils/metaPixel';
-import { loadRedditPixel } from '@client/app/utils/redditPixel';
-import { loadMailerLite } from '@client/app/utils/mailerLite';
+import { CONSENT_VENDORS, loadConsentVendors } from '@client/app/utils/consentVendors';
 import { clearTrackingCookies } from '@client/app/utils/trackingCookies';
 import { CONSENT_KEY, publishResolvedConsent, resolveConsent } from '@client/app/utils/consentRegion';
 import { clearAttributionCookies, flushUtmCapture } from '@client/app/utils/utmCapture';
@@ -56,9 +54,7 @@ function activateConsent(value: Consent) {
   // (until then they only queue in memory), denied == they never load. Each
   // no-ops when its own pixel id is unconfigured.
   if (value === 'granted') {
-    loadRedditPixel();
-    loadMetaPixel();
-    loadMailerLite();
+    loadConsentVendors();
     // The campaign this visitor landed on, held unwritten since module load if they were
     // still being asked at the time. No-op once written, or when there was none.
     flushUtmCapture();
@@ -82,20 +78,16 @@ function joinList(items: string[]): string {
   return items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0];
 }
 
-/** Names each third party a grant loads, so consent is informed. Must stay in sync with what
- * activateConsent loads. */
+/** Names each configured third party by category, e.g. "advertising (Meta, Reddit)". */
 function describeCookieKinds(): string {
-  const adVendors = [
-    process.env.NEXT_PUBLIC_META_PIXEL_ID && 'Meta',
-    process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID && 'Reddit',
-  ].filter((vendor): vendor is string => Boolean(vendor));
-  const kinds = [
-    process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID && 'analytics (Google Analytics)',
-    adVendors.length > 0 && `advertising (${adVendors.join(', ')})`,
-    'email marketing (MailerLite)',
-    'campaign attribution',
-  ].filter((kind): kind is string => Boolean(kind));
-  return joinList(kinds);
+  const namesByCategory = new Map<string, string[]>();
+  for (const vendor of CONSENT_VENDORS) {
+    if (!vendor.isConfigured()) continue;
+    namesByCategory.set(vendor.category, [...(namesByCategory.get(vendor.category) ?? []), vendor.name]);
+  }
+  const kinds = [...namesByCategory].map(([category, names]) => `${category} (${names.join(', ')})`);
+  // First-party, so it has no vendor to name.
+  return joinList([...kinds, 'campaign attribution']);
 }
 
 export function CookieConsentBanner() {
