@@ -77,6 +77,7 @@ describe('POST /api/mcp/confirm', () => {
     expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
     expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
     expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({ _executeFromButton: true });
+    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].userId).toBe('user-1');
     expect(vi.mocked(claimPendingAction).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invokeMcpHandler).mock.invocationCallOrder[0]
     );
