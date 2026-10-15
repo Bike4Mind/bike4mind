@@ -13,7 +13,8 @@ export const createSessionContract = defineEndpoint({
     '`sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API ' +
     'key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as ' +
     '`ai:chat`. A key holding `ai:generate` without `notebooks:write` may create a bare session only ' +
-    '(`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from ' +
+    '(`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. ' +
+    'Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from ' +
     "`GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on " +
     'forced retrieval.',
   tags: ['Sessions'],
@@ -31,7 +32,8 @@ export const createSessionContract = defineEndpoint({
     400: { description: 'The request could not be processed (for example a bad project id).', schema: ApiErrorSchema },
     403: {
       description:
-        'The key lacks `notebooks:write` (or holds only `ai:generate` and set a field beyond a bare session), is not bound to a requested data lake, or the caller is not ' +
+        'The key lacks `notebooks:write` (or holds only `ai:generate` and set a field beyond a bare ' +
+        'session), is not bound to a requested data lake, or the caller is not ' +
         'entitled to the requested `surface`.',
       schema: ScopeForbiddenErrorSchema,
     },
