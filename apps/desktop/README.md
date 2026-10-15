@@ -85,6 +85,11 @@ and startup logs. This smoke test uses AppImage extraction and `--no-sandbox` on
 CI; it does not verify FUSE mounting, desktop integration, sandbox compatibility on a
 real workstation, or authenticated chat. Those still need real-machine acceptance tests.
 
+The macOS job mounts the native-architecture DMG read-only, copies the app to a temporary
+installation directory, and runs the same startup checks with an isolated profile.
+`mac-smoke-results` contains the screenshot and logs. The other architecture is packaged
+but not launched. This does not verify Gatekeeper approval on a fresh machine.
+
 Installer versions follow SemVer, selected automatically by
 `scripts/desktop_release_version.py`. The first release uses the package version
 (`0.1.0`). After that, desktop release tags are the version source of truth; there is

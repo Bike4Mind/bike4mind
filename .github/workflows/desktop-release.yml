@@ -122,12 +122,25 @@ jobs:
       - name: Launch packaged Linux AppImage
         if: matrix.platform == 'linux'
         timeout-minutes: 3
-        run: xvfb-run -a node apps/desktop/scripts/smoke-appimage.mjs
-      - name: Upload Linux startup evidence
-        if: always() && matrix.platform == 'linux'
+        run: xvfb-run -a node apps/desktop/scripts/smoke-packaged.mjs
+      - name: Install and launch packaged macOS DMG
+        if: matrix.platform == 'mac'
+        timeout-minutes: 3
+        run: |
+          install_dir=$(mktemp -d)
+          mount_dir="$install_dir/mount"
+          mkdir -p "$mount_dir"
+          trap 'hdiutil detach "$mount_dir" -quiet || true; rm -rf "$install_dir"' EXIT
+          arch=$(node -p 'process.arch')
+          hdiutil attach "apps/desktop/release/Bike4Mind-$DESKTOP_VERSION-$arch.dmg" -readonly -nobrowse -mountpoint "$mount_dir"
+          ditto "$mount_dir/Bike4Mind.app" "$install_dir/Bike4Mind.app"
+          hdiutil detach "$mount_dir" -quiet
+          node apps/desktop/scripts/smoke-packaged.mjs "$install_dir/Bike4Mind.app/Contents/MacOS/Bike4Mind"
+      - name: Upload packaged startup evidence
+        if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: linux-smoke-results
+          name: ${{ matrix.platform }}-smoke-results
           path: apps/desktop/smoke-results/
           retention-days: 7
       - uses: actions/upload-artifact@v6

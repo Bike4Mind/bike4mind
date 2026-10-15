@@ -2,20 +2,32 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:net';
 import { resolve, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const release = resolve('apps/desktop/release');
 const output = resolve('apps/desktop/smoke-results');
 await mkdir(output, { recursive: true });
-const images = (await readdir(release)).filter(name => name.endsWith('.AppImage'));
-assert.equal(images.length, 1, 'Expected exactly one packaged AppImage');
+let executable = process.argv[2];
+const platformArgs = [];
+if (process.platform === 'linux') {
+  const images = (await readdir(release)).filter(name => name.endsWith('.AppImage'));
+  assert.equal(images.length, 1, 'Expected exactly one packaged AppImage');
+  executable = join(release, images[0]);
+  platformArgs.push('--appimage-extract-and-run', '--no-sandbox', '--disable-dev-shm-usage');
+}
+assert.ok(executable, 'Pass the installed macOS app executable');
+const server = createServer();
+await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
+const port = server.address().port;
+await new Promise(resolveClose => server.close(resolveClose));
 const home = await mkdtemp(join(tmpdir(), 'desktop-smoke-'));
 let logs = '';
 let socket;
-const child = spawn(join(release, images[0]), [
-  '--appimage-extract-and-run', '--no-sandbox', '--disable-dev-shm-usage',
-  '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9222',
+const child = spawn(executable, [
+  ...platformArgs,
+  '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${port}`,
   `--user-data-dir=${join(home, 'profile')}`,
 ], {
   detached: true,
@@ -37,7 +49,7 @@ try {
     if (launchError) throw launchError;
     assert.equal(child.exitCode, null, `Packaged app exited: ${logs}`);
     try {
-      const pages = await fetch('http://127.0.0.1:9222/json/list').then(r => r.json());
+      const pages = await fetch(`http://127.0.0.1:${port}/json/list`).then(r => r.json());
       target = pages.find(page => page.type === 'page' && page.url.startsWith('file://'));
       if (target) break;
     } catch { /* The debugger starts after Electron initializes. */ }
@@ -89,14 +101,14 @@ try {
     await delay(500);
   }
   const screenshot = await call('Page.captureScreenshot');
-  await writeFile(join(output, 'linux-startup.png'), Buffer.from(screenshot.data, 'base64'));
+  await writeFile(join(output, `${process.platform}-startup.png`), Buffer.from(screenshot.data, 'base64'));
   assert.ok(state?.heading, 'Packaged sign-in screen did not render');
   assert.ok(['signed-out', 'unconfigured'].includes(state.auth), 'Auth initialization did not finish');
   assert.equal(state.info.appVersion, process.env.DESKTOP_VERSION);
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions));
   assert.equal(child.exitCode, null, 'App exited during startup verification');
   await writeFile(join(output, 'result.json'), JSON.stringify(state, null, 2));
-  console.log('Packaged AppImage rendered its auth screen and passed main/preload IPC checks.');
+  console.log('Packaged app rendered its auth screen and passed main/preload IPC checks.');
 } finally {
   socket?.close();
   if (child.pid) {
