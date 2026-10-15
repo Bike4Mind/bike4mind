@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { promises as fsp } from 'fs';
+import os from 'os';
+import path from 'path';
 import { isPathWithinCwd, isBinaryFile } from './fileSearch.js';
 
 describe('fileSearch utils', () => {
@@ -87,9 +90,9 @@ describe('fileSearch utils', () => {
     });
 
     describe('symlink resolution', () => {
-      // Due to ESM limitations, fs.realpathSync.native cannot be mocked directly in tests.
-      // These tests verify the expected behavior through integration-style testing.
-      // The symlink resolution logic is tested by verifying that:
+      // The cases here mock cwd to a path that does not exist, so fsp.realpath throws and the
+      // escape guard is never reached; the real-filesystem cases below cover it. These tests
+      // verify only, integration-style, that:
       // 1. Paths within cwd are allowed (even if they would be symlinks in production)
       // 2. Paths outside cwd are blocked
       // 3. Non-existent paths within cwd are allowed for autocomplete
@@ -112,6 +115,42 @@ describe('fileSearch utils', () => {
         // The implementation handles ENOENT gracefully by resolving relative to cwd
         await expect(isPathWithinCwd('src/new-file-that-does-not-exist.ts')).resolves.toBe(true);
         await expect(isPathWithinCwd('new-directory/new-file.js')).resolves.toBe(true);
+      });
+    });
+
+    describe('symlink resolution on the real filesystem', () => {
+      let projectDir: string;
+      let outsideDir: string;
+
+      beforeEach(async () => {
+        // realpath so cwd's own resolution is a no-op: os.tmpdir() is itself a symlink on
+        // macOS (/var -> /private/var), and the escape assertion depends on a lexical
+        // match between cwd and the resolved path when the candidate is not a link.
+        projectDir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'b4m-pathwithin-')));
+        outsideDir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'b4m-pathwithin-out-')));
+        vi.spyOn(process, 'cwd').mockReturnValue(projectDir);
+      });
+
+      afterEach(async () => {
+        vi.restoreAllMocks();
+        await fsp.rm(projectDir, { recursive: true, force: true }).catch(() => {});
+        await fsp.rm(outsideDir, { recursive: true, force: true }).catch(() => {});
+      });
+
+      it('should block a path reached through a symlink that escapes cwd', async () => {
+        // Without realpath the candidate stays lexically under cwd and is allowed.
+        await fsp.writeFile(path.join(outsideDir, 'secret.txt'), 'x', 'utf-8');
+        await fsp.symlink(outsideDir, path.join(projectDir, 'link'));
+
+        await expect(isPathWithinCwd('link/secret.txt')).resolves.toBe(false);
+      });
+
+      it('should allow a path reached through a symlink that stays inside cwd', async () => {
+        await fsp.mkdir(path.join(projectDir, 'real'));
+        await fsp.writeFile(path.join(projectDir, 'real', 'file.txt'), 'x', 'utf-8');
+        await fsp.symlink(path.join(projectDir, 'real'), path.join(projectDir, 'link'));
+
+        await expect(isPathWithinCwd('link/file.txt')).resolves.toBe(true);
       });
     });
   });
