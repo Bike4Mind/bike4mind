@@ -31,8 +31,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (!before) throw new ConflictError('This listing is already withdrawn or delisted');
     await SkillListingVersion.updateMany(
       // Never supersede the version the listing currently serves: a crash between the approve CAS
-      // and the version stamp can leave it marked pending while it is already live.
-      { listingId: String(listing.id), reviewStatus: 'pending', _id: { $ne: listing.currentApprovedVersionId } },
+      // and the version stamp can leave it marked pending while it is already live. Read the
+      // pre-image, since a concurrent approve could have moved the pointer since `listing` was read.
+      { listingId: String(listing.id), reviewStatus: 'pending', _id: { $ne: before.currentApprovedVersionId } },
       { $set: { reviewStatus: 'superseded' } }
     );
     res.status(204).end();

@@ -41,7 +41,7 @@ export async function runSkillMarketReviewSla(now: Date = new Date()): Promise<{
     const versionId = String(version._id);
     if (listing && listing.currentApprovedVersionId === versionId) {
       // A crash between the approve CAS and the version stamp left the live version marked pending.
-      // It is not an orphan and must never be retired; a new submission by the author repairs it.
+      // It is not an orphan and must never be retired; re-approving it repairs the stamp.
       continue;
     }
     if (!listing || listing.pendingVersionId !== versionId) {

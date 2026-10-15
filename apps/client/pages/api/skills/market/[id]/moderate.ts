@@ -39,7 +39,9 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const resolved = { resolvedBy: actor.id, resolvedAt: new Date() };
 
   if (body.action === 'delist') {
-    const res1 = await SkillListing.updateOne(
+    // Read the pre-image: `listing` was fetched before this write, so a concurrent approve could
+    // have moved `currentApprovedVersionId` on; the sweep below must skip whatever is live NOW.
+    const res1 = await SkillListing.findOneAndUpdate(
       { _id: listingId, status: { $nin: ['delisted', 'withdrawn'] } },
       {
         $set: {
@@ -50,14 +52,15 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
           pendingVersionId: null,
           pendingVersion: null,
         },
-      }
+      },
+      { new: false }
     );
-    if (res1.modifiedCount === 0) throw new ConflictError('This listing is already delisted or withdrawn');
+    if (!res1) throw new ConflictError('This listing is already delisted or withdrawn');
     await SkillListingVersion.updateMany(
       // Never supersede the version the listing currently serves: a crash between the approve CAS
       // and the version stamp can leave it marked pending while it is already live, and a restore
       // must still find it approved.
-      { listingId, reviewStatus: 'pending', _id: { $ne: listing.currentApprovedVersionId } },
+      { listingId, reviewStatus: 'pending', _id: { $ne: res1.currentApprovedVersionId } },
       { $set: { reviewStatus: 'superseded' } }
     );
     await SkillListingReport.updateMany({ listingId, status: 'open' }, { $set: { status: 'actioned', ...resolved } });
