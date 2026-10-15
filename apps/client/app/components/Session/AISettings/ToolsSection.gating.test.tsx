@@ -520,4 +520,23 @@ describe('MISSING_KEY_TOOLTIPS lock-step wording', () => {
   it('names the local Ollama embedder alternative for the knowledge base', () => {
     expect(MISSING_KEY_TOOLTIPS.search_knowledge_base).toContain('OLLAMA_BASE_URL');
   });
+
+  // Tools that resolve through getEffectiveApiKey / getEffectiveLLMApiKeys (a user's own key
+  // first) must point at Profile > API Keys too; an admin-only tool must not, or the tooltip
+  // sends users to a page their own key cannot help with.
+  it('names Profile > API Keys for user-key tools only', () => {
+    for (const tool of ['image_generation', 'audio_generation', 'search_knowledge_base'] as const) {
+      expect(MISSING_KEY_TOOLTIPS[tool]).toContain('Profile > API Keys');
+    }
+    expect(MISSING_KEY_TOOLTIPS.wolfram_alpha).not.toContain('Profile > API Keys');
+    expect(MISSING_KEY_TOOLTIPS.web_search).not.toContain('Profile > API Keys');
+  });
+
+  // A personal key is saved inactive and availability only resolves the active one, so the
+  // tooltip has to name the activate step - adding a key alone leaves the tool greyed out.
+  it('names the activate step for user-key tools', () => {
+    for (const tool of ['image_generation', 'audio_generation', 'search_knowledge_base'] as const) {
+      expect(MISSING_KEY_TOOLTIPS[tool]).toContain('activate');
+    }
+  });
 });
