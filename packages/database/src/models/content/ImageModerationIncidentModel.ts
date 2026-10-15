@@ -46,7 +46,9 @@ const ImageModerationIncidentSchema = new Schema(
     reportChannel: { type: String, enum: INCIDENT_REPORT_CHANNELS, required: false },
     reportedBy: { type: String, required: false },
     reportedAt: { type: Date, required: false },
-    previousReviewStatus: { type: String, enum: INCIDENT_REVIEW_STATUSES, required: false },
+    previousReviewStatus: { type: String, enum: ['false_positive'], required: false },
+    falsePositiveBy: { type: String, required: false },
+    falsePositiveAt: { type: Date, required: false },
   },
   {
     timestamps: true,
@@ -174,8 +176,10 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   }
 
   /**
-   * Transition an incident to a terminal reviewStatus. `ncmecReportId` and `reportedBy` are set
-   * when `status === 'reported'`. Returns null if the transition is disallowed:
+   * Transition an incident to a terminal reviewStatus. `ncmecReportId` and the acting admin
+   * (`reportedBy`, with `reportedAt`) are set when `status === 'reported'`; for 'false_positive'
+   * the acting admin and time go to `falsePositiveBy`/`falsePositiveAt`. Returns null if the
+   * transition is disallowed:
    * - always blocked when already 'reported' (idempotency)
    * - also blocked from 'confirmed_csam' when targeting 'false_positive', to prevent a
    *   concurrent false_positive verdict from overriding an in-flight NCMEC submission.
@@ -184,13 +188,17 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
     id: string,
     status: IncidentReviewStatus,
     ncmecReportId?: string,
-    reportedBy?: string
+    actorId?: string
   ): Promise<IImageModerationIncidentDocument | null> {
     const update: Record<string, unknown> = { reviewStatus: status };
     if (ncmecReportId) update.ncmecReportId = ncmecReportId;
     if (status === 'reported') {
       update.reportedAt = new Date();
-      if (reportedBy) update.reportedBy = reportedBy;
+      if (actorId) update.reportedBy = actorId;
+    }
+    if (status === 'false_positive') {
+      update.falsePositiveAt = new Date();
+      if (actorId) update.falsePositiveBy = actorId;
     }
     const excluded = status === 'false_positive' ? ['reported', 'confirmed_csam'] : ['reported'];
     return this.model.findOneAndUpdate({ _id: id, reviewStatus: { $nin: excluded } }, { $set: update }, { new: true });

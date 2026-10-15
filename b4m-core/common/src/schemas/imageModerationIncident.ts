@@ -49,9 +49,13 @@ export const ImageModerationIncidentSchema = z.object({
   reportedBy: z.string().optional(),
   // When the incident moved to 'reported'; unlike updatedAt, later writes do not move it.
   reportedAt: z.union([z.string(), z.date()]).optional(),
-  // Set only when record_manual_report overrode an earlier verdict ('false_positive'), so the
-  // disagreement between reviewers stays on the record.
-  previousReviewStatus: z.enum(INCIDENT_REVIEW_STATUSES).optional(),
+  // Set only when record_manual_report overrode a 'false_positive' verdict. Together with
+  // falsePositiveBy/falsePositiveAt (kept through the override) both sides of the reviewer
+  // disagreement stay on the record.
+  previousReviewStatus: z.literal('false_positive').optional(),
+  // Admin user id and time of a 'false_positive' verdict.
+  falsePositiveBy: z.string().optional(),
+  falsePositiveAt: z.union([z.string(), z.date()]).optional(),
   createdAt: z.union([z.string(), z.date()]).optional(),
   updatedAt: z.union([z.string(), z.date()]).optional(),
 });

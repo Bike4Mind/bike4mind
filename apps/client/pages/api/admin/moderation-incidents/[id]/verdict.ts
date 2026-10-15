@@ -191,6 +191,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
             : 'Incident has an API submission in flight or with an unknown outcome -- once it is stale, use mark_reported if NCMEC has a tip, or requeue then record_manual_report if it does not',
         });
       }
+      if (incident.reviewStatus === 'reported') {
+        // A second filed tip is not stored on the incident; the warn line above is its only record.
+        return res.status(409).json({
+          error: `Incident is already reported (reportId=${incident.ncmecReportId ?? 'unknown'}); your report id was not stored -- keep it for the duplicate-tip record`,
+        });
+      }
       return res.status(409).json({ error: `Incident is already ${incident.reviewStatus}` });
     }
     req.logger.info(
@@ -304,7 +310,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   }
 
   // false_positive: no NCMEC submission, just update the status.
-  const updated = await imageModerationIncidentRepository.updateReviewStatus(incidentId, 'false_positive');
+  const updated = await imageModerationIncidentRepository.updateReviewStatus(
+    incidentId,
+    'false_positive',
+    undefined,
+    req.user.id
+  );
   if (!updated) {
     const incident = await imageModerationIncidentRepository.findById(incidentId);
     if (!incident) return res.status(404).json({ error: 'Incident not found' });

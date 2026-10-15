@@ -134,7 +134,10 @@ incident from `pending_review`/absent straight to `'reported'` in one atomic wri
 `reportChannel: 'manual'` and the admin's user id in `reportedBy`, and needs no NCMEC
 credentials. It also overrides a `false_positive` verdict, because the tip already exists at
 NCMEC and the record must say so; `previousReviewStatus: 'false_positive'` keeps the earlier
-verdict visible. The report id must be letters, digits and dashes only. It does not act on a
+verdict visible, and `falsePositiveBy`/`falsePositiveAt` (written by the `false_positive`
+verdict and left untouched by the override) keep who made it and when. A second hand-filed tip
+on an already `reported` incident is refused and not stored; the 409 says so and the warn log
+keeps its id. The report id must be letters, digits and dashes only. It does not act on a
 `confirmed_csam` claim; resolve that through the recovery verdicts first: `retry_finish` when
 an unfinished report id is stored (once NCMEC's 24-hour window has passed, file by hand and
 use `mark_reported` with the new report id instead), otherwise (once the claim is stale) `mark_reported` if NCMEC

@@ -313,6 +313,23 @@ describe('ImageModerationIncidentRepository', () => {
       expect((await ImageModerationIncident.findById(id))?.ncmecReportId).toBe(winners[0]?.ncmecReportId);
     });
 
+    it('keeps who marked it false_positive, and when, through the override', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const id = String(inc._id);
+      const fp = await imageModerationIncidentRepository.updateReviewStatus(
+        id,
+        'false_positive',
+        undefined,
+        'admin-fp'
+      );
+      expect(fp?.falsePositiveBy).toBe('admin-fp');
+      expect(fp?.falsePositiveAt).toBeInstanceOf(Date);
+      const out = await imageModerationIncidentRepository.recordManualReport(id, report);
+      expect(out?.falsePositiveBy).toBe('admin-fp');
+      expect(out?.falsePositiveAt).toEqual(fp?.falsePositiveAt);
+      expect(out?.reportedBy).toBe('admin-1');
+    });
+
     it('cannot be flipped back to false_positive once recorded over it', async () => {
       const inc = await imageModerationIncidentRepository.record(baseIncident());
       const id = String(inc._id);
