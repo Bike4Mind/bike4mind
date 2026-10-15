@@ -255,6 +255,21 @@ describe('CheckpointStore', () => {
     });
   });
 
+  describe('operation queue', () => {
+    it('stays usable after a queued operation rejects', async () => {
+      // The queue tail swallows the rejection so one bad /restore index does not reject every
+      // later operation. The tool layer swallows the error too, so without this a single typo
+      // would silently disable checkpointing for the rest of the session.
+      await fs.writeFile(path.join(testDir, 'a.txt'), 'original', 'utf-8');
+      await expect(checkpointStore.restoreCheckpoint(99)).rejects.toThrow('Checkpoint #99 not found');
+
+      expect(await checkpointStore.createCheckpoint('edit_local_file', ['a.txt'])).not.toBeNull();
+
+      await fs.writeFile(path.join(testDir, 'a.txt'), 'edited', 'utf-8');
+      await expect(checkpointStore.getCheckpointDiff(1)).resolves.toContain('a.txt');
+    });
+  });
+
   describe('undoLast', () => {
     it('should restore to most recent checkpoint', async () => {
       const filePath = 'test.ts';
