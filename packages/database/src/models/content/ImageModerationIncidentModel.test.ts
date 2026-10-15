@@ -273,15 +273,40 @@ describe('ImageModerationIncidentRepository', () => {
       expect(await imageModerationIncidentRepository.claimForNcmecSubmission(id)).toBeNull();
     });
 
-    it('refuses reported and false_positive incidents without overwriting them', async () => {
-      const a = await imageModerationIncidentRepository.record(baseIncident());
-      const b = await imageModerationIncidentRepository.record(baseIncident());
-      await imageModerationIncidentRepository.updateReviewStatus(String(a._id), 'reported', 'rpt-api');
-      await imageModerationIncidentRepository.updateReviewStatus(String(b._id), 'false_positive');
-      expect(await imageModerationIncidentRepository.recordManualReport(String(a._id), report)).toBeNull();
-      expect(await imageModerationIncidentRepository.recordManualReport(String(b._id), report)).toBeNull();
-      expect((await ImageModerationIncident.findById(a._id))?.ncmecReportId).toBe('rpt-api');
-      expect((await ImageModerationIncident.findById(b._id))?.reviewStatus).toBe('false_positive');
+    it('refuses a reported incident without overwriting it', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      await imageModerationIncidentRepository.updateReviewStatus(String(inc._id), 'reported', 'rpt-api');
+      expect(await imageModerationIncidentRepository.recordManualReport(String(inc._id), report)).toBeNull();
+      const doc = await ImageModerationIncident.findById(inc._id);
+      expect(doc?.ncmecReportId).toBe('rpt-api');
+      expect(doc?.reportChannel).toBeUndefined();
+    });
+
+    it('overrides a false_positive verdict and keeps it as previousReviewStatus', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      await imageModerationIncidentRepository.updateReviewStatus(String(inc._id), 'false_positive');
+      const out = await imageModerationIncidentRepository.recordManualReport(String(inc._id), report);
+      expect(out?.reviewStatus).toBe('reported');
+      expect(out?.ncmecReportId).toBe('123456');
+      expect(out?.reportChannel).toBe('manual');
+      expect(out?.reportedBy).toBe('admin-1');
+      expect(out?.reportedAt).toBeInstanceOf(Date);
+      expect(out?.previousReviewStatus).toBe('false_positive');
+    });
+
+    it('leaves previousReviewStatus unset when recording an unreviewed incident', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const out = await imageModerationIncidentRepository.recordManualReport(String(inc._id), report);
+      expect(out?.previousReviewStatus).toBeUndefined();
+    });
+
+    it('cannot be flipped back to false_positive once recorded over it', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const id = String(inc._id);
+      await imageModerationIncidentRepository.updateReviewStatus(id, 'false_positive');
+      await imageModerationIncidentRepository.recordManualReport(id, report);
+      expect(await imageModerationIncidentRepository.updateReviewStatus(id, 'false_positive')).toBeNull();
+      expect((await ImageModerationIncident.findById(id))?.reviewStatus).toBe('reported');
     });
   });
 

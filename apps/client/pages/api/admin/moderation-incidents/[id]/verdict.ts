@@ -40,7 +40,8 @@ function isNcmecConfigured(creds: ReturnType<typeof resolveNcmecCredentials>): b
  *   false_positive  -> mark the incident 'false_positive' (no NCMEC submission).
  *   record_manual_report -> the admin filed the CyberTip by hand on the NCMEC web form; mark
  *                      the incident 'reported' with that report id. Needs no NCMEC API
- *                      credentials, so it works before ESP API access is provisioned.
+ *                      credentials, so it works before ESP API access is provisioned. Also
+ *                      overrides a 'false_positive' verdict, since the tip already exists.
  *
  * Recovery verdicts (incident stuck in confirmed_csam after unknown NCMEC outcome; only
  * claims older than STALE_CONFIRMED_CSAM_MS are resolvable, so a live submission is safe):

@@ -509,7 +509,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
     });
 
     it('logs the admin-supplied reportId when the verdict is refused', async () => {
-      for (const incident of [null, { reviewStatus: 'false_positive' }]) {
+      for (const incident of [null, { reviewStatus: 'reported' }]) {
         mockRecordManualReport.mockResolvedValue(null);
         mockFindById.mockResolvedValue(incident);
 
@@ -520,16 +520,15 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       }
     });
 
-    it('returns 409 when the incident is already reported or false_positive', async () => {
-      for (const reviewStatus of ['reported', 'false_positive']) {
-        mockRecordManualReport.mockResolvedValue(null);
-        mockFindById.mockResolvedValue({ reviewStatus });
+    it('returns 409 when the incident is already reported', async () => {
+      mockRecordManualReport.mockResolvedValue(null);
+      mockFindById.mockResolvedValue({ reviewStatus: 'reported' });
 
-        const res = makeRes();
-        await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' }), res);
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' }), res);
 
-        expect(res.status).toHaveBeenCalledWith(409);
-      }
+      expect(res.status).toHaveBeenCalledWith(409);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Incident is already reported' });
     });
 
     it('returns 400 when ncmecReportId is missing, blank, too long, or has disallowed characters', async () => {

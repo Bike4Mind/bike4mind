@@ -46,6 +46,7 @@ const ImageModerationIncidentSchema = new Schema(
     reportChannel: { type: String, enum: INCIDENT_REPORT_CHANNELS, required: false },
     reportedBy: { type: String, required: false },
     reportedAt: { type: Date, required: false },
+    previousReviewStatus: { type: String, enum: INCIDENT_REVIEW_STATUSES, required: false },
   },
   {
     timestamps: true,
@@ -142,22 +143,32 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    * Record a CyberTip an admin filed by hand on the NCMEC web form. Transitions directly from
    * absent/pending_review to 'reported' in one atomic write, so it races cleanly with
    * claimForNcmecSubmission: whichever lands first wins and the other gets null.
+   *
+   * Also overrides a 'false_positive' verdict: the tip already exists at NCMEC, so the record
+   * must say so, and previousReviewStatus keeps the earlier verdict visible. Never acts on
+   * 'confirmed_csam' (an API submission owns it) or 'reported'.
    */
   async recordManualReport(
     id: string,
     report: { ncmecReportId: string; reportedBy: string }
   ): Promise<IImageModerationIncidentDocument | null> {
-    return this.model.findOneAndUpdate(
+    const reported = {
+      reviewStatus: 'reported',
+      ncmecReportId: report.ncmecReportId,
+      reportChannel: 'manual',
+      reportedBy: report.reportedBy,
+      reportedAt: new Date(),
+    };
+    const fromUnreviewed = await this.model.findOneAndUpdate(
       { _id: id, reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } },
-      {
-        $set: {
-          reviewStatus: 'reported',
-          ncmecReportId: report.ncmecReportId,
-          reportChannel: 'manual',
-          reportedBy: report.reportedBy,
-          reportedAt: new Date(),
-        },
-      },
+      { $set: reported },
+      { new: true }
+    );
+    if (fromUnreviewed) return fromUnreviewed;
+    // Each write is atomic on its own filter; a row can only match one of the two.
+    return this.model.findOneAndUpdate(
+      { _id: id, reviewStatus: 'false_positive' },
+      { $set: { ...reported, previousReviewStatus: 'false_positive' } },
       { new: true }
     );
   }
