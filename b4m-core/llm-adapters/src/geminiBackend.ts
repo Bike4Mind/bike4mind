@@ -186,8 +186,10 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200_000: { input: 2 / 1000000, output: 12 / 1000000 }, // <=200k: $2/1M input, $12/1M output
-          2097152: { input: 4 / 1000000, output: 18 / 1000000 }, // >200k: $4/1M input, $18/1M output
+          // List is $2/$12 per 1M up to 200k and $4/$18 above. Held flat until every billing path
+          // picks the tier per request: summed tool-loop or agent-run input would cross 200k and
+          // bill the whole run at the upper rate.
+          2097152: { input: 2 / 1000000, output: 18 / 1000000 },
         },
         supportsVision: true,
         supportsTools: true,
@@ -232,8 +234,10 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200_000: { input: 2 / 1000000, output: 12 / 1000000 }, // <=200k: $2/1M input, $12/1M output
-          2097152: { input: 4 / 1000000, output: 18 / 1000000 }, // >200k: $4/1M input, $18/1M output
+          // List is $2/$12 per 1M up to 200k and $4/$18 above. Held flat until every billing path
+          // picks the tier per request: summed tool-loop or agent-run input would cross 200k and
+          // bill the whole run at the upper rate.
+          2097152: { input: 2 / 1000000, output: 18 / 1000000 },
         },
         supportsVision: true,
         supportsTools: true,

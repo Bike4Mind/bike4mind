@@ -539,8 +539,9 @@ export class OpenAIBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          272_000: { input: 2.5 / 1_000_000, output: 15.0 / 1_000_000 }, // <=272k: $2.50 / 1M in, $15.00 / 1M out
-          400000: { input: 5.0 / 1_000_000, output: 22.5 / 1_000_000 }, // >272k: $5.00 / 1M in, $22.50 / 1M out
+          // List is $2.50/$15 per 1M up to 272k and $5/$22.50 above. Held flat until agent runs
+          // pick the tier per request: summed run input would cross 272k and bill at the upper rate.
+          400000: { input: 2.5 / 1_000_000, output: 15.0 / 1_000_000 },
         },
         supportsVision: true,
         supportsImageVariation: false,

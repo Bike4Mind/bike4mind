@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-14T12:42:43.730Z",
+  "generatedAt": "2026-10-15T03:30:31.095Z",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -352,12 +352,8 @@
       "modelId": "gemini-3-pro-preview",
       "unit": "per_token",
       "pricing": {
-        "200000": {
-          "input": 0.000002,
-          "output": 0.000012
-        },
         "2097152": {
-          "input": 0.000004,
+          "input": 0.000002,
           "output": 0.000018
         }
       }
@@ -376,12 +372,8 @@
       "modelId": "gemini-3.1-pro-preview",
       "unit": "per_token",
       "pricing": {
-        "200000": {
-          "input": 0.000002,
-          "output": 0.000012
-        },
         "2097152": {
-          "input": 0.000004,
+          "input": 0.000002,
           "output": 0.000018
         }
       }
@@ -692,13 +684,9 @@
       "modelId": "gpt-5.4",
       "unit": "per_token",
       "pricing": {
-        "272000": {
+        "400000": {
           "input": 0.0000025,
           "output": 0.000015
-        },
-        "400000": {
-          "input": 0.000005,
-          "output": 0.0000225
         }
       }
     },
