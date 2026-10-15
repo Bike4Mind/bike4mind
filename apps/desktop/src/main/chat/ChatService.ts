@@ -127,9 +127,8 @@ import { webContextFor } from './tools/webTools';
 import { DoomLoopTracker } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
-import { spendsCredits } from './tools/riskAssessment';
+import { spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
 import { MCP_TOOL_PREFIX } from './mcp/names';
-import { WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME } from '@shared/webSearch';
 import {
   capOutput,
   outputCapFor,
@@ -1911,7 +1910,14 @@ export class ChatService {
           mcpServers: !!this.deps.mcp,
         });
       let tools = toolsFor(roots);
-      const directoryTurn: DirectoryTurn = { declined: [], granted: false };
+      // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
+      // text it had already read is still in front of it: it starts out as tainted as the turn
+      // it carries on.
+      const directoryTurn: DirectoryTurn = {
+        declined: [],
+        granted: false,
+        ...(resume ? resumedUntrusted(resume.toolCalls) : {}),
+      };
       const project = session.mode === 'code' ? session.project : undefined;
       // Started before the wire messages are built so the instruction files are read alongside
       // them rather than adding a hop of their own; every later turn takes it from the cache.
@@ -2663,8 +2669,11 @@ export class ChatService {
           });
         }
 
+        // A failed call is not a quiet one: an MCP server puts its error in the result body, and
+        // `toolResultContent` sends that text to the model like any other, so only a call the
+        // turn stopped waiting on - whose result is dropped - leaves the reply untainted.
         if (
-          settled.status === 'done' &&
+          !abandoned &&
           scope.directories &&
           !scope.directories.untrusted &&
           readsUntrusted(request.name)
@@ -4656,31 +4665,12 @@ interface DirectoryTurn {
 }
 
 /**
- * Tools whose result is someone else's text - a web page, an MCP server, a skill, or another
- * session's transcript, which may have read any of those - that can carry injected instructions.
+ * The first untrusted source a turn that ran out of budget had read. The reply that carries it
+ * on gets the same content replayed, so it starts tainted; see DirectoryTurn.untrusted.
  */
-function readsUntrusted(name: string): boolean {
-  return (
-    name === WEB_FETCH_TOOL_NAME ||
-    name === 'session_read' ||
-    name === WEB_SEARCH_TOOL_NAME ||
-    name === 'skill' ||
-    name.startsWith('browser_') ||
-    name.startsWith(MCP_TOOL_PREFIX)
-  );
-}
-
-/** Tools that can carry data off this computer, or into a session that has not read the untrusted content. */
-function sendsOut(name: string): boolean {
-  return (
-    name === 'bash_execute' ||
-    name === 'bash_background' ||
-    name === WEB_FETCH_TOOL_NAME ||
-    name === 'browser_navigate' ||
-    name === 'browser_tabs' ||
-    name === 'session_send' ||
-    name.startsWith(MCP_TOOL_PREFIX)
-  );
+function resumedUntrusted(calls: readonly ChatToolCall[]): { untrusted?: string } {
+  const source = calls.find(call => call.status !== 'denied' && readsUntrusted(call.name));
+  return source ? { untrusted: source.name } : {};
 }
 
 function untrustedReason(tool: string): string {

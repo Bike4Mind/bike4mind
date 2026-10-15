@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatApprovalMode, ChatStreamEvent, ChatToolCall } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService } from './ChatService';
+import { ChatService, type ChatServiceDeps } from './ChatService';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -30,6 +30,8 @@ describe('ChatService untrusted content in a reply', () => {
   let streams: PassThrough[];
   let root: string;
   let fetchFails: boolean;
+  /** Mutated per test: the service holds this object, so a test can shrink a budget before it runs. */
+  const turnLimits: ChatServiceDeps['turnLimits'] = {};
 
   const calls = (name: string, status: ChatToolCall['status']): ChatToolCall[] =>
     events
@@ -44,6 +46,7 @@ describe('ChatService untrusted content in a reply', () => {
     await writeFile(join(root, 'notes.txt'), 'hello\n', 'utf8');
     approvals = new ApprovalGate();
     fetchFails = false;
+    for (const key of Object.keys(turnLimits) as (keyof typeof turnLimits)[]) delete turnLimits[key];
     const testEvents: ChatStreamEvent[] = [];
     const testStreams: PassThrough[] = [];
     const post = vi.fn().mockImplementation(() => {
@@ -72,6 +75,7 @@ describe('ChatService untrusted content in a reply', () => {
           getAxiosInstance: () => ({ post }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
+      turnLimits,
       emit: event => testEvents.push(event),
     });
   });
@@ -121,14 +125,74 @@ describe('ChatService untrusted content in a reply', () => {
     expect(asked.approvalDetail).toContain('Asked because this reply read content from the web (web_fetch).');
   });
 
-  it('does not count a fetch that failed', async () => {
+  it('counts a fetch that failed, whose error text still reaches the model', async () => {
     fetchFails = true;
     const id = await session('auto');
     await reply(id, [fetch, ['bash_execute', { command: 'ls', cwd: root }]]);
 
-    await awaitCall('bash_execute', 'done');
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
     expect(calls('web_fetch', 'error')).toHaveLength(1);
+    expect(asked.approvalDetail).toContain('(web_fetch)');
+  });
+
+  it('counts a web search as content the reply has read', async () => {
+    const id = await session('auto');
+    await reply(id, [['web_search', { query: 'anything' }], ['bash_execute', { command: 'ls', cwd: root }]]);
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('read content from the web (web_search).');
+  });
+
+  it('asks before a background command once the reply is tainted', async () => {
+    const id = await session('auto');
+    await reply(id, [fetch, ['bash_background', { command: 'sleep 30', cwd: root }]]);
+
+    const asked = await awaitCall('bash_background', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('read content from the web (web_fetch).');
+  });
+
+  it('still runs a read that cannot send data out unasked in a tainted reply', async () => {
+    const id = await session('auto');
+    await reply(id, [fetch, ['file_read', { path: join(root, 'notes.txt') }]]);
+
+    await awaitCall('file_read', 'done');
+    expect(calls('file_read', 'awaiting-approval')).toHaveLength(0);
+  });
+
+  it('does not carry the taint into the next reply of the same conversation', async () => {
+    const id = await session('auto');
+    const next = await reply(id, [fetch, ['bash_execute', { command: 'ls', cwd: root }]]);
+    const first = await awaitCall('bash_execute', 'awaiting-approval');
+    approvals.resolve(first.approvalId!, { decision: 'once' });
+    await awaitCall('bash_execute', 'done');
+    await finish(next);
+
+    events.length = 0;
+    await reply(id, [['bash_execute', { command: 'ls', cwd: root }]]);
+    await awaitCall('bash_execute', 'done');
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+  });
+
+  it('starts a continued reply tainted, because it replays what the last one read', async () => {
+    turnLimits.rounds = 1;
+    const id = await session('auto');
+    const before = streams.length;
+    await service.send(id, 'go');
+    await vi.waitUntil(() => streams.length === before + 1, { timeout: 5000, interval: 5 });
+    streams[before].write(toolTurn('c1', 'web_fetch', { url: 'https://example.com/page' }));
+    streams[before].write(frame('[DONE]'));
+    await awaitCall('web_fetch', 'done');
+    await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 5000, interval: 5 });
+    expect(events.find(event => event.type === 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+
+    events.length = 0;
+    await expect(service.continueReply(id)).resolves.toMatchObject({ ok: true });
+    await vi.waitUntil(() => streams.length === before + 2, { timeout: 5000, interval: 5 });
+    streams[before + 1].write(toolTurn('c2', 'bash_execute', { command: 'ls', cwd: root }));
+    streams[before + 1].write(frame('[DONE]'));
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('read content from the web (web_fetch).');
   });
 
   it('runs the same command unasked in a reply that read nothing untrusted', async () => {

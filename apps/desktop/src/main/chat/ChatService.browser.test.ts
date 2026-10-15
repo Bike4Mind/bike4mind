@@ -335,6 +335,60 @@ describe('ChatService agent browser', () => {
     );
   });
 
+  it('asks in "Approve for me" before opening a site once the reply has read a page', async () => {
+    const id = await codeSession();
+    await store.setApprovalMode(id, 'auto');
+    await service.send(id, 'read the page, then open example.com');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    streams[0].write(frame({ type: 'tool_use', tools: [{ id: 'snap', name: 'browser_snapshot', arguments: '{}' }] }));
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    streams[1].write(
+      frame({
+        type: 'tool_use',
+        tools: [
+          { id: 'nav', name: 'browser_navigate', arguments: JSON.stringify({ url: 'https://example.com/' }) },
+        ],
+      })
+    );
+    streams[1].write(frame('[DONE]'));
+
+    const card = await vi.waitUntil(
+      () => events.find(e => e.type === 'tool-start' && e.call.name === 'browser_navigate' && !!e.call.approvalId),
+      { timeout: 3000, interval: 5 }
+    );
+    expect(card.type === 'tool-start' && card.call.approvalDetail).toContain('(browser_snapshot)');
+  });
+
+  it('asks in "Approve for me" before opening a tab once the reply has read a page', async () => {
+    const id = await codeSession();
+    await store.setApprovalMode(id, 'auto');
+    await service.send(id, 'read the page, then open a tab');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    streams[0].write(frame({ type: 'tool_use', tools: [{ id: 'snap', name: 'browser_snapshot', arguments: '{}' }] }));
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    streams[1].write(
+      frame({
+        type: 'tool_use',
+        tools: [
+          {
+            id: 'tabs',
+            name: 'browser_tabs',
+            arguments: JSON.stringify({ action: 'new', url: 'https://example.com/' }),
+          },
+        ],
+      })
+    );
+    streams[1].write(frame('[DONE]'));
+
+    const card = await vi.waitUntil(
+      () => events.find(e => e.type === 'tool-start' && e.call.name === 'browser_tabs' && !!e.call.approvalId),
+      { timeout: 3000, interval: 5 }
+    );
+    expect(card.type === 'tool-start' && card.call.approvalDetail).toContain('(browser_snapshot)');
+  });
+
   it('closes the browser with its conversation', async () => {
     const id = await codeSession();
     await service.deleteSession(id);
