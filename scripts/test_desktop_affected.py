@@ -1,3 +1,4 @@
+from fnmatch import fnmatchcase
 import json
 from pathlib import Path
 import unittest
@@ -141,6 +142,30 @@ class DesktopAffectedTest(unittest.TestCase):
         self.assertEqual(version_tests.select_version(releases, '0.1.0')[:2], ('0.1.1', False))
         notes = version_tests.release_notes('0.1.1', 'desktop-v0.1.1', 'example/repo')
         self.assertNotIn('feat(shared)!', notes)
+
+
+class DesktopWorkflowTriggersTest(unittest.TestCase):
+    def test_automatic_triggers_are_temporarily_desktop_only(self):
+        workflow_path = Path(__file__).resolve().parents[1] / '.github/workflows/desktop-release.yml'
+        workflow = yaml.load(workflow_path.read_text(), Loader=yaml.BaseLoader)
+        expected = {
+            'apps/desktop/**', '.github/workflows/desktop-release.yml',
+            'scripts/desktop_release_version.py', 'scripts/test_desktop_release_version.py',
+            'scripts/desktop_affected.py', 'scripts/test_desktop_affected.py',
+        }
+        for event in ('pull_request', 'push'):
+            paths = workflow['on'][event]['paths']
+            self.assertEqual(set(paths), expected)
+            for path in ('apps/desktop/src/main/index.ts', *sorted(expected - {'apps/desktop/**'})):
+                with self.subTest(event=event, included=path):
+                    self.assertTrue(any(fnmatchcase(path, pattern) for pattern in paths))
+            for path in ('b4m-core/services/src/notebookExportService/index.ts',
+                         'packages/cli/src/index.ts', 'apps/client/app.ts',
+                         'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml',
+                         'patches/example.patch', 'turbo.json', 'vitest.shared.ts', '.npmrc'):
+                with self.subTest(event=event, excluded=path):
+                    self.assertFalse(any(fnmatchcase(path, pattern) for pattern in paths))
+        self.assertIn('workflow_dispatch', workflow['on'])
 
 
 if __name__ == '__main__':

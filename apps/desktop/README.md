@@ -64,18 +64,23 @@ auto-update can.
 ### Automated releases
 
 [`Desktop Release`](../../.github/workflows/desktop-release.yml) runs on pushes to
-`main` touching desktop, shared core packages, CLI sources, build configuration, or
-dependencies. It can also be run manually from Actions on `main`.
+`main` and pull requests touching `apps/desktop/**` or the desktop release workflow,
+version script, dependency gate, and their tests. It can also be run manually from
+Actions on `main`.
 
-Broad path filters only start a lightweight dependency/version job. Before packaging,
+Automatic triggers are temporarily desktop-only. Shared/core/backend sources, root
+dependencies, lockfiles, patches, and shared configuration alone do not start this
+workflow, even when desktop depends on them. Until dependency-aware triggers are
+restored, those changes need a manual run or a later desktop change to package.
+
+When a run starts, before packaging,
 `scripts/desktop_affected.py` compares the desktop workspace dependency closure on both
 sides, including dev/typecheck dependencies and transitively resolved lockfile entries.
-Unrelated workspace sources, web-only lockfile changes, and unrelated root dependencies
-skip all packaging, startup, validation, and publication jobs. The same check governs
-semantic bumps and release notes. Shared workspace/build configuration remains a safe
-rebuild trigger; malformed or missing historical inputs fail safe by requiring a build.
+The same check governs semantic bumps and release notes, excluding unrelated workspace
+and web-only changes. Shared workspace/build configuration remains a conservative
+input within an existing run; malformed or missing historical inputs require a build.
 Pull requests compare their base with the head. Pushes and manual runs check every
-commit since the last desktop release, so a cancelled or failed run cannot strand a change.
+commit since the last desktop release, including pending shared dependency changes.
 
 Pull requests targeting `main` run the same builds and artifact validation without
 publishing a release. In the workflow run's Artifacts section, download
