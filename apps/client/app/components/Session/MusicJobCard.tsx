@@ -36,10 +36,13 @@ const toPlayerFile = (jobId: string, fileId: string, output: MusicOutput): Media
   fileUrlExpireAt: output.expires_at ? new Date(output.expires_at) : undefined,
 });
 
-// Settled once the song is billed; until then the hold, which is the most the song can cost.
-const creditsLabel = ({ reserved, settled }: MusicGeneration['credits']): string | null => {
+// Settled once the song is billed; until then the hold, which is the most the song can cost. A terminal job never
+// settles afterwards, so a hold it still shows was released - do not present it as a possible charge.
+const creditsLabel = (job: Pick<MusicGeneration, 'credits' | 'state'>): string | null => {
+  const { reserved, settled } = job.credits;
   if (settled !== null) return `${formatCredits(settled)} credits`;
-  return reserved === null ? null : `up to ${formatCredits(reserved)} credits`;
+  if (reserved === null || isTerminalGenerationState(job.state)) return null;
+  return `up to ${formatCredits(reserved)} credits`;
 };
 
 // The server refuses to cancel a storing job: the provider has already produced, and charged for, the song.
@@ -91,7 +94,7 @@ const MusicJobCard = ({ jobId }: { jobId: string }) => {
           {[
             `${output?.duration_seconds ?? job.duration_seconds}s`,
             job.instrumental && 'Instrumental',
-            creditsLabel(job.credits),
+            creditsLabel(job),
           ]
             .filter(Boolean)
             .join(', ')}
