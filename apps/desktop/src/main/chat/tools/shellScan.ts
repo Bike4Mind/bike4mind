@@ -260,8 +260,18 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
       arg => CURL_SENDS.test(arg.split('=')[0]) || (!/^-[a-zA-Z]*X/.test(arg) && /^-[a-zA-Z]*[dFTK]/.test(arg))
     );
     if (flag) return `curl ${flag.split('=')[0]}`;
-    // A header read from a file (`-H @path`) sends what the file holds as a header value.
-    if (optionValue(args, ['-H', '--header'])?.startsWith('@')) return 'curl -H';
+    // A header read from a file (`-H @path`) sends what the file holds as a header value. Check
+    // every header, not just the first: a call usually carries several, and any one of them can
+    // name a file, however it is spelled (`-sH@file`, `--header=@file`, `--proxy-header @file`).
+    const headerFile = args.some((arg, i) => {
+      const glued = /^(?:-[a-zA-Z]*H|--(?:proxy-)?header=)(.+)$/.exec(arg);
+      if (glued) return glued[1].startsWith('@');
+      if (/^-[a-zA-Z]*H$/.test(arg) || arg === '--header' || arg === '--proxy-header') {
+        return (args[i + 1] ?? '').startsWith('@');
+      }
+      return false;
+    });
+    if (headerFile) return 'curl -H';
     // `-sX POST` sets the method too.
     const method = optionValue(
       args.map(arg => arg.replace(/^-[a-zA-Z]*X/, '-X')),
