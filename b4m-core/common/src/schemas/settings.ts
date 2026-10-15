@@ -573,6 +573,7 @@ export const SettingKeySchema = z.enum([
 
   // MUSIC GENERATION
   'musicGeneration',
+  'agentMusicTracksPerRun',
 
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
@@ -640,6 +641,7 @@ export const OrchestrationDefaultsSchema = z.object({
     // to expose.
     'image_generation',
     'edit_image',
+    // Only offered when the run gets a music config, which enforces agentMusicTracksPerRun.
     'music_generation',
     'audio_generation',
     'excel_generation',
@@ -5047,6 +5049,19 @@ export const settingsMap = {
     category: 'AI',
     order: 147,
     schema: MusicGenerationSettingsSchema,
+  }),
+  agentMusicTracksPerRun: makeNumberSetting({
+    key: 'agentMusicTracksPerRun',
+    name: 'Agent Music Tracks Per Run',
+    defaultValue: 2,
+    min: 0,
+    int: true,
+    description:
+      'Most music_generation songs one agent-mode run may start, counted across the run and all of its subagents. 0 removes the tool from agent mode. Each song still holds and settles its own credits.',
+    category: 'AI',
+    order: 148,
+    // Consumed by apps/workers/src/queueHandlers/agentExecutor.musicToolConfig.ts.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   enableModelDiscovery: makeBooleanSetting({
     key: 'enableModelDiscovery',
