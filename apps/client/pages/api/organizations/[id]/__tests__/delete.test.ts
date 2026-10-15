@@ -82,13 +82,17 @@ describe('DELETE /api/organizations/[id]', () => {
     invalidatePartnerRuleCache.mockClear();
     withTransaction.mockClear();
     findActiveSubscriptionsByOwner.mockClear().mockResolvedValue([]);
+    warn.mockClear();
     txn.depth = 0;
     txn.depthAtDelete = -1;
   });
 
+  const warn = vi.fn();
+
   const call = () => {
     const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
     (req as any).user = { id: 'admin1', isAdmin: true };
+    (req as any).logger = { warn };
     return mockRefs.deleteHandler!(req, res);
   };
 
@@ -128,6 +132,28 @@ describe('DELETE /api/organizations/[id]', () => {
     await call();
 
     expect(clearOrganization).toHaveBeenCalledWith('org1');
+  });
+
+  it('still answers the committed delete, and logs a warning, when clearing the integration requests fails', async () => {
+    clearOrganization.mockRejectedValueOnce(new Error('mongo down'));
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
+    (req as any).user = { id: 'admin1', isAdmin: true };
+    (req as any).logger = { warn };
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ id: 'org1' });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/org1.*mongo down/);
+    // The step before it ran, and the failure did not undo it.
+    expect(updateMany).toHaveBeenCalledWith({ organizationId: 'org1' }, { organizationId: null });
+    expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not warn when the integration requests clear cleanly', async () => {
+    await call();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('does not clear the partner-rule reference if deleteOrganization throws', async () => {
