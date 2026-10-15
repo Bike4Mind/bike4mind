@@ -71,4 +71,33 @@ describe('createToolFailureGuard', () => {
     for (let i = 0; i <= TOOL_FAILURE_BLOCK_AFTER; i++) await expect(t.toolFn()).rejects.toBe(denied);
     expect(denied.message).toBe(message);
   });
+
+  it('counts a result starting with "Error:" as a failure and nudges it in the result', async () => {
+    const impl = vi.fn(() => Promise.resolve('Error: missing "task" parameter'));
+    const [delegate] = createToolFailureGuard().apply([tool('delegate_to_agent', impl)]);
+
+    await expect(delegate.toolFn()).resolves.toBe('Error: missing "task" parameter');
+    await expect(delegate.toolFn()).resolves.toMatch(/failed 2 times in a row/);
+    for (let i = 3; i <= TOOL_FAILURE_BLOCK_AFTER; i++) await delegate.toolFn();
+    await expect(delegate.toolFn()).rejects.toThrow(/Not run: "delegate_to_agent"/);
+    expect(impl).toHaveBeenCalledTimes(TOOL_FAILURE_BLOCK_AFTER);
+  });
+
+  it('does not stack nudges on an error instance a tool rethrows every call', async () => {
+    const shared = new Error('quota exceeded');
+    const [t] = createToolFailureGuard().apply([tool('fmp', () => Promise.reject(shared))]);
+    await expect(t.toolFn()).rejects.toThrow(/^quota exceeded$/);
+    await expect(t.toolFn()).rejects.toThrow(/failed 2 times/);
+    const third = await t.toolFn().catch((e: Error) => e);
+    expect((third as Error).message.match(/times in a row/g)).toHaveLength(1);
+    expect(shared.message).toBe('quota exceeded');
+  });
+
+  it('counts each failure of calls that run in parallel', async () => {
+    const impl = vi.fn(() => Promise.reject(new Error('bad')));
+    const [math] = createToolFailureGuard().apply([tool('math_evaluate', impl)]);
+    await Promise.allSettled(Array.from({ length: TOOL_FAILURE_BLOCK_AFTER }, () => math.toolFn()));
+    await expect(math.toolFn()).rejects.toThrow(/Not run/);
+    expect(impl).toHaveBeenCalledTimes(TOOL_FAILURE_BLOCK_AFTER);
+  });
 });

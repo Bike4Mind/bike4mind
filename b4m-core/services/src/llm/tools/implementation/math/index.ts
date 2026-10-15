@@ -361,7 +361,7 @@ export const mathTool: ToolDefinition = {
     toolFn: value => evaluateMath(value as MathParams),
     toolSchema: {
       name: 'math_evaluate',
-      description: `Evaluate mathematical expressions using mathjs syntax. Supports arithmetic, algebra, trigonometry, calculus, and statistics. Supports multi-step calculations with semicolon-separated statements sharing a scope (e.g., "x = 5; y = 10; x * y" returns 50). IMPORTANT: Use simple mathematical notation only - no loops or programming constructs, and no JavaScript syntax (no spread "...", no let/const, no Math.max; use max([1, 2, 3]) or "v = [1, 2, 3]; max(v)"). If a call fails, fix the expression from the error message instead of resending it.
+      description: `Evaluate mathematical expressions using mathjs syntax. Supports arithmetic, algebra, trigonometry, calculus, and statistics. Supports multi-step calculations with semicolon-separated statements sharing a scope (e.g., "x = 5; y = 10; x * y" returns 50). IMPORTANT: Use simple mathematical notation only - no loops, programming constructs or JavaScript ("...", Math.max). On an error, fix the expression; never resend it.
 
 Present mathematical work in your response using LaTeX: $...$ inline, $$...$$ for display equations. Inline spans are only rendered as math when they contain a backslash command, so write $\\int_0^3 x^2 dx = 9$ rather than $x^2 = 9$. That rendering is part of your response text, not a tool call.`,
       parameters: {
