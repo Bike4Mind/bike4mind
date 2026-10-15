@@ -6,8 +6,9 @@ import { GENERATED_MEDIA_URL_TTL_SECONDS, signGeneratedMediaUrls } from '@server
 import { toObjectIdString } from '@server/utils/objectId';
 import { z } from 'zod';
 
-// A chat turn produces a handful of files; this bounds one request, not a session.
-const MAX_KEYS_PER_REQUEST = 200;
+// A chat turn produces a handful of files; this bounds one request, not a session, and keeps the
+// query string well under CloudFront's URL length limit.
+const MAX_KEYS_PER_REQUEST = 50;
 
 // Bare generated-bucket basenames (`<uuid>.png`, `report-1a2b3c4d.xlsx`). Never a path: the key
 // must also be referenced by a quest in the session before it is signed.
@@ -17,8 +18,12 @@ const generatedKeySchema = z
   .max(256)
   .regex(/^[^/\\]+$/, 'Expected a bare generated-file key');
 
-const bodySchema = z.object({
-  keys: z.array(generatedKeySchema).min(1).max(MAX_KEYS_PER_REQUEST),
+// `?keys=a&keys=b`: Next parses one occurrence as a string and several as an array.
+const querySchema = z.object({
+  keys: z
+    .union([generatedKeySchema, z.array(generatedKeySchema)])
+    .transform(keys => (Array.isArray(keys) ? keys : [keys]))
+    .pipe(z.array(generatedKeySchema).min(1).max(MAX_KEYS_PER_REQUEST)),
 });
 
 /**
@@ -28,13 +33,13 @@ const bodySchema = z.object({
  * (owner or sharee) can read what it generated. Keys the session does not reference are omitted,
  * so a foreign key is indistinguishable from a nonexistent one.
  */
-const handler = baseApi({ auth: 'jwtOnly' }).post(
-  asyncHandler<unknown, unknown, unknown, { id?: string }>(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).get(
+  asyncHandler<unknown, unknown, unknown, { id?: string; keys?: string | string[] }>(async (req, res) => {
     // Canonicalized: QuestModel.sessionId is a plain string, compared byte-for-byte.
     const sessionId = req.query.id ? toObjectIdString(req.query.id) : undefined;
     if (!sessionId) throw new NotFoundError('Session not found');
 
-    const { keys } = bodySchema.parse(req.body);
+    const { keys } = querySchema.parse({ keys: req.query.keys });
 
     const session = await sessionRepository.shareable.findAccessibleById(req.user!, sessionId);
     if (!session) throw new NotFoundError('Session not found');

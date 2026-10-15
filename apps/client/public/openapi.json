@@ -5639,7 +5639,8 @@
                   "type": "string"
                 },
                 "url": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Presigned download URL. Short-lived (about an hour): fetch it promptly, do not store it."
                 },
                 "isImage": {
                   "type": "boolean"

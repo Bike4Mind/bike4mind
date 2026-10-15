@@ -1,16 +1,21 @@
+import { useRef } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { api } from '@client/app/contexts/ApiContext';
 
-// Server presigns for 3600s (GENERATED_MEDIA_URL_TTL_SECONDS); re-sign well before that so neither a
-// re-mounted message nor a long-open tab (lazy audio/video, save/copy fetches) holds a dead URL.
-const GENERATED_MEDIA_STALE_TIME_MS = 45 * 60 * 1000;
-const GENERATED_MEDIA_GC_TIME_MS = GENERATED_MEDIA_STALE_TIME_MS;
+// Re-sign this long before the server's expiresAt, so neither a re-mounted message nor a long-open
+// tab (lazy audio/video, save/copy/edit fetches) holds a dead URL. Must exceed the default 5 min
+// gcTime, so a cache entry revived on remount is always still valid while it refetches.
+const GENERATED_MEDIA_REFRESH_MARGIN_MS = 15 * 60 * 1000;
+const GENERATED_MEDIA_MIN_REFRESH_MS = 60 * 1000;
 
 const generatedMediaResponseSchema = z.object({
   urls: z.record(z.string(), z.string()),
   expiresAt: z.string(),
 });
+
+type GeneratedMediaResponse = z.infer<typeof generatedMediaResponseSchema>;
+type SignedUrl = { url: string; expiresAtMs: number };
 
 const EMPTY_URLS: Record<string, string> = {};
 
@@ -18,24 +23,68 @@ export const generatedMediaKeys = {
   urls: (sessionId: string | undefined, keys: string[]) => ['generatedMediaUrls', sessionId, keys] as const,
 };
 
+const msUntilRefresh = (response: GeneratedMediaResponse | undefined): number => {
+  if (!response) return 0;
+  const refreshAt = Date.parse(response.expiresAt) - GENERATED_MEDIA_REFRESH_MARGIN_MS;
+  return Math.max(refreshAt - Date.now(), GENERATED_MEDIA_MIN_REFRESH_MS);
+};
+
 /**
- * Resolves bare generated-media keys to short-lived presigned URLs via the authorized endpoint.
- * Keys the caller may not read are absent from `urls`; callers must skip those entries.
+ * Keep a key's previous URL while it is still fresh. Each response re-signs every key in the turn,
+ * and a changed src reloads an <img>, restarts <audio>, and re-downloads a video mid-play.
+ */
+const mergeStableUrls = (
+  previous: Record<string, SignedUrl>,
+  response: GeneratedMediaResponse
+): Record<string, SignedUrl> => {
+  const expiresAtMs = Date.parse(response.expiresAt);
+  const keepUntil = Date.now() + GENERATED_MEDIA_REFRESH_MARGIN_MS;
+  return Object.fromEntries(
+    Object.entries(response.urls).map(([key, url]) => {
+      const kept = previous[key];
+      return [key, kept && kept.expiresAtMs > keepUntil ? kept : { url, expiresAtMs }];
+    })
+  );
+};
+
+// Held URLs can be older than this response, so the refresh is scheduled off the earliest expiry.
+const toResponse = (held: Record<string, SignedUrl>, response: GeneratedMediaResponse): GeneratedMediaResponse => {
+  const earliestExpiryMs = Math.min(
+    Date.parse(response.expiresAt),
+    ...Object.values(held).map(entry => entry.expiresAtMs)
+  );
+  return {
+    urls: Object.fromEntries(Object.entries(held).map(([key, entry]) => [key, entry.url])),
+    expiresAt: new Date(earliestExpiryMs).toISOString(),
+  };
+};
+
+/**
+ * Resolves bare generated-media keys to short-lived presigned URLs via the authorized endpoint
+ * (GET /api/sessions/[id]/generated-media). Keys the caller may not read are absent from `urls`;
+ * callers must skip those entries.
  */
 export function useGeneratedMediaUrls(sessionId: string | undefined, keys: string[]) {
   const normalizedKeys = [...new Set(keys)].sort();
+  // Read and written only inside queryFn: URLs held from earlier responses of this message.
+  const heldUrlsRef = useRef<Record<string, SignedUrl>>({});
 
   const query = useQuery({
     queryKey: generatedMediaKeys.urls(sessionId, normalizedKeys),
-    queryFn: async () => {
-      const { data } = await api.post(`/api/sessions/${sessionId}/generated-media`, { keys: normalizedKeys });
-      return generatedMediaResponseSchema.parse(data);
+    queryFn: async (): Promise<GeneratedMediaResponse> => {
+      // GET, not POST: this is a read, and a read-only session view may refuse writes to the session.
+      const params = new URLSearchParams(normalizedKeys.map(key => ['keys', key]));
+      const { data } = await api.get(`/api/sessions/${sessionId}/generated-media?${params.toString()}`);
+      const response = generatedMediaResponseSchema.parse(data);
+      const held = mergeStableUrls(heldUrlsRef.current, response);
+      heldUrlsRef.current = held;
+      return toResponse(held, response);
     },
     enabled: Boolean(sessionId) && normalizedKeys.length > 0,
-    staleTime: GENERATED_MEDIA_STALE_TIME_MS,
-    gcTime: GENERATED_MEDIA_GC_TIME_MS,
-    refetchInterval: GENERATED_MEDIA_STALE_TIME_MS,
-    refetchOnWindowFocus: false,
+    // Fresh until the refresh point: a remount or refocus inside it costs nothing, and one past it
+    // (including a tab that was hidden through the interval tick) re-signs.
+    staleTime: query => msUntilRefresh(query.state.data),
+    refetchInterval: query => (query.state.data ? msUntilRefresh(query.state.data) : false),
     // A streaming turn adds keys one at a time; keep the already-signed ones on screen meanwhile.
     placeholderData: keepPreviousData,
   });

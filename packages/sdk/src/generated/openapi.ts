@@ -3165,6 +3165,7 @@ export interface components {
       videos: string[];
       files: {
         name: string;
+        /** @description Presigned download URL. Short-lived (about an hour): fetch it promptly, do not store it. */
         url: string;
         isImage: boolean;
         isAudio: boolean;

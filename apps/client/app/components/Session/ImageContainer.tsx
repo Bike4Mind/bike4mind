@@ -71,7 +71,7 @@ type ImageContainerProps = {
 };
 
 // Extract the S3 key from an image URL
-const extractS3KeyFromUrl = (imageUrl: string): string | null => {
+export const extractS3KeyFromUrl = (imageUrl: string): string | null => {
   try {
     const url = new URL(imageUrl);
 
@@ -91,7 +91,7 @@ const extractS3KeyFromUrl = (imageUrl: string): string | null => {
 };
 
 // Whether an image URL points at the generated-images bucket
-const isGeneratedImage = (imageUrl: string): boolean => {
+export const isGeneratedImage = (imageUrl: string): boolean => {
   return imageUrl.includes('generatedimagesbucket');
 };
 
