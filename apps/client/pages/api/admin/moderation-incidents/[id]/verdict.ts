@@ -58,22 +58,21 @@ function isNcmecConfigured(creds: ReturnType<typeof resolveNcmecCredentials>): b
  * The NCMEC reportId is logged immediately after NCMEC accepts the submission and before
  * the DB update so it is recoverable from logs even if the DB write subsequently fails.
  */
+// An operator-typed CyberTip id; the charset also keeps CR/LF out of the [NCMEC] log lines.
+const ncmecReportIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9-]+$/);
+
 const bodySchema = z.union([
   z.object({ verdict: z.literal('confirmed_csam') }),
   z.object({ verdict: z.literal('false_positive') }),
-  z.object({ verdict: z.literal('mark_reported'), ncmecReportId: z.string().min(1) }),
+  z.object({ verdict: z.literal('mark_reported'), ncmecReportId: ncmecReportIdSchema }),
   z.object({ verdict: z.literal('requeue') }),
   z.object({ verdict: z.literal('retry_finish') }),
-  z.object({
-    verdict: z.literal('record_manual_report'),
-    // Also keeps CR/LF out of the [NCMEC] log lines the id is interpolated into.
-    ncmecReportId: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
-      .regex(/^[A-Za-z0-9-]+$/),
-  }),
+  z.object({ verdict: z.literal('record_manual_report'), ncmecReportId: ncmecReportIdSchema }),
 ]);
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req: Request, res) => {

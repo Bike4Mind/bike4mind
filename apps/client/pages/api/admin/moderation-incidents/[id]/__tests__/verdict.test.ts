@@ -322,6 +322,22 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
 
       expect(res.status).toHaveBeenCalledWith(409);
     });
+
+    it('trims the report id and rejects one with characters outside letters, digits and dashes', async () => {
+      mockResolveConfirmedCsam.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'reported' });
+      const ok = makeRes();
+      await runHandler(makeReq({ verdict: 'mark_reported', ncmecReportId: ' RPT-MANUAL ' }), ok);
+      expect(mockResolveConfirmedCsam).toHaveBeenCalledWith(
+        'inc-1',
+        expect.objectContaining({ ncmecReportId: 'RPT-MANUAL' })
+      );
+
+      mockResolveConfirmedCsam.mockClear();
+      const bad = makeRes();
+      await runHandler(makeReq({ verdict: 'mark_reported', ncmecReportId: 'RPT\nforged' }), bad);
+      expect(bad.status).toHaveBeenCalledWith(400);
+      expect(mockResolveConfirmedCsam).not.toHaveBeenCalled();
+    });
   });
 
   // ------------------------------------------------------------------ requeue (recovery)
