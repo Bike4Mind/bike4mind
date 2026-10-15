@@ -43,11 +43,15 @@ vi.mock('@server/utils/apiKeyRotationNotifier', () => ({ notifyApiKeyRotationReo
 const userApiKeyRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
 const organizationRepository = vi.hoisted(() => ({ findIdsAdministeredBy: vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ organizationRepository }));
+vi.mock('@bike4mind/database', () => ({
+  organizationRepository,
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
+}));
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
 import { NotFoundError } from '@server/utils/errors';
+import { realtimeConnectionRepository } from '@bike4mind/database';
 // Order matters: the first baseApi() call is rotate, the second is revoke.
 import '@pages/api/user-api-keys/[id]/rotate';
 import '@pages/api/user-api-keys/[id]/revoke';
@@ -73,6 +77,18 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
         db: expect.objectContaining({ organizations: organizationRepository }),
       })
     );
+  });
+
+  it('wires the realtime connection repository so a rotation ends the key sockets', async () => {
+    const { req, res } = post('key-1');
+    await mockRefs.rotateHandler!(req, res);
+    expect(rotateUserApiKey).toHaveBeenCalledWith('admin-user', { keyId: 'key-1' }, expect.anything());
+    const [, , adapters] = rotateUserApiKey.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      { db: { realtimeConnections: unknown } },
+    ];
+    expect(adapters.db.realtimeConnections).toBe(realtimeConnectionRepository);
   });
 
   it('propagates a service NotFoundError', async () => {
@@ -138,8 +154,11 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
 
   it('returns 200 with the credential when the notifier does not settle within 5s', async () => {
     rotateUserApiKey.mockResolvedValueOnce({
-      id: 'key-1', name: 'k', keyPrefix: 'b4m_live_x',
-      key: 'b4m_live_secret', previousOwnerUserId: 'minter',
+      id: 'key-1',
+      name: 'k',
+      keyPrefix: 'b4m_live_x',
+      key: 'b4m_live_secret',
+      previousOwnerUserId: 'minter',
     });
     // Never-settling notifier simulates a stalled SMTP host.
     notifyApiKeyRotationReown.mockReturnValueOnce(new Promise(() => {}));
@@ -164,8 +183,15 @@ describe('POST /api/user-api-keys/[id]/revoke', () => {
     expect(revokeUserApiKey).toHaveBeenCalledWith(
       'admin-user',
       { keyId: 'key-1', reason: 'rotated out' },
-      expect.objectContaining({ db: expect.objectContaining({ organizations: organizationRepository }) })
+      expect.anything()
     );
+    const [, , adapters] = revokeUserApiKey.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      { db: { organizations: unknown; realtimeConnections: unknown } },
+    ];
+    expect(adapters.db.organizations).toBe(organizationRepository);
+    expect(adapters.db.realtimeConnections).toBe(realtimeConnectionRepository);
   });
 
   it('propagates a service NotFoundError', async () => {

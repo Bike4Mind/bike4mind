@@ -10,7 +10,7 @@ if [ "$state" = false ]; then
   exit 0
 fi
 if [ -z "$state" ]; then
-  gh release create "$tag" --target "$RELEASE_TARGET" --draft --title "Desktop $DESKTOP_VERSION" --notes-file "$notes"
+  gh release create "$tag" --target "$RELEASE_TARGET" --draft --title "Bike4Mind Desktop $DESKTOP_VERSION" --notes-file "$notes"
 fi
 gh release upload "$tag" "$assets"/* --clobber
 gh release edit "$tag" --draft=false --latest=false

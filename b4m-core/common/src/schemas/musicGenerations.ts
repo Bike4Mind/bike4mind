@@ -23,6 +23,7 @@ export const MUSIC_GENERATION_API_ERROR_CODES = [
   'insufficient_credits',
   'idempotency_key_reused',
   'invalid_idempotency_key',
+  'not_cancellable',
 ] as const satisfies readonly ApiErrorCode[];
 export type MusicGenerationApiErrorCode = (typeof MUSIC_GENERATION_API_ERROR_CODES)[number];
 

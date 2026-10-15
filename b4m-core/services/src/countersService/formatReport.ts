@@ -236,14 +236,14 @@ function formatAIInsights(insights: string | string[] | null): { sections: strin
 
 /**
  * Render the "Usage by Source" line as `web: 89% · cli: 10% · agent: 1%`.
- * Source order: web -> cli -> agent -> api -> system (any unknown sources appear
+ * Source order: web -> cli -> desktop -> agent -> api -> system (any unknown sources appear
  * after these in their original sort order from the aggregation).
  */
 export function formatUsageBySource(usage?: Array<{ source: CompletionSource; count: number }>): string | null {
   if (!usage || usage.length === 0) return null;
   const total = usage.reduce((sum, u) => sum + u.count, 0);
   if (total === 0) return null;
-  const PREFERRED_ORDER: readonly CompletionSource[] = ['web', 'cli', 'agent', 'api', 'system'];
+  const PREFERRED_ORDER: readonly CompletionSource[] = ['web', 'cli', 'desktop', 'agent', 'api', 'system'];
   const sorted = [...usage].sort((a, b) => {
     const ai = PREFERRED_ORDER.indexOf(a.source);
     const bi = PREFERRED_ORDER.indexOf(b.source);

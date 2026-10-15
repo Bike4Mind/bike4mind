@@ -51,7 +51,7 @@ function markup(
   gh: PrBarState['gh'] = 'ok',
   autoMerge: PrBarState['autoMerge'] = { mode: 'desktop' },
   binding: PrBinding = BINDING,
-  autoFix: PrBarState['autoFix'] = { status: 'watching', attempts: 0, max: 3 }
+  autoFix: PrBarState['autoFix'] = { status: 'watching', attempts: 0, max: 5 }
 ): string {
   const state: PrBarState = {
     sessionId: 'session-1',
@@ -126,9 +126,9 @@ describe('PrStatusBar', () => {
         .replace(/<[^>]*>/g, ' ')
         .match(/(Fixing conflicts\.\.\.|Conflicts)/)?.[1];
     expect(chip(markup(conflicting))).toBe('Conflicts');
-    const fixing = { status: 'started', attempts: 1, max: 3, conflicts: true } as const;
+    const fixing = { status: 'started', attempts: 1, max: 5, conflicts: true } as const;
     expect(chip(markup(conflicting, false, 'ok', { mode: 'desktop' }, BINDING, fixing))).toBe('Fixing conflicts...');
-    const other = { status: 'started', attempts: 1, max: 3 } as const;
+    const other = { status: 'started', attempts: 1, max: 5 } as const;
     expect(chip(markup(conflicting, false, 'ok', { mode: 'desktop' }, BINDING, other))).toBe('Conflicts');
   });
 

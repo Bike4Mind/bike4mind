@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { ChatMessage } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageThread } from './MessageThread';
-import { buildThread, LARGEST_REAL_SHAPE, STRESS_SHAPE } from './threadFixture';
+import { buildThread, LARGEST_REAL_SHAPE, STRESS_SHAPE, type ThreadShape } from './threadFixture';
 import { WINDOW_STEP } from './threadWindow';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,6 +50,15 @@ class ScriptedObserver {
 // Stable, as ChatShell's are: a new callback per render would defeat the memo on every turn.
 const respond = () => undefined;
 const resume = () => undefined;
+
+const SPARSE_STRESS_SHAPE: ThreadShape = {
+  ...STRESS_SHAPE,
+  previewChars: 100,
+  diffEvery: 0,
+  proseChars: 40,
+  codeEvery: 0,
+  mermaid: false,
+};
 
 describe('opening a long conversation', () => {
   let container: HTMLDivElement;
@@ -135,17 +144,20 @@ describe('opening a long conversation', () => {
     expect(host.scrollHeight - host.scrollTop).toBe(fromBottom);
   });
 
+  // The stress fixture's turns and boundary, with almost none of its text: walking to the
+  // boundary mounts every turn after it, and drawing all of that markdown is what used to run
+  // this past its timeout on a loaded runner. The bound on what one window draws is pinned above.
   it('reaches the compaction boundary by scrolling, and only then offers the earlier messages', () => {
-    render(buildThread(STRESS_SHAPE));
+    render(buildThread(SPARSE_STRESS_SHAPE));
     for (let step = 0; step < 100 && count('chat-thread-older-sentinel') > 0; step++)
       act(() => ScriptedObserver.reveal());
 
     expect(count('chat-thread-older-sentinel')).toBe(0);
     expect(count('chat-boundary')).toBe(1);
     expect(count('chat-earlier-messages')).toBe(1);
-    const turnsAfterBoundary = STRESS_SHAPE.turns - (STRESS_SHAPE.boundaryAt ?? 0) / 2;
+    const turnsAfterBoundary = SPARSE_STRESS_SHAPE.turns - (SPARSE_STRESS_SHAPE.boundaryAt ?? 0) / 2;
     expect(count('chat-message-assistant')).toBe(turnsAfterBoundary);
-  }, 60_000);
+  });
 
   it('re-renders only the reply that is streaming, not the turns above it', () => {
     const messages = buildThread({ ...STRESS_SHAPE, turns: 4, boundaryAt: undefined, roundsPerTurn: 3 });

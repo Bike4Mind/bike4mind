@@ -192,7 +192,7 @@ function dagNodeDispatchEvent() {
 // Mutable so a test can push the run past the dispatcher's deadline buffer mid-flight.
 let remainingMs = 600_000;
 const lambdaContext = { getRemainingTimeInMillis: () => remainingMs } as never;
-const imagePayload = { model: IMAGE_MODEL_ID, n: 1, prompt: 'a bicycle' };
+const imagePayload = { model: IMAGE_MODEL_ID, n: 1, paths: ['generated/bicycle.png'] };
 const EXPECTED_IMAGE_CREDITS = 55;
 const audioPayload = { kind: 'sound_effect', provider: 'elevenlabs', durationSeconds: 20 };
 
@@ -235,7 +235,7 @@ describe('processSubagentDispatch generated-media billing', () => {
 
   it('deducts the generated-image credits from the wallet and mirrors them onto the child audit counter', async () => {
     delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('image_generation', imagePayload);
+      await callbacks.onToolFinish('image_generation', imagePayload);
       return completedResult;
     };
     const { handler } = await import('./agentExecutor');
@@ -262,7 +262,7 @@ describe('processSubagentDispatch generated-media billing', () => {
 
   it('still deducts media generated before the run rejects, and marks the child failed', async () => {
     delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('image_generation', imagePayload);
+      await callbacks.onToolFinish('image_generation', imagePayload);
       throw new Error('agent blew up');
     };
     const { handler } = await import('./agentExecutor');
@@ -297,6 +297,20 @@ describe('processSubagentDispatch generated-media billing', () => {
     expect(mockIncrementCreditsUsed).toHaveBeenCalledWith('child-1', audioCredits);
   });
 
+  it('does not bill an image call that started but never delivered', async () => {
+    delegateBehavior = async callbacks => {
+      await callbacks.onToolStart('image_generation', { model: IMAGE_MODEL_ID, n: 1, prompt: 'a bicycle' });
+      return completedResult;
+    };
+    const { handler } = await import('./agentExecutor');
+
+    await handler(dagNodeDispatchEvent(), lambdaContext);
+
+    expect(mockMarkComplete).toHaveBeenCalledTimes(1);
+    expect(deductCreditsWithOrgSupportMock).not.toHaveBeenCalled();
+    expect(mockIncrementCreditsUsed).not.toHaveBeenCalled();
+  });
+
   it('does not bill audio from the onToolStart payload alone', async () => {
     delegateBehavior = async callbacks => {
       await callbacks.onToolStart('audio_generation', audioPayload);
@@ -313,7 +327,7 @@ describe('processSubagentDispatch generated-media billing', () => {
 
   it('bills media on a user abort that returns a partial result, before the terminal writes', async () => {
     delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('image_generation', imagePayload);
+      await callbacks.onToolFinish('image_generation', imagePayload);
       mockCheckAbortFlag.mockResolvedValue(true);
       await tickAbortPoller();
       return completedResult;
@@ -332,7 +346,7 @@ describe('processSubagentDispatch generated-media billing', () => {
 
   it('bills media on a deadline timeout that returns a partial result', async () => {
     delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('image_generation', imagePayload);
+      await callbacks.onToolFinish('image_generation', imagePayload);
       remainingMs = 1_000;
       await tickAbortPoller();
       return completedResult;
@@ -354,7 +368,7 @@ describe('processSubagentDispatch generated-media billing', () => {
       await tickAbortPoller();
     });
     delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('image_generation', imagePayload);
+      await callbacks.onToolFinish('image_generation', imagePayload);
       return completedResult;
     };
     const { handler } = await import('./agentExecutor');
@@ -373,7 +387,7 @@ describe('processSubagentDispatch generated-media billing', () => {
       { id: 'claude-sonnet-5', backend: 'anthropic' },
     ] as never);
     delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('image_generation', imagePayload);
+      await callbacks.onToolFinish('image_generation', imagePayload);
       return completedResult;
     };
     const { handler } = await import('./agentExecutor');
@@ -411,7 +425,7 @@ describe('processSubagentDispatch generated-media billing', () => {
   it('keeps the terminal status when the media deduction itself fails', async () => {
     deductCreditsWithOrgSupportMock.mockRejectedValue(new Error('wallet unavailable'));
     delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('image_generation', imagePayload);
+      await callbacks.onToolFinish('image_generation', imagePayload);
       return completedResult;
     };
     const { handler } = await import('./agentExecutor');
@@ -427,7 +441,7 @@ describe('processSubagentDispatch generated-media billing', () => {
   it('keeps the original failure when the media deduction fails on the throw path', async () => {
     deductCreditsWithOrgSupportMock.mockRejectedValue(new Error('wallet unavailable'));
     delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('image_generation', imagePayload);
+      await callbacks.onToolFinish('image_generation', imagePayload);
       throw new Error('agent blew up');
     };
     const { handler } = await import('./agentExecutor');

@@ -9,6 +9,8 @@ import {
   getTurnsCost,
   type TurnUsage,
   pricingTierForTokens,
+  publishesCacheReadRate,
+  PUBLISHED_CACHE_READ_BACKENDS,
   CreditHolderType,
   ICreditHolder,
   ICreditHolderMethods,
@@ -181,14 +183,17 @@ function estimateInputTokens(messages: IMessage[]): number {
  * Backends whose server caches prompt prefixes without a client flag; they only get the cache
  * rate when the catalog publishes an explicit cache_read (the default 0.1x multiplier is
  * Anthropic's). Must stay in sync with the adapters that report cache reads into settlement
- * (those calling `splitCacheInclusiveInput`): xAI's adapter does not, so settlement bills its
- * full input. Gemini and Ollama publish no cache_read; Bedrock's cache_control is gated on
- * options.cacheStrategy.enableCaching, which this path never sets.
+ * (those calling `splitCacheInclusiveInput`); the Gemini and xAI adapters forward them only for a
+ * model that publishes cache_read, the same condition this path checks. Ollama publishes no
+ * cache_read; Bedrock's cache_control is gated on options.cacheStrategy.enableCaching, which this
+ * path never sets.
  */
 const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.OpenAI,
   ModelBackend.Kimi,
   ModelBackend.DeepSeek,
+  ModelBackend.Gemini,
+  ModelBackend.XAI,
 ]);
 
 // Bounds a cold or fabricated cache at about 2.5x the floor (a write costs 1.25x against the 0.5x floor).
@@ -243,7 +248,12 @@ function estimateReservationUsd(
     writeEnd = lastFlagged;
     hoistsSystem = true;
   } else {
-    const publishesCacheRead = tier !== null && modelInfo.pricing[tier]?.cache_read !== undefined;
+    // Mirror the adapter gate exactly: for a backend that forwards cache reads only for a model
+    // publishing cache_read on every tier, a single tier carrying one must not discount the hold,
+    // or settlement bills full-rate input against a discounted reservation.
+    const publishesCacheRead = PUBLISHED_CACHE_READ_BACKENDS.has(modelInfo.backend)
+      ? publishesCacheReadRate(modelInfo)
+      : tier !== null && modelInfo.pricing[tier]?.cache_read !== undefined;
     if (!AUTO_CACHING_BACKENDS.has(modelInfo.backend) || !publishesCacheRead) return uncachedUsd;
     readEnd = lastAssistantIndex - 1;
     hoistsSystem = false;
@@ -376,6 +386,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const models = await getAvailableModels(apiKeys);
   const modelInfo = models.find(m => m.id === (model as ChatModels));
   const catalogued = CHAT_MODELS.includes(model as ChatModels);
+
+  // Catalogued but never runnable; unlike provider_not_configured, retrying cannot help.
+  if (modelInfo?.disabled) {
+    const reason = modelInfo.disabledReason ? `: ${modelInfo.disabledReason}` : '';
+    throw new BadRequestError(
+      `Model '${params.model}' is currently unavailable${reason}. List the models you can call with GET /api/v1/models.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
 
   const llm = getLlmByModel(apiKeys, {
     modelInfo,

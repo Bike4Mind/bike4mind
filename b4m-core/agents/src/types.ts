@@ -292,8 +292,11 @@ export interface AgentRunOptions {
    * propagates as before. Not provided: behavior is unchanged (the error
    * always propagates). Kept as an injected callback so the agent stays
    * infra-free - hosts (e.g. the CLI) own the actual compaction strategy.
+   * `protectedCount` is the length of the run's protected prefix (system +
+   * previousMessages + current query, after transcript repair); messages
+   * below it must be kept as they are.
    */
-  onContextLimit?: (messages: IMessage[]) => Promise<IMessage[] | null>;
+  onContextLimit?: (messages: IMessage[], protectedCount: number) => Promise<IMessage[] | null>;
   /**
    * Host-supplied provider for a compact live-workflow-state reminder (open
    * todos, unresolved blockers, recent decisions). Called before every LLM

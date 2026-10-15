@@ -97,6 +97,7 @@ import type { CitableSource, WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
+import { isConfirmableMcpTool } from '@client/app/utils/confirmableMcpTool';
 import {
   extractChessJson,
   validateChessFen,
@@ -763,9 +764,11 @@ function getPendingActionError(error: unknown, fallbackMessage: string): { messa
   };
 }
 
-export const PendingActionButtons: FC<PendingActionButtonsProps> = props => (
-  <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
-);
+// The confirm route executes only allowlisted write tools, so any other pending action gets no card.
+export const PendingActionButtons: FC<PendingActionButtonsProps> = props =>
+  isConfirmableMcpTool(props.pendingAction.tool) ? (
+    <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
+  ) : null;
 
 const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAction, messageId, sessionId }) => {
   const storageKey = messageId ? `mcp-confirm-${messageId}-${pendingAction.ts}` : null;

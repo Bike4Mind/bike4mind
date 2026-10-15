@@ -1,4 +1,4 @@
-import { B4mApiError, B4mQuestError } from './errors';
+import { B4mApiError, B4mQuestError, B4mStreamEndedError } from './errors';
 import type { components, operations as Operations } from './generated/openapi';
 import { operations } from './generated/operations';
 import { parseSse } from './sse';
@@ -278,7 +278,7 @@ export function createClient(options: ClientOptions) {
         if (event.type === 'error') sawError = true;
         yield event;
       }
-      if (!sawDone && !sawError) throw new Error('completion stream ended before [DONE]');
+      if (!sawDone && !sawError) throw new B4mStreamEndedError();
     },
 
     /** `POST /api/chat`, queued (the default): the turn's outcome is on the returned handle's `poll()`. */

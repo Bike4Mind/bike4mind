@@ -1,4 +1,9 @@
-import { ApiKeyScope, IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  IOrganizationRepository,
+  IRealtimeConnectionRepository,
+  IUserApiKeyRepository,
+} from '@bike4mind/common';
 import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import { z } from 'zod';
@@ -7,6 +12,7 @@ import { resolveOwnedApiKey } from './resolveOwnedApiKey';
 import { assertNoScopeEscalation } from './assertNoScopeEscalation';
 import { generateCallbackSigningSecret } from './callbackSigningSecret';
 import { computeKeyDigest } from './keyDigest';
+import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
 
 const rotateUserApiKeySchema = z.object({
   keyId: z.string(),
@@ -18,6 +24,9 @@ interface RotateUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
+    // Optional only so existing overlay callers keep compiling; when omitted, sockets opened with
+    // the rotated-away secret stay up until the gateway's 2h cap. In-repo callers always pass it.
+    realtimeConnections?: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
   /**
    * Scopes of the API key making the request, when the caller authenticated with one.
@@ -134,6 +143,11 @@ export const rotateUserApiKey = async (
   const callbackSigningSecret = reOwned ? generateCallbackSigningSecret() : undefined;
   if (callbackSigningSecret) {
     await db.userApiKeys.setCallbackSigningSecret(apiKey.id, callbackSigningSecret, new Date());
+  }
+
+  // Rotation keeps the key id, so sockets opened with the old secret would otherwise stay live.
+  if (db.realtimeConnections) {
+    await endRealtimeConnections({ apiKeyId: apiKey.id }, { db: { realtimeConnections: db.realtimeConnections } });
   }
 
   return {

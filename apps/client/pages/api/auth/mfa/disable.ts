@@ -7,6 +7,7 @@ import {
   authSessionRepository,
   trustedDeviceRepository,
   passkeyCredentialRepository,
+  realtimeConnectionRepository,
 } from '@bike4mind/database';
 import { clearTrustedDeviceCookie } from '@server/auth/trustedDevice';
 import { logAuthAudit } from '@server/utils/authAudit';
@@ -44,7 +45,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
         // Disabling MFA is a security-relevant change: revoke every existing session (including
         // this one) -- bumps tokenVersion AND clears session rows -- forcing re-authentication.
         await userService.revokeUserSessions(freshUser.id, {
-          db: { users: userRepository, authSessions: authSessionRepository },
+          db: {
+            users: userRepository,
+            authSessions: authSessionRepository,
+            realtimeConnections: realtimeConnectionRepository,
+          },
           logger: req.logger,
         });
 

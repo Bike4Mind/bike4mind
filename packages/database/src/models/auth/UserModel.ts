@@ -539,6 +539,33 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  async setCurrentStorageIfUnchanged(userId: string, expected: number, next: number): Promise<boolean> {
+    // `null` also matches a missing field, which every reader treats as 0.
+    const counterFilter = expected === 0 ? { $in: [0, null] } : expected;
+    const res = await this.model.updateOne(
+      { _id: userId, currentStorageSize: counterFilter },
+      { $set: { currentStorageSize: next } }
+    );
+    return res.matchedCount === 1;
+  }
+
+  async findCurrentStorageSize(userId: string): Promise<number | null> {
+    if (!mongoose.isValidObjectId(userId)) return null;
+    const row = await this.model
+      .findById(userId, { currentStorageSize: 1 })
+      .lean<{ currentStorageSize?: number | null }>();
+    return row ? (row.currentStorageSize ?? 0) : null;
+  }
+
+  async listUserIdsAfter(afterId: string | null, limit: number): Promise<string[]> {
+    const rows = await this.model
+      .find(afterId ? { _id: { $gt: afterId } } : {}, { _id: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean<Array<{ _id: unknown }>>();
+    return rows.map(row => String(row._id));
+  }
+
   /**
    * Charge `count` referrals (atomic, floored at zero) and record the invites they created, so a
    * concurrent change to either field is not reverted. Two writes: a pipeline update can't use

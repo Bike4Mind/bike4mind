@@ -279,6 +279,8 @@ export interface ProjectBindingController {
   dismissError: () => void;
   /** Open the folder picker, then re-root the session on whatever is chosen. */
   pickDirectory: () => Promise<void>;
+  /** Re-root the session on a folder already known, such as a recent one: no picker. */
+  chooseDirectory: (directory: string) => Promise<void>;
   setBranch: (branch: string) => Promise<void>;
   setWorkspace: (workspace: boolean) => Promise<void>;
   /** Move the session into the worktree that already has `elsewhere.branch` checked out. */
@@ -895,24 +897,31 @@ export function useConversation(
     [sessionId, applySummary]
   );
 
+  const chooseDirectory = useCallback(
+    async (directory: string) => {
+      setProjectError(null);
+      const inspected = await window.b4m.chat.inspectProject(directory);
+      // A folder nothing could run in is reported instead of being bound. Main refuses it too,
+      // so this only spares the user a move that would come back as the same sentence.
+      if (inspected.refusal) {
+        setProjectError({ message: inspected.refusal, busy: false });
+        return;
+      }
+      // The workspace choice does not travel: it named a worktree of the repository being left,
+      // and carrying it across would create one in a repository the user has only just pointed at.
+      const moved = await changeProject({ directory, branch: inspected.currentBranch ?? '', workspace: false });
+      // The folder is still usable when git could not be read - it just has no branches to offer -
+      // so this is reported after the move rather than instead of it.
+      if (moved && inspected.error) setProjectError({ message: inspected.error, busy: false });
+    },
+    [changeProject]
+  );
+
   const pickDirectory = useCallback(async () => {
     setProjectError(null);
     const directory = await window.b4m.chat.pickProjectDirectory();
-    if (!directory) return;
-    const inspected = await window.b4m.chat.inspectProject(directory);
-    // A folder nothing could run in is reported instead of being bound. Main refuses it too,
-    // so this only spares the user a move that would come back as the same sentence.
-    if (inspected.refusal) {
-      setProjectError({ message: inspected.refusal, busy: false });
-      return;
-    }
-    // The workspace choice does not travel: it named a worktree of the repository being left,
-    // and carrying it across would create one in a repository the user has only just pointed at.
-    const moved = await changeProject({ directory, branch: inspected.currentBranch ?? '', workspace: false });
-    // The folder is still usable when git could not be read - it just has no branches to offer -
-    // so this is reported after the move rather than instead of it.
-    if (moved && inspected.error) setProjectError({ message: inspected.error, busy: false });
-  }, [changeProject]);
+    if (directory) await chooseDirectory(directory);
+  }, [chooseDirectory]);
 
   const setBranch = useCallback(
     async (branch: string) => {
@@ -967,6 +976,7 @@ export function useConversation(
       error: projectError,
       dismissError: dismissProjectError,
       pickDirectory,
+      chooseDirectory,
       setBranch,
       setWorkspace,
       moveToCheckout,
@@ -979,6 +989,7 @@ export function useConversation(
       projectError,
       dismissProjectError,
       pickDirectory,
+      chooseDirectory,
       setBranch,
       setWorkspace,
       moveToCheckout,

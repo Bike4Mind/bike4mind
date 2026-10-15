@@ -163,6 +163,7 @@ re-deciding per endpoint:
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
 | Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
 | Org-billed API key's organization is gone, or its holder has left it | `400` | - (re-mint the key) |
+| Cancel of a job the provider is already rendering and billing | `409` | `not_cancellable` (do not retry; the job runs to its end and is charged if it produces output) |
 
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `303`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,

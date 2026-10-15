@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { IPC_CHANNELS, type AppInfo } from '@shared/ipc';
 import appIcon from '../../build/icon.png?asset';
+import macAppIcon from '../../build/icon-mac.png?asset';
 import { registerAccount } from './account';
 import { registerAuth } from './auth';
 import { registerChat } from './chat';
@@ -100,7 +101,7 @@ ipcMain.handle(IPC_CHANNELS.shellOpenExternal, (_event, url: unknown) => {
 void app.whenReady().then(async () => {
   // macOS reads the dock icon from the app bundle, which only a packaged build has, so a
   // dev run would otherwise sit in the dock as Electron's own atom.
-  if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(appIcon);
+  if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(macAppIcon);
 
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.

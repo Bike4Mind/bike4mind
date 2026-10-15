@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/common';
 import type { ICompletionOptionTools, CompletionInfo } from '@bike4mind/llm-adapters';
 import { isContextLimitError } from './errors';
+import { isJsonObjectString, isPlainObject, isRepaired, repairTranscript } from './transcript';
 import type {
   AgentCheckpoint,
   AgentContext,
@@ -460,6 +461,9 @@ export class ReActAgent extends EventEmitter {
         },
       ];
       this.messages = messages; // Keep instance state in sync for toCheckpoint()
+      // Repaired before the protected-prefix length is taken: a repair inside previousMessages
+      // changes its length, and a stale count would let trimming cut the current query.
+      this.repairTranscriptBeforeRequest(messages);
       this.initialMessageCount = messages.length;
 
       messages.forEach((msg, i) => {
@@ -528,6 +532,7 @@ export class ReActAgent extends EventEmitter {
         }
 
         appendWorkflowReminder(messages, options.workflowReminder);
+        this.repairTranscriptBeforeRequest(messages);
 
         // Build cache strategy for prompt caching (system prompt + tools are static
         // across iterations; conversation history uses a moving breakpoint - see
@@ -727,7 +732,7 @@ export class ReActAgent extends EventEmitter {
         } catch (completionError) {
           if (!reactiveCompactionAttempted && options.onContextLimit && isContextLimitError(completionError)) {
             reactiveCompactionAttempted = true;
-            const compacted = await options.onContextLimit(messages);
+            const compacted = await options.onContextLimit(messages, this.initialMessageCount);
 
             if (compacted && compacted.length > 0 && compacted.length < messages.length) {
               this.context.logger.info(
@@ -1308,6 +1313,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         { role: 'user', content: query },
       ] as IMessage[];
 
+      this.repairTranscriptBeforeRequest(this.messages);
       this.initialMessageCount = this.messages.length;
       this.iterationInitialized = true;
     }
@@ -1375,6 +1381,12 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       }
 
       appendWorkflowReminder(this.messages, options.workflowReminder);
+      // A resumed checkpoint can need repair inside its protected prefix; keep the prefix ending at the
+      // same message so trimming never drops the query.
+      const lastProtected = this.messages[this.initialMessageCount - 1];
+      this.repairTranscriptBeforeRequest(this.messages);
+      const lastProtectedIndex = lastProtected ? this.messages.indexOf(lastProtected) : -1;
+      if (lastProtectedIndex >= 0) this.initialMessageCount = lastProtectedIndex + 1;
 
       let iterationComplete = false;
       let currentText = '';
@@ -1506,9 +1518,9 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                   options.parallelExecution &&
                   shouldUseParallelExecution(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool)
                 ) {
-                  // Keyed by the provider `tool_use` id (not `getToolId`, which is
-                  // name+stringified-args and collides when a batch calls the same
-                  // tool twice with identical arguments). `withholdIfGated` assigns
+                  // Keyed by the provider `tool_use` id (not `getToolId`, whose
+                  // name+args fallback for id-less calls collides when a batch calls
+                  // the same tool twice with identical arguments). `withholdIfGated` assigns
                   // `toolUse.id` when the provider omitted one, so every entry here
                   // is guaranteed to have it set by the time this map is read.
                   const withheld = new Map<string, GatedToolCall>();
@@ -2072,16 +2084,56 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     observation: string,
     thinkingBlocks: unknown[]
   ): void {
-    const params = this.parseToolArguments(toolUse.arguments);
     const toolId = toolUse.id || `${toolUse.name}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const parameters = typeof toolUse.arguments === 'string' ? toolUse.arguments : JSON.stringify(params);
 
     this.context.llm.pushToolMessages(
       messages as Parameters<typeof this.context.llm.pushToolMessages>[0],
-      { id: toolId, name: toolUse.name, parameters },
+      { id: toolId, name: toolUse.name, parameters: this.serializeToolArguments(toolUse) },
       observation,
       thinkingBlocks
     );
+  }
+
+  /**
+   * The call's arguments as a JSON object string, raw bytes kept when they already are one. Malformed
+   * arguments are recorded as `{}`: the tool has already run (and reported the parse error as its
+   * observation), and throwing here would abort the turn with earlier calls left unanswered.
+   */
+  private serializeToolArguments(toolUse: ToolUseInfo): string {
+    const args = toolUse.arguments;
+    if (typeof args === 'string' && isJsonObjectString(args)) return args;
+    try {
+      const parsed = this.parseToolArguments(args);
+      if (isPlainObject(parsed)) return JSON.stringify(parsed);
+    } catch {
+      // Unrecoverable JSON; recorded as {} below.
+    }
+    this.context.logger.warn(`[ReActAgent] Recording malformed arguments for tool "${toolUse.name}" as {}`);
+    return '{}';
+  }
+
+  /**
+   * The transcript owner's check before every model request: see `repairTranscript`. Missing results
+   * are synthesized through the backend's own `pushToolMessages`, so their shape matches what that
+   * backend appends for a real result.
+   */
+  private repairTranscriptBeforeRequest(messages: IMessage[]): void {
+    const report = repairTranscript(messages, (call, observation) => {
+      const pair: IMessage[] = [];
+      try {
+        this.context.llm.pushToolMessages(pair, { id: call.id, name: call.name, parameters: '{}' }, observation);
+      } catch (error) {
+        // Some backends (Bedrock models without tool support) throw here; the call is then sent as is.
+        this.context.logger.debug(`[ReActAgent] Cannot synthesize a tool result: ${String(error)}`);
+        return [];
+      }
+      // slice(1) relies on the backend pushing exactly one assistant message first. Some (Bedrock-Anthropic)
+      // also consume pending reasoning state here, harmless since repair only runs before a request.
+      return pair.slice(1);
+    });
+    if (isRepaired(report)) {
+      this.context.logger.warn(`[ReActAgent] Repaired transcript before model request: ${JSON.stringify(report)}`);
+    }
   }
 }
 

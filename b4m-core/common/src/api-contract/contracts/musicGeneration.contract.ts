@@ -191,10 +191,11 @@ export const cancelMusicGenerationContract = defineEndpoint({
   operationId: 'cancelMusicGeneration',
   summary: 'Cancel a music generation',
   description:
-    'Requests cancellation and returns the job. A job still waiting to start (or to retry) moves to `cancelled` ' +
-    'shortly after and its reserved credits are returned. The provider renders a song in one call that cannot ' +
-    'be interrupted, so a cancel that arrives while the song is rendering does not stop it: the job finishes ' +
-    'and is charged. A finished job is returned unchanged.',
+    'Requests cancellation and returns the job. A job still `pending` (waiting to start, or to retry) moves to ' +
+    '`cancelled` shortly after and its reserved credits are returned. The provider renders a song in one call ' +
+    'that cannot be interrupted and is billed once it starts, so a `running` job cannot be cancelled: the ' +
+    'request is refused with a 409 (`not_cancellable`), and the job runs to its end, charged if the song is ' +
+    'produced. A finished job is returned unchanged.',
   tags: ['Music'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
@@ -203,6 +204,10 @@ export const cancelMusicGenerationContract = defineEndpoint({
     200: { description: 'The job after the cancel request.', schema: MusicGenerationSchema, example: exampleJob },
     403: scopeForbidden,
     404: notFound,
+    409: {
+      description: 'The song is already rendering (`running`); `errorCode` is `not_cancellable`.',
+      schema: MusicGenerationErrorResponseSchema,
+    },
     429: rateLimited,
   },
   emitsRateLimitHeaders: true,
