@@ -1,9 +1,8 @@
-import os
 from pathlib import Path
-import subprocess
 import tempfile
-import textwrap
 import unittest
+
+from distribution import assemble
 
 
 WORKFLOW = (Path(__file__).resolve().parents[3] / '.github/workflows/desktop-release.yml').read_text()
@@ -11,24 +10,30 @@ WORKFLOW = (Path(__file__).resolve().parents[3] / '.github/workflows/desktop-rel
 
 class ReleasePlatformsTest(unittest.TestCase):
     def validate(self, missing=None, extra=None):
-        code = textwrap.dedent(WORKFLOW.split("python3 <<'PY'\n", 1)[1].split('\n          PY', 1)[0])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             names = {'Bike4Mind-0.1.1-arm64.dmg', 'Bike4Mind-0.1.1-arm64.zip',
-                     'Bike4Mind-0.1.1-x64.AppImage'}
+                     'Bike4Mind-0.1.1-x64.AppImage', 'Bike4Mind-0.1.1-arm64.zip.blockmap'}
             names.discard(missing)
             if extra:
                 names.add(extra)
             for name in names:
                 (root / name).write_text('installer')
-            return subprocess.run(['python3', '-c', code], cwd=root, capture_output=True,
-                                  env={**os.environ, 'GITHUB_OUTPUT': str(root / 'output')}).returncode
+            try:
+                assemble(root, '0.1.1', 'example/dist', 'example/source')
+                return 0
+            except ValueError:
+                return 1
 
     def test_remaining_installers_pass(self):
         self.assertEqual(self.validate(), 0)
 
     def test_missing_linux_installer_fails(self):
         self.assertNotEqual(self.validate(missing='Bike4Mind-0.1.1-x64.AppImage'), 0)
+
+    def test_missing_zip_or_blockmap_fails(self):
+        for name in ('Bike4Mind-0.1.1-arm64.zip', 'Bike4Mind-0.1.1-arm64.zip.blockmap'):
+            self.assertNotEqual(self.validate(missing=name), 0)
 
     def test_unexpected_intel_installer_fails(self):
         self.assertNotEqual(self.validate(extra='Bike4Mind-0.1.1-x64.dmg'), 0)

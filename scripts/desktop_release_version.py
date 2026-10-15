@@ -42,8 +42,8 @@ def release_notes(version, previous, repository):
                  for sha, subject, _ in changes)
     lines.extend(['', '## Installation', '',
                   'Choose arm64.dmg for Apple Silicon or x64.AppImage for Linux. Intel Mac builds are temporarily paused.',
-                  'SHA256SUMS.txt contains installer checksums. Updates are installed manually.',
-                  'Unsigned builds may need approval in macOS Privacy & Security. Only approve downloads you trust.', ''])
+                  'SHA256SUMS.txt contains installer and update metadata checksums.',
+                  'In-app updates require an installed build configured with this feed. Older unsigned macOS builds require a manual signed installation.', ''])
     return '\n'.join(lines)
 
 
@@ -59,7 +59,7 @@ def select_version(releases, baseline, preview='', title='', run=''):
     head = git('rev-parse', 'HEAD')
     previous = ''
     if candidates:
-        parts, previous, release = max(candidates, key=lambda candidate: candidate[0])
+        parts, previous, release = max(candidates, key=lambda candidate: (candidate[0], bool(candidate[2].get('draft'))))
         target = release['target_commitish'] if release.get('draft') else previous
         released_sha = git('rev-parse', f'{target}^{{commit}}')
         if release.get('draft'):
@@ -89,6 +89,10 @@ def select_version(releases, baseline, preview='', title='', run=''):
             parts = (major, minor + 1, 0)
         elif level == 1:
             parts = (major, minor, patch + 1)
+        # A withdrawn release (marked prerelease) is not a baseline, but its tag still holds the version.
+        occupied = {release['tag_name'] for release in releases}
+        while level and f'desktop-v{".".join(map(str, parts))}' in occupied:
+            parts = (parts[0], parts[1], parts[2] + 1)
 
     version = '.'.join(map(str, parts))
     if preview:
@@ -96,6 +100,15 @@ def select_version(releases, baseline, preview='', title='', run=''):
             raise ValueError('Preview requires numeric PR and run numbers')
         version += f'-pr.{preview}.{run}'
     return version, bool(preview or not candidates or level), previous
+
+
+def with_reservations(releases, source_tags):
+    known = {release['tag_name'] for release in releases}
+    for tag in source_tags:
+        if tag not in known and re.fullmatch(r'desktop-v(' + VERSION.pattern + r')', tag):
+            releases.append({'tag_name': tag, 'prerelease': False, 'draft': True,
+                             'target_commitish': git('rev-parse', f'{tag}^{{commit}}')})
+    return releases
 
 
 def main():
@@ -110,6 +123,22 @@ def main():
         f'repos/{os.environ["GITHUB_REPOSITORY"]}/releases?per_page=100',
     ], text=True))
     releases = [release for page in pages for release in page]
+    # Source tags retain source ancestry while distribution tags belong to a separate repository.
+    source_tags = git('tag', '--list', 'desktop-v*').splitlines()
+    destination = os.environ['DESKTOP_RELEASE_REPOSITORY']
+    if not destination or destination.lower() == os.environ['GITHUB_REPOSITORY'].lower():
+        raise ValueError('A separate distribution repository is required')
+    pages = json.loads(subprocess.check_output([
+        'gh', 'api', '--paginate', '--slurp', f'repos/{destination}/releases?per_page=100',
+    ], text=True))
+    for page in pages:
+        for release in page:
+            if not re.fullmatch(r'desktop-v(' + VERSION.pattern + r')', release['tag_name']):
+                continue
+            # Missing source reservations are an error, never a fresh baseline.
+            release['target_commitish'] = git('rev-parse', f'{release["tag_name"]}^{{commit}}')
+            releases.append(release)
+    releases = with_reservations(releases, source_tags)
     baseline = json.loads(Path('apps/desktop/package.json').read_text())['version']
     version, publish, previous = select_version(
         releases, baseline, os.environ.get('PR_NUMBER', ''),
