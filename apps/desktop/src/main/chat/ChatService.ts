@@ -4655,10 +4655,14 @@ interface DirectoryTurn {
   untrusted?: string;
 }
 
-/** Tools whose result is someone else's text - a web page, an MCP server, a skill - that can carry injected instructions. */
+/**
+ * Tools whose result is someone else's text - a web page, an MCP server, a skill, or another
+ * session's transcript, which may have read any of those - that can carry injected instructions.
+ */
 function readsUntrusted(name: string): boolean {
   return (
     name === WEB_FETCH_TOOL_NAME ||
+    name === 'session_read' ||
     name === WEB_SEARCH_TOOL_NAME ||
     name === 'skill' ||
     name.startsWith('browser_') ||
@@ -4686,7 +4690,9 @@ function untrustedReason(tool: string): string {
       ? 'an MCP server'
       : tool === 'skill'
         ? 'a skill'
-        : 'the web';
+        : tool === 'session_read'
+          ? 'another conversation'
+          : 'the web';
   return `Asked because this reply read content from ${source} (${tool}).`;
 }
 

@@ -151,11 +151,12 @@ const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'ni
 
 const ALWAYS_OUTBOUND = new Set(['scp', 'sftp', 'ftp', 'nc', 'ncat', 'netcat', 'socat', 'telnet', 'ssh']);
 
-const CURL_SENDS = /^(-d|--data.*|-F|--form.*|-T|--upload-file|--json)$/;
+// `-K` reads options from a file, which can hold `--data`.
+const CURL_SENDS = /^(-d|--data.*|-F|--form.*|-T|--upload-file|--json|-K|--config)$/;
 const WGET_SENDS = /^--(post|body)-(data|file)$/;
 
 /** Options that run a script given inline, which can open a socket no scan of the text sees. */
-const SHELL_SCRIPT = /^-[a-zA-Z]*c$/;
+const DASH_C = /^-[a-zA-Z]*c$/;
 const INLINE_SCRIPT: Record<string, RegExp> = {
   node: /^(-e|-p|--eval|--print)(=|$)/,
   ruby: /^-[a-zA-Z]*e$/,
@@ -163,11 +164,41 @@ const INLINE_SCRIPT: Record<string, RegExp> = {
   php: /^-r$/,
   bun: /^(-e|--eval)(=|$)/,
   osascript: /^-e$/,
-  sh: SHELL_SCRIPT,
-  bash: SHELL_SCRIPT,
-  zsh: SHELL_SCRIPT,
-  dash: SHELL_SCRIPT,
+  sh: DASH_C,
+  bash: DASH_C,
+  zsh: DASH_C,
+  dash: DASH_C,
 };
+
+/** Interpreters that run a script fed on stdin when given no script file: `python3 - <<'EOF'`, `echo x | sh`. */
+const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zsh|dash)$/;
+
+/**
+ * Whether a command's stdin is fed: piped into, a heredoc or here-string, or a `<` redirect. A
+ * here-string parses as the command's own child, and `cat <<'EOF' | python3` nests the pipe that
+ * feeds python3 inside the heredoc redirect, where python3 is that pipeline's first command.
+ */
+function readsStdin(node: Node): boolean {
+  if (node.namedChildren.some(child => child?.type === 'herestring_redirect')) return true;
+  let self: Node = node;
+  let parent = node.parent;
+  if (parent?.type === 'redirected_statement') {
+    const fed = parent.namedChildren.some(
+      child =>
+        child !== null &&
+        (child.type === 'heredoc_redirect' ||
+          child.type === 'herestring_redirect' ||
+          (child.type === 'file_redirect' && redirectOperator(child) === '<'))
+    );
+    if (fed) return true;
+    self = parent;
+    parent = parent.parent;
+  }
+  return (
+    parent?.type === 'pipeline' &&
+    (parent.namedChildren[0]?.id !== self.id || parent.parent?.type === 'heredoc_redirect')
+  );
+}
 
 /** The value an option sets, as `-X POST`, `-XPOST` or `--request=POST`; undefined when absent. */
 function optionValue(args: readonly string[], flags: readonly string[]): string | undefined {
@@ -190,7 +221,7 @@ function sendsBody(method: string | undefined): boolean {
  * script file, a decoded payload or a wrapper not listed here slips past, which is why a reply that
  * has read untrusted content asks before any command at all (see ChatService's DirectoryTurn.untrusted).
  */
-export function outboundReason(raw: readonly string[]): string | null {
+export function outboundReason(raw: readonly string[], stdin = false): string | null {
   const tokens = raw.map(unquote);
   let start = 0;
   while (start < tokens.length && WRAPPERS.has(basename(tokens[start]))) {
@@ -206,10 +237,15 @@ export function outboundReason(raw: readonly string[]): string | null {
   if (ALWAYS_OUTBOUND.has(program)) return program;
   if (program === 'curl') {
     const flag = args.find(
-      arg => CURL_SENDS.test(arg.split('=')[0]) || (!arg.startsWith('-X') && /^-[a-zA-Z]*[dFT]/.test(arg))
+      arg => CURL_SENDS.test(arg.split('=')[0]) || (!/^-[a-zA-Z]*X/.test(arg) && /^-[a-zA-Z]*[dFTK]/.test(arg))
     );
     if (flag) return `curl ${flag.split('=')[0]}`;
-    if (sendsBody(optionValue(args, ['-X', '--request']))) return 'curl --request';
+    // `-sX POST` sets the method too.
+    const method = optionValue(
+      args.map(arg => arg.replace(/^-[a-zA-Z]*X/, '-X')),
+      ['-X', '--request']
+    );
+    if (sendsBody(method)) return 'curl --request';
     return computed ? 'curl with a computed argument' : null;
   }
   if (program === 'wget') {
@@ -234,11 +270,30 @@ export function outboundReason(raw: readonly string[]): string | null {
     if (sub === 'remote' && (action === 'add' || action === 'set-url')) return `git remote ${action}`;
     return null;
   }
-  if (/^python[\d.]*$/.test(program)) return args.includes('-c') ? `${program} -c` : null;
+  if (program === 'gh') {
+    const [sub, action] = args.filter(arg => !arg.startsWith('-'));
+    if ((sub === 'gist' && (action === 'create' || action === 'edit')) || (sub === 'release' && action === 'upload')) {
+      return `gh ${sub} ${action}`;
+    }
+    const fields = args.some(arg => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(arg));
+    return sub === 'api' && (fields || sendsBody(optionValue(args, ['-X', '--method']))) ? 'gh api' : null;
+  }
+  if (program === 'aws' || program === 'gsutil' || program === 'gcloud') {
+    const positional = args.filter(arg => !arg.startsWith('-'));
+    const copies = positional.some(arg => /^(cp|mv|sync|rsync)$/.test(arg));
+    if (copies && /^(s3|gs):\/\//.test(positional.at(-1) ?? '')) return `${program} upload`;
+    return positional.includes('put-object') ? `${program} put-object` : null;
+  }
+  if (program === 'docker' || program === 'podman') {
+    return args.find(arg => !arg.startsWith('-')) === 'push' ? `${program} push` : null;
+  }
   if (program === 'deno') return args[0] === 'eval' ? 'deno eval' : null;
   if (program === 'eval') return 'eval';
-  const inline = args.find(arg => INLINE_SCRIPT[program]?.test(arg));
+  const inline = args.find(arg => (/^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program])?.test(arg));
   if (inline) return `${program} ${inline.split('=')[0]}`;
+  if (stdin && STDIN_SCRIPT.test(program) && args.every(arg => arg.startsWith('-'))) {
+    return `${program} reading a script from stdin`;
+  }
   if ((program === 'npm' || program === 'pnpm' || program === 'yarn') && args.includes('publish')) {
     return `${program} publish`;
   }
@@ -329,7 +384,7 @@ export async function scanShell(
         always: `${arityPrefix(normalised).join(' ')} *`,
         coverable: !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens),
       });
-      const sends = outboundReason(tokens);
+      const sends = outboundReason(tokens, readsStdin(node));
       if (sends) outbound.add(sends);
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
