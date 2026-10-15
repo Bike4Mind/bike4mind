@@ -387,6 +387,38 @@ describe('nextRouteForContract', () => {
     });
   });
 
+  describe('deprecated contracts', () => {
+    const deprecated = { since: '2026-10-15', sunset: '2027-01-15', successor: '/api/v1/fixtures' };
+
+    it('sends Deprecation, Sunset and Link on a handled response', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(makeContract({ deprecated })).post((_req, res) => res.json({ ok: true }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res.getHeader('Deprecation')).toBe('@1792022400');
+      expect(res.getHeader('Sunset')).toBe('Fri, 15 Jan 2027 00:00:00 GMT');
+      expect(res.getHeader('Link')).toBe('</api/v1/fixtures>; rel="successor-version"');
+    });
+
+    it('still sends them when the body fails validation', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(makeContract({ deprecated })).post((_req, res) => res.json({ ok: true }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x', body: { message: 1 } });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res.getHeader('Sunset')).toBe('Fri, 15 Jan 2027 00:00:00 GMT');
+    });
+
+    it('sends none on a contract that is not deprecated', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(makeContract()).post((_req, res) => res.json({ ok: true }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res.getHeader('Deprecation')).toBeUndefined();
+    });
+  });
+
   describe('verb binding (P3-1)', () => {
     it('throws when a handler is registered on a verb other than the contract method', () => {
       // A POST contract wired via .get(handler) would serve GET with validation on the

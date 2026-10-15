@@ -1,6 +1,7 @@
 import { baseApi } from './baseApi';
 import {
   BadRequestError,
+  deprecationHeaders,
   isZodError,
   type EndpointContract,
   type PathParamsOf,
@@ -91,6 +92,16 @@ export function nextRouteForContract<C extends EndpointContract>(
       throw error;
     }
   };
+
+  // Ahead of everything else in the prelude so a validation failure or a rate-limit
+  // rejection still tells the caller the endpoint is going away.
+  const deprecation = contract.deprecated;
+  if (deprecation) {
+    prelude.push((_req, res, next) => {
+      for (const [name, value] of Object.entries(deprecationHeaders(deprecation))) res.setHeader(name, value);
+      next();
+    });
+  }
 
   // Prepended first so it runs BEFORE validation: a malformed body still counts
   // against the limiter (see the function-doc note on ordering).

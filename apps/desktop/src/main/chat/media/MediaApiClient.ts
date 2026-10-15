@@ -4,13 +4,17 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
   CreateFileUploadResponseSchema,
   FileResponseSchema,
+  ListMusicModelsResponseSchema,
+  MusicGenerationSchema,
   VideoGenerationSchema,
   ttsBase64ResponseSchema,
   type CreateFileUploadResponse,
   type CreateVideoGenerationBody,
   type FileResponse,
   type VideoGeneration,
-  type MusicRequest,
+  type CreateMusicGenerationBody,
+  type MusicGeneration,
+  type PublicMusicModel,
   type SoundEffectsRequest,
   type TTSRequest,
   type TtsBase64Response,
@@ -287,8 +291,42 @@ export class MediaApiClient {
     return this.postForAudio('/api/ai/sound-effects', request, 'Sound-effect generation');
   }
 
-  generateMusic(request: MusicRequest): Promise<GeneratedAudio> {
-    return this.postForAudio('/api/ai/music', request, 'Music generation');
+  /** Music models this caller can use right now, in the server's order. */
+  async listMusicModels(): Promise<PublicMusicModel[]> {
+    try {
+      const response = await this.api.get<unknown>('/api/v1/music-models', { timeout: TIMEOUT_MS.download });
+      return ListMusicModelsResponseSchema.parse(response).models;
+    } catch (error) {
+      throw toMediaError(error, 'Listing music models');
+    }
+  }
+
+  /**
+   * Start a music job. Returns as soon as it is queued; the song renders server-side.
+   * `idempotencyKey` makes a retried submit of the same call return the same job, not a second bill.
+   */
+  async createMusicGeneration(body: CreateMusicGenerationBody, idempotencyKey: string): Promise<MusicGeneration> {
+    try {
+      const response = await this.api.post<unknown>('/api/v1/music-generations', body, {
+        timeout: TIMEOUT_MS.submit,
+        headers: { 'Idempotency-Key': idempotencyKey },
+      });
+      return MusicGenerationSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Music generation');
+    }
+  }
+
+  async getMusicGeneration(jobId: string, signal?: AbortSignal): Promise<MusicGeneration> {
+    try {
+      const response = await this.api.get<unknown>(`/api/v1/music-generations/${encodeURIComponent(jobId)}`, {
+        timeout: TIMEOUT_MS.download,
+        signal,
+      });
+      return MusicGenerationSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Reading the music job');
+    }
   }
 
   /**

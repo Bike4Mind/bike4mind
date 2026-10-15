@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
   ASPECT_RATIOS,
-  DEFAULT_MUSIC_LENGTH_MS,
-  DEFAULT_MUSIC_MODEL_ID,
   ImageModels,
   RESOLUTION_TIERS,
   TTS_MAX_INPUT_CHARS,
+  type PublicMusicModel,
   type VideoModel,
   type VoiceGenerationVendor,
 } from '@bike4mind/common';
@@ -339,52 +338,86 @@ export const generateSoundEffectTool: ToolDefinition = {
   },
 };
 
+/**
+ * The model for a song. The server lists only models this caller can use, so the pick is the
+ * first one that is not a provider-labelled preview (which can be retired at short notice),
+ * and the first of all when every one is a preview.
+ */
+async function resolveMusicModel(media: MediaContext): Promise<PublicMusicModel> {
+  const offered = await media.client.listMusicModels();
+  const model = offered.find(candidate => !candidate.preview) ?? offered[0];
+  if (!model) throw new MediaToolError('No music models are available on this server.');
+  return model;
+}
+
+function describeMusicLength(durationSeconds: number | undefined): string {
+  return durationSeconds === undefined ? 'a track of the default length' : `${durationSeconds}s of music`;
+}
+
+function optionalDurationSeconds(input: Record<string, unknown>): number | undefined {
+  const value = optionalNumber(input, 'durationSeconds');
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error('"durationSeconds" must be a positive whole number of seconds.');
+  }
+  return value;
+}
+
 export const generateMusicTool: ToolDefinition = {
   schema: {
     name: 'generate_music',
     description:
-      'Generate a background-music track from a text prompt and give the user a player for it. ' +
-      'Costs the user credits, billed by length. Requires an ElevenLabs key on the server.',
+      'Generate a song or background-music track from a text prompt and give the user a player for it. ' +
+      'Costs the user credits. It renders as a background job on the server, usually in under a couple ' +
+      "of minutes, and the song is also saved to the user's Files.",
     parameters: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'The track to generate, e.g. "calm lo-fi study beat".' },
-        lengthMs: { type: 'number', description: 'Track length in milliseconds, 3000-120000. Defaults to 10000.' },
-        forceInstrumental: { type: 'boolean', description: 'Suppress vocals.' },
+        durationSeconds: {
+          type: 'number',
+          description: "Track length in whole seconds. Omit for the model's default length.",
+        },
+        instrumental: { type: 'boolean', description: 'true for no vocals.' },
       },
       required: ['prompt'],
     },
   },
 
-  approval(input) {
+  async approval(input, context) {
     const prompt = requireString(input, 'prompt');
-    const lengthMs = optionalNumber(input, 'lengthMs') ?? DEFAULT_MUSIC_LENGTH_MS;
+    const durationSeconds = optionalDurationSeconds(input);
+    const instrumental = typeof input.instrumental === 'boolean' ? input.instrumental : undefined;
+    const model = await resolveMusicModel(requireMedia(context));
 
     return {
       detail:
-        `Generate ${Math.round(lengthMs / 1000)}s of music with elevenlabs.\n` +
-        'This spends credits on your Bike4Mind account, billed by track length.\n\n' +
+        `Generate ${describeMusicLength(durationSeconds)} with ${model.display_name}.\n` +
+        'This spends credits on your Bike4Mind account.\n\n' +
         excerpt(prompt),
-      key: `generate_music:${lengthMs}:${prompt}`,
+      key: `generate_music:${model.id}:${durationSeconds ?? 'default'}:${instrumental ?? 'default'}:${prompt}`,
     } satisfies ApprovalPrompt;
   },
 
   async run(input, context) {
     const media = requireMedia(context);
-    const lengthMs = optionalNumber(input, 'lengthMs') ?? DEFAULT_MUSIC_LENGTH_MS;
+    const prompt = requireString(input, 'prompt');
+    const durationSeconds = optionalDurationSeconds(input);
 
     return reporting(context, async () => {
+      const model = await resolveMusicModel(media);
+      context.report?.progress('Rendering the song...');
       const outcome = await generateMusic(
         {
-          provider: 'elevenlabs',
-          prompt: requireString(input, 'prompt'),
-          lengthMs,
-          modelId: DEFAULT_MUSIC_MODEL_ID,
-          ...(typeof input.forceInstrumental === 'boolean' ? { forceInstrumental: input.forceInstrumental } : {}),
+          model: model.id,
+          prompt,
+          ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+          ...(typeof input.instrumental === 'boolean' ? { instrumental: input.instrumental } : {}),
         },
-        audioDeps(context, media)
+        audioDeps(context, media),
+        { signal: context.signal }
       );
-      return describeAudio(context, outcome, `${Math.round(lengthMs / 1000)}s of music`);
+      return describeAudio(context, outcome, describeMusicLength(durationSeconds));
     });
   },
 };

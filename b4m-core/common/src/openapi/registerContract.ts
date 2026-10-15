@@ -7,6 +7,7 @@ import { ErrorResponse, DEPRECATED_NAME_METADATA } from './schemas';
 // which imports @bike4mind/hearth - absent in the install-only CI openapi job.
 import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../schemas/chat';
 import type { EndpointContract } from '../api-contract';
+import { deprecationHeaders, deprecationNotice } from '../api-contract/deprecation';
 
 type ContractSchema = z.ZodTypeAny | { type: 'string'; contentEncoding: 'binary' };
 type ContractResponse = {
@@ -42,6 +43,12 @@ function annotateInheritedName(schema: z.ZodTypeAny): z.ZodTypeAny {
   if (!inherited || inherited !== ApiErrorSchema.shape.name || !objectSchema.extend) return schema;
   return objectSchema.extend({ name: inherited.openapi(DEPRECATED_NAME_METADATA) });
 }
+
+const DEPRECATION_HEADER_DOCS: Record<string, string> = {
+  Deprecation: 'RFC 9745: when this endpoint was deprecated.',
+  Sunset: 'RFC 8594: the first day this endpoint may stop being served.',
+  Link: 'RFC 8288: the replacement endpoint (`rel="successor-version"`).',
+};
 
 /** The auto-injected scope 403's body: one shared component, $ref'd by every operation. */
 const SCOPE_FORBIDDEN_RESPONSE = annotateInheritedName(ScopeForbiddenErrorSchema).openapi('ScopeForbiddenResponse');
@@ -133,6 +140,17 @@ export function registerContract(contract: EndpointContract): void {
               ...(body.example !== undefined && { example: body.example }),
             });
 
+  // Only the contract's own statuses: the adapter sets these headers just ahead of the
+  // handler, so the 401/403/405 that baseApi answers earlier never carry them.
+  const deprecationHeaderDocs: Record<string, string> = contract.deprecated
+    ? Object.fromEntries(
+        Object.entries(deprecationHeaders(contract.deprecated)).map(([name, value]) => [
+          name,
+          `${DEPRECATION_HEADER_DOCS[name]} Always \`${value}\` on this endpoint.`,
+        ])
+      )
+    : {};
+
   const responses: Record<string, ContractResponse> = {};
   for (const [status, spec] of Object.entries(contract.responses)) {
     const content: Record<string, { schema: ContractSchema }> = {
@@ -162,12 +180,13 @@ export function registerContract(contract: EndpointContract): void {
       );
     }
 
+    const headers = { ...spec.headers, ...deprecationHeaderDocs };
     responses[status] = {
       description: spec.description,
       ...(!spec.noBody && { content }),
-      ...(spec.headers && {
+      ...(Object.keys(headers).length > 0 && {
         headers: Object.fromEntries(
-          Object.entries(spec.headers).map(([name, description]) => [
+          Object.entries(headers).map(([name, description]) => [
             name,
             { description, schema: { type: 'string' as const } },
           ])
@@ -238,7 +257,10 @@ export function registerContract(contract: EndpointContract): void {
     path: contract.path,
     operationId: contract.operationId,
     summary: contract.summary,
-    description: contract.description,
+    description: contract.deprecated
+      ? [deprecationNotice(contract.deprecated), contract.description].filter(Boolean).join(' ')
+      : contract.description,
+    ...(contract.deprecated && { deprecated: true }),
     tags: contract.tags,
     security,
     request:

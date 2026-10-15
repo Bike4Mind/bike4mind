@@ -206,3 +206,42 @@ describe('registerContract - streaming contracts', () => {
     expect(op.responses?.['422']).toMatchObject(errorResponse);
   });
 });
+
+describe('registerContract - deprecated contracts', () => {
+  const deprecatedContract: EndpointContract = {
+    ...contract,
+    method: 'post',
+    operationId: 'createFixtureDeprecated',
+    path: '/api/v1/fixture-deprecated',
+    pathParams: undefined,
+    queryParams: undefined,
+    description: 'Original description.',
+    deprecated: { since: '2026-10-15', sunset: '2027-01-15', successor: '/api/v1/fixture-successor' },
+  };
+  registerContract(deprecatedContract);
+  const generated = new OpenApiGeneratorV31(registry.definitions).generateDocument({
+    openapi: '3.1.0',
+    info: { title: 'fixture', version: '0.0.0' },
+  });
+  const deprecatedOperation = getOperation(generated, deprecatedContract.path, 'post') as FixtureOperation & {
+    deprecated?: boolean;
+    description?: string;
+  };
+
+  it('flags the operation and leads its description with the sunset and successor', () => {
+    expect(deprecatedOperation.deprecated).toBe(true);
+    expect(deprecatedOperation.description).toBe(
+      '**Deprecated, sunset 2027-01-15.** Use `/api/v1/fixture-successor` instead. Original description.'
+    );
+  });
+
+  it("documents the deprecation headers on the contract's own statuses only", () => {
+    const responses = deprecatedOperation.responses as Record<string, { headers?: Record<string, unknown> }>;
+    expect(Object.keys(responses['200'].headers ?? {})).toEqual(['Deprecation', 'Sunset', 'Link']);
+    expect(responses['405'].headers).not.toHaveProperty('Sunset');
+  });
+
+  it('leaves a non-deprecated operation unflagged', () => {
+    expect(operation).not.toHaveProperty('deprecated');
+  });
+});
