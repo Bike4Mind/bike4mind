@@ -58,6 +58,7 @@ export function limitMusicTracksPerRun(
       slots,
       logger,
       logTag: '[AgentMusic]',
+      releaseNoun: 'song',
       refusal: {
         ok: false,
         status: 403,

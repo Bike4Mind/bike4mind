@@ -26,6 +26,8 @@ type LimitJobsPerRunOptions<TResult> = {
   logger: Logger;
   /** Prefixes the release-failure warning, e.g. '[AgentVideo]'. */
   logTag: string;
+  /** The generation unit named in the release-failure warning, e.g. 'clip' or 'song'. */
+  releaseNoun: string;
   /** The tool result the model sees once the cap is reached. */
   refusal: TResult;
 };
@@ -41,14 +43,14 @@ const startedNewJob = (result: CreateJobResult): boolean => result.ok && result.
  */
 export function limitJobsPerRun<TInput, TResult extends CreateJobResult>(
   createJob: (input: TInput) => Promise<TResult>,
-  { questId, limit, slots, logger, logTag, refusal }: LimitJobsPerRunOptions<TResult>
+  { questId, limit, slots, logger, logTag, releaseNoun, refusal }: LimitJobsPerRunOptions<TResult>
 ): (input: TInput) => Promise<TResult> {
   return async input => {
     if (!(await slots.claim(questId, limit))) return refusal;
     const result = await createJob(input);
     if (!startedNewJob(result)) {
       await slots.release(questId).catch(error =>
-        logger.warn(`${logTag} failed to release an unused slot; the run keeps one fewer`, {
+        logger.warn(`${logTag} failed to release an unused ${releaseNoun} slot; the run keeps one fewer`, {
           questId,
           error: error instanceof Error ? error.message : String(error),
         })

@@ -59,6 +59,7 @@ export function limitVideoClipsPerRun(
       slots,
       logger,
       logTag: '[AgentVideo]',
+      releaseNoun: 'clip',
       refusal: {
         ok: false,
         status: 403,
