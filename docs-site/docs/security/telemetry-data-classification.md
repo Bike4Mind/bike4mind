@@ -162,3 +162,20 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Latency        | Response time in milliseconds     | 90 days (TTL index) | Usage stats                                      |
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
+
+## Integrations gallery usage
+
+The `/integrations` page records first-party `IntegrationsEvents` through the existing `/api/analytics/log-event` route. They are stored like every other counter event (`CounterLog` and the per-user `UserActivityCounter`), tied to the signed-in user, and sent to no third party. Like the rest of first-party usage analytics, they are not behind the attribution consent banner.
+
+| Event                         | Metadata                                                                      |
+| ----------------------------- | ----------------------------------------------------------------------------- |
+| Integrations Page Viewed      | `entryPoint`: `profile_menu`, `profile_tab_link` or `direct`                  |
+| Integrations Search Performed | `query`, `resultCount`, `tab`; sent once the query settles, not per keystroke |
+| Integrations Filter Changed   | `filter` (`category`, `status` or `kind`) and the chosen `value`              |
+| Integrations Card Opened      | `integrationId`                                                               |
+| Integrations Connect Clicked  | `integrationId`                                                               |
+| Integrations Request Toggled  | `integrationId`, `requested`                                                  |
+
+The search query is free text, so it is trimmed, lowercased and capped at 64 characters before it is sent. The entry point is named `entryPoint`, not `source`, because counter reports read `metadata.source` as the client a request came from.
+
+Integration requests themselves ("request this integration") are product data, not telemetry. Signed-in users see only per-integration counts and their own requests. Requester identity (name, email, organization) is readable only by admins, through `/api/admin/integrations/demand/*`, and an account's requests are removed when the account is deleted.

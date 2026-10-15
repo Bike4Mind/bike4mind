@@ -34,6 +34,7 @@ import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
 import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
+import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
 // /new and /notebooks/$id render through one shell (see notebookShellRoute).
@@ -366,9 +367,13 @@ const gearsRoute = createRoute({
 });
 
 // Integrations - the directory of every integration and model provider, with roadmap requests.
-const integrationsRoute = createRoute({
+// Exported so the page reads `?source=` (its analytics entry point) with integrationsRoute.useSearch().
+export const integrationsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/integrations',
+  validateSearch: (search: Record<string, unknown>): { source?: IntegrationsPageSource } => ({
+    source: isIntegrationsPageSource(search.source) ? search.source : undefined,
+  }),
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <IntegrationsPage />

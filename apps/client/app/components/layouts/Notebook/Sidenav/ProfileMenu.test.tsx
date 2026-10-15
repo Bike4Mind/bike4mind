@@ -362,11 +362,11 @@ describe('ProfileMenu - focus after navigating', () => {
     expect(document.activeElement).toBe(document.body);
   });
 
-  it('opens the Integrations page and closes the menu', () => {
+  it('opens the Integrations page, attributed to this menu, and closes the menu', () => {
     router.pathname = '/new';
     openMenu();
     fireEvent.click(screen.getByTestId('profile-menu-integrations'));
-    expect(router.navigate).toHaveBeenCalledWith({ to: '/integrations' });
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/integrations', search: { source: 'profile_menu' } });
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
   });
 });

@@ -1,16 +1,17 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { SettingKey } from '@bike4mind/common';
+import { IntegrationsEvents, type IntegrationsPageSource, type SettingKey } from '@bike4mind/common';
 import type { Connections } from './galleryModel';
 
 const h = vi.hoisted(() => ({
   toggleRequest: vi.fn(),
   connect: vi.fn(),
   navigate: vi.fn(),
+  logEvent: vi.fn(),
   stub: (testId: string) => ({ default: () => React.createElement('div', { 'data-testid': testId }) }),
 }));
 
@@ -36,6 +37,7 @@ vi.mock('./useIntegrationConnections', async importOriginal => ({
   useIntegrationConnect: () => ({ connect: h.connect, isPending: () => false }),
 }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsTablet: () => compact }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: h.logEvent }) }));
 vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiumRoutes: [] }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() } }));
@@ -65,13 +67,13 @@ vi.mock('@client/app/components/ProfileModal/SettingsTabContent/WebhookSubscript
 );
 vi.mock('@client/app/components/ProfileModal/SettingsTabContent/McpSection', () => h.stub('stub-mcp'));
 
-import IntegrationsGallery from './IntegrationsGallery';
+import IntegrationsGallery, { SEARCH_SETTLE_MS } from './IntegrationsGallery';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const renderGallery = () =>
+const renderGallery = (props: { source?: IntegrationsPageSource } = {}) =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <IntegrationsGallery />
+      <IntegrationsGallery {...props} />
     </CssVarsProvider>
   );
 
@@ -268,5 +270,113 @@ describe('IntegrationsGallery', () => {
     await userEvent.click(screen.getByTestId('integrations-tab-models'));
     expect(screen.getByTestId('integrations-model-card-anthropic')).toBeInTheDocument();
     expect(screen.queryAllByTestId(/^integrations-model-row-/)).toHaveLength(0);
+  });
+});
+
+describe('IntegrationsGallery analytics', () => {
+  const logged = (type: IntegrationsEvents) =>
+    h.logEvent.mock.calls.map(([event]) => event).filter(event => event.type === type);
+
+  it('records one page view per visit with its entry point, defaulting to direct', () => {
+    const { rerender, unmount } = renderGallery({ source: 'profile_menu' });
+    // The page strips ?source= right after; the new prop must not read as a second visit.
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <IntegrationsGallery source="direct" />
+      </CssVarsProvider>
+    );
+    expect(logged(IntegrationsEvents.INTEGRATIONS_PAGE_VIEWED)).toEqual([
+      { type: IntegrationsEvents.INTEGRATIONS_PAGE_VIEWED, metadata: { entryPoint: 'profile_menu' } },
+    ]);
+    unmount();
+
+    h.logEvent.mockClear();
+    renderGallery();
+    expect(logged(IntegrationsEvents.INTEGRATIONS_PAGE_VIEWED)).toEqual([
+      { type: IntegrationsEvents.INTEGRATIONS_PAGE_VIEWED, metadata: { entryPoint: 'direct' } },
+    ]);
+  });
+
+  it('records a search once the query settles, normalized, with what it found', () => {
+    vi.useFakeTimers();
+    try {
+      renderGallery();
+      const input = screen.getByTestId('integrations-search-input');
+      const typeQuery = (value: string) => fireEvent.change(input, { target: { value } });
+
+      typeQuery('No');
+      typeQuery('  NoSuch Thing ');
+      act(() => vi.advanceTimersByTime(SEARCH_SETTLE_MS - 1));
+      expect(logged(IntegrationsEvents.INTEGRATIONS_SEARCH_PERFORMED)).toEqual([]);
+      act(() => vi.advanceTimersByTime(1));
+      expect(logged(IntegrationsEvents.INTEGRATIONS_SEARCH_PERFORMED)).toEqual([
+        {
+          type: IntegrationsEvents.INTEGRATIONS_SEARCH_PERFORMED,
+          metadata: { query: 'nosuch thing', resultCount: 0, tab: 'integrations' },
+        },
+      ]);
+
+      // The same query read differently is not a new search; whitespace alone is none at all.
+      typeQuery('nosuch thing');
+      act(() => vi.advanceTimersByTime(SEARCH_SETTLE_MS));
+      typeQuery('   ');
+      act(() => vi.advanceTimersByTime(SEARCH_SETTLE_MS));
+      expect(logged(IntegrationsEvents.INTEGRATIONS_SEARCH_PERFORMED)).toHaveLength(1);
+
+      typeQuery('Notion');
+      act(() => vi.advanceTimersByTime(SEARCH_SETTLE_MS));
+      expect(logged(IntegrationsEvents.INTEGRATIONS_SEARCH_PERFORMED)[1].metadata).toEqual({
+        query: 'notion',
+        resultCount: 1,
+        tab: 'integrations',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('records each filter pick, but not the reset a tab switch performs', async () => {
+    renderGallery();
+    await pick('status', 'connected');
+    await pick('category', 'crm');
+    await userEvent.click(screen.getByTestId('integrations-tab-models'));
+    await pick('kind', 'music');
+
+    expect(logged(IntegrationsEvents.INTEGRATIONS_FILTER_CHANGED).map(event => event.metadata)).toEqual([
+      { filter: 'status', value: 'connected' },
+      { filter: 'category', value: 'crm' },
+      { filter: 'kind', value: 'music' },
+    ]);
+  });
+
+  it('records a drawer open and a connect click, from the row and from the drawer', async () => {
+    renderGallery();
+    await userEvent.click(screen.getByTestId('integrations-action-btn-github'));
+    expect(h.connect).toHaveBeenCalledWith('github');
+
+    await userEvent.click(screen.getByTestId('integrations-row-notion'));
+    const drawer = await screen.findByTestId('integrations-drawer');
+    await userEvent.click(within(drawer).getByTestId('integrations-drawer-connect-btn'));
+    expect(h.connect).toHaveBeenCalledWith('notion');
+
+    // The row's Connect button stops propagation, so it never also counts as opening the drawer.
+    expect(logged(IntegrationsEvents.INTEGRATIONS_CARD_OPENED).map(event => event.metadata)).toEqual([
+      { integrationId: 'notion' },
+    ]);
+    expect(logged(IntegrationsEvents.INTEGRATIONS_CONNECT_CLICKED).map(event => event.metadata)).toEqual([
+      { integrationId: 'github' },
+      { integrationId: 'notion' },
+    ]);
+  });
+
+  it('records a request toggle with the state the click asked for', async () => {
+    renderGallery();
+    await userEvent.click(screen.getByTestId('integrations-request-btn-hubspot'));
+    await userEvent.click(screen.getByTestId('integrations-request-btn-gmail'));
+
+    expect(logged(IntegrationsEvents.INTEGRATIONS_REQUEST_TOGGLED).map(event => event.metadata)).toEqual([
+      { integrationId: 'hubspot', requested: true },
+      { integrationId: 'gmail', requested: false },
+    ]);
   });
 });

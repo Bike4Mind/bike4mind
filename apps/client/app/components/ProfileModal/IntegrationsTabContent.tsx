@@ -39,7 +39,7 @@ const IntegrationsTabContent = () => {
         <Link
           component="button"
           level="body-sm"
-          onClick={() => navigate({ to: '/integrations' })}
+          onClick={() => navigate({ to: '/integrations', search: { source: 'profile_tab_link' } })}
           data-testid="profile-integrations-browse-link"
           sx={{ ml: 'auto' }}
         >

@@ -1,15 +1,19 @@
-import { useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Box, Button, Input, Option, Select, Stack, TabList, Tabs, Typography } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
 import {
   INTEGRATION_CATEGORY_LABELS,
+  IntegrationsEvents,
   MODEL_PROVIDERS,
   MODEL_PROVIDER_KIND_LABELS,
   canAccessTavern,
+  normalizeIntegrationsSearchQuery,
   type DerivedIntegration,
   type DerivedIntegrationStatus,
   type IntegrationCategory,
   type IntegrationId,
+  type IntegrationsGalleryFilter,
+  type IntegrationsPageSource,
   type ModelProvider,
   type ModelProviderKind,
 } from '@bike4mind/common';
@@ -17,6 +21,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useIsTablet } from '@client/app/hooks/useIsMobile';
 import { useIntegrationRequests, useToggleIntegrationRequest } from '@client/app/hooks/data/integrationRequests';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import IntegrationLogo from './IntegrationLogo';
@@ -38,7 +43,12 @@ import {
   type GalleryViewer,
   type StatusFilter,
 } from './galleryModel';
-import { isConnectable, useIntegrationConnect, useIntegrationConnections } from './useIntegrationConnections';
+import {
+  isConnectable,
+  useIntegrationConnect,
+  useIntegrationConnections,
+  type ConnectableId,
+} from './useIntegrationConnections';
 
 type GalleryTab = 'integrations' | 'models';
 
@@ -46,6 +56,9 @@ type GalleryTab = 'integrations' | 'models';
 const SET_UP_IDS: readonly IntegrationId[] = ['jupyter', 'email', 'blog', 'linkedin'];
 
 const MODEL_STATUS: DerivedIntegrationStatus = { status: 'available', betaTag: false, adminOnly: false };
+
+/** How long the search box must sit still before the query is recorded as a search. */
+export const SEARCH_SETTLE_MS = 800;
 
 interface FilterOption<T extends string> {
   value: T;
@@ -214,9 +227,10 @@ const CardText = ({ children }: { children: ReactNode }) => (
  * The /integrations page body: every integration and model provider in one searchable
  * directory, as dense rows on desktop and a card grid below md. Statuses come from the registry
  * in @bike4mind/common (deriveIntegrationStatus), connection state from the sources Profile >
- * Integrations reads.
+ * Integrations reads. Usage is recorded through useLogEvent (IntegrationsEvents in @bike4mind/common);
+ * `source` names the entry point the page was opened from.
  */
-const IntegrationsGallery = () => {
+const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageSource }) => {
   const currentUser = useUser(s => s.currentUser);
   const isAdmin = useUser(s => s.isAdmin);
   const { isFeatureEnabled } = useAdminSettingsCache();
@@ -233,6 +247,7 @@ const IntegrationsGallery = () => {
   const { connect, isPending } = useIntegrationConnect();
   const { data: requests } = useIntegrationRequests();
   const toggleRequest = useToggleIntegrationRequest();
+  const { mutate: logEvent } = useLogEvent();
 
   const [tab, setTab] = useState<GalleryTab>('integrations');
   const [query, setQuery] = useState('');
@@ -243,10 +258,63 @@ const IntegrationsGallery = () => {
 
   const rows = deriveGallery(viewer, connections);
   const counts = galleryCounts(rows);
+  const visibleIntegrations = filterIntegrations(rows, { query, category, status });
+  const visibleModels = filterModels(MODEL_PROVIDERS, { query, kind: modelKind });
+  const resultCount = tab === 'integrations' ? visibleIntegrations.length : visibleModels.length;
   const mine = new Set(requests?.mine ?? []);
   const countOf = (id: IntegrationId) => requests?.counts[id] ?? 0;
-  const onToggleRequest = (integrationId: IntegrationId, requested: boolean) =>
+
+  // A ref, not the dependency array, keeps this to one view per mount: StrictMode re-runs effects,
+  // and the page strips `?source=` right after, which changes the prop.
+  const viewLogged = useRef(false);
+  useEffect(() => {
+    if (viewLogged.current) return;
+    viewLogged.current = true;
+    logEvent({ type: IntegrationsEvents.INTEGRATIONS_PAGE_VIEWED, metadata: { entryPoint: source } });
+  }, [logEvent, source]);
+
+  // Recorded once the query settles. A filter or tab change while it settles restarts the wait, so
+  // resultCount is what the user is looking at; re-reading the same query records nothing new.
+  const lastLoggedQuery = useRef('');
+  useEffect(() => {
+    const normalized = normalizeIntegrationsSearchQuery(query);
+    if (!normalized) {
+      lastLoggedQuery.current = '';
+      return;
+    }
+    if (normalized === lastLoggedQuery.current) return;
+    const timer = setTimeout(() => {
+      lastLoggedQuery.current = normalized;
+      logEvent({
+        type: IntegrationsEvents.INTEGRATIONS_SEARCH_PERFORMED,
+        metadata: { query: normalized, resultCount, tab },
+      });
+    }, SEARCH_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [query, resultCount, tab, logEvent]);
+
+  const openDrawer = (integrationId: IntegrationId) => {
+    setOpenId(integrationId);
+    logEvent({ type: IntegrationsEvents.INTEGRATIONS_CARD_OPENED, metadata: { integrationId } });
+  };
+  const onConnect = (integrationId: ConnectableId) => {
+    logEvent({ type: IntegrationsEvents.INTEGRATIONS_CONNECT_CLICKED, metadata: { integrationId } });
+    connect(integrationId);
+  };
+  // `requested` is the state before the click, so the event records its opposite.
+  const onToggleRequest = (integrationId: IntegrationId, requested: boolean) => {
+    logEvent({
+      type: IntegrationsEvents.INTEGRATIONS_REQUEST_TOGGLED,
+      metadata: { integrationId, requested: !requested },
+    });
     toggleRequest.mutate({ integrationId, requested });
+  };
+  const changeFilter =
+    <T extends string>(filter: IntegrationsGalleryFilter, set: (value: T) => void) =>
+    (value: T) => {
+      set(value);
+      logEvent({ type: IntegrationsEvents.INTEGRATIONS_FILTER_CHANGED, metadata: { filter, value } });
+    };
 
   const changeTab = (next: GalleryTab) => {
     setTab(next);
@@ -258,7 +326,7 @@ const IntegrationsGallery = () => {
   const action = (row: DerivedIntegration, connection: ConnectionState | undefined) => {
     const { id, stage } = row.integration;
     const testId = `integrations-action-btn-${id}`;
-    const open = () => setOpenId(id);
+    const open = () => openDrawer(id);
     if (stage === 'planned') {
       return (
         <RequestButton
@@ -287,7 +355,9 @@ const IntegrationsGallery = () => {
       </Button>
     );
     if (row.status === 'connected') return button('Manage', open);
-    if (isConnectable(id)) return button(connection?.needsReconnect ? 'Reconnect' : 'Connect', () => connect(id), true);
+    if (isConnectable(id)) {
+      return button(connection?.needsReconnect ? 'Reconnect' : 'Connect', () => onConnect(id), true);
+    }
     return button(SET_UP_IDS.includes(id) ? 'Set up' : 'Details', open);
   };
 
@@ -296,12 +366,12 @@ const IntegrationsGallery = () => {
     role: 'button',
     tabIndex: 0,
     'data-testid': testId,
-    onClick: () => setOpenId(id),
+    onClick: () => openDrawer(id),
     onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
       if (event.target !== event.currentTarget) return;
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-        setOpenId(id);
+        openDrawer(id);
       }
     },
   });
@@ -450,7 +520,7 @@ const IntegrationsGallery = () => {
   }
 
   const integrationsBody = () => {
-    const groups = groupIntegrations(filterIntegrations(rows, { query, category, status }));
+    const groups = groupIntegrations(visibleIntegrations);
     if (groups.length === 0) return empty;
     return (
       <>
@@ -470,7 +540,7 @@ const IntegrationsGallery = () => {
   };
 
   const modelsBody = () => {
-    const groups = groupModels(filterModels(MODEL_PROVIDERS, { query, kind: modelKind }));
+    const groups = groupModels(visibleModels);
     if (groups.length === 0) return empty;
     return (
       <>
@@ -502,7 +572,7 @@ const IntegrationsGallery = () => {
             count: rows.filter(r => r.integration.category === c).length,
           }))}
           total={rows.length}
-          onChange={setCategory}
+          onChange={changeFilter<IntegrationCategory | 'all'>('category', setCategory)}
           testId="integrations-category"
         />
         <FilterSelect<Exclude<StatusFilter, 'all'>>
@@ -515,7 +585,7 @@ const IntegrationsGallery = () => {
             count: filterIntegrations(rows, { query: '', category: 'all', status: s }).length,
           }))}
           total={rows.length}
-          onChange={setStatus}
+          onChange={changeFilter<StatusFilter>('status', setStatus)}
           testId="integrations-status"
         />
       </>
@@ -530,7 +600,7 @@ const IntegrationsGallery = () => {
           count: MODEL_PROVIDERS.filter(m => m.kind === k).length,
         }))}
         total={MODEL_PROVIDERS.length}
-        onChange={setModelKind}
+        onChange={changeFilter<ModelProviderKind | 'all'>('kind', setModelKind)}
         testId="integrations-kind"
       />
     );
@@ -601,7 +671,7 @@ const IntegrationsGallery = () => {
         derived={open}
         connection={openId ? connections[openId] : undefined}
         connecting={openId ? isPending(openId) : false}
-        onConnect={connect}
+        onConnect={onConnect}
         requested={openId ? mine.has(openId) : false}
         requestCount={openId ? countOf(openId) : 0}
         onToggleRequest={onToggleRequest}

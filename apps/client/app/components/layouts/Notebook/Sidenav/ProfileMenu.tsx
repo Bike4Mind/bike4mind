@@ -467,7 +467,9 @@ const ProfileMenu = () => {
             icon={<PowerOutlinedIcon sx={{ fontSize: '18px' }} />}
             label={t('integrations.title', 'Integrations')}
             onClick={() => {
-              navigateFromMenu('/integrations', () => navigate({ to: '/integrations' }));
+              navigateFromMenu('/integrations', () =>
+                navigate({ to: '/integrations', search: { source: 'profile_menu' } })
+              );
             }}
           />
           <MenuRow
