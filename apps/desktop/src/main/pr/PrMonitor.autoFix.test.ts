@@ -139,7 +139,7 @@ describe('PrMonitor auto-fix', () => {
     expect(out.last().autoFix.note).toContain('gave up after 3 attempts');
 
     await monitor.setOption(SESSION, 'autoFix', true);
-    await settle();
+    await monitor.idle();
     expect(started).toHaveLength(1);
     expect(started[0].prompt).toContain(`Attempt 1 of ${MAX_AUTO_FIX_ATTEMPTS}`);
     expect(await store.get(SESSION)).toMatchObject({ autoFixAttempts: 1, autoFixMax: MAX_AUTO_FIX_ATTEMPTS });
@@ -170,7 +170,7 @@ describe('PrMonitor auto-fix', () => {
     const { store, monitor, out } = setup();
     await store.set(SESSION, { ...bound, autoFix: false, autoFixAttempts: 0 });
     await monitor.setOption(SESSION, 'autoFix', true);
-    await settle();
+    await monitor.idle();
     expect((await store.get(SESSION))?.autoFixMax).toBe(5);
     expect(out.last().autoFix.max).toBe(5);
   });
