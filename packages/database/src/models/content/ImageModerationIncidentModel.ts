@@ -68,6 +68,11 @@ export const ImageModerationIncident =
 // A confirmed_csam claim older than this is treated as a stuck submission, not a live one.
 export const STALE_CONFIRMED_CSAM_MS = 10 * 60 * 1000;
 
+// Incidents awaiting a verdict. reviewStatus is absent on pre-Q3 rows, so `null` matches a
+// missing field too. Shared so claimForNcmecSubmission and recordManualReport cannot diverge:
+// both are the "unreviewed" predicate, and only one of them may win a given race.
+const UNREVIEWED_REVIEW_STATUSES: (IncidentReviewStatus | null)[] = ['pending_review', null];
+
 export class ImageModerationIncidentRepository extends BaseRepository<IImageModerationIncidentDocument> {
   constructor(model: Model<IImageModerationIncidentDocument>) {
     super(model);
@@ -96,7 +101,7 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   /** Returns unreviewed incidents (reviewStatus absent or 'pending_review'), oldest first. */
   async findPendingReview(limit: number): Promise<IImageModerationIncidentDocument[]> {
     return this.model
-      .find({ reviewStatus: { $in: ['pending_review', null] } })
+      .find({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } })
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean() as unknown as IImageModerationIncidentDocument[];
@@ -127,7 +132,7 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    */
   async claimForNcmecSubmission(id: string): Promise<IImageModerationIncidentDocument | null> {
     return this.model.findOneAndUpdate(
-      { _id: id, reviewStatus: { $in: ['pending_review', null] } },
+      { _id: id, reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } },
       { $set: { reviewStatus: 'confirmed_csam' } },
       { new: true }
     );
@@ -143,7 +148,7 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
     report: { ncmecReportId: string; reportedBy: string }
   ): Promise<IImageModerationIncidentDocument | null> {
     return this.model.findOneAndUpdate(
-      { _id: id, reviewStatus: { $in: ['pending_review', null] } },
+      { _id: id, reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } },
       {
         $set: {
           reviewStatus: 'reported',
