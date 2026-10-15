@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
 import { WebSocketLlmBackend } from './WebSocketLlmBackend';
-import { isTransientNetworkError } from './retryPolicy';
 import type { WebSocketConnectionManager } from '../ws/WebSocketConnectionManager';
 import type { ApiClient } from '../auth/ApiClient';
 import type { CompletionRequest } from './streamTransport';
@@ -112,8 +111,8 @@ describe('WebSocketLlmBackend transport (open)', () => {
     ws.dropConnection();
 
     await expect(consumer).rejects.toThrow(/connection closed/i);
-    // Being classified transient is what earns the WebSocket path its retries.
-    expect(isTransientNetworkError(new Error('WebSocket connection closed during completion'))).toBe(true);
+    // The network kind is what earns the WebSocket path its retries.
+    await expect(consumer).rejects.toMatchObject({ kind: 'network' });
   });
 
   it('throws on a cli_completion_error frame', async () => {
@@ -140,6 +139,7 @@ describe('WebSocketLlmBackend transport (open)', () => {
     ws.emit({ action: 'cli_completion_error', error: 'Rate limit exceeded.', retryAfter: 120 });
 
     await expect(consumer).rejects.toThrow('Rate limit exceeded. (retry after 120s)');
+    await expect(consumer).rejects.toMatchObject({ kind: 'rate_limited', retryAfterMs: 120_000 });
   });
 
   it('throws a retryable error when the socket is not connected', async () => {
@@ -151,6 +151,6 @@ describe('WebSocketLlmBackend transport (open)', () => {
     })();
     await expect(consumer).rejects.toThrow('WebSocket is not connected');
     // Retryable so a retry racing auto-reconnect waits out another backoff window.
-    expect(isTransientNetworkError(new Error('WebSocket is not connected'))).toBe(true);
+    await expect(consumer).rejects.toMatchObject({ kind: 'network' });
   });
 });
