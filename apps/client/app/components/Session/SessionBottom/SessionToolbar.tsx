@@ -129,10 +129,11 @@ export function SessionToolbar(props: SessionToolbarProps) {
   const voiceRecordRef = useRef<VoiceRecordButtonRef>(null);
   const [recording, setRecording] = useState(false);
   const voiceCallActive = useConversationalVoiceStore(s => isCallActivePhase(s.phase));
-  // Only when the row is collapsed (a split view, a narrow window) does the voice pill take over the
-  // model, Tools and Agents' space; at full width they keep their place beside it.
+  // On phones and when the row is collapsed (a split view, a narrow window) the voice pill takes over
+  // the model, Tools and Agents' space, reaching to the plus button; at full desktop width they keep
+  // their place beside it.
   const [rowCompact, setRowCompact] = useState(false);
-  const stretchVoice = (recording || voiceCallActive) && rowCompact;
+  const stretchVoice = (recording || voiceCallActive) && (rowCompact || isMobile);
   const [isSettingsExiting] = useState(false);
 
   const sendBlockedLabel = sendBlockedReason ? getSendBlockedLabel(sendBlockedReason, t) : null;

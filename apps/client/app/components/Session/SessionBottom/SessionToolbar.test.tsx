@@ -162,7 +162,7 @@ describe('SessionToolbar - dictation', () => {
   });
 });
 
-describe('SessionToolbar - voice pill in a collapsed row', () => {
+describe('SessionToolbar - voice pill in a collapsed row or on phones', () => {
   it('keeps the model, Tools and Agents beside the recording at full width', () => {
     render(<SessionToolbar {...baseProps} />, { wrapper: Wrapper });
     act(() => mocks.voiceRecordingStarts.at(-1)?.());
@@ -173,6 +173,12 @@ describe('SessionToolbar - voice pill in a collapsed row', () => {
     mocks.rowCompact = true;
     render(<SessionToolbar {...baseProps} />, { wrapper: Wrapper });
     expect(screen.getByTestId('ai-settings-row')).toBeVisible();
+    act(() => mocks.voiceRecordingStarts.at(-1)?.());
+    expect(screen.getByTestId('ai-settings-row')).not.toBeVisible();
+  });
+
+  it('gives their space to the recording on phones, where the model holds the row alone', () => {
+    render(<SessionToolbar {...baseProps} isMobile />, { wrapper: Wrapper });
     act(() => mocks.voiceRecordingStarts.at(-1)?.());
     expect(screen.getByTestId('ai-settings-row')).not.toBeVisible();
   });
