@@ -159,6 +159,8 @@ const WGET_SENDS = /^--(post|body)/;
 
 /** Options that run a script given inline, which can open a socket no scan of the text sees. */
 const DASH_C = /^-[a-zA-Z]*c/;
+// Shells read `+c` like `-c` (`bash +ec '...'` runs the script); python reads `+c` as a file name.
+const SHELL_C = /^[+-][a-zA-Z]*c/;
 const INLINE_SCRIPT: Record<string, RegExp> = {
   node: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
   ruby: /^-[a-zA-Z]*e/,
@@ -166,10 +168,10 @@ const INLINE_SCRIPT: Record<string, RegExp> = {
   php: /^-r/,
   bun: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
   osascript: /^-e/,
-  sh: DASH_C,
-  bash: DASH_C,
-  zsh: DASH_C,
-  dash: DASH_C,
+  sh: SHELL_C,
+  bash: SHELL_C,
+  zsh: SHELL_C,
+  dash: SHELL_C,
 };
 
 /**
@@ -255,7 +257,7 @@ function interpreterOptions(program: string, args: readonly string[]): { options
   const letters = optionValueLetters(program);
   const shellWord = SHELL_OPTION_WORD.has(program);
   // Shells also take flags as `+e`, which turn an option off rather than ending the options.
-  const plusFlags = INLINE_SCRIPT[program] === DASH_C;
+  const plusFlags = INLINE_SCRIPT[program] === SHELL_C;
   const options: string[] = [];
   let i = 0;
   for (; i < args.length; i++) {
@@ -447,7 +449,7 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   if (inline) return `${program} ${(inlineScript?.exec(inline)?.[0] ?? inline.split('=')[0]).replace(/=$/, '')}`;
   // `bash -s` reads its script from stdin even when operands follow, as `curl ... | bash -s -- arg`.
   const scriptOperand =
-    INLINE_SCRIPT[program] === DASH_C && options.some(arg => /^-[a-zA-Z]*s/.test(arg)) ? '-' : operands[0];
+    INLINE_SCRIPT[program] === SHELL_C && options.some(arg => /^[+-][a-zA-Z]*s/.test(arg)) ? '-' : operands[0];
   if (
     stdin &&
     STDIN_SCRIPT.test(program) &&
