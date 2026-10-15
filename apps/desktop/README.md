@@ -190,6 +190,27 @@ partial manifest. Published assets are not overwritten on retry.
    and explicitly restart into the newer version. Never use a user's existing profile.
    Contract tests and local feed checks do not prove Squirrel.Mac signature acceptance.
 
+#### GitHub App setup (independent of Apple)
+
+1. In the organization settings, open Developer settings > GitHub Apps > New GitHub App.
+   Use a dedicated distribution publisher, disable webhooks, and limit installation to
+   this account. It needs no OAuth callback, user permissions, or event subscriptions.
+2. Under Repository permissions, grant Contents read/write. Metadata read is implicit;
+   leave every other permission unset. No organization permissions are needed.
+3. Install the App with Only select repositories and select only the distribution repo.
+   Do not add the source repo or grant this App a source tag-ruleset bypass.
+4. Set source Actions variable `DESKTOP_RELEASE_APP_ID` to the App's client ID, as required
+   by `actions/create-github-app-token@v3`. Generate a private key and upload its PEM
+   contents directly into source Actions secret `DESKTOP_RELEASE_APP_PRIVATE_KEY`.
+   Never paste the PEM into chat, commit it, or put it in the distribution repository.
+5. After credentials are available, verify the minted token can create and remove a
+   temporary destination draft, but cannot write to the source or another repository.
+   A successful test using a personal gh login does not prove the App's token scope.
+
+This can be configured while Apple access is pending. Leave `DESKTOP_MAC_SIGNING` unset
+until the Apple credentials are ready. PR packaging remains available; main distribution
+stays blocked, and no unsigned installer becomes an automatic update.
+
 Release notes list desktop-relevant first-parent changes and explain the semantic bump.
 The publication script is `apps/desktop/scripts/publish-release.sh`, shared with
 `apps/desktop/scripts/verify-publication.sh`. Run the latter from the repository root

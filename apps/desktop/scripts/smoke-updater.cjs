@@ -1,11 +1,13 @@
 // Checks real updater transport and hashing without launching or installing an app.
 const assert = require('node:assert/strict');
+const { Buffer } = require('node:buffer');
 const { createHash } = require('node:crypto');
 const fs = require('node:fs/promises');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { createRequire } = require('node:module');
+const { URL } = require('node:url');
 
 const dependencies = process.env.UPDATER_TEST_DEPENDENCIES;
 const load = dependencies ? createRequire(path.resolve(dependencies, 'package.json')) : require;
