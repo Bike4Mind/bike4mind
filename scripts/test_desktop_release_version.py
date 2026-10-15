@@ -15,6 +15,8 @@ class DesktopVersionTest(unittest.TestCase):
         self.git('init', '-q')
         self.git('config', 'user.email', 'test@example.com')
         self.git('config', 'user.name', 'Test')
+        Path('apps/desktop').mkdir(parents=True)
+        Path('apps/desktop/package.json').write_text('{"name":"@bike4mind/desktop"}')
         self.commit('feat(desktop): initial app')
         self.git('tag', 'desktop-v0.1.0')
         self.releases = [{'tag_name': 'desktop-v0.1.0', 'prerelease': False}]

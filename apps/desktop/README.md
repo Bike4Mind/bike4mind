@@ -67,6 +67,14 @@ auto-update can.
 `main` touching desktop, shared core packages, CLI sources, build configuration, or
 dependencies. It can also be run manually from Actions on `main`.
 
+Broad path filters only start a lightweight dependency/version job. Before packaging,
+`scripts/desktop_affected.py` compares the desktop workspace dependency closure on both
+sides, including dev/typecheck dependencies and transitively resolved lockfile entries.
+Unrelated workspace sources, web-only lockfile changes, and unrelated root dependencies
+skip all packaging, startup, validation, and publication jobs. The same check governs
+semantic bumps and release notes. Shared workspace/build configuration remains a safe
+rebuild trigger; malformed or missing historical inputs fail safe by requiring a build.
+
 Pull requests targeting `main` run the same builds and artifact validation without
 publishing a release. In the workflow run's Artifacts section, download
 `desktop-mac-arm64`, `desktop-mac-x64`, and `desktop-linux-x64` for installers,
