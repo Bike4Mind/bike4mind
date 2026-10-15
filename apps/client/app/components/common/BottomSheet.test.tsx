@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import BottomSheet from './BottomSheet';
@@ -38,6 +38,33 @@ describe('BottomSheet', () => {
     renderSheet();
     expect(screen.getByTestId('sheet')).toHaveAttribute('aria-label', 'Add files and more');
     expect(screen.getByRole('button', { name: 'Row' })).toBeInTheDocument();
+  });
+
+  it('renders nothing while closed, and unmounts once it has slid away', () => {
+    vi.useFakeTimers();
+    try {
+      const sheet = (open: boolean) => (
+        <CssVarsProvider theme={appTheme}>
+          <BottomSheet open={open} onClose={vi.fn()} label="Actions" data-testid="sheet">
+            <button>Row</button>
+          </BottomSheet>
+        </CssVarsProvider>
+      );
+      const { rerender } = render(sheet(false));
+      expect(screen.queryByTestId('sheet')).not.toBeInTheDocument();
+
+      rerender(sheet(true));
+      expect(screen.getByTestId('sheet')).toBeInTheDocument();
+      // The two frames it waits before sliding in.
+      act(() => vi.advanceTimersByTime(50));
+
+      rerender(sheet(false));
+      expect(screen.getByTestId('sheet')).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(400));
+      expect(screen.queryByTestId('sheet')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('closes on a long swipe down the handle', () => {

@@ -7,6 +7,8 @@ import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings
 const CLOSE_DISTANCE_PX = 80;
 const FLICK_MIN_PX = 24;
 const FLICK_SPEED_PX_PER_MS = 0.5;
+// Joy's --Drawer-transitionDuration (0.3s), plus a margin.
+const EXIT_MS = 350;
 
 interface BottomSheetProps {
   open: boolean;
@@ -32,6 +34,21 @@ const BottomSheet: FC<BottomSheetProps> = ({
   children,
   'data-testid': testId,
 }) => {
+  // Joy's Drawer stays in the DOM when closed, and every answer on a phone has a sheet, so this one
+  // is mounted only while open or sliding away. It mounts closed and opens a frame later, so the
+  // slide-in still plays.
+  const [entered, setEntered] = useState(open);
+  useEffect(() => {
+    if (!open) {
+      const timer = setTimeout(() => setEntered(false), EXIT_MS);
+      return () => clearTimeout(timer);
+    }
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => setEntered(true));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
+
   const [dragY, setDragY] = useState<number | null>(null);
   const drag = useRef<{ startY: number; startTime: number; y: number } | null>(null);
 
@@ -99,10 +116,12 @@ const BottomSheet: FC<BottomSheetProps> = ({
     if (d.y > CLOSE_DISTANCE_PX || (d.y > FLICK_MIN_PX && speed > FLICK_SPEED_PX_PER_MS)) onClose();
   };
 
+  if (!open && !entered) return null;
+
   return (
     <Drawer
       anchor="bottom"
-      open={open}
+      open={open && entered}
       onClose={onClose}
       slotProps={{
         content: {

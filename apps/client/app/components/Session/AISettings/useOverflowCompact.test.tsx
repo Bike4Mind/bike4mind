@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { useRef } from 'react';
 import { useOverflowCompact } from './useOverflowCompact';
 
@@ -15,12 +15,13 @@ class FakeResizeObserver {
   disconnect() {}
 }
 
-const Row = () => {
+const Row = ({ extra = false }: { extra?: boolean }) => {
   const ref = useRef<HTMLDivElement>(null);
   const compact = useOverflowCompact(ref);
   return (
     <div ref={ref} data-testid="row" data-compact={String(compact)}>
       <span />
+      {extra && <span />}
     </div>
   );
 };
@@ -46,6 +47,7 @@ beforeEach(() => {
     },
   });
   size.client = 500;
+  size.fullContent = 400;
 });
 
 afterEach(() => {
@@ -72,6 +74,14 @@ describe('useOverflowCompact', () => {
     resize(350);
     resize(380);
     expect(screen.getByTestId('row')).toHaveAttribute('data-compact', 'true');
+  });
+
+  it('goes compact when a new child overflows a row whose own size did not change', async () => {
+    const { rerender } = render(<Row />);
+    // No resize fires here: only the mutation observer can notice.
+    size.fullContent = 600;
+    rerender(<Row extra />);
+    await waitFor(() => expect(screen.getByTestId('row')).toHaveAttribute('data-compact', 'true'));
   });
 
   it('expands again once the row is as wide as the full content was', () => {

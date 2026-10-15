@@ -139,7 +139,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const [lowCreditsDismissedFor, setLowCreditsDismissedFor] = useState<string | null>(null);
   const lowCreditsWarningDismissed =
     !!currentUserId && (lowCreditsDismissedFor === currentUserId || isCreditNudgeDismissed(currentUserId));
-  // Band at which the user dismissed the context warning; re-shows on escalation.
 
   // Modal state: triggered modal, admin preview, format dialog, modal list
   const {
@@ -754,6 +753,13 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                             }
                           }}
                         />
+                      )}
+                      {/* The editor shows its placeholder only while empty, so with a draft in the box
+                          (a restored one, say) the notice and its Retry move above the text. */}
+                      {noModels && chatInputValue !== '' && (
+                        <Box sx={{ pb: '8px' }}>
+                          <NoModelsPlaceholder loadError={isModelsError} onRetry={() => void refetchModels()} />
+                        </Box>
                       )}
                       <LexicalChatInput
                         ref={lexicalInputRef}

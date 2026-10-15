@@ -163,6 +163,9 @@ export const VoiceRecordButton = forwardRef<VoiceRecordButtonRef, IProps>(
         const response = await api.post<{ text: string }>('/api/ai/transcribe', { fileKey });
         if (response?.data?.text) {
           onRecordingEnd(response.data.text);
+        } else {
+          // Silence transcribes to nothing; the parent still has to leave its recording state.
+          onRecordingError();
         }
       } catch (error) {
         console.error('Transcription error:', error);

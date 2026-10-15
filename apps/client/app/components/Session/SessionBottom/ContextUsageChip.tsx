@@ -102,13 +102,18 @@ const ContextUsageChip: FC<ContextUsageChipProps> = ({ usage, modelName, inputOv
     }
   }
 
-  const label = usage ? `${pct}%` : 'Too long';
-  const ariaLabel = usage ? `Context ${label} used` : `Context: ${label}`;
+  // A file cut to fit is the problem to fix, whatever the context holds, so it gets its own word.
+  const label = attachment ? 'File too large' : usage ? `${pct}%` : 'Too long';
+  const ariaLabel = usage && !attachment ? `Context ${label} used` : `Context: ${label}`;
 
   return (
     <Tooltip
       placement="top"
       variant="soft"
+      // The details live only here, so a tap shows them (Joy waits for a long press by default) and
+      // they stay long enough to read.
+      enterTouchDelay={0}
+      leaveTouchDelay={5000}
       title={
         <Box sx={{ maxWidth: 300, display: 'flex', flexDirection: 'column', gap: '4px' }}>
           {lines.map(line => (
