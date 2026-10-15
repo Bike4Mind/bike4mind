@@ -22,8 +22,12 @@ export function useRecentFolders(): RecentFolders {
   }, []);
 
   const remove = useCallback(async (path: string) => {
-    const left = await window.b4m.chat.removeRecentFolder(path);
-    if (live.current) setFolders(left);
+    try {
+      const left = await window.b4m.chat.removeRecentFolder(path);
+      if (live.current) setFolders(left);
+    } catch (error) {
+      console.warn('Could not remove recent folder', error);
+    }
   }, []);
 
   useEffect(() => {
