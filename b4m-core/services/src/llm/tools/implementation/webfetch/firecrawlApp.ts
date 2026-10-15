@@ -1,4 +1,5 @@
 import FirecrawlDefault from '@mendable/firecrawl-js';
+import { UnsafeScrapeTargetError } from './errors';
 import { unsafeFetchUrlReason } from './ssrfGuard';
 
 type FirecrawlAppCtor = new (config: FirecrawlAppConfig) => FirecrawlClient;
@@ -49,11 +50,6 @@ export interface FirecrawlScrapeResult {
 export interface FirecrawlClient {
   scrapeUrl: (url: string, params?: FirecrawlScrapeParams) => Promise<FirecrawlScrapeResult>;
   search: (query: string) => Promise<{ data: { url?: string; title?: string; description?: string }[] }>;
-}
-
-/** A scrape refused by the SSRF pre-flight; never worth retrying. */
-export class UnsafeScrapeTargetError extends Error {
-  name = 'UnsafeScrapeTargetError';
 }
 
 /**

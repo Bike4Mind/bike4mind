@@ -1,7 +1,8 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
 import FirecrawlDefault from '@mendable/firecrawl-js';
-import { FirecrawlApp, resolveFirecrawlApp, createFirecrawlApp, UnsafeScrapeTargetError } from './firecrawlApp';
+import { FirecrawlApp, resolveFirecrawlApp, createFirecrawlApp } from './firecrawlApp';
+import { UnsafeScrapeTargetError } from './errors';
 
 const requireCjs = createRequire(import.meta.url);
 

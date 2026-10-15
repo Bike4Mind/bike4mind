@@ -1,4 +1,4 @@
-import { UnsafeScrapeTargetError } from './firecrawlApp';
+import { UnsafeScrapeTargetError } from './errors';
 import type { FirecrawlClient, FirecrawlScrapeParams, FirecrawlScrapeResult } from './firecrawlApp';
 
 const DEFAULT_MAX_RETRIES = 3;
