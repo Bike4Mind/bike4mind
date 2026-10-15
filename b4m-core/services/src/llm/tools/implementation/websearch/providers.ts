@@ -384,13 +384,18 @@ function summarizeSerpApiRequest(url: URL): Record<string, string> {
   return summary;
 }
 
+function logSerpApiAttemptFailure(retryable: boolean, message: string, details: Record<string, unknown>): void {
+  if (retryable) Logger.globalInstance.warn(message, details);
+  else Logger.globalInstance.error(message, details);
+}
+
 /**
  * One SerpAPI organic-search attempt, bounded by SERPAPI_ATTEMPT_TIMEOUT_MS. Never throws -
  * failures (timeout, network error, non-OK response) come back as a tagged result so
  * serpApiSearch can decide whether to retry without duplicating the timeout/abort bookkeeping.
- * Logs at warn, not error: a failed attempt is often recovered by the retry or by the hedged
- * backup provider, and the error-level alert belongs to whichever caller sees the final failure
- * (performWebSearch, runLakeResearch).
+ * A transient failure logs at warn, not error: the retry or the hedged backup provider often
+ * recovers it, and the error-level alert belongs to whichever caller sees the final failure. A
+ * non-transient one (e.g. a revoked key) stays at error, since no retry or backup can fix it.
  */
 async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApiAttemptResult> {
   const controller = new AbortController();
@@ -409,7 +414,8 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     if (response.ok) return { ok: true, data: (await response.json()) as SerpApiResponse };
 
     const errorText = await response.text();
-    Logger.globalInstance.warn('❌ WebSearch Tool: API error details:', {
+    const retryable = response.status === 429 || response.status >= 500;
+    logSerpApiAttemptFailure(retryable, '❌ WebSearch Tool: API error details:', {
       status: response.status,
       statusText: response.statusText,
       errorText,
@@ -419,7 +425,7 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     });
     return {
       ok: false,
-      retryable: response.status === 429 || response.status >= 500,
+      retryable,
       timedOut: false,
       status: response.status,
       error: new Error(`SERP API error: ${response.statusText} - ${errorText}`),
@@ -429,7 +435,7 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     // A network-level failure (DNS, connection reset, TLS, ...) surfaces from fetch as a
     // TypeError; anything else is unexpected and is not treated as transient.
     const retryable = timedOut || error instanceof TypeError;
-    Logger.globalInstance.warn('❌ WebSearch Tool: SerpAPI request failed:', {
+    logSerpApiAttemptFailure(retryable, '❌ WebSearch Tool: SerpAPI request failed:', {
       attempt,
       request,
       timedOut,
@@ -772,6 +778,20 @@ function parseSearxngPlaces(data: unknown, limit: number): WebSearchPlace[] {
  * flaky local instance degrades to "no results" instead of throwing, matching how search is best-
  * effort in the agent loop.
  */
+/**
+ * Under throwOnError a hedge owns the outcome (the other provider may still answer) and alerts on
+ * the final failure itself, so the attempt logs at warn. Fail-soft returns [] and this log is the
+ * only record, so it stays at error.
+ */
+function logSearxngFailure(
+  options: WebSearchOptions | undefined,
+  message: string,
+  details: Record<string, unknown>
+): void {
+  if (options?.throwOnError) Logger.globalInstance.warn(message, details);
+  else Logger.globalInstance.error(message, details);
+}
+
 export function createSearxngProvider(baseUrl: string): WebSearchProvider {
   return {
     name: 'searxng',
@@ -819,7 +839,7 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
       try {
         const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
         if (!response.ok) {
-          Logger.globalInstance.error('❌ WebSearch Tool: SearXNG error', {
+          logSearxngFailure(options, '❌ WebSearch Tool: SearXNG error', {
             request,
             status: response.status,
             statusText: response.statusText,
@@ -836,7 +856,7 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
         });
         return results;
       } catch (error) {
-        Logger.globalInstance.error('❌ WebSearch Tool: SearXNG request failed:', {
+        logSearxngFailure(options, '❌ WebSearch Tool: SearXNG request failed:', {
           request,
           error: error instanceof Error ? error.message : String(error),
         });

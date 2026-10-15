@@ -230,6 +230,14 @@ class EmptySearchAnswer extends Error {}
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+function logHedgedProviderFailure(provider: WebSearchProvider, error: unknown): void {
+  if (error instanceof EmptySearchAnswer) return;
+  Logger.globalInstance.error('❌ WebSearch Tool: provider failed while the other answered empty', {
+    provider: provider.name,
+    error: errorMessage(error),
+  });
+}
+
 /**
  * Organic search as a hedged request: the lead starts at once, and the backup starts alongside it
  * once the lead has been silent for WEB_SEARCH_HEDGE_DELAY_MS, or as soon as the lead fails. The
@@ -288,8 +296,16 @@ export async function searchWithHedge(
     return await Promise.any([nonEmpty(fromLead, lead), nonEmpty(fromBackup, backup)]);
   } catch (error) {
     const [leadError, backupError] = error instanceof AggregateError ? error.errors : [error, error];
-    if (leadError instanceof EmptySearchAnswer) return { results: [], servedBy: lead };
-    if (backupError instanceof EmptySearchAnswer) return { results: [], servedBy: backup };
+    // One provider answered empty and the other failed: the caller sees "no results", not a throw,
+    // so this is the only error-level record of the failure (the providers log attempts at warn).
+    if (leadError instanceof EmptySearchAnswer) {
+      logHedgedProviderFailure(backup, backupError);
+      return { results: [], servedBy: lead };
+    }
+    if (backupError instanceof EmptySearchAnswer) {
+      logHedgedProviderFailure(lead, leadError);
+      return { results: [], servedBy: backup };
+    }
     throw new Error(
       `Web search failed on both providers. ${lead.name}: ${errorMessage(leadError)}; ` +
         `${backup.name}: ${errorMessage(backupError)}`
