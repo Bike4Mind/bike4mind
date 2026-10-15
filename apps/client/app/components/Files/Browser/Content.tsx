@@ -61,9 +61,9 @@ import { useQueryClient } from '@tanstack/react-query';
 const FILES_PER_PAGE = 20;
 
 // Desktop toolbar widths (px) at which its rows merge. With Research shown, tabs + actions need ~770 and
-// tabs + filters + actions ~1200.
+// tabs + filters + actions ~1260 (the single-row switch keeps some headroom above that).
 const TOOLBAR_TWO_ROW_MIN_WIDTH_PX = 800;
-const TOOLBAR_SINGLE_ROW_MIN_WIDTH_PX = 1240;
+const TOOLBAR_SINGLE_ROW_MIN_WIDTH_PX = 1280;
 
 const FileBrowserContent = () => {
   const { t } = useTranslation();
@@ -759,6 +759,10 @@ const FileBrowserContent = () => {
                 data-testid="file-browser-toolbar-actions"
                 sx={{
                   gridArea: 'actions',
+                  // Keep each action at its full label width; globals.css `min-width: 0` would otherwise let the
+                  // grid squeeze them until labels clip or wrap.
+                  whiteSpace: 'nowrap',
+                  '& > *': { flexShrink: 0 },
                   [`@container (min-width: ${TOOLBAR_TWO_ROW_MIN_WIDTH_PX}px)`]: { justifySelf: 'end' },
                 }}
               >

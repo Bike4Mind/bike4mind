@@ -66,7 +66,7 @@ test.describe('File Browser Search', () => {
 
   // The toolbar switches layout on the dialog's width; at each layout the search box must keep its floor and
   // stay clear of the actions (see the toolbar breakpoints in Files/Browser/Content.tsx).
-  for (const width of [1024, 1280, 1440, 1920]) {
+  for (const width of [1024, 1280, 1440, 1460, 1920]) {
     test(`should keep the search box usable at a ${width}px viewport`, async ({ page, basePage, fileUpload }) => {
       await page.setViewportSize({ width, height: 900 });
       await page.goto('/');
@@ -93,6 +93,12 @@ test.describe('File Browser Search', () => {
         search.y < actions.y + actions.height &&
         actions.y < search.y + search.height;
       expect(overlaps).toBe(false);
+
+      // No action may be squeezed below its label, even near the single-row switch (1460).
+      const clippedActions = await toolbarActions.evaluate(
+        el => Array.from(el.querySelectorAll('button')).filter(button => button.scrollWidth > button.clientWidth).length
+      );
+      expect(clippedActions).toBe(0);
     });
   }
 });
