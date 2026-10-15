@@ -10,12 +10,23 @@ import {
 /**
  * Auto-fix turns allowed per PR before it gives up.
  *
- * Three: one for the failure as reported, one for whatever that fix uncovered, and one last try.
- * Each is a full agent turn spending the user's credits with nobody watching, and a problem that
- * three attempts have not moved is one that needs a person, not a fourth guess. Re-checking the
- * box is that person deciding otherwise, and refills it.
+ * Five: a fix often uncovers the next failure, so the first few turns are spent converging. Each
+ * is a full agent turn spending the user's credits with nobody watching, and a problem that five
+ * attempts have not moved is one that needs a person, not a sixth guess. Re-checking the box is
+ * that person deciding otherwise, and refills it.
  */
-export const MAX_AUTO_FIX_ATTEMPTS = 3;
+export const MAX_AUTO_FIX_ATTEMPTS = 5;
+
+const LEGACY_MAX_AUTO_FIX_ATTEMPTS = 3;
+
+/**
+ * The attempts this PR's box was ticked for. Kept per binding so raising the limit never restarts
+ * a PR that already gave up: only re-ticking the box grants the new budget. A binding ticked before
+ * the budget was stored had the legacy one.
+ */
+export function autoFixBudget(binding: PrBinding): number {
+  return binding.autoFixMax ?? LEGACY_MAX_AUTO_FIX_ATTEMPTS;
+}
 
 /**
  * Whose comments auto-fix acts on: people with write access, and the PR's author. Anyone can
@@ -94,7 +105,8 @@ export function planAutoFix(binding: PrBinding, snapshot: PrSnapshot, busy: bool
   const reviews = actionableChangeRequests(snapshot, handled);
 
   if (!conflictNew && !ciNew && threads.length === 0 && reviews.length === 0) return { kind: 'none' };
-  if ((binding.autoFixAttempts ?? 0) >= MAX_AUTO_FIX_ATTEMPTS) return { kind: 'exhausted' };
+  const budget = autoFixBudget(binding);
+  if ((binding.autoFixAttempts ?? 0) >= budget) return { kind: 'exhausted' };
   if (busy) return { kind: 'wait' };
 
   const fingerprints = [
@@ -107,7 +119,7 @@ export function planAutoFix(binding: PrBinding, snapshot: PrSnapshot, busy: bool
   return {
     kind: 'start',
     fingerprints,
-    prompt: autoFixPrompt(snapshot, ciNew ? failing : [], threads, attempt, reviews, conflictNew),
+    prompt: autoFixPrompt(snapshot, ciNew ? failing : [], threads, attempt, budget, reviews, conflictNew),
     summary: autoFixSummary(snapshot.number, ciNew ? failing.length : 0, threads.length, reviews.length, conflictNew),
   };
 }
@@ -152,12 +164,13 @@ export function autoFixPrompt(
   failing: readonly PrCheck[],
   threads: readonly PrReviewThread[],
   attempt: number,
+  budget: number,
   reviews: readonly PrChangeRequest[] = [],
   conflicts = false
 ): string {
   const lines = [
     `[Auto-fix for pull request #${snapshot.number} (${snapshot.url}), started by the app because the user`,
-    `turned on "${AUTO_FIX_LABEL}" for this PR. Attempt ${attempt} of ${MAX_AUTO_FIX_ATTEMPTS}.]`,
+    `turned on "${AUTO_FIX_LABEL}" for this PR. Attempt ${attempt} of ${budget}.]`,
     '',
     `The PR's branch is \`${snapshot.headRefName}\` in ${snapshot.owner}/${snapshot.repo}.`,
   ];
