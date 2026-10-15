@@ -47,7 +47,7 @@ export async function createModelAdmission(user: IUserDocument) {
     if (!config) return true;
     const needsEntitlements = !isAdmin && (config.allowedEntitlements?.length ?? 0) > 0;
     const keys = needsEntitlements ? await (entitlementKeys ??= getUserEntitlements(user).catch(() => [])) : [];
-    return config.enabled && isModelAccessible(config, user.tags || [], isAdmin, keys);
+    return isModelAccessible(config, user.tags || [], isAdmin, keys);
   };
 
   return {
