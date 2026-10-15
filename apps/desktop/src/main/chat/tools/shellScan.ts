@@ -174,6 +174,66 @@ const INLINE_SCRIPT: Record<string, RegExp> = {
 };
 
 /**
+ * The option letters whose value is the rest of the flag cluster, so a letter after one is that
+ * value rather than another flag: `ruby -rset` loads the library `set`, it does not run `-e`.
+ * Keep in step with INLINE_SCRIPT above - a value letter must never be an inline-script flag.
+ */
+const OPTION_VALUE_LETTERS: Record<string, string> = {
+  python: 'WX',
+  node: 'r',
+  bun: 'r',
+  perl: 'IMmx',
+  ruby: 'rICCEKFx',
+  osascript: 'ls',
+  sh: 'oO',
+  bash: 'oO',
+  zsh: 'oO',
+  dash: 'o',
+};
+
+/** The long forms of the above whose value is the next argument rather than glued to the flag. */
+const OPTION_VALUE_WORDS: Record<string, readonly string[]> = {
+  node: ['--require', '--import'],
+  bun: ['--require'],
+  bash: ['--rcfile'],
+};
+
+function optionValueLetters(program: string): string {
+  return /^python[\d.]*$/.test(program) ? OPTION_VALUE_LETTERS.python : (OPTION_VALUE_LETTERS[program] ?? '');
+}
+
+/** A flag cluster cut at its first value-taking letter: everything after it is that value. */
+function flagRun(arg: string, letters: string): string {
+  if (arg.startsWith('--')) return arg;
+  const at = [...arg.slice(1)].findIndex(char => letters.includes(char));
+  return at === -1 ? arg : arg.slice(0, at + 2);
+}
+
+/** Whether an option takes its value in the next argument rather than glued to its flag. */
+function takesNextArgument(program: string, arg: string): boolean {
+  if (arg.startsWith('--')) return !arg.includes('=') && (OPTION_VALUE_WORDS[program] ?? []).includes(arg);
+  const cluster = arg.slice(1);
+  const at = [...cluster].findIndex(char => optionValueLetters(program).includes(char));
+  return at !== -1 && at === cluster.length - 1;
+}
+
+/**
+ * An interpreter's options up to its first operand. A value-taking option swallows the rest of its
+ * cluster (`ruby -rset x.rb`) or its next argument (`python3 -W ignore -c ...`), so neither the
+ * swallowed word nor a later script argument is read as one of the interpreter's own options.
+ */
+function interpreterOptions(program: string, args: readonly string[]): string[] {
+  const letters = optionValueLetters(program);
+  const options: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (!args[i].startsWith('-')) break;
+    options.push(flagRun(args[i], letters));
+    if (takesNextArgument(program, args[i])) i++;
+  }
+  return options;
+}
+
+/**
  * Interpreters that run a script fed on stdin when given no script file: `python3 - <<'EOF'`,
  * `echo x | sh`, and the shell builtins that read one in-process: `source <(curl https://x)`.
  */
@@ -332,10 +392,10 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   // A name built from a command substitution carries what it read into the lookup itself.
   if (RESOLVERS.has(program) && computed) return `${program} with a computed argument`;
   const inlineScript = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
-  // Only the option prefix counts: a script's own arguments (`python3 x.py -config`) are not the
-  // interpreter's options, and treating them as such asks on a command that cannot send anything.
-  const optionEnd = args.findIndex(arg => !arg.startsWith('-'));
-  const options = optionEnd === -1 ? args : args.slice(0, optionEnd);
+  // Only the interpreter's own options count: a script's own arguments (`python3 x.py -config`) are
+  // not options, and neither is the value of a value-taking option, whose word is swallowed before
+  // the operand starts (`python3 -W ignore -c ...` still runs an inline script).
+  const options = interpreterOptions(program, args);
   const inline = inlineScript ? options.find(arg => inlineScript.test(arg)) : undefined;
   if (inline) return `${program} ${(inlineScript?.exec(inline)?.[0] ?? inline.split('=')[0]).replace(/=$/, '')}`;
   if (
