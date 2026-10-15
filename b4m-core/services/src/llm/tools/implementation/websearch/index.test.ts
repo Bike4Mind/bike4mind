@@ -844,6 +844,18 @@ describe('webSearchTool - hedged backup and cache', () => {
       );
     });
 
+    it('logs one error naming the failed SerpAPI lead when the SearXNG backup answers empty', async () => {
+      configure('serpapi');
+      stubProviders({ serpOrganic: [{ status: 503 }, { status: 503 }], searxng: { status: 200, body: { results: [] } } });
+
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('provider failed while the other answered empty'),
+        expect.objectContaining({ provider: 'serpapi' })
+      );
+    });
+
     it('logs no error when both providers answer empty', async () => {
       configure('searxng');
       stubProviders({
