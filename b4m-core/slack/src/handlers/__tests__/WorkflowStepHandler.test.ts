@@ -222,6 +222,22 @@ describe('WorkflowStepHandler', () => {
       );
     });
 
+    it("does not make the workflow notebook the runner's last notebook", async () => {
+      vi.mocked(User.findOne).mockResolvedValue(createMockUser());
+      vi.mocked(createSession).mockResolvedValue({ id: 'session_123', name: 'Builder Notebook' } as any);
+
+      const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
+        user_context: ACTING_USER_CONTEXT,
+        notebook_name: 'Builder Notebook',
+      });
+
+      await handler.handleFunctionExecuted(event);
+
+      expect(createSession).toHaveBeenCalledTimes(1);
+      const options = vi.mocked(createSession).mock.calls[0][3] as { setLastNotebook?: boolean } | undefined;
+      expect(options?.setLastNotebook).not.toBe(true);
+    });
+
     it('should fail when user_context is missing', async () => {
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {});
 
