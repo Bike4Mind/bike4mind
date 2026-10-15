@@ -67,6 +67,12 @@ auto-update can.
 `main` touching desktop, shared core packages, CLI sources, build configuration, or
 dependencies. It can also be run manually from Actions on `main`.
 
+Pull requests targeting `main` run the same builds and artifact validation without
+publishing a release. In the workflow run's Artifacts section, download
+`desktop-installers` for the five installers and `SHA256SUMS.txt`. PR jobs have only
+read access to repository contents; the publication job runs only for pushes or manual
+dispatches on `main`. PR runs are isolated from the main release concurrency group.
+
 The workflow installs from the frozen lockfile, builds shared packages, runs desktop
 typechecks and tests on macOS and Linux, then packages both macOS architectures and
 Linux x64. Publication waits for both build jobs and validates all five artifacts.
