@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { estimateTtsCreditCost, TTS_DEFAULT_MODEL } from '@bike4mind/common';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -18,6 +19,7 @@ vi.mock('@client/app/components/Session/AISettings/AudioGenerationSettings', () 
 }));
 
 import { SoundEffectsStudioWorkspace, SpeechStudioWorkspace } from './AudioStudioWorkspace';
+import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
 import { useAudioStudioDraft } from './useAudioStudioDraft';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -31,6 +33,7 @@ beforeEach(() => {
   hookState.result = null;
   hookState.isGenerating = false;
   useAudioStudioDraft.setState({ text: { tts: '', 'sound-effects': '' } });
+  useAudioGenSettings.getState().reset();
   providers(['openai'], ['elevenlabs']);
 });
 
@@ -73,9 +76,19 @@ describe('AudioStudioWorkspace form', () => {
     expect(useAudioStudioDraft.getState().text.tts).toBe('Hello there');
   });
 
-  it('shows a live credit estimate', () => {
+  it('estimates credits the way the server preflight does, live as the text and provider change', () => {
+    const shownCredits = () =>
+      Number(screen.getByTestId('speech-studio-credit-estimate').textContent?.match(/~(\d+)/)?.[1]);
+    const text = 'x'.repeat(3000);
     renderWithTheme(<SpeechStudioWorkspace testId="speech-studio" />);
-    expect(screen.getByTestId('speech-studio-credit-estimate')).toHaveTextContent(/credits? estimated/);
+
+    fireEvent.change(screen.getByTestId('speech-studio-text-input').querySelector('textarea')!, {
+      target: { value: text },
+    });
+    expect(shownCredits()).toBe(estimateTtsCreditCost('openai', TTS_DEFAULT_MODEL.openai, text.length));
+
+    act(() => useAudioGenSettings.getState().setTtsProvider('elevenlabs'));
+    expect(shownCredits()).toBe(estimateTtsCreditCost('elevenlabs', TTS_DEFAULT_MODEL.elevenlabs, text.length));
   });
 
   it('plays a result Files could not keep, since it will not appear in the gallery', () => {

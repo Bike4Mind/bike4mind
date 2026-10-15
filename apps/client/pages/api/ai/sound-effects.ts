@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto';
 import {
-  ApiKeyType,
   isSupportedElevenLabsFormat,
   UnprocessableEntityError,
   shouldPersistGeneratedAudio,
@@ -15,13 +14,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
-
-// The stored key type each vendor needs. Resolved per-user first, then falling
-// back to the admin-configured key (getEffectiveApiKey), so the feature works
-// out of the box on platforms that provide a shared provider key.
-const PROVIDER_API_KEY_TYPE: Record<SoundGenerationVendor, ApiKeyType> = {
-  elevenlabs: ApiKeyType.elevenlabs,
-};
+import { AUDIO_VENDOR_API_KEY_TYPE } from '@server/utils/listUsableAudioProviders';
 
 // Each vendor's output-format check. Run before the reservation: an unmapped codec would be generated and
 // billed, then could be neither labelled nor saved.
@@ -53,7 +46,7 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,
-    { type: PROVIDER_API_KEY_TYPE[provider] },
+    { type: AUDIO_VENDOR_API_KEY_TYPE[provider] },
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
 
