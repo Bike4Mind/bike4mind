@@ -118,6 +118,24 @@ describe('gateSubagentTools', () => {
     expect(ran).toEqual([]);
   });
 
+  it('runs a confirming MCP server tool the parent never approved, since its writes only preview', async () => {
+    expect(await runGated('github__list_issues', [], [])).toBe('github__list_issues ok');
+    expect(await runGated('atlassian__jira_create_issue', [], [])).toBe('atlassian__jira_create_issue ok');
+    expect(ran).toEqual(['github__list_issues', 'atlassian__jira_create_issue']);
+  });
+
+  it('still refuses a confirming MCP server tool the user denied', async () => {
+    expect(await runGated('github__create_issue', [], ['github__create_issue'])).toMatch(/the user denied it/);
+    expect(ran).toEqual([]);
+  });
+
+  it('refuses an unapproved tool from any other MCP server, including one merely named like a confirming server', async () => {
+    expect(await runGated('notion__create_page', [], [])).toMatch(/needs the user's approval/);
+    expect(await runGated('githubx__create_issue', [], [])).toMatch(/needs the user's approval/);
+    expect(await runGated('mcp__github__create_issue', [], [])).toMatch(/needs the user's approval/);
+    expect(ran).toEqual([]);
+  });
+
   it('passes the delegation tools and the coordinator capture tool through untouched', () => {
     const tools = ['delegate_to_agent', 'coordinate_task', 'decompose_task'].map(makeTool);
     expect(gateSubagentTools(tools, { approvedTools: [], deniedTools: [] }, makeLogger())).toEqual(tools);

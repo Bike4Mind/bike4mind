@@ -25,13 +25,22 @@ export type McpPendingActionExtraction =
   | { kind: 'rejected'; reason: 'malformed' | 'untrusted-emitter' | 'unparseable'; result: string };
 
 /** Per confirming server, the write tools that gate on a confirm button. The host executors route by
- * the same sets (apps/client/server/utils/pendingActionTarget.ts). */
+ * the same sets (apps/client/server/utils/pendingActionTarget.ts). The subagent permission gate also
+ * trusts these servers' tools (isConfirmingMcpTool), so a server belongs here only if every one of its
+ * write tools previews instead of executing (pinned by
+ * b4m-core/mcp/src/shared/confirmingServers.previewGate.test.ts). */
 const CONFIRMABLE_TOOLS_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['github', GITHUB_CONFIRMABLE_TOOLS],
   ['atlassian', ATLASSIAN_CONFIRMABLE_TOOLS],
 ]);
 
 const MCP_NAMESPACE_SEPARATOR = '__';
+
+/** True for a namespaced `server__tool` id from a confirming server. */
+export function isConfirmingMcpTool(toolName: string): boolean {
+  const separatorIndex = toolName.indexOf(MCP_NAMESPACE_SEPARATOR);
+  return separatorIndex > 0 && CONFIRMABLE_TOOLS_BY_SERVER.has(toolName.slice(0, separatorIndex));
+}
 
 const CONFIRM_NEXT_STEP = 'Click the Confirm or Cancel button below to proceed.';
 

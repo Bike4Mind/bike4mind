@@ -11,6 +11,7 @@ import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
 import { MemberCreditCapError } from '../../creditService';
+import { isConfirmingMcpTool } from '../mcpPendingAction';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -37,6 +38,11 @@ export type SubagentToolPermissions = {
  * Wrap each tool so a call the parent's permission gate would not let through is refused
  * instead of run. A child has no approver to pause for, so `needs_approval` is a refusal
  * that tells the model to hand the step back to the parent, whose gate can ask the user.
+ *
+ * Confirming MCP servers' tools (github, atlassian) are the exception: they are agent-only, so
+ * the parent never holds them and could never take the step back. Their writes only preview and
+ * execute on the user's Confirm click, which is the approval the gate would otherwise ask for.
+ * A tool the user denied is still refused.
  */
 export function gateSubagentTools(
   tools: ICompletionOptionTools[],
@@ -49,7 +55,9 @@ export function gateSubagentTools(
 
     const toolFn: ICompletionOptionTools['toolFn'] = async (parameters, apiKey) => {
       const verdict = classifyToolPermission(toolName, permissions.approvedTools, permissions.deniedTools);
-      if (verdict === 'allowed') return tool.toolFn(parameters, apiKey);
+      if (verdict === 'allowed' || (verdict === 'needs_approval' && isConfirmingMcpTool(toolName))) {
+        return tool.toolFn(parameters, apiKey);
+      }
 
       logger.warn(`[SubagentOrchestrator] Refused subagent call to "${toolName}" (${verdict})`);
       return verdict === 'denied'
