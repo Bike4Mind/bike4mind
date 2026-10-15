@@ -65,6 +65,8 @@ jobs:
           persist-credentials: false
       - name: Test semantic version selection
         run: python3 -m unittest discover -s scripts -p test_desktop_release_version.py -v
+      - name: Test desktop release scripts
+        run: python3 -m unittest discover -s apps/desktop/scripts -p 'test_*.py' -v
       - name: Choose installer version
         id: version
         env:
