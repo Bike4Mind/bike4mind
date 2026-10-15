@@ -32,10 +32,13 @@ describe('StorageDriftRecordRepository.latestByUserIds', () => {
   const newer = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   it('returns the newest record per user and omits users never checked', async () => {
+    // Newer first: a query that drops $sort and keeps insertion order ($last) then fails. u9 is not
+    // requested, which pins the $match.
     await storageDriftRecordRepository.appendMany([
-      record('u1', 1000, 400, older),
       record('u1', 1000, 500, newer),
+      record('u1', 1000, 400, older),
       record('u2', 250, 250, newer),
+      record('u9', 900, 100, newer),
     ]);
 
     const latest = await storageDriftRecordRepository.latestByUserIds(['u1', 'u2', 'u3']);
@@ -43,6 +46,7 @@ describe('StorageDriftRecordRepository.latestByUserIds', () => {
     expect(latest.get('u1')?.truth).toBe(500);
     expect(latest.get('u2')?.truth).toBe(250);
     expect(latest.has('u3')).toBe(false);
+    expect(latest.has('u9')).toBe(false);
     expect(latest.size).toBe(2);
   });
 
