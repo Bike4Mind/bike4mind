@@ -67,6 +67,8 @@ Detection -> block (FabFile.moderationStatus = 'blocked')
           -> Human review: POST /api/admin/moderation-incidents/:id/verdict
                confirmed_csam  -> NCMEC CyberTip submitted -> reviewStatus = 'reported'
                false_positive  -> reviewStatus = 'false_positive' (no NCMEC submission)
+               record_manual_report -> filed by hand on the CyberTipline web form
+                                       -> reviewStatus = 'reported', reportChannel = 'manual'
 ```
 
 The triage queue returns incidents with `reviewStatus` absent or `'pending_review'`, oldest
@@ -116,6 +118,23 @@ than an explicit `'false'` uses the test host, so a missing value cannot post to
   | `mark_reported` | Operator confirmed with NCMEC that the tip was received; supply `ncmecReportId`. |
   | `requeue` | Operator confirmed with NCMEC that no tip was filed; moves back to `pending_review`. |
   | `retry_finish` | `/finish` failed but reportId is stored; re-calls `/finish` within NCMEC's 24-hour window. |
+
+**Manual reporting (web form):** the statute requires the report, not the API. Until ESP API
+credentials are provisioned (the `confirmed_csam` verdict returns 503 without them), or
+whenever the API is unavailable, an admin files the CyberTip by hand on the CyberTipline web
+form and records it with `{ verdict: "record_manual_report", ncmecReportId }`. This moves the
+incident from `pending_review`/absent straight to `'reported'` in one atomic write, stores
+`reportChannel: 'manual'` and the admin's user id in `reportedBy`, and needs no NCMEC
+credentials. The report id must be letters, digits and dashes only. It does not act on a
+`confirmed_csam` claim; resolve that through the recovery verdicts first: `retry_finish` when
+an unfinished report id is stored (once NCMEC's 24-hour window has passed, file by hand and
+use `mark_reported` with the new report id instead), otherwise (once the claim is stale) `mark_reported` if NCMEC
+holds a tip, or `requeue` followed by `record_manual_report` if it does not. A refused
+`record_manual_report` still logs the supplied report id.
+
+`reportChannel: 'manual'` marks incidents recorded through `record_manual_report`. An incident
+without it was recorded by the API path or by `mark_reported` / `retry_finish`. Every path to
+`'reported'` stamps `reportedAt` and stores the acting admin's user id in `reportedBy`.
 
 **Before going live:** validate the exact XML schema, element names, and endpoint paths with
 your NCMEC ESP representative. Run a full end-to-end test against the NCMEC test host

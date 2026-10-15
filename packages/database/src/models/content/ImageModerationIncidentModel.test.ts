@@ -106,9 +106,22 @@ describe('ImageModerationIncidentRepository', () => {
 
     it('persists ncmecReportId when provided', async () => {
       const inc = await imageModerationIncidentRepository.record(baseIncident());
-      const updated = await imageModerationIncidentRepository.updateReviewStatus(String(inc._id), 'reported', 'rpt-42');
+      const updated = await imageModerationIncidentRepository.updateReviewStatus(
+        String(inc._id),
+        'reported',
+        'rpt-42',
+        'admin-1'
+      );
       expect(updated?.reviewStatus).toBe('reported');
       expect(updated?.ncmecReportId).toBe('rpt-42');
+      expect(updated?.reportedBy).toBe('admin-1');
+      expect(updated?.reportedAt).toBeInstanceOf(Date);
+    });
+
+    it('does not set reportedAt for a non-reported status', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const updated = await imageModerationIncidentRepository.updateReviewStatus(String(inc._id), 'false_positive');
+      expect(updated?.reportedAt).toBeUndefined();
     });
 
     it('returns null when incident is already reported (idempotency guard)', async () => {
@@ -175,9 +188,12 @@ describe('ImageModerationIncidentRepository', () => {
       const out = await imageModerationIncidentRepository.resolveConfirmedCsam(id, {
         status: 'reported',
         ncmecReportId: 'RPT-M',
+        reportedBy: 'admin-1',
       });
       expect(out?.reviewStatus).toBe('reported');
       expect(out?.ncmecReportId).toBe('RPT-M');
+      expect(out?.reportedBy).toBe('admin-1');
+      expect(out?.reportedAt).toBeInstanceOf(Date);
     });
 
     it('requeues a stale confirmed_csam claim with no stored reportId', async () => {
@@ -190,7 +206,11 @@ describe('ImageModerationIncidentRepository', () => {
       const id = await claimed(false);
       expect(await imageModerationIncidentRepository.resolveConfirmedCsam(id, { status: 'pending_review' })).toBeNull();
       expect(
-        await imageModerationIncidentRepository.resolveConfirmedCsam(id, { status: 'reported', ncmecReportId: 'X' })
+        await imageModerationIncidentRepository.resolveConfirmedCsam(id, {
+          status: 'reported',
+          ncmecReportId: 'X',
+          reportedBy: 'admin-1',
+        })
       ).toBeNull();
       expect((await ImageModerationIncident.findById(id))?.reviewStatus).toBe('confirmed_csam');
     });
@@ -203,6 +223,7 @@ describe('ImageModerationIncidentRepository', () => {
       const out = await imageModerationIncidentRepository.resolveConfirmedCsam(id, {
         status: 'reported',
         ncmecReportId: 'RPT-UNFINISHED',
+        reportedBy: 'admin-1',
       });
       expect(out?.reviewStatus).toBe('reported');
     });
@@ -212,6 +233,55 @@ describe('ImageModerationIncidentRepository', () => {
       const id = String(inc._id);
       await backdate(id);
       expect(await imageModerationIncidentRepository.resolveConfirmedCsam(id, { status: 'pending_review' })).toBeNull();
+    });
+  });
+
+  describe('recordManualReport', () => {
+    const report = { ncmecReportId: '123456', reportedBy: 'admin-1' };
+
+    it('moves an unreviewed incident straight to reported with channel and admin', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const out = await imageModerationIncidentRepository.recordManualReport(String(inc._id), report);
+      expect(out?.reviewStatus).toBe('reported');
+      expect(out?.ncmecReportId).toBe('123456');
+      expect(out?.reportChannel).toBe('manual');
+      expect(out?.reportedBy).toBe('admin-1');
+      expect(out?.reportedAt).toBeInstanceOf(Date);
+    });
+
+    it('accepts pending_review', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      await ImageModerationIncident.findByIdAndUpdate(inc._id, { $set: { reviewStatus: 'pending_review' } });
+      const out = await imageModerationIncidentRepository.recordManualReport(String(inc._id), report);
+      expect(out?.reviewStatus).toBe('reported');
+    });
+
+    it('loses to an API claim that landed first, leaving the claim intact', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const id = String(inc._id);
+      await imageModerationIncidentRepository.claimForNcmecSubmission(id);
+      expect(await imageModerationIncidentRepository.recordManualReport(id, report)).toBeNull();
+      const doc = await ImageModerationIncident.findById(id);
+      expect(doc?.reviewStatus).toBe('confirmed_csam');
+      expect(doc?.ncmecReportId).toBeUndefined();
+    });
+
+    it('blocks a later API claim once recorded', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const id = String(inc._id);
+      await imageModerationIncidentRepository.recordManualReport(id, report);
+      expect(await imageModerationIncidentRepository.claimForNcmecSubmission(id)).toBeNull();
+    });
+
+    it('refuses reported and false_positive incidents without overwriting them', async () => {
+      const a = await imageModerationIncidentRepository.record(baseIncident());
+      const b = await imageModerationIncidentRepository.record(baseIncident());
+      await imageModerationIncidentRepository.updateReviewStatus(String(a._id), 'reported', 'rpt-api');
+      await imageModerationIncidentRepository.updateReviewStatus(String(b._id), 'false_positive');
+      expect(await imageModerationIncidentRepository.recordManualReport(String(a._id), report)).toBeNull();
+      expect(await imageModerationIncidentRepository.recordManualReport(String(b._id), report)).toBeNull();
+      expect((await ImageModerationIncident.findById(a._id))?.ncmecReportId).toBe('rpt-api');
+      expect((await ImageModerationIncident.findById(b._id))?.reviewStatus).toBe('false_positive');
     });
   });
 
