@@ -31,7 +31,7 @@ type WarnLogger = { warn: (message: string, ...args: unknown[]) => void };
  * AI edit keeps under their own keys in `versions[]` (see appendEditedVersion) and, for an in-chat generated asset,
  * the generated-bucket copy chat plays inline (`sourceMetadata.generatedCopyKey`). Revisions are deleted first and
  * best-effort; a failure on `filePath` or the generated copy still rejects.
- * Shared by the single-file delete, the notebook delete and the delete-all route so they cannot drift.
+ * Shared by the single-file and bulk delete (via deleteFabFile) and the delete-all route so they cannot drift.
  * A moderation-blocked file keeps its objects: they may be legal-hold evidence pending triage (see
  * isModerationEvidenceHold and FabFileModel.hardDeleteByIds). An unscannable-format block is not held.
  */
