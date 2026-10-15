@@ -361,8 +361,8 @@ describe('WorkflowStepHandler', () => {
           body: expect.objectContaining({
             historyCount: 0,
             enableAgents: false,
+            disableUserIntegrations: true,
             skipAutoOffers: true,
-            mcpServers: [],
             tools: [],
           }),
         })

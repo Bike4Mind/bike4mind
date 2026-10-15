@@ -329,8 +329,8 @@ export class WorkflowStepHandler {
           message,
           messageFileIds: [],
           // The prompt is builder-authored and the reply flows back to the builder, so the run gets
-          // none of the runner's context: no notebook history, no tools (agents, MCP, auto-offered
-          // knowledge/lake search). The notebook itself is fresh unless the builder named one.
+          // none of the runner's context: no notebook history, no user integrations (MCP, agents and
+          // delegation, skills) and no auto-offered tools such as knowledge/lake search.
           historyCount: 0,
           fabFileIds: [],
           dashboardParams: {
@@ -341,8 +341,8 @@ export class WorkflowStepHandler {
           enableMementos: false,
           enableArtifacts: false,
           enableAgents: false,
+          disableUserIntegrations: true,
           skipAutoOffers: true,
-          mcpServers: [],
           tools: [],
           organizationId: user.organizationId,
         },
