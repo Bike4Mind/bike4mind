@@ -91,7 +91,10 @@ test.describe('File Browser Search', () => {
       await expect(toolbarActions).toBeVisible({ timeout: TIMEOUTS.ACTION });
 
       // The row is only the crowded one with Research present (the search user enables it in search.setup.ts).
-      await expect(toolbarActions.getByRole('button')).toHaveCount(3);
+      // Count `button` elements rather than the button role: the Upload control is a Select whose trigger is a
+      // <button role="combobox">, so a role query resolves 2 of the 3 and the count would never hold.
+      await expect(toolbarActions.locator('button')).toHaveCount(3);
+      await expect(toolbarActions.getByRole('button', { name: /research/i })).toBeVisible();
 
       const search = await searchInput.boundingBox();
       const filters = await toolbarFilters.boundingBox();
