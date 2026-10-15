@@ -19,7 +19,7 @@ import {
 import { useUpdateSettings } from '@client/app/hooks/data/settings';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 
-// Both settings share this shape: a per-model override of the catalog's defaultEnabled.
+// Shared by both settings: per-model overrides of the catalog's defaultEnabled.
 type GenerationModelSettings = { enabledModels: Record<string, boolean> };
 
 type CatalogEntry = { displayName: string; provider: string; defaultEnabled: boolean; preview?: boolean };
@@ -69,7 +69,7 @@ const EMPTY_SETTINGS: GenerationModelSettings = { enabledModels: {} };
 
 function GenerationModelsSection<M extends Modality>({ section }: { section: GenerationModality<M> }) {
   const { modality, settingKey, title, icon, ids, catalog, schema, isEnabled } = section;
-  // One mutation per section: a save in flight locks only its own switches, since each section owns its own key.
+  // One mutation per section, so a pending save locks only this section's switches.
   const updateSettings = useUpdateSettings();
   const { getSettingObject, authedSettingsLoaded } = useAdminSettings();
   // getSettingObject does not validate; malformed stored data falls back to catalog defaults.
