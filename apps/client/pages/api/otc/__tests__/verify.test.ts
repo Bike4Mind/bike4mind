@@ -672,17 +672,22 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
 });
 
 describe('/api/otc/verify - existing user verification and pending free credits', () => {
-  const pendingUser = (overrides: Record<string, unknown> = {}) => ({
-    id: 'u-existing',
-    isSystem: false,
-    isBanned: false,
-    emailVerified: false,
-    tags: ['Customer', PENDING_FREE_CREDITS_TAG],
-    pendingCreditGrant: null,
-    tokenVersion: 0,
-    toJSON: () => ({ id: 'u-existing', username: 'bob' }),
-    ...overrides,
-  });
+  // The handler mutates the doc in place and the login response serializes it through toJSON(),
+  // so the fixture must expose the CURRENT fields - a fixed toJSON would hide an unreflected grant.
+  const pendingUser = (overrides: Record<string, unknown> = {}) => {
+    const user: Record<string, unknown> = {
+      id: 'u-existing',
+      isSystem: false,
+      isBanned: false,
+      emailVerified: false,
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: null,
+      tokenVersion: 0,
+      ...overrides,
+    };
+    user.toJSON = () => ({ ...user });
+    return user;
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -704,7 +709,7 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     });
 
   it('stamps emailVerified first, then strips the pending-credit tag in a separate write', async () => {
-    mockFindByEmail.mockResolvedValue(pendingUser());
+    mockFindByEmail.mockResolvedValue(pendingUser({ pendingCreditGrant: 250 }));
     mockReleasePending.mockResolvedValue({
       released: true,
       creditsGranted: 100,
@@ -721,12 +726,17 @@ describe('/api/otc/verify - existing user verification and pending free credits'
       id: 'u-existing',
       emailVerified: true,
       emailVerifiedAt: expect.any(Date),
+      emailVerificationToken: null,
+      emailVerificationExpires: null,
+      emailVerificationSentAt: null,
     });
     expect(mockUserUpdate).toHaveBeenNthCalledWith(2, {
       id: 'u-existing',
       tags: ['Customer'],
       pendingCreditGrant: null,
     });
+    // The release is reflected onto the response, not just the doc the handler mutated.
+    expect(res._getJSONData()).toMatchObject({ tags: ['Customer'], pendingCreditGrant: null });
   });
 
   it('leaves an already-verified user untouched', async () => {
@@ -752,6 +762,9 @@ describe('/api/otc/verify - existing user verification and pending free credits'
       id: 'u-existing',
       emailVerified: true,
       emailVerifiedAt: expect.any(Date),
+      emailVerificationToken: null,
+      emailVerificationExpires: null,
+      emailVerificationSentAt: null,
     });
   });
 
@@ -767,6 +780,7 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     expect(res._getStatusCode()).toBe(200);
     // Reflected onto the doc the response serializes, so the client sees the grant without a refetch.
     expect(user).toMatchObject({ currentCredits: 15_000, organizationId: 'org-partner' });
+    expect(res._getJSONData()).toMatchObject({ currentCredits: 15_000, organizationId: 'org-partner' });
     expect(mockAddCredits).toHaveBeenCalledWith(
       expect.objectContaining({
         ownerId: 'u-existing',
