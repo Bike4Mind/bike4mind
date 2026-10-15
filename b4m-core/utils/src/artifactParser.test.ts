@@ -2081,13 +2081,11 @@ describe('convertCodeBlocksToArtifacts - tool-output JSON and code fences', () =
   });
 
   it('scans fences in linear time when no closer is long enough, or with many short fences', () => {
-    assertLinearGrowth(
-      n => `mermaid\n~~~~~\n${'~~~ x\n`a `b\n'.repeat(n)}`,
-      20000,
-      undefined,
-      convertCodeBlocksToArtifacts,
-      150
-    );
+    // The tilde input stays cheap (a couple of milliseconds), so the default floor keeps its
+    // ratio sharp on fast hosts.
+    assertLinearGrowth(n => `mermaid\n~~~~~\n${'~~~ x\n`a `b\n'.repeat(n)}`, 20000);
+    // ~600KB doubled input: at the default floor the ratio degrades to an absolute ~75ms
+    // budget that a loaded runner can miss on noise alone.
     assertLinearGrowth(
       n => `mermaid\n${'```\n`a`\n```\n`b\n'.repeat(n)}`,
       20000,
