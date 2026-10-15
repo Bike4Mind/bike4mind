@@ -591,8 +591,40 @@ describe('PATCH /api/publish/artifacts/[id] - title/description purge the cached
     expect(await patchBody({ title: 'Old title', description: 'Old description' })).not.toHaveBeenCalled();
   });
 
+  it('purges when a non-empty description is cleared to empty', async () => {
+    expect(await patchBody({ description: '' })).toHaveBeenCalledTimes(1);
+  });
+
+  it('purges the artifact it just saved, with the request logger', async () => {
+    const { toCacheTarget } = await import('@server/services/publish');
+    const target = { publicId: 'pub-1' };
+    vi.mocked(toCacheTarget).mockReturnValueOnce(target as ReturnType<typeof toCacheTarget>);
+    const artifact = titled();
+    const invalidate = await patchBody({ title: 'New title' }, artifact);
+    expect(toCacheTarget).toHaveBeenLastCalledWith(artifact);
+    expect(invalidate.mock.calls[0][0]).toBe(target);
+  });
+
   it('does NOT purge when an absent description is sent as empty', async () => {
     expect(await patchBody({ description: '' }, titled({ description: undefined }))).not.toHaveBeenCalled();
+  });
+
+  it('purges when the comment policy of an open-public artifact changes', async () => {
+    expect(await patchBody({ commentPolicy: 'open' }, titled({ commentPolicy: 'none' }))).toHaveBeenCalledTimes(1);
+  });
+
+  it('purges when comments are switched on for an artifact with no stored policy', async () => {
+    expect(await patchBody({ commentPolicy: 'open' })).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT purge when the comment policy is re-sent unchanged, or absent is sent as none', async () => {
+    expect(await patchBody({ commentPolicy: 'open' }, titled({ commentPolicy: 'open' }))).not.toHaveBeenCalled();
+    expect(await patchBody({ commentPolicy: 'none' })).not.toHaveBeenCalled();
+  });
+
+  it('does NOT purge a comment-policy change on a gated public artifact - it is not cache-eligible', async () => {
+    const gated = titled({ accessGate: { kind: 'passphrase', passphraseHash: 'x' } });
+    expect(await patchBody({ commentPolicy: 'open' }, gated)).not.toHaveBeenCalled();
   });
 
   it('does NOT purge a tags-only change - tags are not rendered into the share page', async () => {

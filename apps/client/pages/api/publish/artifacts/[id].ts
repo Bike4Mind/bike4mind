@@ -232,6 +232,9 @@ const handler = baseApi()
         code: 'GATE_REQUIRES_ENFORCING_SURFACE',
       });
     }
+    // The serve route renders the comment widget only for a policy other than 'none' (absent === 'none').
+    const commentPolicyChanged =
+      parsed.data.commentPolicy !== undefined && parsed.data.commentPolicy !== (artifact.commentPolicy ?? 'none');
     if (parsed.data.commentPolicy !== undefined) artifact.commentPolicy = parsed.data.commentPolicy;
     const discoverableBefore = !!artifact.discoverable;
     if (parsed.data.discoverable !== undefined) artifact.discoverable = parsed.data.discoverable;
@@ -269,18 +272,19 @@ const handler = baseApi()
     await artifact.save();
 
     // Any change that alters the CACHED public response must purge the CDN, or the
-    // stale copy keeps serving up to its TTL. Four triggers: (a) leaving open-public
+    // stale copy keeps serving up to its TTL. Five triggers: (a) leaving open-public
     // (downgrade OR newly-gated) removes the page from cache-eligibility; (b) the
     // embed allowlist changed while still open-public - the served frame-ancestors
     // CSP header is part of the cached bytes; (c) discoverability changed - the robots
     // header and <meta> are cached too, and an owner turning discovery OFF must not
     // keep serving an indexable copy for up to an hour; (d) the title or description
-    // changed, so the page does not show the old ones while the owner's list shows the new.
+    // changed, so the page does not show the old ones while the owner's list shows the new;
+    // (e) the comment policy changed - the comment widget is part of the cached markup.
     // Best-effort; awaited because a Lambda can freeze before a dangling promise sends,
     // and this is the revoke the owner is waiting on.
     if (
       (wasOpenPublic && !isOpenPublicNow) ||
-      (isOpenPublicNow && (embedOriginsChanged || discoverableChanged || displayChanged))
+      (isOpenPublicNow && (embedOriginsChanged || discoverableChanged || displayChanged || commentPolicyChanged))
     ) {
       await invalidatePublishCdn(toCacheTarget(artifact), req.logger);
     }
