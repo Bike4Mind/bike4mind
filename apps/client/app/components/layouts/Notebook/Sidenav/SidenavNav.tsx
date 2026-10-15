@@ -137,12 +137,16 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const gearsSignal = useGearsNavSignal();
   // Shown only when a modality's models endpoint (GET /api/v1/video-models, /music-models) lists a model this user
   // can run, and it opens on that modality's tab, so it never dead-ends.
-  const { data: videoModels } = useVideoModels();
-  const { data: musicModels } = useMusicModels();
-  const studioModality = firstUsableStudioModality({
-    video: (videoModels?.length ?? 0) > 0,
-    music: (musicModels?.length ?? 0) > 0,
-  });
+  const videoModels = useVideoModels();
+  const musicModels = useMusicModels();
+  // Decided once both lists have settled, so a fast music answer cannot open Studio on Music while Video is usable.
+  const studioModality =
+    videoModels.isPending || musicModels.isPending
+      ? undefined
+      : firstUsableStudioModality({
+          video: (videoModels.data?.length ?? 0) > 0,
+          music: (musicModels.data?.length ?? 0) > 0,
+        });
 
   const closeOnMobile = () => {
     if (isMobile) setOpenSideNav(false);

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { MUSIC_MODEL_CATALOG, estimateMusicCostCredits, type PublicMusicModel } from '@bike4mind/common';
+import {
+  MUSIC_MODEL_CATALOG,
+  MUSIC_MODEL_IDS,
+  estimateMusicCostCredits,
+  validateMusicRequest,
+  type PublicMusicModel,
+} from '@bike4mind/common';
+import { toPublicMusicModel } from '../../../server/musicGenerations/listUsableMusicModels';
 import {
   canSubmit,
   clampDuration,
@@ -95,10 +102,12 @@ describe('clampToModel', () => {
     expect(changes).toEqual(['Writer writes its own lyrics; yours are kept but will not be sent.']);
   });
 
-  it('warns when the lyrics are longer than the new model accepts', () => {
+  it('leaves lyrics over the new limit to the field note, which clears once they are fixed', () => {
     const short = model({ display_name: 'Short', lyrics: { max_chars: 5, max_line_chars: null } });
-    const { changes } = clampToModel(form({ lyrics: 'too long' }), short);
-    expect(changes).toEqual(['Lyrics are 8 characters; Short accepts at most 5. Shorten them to generate.']);
+    const { state, changes } = clampToModel(form({ lyrics: 'too long' }), short);
+    expect(changes).toEqual([]);
+    expect(lyricsProblem(state, short)).toBe('Lyrics are 8 characters; Short accepts at most 5.');
+    expect(canSubmit({ ...state, lyrics: 'ok' }, short)).toBe(true);
   });
 });
 
@@ -157,5 +166,44 @@ describe('estimateCredits', () => {
 
   it('is null for a model the catalog does not know', () => {
     expect(estimateCredits(form({ modelId: 'unknown' }))).toBeNull();
+  });
+});
+
+// The form must refuse exactly what the server refuses, for every catalog model (the server's public model view is
+// what the form receives).
+describe('agreement with validateMusicRequest', () => {
+  const lyricsCases = ['', '[Verse]\nshort line', 'x'.repeat(201), `${'line\n'.repeat(900)}end`, 'y'.repeat(10_001)];
+
+  it.each(MUSIC_MODEL_IDS)('%s', id => {
+    const publicModel = toPublicMusicModel(id);
+    const caps = MUSIC_MODEL_CATALOG[id];
+    const base = initialFormFor(publicModel);
+    const durations = caps.duration.control === 'fixed' ? [null] : [caps.duration.min, caps.duration.max];
+    for (const lyrics of lyricsCases) {
+      for (const instrumental of [false, true]) {
+        for (const durationSeconds of durations) {
+          const { state } = clampToModel(
+            { ...base, prompt: 'a song', lyrics, instrumental, durationSeconds },
+            publicModel
+          );
+          const body = toCreateBody(state, publicModel);
+          const verdict = validateMusicRequest(
+            {
+              model: id,
+              prompt: body.prompt,
+              lyrics: body.lyrics,
+              instrumental: body.instrumental,
+              durationSeconds: body.duration_seconds,
+            },
+            caps
+          );
+          expect({ lyrics: lyrics.slice(0, 20), instrumental, ok: canSubmit(state, publicModel) }).toEqual({
+            lyrics: lyrics.slice(0, 20),
+            instrumental,
+            ok: verdict.ok,
+          });
+        }
+      }
+    }
   });
 });

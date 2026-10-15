@@ -213,6 +213,13 @@ describe('SidenavNav Studio row', () => {
     expect(navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'music' } });
   });
 
+  it('waits for both model lists before deciding which tab to open', () => {
+    useVideoModelsMock.mockReturnValue({ data: undefined, isPending: true });
+    useMusicModelsMock.mockReturnValue(usable);
+    renderNav();
+    expect(studioRow()).not.toBeInTheDocument();
+  });
+
   it('is active on any Studio tab', () => {
     useMusicModelsMock.mockReturnValue(usable);
     location.pathname = '/studio/music';

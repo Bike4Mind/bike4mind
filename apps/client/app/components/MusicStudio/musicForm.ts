@@ -83,15 +83,12 @@ export function clampToModel(
   const instrumental = model.vocals === 'never' || state.instrumental;
   if (!state.instrumental && instrumental) changes.push(`${name} makes instrumental music only.`);
 
-  const next: MusicFormState = { ...state, modelId: model.id, instrumental, durationSeconds };
-  const hasLyrics = state.lyrics.trim().length > 0;
-  if (hasLyrics && !instrumental && model.lyrics === null) {
+  // Lyrics over the new model's limits are not reported here: the field's own note tracks them as the user edits.
+  if (state.lyrics.trim().length > 0 && !instrumental && model.lyrics === null) {
     changes.push(`${name} writes its own lyrics; yours are kept but will not be sent.`);
   }
-  const problem = lyricsProblem(next, model);
-  if (problem) changes.push(`${problem} Shorten them to generate.`);
 
-  return { state: next, changes };
+  return { state: { ...state, modelId: model.id, instrumental, durationSeconds }, changes };
 }
 
 export function toCreateBody(state: MusicFormState, model: PublicMusicModel): CreateMusicGenerationBody {
