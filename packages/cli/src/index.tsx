@@ -2786,7 +2786,7 @@ function CliApp() {
           return;
         }
         try {
-          const diffOutput = state.checkpointStore.getCheckpointDiff(diffTarget);
+          const diffOutput = await state.checkpointStore.getCheckpointDiff(diffTarget);
           if (!diffOutput.trim()) {
             console.log('No differences found between checkpoint and current state.');
           } else {

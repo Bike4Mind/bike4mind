@@ -103,6 +103,26 @@ describe('CheckpointStore', () => {
       expect(checkpoint!.name).toContain('before-edit_local_file');
     });
 
+    it('does not block the event loop while git runs', async () => {
+      const filePath = 'src/hello.ts';
+      await fs.mkdir(path.join(testDir, 'src'), { recursive: true });
+      await fs.writeFile(path.join(testDir, filePath), 'const x = 1;', 'utf-8');
+      // createCheckpoint also awaits fs calls that yield on their own, so probe the
+      // git runner directly: a sync implementation runs to completion before the
+      // call returns, so the immediate can only fire after the promise settles.
+      const runGit = (checkpointStore as unknown as { git: (...args: string[]) => Promise<string> }).git.bind(
+        checkpointStore
+      );
+      const order: string[] = [];
+
+      const pending = runGit('status').then(() => order.push('git-done'));
+      setImmediate(() => order.push('event-loop-turn'));
+      await pending;
+
+      expect(order).toEqual(['event-loop-turn', 'git-done']);
+      expect(await checkpointStore.createCheckpoint('edit_local_file', [filePath])).not.toBeNull();
+    });
+
     it('should record absent marker for non-existent files', async () => {
       // File does not exist yet (will be created by create_file)
       const filePath = 'new-file.ts';
@@ -240,7 +260,7 @@ describe('CheckpointStore', () => {
       // Modify file
       await fs.writeFile(path.join(testDir, filePath), 'line1\nline2\nline3\n', 'utf-8');
 
-      const diff = checkpointStore.getCheckpointDiff(1);
+      const diff = await checkpointStore.getCheckpointDiff(1);
       expect(diff).toContain('line3');
     });
 
@@ -250,12 +270,12 @@ describe('CheckpointStore', () => {
       await checkpointStore.createCheckpoint('edit_local_file', [filePath]);
 
       // Don't modify the file
-      const diff = checkpointStore.getCheckpointDiff(1);
+      const diff = await checkpointStore.getCheckpointDiff(1);
       expect(diff.trim()).toBe('');
     });
 
-    it('should throw for invalid checkpoint index', () => {
-      expect(() => checkpointStore.getCheckpointDiff(99)).toThrow('Checkpoint #99 not found');
+    it('should throw for invalid checkpoint index', async () => {
+      await expect(checkpointStore.getCheckpointDiff(99)).rejects.toThrow('Checkpoint #99 not found');
     });
   });
 
@@ -474,7 +494,7 @@ describe('CheckpointStore repo-trust hardening', () => {
       await fs.writeFile(victim, 'victim-original', 'utf-8');
       await fs.symlink(victim, path.join(proj, '.b4m', 'shadow-repo', '.diff-a'));
 
-      expect(() => store.getCheckpointDiff(1)).toThrow(/symlink|sandbox/i);
+      await expect(store.getCheckpointDiff(1)).rejects.toThrow(/symlink|sandbox/i);
       expect(await fs.readFile(victim, 'utf-8')).toBe('victim-original');
     } finally {
       await cleanup(proj);

@@ -1,8 +1,11 @@
 import { promises as fs } from 'fs';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, lstatSync, realpathSync, type Stats } from 'fs';
-import { execFileSync } from 'child_process';
+import { existsSync, lstatSync, realpathSync, type Stats } from 'fs';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import path from 'path';
 import { isPathWithin } from '../utils/pathWithin.js';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * A checkpoint represents a snapshot of file state before a tool modification
@@ -142,12 +145,12 @@ export class CheckpointStore {
     }
     if (!gitStat) {
       await fs.mkdir(this.shadowRepoDir, { recursive: true });
-      this.git('init');
+      await this.git('init');
       // Configure the shadow repo to avoid user identity warnings
-      this.git('config', 'user.email', 'checkpoint@b4m.local');
-      this.git('config', 'user.name', 'B4M Checkpoint');
+      await this.git('config', 'user.email', 'checkpoint@b4m.local');
+      await this.git('config', 'user.name', 'B4M Checkpoint');
       // Create initial empty commit
-      this.git('commit', '--allow-empty', '-m', 'checkpoint-init');
+      await this.git('commit', '--allow-empty', '-m', 'checkpoint-init');
     }
 
     // Anchor the real (symlink-resolved) roots now that both dirs exist.
@@ -240,21 +243,21 @@ export class CheckpointStore {
       }
 
       // Stage and commit in shadow repo
-      this.git('add', '-A');
+      await this.git('add', '-A');
 
       // Check if there are actual changes to commit
       try {
-        this.git('diff', '--cached', '--quiet');
+        await this.git('diff', '--cached', '--quiet');
         // No changes to commit
         return null;
       } catch {
         // There are changes (git diff --quiet exits non-zero when there are diffs)
       }
 
-      this.git('commit', '-m', checkpointName);
+      await this.git('commit', '-m', checkpointName);
 
       // Get the commit SHA
-      const sha = this.git('rev-parse', '--short', 'HEAD').trim();
+      const sha = (await this.git('rev-parse', '--short', 'HEAD')).trim();
 
       const checkpoint: Checkpoint = {
         id: sha,
@@ -317,7 +320,7 @@ export class CheckpointStore {
       const absolutePath = this.validatePathWithinProject(filePath);
       try {
         // Get file content at the checkpoint commit
-        const content = this.git('show', `${checkpoint.id}:${filePath}`);
+        const content = await this.git('show', `${checkpoint.id}:${filePath}`);
 
         // Write it back to the real working directory
         await fs.mkdir(path.dirname(absolutePath), { recursive: true });
@@ -325,7 +328,10 @@ export class CheckpointStore {
       } catch {
         // Check if file was marked as absent at this checkpoint
         try {
-          this.git('show', `${checkpoint.id}:${path.dirname(filePath)}/${path.basename(filePath)}${ABSENT_MARKER}`);
+          await this.git(
+            'show',
+            `${checkpoint.id}:${path.dirname(filePath)}/${path.basename(filePath)}${ABSENT_MARKER}`
+          );
           // File was absent at this checkpoint - delete it if it exists now
           if (existsSync(absolutePath)) {
             await fs.unlink(absolutePath);
@@ -352,7 +358,7 @@ export class CheckpointStore {
    * @param index - 1-based index (1 = most recent, default)
    * @returns Unified diff string
    */
-  getCheckpointDiff(index: number = 1): string {
+  async getCheckpointDiff(index: number = 1): Promise<string> {
     const checkpoint = this.getCheckpoint(index);
     if (!checkpoint) {
       throw new Error(`Checkpoint #${index} not found. Use /checkpoints to see available restore points.`);
@@ -364,7 +370,7 @@ export class CheckpointStore {
       const absolutePath = this.validatePathWithinProject(filePath);
 
       // Temp files live directly under the shadow root; refuse if a committed
-      // `.diff-a`/`.diff-b` symlink would redirect the writeFileSync below.
+      // `.diff-a`/`.diff-b` symlink would redirect the writeFile below.
       const tmpCheckpoint = path.join(this.shadowRepoDir, '.diff-a');
       const tmpCurrent = path.join(this.shadowRepoDir, '.diff-b');
       this.assertContainedSync(tmpCheckpoint, this.realShadowRoot());
@@ -374,7 +380,7 @@ export class CheckpointStore {
         // Get checkpoint version
         let checkpointContent: string;
         try {
-          checkpointContent = this.git('show', `${checkpoint.id}:${filePath}`);
+          checkpointContent = await this.git('show', `${checkpoint.id}:${filePath}`);
         } catch {
           checkpointContent = ''; // File was absent at checkpoint
         }
@@ -382,7 +388,7 @@ export class CheckpointStore {
         // Get current version
         let currentContent = '';
         if (existsSync(absolutePath)) {
-          currentContent = readFileSync(absolutePath, 'utf-8');
+          currentContent = await fs.readFile(absolutePath, 'utf-8');
         }
 
         if (checkpointContent === currentContent) {
@@ -390,11 +396,11 @@ export class CheckpointStore {
         }
 
         // Write temp files for git diff
-        writeFileSync(tmpCheckpoint, checkpointContent, 'utf-8');
-        writeFileSync(tmpCurrent, currentContent, 'utf-8');
+        await fs.writeFile(tmpCheckpoint, checkpointContent, 'utf-8');
+        await fs.writeFile(tmpCurrent, currentContent, 'utf-8');
 
         try {
-          this.git(
+          await this.git(
             'diff',
             '--no-index',
             '--color',
@@ -417,12 +423,12 @@ export class CheckpointStore {
       } finally {
         // Always clean up temp files
         try {
-          unlinkSync(tmpCheckpoint);
+          await fs.unlink(tmpCheckpoint);
         } catch {
           /* ignore */
         }
         try {
-          unlinkSync(tmpCurrent);
+          await fs.unlink(tmpCurrent);
         } catch {
           /* ignore */
         }
@@ -447,7 +453,7 @@ export class CheckpointStore {
 
     // Run git GC to clean up unreferenced objects
     try {
-      this.git('gc', '--auto', '--quiet');
+      await this.git('gc', '--auto', '--quiet');
     } catch {
       // GC failure is non-critical
     }
@@ -593,11 +599,10 @@ export class CheckpointStore {
    * (GIT_CONFIG_COUNT + numbered keys, GIT_CONFIG_PARAMETERS, GIT_DIR,
    * GIT_WORK_TREE) - undefined values are dropped from the child env by Node.
    */
-  private git(...args: string[]): string {
-    return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], {
+  private async git(...args: string[]): Promise<string> {
+    const pending = execFileAsync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], {
       cwd: this.shadowRepoDir,
       encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 10000,
       env: {
         ...process.env,
@@ -609,6 +614,10 @@ export class CheckpointStore {
         GIT_WORK_TREE: undefined,
       },
     });
+    // execFileSync closed stdin immediately; do the same so git never waits on it.
+    pending.child.stdin?.end();
+    const { stdout } = await pending;
+    return stdout;
   }
 
   /**
