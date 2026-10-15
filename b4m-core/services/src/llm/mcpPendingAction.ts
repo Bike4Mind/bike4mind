@@ -6,8 +6,12 @@
  * The token is not signed, so its authority comes from where it was emitted. A tool result is
  * not trusted content: a read tool can echo upstream JSON, and a non-confirming server can return
  * anything. A token is only honoured when a confirming server emitted it AND it names the very
- * tool that emitted it, so a click can never execute a different tool than the one previewed.
+ * tool that emitted it AND that tool is one of the server's confirmable write tools, so a click can
+ * never execute a different tool than the one previewed, nor a read tool that echoed a token.
  */
+
+import { ATLASSIAN_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/atlassian/constants';
+import { GITHUB_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/github/constants';
 
 export type McpPendingAction = {
   tool: string;
@@ -20,9 +24,12 @@ export type McpPendingActionExtraction =
   | { kind: 'accepted'; action: McpPendingAction; result: string }
   | { kind: 'rejected'; reason: 'malformed' | 'untrusted-emitter' | 'unparseable'; result: string };
 
-/** The servers whose write tools gate on a confirm button (must match the host's routing in
- * apps/client/pages/api/mcp/confirm.ts and apps/client/server/utils/pendingActionExecutor.ts). */
-const CONFIRMING_MCP_SERVERS: ReadonlySet<string> = new Set(['github', 'atlassian']);
+/** Per confirming server, the write tools that gate on a confirm button. The host executors route by
+ * the same sets (apps/client/server/utils/pendingActionTarget.ts). */
+const CONFIRMABLE_TOOLS_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['github', GITHUB_CONFIRMABLE_TOOLS],
+  ['atlassian', ATLASSIAN_CONFIRMABLE_TOOLS],
+]);
 
 const MCP_NAMESPACE_SEPARATOR = '__';
 
@@ -36,7 +43,7 @@ function isEmittedByConfirmingServer(emittingTool: string, actionTool: string): 
   if (separatorIndex <= 0) return false;
   const server = emittingTool.slice(0, separatorIndex);
   const tool = emittingTool.slice(separatorIndex + MCP_NAMESPACE_SEPARATOR.length);
-  return CONFIRMING_MCP_SERVERS.has(server) && tool === actionTool;
+  return tool === actionTool && (CONFIRMABLE_TOOLS_BY_SERVER.get(server)?.has(tool) ?? false);
 }
 
 function decodePendingAction(token: unknown): McpPendingAction | null {
