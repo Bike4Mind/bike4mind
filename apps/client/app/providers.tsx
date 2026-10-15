@@ -16,7 +16,7 @@ import { ServerStatusProvider } from '@client/app/contexts/ServerStatusProvider'
 import DefaultMetaTags from '@client/app/components/DefaultMetaTags';
 import ConfirmationModal from '@client/app/components/ConfirmationModal';
 import WebsocketReactQueryInvalidateListener from '@client/app/components/WebsocketReactQueryInvalidateListener';
-import VideoGenerationUpdatesListener from '@client/app/components/VideoGenerationUpdatesListener';
+import GenerationUpdatesListener from '@client/app/components/GenerationUpdatesListener';
 import CreditBalanceSyncListener from '@client/app/components/CreditBalanceSyncListener';
 import AgentExecutionSubscriber from '@client/app/components/AgentExecutionSubscriber';
 import StripeCheckoutSuccessHandler from '@client/app/components/stripe/StripeCheckoutSuccessHandler';
@@ -198,7 +198,7 @@ export function ClientProviders({ children }: { children: ReactNode }) {
           {/* connection is never established until the user authenticates. */}
           <WebsocketConfigProvider>
             <WebsocketReactQueryInvalidateListener />
-            <VideoGenerationUpdatesListener />
+            <GenerationUpdatesListener />
             <CreditBalanceSyncListener />
             <AgentExecutionSubscriber />
             <Suspense fallback={null}>

@@ -77,6 +77,11 @@ export const verifyEmailChange = async (
       // Since email changed, mark as verified with current timestamp
       emailVerified: true,
       emailVerifiedAt: new Date(),
+      // A link sent to the old address must not verify the new one: /api/email/verify grants by the
+      // account's CURRENT email, so a stale link would hand over the new domain's signup grant.
+      emailVerificationToken: null,
+      emailVerificationExpires: null,
+      emailVerificationSentAt: null,
     });
     return 'changed';
   } catch (error) {

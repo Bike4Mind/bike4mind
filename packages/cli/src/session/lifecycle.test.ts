@@ -393,6 +393,8 @@ describe('session lifecycle', () => {
       await compactSession(ctx, { userInstructions: 'focus on X' });
 
       expect(run).toHaveBeenCalledOnce();
+      // No live view renders the summary, so it must not trade away transient retries.
+      expect(run).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ streamText: false }));
       expect(save).toHaveBeenCalledWith(original); // old session preserved first
       const compacted = useCliStore.getState().session!;
       expect(compacted.id).not.toBe(original.id);

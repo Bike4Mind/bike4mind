@@ -107,26 +107,6 @@ export async function buildAgentVideoToolConfig(
   }
 }
 
-/**
- * Writes the run's new video job ids onto its Quest as each job is created, like chat, so the clip
- * card survives a checkpoint continuation (whose in-memory run state starts empty). Best-effort: the
- * job itself already exists and bills regardless.
- */
-export async function attachVideoJobsToRunQuest(
-  videoJobIds: readonly string[] | undefined,
-  questId: string | undefined,
-  quests: { addVideoJobIds(questId: string, jobIds: string[]): Promise<void> },
-  logger: Logger
-): Promise<void> {
-  if (!videoJobIds?.length || !questId) return;
-  await quests.addVideoJobIds(questId, [...videoJobIds]).catch(error =>
-    logger.warn('[AgentVideo] failed to attach video jobs to the run quest', {
-      questId,
-      error: error instanceof Error ? error.message : String(error),
-    })
-  );
-}
-
 /** Production deps. The run's organizationId is membership-checked at run start (see agentExecutor toolDeps). */
 export function getAgentVideoToolConfigDeps(logger: Logger): AgentVideoToolConfigDeps {
   return {

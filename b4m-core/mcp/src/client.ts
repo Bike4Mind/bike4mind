@@ -157,13 +157,16 @@ export class MCPClient {
         console.error(`[MCP] Transport error for ${this.serverName}:`, error);
       };
 
-      await this.mcp.connect(stdioTransport);
-
-      // Start reading stderr if callback provided and stream available.
+      // Before connect, not after: the SDK returns the PassThrough immediately for exactly this
+      // reason. A server that writes its reason to stderr and exits during the handshake - a
+      // missing API key, an unsupported runtime - is the case where those lines are the only
+      // explanation there will be, and attaching afterwards loses them.
       // transport.stderr is typed as Stream but is a Readable when stderr='pipe'.
       if (this.onStderrLine && stdioTransport.stderr) {
         this.readStderr(stdioTransport.stderr as unknown as Readable);
       }
+
+      await this.mcp.connect(stdioTransport);
 
       // Wait a bit for connection to stabilize
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -210,6 +213,18 @@ export class MCPClient {
     stream.on('error', () => {
       // Stream closed (e.g., process exited) - expected during disconnect
     });
+  }
+
+  /**
+   * The pid of the stdio child, or null for an HTTP server and before `connectToServer`.
+   *
+   * Exposed so an embedding process can guarantee no child outlives it. `disconnect()` is the
+   * polite path and is async; a host that must tear down synchronously (Electron's `will-quit`
+   * handler cannot await) needs the pid to signal directly.
+   */
+  get childPid(): number | null {
+    const transport = this.transport;
+    return transport instanceof StdioClientTransport ? transport.pid : null;
   }
 
   async callTool(toolName: string, toolArgs: unknown) {

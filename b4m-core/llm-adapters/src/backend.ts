@@ -17,6 +17,7 @@ import {
   type ToolStarted,
   type TurnUsage,
 } from '@bike4mind/common';
+import type { AnthropicEffort } from './thinkingParams';
 import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 import type { RecordableToolUse } from './recordToolResult';
 import type { DowngradedToolChoice } from './forcedToolChoice';
@@ -143,6 +144,12 @@ export interface ICompletionOptions {
   logprobs?: number;
   echo?: boolean;
   stream?: boolean;
+  /**
+   * Set when a caller renders reply text live (e.g. the CLI TUI). Backends that
+   * stream text out early must stop retrying once text has gone out, so callers
+   * with no live view leave this unset and keep full retry and fallback.
+   */
+  streamText?: boolean;
   bestOf?: number;
   logitBias?: { [key: string]: number };
   tools: ICompletionOptionTools[];
@@ -187,6 +194,15 @@ export interface ICompletionOptions {
    * @see https://platform.openai.com/docs/guides/reasoning
    */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Explicit effort for an Anthropic turn, in Anthropic's own five-level vocabulary
+   * (`output_config.effort`). Takes precedence over `reasoningEffort`, which is mapped
+   * into that vocabulary when this is unset; unset both and the turn runs at the backend
+   * default (see resolveAnthropicEffort). This exists alongside `reasoningEffort` rather
+   * than replacing it because Anthropic's 'max' has no OpenAI counterpart and
+   * `ReasoningEffort` is forwarded to OpenAI's `reasoning_effort` verbatim.
+   */
+  anthropicEffort?: AnthropicEffort;
   _internal?: {
     toolCallCount?: number; // Internal counter for tracking recursive tool calls (do not set manually)
     /** Per-request override for the recursive tool-call ceiling (defaults to DEFAULT_MAX_TOOL_CALLS).

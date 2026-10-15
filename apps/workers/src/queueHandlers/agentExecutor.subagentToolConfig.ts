@@ -14,7 +14,7 @@
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
 import type { GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
 import type { BuildSharedToolsOptions } from '@bike4mind/services/llm';
-import type { VideoToolConfig } from '@bike4mind/services/llm/tools';
+import type { MusicToolConfig, VideoToolConfig } from '@bike4mind/services/llm/tools';
 
 export interface BuildSubagentToolConfigInput {
   model?: string;
@@ -44,6 +44,8 @@ export interface BuildSubagentToolConfigInput {
    * it cannot be persisted on the execution doc). Null/omitted leaves `video_generation` unoffered.
    */
   videoConfig?: VideoToolConfig | null;
+  /** Built per invocation by agentExecutor.musicToolConfig.ts, like videoConfig. Null/omitted leaves it unoffered. */
+  musicConfig?: MusicToolConfig | null;
   /**
    * Signs web_search image URLs for this subagent - see WebSearchToolConfig.imageUrlSigningSecret.
    * Omit only when the caller genuinely has no secret (performWebSearch then degrades to plain
@@ -59,6 +61,7 @@ export function buildSubagentToolConfig({
   imageConfig,
   audioConfig,
   videoConfig,
+  musicConfig,
   imageUrlSigningSecret,
 }: BuildSubagentToolConfigInput): NonNullable<BuildSharedToolsOptions['config']> {
   return {
@@ -77,5 +80,6 @@ export function buildSubagentToolConfig({
     // user's saved audio settings. Only set when present.
     ...(audioConfig && { audio_generation: audioConfig }),
     ...(videoConfig && { video_generation: videoConfig }),
+    ...(musicConfig && { music_generation: musicConfig }),
   };
 }

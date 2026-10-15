@@ -8,6 +8,25 @@ import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
 export const GENERATION_JOB_KINDS = ['video', 'music'] as const;
 export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
 
+/** A job a chat message started, as stored on the quest: the kind picks the card and the endpoint that reads it. */
+export type GenerationJobRef = { id: string; kind: GenerationJobKind };
+
+/**
+ * The jobs a quest started, oldest first. Quests written before `generationJobs` existed only carry
+ * `videoJobIds`, so those read as video jobs (no backfill).
+ */
+export const questGenerationJobs = (quest: {
+  generationJobs?: readonly GenerationJobRef[];
+  videoJobIds?: readonly string[];
+}): GenerationJobRef[] => {
+  const legacy = (quest.videoJobIds ?? []).map((id): GenerationJobRef => ({ id, kind: 'video' }));
+  const byId = new Map<string, GenerationJobRef>();
+  for (const ref of [...legacy, ...(quest.generationJobs ?? [])]) {
+    if (!byId.has(ref.id)) byId.set(ref.id, { id: ref.id, kind: ref.kind });
+  }
+  return [...byId.values()];
+};
+
 export const GENERATION_JOB_STATES = [
   'pending',
   'running',

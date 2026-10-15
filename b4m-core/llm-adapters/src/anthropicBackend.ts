@@ -54,6 +54,7 @@ import {
 import {
   buildThinkingParams,
   planReasoningEffort,
+  resolveAnthropicEffort,
   resolveOutputMaxTokens,
   THINKING_ANSWER_HEADROOM_TOKENS,
   type AnthropicEffort,
@@ -1236,14 +1237,20 @@ export class AnthropicBackend implements ICompletionBackend {
         thinking?: { enabled?: boolean; budget_tokens?: number };
       };
       const isQuestMaster = thinkingOptions.questMaster === true;
-      const userThinkingEnabled = thinkingOptions.thinking?.enabled === true;
+      // The forced response_format tool cannot run alongside thinking, so an explicit request falls
+      // through to the reasoningEffort plan below, which only keeps the off switch there.
+      const userThinkingEnabled = thinkingOptions.thinking?.enabled === true && !usingResponseFormatToolUse;
 
       if (userThinkingEnabled || isQuestMaster) {
         // Determine budget and effort based on context
         const budgetTokens = isQuestMaster
           ? Math.min(Math.floor((options.maxTokens ?? 8192) * 0.25), 4096)
           : (thinkingOptions.thinking?.budget_tokens ?? 16000);
-        const effort = isQuestMaster ? ('medium' as const) : ('high' as const);
+        const effort = resolveAnthropicEffort({
+          questMaster: isQuestMaster,
+          anthropicEffort: options.anthropicEffort,
+          reasoningEffort: options.reasoningEffort,
+        });
 
         const result = buildThinkingParams(model, currentModelInfo, budgetTokens, apiParams.max_tokens ?? 4096, effort);
 

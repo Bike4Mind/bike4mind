@@ -81,13 +81,17 @@ Located in the AI category, the Operations Model setting allows administrators t
 - **Image Model** -- The model for image-related operations
 - **Speech Model** -- The model for speech-to-text operations
 
-### Video Generation Models
+### Generation Models
 
-Located in the AI category, this card shows one switch per video model in the catalog. Each switch shows whether the server will accept video jobs for that model:
+Located in the AI category, this card has one section per generation modality (Video and Music), with one switch per model in that modality's catalog. Each switch shows whether the server will accept generation jobs for that model:
 
-- A model that is on by default and has no admin override reads "Enabled by default"
-- Turning a model off makes new video jobs for it be refused
-- Models whose provider is not configured on the deployment (for example, the non-production test model on production) cannot generate regardless of the switch
+- A model that is on by default and has no admin override reads "Enabled by default". Once you flip a switch, your choice overrides the model's default in either direction
+- Models marked "Preview" are early-access provider models whose behavior or pricing may still change
+- Turning a model off makes new jobs for it be refused and removes it from the public model listings (`GET /api/v1/video-models`, `GET /api/v1/music-models`); a disabled video model also disappears from Studio
+- The in-chat music generation tool does not honour these switches yet; it always uses its built-in default music model
+- Models whose provider is not configured on the deployment (for example, the non-production test models on production) cannot generate regardless of the switch
+
+Video and music are stored as separate settings (`videoGeneration` and `musicGeneration`), so a change in one section never affects the other.
 
 ### Agent Video Clips Per Run
 

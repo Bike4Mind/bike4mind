@@ -534,6 +534,7 @@ export class ReActAgent extends EventEmitter {
             messages,
             {
               stream: true,
+              streamText: options.streamText ?? this.hasTextDeltaListener(),
               tools: this.context.tools,
               maxTokens,
               temperature,
@@ -976,6 +977,11 @@ BEHAVIOR GUIDELINES:
 Remember: You are an autonomous AGENT. Act independently and solve problems proactively.`;
   }
 
+  /** Live text is requested only for a listening view; without one, the backend keeps full retry. */
+  private hasTextDeltaListener(): boolean {
+    return this.listenerCount('text_delta') > 0;
+  }
+
   /**
    * Demote a would-be final answer to a thought and hand the model drained host
    * feedback (see AgentRunOptions.drainFeedback) as the next user message, so
@@ -1314,6 +1320,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         this.messages,
         {
           stream: true,
+          streamText: options.streamText ?? this.hasTextDeltaListener(),
           tools: this.context.tools,
           maxTokens,
           temperature,

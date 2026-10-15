@@ -357,6 +357,8 @@ export default defineConfig([
     '**/.sst/**',
     '**/sst-env.d.ts',
     'apps/client/public/**',
+    // electron-vite's build output; 'dist'/'build' above do not cover it.
+    'apps/desktop/out/**',
     'packages/sdk/src/generated/**',
     'apps/client/next.config.js',
     'apps/client/next-i18next.config.js',
