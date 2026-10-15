@@ -711,6 +711,8 @@ export async function publishArtifact(
     slug: existing?.slug ?? artifactSlug(title, artifact.id),
     title,
     visibility: args.visibility ?? existing?.visibility ?? PUBLISH_DEFAULT_VISIBILITY,
+    ...(existing?.description !== undefined && { description: existing.description }),
+    ...(existing?.commentPolicy !== undefined && { commentPolicy: existing.commentPolicy }),
     source: { kind: 'bundle', artifactId: artifact.id, artifactType: artifactType.data },
     files: [{ path: PUBLISH_INDEX_PATH, size: Buffer.byteLength(body), mimeType: PUBLISH_INDEX_MIME }],
   };

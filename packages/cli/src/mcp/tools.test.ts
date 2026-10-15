@@ -1671,6 +1671,15 @@ describe('publishArtifact', () => {
     });
   });
 
+  it('forwards the existing description and comment policy on republish', async () => {
+    const { client, fns } = publishClient();
+    fns.findPublishedArtifact.mockResolvedValue({ ...existingPage, description: 'd', commentPolicy: 'open' });
+
+    await publishArtifact(client, { artifactId: ARTIFACT_ID });
+
+    expect(fns.requestPublishUpload.mock.calls[0][0]).toMatchObject({ description: 'd', commentPolicy: 'open' });
+  });
+
   it('lets an explicit visibility change an existing page', async () => {
     const { client, fns } = publishClient();
     fns.findPublishedArtifact.mockResolvedValue(existingPage);

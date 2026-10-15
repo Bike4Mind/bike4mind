@@ -14,6 +14,7 @@ import {
   supportedVoiceGenerationVendor,
   SLUG_OWNED_BY_OTHER,
   type ChatHistoryItemType,
+  type CommentPolicy,
   type GeneratedFile,
   type GenerateImageResponse,
   type ImagePromptResolution,
@@ -192,6 +193,8 @@ export interface ExistingPublication {
   scopeId: string;
   slug: string;
   visibility: PublishVisibility;
+  description?: string;
+  commentPolicy?: CommentPolicy;
 }
 
 /**
@@ -560,8 +563,12 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     // where the key-scope fallback below would misdirect. Other 403s keep that fallback.
     // The match is wording-based: must stay in sync with the ForbiddenError messages in
     // apps/client/server/middlewares/csrfProtection.ts.
-    const csrfMessage = extractServerMessage(data);
-    if (csrfMessage && /CSRF|request origin/i.test(csrfMessage)) return csrfMessage;
+    const serverMessage = extractServerMessage(data);
+    if (serverMessage && /CSRF|request origin/i.test(serverMessage)) return serverMessage;
+    // Must stay in sync with the ForbiddenError text in
+    // apps/client/server/services/publish/checkScopePermission.ts.
+    if (serverMessage && /own user scope/i.test(serverMessage))
+      return `${serverMessage} (publish_artifact only publishes artifacts you own)`;
     const base = "API key forbidden: check the key's scopes and account access";
     return scope ? `${base} (recommended scope: ${scope})` : base;
   }

@@ -737,6 +737,16 @@ describe('mapApiError', () => {
     expect(msg).not.toContain('API key forbidden');
   });
 
+  it('surfaces the user-scope ownership message on a 403 instead of the key-scope hint', () => {
+    const msg = mapApiError(
+      axiosError(403, { data: { error: 'You can only publish to your own user scope' } }),
+      'http://x',
+      'files:write'
+    );
+    expect(msg).toContain('You can only publish to your own user scope');
+    expect(msg).not.toContain('recommended scope');
+  });
+
   it('keeps the API-key scope fallback for a non-CSRF 403 that carries a server body', () => {
     expect(mapApiError(axiosError(403, { data: { error: 'Insufficient scope' } }), 'http://x', 'files:read')).toBe(
       "API key forbidden: check the key's scopes and account access (recommended scope: files:read)"
