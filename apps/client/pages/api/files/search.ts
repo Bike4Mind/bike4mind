@@ -30,12 +30,17 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
     // from the shared-only branch.
     const isSharedView = Boolean(filters.shared);
     const isCuratedView = Boolean(filters.curated);
+    // Strict, matching the service's own parse of `owned`: the string 'false' must not narrow the list.
+    const isOwnedView = filters.owned === true || filters.owned === 'true';
 
     // Include shared/data-lake files in the default view so total count reflects all files the
     // user can access, not just owned files. The shared and curated views carry their own
-    // ownership predicate, so widening them would be wrong as well as pointless.
+    // ownership predicate, so widening them would be wrong as well as pointless. The owned view asks
+    // for exactly the unwidened list.
     const scope =
-      !isSharedView && !isCuratedView ? { includeShared: true, ...buildRequestFileScope(req, req.user) } : undefined;
+      !isSharedView && !isCuratedView && !isOwnedView
+        ? { includeShared: true, ...buildRequestFileScope(req, req.user) }
+        : undefined;
 
     const result = await fabFilesService.search(
       req.user.id,
