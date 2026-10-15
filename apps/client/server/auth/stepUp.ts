@@ -1,5 +1,12 @@
 import type { Request, RequestHandler } from 'express';
-import { ForbiddenError, STEP_UP_REQUIRED_CODE, type IUserDocument, type StepUpMethod } from '@bike4mind/common';
+import {
+  ForbiddenError,
+  STEP_UP_REQUIRED_CODE,
+  type AuthSessionCreatedVia,
+  type IAuthSessionDocument,
+  type IUserDocument,
+  type StepUpMethod,
+} from '@bike4mind/common';
 import { mfaService } from '@bike4mind/services';
 import { authSessionRepository, passkeyCredentialRepository } from '@bike4mind/database';
 
@@ -17,6 +24,20 @@ export const STEP_UP_MAX_PASSWORD_FAILURES = 5;
 /** A session this young was minted by a first-factor sign-in that has just proved the user. */
 export const FRESH_SIGN_IN_WINDOW_MS = 5 * 60 * 1000;
 
+/**
+ * Session origins that are an interactive sign-in. An allowlist so a new mint path fails closed:
+ * `device` and `oauth-token` sessions can be minted on demand by an already-authenticated caller,
+ * so a stolen session could otherwise mint a "fresh" one and skip step-up.
+ */
+const INTERACTIVE_SIGN_IN_ORIGINS: ReadonlySet<AuthSessionCreatedVia> = new Set([
+  'otc',
+  'otc-registration',
+  'oauth',
+  'okta',
+  'saml',
+  'mfa',
+]);
+
 export { STEP_UP_REQUIRED_CODE, STEP_UP_FAILED_CODE, type StepUpMethod } from '@bike4mind/common';
 
 type StepUpUser = Pick<IUserDocument, 'id'> & { sid?: string };
@@ -30,26 +51,30 @@ export const stepUpUnavailableError = () =>
     code: 'step_up_unavailable',
   });
 
+/** This request's session when it is owned by the user, unrevoked and unexpired; otherwise null. */
+export async function findLiveSession(user: StepUpUser, now = new Date()): Promise<IAuthSessionDocument | null> {
+  if (!user.sid) return null;
+  const session = await authSessionRepository.findBySid(user.sid);
+  if (!session || session.userId !== user.id || session.revokedAt || session.expiresAt <= now) return null;
+  return session;
+}
+
 /**
- * True for a live, non-impersonated session created within FRESH_SIGN_IN_WINDOW_MS. Lets enrollment
- * forced right after any sign-in (SSO included, not only the email-code path that mints an
- * mfaPending token) start without a second prompt. Refresh rotation keeps the row's createdAt, so
- * a long-lived session never qualifies.
+ * True for a live, non-impersonated session that an interactive sign-in created within
+ * FRESH_SIGN_IN_WINDOW_MS. Lets enrollment forced right after any sign-in (SSO included, not only
+ * the email-code path that mints an mfaPending token) start without a second prompt. Refresh
+ * rotation keeps the row's createdAt, so a long-lived session never qualifies.
  */
 export async function isFreshSignIn(user: StepUpUser, now = new Date()): Promise<boolean> {
-  if (!user.sid) return false;
-  const session = await authSessionRepository.findBySid(user.sid);
-  if (!session || session.userId !== user.id || session.revokedAt || session.impersonatedBy) return false;
-  if (session.expiresAt <= now) return false;
+  const session = await findLiveSession(user, now);
+  if (!session || session.impersonatedBy || !INTERACTIVE_SIGN_IN_ORIGINS.has(session.createdVia)) return false;
   return now.getTime() - new Date(session.createdAt).getTime() < FRESH_SIGN_IN_WINDOW_MS;
 }
 
 /** End of the current step-up window for this request's session, or null when not stepped up. */
 export async function getStepUpUntil(user: StepUpUser, now = new Date()): Promise<Date | null> {
-  if (!user.sid) return null;
-  const session = await authSessionRepository.findBySid(user.sid);
-  if (!session || session.userId !== user.id || session.revokedAt || session.expiresAt <= now) return null;
-  if (!session.stepUpAt) return null;
+  const session = await findLiveSession(user, now);
+  if (!session?.stepUpAt) return null;
   const until = new Date(new Date(session.stepUpAt).getTime() + STEP_UP_WINDOW_MS);
   return until > now ? until : null;
 }

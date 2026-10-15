@@ -323,10 +323,15 @@ describe('POST /api/auth/step-up - password', () => {
     expect(lockedOut._getJSONData()).toMatchObject({ attemptsRemaining: 0 });
     expect(sessions.get('sid-1')!.revokedAt).toBeInstanceOf(Date);
 
-    await expect(
-      call(stepUpHandler, { body: { method: 'password', password: 'correct horse' } })
-    ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { code: 'step_up_unavailable' } });
+    // A right and a wrong guess get the same answer, so the revoked session learns nothing.
+    for (const password of ['correct horse', 'still-wrong']) {
+      await expect(call(stepUpHandler, { body: { method: 'password', password } })).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { code: 'step_up_unavailable' },
+      });
+    }
     expect(sessions.get('sid-1')!.stepUpAt).toBeNull();
+    expect(sessions.get('sid-1')!.stepUpPasswordFailures).toBe(5);
   });
 
   it('is refused (400) for an MFA-enrolled user even with the right password', async () => {

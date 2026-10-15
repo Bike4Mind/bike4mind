@@ -15,6 +15,7 @@ import {
   passkeyDeps,
 } from '@server/auth/passkey';
 import {
+  findLiveSession,
   markStepUp,
   STEP_UP_FAILED_CODE,
   STEP_UP_MAX_PASSWORD_FAILURES,
@@ -107,6 +108,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const body = bodySchema.parse(req.body);
     const sid = req.user.sid;
     if (!sid) throw stepUpUnavailableError();
+    // A revoked session's access JWT stays valid until it expires; refusing it before any proof is
+    // checked keeps a locked-out session from learning whether its next guess was right.
+    if (!(await findLiveSession(req.user))) throw stepUpUnavailableError();
 
     const user: IUserDocument | null = await userRepository.findByIdWithPassword(req.user.id);
     if (!user) throw new NotFoundError('User not found');

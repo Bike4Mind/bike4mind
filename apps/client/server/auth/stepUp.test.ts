@@ -15,7 +15,16 @@ vi.mock('@bike4mind/services', () => ({
   mfaService: { userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean } }) => !!user.mfa?.totpEnabled },
 }));
 
-import { STEP_UP_WINDOW_MS, getStepUpUntil, markStepUp, requireStepUp, stepUpGate, stepUpMethodsFor } from './stepUp';
+import {
+  FRESH_SIGN_IN_WINDOW_MS,
+  STEP_UP_WINDOW_MS,
+  getStepUpUntil,
+  isFreshSignIn,
+  markStepUp,
+  requireStepUp,
+  stepUpGate,
+  stepUpMethodsFor,
+} from './stepUp';
 
 const NOW = new Date('2026-10-14T12:00:00Z');
 const session = (o: Record<string, unknown> = {}) => ({
@@ -66,6 +75,31 @@ describe('getStepUpUntil / requireStepUp', () => {
       additionalInfo: { code: 'step_up_unavailable' },
     });
     expect(mockFindBySid).not.toHaveBeenCalled();
+  });
+});
+
+describe('isFreshSignIn', () => {
+  const signIn = (o: Record<string, unknown> = {}) =>
+    session({ createdVia: 'oauth', createdAt: new Date(NOW.getTime() - 1000), ...o });
+
+  it.each(['otc', 'otc-registration', 'oauth', 'okta', 'saml', 'mfa'])(
+    'accepts a session an interactive %s sign-in minted moments ago',
+    async createdVia => {
+      mockFindBySid.mockResolvedValue(signIn({ createdVia }));
+      expect(await isFreshSignIn(user)).toBe(true);
+    }
+  );
+
+  it.each([
+    ...['device', 'oauth-token', 'mfa-setup', 'emergency', 'impersonation', 'identify', 'legacy-migration'].map(
+      createdVia => [`a ${createdVia} session`, signIn({ createdVia })] as const
+    ),
+    ['a session exactly at the window edge', signIn({ createdAt: new Date(NOW.getTime() - FRESH_SIGN_IN_WINDOW_MS) })],
+    ['an expired session', signIn({ expiresAt: NOW })],
+    ['an impersonated session', signIn({ impersonatedBy: 'admin-1' })],
+  ])('refuses %s', async (_label, row) => {
+    mockFindBySid.mockResolvedValue(row);
+    expect(await isFreshSignIn(user)).toBe(false);
   });
 });
 

@@ -240,6 +240,7 @@ describe('POST /api/auth/mfa/setup right after a first-factor sign-in (SSO under
       expiresAt: new Date(Date.now() + 86_400_000),
       stepUpAt: null,
       createdAt: new Date(),
+      createdVia: 'oauth',
       ...overrides,
     });
 
@@ -258,6 +259,9 @@ describe('POST /api/auth/mfa/setup right after a first-factor sign-in (SSO under
     ['an older session', { createdAt: new Date(Date.now() - 60 * 60 * 1000) }],
     ['an impersonation session', { impersonatedBy: 'admin-1' }],
     ['a revoked session', { revokedAt: new Date() }],
+    // An authenticated caller can mint these on demand, so a young one proves nothing.
+    ['a device-flow session', { createdVia: 'device' }],
+    ['an OAuth token session', { createdVia: 'oauth-token' }],
   ])('still requires step-up for %s', async (_label, overrides) => {
     session(overrides);
     const res = await call(setupRoute, {});
