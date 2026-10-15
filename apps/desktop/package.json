@@ -2,6 +2,7 @@
   "name": "@bike4mind/desktop",
   "version": "0.1.0",
   "private": true,
+  "changesetsVersioned": true,
   "description": "Bike4Mind Electron desktop client",
   "author": "Bike4Mind",
   "license": "BUSL-1.1",
