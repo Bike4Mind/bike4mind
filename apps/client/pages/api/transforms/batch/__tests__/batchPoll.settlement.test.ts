@@ -12,6 +12,7 @@ const m = vi.hoisted(() => ({
   batch: null as Record<string, unknown> | null,
   claim: vi.fn(),
   settle: vi.fn(),
+  catalog: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -34,7 +35,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 const usage = (input: number, output: number) => ({ inputTokens: input, outputTokens: output });
 vi.mock('@bike4mind/llm-adapters', () => ({
-  getAvailableModels: async () => [{ id: 'm1', pricing: { 200_000: { input: 1e-3, output: 2e-3 } } }],
+  getAvailableModels: m.catalog,
   AnthropicBatchService: {
     fromApiKey: () => ({
       getBatchResults: async () => ({
@@ -63,6 +64,7 @@ async function poll() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  m.catalog.mockResolvedValue([{ id: 'm1', pricing: { 200_000: { input: 1e-3, output: 2e-3 } } }]);
   m.batch = {
     id: 'row1',
     ownerUserId: 'u1',
@@ -110,6 +112,14 @@ describe('GET /api/transforms/batch/:id settlement', () => {
 
     await poll();
 
+    expect(m.claim).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+
+  it('leaves the batch unclaimed when the catalog cannot load, so a retried poll can still settle', async () => {
+    m.catalog.mockRejectedValueOnce(new Error('catalog down'));
+
+    await expect(poll()).rejects.toThrow('catalog down');
     expect(m.claim).not.toHaveBeenCalled();
     expect(m.settle).not.toHaveBeenCalled();
   });

@@ -284,37 +284,44 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       return res.status(503).json({ error: 'Code-execution sandbox unavailable' });
     }
 
-    // Wire data-lake tools into the REPL (NOT into the agent's tool array)
-    session.setTools(
-      buildDataLakeTools({
-        baseUrl,
-        authHeaders,
-        anthropicApiKey: subLlmAnthropicKey,
+    let agent: ReActAgent;
+    try {
+      // Wire data-lake tools into the REPL (NOT into the agent's tool array)
+      session.setTools(
+        buildDataLakeTools({
+          baseUrl,
+          authHeaders,
+          anthropicApiKey: subLlmAnthropicKey,
+          session,
+        })
+      );
+
+      // The agent gets exactly one tool: code_execute. Pure RLM mode. Pass the
+      // data-lake tool names so the tool description tells the agent what's
+      // actually callable inside the REPL.
+      const codeExecuteTool = makeCodeExecuteTool({
         session,
-      })
-    );
+        logger: req.logger,
+        toolNames: ['semanticSearch', 'keywordSearch', 'listArticles', 'getArticle', 'subAgentQuery'],
+      });
 
-    // The agent gets exactly one tool: code_execute. Pure RLM mode. Pass the
-    // data-lake tool names so the tool description tells the agent what's
-    // actually callable inside the REPL.
-    const codeExecuteTool = makeCodeExecuteTool({
-      session,
-      logger: req.logger,
-      toolNames: ['semanticSearch', 'keywordSearch', 'listArticles', 'getArticle', 'subAgentQuery'],
-    });
-
-    // --- Construct + run the agent ---
-    const agent = new ReActAgent({
-      userId,
-      logger: req.logger,
-      llm,
-      model: modelInfo.id,
-      tools: [codeExecuteTool],
-      maxIterations,
-      systemPrompt,
-      temperature: 0.4,
-      maxTokens: ROOT_MAX_TOKENS,
-    });
+      // --- Construct + run the agent ---
+      agent = new ReActAgent({
+        userId,
+        logger: req.logger,
+        llm,
+        model: modelInfo.id,
+        tools: [codeExecuteTool],
+        maxIterations,
+        systemPrompt,
+        temperature: 0.4,
+        maxTokens: ROOT_MAX_TOKENS,
+      });
+    } catch (e) {
+      // Nothing has run yet, so a setup failure owes nothing.
+      await reservation.refund();
+      throw e;
+    }
 
     let timedOut = false;
     const timeoutSignal = AbortSignal.timeout(HARD_TIMEOUT_MS);

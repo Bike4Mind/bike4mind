@@ -337,4 +337,15 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
     expect(meter.refund).toHaveBeenCalledTimes(1);
     expect(meter.settle).not.toHaveBeenCalled();
   });
+
+  it('refunds in full when agent setup throws after the reservation', async () => {
+    mockBuildDataLakeTools.mockImplementationOnce(() => {
+      throw new Error('tool wiring failed');
+    });
+
+    await expect(call({ authorization: 'Bearer t' })).rejects.toThrow('tool wiring failed');
+    expect(meter.refund).toHaveBeenCalledTimes(1);
+    expect(meter.settle).not.toHaveBeenCalled();
+    expect(mockAgentRun).not.toHaveBeenCalled();
+  });
 });

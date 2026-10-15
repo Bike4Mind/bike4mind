@@ -70,6 +70,8 @@ const handler = baseApi().get(async (req, res) => {
     error: r.error,
   }));
 
+  // Fetched before the claim: once the claim clears the hold, a throw here could never be retried.
+  const catalog = batch.creditHold ? await getAvailableModels({ anthropic: apiKey }) : [];
   // Only the poll that wins the in_progress -> completed transition sees the hold, so a retried or
   // concurrent poll never settles twice.
   const claimed = await transformBatchRepository.claimCompletion(batch.id, {
@@ -80,7 +82,6 @@ const handler = baseApi().get(async (req, res) => {
   if (claimed?.creditHold) {
     // Failed items are free. Standard rate, as reserved at submit (no Batches discount in pricing).
     const modelByRef = new Map(claimed.customIdMap.map(m => [m.clientRef, m.model]));
-    const catalog = await getAvailableModels({ anthropic: apiKey });
     let usd = 0;
     let inputTokens = 0;
     let outputTokens = 0;
