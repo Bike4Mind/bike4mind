@@ -608,12 +608,10 @@ const SlackWorkspacesTab: React.FC = () => {
         errorMessage = 'Export timed out (Gateway Timeout)';
         suggestion =
           'This channel has too many messages for a single export. Enable "Background Export" above or use date range filters.';
-      }
-      else if (statusCode === 408 || error.code === 'ECONNABORTED') {
+      } else if (statusCode === 408 || error.code === 'ECONNABORTED') {
         errorMessage = 'Export request timed out';
         suggestion = 'Enable "Background Export" for large channels, or use a narrower date range.';
-      }
-      else if (statusCode === 413) {
+      } else if (statusCode === 413) {
         errorMessage = 'Channel too large to export';
         suggestion = 'Please use date filters to export smaller batches, or enable "Background Export".';
       }
@@ -1657,8 +1655,9 @@ const SlackWorkspacesTab: React.FC = () => {
                 <strong>{updateModalWorkspace?.name || updateModalWorkspace?.slackAppId}</strong>?
               </Typography>
               <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-                This will update scopes, events, commands, and interactivity settings. Your app&apos;s name,
-                description, and color will not be changed.
+                This will update scopes, events, commands, interactivity settings, and workflow steps. Your app&apos;s
+                name, description, and color will not be changed. Workflows that already use a workflow step whose
+                inputs changed need that step re-added in Workflow Builder.
               </Typography>
               {(() => {
                 const ms = updateModalWorkspace ? manifestStatuses[updateModalWorkspace.id] : undefined;
