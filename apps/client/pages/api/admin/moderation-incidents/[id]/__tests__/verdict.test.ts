@@ -457,6 +457,21 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(res.json).toHaveBeenCalledWith({ ok: true, ncmecReportId: '123456' });
     });
 
+    it('logs when the manual report overrode a false_positive verdict', async () => {
+      mockRecordManualReport.mockResolvedValue({
+        reviewStatus: 'reported',
+        ncmecReportId: '123456',
+        previousReviewStatus: 'false_positive',
+      });
+
+      const req = makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' });
+      const res = makeRes();
+      await runHandler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(req.logger.info).toHaveBeenCalledWith(expect.stringContaining('(overriding false_positive)'));
+    });
+
     it('works when NCMEC API credentials are not configured', async () => {
       const { Resource } = await import('sst');
       const r = Resource as unknown as Record<string, { value: string }>;

@@ -74,6 +74,7 @@ Detection -> block (FabFile.moderationStatus = 'blocked')
                false_positive  -> reviewStatus = 'false_positive' (no NCMEC submission)
                record_manual_report -> filed by hand on the CyberTipline web form
                                        -> reviewStatus = 'reported', reportChannel = 'manual'
+                                       (also from 'false_positive'; previousReviewStatus = 'false_positive')
 ```
 
 The triage queue returns incidents with `reviewStatus` absent or `'pending_review'`, oldest

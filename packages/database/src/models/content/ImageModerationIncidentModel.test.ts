@@ -300,6 +300,19 @@ describe('ImageModerationIncidentRepository', () => {
       expect(out?.previousReviewStatus).toBeUndefined();
     });
 
+    it('lets exactly one of two concurrent manual reports win over a false_positive verdict', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const id = String(inc._id);
+      await imageModerationIncidentRepository.updateReviewStatus(id, 'false_positive');
+      const results = await Promise.all([
+        imageModerationIncidentRepository.recordManualReport(id, { ncmecReportId: 'TIP-A', reportedBy: 'admin-1' }),
+        imageModerationIncidentRepository.recordManualReport(id, { ncmecReportId: 'TIP-B', reportedBy: 'admin-2' }),
+      ]);
+      const winners = results.filter(r => r !== null);
+      expect(winners).toHaveLength(1);
+      expect((await ImageModerationIncident.findById(id))?.ncmecReportId).toBe(winners[0]?.ncmecReportId);
+    });
+
     it('cannot be flipped back to false_positive once recorded over it', async () => {
       const inc = await imageModerationIncidentRepository.record(baseIncident());
       const id = String(inc._id);

@@ -194,7 +194,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       return res.status(409).json({ error: `Incident is already ${incident.reviewStatus}` });
     }
     req.logger.info(
-      `[NCMEC] incident ${incidentId} recorded as manually reported, reportId=${body.ncmecReportId}, by admin=${req.user.id}`
+      `[NCMEC] incident ${incidentId} recorded as manually reported${updated.previousReviewStatus ? ` (overriding ${updated.previousReviewStatus})` : ''}, reportId=${body.ncmecReportId}, by admin=${req.user.id}`
     );
     return res.status(200).json({ ok: true, ncmecReportId: body.ncmecReportId });
   }
