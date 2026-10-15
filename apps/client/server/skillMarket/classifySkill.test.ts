@@ -121,4 +121,18 @@ describe('classifySkill', () => {
     expect(nonce(seen[0])).not.toBe(nonce(seen[1]));
     expect(seen[0]).toContain(`=====END SKILL DATA ${nonce(seen[0])}=====`);
   });
+
+  it('fails closed on a hung model call instead of waiting forever', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = classifySkill(
+        snapshot,
+        llm(() => new Promise<string>(() => {}))
+      );
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(await pending).toMatchObject({ ok: false, error: 'Classifier timed out' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

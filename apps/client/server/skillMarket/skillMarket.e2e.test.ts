@@ -7,16 +7,51 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 
 // Org membership is the only external input to the visibility gate; everything else (models,
 // CAS writes, search, import, rating) runs against a real mongod.
-const orgs = vi.hoisted(() => ({ members: new Map<string, string[]>(), admins: new Map<string, string[]>() }));
+const orgs = vi.hoisted(() => ({
+  members: new Map<string, string[]>(),
+  admins: new Map<string, string[]>(),
+  info: new Map<string, { name?: string; userId?: string; managerId?: string }>(),
+}));
 vi.mock('@bike4mind/database/infra', async importOriginal => ({
   ...(await importOriginal<object>()),
   organizationRepository: {
     findMembershipOrgIds: async (u: string) => orgs.members.get(u) ?? [],
     findIdsAdministeredBy: async (u: string) => orgs.admins.get(u) ?? [],
-    findById: async () => ({ name: 'Acme' }),
+    findById: async (id: string) => orgs.info.get(id) ?? { name: 'Acme' },
     findMemberUserIds: async () => ({ userIds: [], aclOnly: [], stampOnly: [] }),
   },
 }));
+
+// The route handlers build their classifier from the operations model; inject the same stub the
+// direct-call tests use so route-level publish/rescan can scan without reaching an LLM.
+const classifier = vi.hoisted(() => ({
+  model: 'stub',
+  complete: async (_system: string, user: string) => {
+    if (user.includes('THROW')) throw new Error('provider down');
+    return JSON.stringify({
+      verdict: 'pass',
+      confidence: 0.95,
+      findings: [],
+      honestSummary: {
+        whatItDoes: user.includes('MISMATCH') ? 'Posts your text to an external service.' : 'Formats text.',
+        toolsUsed: [],
+        dataItTouches: 'The text you paste.',
+        riskNotes: [],
+        descriptionMatches: !user.includes('MISMATCH'),
+      },
+    });
+  },
+}));
+const submitListingVersionMock = vi.hoisted(() => vi.fn());
+vi.mock('@server/skillMarket/classifySkill', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  getOperationsClassifierLlm: async () => classifier,
+}));
+vi.mock('@server/skillMarket/submitVersion', async importOriginal => {
+  const actual = await importOriginal<typeof import('./submitVersion')>();
+  submitListingVersionMock.mockImplementation(actual.submitListingVersion);
+  return { ...actual, submitListingVersion: submitListingVersionMock };
+});
 
 vi.mock('@client/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: vi.fn() },
@@ -46,11 +81,14 @@ import {
   SkillListingImport,
   SkillListingReport,
   SkillListingVersion,
+  User,
+  claimSkillVersionScan,
   skillRepository,
+  writeSkillVersionScanVerdict,
 } from '@bike4mind/database';
 import type { ISkill, ISkillListing } from '@bike4mind/common';
-import { submitListingVersion, decideVersion } from './submitVersion';
-import { searchListings } from './search';
+import { submitListingVersion, decideVersion, rescanVersion } from './submitVersion';
+import { recommendListings, searchListings } from './search';
 import { attachMarketStatus } from './marketStatus';
 import { serializeListing } from './market';
 import { runSkillMarketReviewSla } from './reviewSla';
@@ -60,6 +98,12 @@ import ratingHandler from '@pages/api/skills/market/[id]/rating';
 import detailHandler from '@pages/api/skills/market/[id]/index';
 import moderateHandler from '@pages/api/skills/market/[id]/moderate';
 import reportHandler from '@pages/api/skills/market/[id]/report';
+import publishHandler from '@pages/api/skills/market/publish';
+import versionsHandler from '@pages/api/skills/market/[id]/versions';
+import rescanHandler from '@pages/api/skills/market/versions/[vid]/rescan';
+import reviewHandler from '@pages/api/skills/market/versions/[vid]/review';
+import reviewQueueHandler from '@pages/api/skills/market/review-queue';
+import byTokenHandler from '@pages/api/skills/market/by-token/[token]';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -76,10 +120,17 @@ afterAll(async () => {
 beforeEach(async () => {
   orgs.members.clear();
   orgs.admins.clear();
+  orgs.info.clear();
   await Promise.all(
-    ['skills', 'skill_listings', 'skill_listing_versions', 'skill_listing_imports', 'skill_listing_reports'].map(c =>
-      mongoose.connection.db!.collection(c).deleteMany({})
-    )
+    [
+      'skills',
+      'skill_listings',
+      'skill_listing_versions',
+      'skill_listing_imports',
+      'skill_listing_reports',
+      'inboxes',
+      'users',
+    ].map(c => mongoose.connection.db!.collection(c).deleteMany({}))
   );
 });
 
@@ -87,27 +138,15 @@ const AUTHOR = 'author-1';
 const OTHER = 'other-1';
 const ADMIN = 'admin-1';
 const ORG = 'org-1';
+const ORG2 = 'org-2';
 
-/** Classifier stub: "MISMATCH" in the body yields descriptionMatches=false, "THROW" errors. */
-const classifier: ClassifierLlm = {
-  model: 'stub',
-  complete: async (_s, user) => {
-    if (user.includes('THROW')) throw new Error('provider down');
-    return JSON.stringify({
-      verdict: 'pass',
-      confidence: 0.95,
-      findings: [],
-      honestSummary: {
-        whatItDoes: user.includes('MISMATCH') ? 'Posts your text to an external service.' : 'Formats text.',
-        toolsUsed: [],
-        dataItTouches: 'The text you paste.',
-        riskNotes: [],
-        descriptionMatches: !user.includes('MISMATCH'),
-      },
-    });
-  },
+/** "MISMATCH" in the body yields descriptionMatches=false; "THROW" errors (see the hoisted stub). */
+const deps: { getClassifier: () => Promise<ClassifierLlm>; random: () => number } = {
+  getClassifier: async () => classifier,
+  random: () => 1,
 };
-const deps = { getClassifier: async () => classifier, random: () => 1 };
+/** Same stub, but every auto-approval is sampled for audit (`random() < auditSampleRate`). */
+const depsAudit = { ...deps, random: () => 0 };
 
 async function makeSkill(userId: string, body: string, extra: Partial<ISkill> = {}): Promise<ISkill> {
   return skillRepository.create({
@@ -123,7 +162,12 @@ async function makeSkill(userId: string, body: string, extra: Partial<ISkill> = 
   } as never) as Promise<ISkill>;
 }
 
-async function publish(skill: ISkill, visibility: ISkillListing['visibility'], organizationId?: string) {
+async function publish(
+  skill: ISkill,
+  visibility: ISkillListing['visibility'],
+  organizationId?: string,
+  scanDeps: { getClassifier: () => Promise<ClassifierLlm>; random: () => number } = deps
+) {
   const doc = await SkillListing.create({
     sourceSkillId: skill.id,
     authorUserId: skill.userId,
@@ -134,7 +178,7 @@ async function publish(skill: ISkill, visibility: ISkillListing['visibility'], o
     description: skill.description,
   });
   const listing = doc.toJSON() as unknown as ISkillListing;
-  const version = await submitListingVersion(listing, skill, deps);
+  const version = await submitListingVersion(listing, skill, scanDeps);
   return { listing: (await SkillListing.findById(listing.id))!.toJSON() as unknown as ISkillListing, version };
 }
 
@@ -318,6 +362,11 @@ describe('Skill Market (real mongod)', () => {
     const updated = (await skillRepository.findById(copyId))!;
     expect(updated).toMatchObject({ body: 'Rewrite as bullets v2.', name: copy.name, importedFrom: { version: 2 } });
 
+    // A second copy (renamed) is still the same importer: only the first import of a listing counts.
+    const renamed = await call(importHandler, 'POST', OTHER, { id: listing.id }, { name: 'x-2' });
+    expect(renamed._getStatusCode()).toBe(201);
+    expect((await SkillListing.findById(listing.id))!.importCount).toBe(1);
+
     await SkillListing.updateOne({ _id: listing.id }, { $set: { status: 'delisted' } });
     [status] = await attachMarketStatus([updated]);
     expect(status.marketStatus?.state).toBe('delisted');
@@ -357,6 +406,7 @@ describe('Skill Market (real mongod)', () => {
 
   it('SLA reminders: nudge author and org reviewers once per day, never approve', async () => {
     orgs.members.set(AUTHOR, [ORG]);
+    orgs.info.set(ORG, { name: 'Acme', userId: 'org-owner', managerId: 'org-mgr' });
     const { listing, version } = await publish(
       await makeSkill(AUTHOR, 'Fetch and summarize.', { allowedTools: ['web_fetch'] }),
       'organization',
@@ -364,12 +414,88 @@ describe('Skill Market (real mongod)', () => {
     );
     const later = new Date(Date.now() + 73 * 60 * 60 * 1000);
     const before = await Inbox.countDocuments({});
+    const authorBefore = await Inbox.countDocuments({ receiverId: AUTHOR });
     expect(await runSkillMarketReviewSla(later)).toEqual({ reminded: 1 });
     expect(await runSkillMarketReviewSla(later)).toEqual({ reminded: 0 });
-    expect(await Inbox.countDocuments({ receiverId: AUTHOR })).toBeGreaterThan(0);
-    expect(await Inbox.countDocuments({})).toBeGreaterThan(before);
+    // One reminder to the author, one each to the org's owner and manager.
+    expect(await Inbox.countDocuments({ receiverId: AUTHOR })).toBe(authorBefore + 1);
+    expect(await Inbox.countDocuments({ receiverId: 'org-owner' })).toBe(1);
+    expect(await Inbox.countDocuments({ receiverId: 'org-mgr' })).toBe(1);
+    expect(await Inbox.countDocuments({})).toBe(before + 3);
     expect((await SkillListingVersion.findById(version.id))!.reviewStatus).toBe('pending');
     expect((await SkillListing.findById(listing.id))!.currentApprovedVersionId).toBeNull();
+  });
+
+  it('SLA reminders: nudge super-admins for a held Public version, never approve it', async () => {
+    const admin = await User.create({ username: 'super-admin', name: 'Super Admin', isAdmin: true });
+    const { version } = await publish(
+      await makeSkill(AUTHOR, 'Fetch and summarize.', { allowedTools: ['web_fetch'] }),
+      'public'
+    );
+    expect(await runSkillMarketReviewSla(new Date(Date.now() + 73 * 60 * 60 * 1000))).toEqual({ reminded: 1 });
+    expect(await Inbox.countDocuments({ receiverId: String(admin._id) })).toBe(1);
+    expect((await SkillListingVersion.findById(version.id))!.reviewStatus).toBe('pending');
+  });
+
+  it('SLA reminders: retire an orphaned pending version and notify nobody', async () => {
+    const missingListingId = new mongoose.Types.ObjectId().toString();
+    const orphan = await SkillListingVersion.create({
+      listingId: missingListingId,
+      version: 1,
+      snapshot: { name: 'orphan', description: 'd', body: 'b' },
+      contentHash: 'orphan-hash',
+      scanStatus: 'passed',
+      reviewStatus: 'pending',
+    });
+    await SkillListingVersion.updateOne(
+      { _id: orphan._id },
+      { $set: { createdAt: new Date(Date.now() - 100 * 60 * 60 * 1000) } }
+    );
+    expect(await runSkillMarketReviewSla(new Date(Date.now() + 73 * 60 * 60 * 1000))).toEqual({ reminded: 0 });
+    expect((await SkillListingVersion.findById(orphan._id))!.reviewStatus).toBe('superseded');
+    expect(await Inbox.countDocuments({})).toBe(0);
+  });
+
+  it('SLA reminders: never retire the version the listing is currently serving', async () => {
+    const listing = await SkillListing.create({
+      sourceSkillId: 'skill-x',
+      authorUserId: AUTHOR,
+      visibility: 'unlisted',
+      name: 'live skill',
+      description: 'd',
+      status: 'approved',
+    });
+    const version = await SkillListingVersion.create({
+      listingId: String(listing._id),
+      version: 1,
+      snapshot: { name: 'live skill', description: 'd', body: 'b' },
+      contentHash: 'live-hash',
+      scanStatus: 'passed',
+      reviewStatus: 'pending',
+    });
+    await SkillListingVersion.updateOne(
+      { _id: version._id },
+      { $set: { createdAt: new Date(Date.now() - 100 * 60 * 60 * 1000) } }
+    );
+    await SkillListing.updateOne(
+      { _id: listing._id },
+      { $set: { currentApprovedVersionId: String(version._id), currentVersion: 1 } }
+    );
+    expect(await runSkillMarketReviewSla(new Date(Date.now() + 73 * 60 * 60 * 1000))).toEqual({ reminded: 0 });
+    expect((await SkillListingVersion.findById(version._id))!.reviewStatus).toBe('pending');
+  });
+
+  it('withdraw and delist never supersede the version the listing currently serves', async () => {
+    // A crash between the approve CAS and the version stamp leaves the live version marked pending.
+    const withdrawn = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
+    await SkillListingVersion.updateOne({ _id: withdrawn.version.id }, { $set: { reviewStatus: 'pending' } });
+    await call(detailHandler, 'DELETE', AUTHOR, { id: withdrawn.listing.id });
+    expect((await SkillListingVersion.findById(withdrawn.version.id))!.reviewStatus).toBe('pending');
+
+    const delisted = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets too.'), 'public');
+    await SkillListingVersion.updateOne({ _id: delisted.version.id }, { $set: { reviewStatus: 'pending' } });
+    await call(moderateHandler, 'POST', ADMIN, { id: delisted.listing.id }, { action: 'delist', reason: 'x' }, true);
+    expect((await SkillListingVersion.findById(delisted.version.id))!.reviewStatus).toBe('pending');
   });
   it('moderation: an org admin cannot restore their own listing or reverse a super-admin delist', async () => {
     orgs.members.set(AUTHOR, [ORG]);
@@ -430,5 +556,384 @@ describe('Skill Market (real mongod)', () => {
     const v2 = await submitListingVersion(listing, (await skillRepository.findById(skill.id))!, deps);
     expect(v2.reviewStatus).toBe('pending');
     expect((await SkillListing.findById(listing.id))!.status).toBe('in_review');
+  });
+
+  it('publish route: gates Public on account age, one skill one listing, and org membership', async () => {
+    const skill = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    await expect(
+      call(publishHandler, 'POST', AUTHOR, {}, { skillId: skill.id, visibility: 'public' }, false, new Date())
+    ).rejects.toMatchObject({ statusCode: 403 });
+
+    const aged = await call(
+      publishHandler,
+      'POST',
+      AUTHOR,
+      {},
+      { skillId: skill.id, visibility: 'public' },
+      false,
+      new Date(Date.now() - 10 * 24 * 60 * 60 * 1000)
+    );
+    expect(aged._getStatusCode()).toBe(201);
+    expect(aged._getJSONData().version).toMatchObject({ scanStatus: 'passed', reviewStatus: 'auto_approved' });
+
+    await expect(
+      call(publishHandler, 'POST', AUTHOR, {}, { skillId: skill.id, visibility: 'unlisted' })
+    ).rejects.toMatchObject({ statusCode: 409 });
+
+    const other = await makeSkill(AUTHOR, 'Another skill.');
+    await expect(
+      call(publishHandler, 'POST', AUTHOR, {}, { skillId: other.id, visibility: 'organization', organizationId: ORG })
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('publish route: refuses a market import and enforces the per-user listing cap', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    const { listing } = await publish(source, 'public');
+    const imported = await call(importHandler, 'POST', OTHER, { id: listing.id });
+    await expect(
+      call(publishHandler, 'POST', OTHER, {}, { skillId: imported._getJSONData().skill.id, visibility: 'unlisted' })
+    ).rejects.toMatchObject({ statusCode: 400 });
+
+    for (let i = 0; i < 25; i++) {
+      await SkillListing.create({
+        sourceSkillId: `seed-${i}`,
+        authorUserId: AUTHOR,
+        visibility: 'unlisted',
+        name: `seed-${i}`,
+        description: 'seed',
+        status: 'approved',
+      });
+    }
+    const extra = await makeSkill(AUTHOR, 'One more skill.');
+    await expect(
+      call(publishHandler, 'POST', AUTHOR, {}, { skillId: extra.id, visibility: 'unlisted' })
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('publish route: leaves no empty listing behind when the scan submission throws', async () => {
+    const skill = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    submitListingVersionMock.mockRejectedValueOnce(new Error('scan exploded'));
+    await expect(
+      call(publishHandler, 'POST', AUTHOR, {}, { skillId: skill.id, visibility: 'unlisted' })
+    ).rejects.toThrow('scan exploded');
+    // The listing is soft-deleted, so it no longer counts toward maxListingsPerUser.
+    expect(await SkillListing.countDocuments({ sourceSkillId: skill.id, deletedAt: null })).toBe(0);
+  });
+
+  it('reject: clears the pending pointer and keeps the earlier approved version live', async () => {
+    const skill = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
+    const { listing } = await publish(skill, 'public');
+    await skillRepository.update({ id: skill.id, body: 'MISMATCH v2' });
+    const v2 = await submitListingVersion(listing, (await skillRepository.findById(skill.id))!, deps);
+    expect(v2.reviewStatus).toBe('pending');
+
+    const rejected = await decideVersion(v2.id, { id: ADMIN, isAdmin: true }, [], {
+      action: 'reject',
+      note: 'understated',
+    });
+    expect(rejected.reviewStatus).toBe('rejected');
+    const after = (await SkillListing.findById(listing.id))!;
+    expect(after.pendingVersionId).toBeNull();
+    expect(after.currentVersion).toBe(1);
+    expect(after.status).toBe('approved');
+    await expect(
+      decideVersion(v2.id, { id: ADMIN, isAdmin: true }, [], { action: 'reject', note: 'again' })
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('audit: a sampled version is audited once, and never by its author', async () => {
+    const { version } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public', undefined, depsAudit);
+    expect(version).toMatchObject({ reviewStatus: 'auto_approved', auditSample: true, auditedAt: null });
+
+    await expect(call(reviewHandler, 'POST', AUTHOR, { vid: version.id }, { action: 'audit' })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(
+      (await call(reviewHandler, 'POST', ADMIN, { vid: version.id }, { action: 'audit' }, true))._getStatusCode()
+    ).toBe(200);
+    await expect(
+      call(reviewHandler, 'POST', ADMIN, { vid: version.id }, { action: 'audit' }, true)
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('withdraw: supersedes a held version, marks importers removed and cannot run twice', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    const { listing } = await publish(source, 'public');
+    const imported = await call(importHandler, 'POST', OTHER, { id: listing.id });
+    const copy = (await skillRepository.findById(imported._getJSONData().skill.id))!;
+    await skillRepository.update({ id: source.id, body: 'MISMATCH v2' });
+    const v2 = await submitListingVersion(listing, (await skillRepository.findById(source.id))!, deps);
+    expect(v2.reviewStatus).toBe('pending');
+
+    await expect(call(detailHandler, 'DELETE', OTHER, { id: listing.id })).rejects.toMatchObject({ statusCode: 403 });
+    expect((await call(detailHandler, 'DELETE', AUTHOR, { id: listing.id }))._getStatusCode()).toBe(204);
+    expect((await SkillListingVersion.findById(v2.id))!.reviewStatus).toBe('superseded');
+    const [status] = await attachMarketStatus([copy]);
+    expect(status.marketStatus?.state).toBe('removed');
+    await expect(call(detailHandler, 'DELETE', AUTHOR, { id: listing.id })).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('organization membership is enforced on a later version and on a rescan', async () => {
+    orgs.members.set(AUTHOR, [ORG]);
+    const skill = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    const { listing } = await publish(skill, 'organization', ORG);
+    orgs.members.delete(AUTHOR);
+    await skillRepository.update({ id: skill.id, body: 'Rewrite as bullets v2.' });
+    await expect(call(versionsHandler, 'POST', AUTHOR, { id: listing.id })).rejects.toMatchObject({ statusCode: 403 });
+    expect((await SkillListing.findById(listing.id))!.currentVersion).toBe(1);
+
+    orgs.members.set(AUTHOR, [ORG]);
+    const held = await publish(await makeSkill(AUTHOR, 'THROW please'), 'organization', ORG);
+    expect(held.version.scanStatus).toBe('error');
+    orgs.members.delete(AUTHOR);
+    await expect(call(rescanHandler, 'POST', AUTHOR, { vid: held.version.id })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+  });
+
+  it('rescan: a failed scan can be retried to passed, but a passed one cannot be rescanned', async () => {
+    const { listing, version } = await publish(await makeSkill(AUTHOR, 'THROW please'), 'unlisted');
+    expect(version.scanStatus).toBe('error');
+
+    const clean: ClassifierLlm = {
+      model: 'stub-clean',
+      complete: async () =>
+        JSON.stringify({
+          verdict: 'pass',
+          confidence: 0.95,
+          findings: [],
+          honestSummary: {
+            whatItDoes: 'Formats text.',
+            toolsUsed: [],
+            dataItTouches: 'The text you paste.',
+            riskNotes: [],
+            descriptionMatches: true,
+          },
+        }),
+    };
+    const cleanDeps = { getClassifier: async () => clean, random: () => 1 };
+    const rescanned = await rescanVersion(listing, version.id, cleanDeps);
+    expect(rescanned).toMatchObject({ scanStatus: 'passed', riskTier: 'clean', reviewStatus: 'auto_approved' });
+    expect((await SkillListing.findById(listing.id))!.status).toBe('approved');
+    await expect(rescanVersion(listing, version.id, cleanDeps)).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('scan claim: only a stale claim can be re-claimed, and a stale verdict cannot land', async () => {
+    const version = await SkillListingVersion.create({
+      listingId: 'listing-1',
+      version: 1,
+      snapshot: { name: 'n', description: 'd', body: 'b' },
+      contentHash: 'h',
+      scanStatus: 'scanning',
+      scanClaimedAt: new Date(Date.now() - 6 * 60_000),
+      reviewStatus: 'not_required',
+    });
+    const staleBefore = new Date(Date.now() - 5 * 60_000);
+    expect(await claimSkillVersionScan(String(version._id), new Date(), staleBefore)).not.toBeNull();
+
+    const claimA = new Date();
+    await SkillListingVersion.updateOne(
+      { _id: version._id },
+      { $set: { scanStatus: 'scanning', scanClaimedAt: new Date(claimA.getTime() + 1000) } }
+    );
+    expect(await claimSkillVersionScan(String(version._id), new Date(), staleBefore)).toBeNull();
+    expect(
+      await writeSkillVersionScanVerdict(String(version._id), claimA, {
+        scanStatus: 'passed',
+        scanFindings: [],
+        reviewStatus: 'auto_approved',
+      })
+    ).toBe(false);
+    expect((await SkillListingVersion.findById(version._id))!.scanStatus).toBe('scanning');
+  });
+
+  it('review queue: scopes org admins to their orgs and hides legacy and Public rows from them', async () => {
+    orgs.admins.set('org-admin', [ORG]);
+    orgs.admins.set('other-admin', [ORG2]);
+    orgs.members.set(AUTHOR, [ORG]);
+    orgs.members.set(OTHER, [ORG2]);
+    const webFetch = { allowedTools: ['web_fetch'] };
+    const mine = await publish(await makeSkill(AUTHOR, 'Fetch and summarize.', webFetch), 'organization', ORG);
+    const theirs = await publish(await makeSkill(OTHER, 'Fetch and summarize it.', webFetch), 'organization', ORG2);
+    const pub = await publish(await makeSkill(AUTHOR, 'Fetch and summarize publicly.', webFetch), 'public');
+    const idsOf = (res: { _getJSONData: () => unknown }) =>
+      (res._getJSONData() as { data: Array<{ listing: { id: string } }> }).data.map(d => d.listing.id);
+
+    expect(idsOf(await call(reviewQueueHandler, 'GET', 'org-admin', { filter: 'pending' }))).toEqual([mine.listing.id]);
+    await expect(call(reviewQueueHandler, 'GET', 'org-admin', { filter: 'legacy' })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    const all = idsOf(await call(reviewQueueHandler, 'GET', ADMIN, { filter: 'pending' }, {}, true));
+    expect(all.sort()).toEqual([mine.listing.id, theirs.listing.id, pub.listing.id].sort());
+  });
+
+  it('recommended: keeps other-org, unlisted and report-hidden listings out', async () => {
+    const author = 'rec-author';
+    const pub = (await publish(await makeSkill(author, 'A popular public formatter.'), 'public')).listing;
+    const otherOrg = (await publish(await makeSkill(author, 'An other-org formatter.'), 'organization', ORG2)).listing;
+    const unlisted = (await publish(await makeSkill(author, 'An unlisted formatter.'), 'unlisted')).listing;
+    const hidden = (await publish(await makeSkill(author, 'A hidden formatter.'), 'public')).listing;
+    await SkillListing.updateOne({ _id: hidden.id }, { $set: { hiddenByReports: true } });
+    const seeded: Array<[string, string]> = [
+      [pub.id, 'i1'],
+      [otherOrg.id, 'i2'],
+      [unlisted.id, 'i3'],
+      [hidden.id, 'i4'],
+    ];
+    for (const [listingId, u] of seeded) {
+      await SkillListingImport.create({ listingId, userId: u, skillId: `s-${u}`, version: 1 });
+    }
+
+    expect((await recommendListings('viewer-1', [ORG])).map(r => r.id)).toEqual([pub.id]);
+  });
+
+  it('by-token: opens an unlisted listing and 404s a malformed token', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'unlisted');
+    const res = await call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken });
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().listing).toMatchObject({ id: listing.id, visibility: 'unlisted' });
+    await expect(call(byTokenHandler, 'GET', OTHER, { token: 'x'.repeat(31) })).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
+
+  it('search: filters and sorts all run behind the visibility gate', async () => {
+    orgs.members.set(AUTHOR, [ORG]);
+    const a = (await publish(await makeSkill(AUTHOR, 'Alpha body.', { description: 'Alpha formatter' }), 'public'))
+      .listing;
+    const b = (
+      await publish(
+        await makeSkill(AUTHOR, 'Beta body.', { description: 'Beta fetcher', allowedTools: ['current_datetime'] }),
+        'public'
+      )
+    ).listing;
+    const orgListing = (
+      await publish(await makeSkill(AUTHOR, 'Gamma body.', { description: 'Gamma org skill' }), 'organization', ORG)
+    ).listing;
+    await SkillListing.updateOne({ _id: a.id }, { $set: { tags: ['writing'], importCount: 5 } });
+    await SkillListing.updateOne({ _id: b.id }, { $set: { tags: ['research'], importCount: 1 } });
+
+    const ids = async (params: Parameters<typeof searchListings>[1]) =>
+      (await searchListings([], params)).data.map(l => l.id);
+
+    expect(await ids({ page: 1, limit: 50, sort: 'top', tags: ['writing'] })).toEqual([a.id]);
+    expect(await ids({ page: 1, limit: 50, sort: 'top', tools: 'with' })).toEqual([b.id]);
+    expect((await ids({ page: 1, limit: 50, sort: 'top', tools: 'without' })).sort()).toEqual([a.id]);
+    expect(
+      (await searchListings([ORG], { page: 1, limit: 50, sort: 'top', tools: 'without' })).data.map(l => l.id).sort()
+    ).toEqual([a.id, orgListing.id].sort());
+    expect(await ids({ page: 1, limit: 50, sort: 'top', scope: 'org' })).toEqual([]);
+    expect(
+      (await searchListings([ORG], { page: 1, limit: 50, sort: 'top', scope: 'org' })).data.map(l => l.id)
+    ).toEqual([orgListing.id]);
+    expect(await ids({ page: 1, limit: 50, sort: 'imports' })).toEqual([a.id, b.id]);
+    expect((await ids({ page: 1, limit: 50, sort: 'new' })).sort()).toEqual([a.id, b.id].sort());
+    expect((await ids({ page: 1, limit: 50, sort: 'updated' })).sort()).toEqual([a.id, b.id].sort());
+
+    await SkillListing.updateOne({ _id: a.id }, { $set: { ratingSum: 5, ratingCount: 1 } });
+    expect(await ids({ page: 1, limit: 50, sort: 'top', minRating: 4 })).toEqual([a.id]);
+
+    const byText = await searchListings([], { page: 1, limit: 50, sort: 'relevance', q: 'alpha' });
+    expect(byText.data.map(l => l.id)).toEqual([a.id]);
+    expect(byText.hasMore).toBe(false);
+
+    const paged = await searchListings([], { page: 1, limit: 1, sort: 'imports' });
+    expect(paged.data).toHaveLength(1);
+    expect(paged.hasMore).toBe(true);
+  });
+
+  it('Public approve of a high-risk version needs the acknowledgement', async () => {
+    const { version } = await publish(
+      await makeSkill(AUTHOR, 'Fetch and summarize.', { allowedTools: ['web_fetch'] }),
+      'public'
+    );
+    expect(version).toMatchObject({ riskTier: 'high', reviewStatus: 'pending' });
+    await expect(
+      decideVersion(version.id, { id: ADMIN, isAdmin: true }, [], { action: 'approve' })
+    ).rejects.toMatchObject({ statusCode: 400 });
+    const approved = await decideVersion(version.id, { id: ADMIN, isAdmin: true }, [], {
+      action: 'approve',
+      ackHighRisk: true,
+    });
+    expect(approved.reviewStatus).toBe('approved');
+  });
+
+  it('scans the whole AI summary, including the two fields an adversarial body can steer', async () => {
+    const honest = (over: Record<string, unknown>): ClassifierLlm => ({
+      model: 'stub-adversary',
+      complete: async () =>
+        JSON.stringify({
+          verdict: 'pass',
+          confidence: 0.95,
+          findings: [],
+          honestSummary: {
+            whatItDoes: 'Formats text.',
+            toolsUsed: [],
+            dataItTouches: 'text',
+            riskNotes: [],
+            descriptionMatches: true,
+            ...over,
+          },
+        }),
+    });
+    const scanOf = async (over: Record<string, unknown>) =>
+      (
+        await publish(await makeSkill(AUTHOR, `Rewrite as bullets ${Math.random()}.`), 'unlisted', undefined, {
+          getClassifier: async () => honest(over),
+          random: () => 1,
+        })
+      ).version;
+
+    const note = await scanOf({ mismatchNote: 'see https://evil.example', descriptionMatches: false });
+    expect(note.scanFindings.map(f => f.rule)).toContain('summary_external_url');
+    expect(note.riskTier).not.toBe('clean');
+
+    const tools = await scanOf({ toolsUsed: ['https://evil.example'] });
+    expect(tools.scanFindings.map(f => f.rule)).toContain('summary_external_url');
+  });
+
+  it('refuses an unchanged resubmit and a resubmit after a delist', async () => {
+    const skill = await makeSkill(AUTHOR, 'Rewrite as bullets.');
+    const { listing } = await publish(skill, 'public');
+    await expect(
+      submitListingVersion(listing, (await skillRepository.findById(skill.id))!, deps)
+    ).rejects.toMatchObject({ statusCode: 400 });
+
+    await SkillListing.updateOne({ _id: listing.id }, { $set: { status: 'delisted' } });
+    await skillRepository.update({ id: skill.id, body: 'Rewrite as bullets v2.' });
+    await expect(
+      submitListingVersion(listing, (await skillRepository.findById(skill.id))!, deps)
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('allows reverting to an earlier approved version instead of calling it unchanged', async () => {
+    const skill = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
+    const { listing } = await publish(skill, 'public');
+    await skillRepository.update({ id: skill.id, body: 'Rewrite as bullets v2.' });
+    await submitListingVersion(listing, (await skillRepository.findById(skill.id))!, deps);
+    expect((await SkillListing.findById(listing.id))!.currentVersion).toBe(2);
+
+    await skillRepository.update({ id: skill.id, body: 'Rewrite as bullets v1.' });
+    // Re-read the listing first: the routes do, and `currentApprovedVersionId` has moved on.
+    const fresh = (await SkillListing.findById(listing.id))!.toJSON() as unknown as ISkillListing;
+    const reverted = await submitListingVersion(fresh, (await skillRepository.findById(skill.id))!, deps);
+    expect(reverted.version).toBe(3);
+    expect((await SkillListing.findById(listing.id))!.currentVersion).toBe(3);
+  });
+
+  it('a failed copy from another author does not block the original author republishing', async () => {
+    const body = 'A unique and useful formatter.';
+    const first = await publish(await makeSkill(AUTHOR, body), 'unlisted');
+    // B has a live listing of their own and submits a version that copies A's content: it fails,
+    // but B's listing stays live because it still serves an earlier approved version.
+    const bListing = await publish(await makeSkill(OTHER, 'B own skill body.'), 'unlisted');
+    const copy = await submitListingVersion(bListing.listing, await makeSkill(OTHER, body), deps);
+    expect(copy.scanStatus).toBe('failed');
+    expect((await SkillListing.findById(bListing.listing.id))!.status).toBe('approved');
+
+    // A withdraws and republishes the same content; the failed copy must not block it.
+    await SkillListing.updateOne({ _id: first.listing.id }, { $set: { status: 'withdrawn' } });
+    const again = await publish(await makeSkill(AUTHOR, body), 'unlisted');
+    expect(again.version.scanStatus).toBe('passed');
   });
 });
