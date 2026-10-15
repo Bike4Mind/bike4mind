@@ -30,8 +30,9 @@ import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy/styles';
 import { useTranslation } from 'react-i18next';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
-import { ModelBackend, ModelInfo, usdToCredits } from '@bike4mind/common';
+import { CreditHolderType, ModelBackend, ModelInfo, usdToCredits } from '@bike4mind/common';
 import { bedrockChipLabels, dedupePricingRows, textModelPriceCells } from './modelPricingRows';
+import { UsageDashboard } from '@client/app/components/admin/CreditAnalysis/components/UsageDashboard';
 import { aggregateUsageByModel } from './usageByModel';
 import SectionContainer from './SectionContainer';
 import { TYPE } from './settingsStyles';
@@ -1022,6 +1023,18 @@ const CreditAnalyticsTabContent: React.FC = () => {
 
         {/* Removed bottom current balance card (duplicated at top) */}
       </Stack>
+
+      {/* Owner-scoped spend breakdown (by key / feature / source) from GET /api/usage. It lived on
+          the API Keys tab until that became keys-only; both usage views belong on this tab, and
+          this is the per-key cut the ledger chart above cannot show. */}
+      {currentUser?.id && (
+        <>
+          <Divider sx={{ my: 4 }}>
+            <Typography level="title-md">Spend breakdown</Typography>
+          </Divider>
+          <UsageDashboard ownerType={CreditHolderType.User} ownerId={currentUser.id} />
+        </>
+      )}
 
       {/* Model Pricing - promoted from an inner sub-tab to a bottom section.
           Both tables render side by side (responsive) rather than behind a toggle. */}

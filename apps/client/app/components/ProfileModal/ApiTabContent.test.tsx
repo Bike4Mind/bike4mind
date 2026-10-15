@@ -23,16 +23,12 @@ vi.mock('@client/app/components/ProfileModal/AgentConnectSection', () => ({
   default: () => <div data-testid="agent-connect-section" />,
 }));
 
-// The removed usage block rendered only when a user was signed in. Supplying one keeps that
-// path armed: a signed-in user must still see no usage dashboard on this tab.
-vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: 'user_1' } }),
+// The usage dashboard now lives on the Usage tab, not here. Mock it to a marker so that if a
+// usage chart is ever wired back into this tab, the "renders no usage dashboard" test below
+// fails rather than silently reintroducing the second, disagreeing usage view.
+vi.mock('@client/app/components/admin/CreditAnalysis/components/UsageDashboard', () => ({
+  UsageDashboard: () => <div data-testid="usage-dashboard" />,
 }));
-
-// The usage dashboard was this tab's only dynamic import. Stub next/dynamic with a marker so a
-// usage chart that comes back here fails this test rather than silently reintroducing the second,
-// disagreeing usage view.
-vi.mock('next/dynamic', () => ({ default: () => () => <div data-testid="usage-dashboard" /> }));
 
 import ApiTabContent from './ApiTabContent';
 

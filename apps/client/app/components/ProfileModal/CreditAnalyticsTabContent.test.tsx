@@ -32,7 +32,7 @@ const accessibleTextModels = [
 ];
 
 const hoisted = vi.hoisted(() => ({
-  currentUser: { id: 'user_1', currentCredits: 1000 } as Record<string, unknown>,
+  currentUser: { id: 'user_1', currentCredits: 1000 } as Record<string, unknown> | null,
   transactions: [] as Array<Record<string, unknown>>,
 }));
 
@@ -58,6 +58,11 @@ vi.mock('@client/app/hooks/useAccessibleModels', () => ({
     isLoading: false,
     isModelsError: false,
   }),
+}));
+// The spend breakdown owns its own /api/usage query; stub it so these tests cover only that the
+// Usage tab mounts it, not what it fetches.
+vi.mock('@client/app/components/admin/CreditAnalysis/components/UsageDashboard', () => ({
+  UsageDashboard: () => <div data-testid="usage-dashboard" />,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -126,5 +131,27 @@ describe('CreditAnalyticsTabContent days remaining', () => {
     render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
 
     expect(screen.getByTestId('credit-analytics-days-remaining')).toHaveTextContent('Too early');
+  });
+});
+
+describe('CreditAnalyticsTabContent spend breakdown', () => {
+  afterEach(() => {
+    hoisted.currentUser = { id: 'user_1', currentCredits: 1000 };
+  });
+
+  // The per-key / per-feature / per-source cut moved here from the API Keys tab, which is now
+  // keys-only. Mounting it on this tab is what keeps "one usage view" from dropping the cut.
+  it('mounts the personal spend breakdown under a heading', () => {
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+
+    expect(screen.getByText('Spend breakdown')).toBeTruthy();
+    expect(screen.getByTestId('usage-dashboard')).toBeTruthy();
+  });
+
+  it('omits the spend breakdown when no user is signed in', () => {
+    hoisted.currentUser = null;
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+
+    expect(screen.queryByTestId('usage-dashboard')).toBeNull();
   });
 });
