@@ -66,7 +66,12 @@ export const useAudioGenSettings = create<AudioGenSettingsState>()(
     }),
     {
       name: 'audio-gen-settings',
-      version: 1,
+      // v2 dropped `mode`: Studio's Speech and Sound effects tabs each pass their own.
+      version: 2,
+      migrate: persisted => {
+        const { mode: _mode, ...settings } = (persisted ?? {}) as Record<string, unknown>;
+        return settings as unknown as AudioGenSettingsState;
+      },
     }
   )
 );

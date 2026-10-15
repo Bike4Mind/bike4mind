@@ -15,9 +15,11 @@ export type UsableAudioProviders = {
 
 type AudioVendor = VoiceGenerationVendor | SoundGenerationVendor;
 
-// Must stay in sync with the key each route resolves: resolveTtsProvider (/api/ai/tts) and
-// PROVIDER_API_KEY_TYPE in /api/ai/sound-effects.
-const VENDOR_API_KEY_TYPE: Record<AudioVendor, ApiKeyType> = {
+/**
+ * The stored key type each audio vendor needs, resolved per user first and then from the admin key
+ * (getEffectiveApiKey). /api/ai/sound-effects reads it too; resolveTtsProvider (/api/ai/tts) picks the same types.
+ */
+export const AUDIO_VENDOR_API_KEY_TYPE: Record<AudioVendor, ApiKeyType> = {
   openai: ApiKeyType.openai,
   elevenlabs: ApiKeyType.elevenlabs,
 };
@@ -35,7 +37,7 @@ export async function listUsableAudioProviders(userId: string): Promise<UsableAu
     vendors.map(async vendor => {
       const apiKey = await apiKeyService.getEffectiveApiKey(
         userId,
-        { type: VENDOR_API_KEY_TYPE[vendor], nullIfMissing: true },
+        { type: AUDIO_VENDOR_API_KEY_TYPE[vendor], nullIfMissing: true },
         { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
       );
       return apiKey ? vendor : undefined;

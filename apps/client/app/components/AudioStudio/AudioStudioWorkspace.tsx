@@ -108,7 +108,12 @@ const AudioStudioWorkspace = ({ mode, testId }: { mode: AudioGenMode; testId: st
   const providers = useAudioProviders();
   const usable = mode === 'tts' ? providers.data?.speech : providers.data?.soundEffects;
   return (
-    <StudioModelsGate testId={testId} noun={NOUN[mode]} models={{ isPending: providers.isPending, data: usable }}>
+    <StudioModelsGate
+      testId={testId}
+      noun={NOUN[mode]}
+      itemsLabel="providers"
+      models={{ isPending: providers.isPending, data: usable }}
+    >
       {() => <AudioStudioForm mode={mode} testId={testId} />}
     </StudioModelsGate>
   );

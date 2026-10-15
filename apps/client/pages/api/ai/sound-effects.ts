@@ -1,9 +1,4 @@
-import {
-  ApiKeyType,
-  shouldPersistGeneratedAudio,
-  generateSoundEffectContract,
-  SoundGenerationVendor,
-} from '@bike4mind/common';
+import { shouldPersistGeneratedAudio, generateSoundEffectContract } from '@bike4mind/common';
 import { adminSettingsRepository, apiKeyRepository, usageEventRepository } from '@bike4mind/database';
 import { apiKeyService, estimateSoundCredits } from '@bike4mind/services';
 import { aiSoundService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -12,13 +7,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
-
-// The stored key type each vendor needs. Resolved per-user first, then falling
-// back to the admin-configured key (getEffectiveApiKey), so the feature works
-// out of the box on platforms that provide a shared provider key.
-const PROVIDER_API_KEY_TYPE: Record<SoundGenerationVendor, ApiKeyType> = {
-  elevenlabs: ApiKeyType.elevenlabs,
-};
+import { AUDIO_VENDOR_API_KEY_TYPE } from '@server/utils/listUsableAudioProviders';
 
 // Provider-agnostic sound-effects generation. Meters usage: because the cost is
 // deterministic (duration-driven), it RESERVES the exact charge before calling
@@ -38,7 +27,7 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,
-    { type: PROVIDER_API_KEY_TYPE[provider] },
+    { type: AUDIO_VENDOR_API_KEY_TYPE[provider] },
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
 

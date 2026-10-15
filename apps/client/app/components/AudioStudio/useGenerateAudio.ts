@@ -88,11 +88,6 @@ export function useGenerateAudio(mode: AudioGenMode) {
 
   useEffect(() => releaseObjectUrl, [releaseObjectUrl]);
 
-  const clearResult = useCallback(() => {
-    releaseObjectUrl();
-    setResult(null);
-  }, [releaseObjectUrl]);
-
   const refreshFiles = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
   }, [queryClient]);
@@ -205,5 +200,5 @@ export function useGenerateAudio(mode: AudioGenMode) {
     [mode, notifySaveOutcome, releaseObjectUrl]
   );
 
-  return { generate, isGenerating, result, clearResult };
+  return { generate, isGenerating, result };
 }
