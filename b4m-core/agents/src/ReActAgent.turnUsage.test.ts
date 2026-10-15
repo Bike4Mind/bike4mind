@@ -104,13 +104,21 @@ describe('ReActAgent per-request usage', () => {
   });
 
   it('run(): a permission denial still reports the turns and cache totals billed so far', async () => {
-    const agent = new ReActAgent(context(scriptedLlm([toolIteration, new PermissionDeniedError('shell')])));
+    const billed: Frame = {
+      ...toolIteration,
+      cacheCreationInputTokens: 500,
+      turnUsage: [
+        { inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 150_000, cacheCreationInputTokens: 500 },
+      ],
+    };
+    const agent = new ReActAgent(context(scriptedLlm([billed, new PermissionDeniedError('shell')])));
 
     const result = await agent.run('find it');
 
     expect(result.finalAnswer).toContain('Permission denied');
-    expect(result.completionInfo.turnUsage).toEqual(toolIteration.turnUsage);
+    expect(result.completionInfo.turnUsage).toEqual(billed.turnUsage);
     expect(result.completionInfo.totalCacheReadTokens).toBe(150_000);
+    expect(result.completionInfo.totalCacheWriteTokens).toBe(500);
   });
 
   it('run(): drops a failed attempt rolled back by reactive compaction', async () => {
