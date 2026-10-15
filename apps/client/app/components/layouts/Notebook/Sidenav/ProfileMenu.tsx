@@ -461,6 +461,14 @@ const ProfileMenu = () => {
             }}
           />
           <MenuRow
+            testId="profile-menu-integrations"
+            icon={<PowerOutlinedIcon sx={{ fontSize: '18px' }} />}
+            label={t('integrations.title', 'Integrations')}
+            onClick={() => {
+              navigateFromMenu('/integrations', () => navigate({ to: '/integrations' }));
+            }}
+          />
+          <MenuRow
             testId="profile-menu-feedback-rollup"
             icon={<FeedbackOutlinedIcon sx={{ fontSize: '18px' }} />}
             label={t('feedback.rollupTitle', 'Your feedback')}
@@ -478,14 +486,6 @@ const ProfileMenu = () => {
             label={t('apiKeys.title', 'API Keys')}
             onClick={() => {
               navigateFromMenu('/profile', () => navigate({ to: '/profile', search: { tab: 'api-keys' } }));
-            }}
-          />
-          <MenuRow
-            testId="profile-menu-integrations"
-            icon={<PowerOutlinedIcon sx={{ fontSize: '18px' }} />}
-            label={t('integrations.title', 'Integrations')}
-            onClick={() => {
-              navigateFromMenu('/integrations', () => navigate({ to: '/integrations' }));
             }}
           />
           <MenuRow
