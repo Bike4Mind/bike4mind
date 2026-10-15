@@ -270,8 +270,14 @@ describe('ChatService agent browser', () => {
     const before = streams.length;
     const doneBefore = events.filter(event => event.type === 'done').length;
     const askedBefore = events.filter(e => e.type === 'tool-start' && e.call.status === 'awaiting-approval').length;
-    await service.send(sessionId, 'read the page');
-    await vi.waitUntil(() => streams.length === before + 1, { timeout: 3000, interval: 5 });
+    expect(await service.send(sessionId, 'read the page')).toMatchObject({ ok: true });
+    // Says which way it went wrong when it does: no request at all, or an extra one that skipped
+    // past the count this waits for.
+    await vi
+      .waitUntil(() => streams.length === before + 1, { timeout: 3000, interval: 5 })
+      .catch(() => {
+        throw new Error(`Expected request ${before + 1} after the send, have ${streams.length}`);
+      });
     streams[before].write(
       frame({ type: 'tool_use', tools: [{ id: `snap_${before}`, name: 'browser_snapshot', arguments: '{}' }] })
     );
