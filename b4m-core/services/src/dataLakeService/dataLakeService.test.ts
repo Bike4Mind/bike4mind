@@ -13,6 +13,7 @@ import {
   type IDataLakeBatchDocument,
   FIND_ACCESSIBLE_ARMS,
   type FindAccessibleArm,
+  STORAGE_CHARGE_STAMP_CUTOFF,
 } from '@bike4mind/common';
 import {
   canAccessLake,
@@ -3071,8 +3072,20 @@ describe('unarchiveDataLake - dedup pass (live re-upload wins)', () => {
   // of the counted set.
   it("debits each discarded duplicate's own owner, grouped by owner", async () => {
     const archived = [
-      { id: 'a1', contentHash: 'h1', userId: 'creator', fileSize: 100 },
-      { id: 'a2', contentHash: 'h2', userId: 'contributor', fileSize: 50 },
+      {
+        id: 'a1',
+        contentHash: 'h1',
+        userId: 'creator',
+        fileSize: 100,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      },
+      {
+        id: 'a2',
+        contentHash: 'h2',
+        userId: 'contributor',
+        fileSize: 50,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      },
     ];
     const incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
     const fabFiles = {
@@ -3107,6 +3120,125 @@ describe('unarchiveDataLake - dedup pass (live re-upload wins)', () => {
     expect(incrementCurrentStorage).toHaveBeenCalledTimes(2);
     expect(incrementCurrentStorage).toHaveBeenCalledWith('creator', -100);
     expect(incrementCurrentStorage).toHaveBeenCalledWith('contributor', -50);
+  });
+
+  it('does not debit a discarded duplicate that was never charged', async () => {
+    const archived = [
+      {
+        id: 'a1',
+        contentHash: 'h1',
+        userId: 'creator',
+        fileSize: 100,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      },
+      {
+        id: 'a2',
+        contentHash: 'h2',
+        userId: 'contributor',
+        fileSize: 50,
+        status: 'pending',
+        storageChargedAt: null,
+        createdAt: new Date('2026-10-10T00:00:00Z'),
+      },
+    ];
+    const incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue(archived),
+      // Both a1 and a2 have a live re-upload - both are discarded duplicates.
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([
+        { id: 'live1', contentHash: 'h1' },
+        { id: 'live2', contentHash: 'h2' },
+      ]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi
+        .fn()
+        .mockResolvedValueOnce(lake({ status: 'archived' }))
+        .mockResolvedValue(lake({ status: 'unarchiving' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
+      activateIfDraft: vi.fn(),
+    };
+
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles, users: { incrementCurrentStorage } },
+    });
+
+    expect(incrementCurrentStorage).toHaveBeenCalledTimes(1);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('creator', -100);
+    expect(incrementCurrentStorage).not.toHaveBeenCalledWith('contributor', expect.anything());
+  });
+
+  // The legacy arm both ways: a pre-stamp `complete` row was charged by the upload event, so its
+  // duplicate is debited, while a post-stamp `complete` row that never won the charge is not.
+  it('debits a legacy pre-stamp complete duplicate but not a post-stamp one that was never charged', async () => {
+    const archived = [
+      {
+        id: 'a1',
+        contentHash: 'h1',
+        userId: 'creator',
+        fileSize: 100,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      },
+      {
+        id: 'a2',
+        contentHash: 'h2',
+        userId: 'legacy-owner',
+        fileSize: 200,
+        status: 'complete',
+        createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000),
+      },
+      {
+        id: 'a3',
+        contentHash: 'h3',
+        userId: 'uncharged-owner',
+        fileSize: 400,
+        status: 'complete',
+        createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() + 1000),
+      },
+    ];
+    const incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue(archived),
+      // Every one of a1/a2/a3 has a live re-upload, so all three are discarded duplicates.
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([
+        { id: 'live1', contentHash: 'h1' },
+        { id: 'live2', contentHash: 'h2' },
+        { id: 'live3', contentHash: 'h3' },
+      ]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi
+        .fn()
+        .mockResolvedValueOnce(lake({ status: 'archived' }))
+        .mockResolvedValue(lake({ status: 'unarchiving' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
+      activateIfDraft: vi.fn(),
+    };
+
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles, users: { incrementCurrentStorage } },
+    });
+
+    expect(incrementCurrentStorage).toHaveBeenCalledTimes(2);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('creator', -100);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('legacy-owner', -200);
+    expect(incrementCurrentStorage).not.toHaveBeenCalledWith('uncharged-owner', expect.anything());
   });
 
   it("passes this lake's own filesArchivedAt stamp through to both the dedup read and the reversal", async () => {
