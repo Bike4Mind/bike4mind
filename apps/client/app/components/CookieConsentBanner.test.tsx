@@ -617,8 +617,8 @@ describe('CookieConsentBanner', () => {
       expect(screen.queryByTestId('cookie-consent-cancel-btn')).not.toBeInTheDocument();
     });
 
-    // Pairs each loader a grant fires with the vendor the ask named, so a loader added to the
-    // grant without a name here fails rather than shipping uninformed consent.
+    // Pairs each loader the grant fires today with the vendor the ask names. It does not catch a
+    // new loader on its own: one added to activateConsent needs a name here AND an assertion below.
     it('names every vendor the grant then loads on the first-run ask', () => {
       vi.stubEnv('NEXT_PUBLIC_GA_MEASUREMENT_ID', 'G-TEST');
       vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
