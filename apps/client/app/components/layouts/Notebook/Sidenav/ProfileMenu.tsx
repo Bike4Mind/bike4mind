@@ -47,6 +47,7 @@ import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWin
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import PowerOutlinedIcon from '@mui/icons-material/PowerOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
 import ApiIcon from '@mui/icons-material/Api';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
@@ -255,6 +256,7 @@ const ProfileMenu = () => {
 
   const { isFeatureEnabled } = useFeatureEnabled();
   const isQuestMasterEnabled = isFeatureEnabled('enableQuestMaster');
+  const isHearthEnabled = isFeatureEnabled('enableHearth');
   // Premium-overlay launch points (codegen glue - empty array in the open-core
   // fork). Visibility semantics (STRICT - no admin/developer bypass, hidden
   // while entitlements load, hidden-not-redirected on denial) live in
@@ -709,6 +711,16 @@ const ProfileMenu = () => {
                     label={t('quests.my_quests', 'My Quests')}
                     onClick={() => {
                       navigateFromMenu('/quests', () => navigate({ to: '/quests' }));
+                    }}
+                  />
+                )}
+                {isHearthEnabled && (
+                  <MenuRow
+                    testId="profile-more-hearth"
+                    icon={<LocalFireDepartmentOutlinedIcon sx={{ fontSize: '18px' }} />}
+                    label={t('sidenav.hearth', 'Hearth')}
+                    onClick={() => {
+                      navigateFromMenu('/hearth', () => navigate({ to: '/hearth' }));
                     }}
                   />
                 )}

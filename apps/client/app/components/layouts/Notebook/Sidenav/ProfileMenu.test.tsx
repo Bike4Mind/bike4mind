@@ -40,8 +40,9 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: (select: (s: unknown) => unknown) => select({ impersonating: false }),
 }));
 vi.mock('@client/app/hooks/useAppVersion', () => ({ useAppVersion: () => ({ data: undefined }) }));
+const features = vi.hoisted(() => ({ enabled: new Set<string>() }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
-  useFeatureEnabled: () => ({ isFeatureEnabled: () => false }),
+  useFeatureEnabled: () => ({ isFeatureEnabled: (key: string) => features.enabled.has(key) }),
 }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsTablet: () => false }));
 vi.mock('@client/app/hooks/data/entitlements', () => ({ useEntitlements: () => ({ data: undefined }) }));
@@ -442,5 +443,34 @@ describe('ProfileMenu - roles and keyboard details', () => {
     fireEvent.click(screen.getByTestId('profile-menu-more'));
     fireEvent.click(screen.getByTestId('profile-more-changelog'));
     expect(focusedWhenOpened).toBe(trigger);
+  });
+});
+
+describe('ProfileMenu - Hearth', () => {
+  afterEach(() => {
+    features.enabled.clear();
+  });
+
+  const openMoreFlyout = () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+    fireEvent.click(screen.getByTestId('profile-menu-more'));
+  };
+
+  it('opens Hearth from the More flyout when its flag is on', () => {
+    features.enabled.add('enableHearth');
+    router.pathname = '/new';
+    openMoreFlyout();
+    fireEvent.click(screen.getByTestId('profile-more-hearth'));
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/hearth' });
+  });
+
+  it('hides Hearth when its flag is off', () => {
+    openMoreFlyout();
+    expect(screen.queryByTestId('profile-more-hearth')).not.toBeInTheDocument();
   });
 });
