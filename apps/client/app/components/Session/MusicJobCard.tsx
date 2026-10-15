@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { Box, Button, Card, Chip, LinearProgress, Stack, Typography, type ColorPaletteProp } from '@mui/joy';
 import type { GenerationJobState, MusicGeneration } from '@bike4mind/common';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
-import { useStablePlayerSrc } from '@client/app/components/VideoStudio/VideoJobCard';
+import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generationJobCard';
 import { isTerminalGenerationState } from '@client/app/hooks/data/generationJobPolling';
 import { useCancelMusicGeneration, useMusicGeneration } from '@client/app/hooks/data/musicGenerations';
 
@@ -14,16 +14,6 @@ const STATE_LABELS: Record<GenerationJobState, string> = {
   failed: 'Failed',
   blocked: 'Blocked',
   cancelled: 'Cancelled',
-};
-
-const STATE_COLORS: Record<GenerationJobState, ColorPaletteProp> = {
-  pending: 'neutral',
-  running: 'primary',
-  storing: 'primary',
-  succeeded: 'success',
-  failed: 'danger',
-  blocked: 'warning',
-  cancelled: 'neutral',
 };
 
 // Used only if a terminal job somehow has no public error; the server normally sends a code-derived message.

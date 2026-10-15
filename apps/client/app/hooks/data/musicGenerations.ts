@@ -8,7 +8,7 @@ import { fabFileKeys } from './fabFileKeys';
 import { generationJobPollInterval } from './generationJobPolling';
 import { upsertMusicGeneration } from './musicGenerationCache';
 import { musicGenerationKeys } from './musicGenerationKeys';
-import { VIDEO_RATE_LIMITED_MESSAGE } from './videoGenerationErrors';
+import { GENERATION_RATE_LIMITED_MESSAGE } from './videoGenerationErrors';
 
 const musicJobUrl = (jobId: string): string => `/api/v1/music-generations/${encodeURIComponent(jobId)}`;
 
@@ -56,7 +56,7 @@ export function useCancelMusicGeneration() {
     onError: error =>
       toast.error(
         isAxiosError(error) && error.response?.status === 429
-          ? VIDEO_RATE_LIMITED_MESSAGE
+          ? GENERATION_RATE_LIMITED_MESSAGE
           : 'Could not cancel the song. Try again.'
       ),
   });

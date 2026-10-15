@@ -25,7 +25,8 @@ vi.mock('@client/app/utils/download', () => ({ downloadData: h.downloadData, dow
 vi.mock('sonner', () => ({ toast: { error: h.toastError, success: vi.fn() } }));
 
 import { readyOutput, videoJob } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
-import VideoJobCard, { MAX_PLAYER_URL_REFRESHES } from './VideoJobCard';
+import { MAX_PLAYER_URL_REFRESHES } from '@client/app/hooks/data/generationJobCard';
+import VideoJobCard from './VideoJobCard';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const card = () => (
