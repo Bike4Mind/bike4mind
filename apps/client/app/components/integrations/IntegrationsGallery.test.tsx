@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
 
 let state: { currentUser: Record<string, unknown> | null; isAdmin: boolean };
 let flags: Set<SettingKey>;
+let settingsLoad: { isLoading: boolean; authedSettingsLoaded: boolean; error: string | null };
 let connections: Connections;
 let requests: { counts: Record<string, number>; mine: string[] } | undefined;
 let pendingToggles: Set<string>;
@@ -26,7 +27,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (s: Record<string, unknown>) => unknown) => selector({ ...state, refreshUser: vi.fn() }),
 }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
-  useAdminSettingsCache: () => ({ isFeatureEnabled: (key: SettingKey) => flags.has(key) }),
+  useAdminSettingsCache: () => ({ isFeatureEnabled: (key: SettingKey) => flags.has(key), ...settingsLoad }),
 }));
 vi.mock('@client/app/hooks/data/integrationRequests', () => ({
   useIntegrationRequests: () => ({ data: requests }),
@@ -95,6 +96,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   state = { currentUser: { id: 'u1', tags: [] }, isAdmin: false };
   flags = new Set<SettingKey>(['EnableMCPServer', 'EnableDataLakes']);
+  settingsLoad = { isLoading: false, authedSettingsLoaded: true, error: null };
   connections = { 'google-drive': { connected: true } };
   requests = { counts: { hubspot: 41, gmail: 3 }, mine: ['gmail'] };
   pendingToggles = new Set();
@@ -114,6 +116,55 @@ describe('IntegrationsGallery', () => {
     expect(screen.getByTestId('integrations-count-line')).toHaveTextContent(
       /^12 integrations, 12 models, 19 on the roadmap\.$/
     );
+  });
+
+  it.each([
+    ['the settings request is still in flight', { isLoading: true, authedSettingsLoaded: false, error: null }],
+    // The public artifact clears isLoading early, but non-public flags are still compiled-in defaults.
+    ['only the public settings have arrived', { isLoading: false, authedSettingsLoaded: false, error: null }],
+  ])('draws placeholders, not default-derived statuses, while %s', (_label, load) => {
+    settingsLoad = load;
+    const { rerender, container } = renderGallery();
+
+    expect(screen.getByTestId('integrations-loading')).toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^integrations-row-/)).toHaveLength(0);
+    expect(container.querySelectorAll('[data-status]')).toHaveLength(0);
+    expect(screen.getByTestId('integrations-count-line')).not.toHaveTextContent('integrations');
+    expect(screen.getByTestId('integrations-status-filter-btn')).toBeDisabled();
+
+    settingsLoad = { isLoading: false, authedSettingsLoaded: true, error: null };
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <IntegrationsGallery />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByTestId('integrations-loading')).toBeNull();
+    expect(screen.getByTestId('integrations-row-google-drive')).toBeInTheDocument();
+    expect(screen.getByTestId('integrations-count-line')).toHaveTextContent(/integrations/);
+    expect(screen.getByTestId('integrations-status-filter-btn')).toBeEnabled();
+  });
+
+  it('draws placeholders as cards below md while settings load', () => {
+    settingsLoad = { isLoading: true, authedSettingsLoaded: false, error: null };
+    compact = true;
+    renderGallery();
+    expect(screen.getByTestId('integrations-loading')).toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^integrations-card-/)).toHaveLength(0);
+  });
+
+  it('falls back to the defaults when the settings request fails, rather than loading forever', () => {
+    settingsLoad = { isLoading: false, authedSettingsLoaded: false, error: 'Failed to fetch admin settings' };
+    renderGallery();
+    expect(screen.queryByTestId('integrations-loading')).toBeNull();
+    expect(screen.getByTestId('integrations-row-google-drive')).toBeInTheDocument();
+  });
+
+  it('keeps the Models tab usable while settings load, since model providers carry no flags', async () => {
+    settingsLoad = { isLoading: true, authedSettingsLoaded: false, error: null };
+    renderGallery();
+    await userEvent.click(screen.getByTestId('integrations-tab-models'));
+    expect(screen.getByTestId('integrations-model-row-anthropic')).toBeInTheDocument();
+    expect(screen.queryByTestId('integrations-loading')).toBeNull();
   });
 
   it('hides the admin-only and Tavern-only entries from a regular user', () => {

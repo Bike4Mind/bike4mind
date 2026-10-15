@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { Box, Button, Input, Option, Select, Stack, TabList, Tabs, Typography } from '@mui/joy';
+import { Box, Button, Input, Option, Select, Skeleton, Stack, TabList, Tabs, Typography } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
 import {
   INTEGRATION_CATEGORY_LABELS,
@@ -78,6 +78,7 @@ function FilterSelect<T extends string>({
   total,
   onChange,
   testId,
+  disabled,
 }: {
   name: string;
   allLabel: string;
@@ -86,6 +87,7 @@ function FilterSelect<T extends string>({
   total: number;
   onChange: (value: T | 'all') => void;
   testId: string;
+  disabled?: boolean;
 }) {
   const active = value !== 'all';
   const activeLabel = options.find(option => option.value === value)?.label;
@@ -102,6 +104,7 @@ function FilterSelect<T extends string>({
       size="sm"
       variant="outlined"
       color={active ? 'primary' : 'neutral'}
+      disabled={disabled}
       value={value}
       onChange={(_, next) => {
         if (next !== null) onChange(next);
@@ -223,6 +226,32 @@ const CardText = ({ children }: { children: ReactNode }) => (
   </Typography>
 );
 
+const LOADING_ROW_COUNT = 8;
+
+/** Rows and cards in the shapes they give way to, so the page does not jump when settings arrive. */
+const LoadingPlaceholder = ({ compact }: { compact: boolean }) => (
+  <Box data-testid="integrations-loading" role="status" aria-label="Loading integrations" sx={{ mt: '10px' }}>
+    {compact ? (
+      <Box sx={cardGridSx}>
+        {Array.from({ length: 4 }, (_, i) => (
+          <Skeleton key={i} variant="rectangular" height={132} sx={{ borderRadius: '12px' }} />
+        ))}
+      </Box>
+    ) : (
+      Array.from({ length: LOADING_ROW_COUNT }, (_, i) => (
+        <Box key={i} sx={rowSx}>
+          <Skeleton variant="circular" width={28} height={28} />
+          <Skeleton variant="text" width="45%" />
+          <Skeleton variant="text" width="70%" />
+          <Skeleton variant="text" width="60%" />
+          <span />
+          <Skeleton variant="rectangular" height={28} sx={{ borderRadius: '6px' }} />
+        </Box>
+      ))
+    )}
+  </Box>
+);
+
 /**
  * The /integrations page body: every integration and model provider in one searchable
  * directory, as dense rows on desktop and a card grid below md. Statuses come from the registry
@@ -233,7 +262,15 @@ const CardText = ({ children }: { children: ReactNode }) => (
 const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageSource }) => {
   const currentUser = useUser(s => s.currentUser);
   const isAdmin = useUser(s => s.isAdmin);
-  const { isFeatureEnabled } = useAdminSettingsCache();
+  const {
+    isFeatureEnabled,
+    isLoading: settingsLoading,
+    authedSettingsLoaded,
+    error: settingsError,
+  } = useAdminSettingsCache();
+  // Until the authenticated fetch lands (or fails) every non-public flag reads as its compiled-in
+  // default, which would draw wrong statuses and then re-sort the page; show placeholders instead.
+  const flagsReady = !settingsLoading && (authedSettingsLoaded || !!settingsError);
   const compact = useIsTablet();
   // /tavern is a codegen-mounted premium route; the same two-part gate as SidenavNav's Tavern row.
   const tavernRouteExists = premiumRoutes.some(route => route.path.startsWith('/tavern'));
@@ -518,6 +555,7 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
   }
 
   const integrationsBody = () => {
+    if (!flagsReady) return <LoadingPlaceholder compact={compact} />;
     const groups = groupIntegrations(visibleIntegrations);
     if (groups.length === 0) return empty;
     return (
@@ -572,6 +610,7 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
           total={rows.length}
           onChange={changeFilter<IntegrationCategory | 'all'>('category', setCategory)}
           testId="integrations-category"
+          disabled={!flagsReady}
         />
         <FilterSelect<Exclude<StatusFilter, 'all'>>
           name="Status"
@@ -585,6 +624,7 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
           total={rows.length}
           onChange={changeFilter<StatusFilter>('status', setStatus)}
           testId="integrations-status"
+          disabled={!flagsReady}
         />
       </>
     ) : (
@@ -622,7 +662,7 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
             data-testid="integrations-count-line"
             sx={{ mt: '6px', fontSize: '14px', color: 'text.tertiary' }}
           >
-            {countLine(counts)}.
+            {flagsReady ? `${countLine(counts)}.` : <Skeleton variant="inline" width={260} />}
           </Typography>
         </Box>
         <Stack direction="row" gap="8px" flexWrap="wrap" data-testid="integrations-filters">
@@ -651,7 +691,7 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
           <PageTab value="integrations" data-testid="integrations-tab-integrations">
             <Typography sx={{ color: 'text.primary' }}>Integrations</Typography>
             <Box component="span" sx={{ ml: '6px', color: 'text.tertiary' }}>
-              {counts.integrations}
+              {flagsReady ? counts.integrations : ''}
             </Box>
           </PageTab>
           <PageTab value="models" data-testid="integrations-tab-models">
