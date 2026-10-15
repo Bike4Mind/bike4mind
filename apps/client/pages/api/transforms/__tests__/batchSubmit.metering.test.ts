@@ -118,6 +118,20 @@ describe('POST /api/transforms/batch metering', () => {
     expect(m.create).not.toHaveBeenCalled();
   });
 
+  it('400s duplicate client_refs before reserving or submitting', async () => {
+    await expect(submit([item('a'), item('a')])).rejects.toMatchObject({ statusCode: 400 });
+    expect(m.reserve).not.toHaveBeenCalled();
+    expect(m.submitBatch).not.toHaveBeenCalled();
+  });
+
+  it('refunds the hold when persisting the batch fails after a successful submit', async () => {
+    m.create.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(submit([item('a')])).rejects.toThrow('db down');
+    expect(m.submitBatch).toHaveBeenCalledTimes(1);
+    expect(m.refund).toHaveBeenCalledTimes(1);
+  });
+
   it('400s a model it cannot price while credits are enforced, and passes it through when they are not', async () => {
     await expect(submit([item('a', 'mystery-model')])).rejects.toMatchObject({ statusCode: 400 });
     expect(m.submitBatch).not.toHaveBeenCalled();

@@ -66,6 +66,9 @@ const BatchSubmitSchema = z.object({
 // Next bodyParser (below) and baseApi's own content-length guard must be raised.
 const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res) => {
   const body = BatchSubmitSchema.parse(req.body);
+  if (new Set(body.requests.map(r => r.client_ref)).size !== body.requests.length) {
+    throw new BadRequestError('Each request must have a unique client_ref');
+  }
 
   const apiKey = Config.ANTHROPIC_API_KEY;
   if (!apiKey || apiKey === 'not-configured') {
@@ -89,8 +92,6 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
     const messages = [{ role: 'system', content: r.system ?? '' }, ...r.messages] as IMessage[];
     return modelInfo ? sum + completionCeilingUsd(modelInfo, messages, r.max_tokens) : sum;
   }, 0);
-  const reservation = await reserveCompletionCredits(req, ceilingUsd, 'batch transforms');
-
   const service = AnthropicBatchService.fromApiKey(apiKey, req.logger);
 
   const requests: BatchTransformRequest[] = body.requests.map(r => ({
@@ -100,6 +101,8 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
     system: r.system,
     messages: r.messages as MessageParam[],
   }));
+
+  const reservation = await reserveCompletionCredits(req, ceilingUsd, 'batch transforms');
 
   let submitted: Awaited<ReturnType<typeof service.submitBatch>>;
   try {
@@ -112,19 +115,25 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
   // submitBatch maps requests in order, so customIdMap[i] is requests[i].
   const customIdMap = submitted.customIdMap.map((m, i) => ({ ...m, model: requests[i].model }));
 
-  await transformBatchRepository.create({
-    ownerUserId: req.user.id,
-    anthropicBatchId,
-    status: 'in_progress',
-    requestCount: requests.length,
-    succeededCount: 0,
-    erroredCount: 0,
-    customIdMap,
-    // ponytail: an ended batch that is never polled keeps its hold forever; add a sweeper like
-    // generationJobs/sweep.ts if consumers stop polling to completion.
-    creditHold: reservation.hold,
-    apiKeyId: req.apiKeyInfo?.keyId,
-  });
+  try {
+    await transformBatchRepository.create({
+      ownerUserId: req.user.id,
+      anthropicBatchId,
+      status: 'in_progress',
+      requestCount: requests.length,
+      succeededCount: 0,
+      erroredCount: 0,
+      customIdMap,
+      // ponytail: an ended batch that is never polled keeps its hold forever; add a sweeper like
+      // generationJobs/sweep.ts if consumers stop polling to completion.
+      creditHold: reservation.hold,
+      apiKeyId: req.apiKeyInfo?.keyId,
+    });
+  } catch (error) {
+    req.logger.error(`[transforms/batch] Failed to persist batch ${anthropicBatchId} after submit`, error);
+    await reservation.refund();
+    throw error;
+  }
 
   req.logger.info(`[transforms/batch] Submitted batch ${anthropicBatchId} (${requests.length} requests)`);
 

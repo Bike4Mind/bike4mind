@@ -378,11 +378,8 @@ const handler = baseApi({ auth: true }).post(
     ];
 
     const maxTokens = 4096;
-    const reservation = await reserveCompletionCredits(
-      req,
-      completionCeilingUsd(modelInfo, messages, maxTokens),
-      'Lattice chat'
-    );
+    const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
+    const reservation = await reserveCompletionCredits(req, ceilingUsd, 'Lattice chat');
 
     let assistantMessage = '';
     let lastCompletionInfo: CompletionInfo | undefined;
@@ -413,9 +410,11 @@ const handler = baseApi({ auth: true }).post(
       throw error;
     }
 
+    // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
+    const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
     await settleCompletion(reservation, req, {
       model: modelInfo.id,
-      usd: completionUsd(modelInfo, usage),
+      usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,
     });

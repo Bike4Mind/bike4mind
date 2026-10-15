@@ -91,6 +91,7 @@ describe('GET /api/transforms/batch/:id settlement', () => {
         sessionId: 'msgbatch_1',
         model: 'm1',
         apiKeyId: 'k1',
+        source: 'api',
         inputTokens: 110,
         outputTokens: 55,
       },

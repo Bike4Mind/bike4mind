@@ -89,6 +89,16 @@ describe('POST /api/lattice/chat metering', () => {
     expect(m.refund).not.toHaveBeenCalled();
   });
 
+  it('settles at the reservation ceiling when the adapter reports no usage', async () => {
+    m.complete.mockImplementation(async (_model, _messages, _opts, cb) => {
+      await cb(['hello'], {});
+    });
+
+    await call();
+
+    expect(m.settle).toHaveBeenCalledWith(expect.objectContaining({ usd: 1, inputTokens: 0, outputTokens: 0 }));
+  });
+
   it('refunds in full and does not settle when the provider throws', async () => {
     m.complete.mockRejectedValue(new Error('provider down'));
 

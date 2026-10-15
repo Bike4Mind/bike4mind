@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import type { IncomingHttpHeaders } from 'http';
 import {
   getTextModelCost,
   getTurnsCost,
@@ -19,6 +20,7 @@ import {
   usdToCreditsStochastic,
 } from '@bike4mind/utils';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import { reserveRequestCredits, type CreditReservation } from '@server/billing/reserveRequestCredits';
 
 /**
@@ -29,6 +31,7 @@ import { reserveRequestCredits, type CreditReservation } from '@server/billing/r
 
 type MeteredRequest = Parameters<typeof reserveRequestCredits>[0]['req'] & {
   apiKeyInfo?: { keyId?: string };
+  headers: IncomingHttpHeaders;
 };
 
 /**
@@ -122,6 +125,8 @@ export function settleCompletion(
     sessionId: charge.sessionId ?? randomUUID(),
     model: charge.model,
     apiKeyId: req.apiKeyInfo?.keyId,
+    // Web JWT calls keep the ledger default; resolveRequestUsageSource would label them 'api'.
+    source: req.apiKeyInfo ? resolveRequestUsageSource(req) : undefined,
     inputTokens: charge.inputTokens,
     outputTokens: charge.outputTokens,
   });

@@ -5,6 +5,7 @@ import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
 import { getTextModelCost } from '@bike4mind/common';
 import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
 import { settleHeldCredits } from '@server/billing/reserveRequestCredits';
+import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
 /**
  * GET /api/transforms/batch/:id - poll a submitted batch (id = Anthropic batch id).
@@ -88,6 +89,11 @@ const handler = baseApi().get(async (req, res) => {
     const models = new Set<string>();
     for (const r of results) {
       const modelInfo = catalog.find(m => m.id === modelByRef.get(r.client_ref));
+      if (r.status === 'done' && r.tokenUsage && !modelInfo) {
+        req.logger.error(
+          `[transforms/batch] Unbilled item in batch ${anthropicBatchId}: model ${modelByRef.get(r.client_ref)} missing from catalog`
+        );
+      }
       if (r.status !== 'done' || !r.tokenUsage || !modelInfo) continue;
       const u = r.tokenUsage;
       usd += getTextModelCost(
@@ -109,6 +115,7 @@ const handler = baseApi().get(async (req, res) => {
         sessionId: anthropicBatchId,
         model: [...models].join(',') || 'unknown',
         apiKeyId: claimed.apiKeyId,
+        source: resolveRequestUsageSource(req),
         inputTokens,
         outputTokens,
       },

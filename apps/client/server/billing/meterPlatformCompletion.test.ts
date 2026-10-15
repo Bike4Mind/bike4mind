@@ -1,4 +1,4 @@
-import { CreditHolderType, getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import { CREDITS_PER_USD_COST, CreditHolderType, getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
@@ -47,7 +47,7 @@ const logger = { error: vi.fn(), warn: vi.fn() };
 const model = { id: 'sonnet', pricing: { 200_000: { input: 3 / 1e6, output: 15 / 1e6 } } } as unknown as ModelInfo;
 const user = (over: Record<string, unknown> = {}) =>
   ({ id: 'u1', organizationId: null, tags: [], isAdmin: false, ...over }) as never;
-const req = (apiKeyInfo?: unknown) => ({ user: user(), apiKeyInfo, logger }) as never;
+const req = (apiKeyInfo?: unknown) => ({ user: user(), apiKeyInfo, logger, headers: {} }) as never;
 
 describe('meterPlatformCompletion credits', () => {
   let balance: number;
@@ -81,7 +81,10 @@ describe('meterPlatformCompletion credits', () => {
       ...usage,
     });
 
+    const raw = usd * CREDITS_PER_USD_COST;
     expect(charged).toBeGreaterThan(0);
+    expect(charged).toBeLessThan(reservation.reservedCredits);
+    expect([Math.floor(raw), Math.ceil(raw)]).toContain(charged);
     expect(balance).toBe(1000 - charged);
     expect(m.deductCredits).toHaveBeenCalledTimes(1);
     expect(m.deductCredits).toHaveBeenCalledWith(
