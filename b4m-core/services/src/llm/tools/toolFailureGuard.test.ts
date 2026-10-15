@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
-import { PermissionDeniedError } from '@bike4mind/common';
+import {
+  PermissionDeniedError,
+  getQuestErrorCode,
+  insufficientCreditsError,
+  spendCapExceededError,
+} from '@bike4mind/common';
 import { createToolFailureGuard, TOOL_FAILURE_BLOCK_AFTER } from './toolFailureGuard';
+import { fileReadTool } from './implementation/fileRead';
+import { knowledgeBaseRetrieveTool } from './implementation/knowledgeBaseRetrieve';
+import { webFetchTool } from './implementation/webfetch';
 
 function tool(name: string, toolFn: ICompletionOptionTools['toolFn']): ICompletionOptionTools {
   return {
@@ -72,6 +80,24 @@ describe('createToolFailureGuard', () => {
     expect(denied.message).toBe(message);
   });
 
+  it.each([
+    ['out-of-credits', () => insufficientCreditsError('no credits'), 'insufficient_credits'],
+    ['spend-cap', () => spendCapExceededError('cap hit'), 'spend_cap_exceeded'],
+  ])('passes a terminal %s error through unchanged and uncounted', async (_, makeError, code) => {
+    const terminal = makeError();
+    const impl = vi
+      .fn<ICompletionOptionTools['toolFn']>()
+      .mockRejectedValueOnce(new Error('provider error'))
+      .mockRejectedValueOnce(terminal)
+      .mockRejectedValueOnce(new Error('provider error'));
+    const [image] = createToolFailureGuard().apply([tool('image_generation', impl)]);
+    await expect(image.toolFn()).rejects.toThrow(/^provider error$/);
+    const thrown = await image.toolFn().catch((e: unknown) => e);
+    expect(thrown).toBe(terminal);
+    expect(getQuestErrorCode(thrown)).toBe(code);
+    await expect(image.toolFn()).rejects.toThrow(/failed 2 times in a row/);
+  });
+
   it('counts a result starting with "Error:" as a failure and nudges it in the result', async () => {
     const impl = vi.fn(() => Promise.resolve('Error: missing "task" parameter'));
     const [delegate] = createToolFailureGuard().apply([tool('delegate_to_agent', impl)]);
@@ -108,5 +134,12 @@ describe('createToolFailureGuard', () => {
       await expect(fetch.toolFn({ url: `https://example.com/${i}` })).rejects.toThrow(/^404$/);
     }
     expect(impl).toHaveBeenCalledTimes(TOOL_FAILURE_BLOCK_AFTER + 1);
+  });
+
+  it('names the real lookup tools in its unguarded list', () => {
+    for (const { name } of [webFetchTool, knowledgeBaseRetrieveTool, fileReadTool]) {
+      const lookup = tool(name, () => Promise.resolve(''));
+      expect(createToolFailureGuard().apply([lookup])[0]).toBe(lookup);
+    }
   });
 });

@@ -1,6 +1,5 @@
-import { PermissionDeniedError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { isTerminalToolError, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
 /** From this many consecutive failures of one tool, its error tells the model to stop retrying it. */
 export const TOOL_FAILURE_NUDGE_AFTER = 2;
@@ -63,8 +62,9 @@ export function createToolFailureGuard() {
             try {
               result = await tool.toolFn(parameters, apiKey);
             } catch (error) {
-              // A permission denial ends the turn in the adapters; it is not a failing tool.
-              if (error instanceof PermissionDeniedError) throw error;
+              // A terminal error (permission denial, out of credits, spend cap) ends the turn in the
+              // adapters; it is not a failing tool, and rewrapping it would drop its quest error code.
+              if (isTerminalToolError(error)) throw error;
               const count = recordFailure(name);
               if (count < TOOL_FAILURE_NUDGE_AFTER || !(error instanceof Error)) throw error;
               // A new error rather than appending to `error.message`: a tool that rejects with one
