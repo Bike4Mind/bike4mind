@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ReActAgent, WORKFLOW_REMINDER_MARKER } from './ReActAgent';
-import type { AgentContext } from './types';
+import type { AgentCheckpoint, AgentContext, RunIterationOptions } from './types';
 import type { ICompletionBackend, CompletionInfo, ICompletionOptions } from '@bike4mind/llm-adapters';
 import type { IMessage } from '@bike4mind/common';
 
@@ -232,6 +232,60 @@ describe('ReActAgent transcript owner', () => {
 
     expect(result.finalAnswer).toBe('final answer');
     expect(toolResults(requests()[0])).toEqual([]);
+  });
+
+  describe('runIteration()', () => {
+    const staleCall: IMessage = {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'stale', name: 'read', input: {} }],
+    };
+    const checkpointWith = (messages: IMessage[]): AgentCheckpoint => ({
+      iteration: 0,
+      messages,
+      steps: [],
+      totalTokens: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheWriteTokens: 0,
+      totalCredits: 0,
+      toolCallCount: 0,
+      confidenceLog: [],
+      iterationConfidences: [],
+      initialMessageCount: messages.length,
+    });
+    async function runToCompletion(agent: ReActAgent, query?: string, options: RunIterationOptions = {}) {
+      let result = await agent.runIteration(query, options);
+      while (!result.isComplete) result = await agent.runIteration(undefined, options);
+      return result;
+    }
+
+    it('answers a dangling call in a resumed checkpoint before the request', async () => {
+      const { llm, requests } = createRecordingLlm([]);
+      const agent = new ReActAgent(createContext(llm));
+      agent.fromCheckpoint(
+        checkpointWith([{ role: 'system', content: 'system' }, staleCall, { role: 'user', content: 'continue' }])
+      );
+
+      await runToCompletion(agent);
+
+      const [first] = requests();
+      expect(first[2]).toEqual({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'stale', content: 'Tool call did not return a result.' }],
+      });
+      expect(toolResults(first)).toHaveLength(1);
+    });
+
+    it('computes the protected prefix after repairing the history', async () => {
+      const { llm } = createRecordingLlm([]);
+      const agent = new ReActAgent(createContext(llm));
+
+      const result = await agent.runIteration('continue', { previousMessages: [staleCall] });
+
+      // system + stale call + its synthesized result + query
+      expect(result.checkpoint.initialMessageCount).toBe(4);
+    });
   });
 
   it('gives identical parallel calls with different ids their own results', async () => {
