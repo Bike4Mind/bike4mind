@@ -3,7 +3,7 @@
  * and other users browse, import (a copy of the approved snapshot) and rate it.
  *
  * Only `currentApprovedVersionId` content is ever served to non-authors; pending/rejected versions
- * are readable by the author and reviewers only (apps/client/server/skillMarket/access.ts).
+ * are readable by the author and reviewers only (apps/client/server/skillMarket/market.ts).
  */
 
 export type SkillListingVisibility = 'public' | 'organization' | 'unlisted';
