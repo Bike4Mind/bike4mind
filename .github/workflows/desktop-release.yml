@@ -1,0 +1,423 @@
+name: Desktop Release
+
+# Builds the macOS desktop app, signs and notarizes it, and publishes it to the update host that
+# installed apps poll. The design, the host layout and the ops checklist are in
+# apps/desktop/docs/release.md; read it before relaxing any guard here.
+#
+# TWO JOBS, SPLIT ON COST. `gate` (Linux, seconds) decides whether this push is a release at all;
+# `publish` (macOS, the long one) only runs when the gate says yes, so an ordinary push never takes
+# a macOS slot or unwraps the signing certificate.
+#
+# THE TRIGGER IS THE VERSION PACKAGES MERGE. changesets writes the desktop's version into
+# apps/desktop/package.json on the "Version Packages" PR (release.yaml), and merging that PR is the
+# push this workflow listens for. Merging it IS the publish. A push that changes the file without
+# changing the version is a skip, not a failure: the gate keys on whether releases/v<version>/
+# already holds anything, never on the commit.
+#
+# Every identifier comes from GitHub variables and secrets; this repo is public. Until
+# DESKTOP_RELEASE_BUCKET is set the gate does not run, so nothing here acts before ops has
+# provisioned the host.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/desktop/package.json'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build, sign, notarize and verify, but upload nothing'
+        type: boolean
+        default: true
+      notes:
+        description: 'Override the in-app release notes (default: the CHANGELOG.md section for this version)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: desktop-release
+  # Never interrupt a publish half way: the upload order below is what keeps a partial one invisible.
+  cancel-in-progress: false
+
+env:
+  HUSKY: '0'
+
+jobs:
+  gate:
+    name: Decide whether this is a desktop release
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') && vars.DESKTOP_RELEASE_BUCKET != ''
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    # Declared for the OIDC subject claim, not for secrets: the role's trust policy binds
+    # `environment:desktop-release`, so the S3 listing below needs it too.
+    environment: desktop-release
+    timeout-minutes: 10
+    outputs:
+      publish: ${{ steps.freshness.outputs.publish }}
+      version: ${{ steps.version.outputs.version }}
+      notes: ${{ steps.notes.outputs.body }}
+    env:
+      BUCKET: ${{ vars.DESKTOP_RELEASE_BUCKET }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    steps:
+      - name: Refuse a real publish from anywhere but main
+        # The environment's branch policy is the control; this is the legible error.
+        if: env.DRY_RUN != 'true' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::a real desktop publish runs only from main, not ${GITHUB_REF}"
+          exit 1
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Read the version being published
+        id: version
+        # package.json is the single source: it is what electron-builder bakes into Info.plist and
+        # latest-mac.yml, and the publish job re-checks the built bundle against it.
+        run: |
+          set -euo pipefail
+          v=$(node apps/desktop/scripts/release.mjs version)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "candidate: v$v"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.DESKTOP_RELEASE_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.DESKTOP_RELEASE_AWS_REGION }}
+
+      - name: Decide whether this version is unpublished
+        id: freshness
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          EVENT: ${{ github.event_name }}
+        # A COUNT, not an exit code: `aws s3 ls | grep -q .` cannot tell an empty prefix from a call
+        # that failed, and "empty" is the answer that lets a publish overwrite immutable objects.
+        # list-objects-v2 under `set -e` either returns a number or fails the step.
+        run: |
+          set -euo pipefail
+          publish=true
+          # shellcheck disable=SC2016 # the backticks are a JMESPath literal, not a substitution
+          n=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "releases/v$VERSION/" \
+                --query 'length(Contents || `[]`)' --output text)
+          if [ "$n" -gt 0 ]; then
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "::warning::releases/v$VERSION/ already exists; a real run would refuse. Dry run continues."
+            elif [ "$EVENT" = "push" ]; then
+              publish=false
+              echo "::notice::v$VERSION is already published; this push carried no new desktop version"
+              {
+                echo "## Nothing to release"
+                echo
+                echo "\`apps/desktop/package.json\` is at \`v$VERSION\`, which is already published."
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::releases/v$VERSION/ already exists. Prefixes are write-once: release the next version instead."
+              exit 1
+            fi
+          else
+            echo "releases/v$VERSION/ is free"
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the release notes
+        id: notes
+        # After the freshness check, so a push that is not a release skips instead of failing on a
+        # changelog section that was never going to exist. Before the macOS job, so a missing
+        # section fails in seconds rather than after a signed build.
+        if: steps.freshness.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          INPUT_NOTES: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_NOTES:-}" ]; then
+            body="$INPUT_NOTES"
+            echo "notes: from the dispatch input"
+          elif body=$(node apps/desktop/scripts/release.mjs notes --version "$VERSION"); then
+            echo "notes: from apps/desktop/CHANGELOG.md ## $VERSION"
+          elif [ "$DRY_RUN" = "true" ]; then
+            body="(dry run: CHANGELOG.md has no section for $VERSION; placeholder notes)"
+            echo "::warning::no ## $VERSION section in apps/desktop/CHANGELOG.md; a real run would refuse."
+          else
+            echo "::error::no release notes for v$VERSION. Dispatch with an explicit notes input to publish anyway."
+            exit 1
+          fi
+          printf '%s\n' "$body"
+          delimiter="NOTES_$(openssl rand -hex 8)"
+          {
+            echo "body<<$delimiter"
+            printf '%s\n' "$body"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Build, sign, notarize and publish
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
+    # arm64 runner; it builds the x64 app too (no native modules to cross-compile).
+    runs-on: ${{ vars.DESKTOP_MAC_RUNNER || 'macos-15' }}
+    # Gates the signing secrets AND sets the OIDC subject the role trusts.
+    environment: desktop-release
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      BUCKET: ${{ vars.DESKTOP_RELEASE_BUCKET }}
+      DISTRIBUTION_ID: ${{ vars.DESKTOP_RELEASE_DISTRIBUTION_ID }}
+      FEED_URL: ${{ vars.B4M_UPDATE_FEED_URL }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      RELEASE_DIR: apps/desktop/release
+    steps:
+      - name: Check the build configuration
+        env:
+          DEFAULT_API_URL: ${{ vars.B4M_DEFAULT_API_URL }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "$FEED_URL" ] || missing="$missing B4M_UPDATE_FEED_URL"
+          [ -n "$APPLE_TEAM_ID" ] || missing="$missing APPLE_TEAM_ID"
+          [ -n "$DEFAULT_API_URL" ] || missing="$missing B4M_DEFAULT_API_URL"
+          if [ -n "$missing" ]; then
+            echo "::error::repository variables not set:$missing (see apps/desktop/docs/release.md)"
+            exit 1
+          fi
+          case "$FEED_URL" in
+            https://*) ;;
+            *) echo "::error::B4M_UPDATE_FEED_URL must be https; a packaged app ignores any other feed"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'pnpm'
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the workspace packages the desktop depends on
+        run: pnpm exec turbo run build --filter='@bike4mind/desktop^...'
+
+      - name: Write the notarization key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          [ -n "$APPLE_API_KEY_P8" ] || { echo "::error::APPLE_API_KEY_P8 is not set in the desktop-release environment"; exit 1; }
+          key="$RUNNER_TEMP/notary/AuthKey.p8"
+          mkdir -p "$(dirname "$key")"
+          umask 077
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$key"
+          echo "APPLE_API_KEY=$key" >> "$GITHUB_ENV"
+
+      - name: Build, sign and notarize
+        working-directory: apps/desktop
+        # Credentials only ever as env, never as arguments (arguments show in `ps`). With
+        # auto-discovery off, the only identity electron-builder can use is the one in CSC_LINK, so a
+        # runner keychain can never substitute another. The publish config only makes electron-builder
+        # write latest-mac.yml; `--publish never` keeps it from uploading anything itself.
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          B4M_DEFAULT_API_URL: ${{ vars.B4M_DEFAULT_API_URL }}
+          B4M_UPDATE_FEED_URL: ${{ vars.B4M_UPDATE_FEED_URL }}
+        run: |
+          set -euo pipefail
+          [ -n "$CSC_LINK" ] || { echo "::error::MAC_CSC_LINK is not set in the desktop-release environment"; exit 1; }
+          pnpm exec electron-vite build
+          pnpm exec electron-builder --mac --publish never \
+            -c.mac.notarize=true \
+            -c.publish.provider=generic \
+            -c.publish.url="$B4M_UPDATE_FEED_URL"
+
+      - name: Verify the signature, notarization and version of every app
+        # The zip is what the updater installs, so the app INSIDE each zip is checked too, not just
+        # the one electron-builder left on disk. A bundle signed by the wrong team installs and then
+        # can never update; a stale bundle re-offers itself forever.
+        run: |
+          set -euo pipefail
+          check_app() {
+            local app="$1"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            local team
+            team=$(codesign -dv "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+            [ "$team" = "$APPLE_TEAM_ID" ] || { echo "::error::$app is signed by team '$team', expected APPLE_TEAM_ID"; exit 1; }
+            spctl --assess --type execute --verbose=2 "$app"
+            xcrun stapler validate "$app"
+            local built
+            built=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
+            [ "$built" = "$VERSION" ] || { echo "::error::$app contains $built, expected $VERSION"; exit 1; }
+            echo "verified $app ($built)"
+          }
+          apps=$(find "$RELEASE_DIR" -maxdepth 2 -name '*.app' -type d)
+          [ -n "$apps" ] || { echo "::error::no .app under $RELEASE_DIR"; exit 1; }
+          while IFS= read -r app; do check_app "$app"; done <<< "$apps"
+          zips=$(find "$RELEASE_DIR" -maxdepth 1 -name '*.zip')
+          [ -n "$zips" ] || { echo "::error::no zip under $RELEASE_DIR"; exit 1; }
+          while IFS= read -r zip; do
+            unpacked="$RUNNER_TEMP/unzip/$(basename "$zip" .zip)"
+            mkdir -p "$unpacked"
+            ditto -x -k "$zip" "$unpacked"
+            check_app "$(find "$unpacked" -maxdepth 1 -name '*.app' -type d | head -1)"
+          done <<< "$zips"
+
+      - name: Cut the manifest
+        id: manifest
+        env:
+          NOTES: ${{ needs.gate.outputs.notes }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          node apps/desktop/scripts/release.mjs manifest \
+            --version "$VERSION" --prefix "releases/v$VERSION" \
+            --in "$RELEASE_DIR/latest-mac.yml" --out "$RUNNER_TEMP/latest-mac.yml" \
+            --notes-file "$RUNNER_TEMP/notes.md" > "$RUNNER_TEMP/manifest-files.txt"
+          while IFS= read -r name; do
+            [ -f "$RELEASE_DIR/$name" ] || { echo "::error::manifest references $name, which was not built"; exit 1; }
+          done < "$RUNNER_TEMP/manifest-files.txt"
+          cat "$RUNNER_TEMP/latest-mac.yml"
+
+      - name: Ensure the AWS CLI is present
+        run: command -v aws >/dev/null || brew install awscli
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.DESKTOP_RELEASE_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.DESKTOP_RELEASE_AWS_REGION }}
+
+      - name: Re-check the prefix and the live feed
+        # Again here, because the build took long enough for another run to have published. The
+        # live-feed check refuses a version that is not ahead of what the feed serves: the updater
+        # would never offer it, and the latest dmg would be older than the manifest.
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016 # the backticks are a JMESPath literal, not a substitution
+          n=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "releases/v$VERSION/" \
+                --query 'length(Contents || `[]`)' --output text)
+          if [ "$n" -gt 0 ] && [ "$DRY_RUN" != "true" ]; then
+            echo "::error::releases/v$VERSION/ was written while this run was building"; exit 1
+          fi
+          live="$RUNNER_TEMP/live-latest-mac.yml"
+          status=$(curl -sS -o "$live" -w '%{http_code}' "${FEED_URL%/}/latest-mac.yml")
+          case "$status" in
+            200) ;;
+            404) : > "$live"; echo "no live manifest: first release" ;;
+            *) echo "::error::reading the live manifest returned HTTP $status"; exit 1 ;;
+          esac
+          if ! node apps/desktop/scripts/release.mjs ahead --version "$VERSION" --live "$live"; then
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "::warning::v$VERSION is not ahead of the live feed; a real run would refuse."
+            else
+              exit 1
+            fi
+          fi
+
+      - name: 1/5 - upload the versioned artifacts
+        if: env.DRY_RUN != 'true'
+        run: |
+          set -euo pipefail
+          prefix="s3://$BUCKET/releases/v$VERSION"
+          for f in "$RELEASE_DIR"/*.zip "$RELEASE_DIR"/*.zip.blockmap "$RELEASE_DIR"/*.dmg "$RELEASE_DIR"/*.dmg.blockmap; do
+            [ -f "$f" ] || continue
+            aws s3 cp "$f" "$prefix/$(basename "$f")" --cache-control "public, max-age=31536000, immutable"
+          done
+
+      - name: 2/5 - verify the uploads landed whole
+        if: env.DRY_RUN != 'true'
+        # list-objects-v2 rather than head-object, so the role needs no read on the objects it wrote.
+        run: |
+          set -euo pipefail
+          for f in "$RELEASE_DIR"/*.zip "$RELEASE_DIR"/*.zip.blockmap "$RELEASE_DIR"/*.dmg "$RELEASE_DIR"/*.dmg.blockmap; do
+            [ -f "$f" ] || continue
+            key="releases/v$VERSION/$(basename "$f")"
+            local_size=$(stat -f%z "$f")
+            remote_size=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$key" \
+                            --query 'Contents[0].Size' --output text)
+            [ "$local_size" = "$remote_size" ] || { echo "::error::$key is $remote_size bytes, built $local_size"; exit 1; }
+          done
+          aws s3 ls "s3://$BUCKET/releases/v$VERSION/"
+
+      - name: 3/5 - point the stable download links at this version
+        if: env.DRY_RUN != 'true'
+        # Server-side copies, not redirects: a private S3 origin behind CloudFront does not honour
+        # S3 website redirects. Short-lived cache, because these names are rewritten every release.
+        run: |
+          set -euo pipefail
+          for dmg in "$RELEASE_DIR"/*.dmg; do
+            name=$(basename "$dmg")
+            latest=$(node apps/desktop/scripts/release.mjs latest-dmg --version "$VERSION" --dmg "$name")
+            aws s3 cp "s3://$BUCKET/releases/v$VERSION/$name" "s3://$BUCKET/$latest" \
+              --metadata-directive REPLACE --cache-control "public, max-age=300" \
+              --content-type application/x-apple-diskimage \
+              --content-disposition "attachment; filename=\"$latest\""
+          done
+
+      - name: 4/5 - publish the manifest (the release switch)
+        # LAST of the writes. Until this object changes no client can see the new prefix, so every
+        # step above can fail without anyone noticing a broken update.
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry run: not uploading latest-mac.yml"
+          else
+            aws s3 cp "$RUNNER_TEMP/latest-mac.yml" "s3://$BUCKET/latest-mac.yml" \
+              --cache-control "public, max-age=60" --content-type "text/yaml"
+          fi
+
+      - name: 5/5 - invalidate the edge
+        # After the writes: invalidating first just re-caches the old objects.
+        if: env.DRY_RUN != 'true' && env.DISTRIBUTION_ID != ''
+        run: |
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/latest-mac.yml" "/Bike4Mind-latest-*" \
+            --query 'Invalidation.{Id:Id,Status:Status}' --output table
+
+      - name: Summary
+        if: always()
+        env:
+          OUTCOME: ${{ job.status }}
+        run: |
+          {
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "## Desktop v$VERSION (dry run - nothing was uploaded)"
+            else
+              echo "## Desktop v$VERSION"
+            fi
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Outcome | $OUTCOME |"
+            echo "| Manifest | \`latest-mac.yml\` at the feed root |"
+            echo "| Artifacts | \`releases/v$VERSION/\` |"
+            for dmg in "$RELEASE_DIR"/*.dmg; do
+              [ -f "$dmg" ] || continue
+              echo "| First install | \`$(node apps/desktop/scripts/release.mjs latest-dmg --version "$VERSION" --dmg "$(basename "$dmg")")\` |"
+            done
+            echo
+            if [ -f "$RUNNER_TEMP/latest-mac.yml" ]; then
+              echo '```yaml'
+              cat "$RUNNER_TEMP/latest-mac.yml"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
