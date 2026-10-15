@@ -106,4 +106,49 @@ describe('deriveIntegrationStatus', () => {
     expect(deriveIntegrationStatus(entry('hubspot'), context([], true), true).status).toBe('coming-soon');
     expect(deriveIntegrationStatus(entry('hubspot'), context([])).status).toBe('coming-soon');
   });
+
+  it('still shows a connected entry as Connected to a non-admin once its flag goes off, with no tag, while each capability reads as off', () => {
+    for (const id of ['linkedin', 'notion'] as const) {
+      const derived = deriveIntegrationStatus(entry(id), context([]), true);
+      expect(derived).toMatchObject({ status: 'connected', betaTag: false, adminOnly: false });
+      expect(derived.capabilities.every(c => c.status === 'coming-soon')).toBe(true);
+    }
+  });
+
+  describe('a ga entry whose every capability sits behind a flag', () => {
+    const gated: Integration = {
+      ...entry('okta'),
+      capabilities: [
+        { id: 'gated-a', label: 'A', kind: 'sign-in', stage: 'ga', flag: 'EnableMCPServer' },
+        { id: 'gated-b', label: 'B', kind: 'sign-in', stage: 'ga', flag: 'EnableDataLakes' },
+      ],
+    };
+
+    it('is admin-only Beta for an admin and Coming soon for everyone else while the flags are off', () => {
+      const asAdmin = deriveIntegrationStatus(gated, context([], true));
+      expect(asAdmin).toMatchObject({ status: 'beta', betaTag: false, adminOnly: true });
+      expect(asAdmin.capabilities.every(c => c.status === 'beta' && c.adminOnly)).toBe(true);
+
+      const asUser = deriveIntegrationStatus(gated, context([]));
+      expect(asUser).toMatchObject({ status: 'coming-soon', adminOnly: false });
+      expect(asUser.capabilities.every(c => c.status === 'coming-soon' && !c.adminOnly)).toBe(true);
+    });
+
+    it('keeps the admin-only note and a Beta tag on a connected admin', () => {
+      expect(deriveIntegrationStatus(gated, context([], true), true)).toMatchObject({
+        status: 'connected',
+        betaTag: true,
+        adminOnly: true,
+      });
+    });
+
+    it('drops the admin-only note as soon as one capability is on for everyone', () => {
+      const derived = deriveIntegrationStatus(gated, context(['EnableDataLakes'], true));
+      expect(derived).toMatchObject({ status: 'available', adminOnly: false });
+      expect(derived.capabilities.map(c => [c.capability.id, c.status, c.adminOnly])).toEqual([
+        ['gated-a', 'beta', true],
+        ['gated-b', 'available', false],
+      ]);
+    });
+  });
 });
