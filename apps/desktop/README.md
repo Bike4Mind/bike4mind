@@ -11,17 +11,17 @@ ported over from `apps/client` only as later tasks need them.
 
 ## Download and install
 
-Download installers from [Desktop releases](https://github.com/bike4mind/bike4mind/releases?q=desktop-v).
+Download installers from [Desktop releases](https://github.com/Bike4Mind/desktop-releases/releases).
 No Node.js, pnpm, or source checkout is required.
 
-1. On macOS, choose `arm64.dmg` for Apple Silicon or `x64.dmg` for Intel, open it,
+1. On macOS, choose `arm64.dmg` for Apple Silicon (Intel builds are paused), open it,
    and drag Bike4Mind into Applications.
 2. On Linux x64, download the `.AppImage`, mark it executable (`chmod +x <file>.AppImage`),
    and launch it. Some distributions require FUSE support to run AppImages.
 
-Builds are currently unsigned and not notarized. macOS may require approval in
-System Settings > Privacy & Security after a blocked launch. Only approve a download
-you trust. `SHA256SUMS.txt` accompanies each release for checksum verification.
+New distribution releases require Developer ID signing and notarization. Legacy unsigned
+builds in the source repository do not gain an updater retroactively: install the first signed
+feed-enabled build manually. `SHA256SUMS.txt` accompanies each release for checksum verification.
 Windows packaging exists locally but is not yet part of the release pipeline.
 
 ## Running it
@@ -102,9 +102,11 @@ defaulting to `macos-26-runner` when unset or empty. The selected runner must be
 Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`.
 Paid runner usage is billed by GitHub.
 
-Publication uses the existing release App with repository-scoped contents write access
-to create protected tags. The workflow token and PR build jobs remain read-only. Missing
-App credentials fail publication rather than falling back to the workflow token.
+Publication uses the existing release App only to reserve protected source version tags.
+A separate distribution App token has contents write access only to the installer repository.
+The workflow token and PR build jobs remain read-only. Missing credentials fail publication.
+The distribution repository needs no Actions workflows; disable Actions there. The source
+workflow is the only publisher. Anyone can read public installers and metadata, not drafts.
 
 Storage is deliberately short-lived: platform installers, checksums, and release notes
 expire after one day; startup evidence expires after three days. Installers are stored
@@ -149,15 +151,44 @@ no version-bump commit or separate package release PR.
 
 Reruns at an already released commit reuse its version and leave published assets
 unchanged. Draft releases reserve their version so a failed upload can be retried.
-An older checkout cannot publish after a newer desktop release. Desktop releases do
-not replace the repository's overall latest release. Keep desktop release tags intact;
+An older checkout cannot publish after a newer desktop release. Version selection reads
+both repositories and source tag reservations, preserving the pre-migration SemVer baseline.
+Desktop updates use only the dedicated repository's Latest release. Production release
+automation is unchanged. Keep source desktop release tags intact;
 changing the package version does not override existing release history.
 
 Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
-Without it, users must select their own backend. The workflow deliberately leaves
-`B4M_UPDATE_FEED_URL` unset: downloadable releases do not configure in-app updates.
-Installing a newer release is currently manual. Only the final publication job has
-`contents: write`; build jobs have read-only tokens. PR builds have no signing credentials.
+Without it, users must select their own backend. `DESKTOP_RELEASE_REPOSITORY` supplies the
+dedicated public `owner/repo`; CI derives and bakes `B4M_UPDATE_FEED_URL` as its
+`https://github.com/<owner>/<repo>/releases/latest/download/` URL. Unset or source-repo
+destinations fail closed. PR builds have no signing credentials and are not published.
+
+The validation job generates `latest-mac.yml` and `latest-linux.yml` from the actual
+installer bytes, with SHA-512 and size. ZIP blockmaps are mandatory; AppImage blockmaps
+are embedded by electron-builder, and any external blockmaps are retained. Payload URLs
+are pinned to the version tag, so a later Latest switch cannot break an already offered
+update. All assets are uploaded to a draft and downloaded for byte comparison before
+publication promotes the complete release to Latest. A failed upload never exposes a
+partial manifest. Published assets are not overwritten on retry.
+
+#### Distribution setup checklist
+
+1. Create a public, distribution-only repository with an initial `main` commit. Do not
+   publish source, credentials, debug dumps, or builder configuration as release assets.
+2. Set source Actions variable `DESKTOP_RELEASE_REPOSITORY` to the dedicated `owner/repo`
+   in the same organization as the source. Keep its name stable for installed clients.
+3. Install a dedicated GitHub App on only that repository with Contents read/write.
+   Set source variable `DESKTOP_RELEASE_APP_ID` and secret `DESKTOP_RELEASE_APP_PRIVATE_KEY`.
+   The existing source release App and protected-tag bypass remain unchanged.
+4. Configure the five Apple secrets below and set `DESKTOP_MAC_SIGNING=true`. Missing,
+   empty, or false signing configuration blocks main distribution, not unsigned PR testing.
+5. Merge through review, then inspect the first trusted run's signatures, notarization,
+   packaged startup evidence, and destination release asset set. Confirm anonymous
+   `latest-mac.yml` and `latest-linux.yml` downloads redirect successfully. CI logs record
+   publication and tag operations; organization audit-log retention is managed separately.
+6. Test two signed versions using a temporary installation and profile. Check, download,
+   and explicitly restart into the newer version. Never use a user's existing profile.
+   Contract tests and local feed checks do not prove Squirrel.Mac signature acceptance.
 
 Release notes list desktop-relevant first-parent changes and explain the semantic bump.
 The publication script is `apps/desktop/scripts/publish-release.sh`, shared with
@@ -172,11 +203,14 @@ Set `DESKTOP_MAC_SIGNING=true` only after configuring all five repository secret
 `DESKTOP_CSC_LINK`, `DESKTOP_CSC_KEY_PASSWORD`, `DESKTOP_APPLE_ID`,
 `DESKTOP_APPLE_APP_SPECIFIC_PASSWORD`, and `DESKTOP_APPLE_TEAM_ID`.
 Only trusted main runs receive these credentials. Opting in with incomplete credentials
-fails rather than silently publishing unsigned builds. Signed runs require code-signature
-and stapling validation. Without opt-in, releases remain unsigned. Signing credentials
+fails rather than silently publishing unsigned builds. Signed runs require Developer ID
+code-signature and app/DMG stapling validation. Without opt-in, main distribution is blocked. Signing credentials
 and end-to-end notarization verification are external setup requirements.
 
-To roll back, download and reinstall an earlier desktop release. Back up the app's
+To stop offering a broken release, mark it as a prerelease and explicitly mark the last
+good complete distribution release as Latest. Verify both manifest URLs anonymously.
+Do not overwrite existing assets or enable updater downgrades. Ship a higher fixed version.
+To roll back manually, download and reinstall an earlier desktop release. Back up the app's
 user-data directory before downgrading because older builds may not understand newer
 local data. If a release is broken, mark it as a prerelease or return it to draft in
 GitHub Releases, then rerun the workflow on corrected `main` to publish a new version.
