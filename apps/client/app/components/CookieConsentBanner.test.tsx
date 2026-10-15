@@ -8,15 +8,19 @@ const { mockLoadRedditPixel, mockLoadMetaPixel } = vi.hoisted(() => ({
   mockLoadMetaPixel: vi.fn(),
 }));
 
-vi.mock('@client/app/utils/redditPixel', () => ({
+// Partial, so the real isConfigured checks still decide what the banner names.
+vi.mock('@client/app/utils/redditPixel', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/redditPixel')>()),
   loadRedditPixel: mockLoadRedditPixel,
 }));
 
-vi.mock('@client/app/utils/metaPixel', () => ({
+vi.mock('@client/app/utils/metaPixel', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/metaPixel')>()),
   loadMetaPixel: mockLoadMetaPixel,
 }));
 
 import { CookieConsentBanner, useCookieSettings } from './CookieConsentBanner';
+import { CONSENT_VENDORS } from '../utils/consentVendors';
 import { captureUtmParams, flushUtmCapture } from '../utils/utmCapture';
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => <CssVarsProvider>{children}</CssVarsProvider>;
@@ -62,8 +66,15 @@ describe('CookieConsentBanner', () => {
     mockLoadMetaPixel.mockClear();
     clearCookies();
     useCookieSettings.setState({ isOpen: false });
+    // The grant loads only configured vendors, so configure the pixels the mocks stand in for.
+    vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
+    vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
     // What the inline tag in layout.tsx would have set; each test states its own.
     delete window.__b4mGaConsentDefault;
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('shows banner when no consent is stored', () => {
@@ -485,7 +496,7 @@ describe('CookieConsentBanner', () => {
 
       expect(screen.getByText('Cookie settings.')).toBeInTheDocument();
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
-        'You are currently allowing email marketing (MailerLite) and campaign attribution cookies.'
+        'You are currently allowing advertising (Meta, Reddit), email marketing (MailerLite) and campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent('Declining reloads the page');
       expect(screen.getByTestId('cookie-consent-cancel-btn')).toBeInTheDocument();
@@ -546,7 +557,7 @@ describe('CookieConsentBanner', () => {
       renderAndReopen();
 
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
-        'You are currently declining email marketing (MailerLite) and campaign attribution cookies.'
+        'You are currently declining advertising (Meta, Reddit), email marketing (MailerLite) and campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).not.toHaveTextContent('reloads the page');
 
@@ -617,13 +628,15 @@ describe('CookieConsentBanner', () => {
       expect(screen.queryByTestId('cookie-consent-cancel-btn')).not.toBeInTheDocument();
     });
 
-    // Pairs each loader the grant fires today with the vendor the ask names. It does not catch a
-    // new loader on its own: one added to activateConsent needs a name here AND an assertion below.
+    // Pairs each loader the grant fires with the vendor the ask names. A loader added outside
+    // CONSENT_VENDORS fails here only if it injects a script in this test's env: one gated on an
+    // env var this test does not stub stays silent, so routing through the registry is the guard.
     it('names every vendor the grant then loads on the first-run ask', () => {
       vi.stubEnv('NEXT_PUBLIC_GA_MEASUREMENT_ID', 'G-TEST');
       vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
       vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
       document.getElementById('mailerlite')?.remove();
+      const scriptsBefore = new Set(document.querySelectorAll('script'));
       try {
         render(
           <TestWrapper>
@@ -641,9 +654,42 @@ describe('CookieConsentBanner', () => {
         expect(mockLoadMetaPixel).toHaveBeenCalledTimes(1);
         expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
         expect(document.getElementById('mailerlite')).not.toBeNull();
+        // The pixel loaders are mocked, so MailerLite is the only real script a grant may add. A
+        // loader called outside the consent registry that injects a script here fails this check;
+        // one gated on an env var not stubbed above adds nothing and passes.
+        const added = [...document.querySelectorAll('script')].filter(script => !scriptsBefore.has(script));
+        expect(added.map(script => script.id)).toEqual(['mailerlite']);
       } finally {
         vi.unstubAllEnvs();
       }
+    });
+
+    it('names every vendor in the consent registry once all are configured', () => {
+      vi.stubEnv('NEXT_PUBLIC_GA_MEASUREMENT_ID', 'G-TEST');
+      vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
+      vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
+      try {
+        renderAndReopen();
+
+        const banner = screen.getByTestId('cookie-consent-banner');
+        for (const vendor of CONSENT_VENDORS) {
+          expect(vendor.isConfigured()).toBe(true);
+          expect(banner).toHaveTextContent(vendor.name);
+        }
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('does not load an unnamed vendor on a grant', () => {
+      vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', '');
+      renderAndReopen();
+
+      expect(screen.getByTestId('cookie-consent-banner')).not.toHaveTextContent('Meta');
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(mockLoadMetaPixel).not.toHaveBeenCalled();
+      expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
     });
 
     it('names only the ad vendor whose pixel is configured', () => {

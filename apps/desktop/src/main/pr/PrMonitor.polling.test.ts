@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { GhError } from './gh';
-import { PrMonitor, type PrTimers } from './PrMonitor';
+import type { PrTimers } from './PrMonitor';
 import { POLL_MS } from './pollSchedule';
-import { REF, check, collector, fakeGithub, quietLogger, snapshot, tempStore } from './prTestSupport';
+import { REF, TrackedMonitor, check, collector, fakeGithub, quietLogger, snapshot, tempStore } from './prTestSupport';
 
 const SESSION = 'session-1';
 
@@ -30,40 +30,6 @@ function manualTimers() {
       await settle();
     },
   };
-}
-
-/**
- * A monitor that tracks every read, schedule and publish it starts, including the ones it fires
- * and forgets, so a test can wait for all of them instead of sleeping. A fixed sleep raced the
- * binding store's real disk writes and failed under load.
- */
-class TrackedMonitor extends PrMonitor {
-  private readonly work = new Set<Promise<unknown>>();
-
-  private track<T>(promise: Promise<T>): Promise<T> {
-    this.work.add(promise);
-    void promise.then(
-      () => this.work.delete(promise),
-      () => this.work.delete(promise)
-    );
-    return promise;
-  }
-
-  protected override read(sessionId: string): Promise<void> {
-    return this.track(super.read(sessionId));
-  }
-
-  protected override schedule(sessionId: string): Promise<void> {
-    return this.track(super.schedule(sessionId));
-  }
-
-  protected override publish(sessionId: string): Promise<void> {
-    return this.track(super.publish(sessionId));
-  }
-
-  async idle(): Promise<void> {
-    while (this.work.size > 0) await Promise.allSettled([...this.work]);
-  }
 }
 
 const monitors: TrackedMonitor[] = [];

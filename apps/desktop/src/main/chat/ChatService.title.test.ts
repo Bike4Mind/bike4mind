@@ -165,13 +165,13 @@ describe('ChatService session titles', () => {
     const reply = await replyStream();
     reply.write(frame({ type: 'content', text: 'ok' }));
     reply.write(frame('[DONE]'));
-    await vi.waitUntil(async () => (await service.getSession(id))?.messages[1]?.content === 'ok', {
-      timeout: 5000,
-      interval: 5,
-    });
+    // The turn's end, not its text: the content lands a frame before [DONE] closes the turn, and
+    // a send in between is refused as "still replying", so no second request ever goes out.
+    await vi.waitUntil(() => !service.isSessionBusy(id), { timeout: 5000, interval: 5 });
+    expect((await service.getSession(id))?.messages[1]?.content).toBe('ok');
 
     const before = post.mock.calls.length;
-    await service.send(id, 'second');
+    expect(await service.send(id, 'second')).toMatchObject({ ok: true });
     await vi.waitUntil(() => post.mock.calls.length > before, { timeout: 5000, interval: 5 });
 
     expect(post.mock.calls.slice(before).some(call => (call[1] as WireRequest).model === TITLE_MODEL)).toBe(false);

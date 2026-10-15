@@ -628,7 +628,8 @@
   "media_player": {
     "load_failed": "This file could not be played",
     "retry": "Retry",
-    "download_failed": "Failed to download file"
+    "download_failed": "Failed to download file",
+    "open_video": "Open {{name}}"
   },
   "generated_filter": {
     "label": "Generated"

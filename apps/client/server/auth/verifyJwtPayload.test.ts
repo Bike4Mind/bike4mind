@@ -45,6 +45,27 @@ describe('verifyJwtPayload', () => {
     expect((user as { impersonatedBy?: string }).impersonatedBy).toBeUndefined();
   });
 
+  it('exposes the token exp (seconds) as accessTokenExpiresAt in milliseconds', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
+    const done = vi.fn();
+    const exp = 1_900_000_000;
+
+    await verifyJwtPayload({ id: 'user-1', tokenVersion: 0, exp }, done);
+
+    const [, user] = done.mock.calls[0];
+    expect((user as { accessTokenExpiresAt?: Date }).accessTokenExpiresAt).toEqual(new Date(exp * 1000));
+  });
+
+  it('leaves accessTokenExpiresAt undefined for a token without exp (ticket.ts applies the TTL fallback)', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
+    const done = vi.fn();
+
+    await verifyJwtPayload({ id: 'user-1', tokenVersion: 0 }, done);
+
+    const [, user] = done.mock.calls[0];
+    expect((user as { accessTokenExpiresAt?: Date }).accessTokenExpiresAt).toBeUndefined();
+  });
+
   it('rejects a token minted for a different path (e.g. a refresh token replayed here)', async () => {
     const done = vi.fn();
 

@@ -1,4 +1,8 @@
-import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
+import {
+  ApiGatewayManagementApiClient,
+  GoneException,
+  PostToConnectionCommand,
+} from '@aws-sdk/client-apigatewaymanagementapi';
 import { z } from 'zod';
 import { MessageDataToClient } from '@bike4mind/common';
 import { Connection } from '@bike4mind/database/social';
@@ -116,7 +120,9 @@ export async function sendToClient(
       if (r.status === 'rejected') {
         const connection = connections[i];
         Logger.info(`Failed to send message to connection ${connection.connectionId}: ${r.reason.message}`);
-        // Send failure most likely means the connection is stale; delete it.
+        // Only a gone socket is stale. A transient or payload error must not delete a live
+        // connection's row: the row is what keeps its subscriptions alive.
+        if (!(r.reason instanceof GoneException)) return;
         Logger.log(`Deleting connection ${connection.connectionId}`);
         return Connection.deleteOne({ connectionId: connection.connectionId });
       }

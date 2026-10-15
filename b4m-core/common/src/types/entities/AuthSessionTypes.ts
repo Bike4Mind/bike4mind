@@ -102,6 +102,16 @@ export interface IAuthSessionStepUpEmailChallenge {
 export interface IAuthSessionDocument extends IAuthSession, IMongoDocument {}
 
 /**
+ * The one rule for "this session may still back a credential": the row exists, is not revoked and
+ * has not expired. Shared by the realtime $connect/reauth check and the realtime sweep so they
+ * cannot drift apart.
+ */
+export const isAuthSessionActive = (
+  session: { revokedAt?: Date | null; expiresAt: Date } | null | undefined,
+  now: Date = new Date()
+): boolean => !!session && !session.revokedAt && session.expiresAt > now;
+
+/**
  * Client-safe projection of an AuthSession for the active-sessions UI (GET /api/users/me/sessions).
  * Deliberately omits every secret (`refreshTokenHash`, `previousRefreshTokenHash`) - only fields a
  * user may see about their own devices. Dates are ISO strings (JSON transport). `current` flags the

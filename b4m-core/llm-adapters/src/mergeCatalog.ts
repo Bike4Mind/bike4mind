@@ -1,8 +1,11 @@
 import {
   FIELD_GROUP_OF,
+  LIFECYCLE_DATE_KEYS,
+  LIFECYCLE_SUNSET_STATUSES,
   MODEL_INFO_FIELD_GROUP_OF,
   ModelBackend,
   isFieldGroup,
+  lifecycleStatusRank,
   isRenderableModelType,
   isDedicatedApiModel,
   toModelInfo,
@@ -47,7 +50,8 @@ export const DISPATCHABLE_ADAPTER_FAMILIES: readonly string[] = [
 /** operator > discovery > seed, per field group (presentation is operator > seed >
  * discovery; see PRESENTATION_PRECEDENCE). An unrecognized source ranks
  * below all three: it still contributes where nothing else does (the lenient
- * read never discards data) but can never outrank a source this build knows. */
+ * read never discards data) but can never outrank a source this build knows.
+ * `lifecycle` and `availability` also fold below operator; see foldLifecycle and keepDisable. */
 const SOURCE_PRECEDENCE: Record<string, number> = { operator: 3, discovery: 2, seed: 1 };
 
 /**
@@ -95,7 +99,9 @@ export interface CatalogMergeResult {
  * pins a model's rank does not thereby freeze its context window: within a group
  * the newest operator row wins, else the newest discovery row, else seed. Within
  * the winning row only the keys it actually carries apply - a sparse operator
- * patch overrides what it names and nothing else.
+ * patch overrides what it names and nothing else. The exception is `lifecycle` and
+ * `availability` below operator: they fold across sources so a feed cannot
+ * un-sunset or re-enable a model (see foldLifecycle, keepDisable).
  *
  * Catalog-only ids are appended only when the invocability contract holds (sec
  * 5.4): an active lifecycle, an adapter family this build can dispatch, a
@@ -280,7 +286,76 @@ function mergeRows(
       draft[key] = value;
     }
   }
+  // An operator winner applies as-is (the deliberate un-retire / re-enable path); the folds below skip it.
+  foldLifecycle(draft, bucket, base, winners.get('lifecycle'));
+  keepDisable(draft, bucket, base, winners.get('availability'));
   return { draft, owned: new Set(winners.keys()) };
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const claimsGroup = (row: IModelCatalogRow, group: FieldGroup): boolean =>
+  row.source !== 'operator' && row.ownedGroups.includes(group);
+
+/** An unranked status never displaces a ranked one; an unranked held one yields only to a sunset status. */
+function displacesStatus(held: unknown, candidate: string): boolean {
+  const rank = lifecycleStatusRank(candidate);
+  if (rank === undefined) return false;
+  const heldRank = lifecycleStatusRank(held);
+  if (heldRank !== undefined) return rank > heldRank;
+  return held === undefined || LIFECYCLE_SUNSET_STATUSES.has(candidate);
+}
+
+/**
+ * Below operator, lifecycle only moves toward sunset: across the non-operator rows and the adapter
+ * literal, the earliest dates and the furthest ranked status win. replacedBy stays the winner's.
+ */
+function foldLifecycle(
+  draft: Record<string, unknown>,
+  bucket: IModelCatalogRow[],
+  base: RenderableModelRecord | null,
+  winner: IModelCatalogRow | undefined
+) {
+  if (!winner || winner.source === 'operator') return;
+  const lifecycles = [
+    base?.lifecycle,
+    ...bucket.filter(row => claimsGroup(row, 'lifecycle')).map(row => row.patch.lifecycle),
+  ].filter(isRecord);
+  if (lifecycles.length === 0) return;
+
+  const folded: Record<string, unknown> = isRecord(draft.lifecycle) ? { ...draft.lifecycle } : {};
+  for (const lifecycle of lifecycles) {
+    for (const key of LIFECYCLE_DATE_KEYS) {
+      const date = lifecycle[key];
+      const current = folded[key];
+      if (typeof date === 'string' && (typeof current !== 'string' || date < current)) folded[key] = date;
+    }
+    if (typeof lifecycle.status === 'string' && displacesStatus(folded.status, lifecycle.status)) {
+      folded.status = lifecycle.status;
+    }
+  }
+  draft.lifecycle = folded;
+}
+
+/** Below operator, another source's `disabled: false` does not clear a disable the adapter literal or a row holds. */
+function keepDisable(
+  draft: Record<string, unknown>,
+  bucket: IModelCatalogRow[],
+  base: RenderableModelRecord | null,
+  winner: IModelCatalogRow | undefined
+) {
+  if (!winner || winner.source === 'operator' || draft.disabled === true) return;
+  let disabler: IModelCatalogRow | undefined;
+  for (const row of bucket) {
+    const disables = claimsGroup(row, 'availability') && row.patch.disabled === true;
+    if (disables && (!disabler || outranks(row, disabler, 'availability'))) disabler = row;
+  }
+  if (!disabler && base?.disabled !== true) return;
+  draft.disabled = true;
+  const reason = disabler ? disabler.patch.disabledReason : base?.disabledReason;
+  if (typeof reason === 'string') draft.disabledReason = reason;
+  else delete draft.disabledReason;
 }
 
 /**

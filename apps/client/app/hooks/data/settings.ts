@@ -19,6 +19,7 @@ import {
   ADMIN_SETTINGS_ARRAY_QUERY_KEY,
   BRANDING_SETTINGS_QUERY_KEY,
   SCOPED_SETTING_OVERRIDES_QUERY_KEY,
+  SERVER_CONFIG_QUERY_KEY,
 } from './queryKeys';
 import { useAccessToken, useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
 
@@ -241,7 +242,7 @@ export function useConfig() {
   const isFullyAuthenticated = useIsFullyAuthenticated();
 
   return useQuery({
-    queryKey: ['server-config'],
+    queryKey: SERVER_CONFIG_QUERY_KEY,
     queryFn: async () => {
       const response = await api.get<ServerConfig>('/api/settings/serverConfig');
 

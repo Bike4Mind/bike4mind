@@ -22,6 +22,7 @@ vi.mock('@bike4mind/database', () => ({
     atomicRecordMfaFailedAttempt: (...a: unknown[]) => mockRecordFailed(...a),
   },
   authSessionRepository: {},
+  realtimeConnectionRepository: {},
   passkeyCredentialRepository: { removeAllForUser: vi.fn() },
 }));
 vi.mock('@bike4mind/services', () => ({

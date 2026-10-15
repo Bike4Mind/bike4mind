@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   probeIdentity: vi.fn(),
   queryClient: { invalidateQueries: vi.fn() },
   sendMessage: vi.fn(),
+  sendJsonMessage: vi.fn(),
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   accessTokenState: { accessToken: 'tok' as string | null, mfaPending: false },
@@ -30,7 +31,12 @@ vi.mock('react-use-websocket', () => ({
     h.capturedUrl.current = url;
     h.capturedOptions.current = options;
     h.capturedUrls.push(url);
-    return { sendJsonMessage: vi.fn(), sendMessage: h.sendMessage, readyState: h.readyState, lastJsonMessage: null };
+    return {
+      sendJsonMessage: h.sendJsonMessage,
+      sendMessage: h.sendMessage,
+      readyState: h.readyState,
+      lastJsonMessage: null,
+    };
   },
 }));
 
@@ -726,5 +732,269 @@ describe('WebsocketProvider - reassembles fanout-chunked frames before dispatch'
       warn.mockRestore();
       vi.useRealTimers();
     }
+  });
+});
+
+describe('WebsocketProvider - reauth after a token refresh', () => {
+  let send: ReturnType<typeof useWebsocket>['sendJsonMessage'] = () => {};
+
+  const Sender = () => {
+    send = useWebsocket().sendJsonMessage;
+    return null;
+  };
+  const element = () =>
+    React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement(Sender));
+
+  beforeEach(() => {
+    h.sendJsonMessage.mockReset();
+    h.queryClient.invalidateQueries.mockReset();
+    h.readyState = 1;
+    h.accessTokenState.accessToken = 'tok';
+    h.accessTokenState.mfaPending = false;
+    stubVisibility('visible');
+  });
+
+  const refreshTo = async (rendered: ReturnType<typeof render>, token: string | null) => {
+    h.accessTokenState.accessToken = token;
+    await act(async () => {
+      rendered.rerender(element());
+    });
+  };
+
+  it('sends reauth_connection with the new token on an open socket', async () => {
+    const rendered = render(element());
+    expect(h.sendJsonMessage).not.toHaveBeenCalled();
+
+    await refreshTo(rendered, 'tok-2');
+
+    expect(h.sendJsonMessage).toHaveBeenCalledWith({ action: 'reauth_connection', accessToken: 'tok-2' });
+  });
+
+  it('does not send reauth while the socket is not open, or when the token is cleared', async () => {
+    h.readyState = 0;
+    const rendered = render(element());
+    await refreshTo(rendered, 'tok-2');
+    h.readyState = 1;
+    await act(async () => {
+      rendered.rerender(element());
+    });
+    await refreshTo(rendered, null);
+
+    expect(h.sendJsonMessage).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'reauth_connection' }));
+  });
+
+  it('re-sends tracked subscriptions with the current token on resubscribe_required', async () => {
+    const rendered = render(element());
+    const subscribe = (subscriptionId: string) =>
+      ({ action: 'subscribe_query', subscriptionId, collectionName: 'quests', query: {} }) as unknown as Parameters<
+        typeof send
+      >[0];
+    act(() => {
+      send(subscribe('s1'));
+      send(subscribe('s2'));
+      send({ action: 'unsubscribe_query', subscriptionId: 's2' } as unknown as Parameters<typeof send>[0]);
+    });
+    await refreshTo(rendered, 'tok-2');
+    h.sendJsonMessage.mockClear();
+
+    act(() => {
+      h.capturedOptions.current.onMessage({ data: JSON.stringify({ action: 'resubscribe_required' }) });
+    });
+
+    expect(h.sendJsonMessage).toHaveBeenCalledTimes(1);
+    expect(h.sendJsonMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'subscribe_query', subscriptionId: 's1', accessToken: 'tok-2' })
+    );
+    expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['quests', 'session'] });
+    expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['invites'] });
+  });
+
+  describe('subscriptions are sent once per reconnect and once per resubscribe_required', () => {
+    const subscribe = (subscriptionId: string) =>
+      ({ action: 'subscribe_query', subscriptionId, collectionName: 'quests', query: {} }) as unknown as Parameters<
+        typeof send
+      >[0];
+    const subscribeSends = (subscriptionId: string) =>
+      h.sendJsonMessage.mock.calls.filter(
+        ([message]) => message.action === 'subscribe_query' && message.subscriptionId === subscriptionId
+      );
+
+    it('replays each tracked subscription exactly once on resubscribe_required', async () => {
+      render(element());
+      act(() => {
+        send(subscribe('s1'));
+        send(subscribe('s2'));
+      });
+      h.sendJsonMessage.mockClear();
+
+      act(() => {
+        h.capturedOptions.current.onMessage({ data: JSON.stringify({ action: 'resubscribe_required' }) });
+      });
+
+      expect(subscribeSends('s1')).toHaveLength(1);
+      expect(subscribeSends('s2')).toHaveLength(1);
+    });
+
+    it('replays each subscription exactly once on a resubscribe_required after a reconnect and the hooks re-send', async () => {
+      render(element());
+      act(() => {
+        send(subscribe('s1'));
+        send(subscribe('s2'));
+      });
+      act(() => {
+        h.capturedOptions.current.onClose({ code: 1006, reason: '' });
+        h.capturedOptions.current.onOpen({});
+      });
+      act(() => {
+        send(subscribe('s1'));
+        send(subscribe('s2'));
+      });
+      h.sendJsonMessage.mockClear();
+
+      act(() => {
+        h.capturedOptions.current.onMessage({ data: JSON.stringify({ action: 'resubscribe_required' }) });
+      });
+
+      expect(subscribeSends('s1')).toHaveLength(1);
+      expect(subscribeSends('s2')).toHaveLength(1);
+    });
+
+    it('leaves the re-send after a reconnect to the hooks, so a resubscribe_required then replays nothing stale', async () => {
+      render(element());
+      act(() => {
+        send(subscribe('s1'));
+        send(subscribe('s2'));
+      });
+      act(() => {
+        h.capturedOptions.current.onClose({ code: 1006, reason: '' });
+      });
+      h.sendJsonMessage.mockClear();
+
+      act(() => {
+        h.capturedOptions.current.onMessage({ data: JSON.stringify({ action: 'resubscribe_required' }) });
+      });
+      expect(subscribeSends('s1')).toHaveLength(0);
+      expect(subscribeSends('s2')).toHaveLength(0);
+
+      // The hooks resubscribe after the reconnect; that is the one send per subscription.
+      act(() => {
+        send(subscribe('s1'));
+        send(subscribe('s2'));
+      });
+      expect(subscribeSends('s1')).toHaveLength(1);
+      expect(subscribeSends('s2')).toHaveLength(1);
+    });
+  });
+
+  it('keeps the same sendJsonMessage identity across a token refresh, so hooks do not resubscribe', async () => {
+    const seen: (typeof send)[] = [];
+    const Capture = () => {
+      seen.push(useWebsocket().sendJsonMessage);
+      return null;
+    };
+    const captureElement = () =>
+      React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement(Capture));
+    const rendered = render(captureElement());
+
+    h.accessTokenState.accessToken = 'tok-2';
+    await act(async () => {
+      rendered.rerender(captureElement());
+    });
+
+    expect(new Set(seen).size).toBe(1);
+    h.sendJsonMessage.mockClear();
+    act(() => {
+      seen[0]({ action: 'unsubscribe_query', subscriptionId: 's1' } as unknown as Parameters<typeof send>[0]);
+    });
+    expect(h.sendJsonMessage).toHaveBeenCalledWith(expect.objectContaining({ accessToken: 'tok-2' }));
+  });
+
+  describe('a token refreshed while the socket is connecting', () => {
+    // The ticket POST as the token-attach interceptor sent it.
+    const ticketResponse = (sentToken: string) => ({
+      data: { ticket: 'ticket-abc' },
+      config: { headers: { Authorization: `Bearer ${sentToken}` } },
+    });
+
+    beforeEach(() => {
+      h.apiPost.mockReset();
+      h.apiPost.mockResolvedValue(ticketResponse('tok'));
+    });
+
+    it('sends reauth_connection on open when the token changed after the ticket was minted', async () => {
+      h.readyState = 0;
+      const rendered = render(element());
+      await act(async () => {
+        await (h.capturedUrl.current as () => Promise<string>)();
+      });
+
+      await refreshTo(rendered, 'tok-2');
+      expect(h.sendJsonMessage).not.toHaveBeenCalled();
+
+      act(() => {
+        h.capturedOptions.current.onOpen({});
+      });
+
+      expect(h.sendJsonMessage).toHaveBeenCalledTimes(1);
+      expect(h.sendJsonMessage).toHaveBeenCalledWith({ action: 'reauth_connection', accessToken: 'tok-2' });
+    });
+
+    it('does not send reauth on open when the token was refreshed while the ticket was being minted', async () => {
+      // An expiry reconnect: the ticket POST's 401 handling refreshes the token mid-request.
+      h.readyState = 0;
+      h.apiPost.mockImplementation(async () => {
+        h.accessTokenState.accessToken = 'tok-2';
+        return ticketResponse('tok-2');
+      });
+      const rendered = render(element());
+      await act(async () => {
+        await (h.capturedUrl.current as () => Promise<string>)();
+      });
+      await act(async () => {
+        rendered.rerender(element());
+      });
+
+      act(() => {
+        h.capturedOptions.current.onOpen({});
+      });
+
+      expect(h.sendJsonMessage).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'reauth_connection' }));
+    });
+
+    it('sends reauth_connection on open when the store moved on while the POST carried the older token', async () => {
+      h.readyState = 0;
+      h.apiPost.mockImplementation(async () => {
+        h.accessTokenState.accessToken = 'tok-2';
+        return ticketResponse('tok');
+      });
+      const rendered = render(element());
+      await act(async () => {
+        await (h.capturedUrl.current as () => Promise<string>)();
+      });
+      await act(async () => {
+        rendered.rerender(element());
+      });
+
+      act(() => {
+        h.capturedOptions.current.onOpen({});
+      });
+
+      expect(h.sendJsonMessage).toHaveBeenCalledTimes(1);
+      expect(h.sendJsonMessage).toHaveBeenCalledWith({ action: 'reauth_connection', accessToken: 'tok-2' });
+    });
+
+    it('does not send reauth on open when the token is unchanged since the ticket was minted', async () => {
+      h.readyState = 0;
+      render(element());
+      await act(async () => {
+        await (h.capturedUrl.current as () => Promise<string>)();
+      });
+
+      act(() => {
+        h.capturedOptions.current.onOpen({});
+      });
+
+      expect(h.sendJsonMessage).not.toHaveBeenCalled();
+    });
   });
 });

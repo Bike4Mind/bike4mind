@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 
 const {
   findOneMock,
+  updateOneMock,
   saveMock,
   getSettingsValueMock,
   sendToQueueMock,
@@ -27,6 +28,7 @@ const {
     moderationDeps: deps,
     buildDepsMock: vi.fn(() => deps),
     findOneMock: vi.fn(),
+    updateOneMock: vi.fn(),
     saveMock: vi.fn(),
     getSettingsValueMock: vi.fn(),
     sendToQueueMock: vi.fn(),
@@ -38,7 +40,7 @@ const {
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (h: unknown) => h }) }));
 vi.mock('@bike4mind/database', () => ({
-  FabFile: { findOne: findOneMock },
+  FabFile: { findOne: findOneMock, updateOne: updateOneMock },
   User: { findById: userFindByIdMock },
   adminSettingsRepository: { getSettingsValue: getSettingsValueMock },
   withTransaction: <T>(fn: (session: unknown) => Promise<T>) => fn({}),
@@ -295,6 +297,12 @@ describe('POST /api/internal/s3/object-created', () => {
       expect(userDoc.save).toHaveBeenCalledWith({ session: {} });
     });
 
+    it('records the measured object size on the row, matching what the charge used', async () => {
+      await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 1234, eventTime: EVENT_TIME }), makeRes());
+
+      expect(updateOneMock).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { fileSize: 1234 } }, { session: {} });
+    });
+
     it('falls back to the stored object size when the payload has none', async () => {
       await handler(makeReq('secret-token', 'uploads/a.pdf'), makeRes());
 
@@ -332,12 +340,15 @@ describe('POST /api/internal/s3/object-created', () => {
       expect(chargeMock).not.toHaveBeenCalled();
     });
 
-    it('does not save the owner when a redelivery loses the claim', async () => {
+    it('does not save the owner or rewrite the row size when a redelivery loses the claim', async () => {
       chargeMock.mockResolvedValue(false);
       await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 10, eventTime: EVENT_TIME }), makeRes());
 
       expect(chargeMock).toHaveBeenCalledTimes(1);
       expect(userDoc.save).not.toHaveBeenCalled();
+      // The newer write already recorded its own size; rewriting it from this stale event would
+      // make the counter's truth disagree with the bytes charged.
+      expect(updateOneMock).not.toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { fileSize: 10 } }, expect.anything());
     });
 
     it('still answers 200 and enqueues chunking when the charge throws', async () => {

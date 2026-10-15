@@ -161,13 +161,23 @@ export function isOverloadedError(error: Error): boolean {
 }
 
 /**
+ * Whether a model can stand in for a failed chat model. Every caller is a text chat, so an
+ * image/speech/video model never qualifies, and a request that carries tools needs a model that
+ * accepts them - otherwise the hop just trades one provider error for another.
+ */
+function canServeChat(model: ModelInfo, requireTools?: boolean): boolean {
+  return model.type === 'text' && (!requireTools || !!model.supportsTools);
+}
+
+/**
  * Validate fallback model passed from frontend
  */
 export function validateFallbackModel(
   fallbackModelId: string,
   availableModels: ModelInfo[],
   apiKeyTable: ApiKeyTable,
-  logger: Logger
+  logger: Logger,
+  requireTools?: boolean
 ): ModelInfo | null {
   logger.info(`🔄 Validating fallback model ${fallbackModelId} from frontend`);
 
@@ -176,6 +186,11 @@ export function validateFallbackModel(
 
   if (!model) {
     logger.warn(`⚠️ Fallback model ${fallbackModelId} not found in available models`);
+    return null;
+  }
+
+  if (!canServeChat(model, requireTools)) {
+    logger.warn(`Fallback model ${fallbackModelId} cannot serve this chat (type: ${model.type})`);
     return null;
   }
 
@@ -341,14 +356,16 @@ function findAutomaticFallback(
   apiKeyTable: ApiKeyTable,
   logger: Logger,
   excludeModelIds?: Set<string>,
-  preferUntriedBackend?: boolean
+  preferUntriedBackend?: boolean,
+  requireTools?: boolean
 ): ModelInfo | null {
   logger.info(`🔍 Finding automatic fallback for ${originalModel.id}`);
 
   // A disabled model is still listed so the picker can grey it out, but it must never
   // run (see ChatCompletionInvoke). Selecting one here would trade a clean fallback for
   // a raw provider error on the next hop, so it is not a candidate.
-  const hasValidKey = (m: ModelInfo) => !m.disabled && !!apiKeyTable[m.backend] && apiKeyTable[m.backend] !== 'expired';
+  const hasValidKey = (m: ModelInfo) =>
+    !m.disabled && canServeChat(m, requireTools) && !!apiKeyTable[m.backend] && apiKeyTable[m.backend] !== 'expired';
 
   // Get preference list for this model. Copied because the table is shared and
   // the generic tail below is pushed onto this list.
@@ -444,6 +461,8 @@ export type LlmWithFallbackOptions = {
    * provider overload that triggered the fallback in the first place.
    */
   endUserId?: string | null;
+  /** The request carries tools, so only a tool-capable model may take over. */
+  requireTools?: boolean;
 };
 
 /**
@@ -488,7 +507,8 @@ export async function getLlmWithFallback(
       apiKeyTable,
       logger,
       excludeModelIds,
-      options.preferUntriedBackend
+      options.preferUntriedBackend,
+      options.requireTools
     );
 
     if (!automaticFallback) {
@@ -512,7 +532,13 @@ export async function getLlmWithFallback(
   }
 
   // Validate fallback model provided by frontend
-  const fallbackModel = validateFallbackModel(fallbackModelId, availableModels, apiKeyTable, logger);
+  const fallbackModel = validateFallbackModel(
+    fallbackModelId,
+    availableModels,
+    apiKeyTable,
+    logger,
+    options.requireTools
+  );
 
   if (!fallbackModel) {
     logger.error('❌ No valid fallback model available after validation');
