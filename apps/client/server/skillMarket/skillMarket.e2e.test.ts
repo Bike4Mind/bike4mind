@@ -427,6 +427,8 @@ describe('Skill Market (real mongod)', () => {
     expect(await Inbox.countDocuments({ receiverId: 'org-owner' })).toBe(1);
     expect(await Inbox.countDocuments({ receiverId: 'org-mgr' })).toBe(1);
     expect(await Inbox.countDocuments({})).toBe(before + 3);
+    // Sent by the system, not shown as coming from the recipient themselves.
+    expect((await Inbox.findOne({ receiverId: AUTHOR }).sort({ _id: -1 }))!.userId).toBe('SYSTEM');
     expect((await SkillListingVersion.findById(version.id))!.reviewStatus).toBe('pending');
     expect((await SkillListing.findById(listing.id))!.currentApprovedVersionId).toBeNull();
   });
@@ -509,7 +511,15 @@ describe('Skill Market (real mongod)', () => {
     const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'organization', ORG);
     const restore = { action: 'restore' };
 
+    const canRestore = async (userId: string, isAdmin = false) =>
+      (await call(detailHandler, 'GET', userId, { id: listing.id }, {}, isAdmin))._getJSONData().viewer.canRestore;
+    expect(await canRestore(ADMIN, true)).toBe(false);
+
     await call(moderateHandler, 'POST', ADMIN, { id: listing.id }, { action: 'delist', reason: 'malware' }, true);
+    // The page's Restore button mirrors the server guard below.
+    expect(await canRestore(ADMIN, true)).toBe(true);
+    expect(await canRestore(AUTHOR)).toBe(false);
+    expect(await canRestore(OTHER)).toBe(false);
     await expect(call(moderateHandler, 'POST', AUTHOR, { id: listing.id }, restore)).rejects.toMatchObject({
       statusCode: 403,
     });
@@ -521,6 +531,8 @@ describe('Skill Market (real mongod)', () => {
 
     // An org admin's own delist is theirs to reverse (but never by the author).
     await call(moderateHandler, 'POST', OTHER, { id: listing.id }, { action: 'delist', reason: 'off-topic' });
+    expect(await canRestore(AUTHOR)).toBe(false);
+    expect(await canRestore(OTHER)).toBe(true);
     await call(moderateHandler, 'POST', OTHER, { id: listing.id }, restore);
     expect((await SkillListing.findById(listing.id))!.status).toBe('approved');
   });
@@ -932,6 +944,12 @@ describe('Skill Market (real mongod)', () => {
 
     const tools = await scanOf({ toolsUsed: ['https://evil.example'] });
     expect(tools.scanFindings.map(f => f.rule)).toContain('summary_external_url');
+
+    const twice = await scanOf({
+      whatItDoes: 'Posts to https://evil.example',
+      dataItTouches: 'Sent to https://evil.example',
+    });
+    expect(twice.scanFindings.filter(f => f.rule === 'summary_external_url')).toHaveLength(1);
 
     // Fields are scanned one at a time: a `<` in one and a `>` in the next must not read as HTML.
     const split = await scanOf({

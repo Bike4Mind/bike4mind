@@ -37,6 +37,19 @@ describe('classifySkill', () => {
     }
   });
 
+  it('tells the model that relying on a tool is held for review, not failed', async () => {
+    let system = '';
+    await classifySkill(
+      snapshot,
+      llm(async sys => {
+        system = sys;
+        return JSON.stringify(valid);
+      })
+    );
+    expect(system).toMatch(/naming a tool \(for example web_fetch\)[^.]*is NOT a fail/);
+    expect(system).toMatch(/add a "high" finding/);
+  });
+
   it('fails closed on unparseable output', async () => {
     const result = await classifySkill(
       snapshot,

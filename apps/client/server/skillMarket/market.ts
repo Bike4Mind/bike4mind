@@ -131,6 +131,13 @@ export function canDelistListing(listing: ISkillListing, actor: MarketActor, adm
   return Boolean(actor.isAdmin) || canReviewListing(listing, actor, adminOrgIds);
 }
 
+/** Must stay in sync with the restore guard in pages/api/skills/market/[id]/moderate.ts. */
+export function canRestoreListing(listing: ISkillListing, actor: MarketActor, adminOrgIds: string[]): boolean {
+  if (!canDelistListing(listing, actor, adminOrgIds)) return false;
+  if (actor.isAdmin) return true;
+  return listing.authorUserId !== actor.id && !(listing.status === 'delisted' && listing.delistedBySuperAdmin);
+}
+
 export const isListingAuthor = (listing: ISkillListing, actor: MarketActor): boolean =>
   listing.authorUserId === actor.id;
 
@@ -208,7 +215,7 @@ export const publicVersionView = (v: ISkillListingVersion) => ({
 });
 
 export async function notifyUser(receiverId: string, title: string, message: string): Promise<void> {
-  await inboxRepository.createInboxMessage({ type: InboxType.COMMON, title, message, receiverId, userId: receiverId });
+  await inboxRepository.createInboxMessage({ type: InboxType.COMMON, title, message, receiverId, userId: 'SYSTEM' });
 }
 
 export async function findListing(id: string): Promise<ISkillListing | null> {

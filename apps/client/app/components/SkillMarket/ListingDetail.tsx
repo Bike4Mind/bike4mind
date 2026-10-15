@@ -26,6 +26,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DownloadIcon from '@mui/icons-material/Download';
 import FlagIcon from '@mui/icons-material/Flag';
 import BlockIcon from '@mui/icons-material/Block';
+import RestoreIcon from '@mui/icons-material/Restore';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
@@ -383,6 +384,7 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
   const { data, isLoading, isError } = useListingDetail({ id: listingId, token });
   const [reportOpen, setReportOpen] = useState(false);
   const [delistOpen, setDelistOpen] = useState(false);
+  const moderate = useModerateListing();
 
   if (isLoading) {
     return (
@@ -519,6 +521,23 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
                 data-testid="market-delist-btn"
               >
                 Delist
+              </Button>
+            ) : null}
+            {viewer.canRestore ? (
+              <Button
+                variant="outlined"
+                color="success"
+                startDecorator={<RestoreIcon />}
+                loading={moderate.isPending}
+                onClick={() =>
+                  moderate
+                    .mutateAsync({ listingId: listing.id, action: 'restore' })
+                    .then(() => toast.success(`/${listing.name} was restored`))
+                    .catch(e => toast.error(getErrorMessage(e)))
+                }
+                data-testid="market-restore-btn"
+              >
+                Restore
               </Button>
             ) : null}
           </Stack>

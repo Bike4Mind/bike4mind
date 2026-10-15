@@ -37,7 +37,14 @@ export type ListingDetail = {
     review?: string;
     skill: { id: string; name: string } | null;
   } | null;
-  viewer: { isAuthor: boolean; canReview: boolean; canDelist: boolean; canImport: boolean; canRate: boolean };
+  viewer: {
+    isAuthor: boolean;
+    canReview: boolean;
+    canDelist: boolean;
+    canRestore: boolean;
+    canImport: boolean;
+    canRate: boolean;
+  };
   similar: MarketListing[];
 };
 

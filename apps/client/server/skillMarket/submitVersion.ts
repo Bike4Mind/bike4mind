@@ -192,9 +192,12 @@ async function scanAndDecide(
         ...classifier.honestSummary.toolsUsed,
       ]
     : [];
-  const summaryFindings = summaryFields
-    .flatMap(field => scanPublicText(field, settings.urlAllowlist))
-    .map(f => ({ ...f, rule: `summary_${f.rule}`, severity: 'high' as const, message: `AI summary: ${f.message}` }));
+  // One finding per rule: a URL quoted in two summary fields is one problem, not two.
+  const summaryFindings = [
+    ...new Map(
+      summaryFields.flatMap(field => scanPublicText(field, settings.urlAllowlist)).map(f => [f.rule, f])
+    ).values(),
+  ].map(f => ({ ...f, rule: `summary_${f.rule}`, severity: 'high' as const, message: `AI summary: ${f.message}` }));
   const allFindings = classifier?.ok ? [...findings, ...classifier.findings, ...summaryFindings] : findings;
   const tier = classifier?.ok
     ? computeTier(

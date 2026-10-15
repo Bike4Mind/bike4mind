@@ -3,6 +3,7 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import { NotFoundError, type ISkillListing, type ISkillListingVersion } from '@bike4mind/common';
 import {
   canDelistListing,
+  canRestoreListing,
   canReviewListing,
   canSeeListing,
   isListingAuthor,
@@ -66,6 +67,7 @@ export async function buildListingDetail(listing: ISkillListing, actor: MarketAc
       isAuthor,
       canReview: canReviewListing(listing, actor, adminOrgIds),
       canDelist: canModerate,
+      canRestore: listing.status === 'delisted' && canRestoreListing(listing, actor, adminOrgIds),
       canImport: visible && !isAuthor,
       canRate: visible && !isAuthor && Boolean(myImport),
     },

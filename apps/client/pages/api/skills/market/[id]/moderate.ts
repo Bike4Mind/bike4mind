@@ -4,7 +4,7 @@ import { baseApi } from '@client/server/middlewares/baseApi';
 import { SkillListing, SkillListingReport, SkillListingVersion } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/common';
-import { canDelistListing, findListing, notifyUser } from '@server/skillMarket/market';
+import { canDelistListing, canRestoreListing, findListing, notifyUser } from '@server/skillMarket/market';
 
 const bodySchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('delist'), reason: z.string().trim().min(1).max(1000) }),
@@ -25,14 +25,11 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const body = bodySchema.parse(req.body);
   const listing = await findListing(String(req.query.id));
   if (!listing) throw new NotFoundError('Listing not found');
-  if (!canDelistListing(listing, actor, await organizationRepository.findIdsAdministeredBy(actor.id))) {
+  const adminOrgIds = await organizationRepository.findIdsAdministeredBy(actor.id);
+  if (!canDelistListing(listing, actor, adminOrgIds)) {
     throw new ForbiddenError("You don't have permission to moderate this listing");
   }
-  if (
-    body.action === 'restore' &&
-    !actor.isAdmin &&
-    (listing.authorUserId === actor.id || (listing.status === 'delisted' && listing.delistedBySuperAdmin))
-  ) {
+  if (body.action === 'restore' && !canRestoreListing(listing, actor, adminOrgIds)) {
     throw new ForbiddenError('Only a platform moderator can restore this listing');
   }
   const listingId = String(listing.id);
