@@ -14,10 +14,10 @@ import {
  * LLM classifier, and the classifier can only ADD findings, never clear these - so prompt-injecting
  * the classifier cannot launder a body these rules catch.
  *
- * Why strict: a published snapshot is copied into the importer's own skill namespace, so at run time
- * its body is framed as the user's own trusted instructions (renderInvokedSkill in skillSafety.ts),
- * not wrapped as untrusted content - and the copy may be re-shared from there. This scan is the
- * only gate before that happens, so a body that is unsafe to run must be caught here.
+ * Why strict: a published snapshot is copied into the importer's own skill namespace and can be
+ * re-shared or re-listed from there, so this scan is the only gate before someone runs the body as
+ * their own. (At run time an imported body is framed as an untrusted market copy - see
+ * `importedFrom` in skillSafety.ts - and the CLI drops imports, but a human can still re-share it.)
  */
 
 /**
