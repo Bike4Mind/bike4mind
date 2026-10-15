@@ -82,6 +82,7 @@ import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { RecentFolderStore } from './project/RecentFolderStore';
+import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
@@ -451,11 +452,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
   ipcMain.handle(IPC_CHANNELS.chatCreateSession, () => service.createSession());
-  // Recorded from the session main settled on rather than the request, so the entry is the
-  // resolved project root. Only a renderer-driven bind counts: a spawned session inheriting its
-  // parent's folder is the app choosing, not the user.
-  const rememberFolder = (session: ChatSessionSummary): void => {
-    const directory = session.project?.directory;
+  const rememberFolder = (directory: string | null): void => {
     if (!directory) return;
     recentFolders
       .record(directory)
@@ -463,13 +460,13 @@ export function registerChat(auth: AuthService): RegisteredChat {
   };
   ipcMain.handle(IPC_CHANNELS.chatCreateCodeSession, async (_event, request: CreateCodeSessionRequest) => {
     const result = await service.createCodeSession(request);
-    if (result.ok && request?.directory) rememberFolder(result.session);
+    rememberFolder(folderToRemember(request, result));
     return result;
   });
 
   ipcMain.handle(IPC_CHANNELS.chatUpdateProject, async (_event, request: UpdateProjectRequest) => {
     const result = await service.updateProject(request);
-    if (result.ok && request?.directory) rememberFolder(result.session);
+    rememberFolder(folderToRemember(request, result));
     return result;
   });
 
