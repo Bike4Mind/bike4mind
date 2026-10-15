@@ -67,7 +67,7 @@ const InspectableSettingsButton: FC<InspectableSettingsButtonProps> = ({
               // gracefully instead of dropping it entirely.
               display: 'block',
               fontWeight: '400',
-              fontSize: '14px',
+              fontSize: '13px',
               color: 'text.primary',
               overflow: 'hidden',
               textOverflow: 'ellipsis',

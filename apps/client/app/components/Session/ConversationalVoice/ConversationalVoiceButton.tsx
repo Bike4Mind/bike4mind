@@ -76,7 +76,7 @@ export interface VoiceCallControlsProps {
 /**
  * What the composer shows for Voice v2: the start button, or while a call is up the status pill
  * (label + equalizer, display only - the red button is the one way to end) and the red end button.
- * Stateless so /voice-lab-style previews can render any phase.
+ * Stateless so a preview can render any phase without a live call.
  */
 export const VoiceCallControls: React.FC<VoiceCallControlsProps> = ({
   phase,

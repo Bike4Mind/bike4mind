@@ -1,7 +1,7 @@
 import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { Box, Dropdown, IconButton, Menu, MenuButton, Modal, ModalDialog, Typography } from '@mui/joy';
-import ConstructionIcon from '@mui/icons-material/ConstructionOutlined';
+import HandymanIcon from '@mui/icons-material/HandymanOutlined';
 import { B4MLLMTools } from '@bike4mind/common';
 import ToolsSection from './ToolsSection';
 import ToolIndicators from '../../common/ToolIndicators';
@@ -112,9 +112,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
             width: '32px',
           }}
         >
-          <ConstructionIcon
-            sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]}
-          />
+          <HandymanIcon sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]} />
         </IconButton>
         <Modal open={open} onClose={() => !isDeepResearchModalOpen && setOpen(false)}>
           <ModalDialog
@@ -183,16 +181,14 @@ const ToolsButton: FC<ToolsButtonProps> = ({
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <ConstructionIcon
-              sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]}
-            />
+            <HandymanIcon sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]} />
             {!isTablet && !iconOnly && (
               <Typography
                 level="body-sm"
                 sx={{
                   color: 'text.primary',
                   fontWeight: '400',
-                  fontSize: '14px',
+                  fontSize: '13px',
                 }}
               >
                 {toolMode === 'smart' ? 'Tools' : 'Fast Tools'}

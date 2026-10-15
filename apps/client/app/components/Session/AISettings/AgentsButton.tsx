@@ -78,7 +78,7 @@ const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsC
                 sx={{
                   color: 'text.primary',
                   fontWeight: '400',
-                  fontSize: '14px',
+                  fontSize: '13px',
                 }}
               >
                 Agents
