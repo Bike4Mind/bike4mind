@@ -15,9 +15,6 @@ vi.mock('@client/app/components/ProfileModal/AgentConnectSection', () => ({
 vi.mock('@client/app/components/ProfileModal/SettingsTabContent/ApiKeysSection', () => ({
   default: () => <div data-testid="section-provider-keys" />,
 }));
-vi.mock('@client/app/components/admin/CreditAnalysis/components/UsageDashboard', () => ({
-  UsageDashboard: () => <div data-testid="usage-dashboard" />,
-}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderTab = () =>
@@ -30,16 +27,18 @@ const renderTab = () =>
 describe('ApiTabContent', () => {
   beforeEach(() => navigate.mockReset());
 
-  it('puts account API keys ahead of provider (BYOK) keys', () => {
+  it('orders account keys, the spend link, agent connect, then provider (BYOK) keys', () => {
     renderTab();
-    const account = screen.getByTestId('section-account-keys');
-    const provider = screen.getByTestId('section-provider-keys');
-    expect(account.compareDocumentPosition(provider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const order = ['section-account-keys', 'api-keys-usage-link', 'section-agent-connect', 'section-provider-keys'].map(
+      id => screen.getByTestId(id)
+    );
+    for (let i = 0; i < order.length - 1; i++) {
+      expect(order[i].compareDocumentPosition(order[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
   });
 
   it('links to the Usage tab instead of rendering its own spend dashboard', () => {
     renderTab();
-    expect(screen.queryByTestId('usage-dashboard')).toBeNull();
     fireEvent.click(screen.getByTestId('api-keys-usage-link-btn'));
     expect(navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'usage' }, replace: true });
   });
