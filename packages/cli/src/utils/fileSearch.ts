@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import * as path from 'node:path';
 import { AsyncFzf, type FzfResultItem } from 'fzf';
-import { fdir } from 'fdir';
 import ignore from 'ignore';
 import { isPathWithin } from './pathWithin.js';
 import { logger } from './Logger.js';
@@ -26,84 +26,103 @@ function statOrNull(targetPath: string): fs.Stats | null {
 }
 
 /**
- * Never listed, whatever .gitignore says: VCS internals, installed dependencies,
- * and nested worktrees (each one a full copy of the repo, so crawling them
- * multiplies the walk and floods @ results with duplicates).
+ * Never listed, whatever .gitignore says: VCS internals ('.git' without a slash,
+ * since it is a file inside a worktree or submodule), installed dependencies, and
+ * nested worktrees (each one a full copy of the repo, so crawling them multiplies
+ * the walk and floods @ results with duplicates).
  */
-const ALWAYS_IGNORED = ['.git/', 'node_modules/', '.claude/worktrees/'];
+const ALWAYS_IGNORED = ignore().add(['.git', 'node_modules/', '.claude/worktrees/']);
 
 const MAX_CRAWL_DEPTH = 10;
 const MAX_CRAWL_ENTRIES = 20000;
+// Directories read concurrently. Batches are consumed in order, so the result
+// does not depend on which readdir finishes first.
+const READDIR_BATCH_SIZE = 32;
 
-/**
- * Load gitignore rules from project root
- */
-function loadIgnoreRules(projectRoot: string): ReturnType<typeof ignore> {
-  const ig = ignore().add(ALWAYS_IGNORED);
+type Ignore = ReturnType<typeof ignore>;
 
-  // Try to load .gitignore
-  const gitignorePath = path.join(projectRoot, '.gitignore');
-  if (fs.existsSync(gitignorePath)) {
-    try {
-      const gitignoreContent = fs.readFileSync(gitignorePath, 'utf-8');
-      ig.add(gitignoreContent);
-    } catch {
-      // Ignore errors reading .gitignore
-    }
+/** Gitignore rules from one directory; `base` is that directory's '/'-terminated relative path. */
+type IgnoreScope = { base: string; rules: Ignore };
+type PendingDirectory = { relativePath: string; scopes: IgnoreScope[] };
+type ListedEntry = { relativePath: string; directory?: PendingDirectory };
+
+function isIgnored(scopes: IgnoreScope[], relativePath: string): boolean {
+  return scopes.some(({ base, rules }) => rules.ignores(relativePath.slice(base.length)));
+}
+
+async function readGitignore(absoluteDir: string): Promise<Ignore | null> {
+  try {
+    return ignore().add(await fsp.readFile(path.join(absoluteDir, '.gitignore'), 'utf-8'));
+  } catch {
+    return null; // unreadable: treat the directory as having no rules of its own
   }
-
-  return ig;
 }
 
 /**
- * Crawl a directory and collect files and directories (directories end in '/').
+ * Lists one directory in name order, dropping ignored entries. A directory's own
+ * .gitignore applies to everything beneath it, as in git.
+ */
+async function listDirectory(projectRoot: string, directory: PendingDirectory): Promise<ListedEntry[]> {
+  const absoluteDir = path.join(projectRoot, directory.relativePath);
+  let dirents: fs.Dirent[];
+  try {
+    dirents = await fsp.readdir(absoluteDir, { withFileTypes: true });
+  } catch {
+    return []; // vanished or unreadable mid-crawl: skip it rather than fail the listing
+  }
+
+  const hasGitignore = dirents.some(dirent => dirent.name === '.gitignore' && dirent.isFile());
+  const rules = hasGitignore ? await readGitignore(absoluteDir) : null;
+  const scopes = rules ? [...directory.scopes, { base: directory.relativePath, rules }] : directory.scopes;
+
+  const entries: ListedEntry[] = [];
+  for (const dirent of dirents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    // Symlinks are listed but never followed, which also rules out cycles.
+    const isDirectory = dirent.isDirectory();
+    const relativePath = `${directory.relativePath}${dirent.name}${isDirectory ? '/' : ''}`;
+    if (isIgnored(scopes, relativePath)) {
+      continue;
+    }
+    entries.push(isDirectory ? { relativePath, directory: { relativePath, scopes } } : { relativePath });
+  }
+  return entries;
+}
+
+/**
+ * Crawl the project breadth-first and collect files and directories
+ * (directories end in '/').
  *
- * Gitignore rules are applied while walking: ignored directories are pruned, and
- * ignored entries never count towards maxEntries, so the cap bounds the listing
- * rather than being spent on entries that get dropped.
+ * Ignored entries are dropped while walking and never count towards maxEntries.
+ * The walk stops as soon as the cap is reached, and because it goes level by
+ * level in name order, a capped listing is always the same shallowest entries.
  *
  * @returns Paths relative to projectRoot, '/'-separated
  */
-async function crawlDirectory(
+export async function crawlDirectory(
   projectRoot: string,
-  ig: ReturnType<typeof ignore>,
-  maxDepth: number = MAX_CRAWL_DEPTH,
-  maxEntries: number = MAX_CRAWL_ENTRIES
+  { maxDepth = MAX_CRAWL_DEPTH, maxEntries = MAX_CRAWL_ENTRIES }: { maxDepth?: number; maxEntries?: number } = {}
 ): Promise<string[]> {
-  return (
-    new fdir()
-      .withRelativePaths()
-      .withDirs()
-      .withPathSeparator('/')
-      .withMaxDepth(maxDepth)
-      .withMaxFiles(maxEntries)
-      .exclude((_dirName, dirPath) => {
-        const relativePath = path.relative(projectRoot, dirPath).split(path.sep).join('/');
-        return relativePath !== '' && ig.ignores(`${relativePath}/`);
-      })
-      // fdir also pushes the root itself as '.', which is not a selectable entry
-      // (and 'ignore' throws on it).
-      .filter(relativePath => relativePath !== '.' && !ig.ignores(relativePath))
-      .crawl(projectRoot)
-      .withPromise()
-  );
-}
+  const collected: string[] = [];
+  let level: PendingDirectory[] = [{ relativePath: '', scopes: [{ base: '', rules: ALWAYS_IGNORED }] }];
 
-/**
- * Walk a directory recursively and collect files/directories with metadata
- * @param basePath - The base directory to walk (defaults to cwd)
- * @param maxDepth - Maximum depth to traverse (default: 10)
- * @param maxEntries - Maximum number of non-ignored entries to collect (default: 20000)
- * @returns Array of FileSearchResult
- */
-export async function walkDirectory(
-  basePath: string = process.cwd(),
-  maxDepth: number = MAX_CRAWL_DEPTH,
-  maxEntries: number = MAX_CRAWL_ENTRIES
-): Promise<FileSearchResult[]> {
-  const normalizedBase = path.resolve(basePath);
-  const paths = await crawlDirectory(normalizedBase, loadIgnoreRules(normalizedBase), maxDepth, maxEntries);
-  return paths.map(relativePath => describeEntry(normalizedBase, relativePath));
+  for (let depth = 0; depth <= maxDepth && level.length > 0; depth++) {
+    const nextLevel: PendingDirectory[] = [];
+    for (let start = 0; start < level.length; start += READDIR_BATCH_SIZE) {
+      const batch = level.slice(start, start + READDIR_BATCH_SIZE);
+      const listings = await Promise.all(batch.map(directory => listDirectory(projectRoot, directory)));
+      for (const entry of listings.flat()) {
+        if (collected.length >= maxEntries) {
+          return collected;
+        }
+        collected.push(entry.relativePath);
+        if (entry.directory) {
+          nextLevel.push(entry.directory);
+        }
+      }
+    }
+    level = nextLevel;
+  }
+  return collected;
 }
 
 /**
@@ -140,33 +159,49 @@ let fileCache: FileCache | null = null;
 let inFlightCrawl: { root: string; promise: Promise<string[]> } | null = null;
 const CACHE_TTL_MS = 30000; // 30 seconds cache
 
-/**
- * Get cached file list or refresh if stale. The crawl is async, so a large tree
- * never blocks the event loop (and with it, input and rendering).
- */
-async function getCachedFiles(projectRoot: string = process.cwd()): Promise<string[]> {
-  const root = path.resolve(projectRoot);
-  if (fileCache && fileCache.root === root && Date.now() - fileCache.timestamp <= CACHE_TTL_MS) {
-    return fileCache.files;
-  }
+function startCrawl(root: string): Promise<string[]> {
   if (inFlightCrawl?.root === root) {
     return inFlightCrawl.promise;
   }
-
-  const crawl = { root, promise: crawlDirectory(root, loadIgnoreRules(root)) };
+  const crawl: { root: string; promise: Promise<string[]> } = {
+    root,
+    promise: crawlDirectory(root)
+      .then(files => {
+        // A crawl superseded by invalidateFileCache() must not repopulate the cache.
+        if (inFlightCrawl === crawl) {
+          fileCache = { root, files, timestamp: Date.now() };
+        }
+        return files;
+      })
+      .finally(() => {
+        if (inFlightCrawl === crawl) {
+          inFlightCrawl = null;
+        }
+      }),
+  };
   inFlightCrawl = crawl;
-  try {
-    const files = await crawl.promise;
-    // A crawl superseded by invalidateFileCache() must not repopulate the cache.
-    if (inFlightCrawl === crawl) {
-      fileCache = { root, files, timestamp: Date.now() };
-    }
-    return files;
-  } finally {
-    if (inFlightCrawl === crawl) {
-      inFlightCrawl = null;
-    }
+  return crawl.promise;
+}
+
+function logCrawlFailure(error: unknown): void {
+  logger.debug(`[fileSearch] Crawling the project failed: ${error instanceof Error ? error.message : String(error)}`);
+}
+
+/**
+ * Get the project listing. An expired listing is served while a refresh runs
+ * in the background, so only the very first search (or one right after
+ * invalidateFileCache) waits for a crawl.
+ */
+async function getCachedFiles(projectRoot: string = process.cwd()): Promise<string[]> {
+  const root = path.resolve(projectRoot);
+  const cached = fileCache?.root === root ? fileCache : null;
+  if (!cached) {
+    return startCrawl(root);
   }
+  if (Date.now() - cached.timestamp > CACHE_TTL_MS) {
+    startCrawl(root).catch(logCrawlFailure);
+  }
+  return cached.files;
 }
 
 /**
@@ -182,11 +217,7 @@ export function invalidateFileCache(): void {
  * Call this early (e.g., at startup) to prevent lag on first @ usage
  */
 export function warmFileCache(): void {
-  getCachedFiles().catch(error => {
-    logger.debug(
-      `[fileSearch] Warming the file cache failed: ${error instanceof Error ? error.message : String(error)}`
-    );
-  });
+  getCachedFiles().catch(logCrawlFailure);
 }
 
 /**
@@ -295,7 +326,8 @@ export async function searchFiles(query: string, maxResults: number = 20): Promi
 
   // If query is empty, return root level items only
   if (!query || query.trim() === '') {
-    const rootFiles = files.filter(f => !f.includes('/')).slice(0, maxResults);
+    // Root-level entries: no '/' except a directory's trailing one.
+    const rootFiles = files.filter(f => !f.slice(0, -1).includes('/')).slice(0, maxResults);
     return rootFiles.map(p => describeEntry(projectRoot, p));
   }
 
