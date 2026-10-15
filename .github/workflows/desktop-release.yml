@@ -140,7 +140,10 @@ jobs:
         run: |
           pnpm build
           if [ "$PLATFORM" = mac ]; then
-            pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.mac.identity=- -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
+            for key in CSC_LINK CSC_KEY_PASSWORD CSC_KEYCHAIN CSC_NAME; do
+              if [ -n "${!key:-}" ]; then echo "Certificate credentials are not allowed in PR packaging: $key"; exit 1; fi
+            done
+            CSC_FOR_PULL_REQUEST=true pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.mac.identity=- -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
             app_dir=release/mac
             if [ "$ARCH" = arm64 ]; then app_dir=release/mac-arm64; fi
             codesign --verify --deep --strict "$app_dir/Bike4Mind.app"
