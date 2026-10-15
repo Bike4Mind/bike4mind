@@ -18,6 +18,7 @@ let state: { currentUser: Record<string, unknown> | null; isAdmin: boolean };
 let flags: Set<SettingKey>;
 let connections: Connections;
 let requests: { counts: Record<string, number>; mine: string[] } | undefined;
+let compact: boolean;
 
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (s: Record<string, unknown>) => unknown) => selector({ ...state, refreshUser: vi.fn() }),
@@ -34,6 +35,7 @@ vi.mock('./useIntegrationConnections', async importOriginal => ({
   useIntegrationConnections: () => connections,
   useIntegrationConnect: () => ({ connect: h.connect, isPending: () => false }),
 }));
+vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsTablet: () => compact }));
 vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiumRoutes: [] }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() } }));
@@ -78,6 +80,10 @@ const rowIds = () =>
   screen
     .queryAllByTestId(/^integrations-row-/)
     .map(el => el.getAttribute('data-testid')!.replace('integrations-row-', ''));
+const pick = async (filter: string, option: string) => {
+  await userEvent.click(screen.getByTestId(`integrations-${filter}-filter-btn`));
+  await userEvent.click(await screen.findByTestId(`integrations-${filter}-option-${option}`));
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -85,6 +91,7 @@ beforeEach(() => {
   flags = new Set<SettingKey>(['EnableMCPServer', 'EnableDataLakes']);
   connections = { 'google-drive': { connected: true } };
   requests = { counts: { hubspot: 41, gmail: 3 }, mine: ['gmail'] };
+  compact = false;
 });
 
 describe('IntegrationsGallery', () => {
@@ -143,18 +150,27 @@ describe('IntegrationsGallery', () => {
     expect(screen.getByTestId('integrations-empty')).toBeInTheDocument();
   });
 
-  it('filters by status and category', async () => {
+  it('filters by status and category from compact selects that name the active value', async () => {
     renderGallery();
-    await userEvent.click(screen.getByTestId('integrations-filter-chip-connected'));
+    expect(screen.getByTestId('integrations-status-filter-btn')).toHaveTextContent('All statuses');
+    await pick('status', 'connected');
     expect(rowIds()).toEqual(['google-drive']);
-    expect(screen.getByTestId('integrations-filter-chip-connected')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('integrations-status-filter-btn')).toHaveTextContent('Status: Connected');
 
-    await userEvent.click(screen.getByTestId('integrations-filter-chip-coming-soon'));
+    await pick('status', 'coming-soon');
     expect(rowIds()).toContain('hubspot');
     expect(rowIds()).not.toContain('github');
 
-    await userEvent.click(screen.getByTestId('integrations-category-chip-crm'));
+    await pick('category', 'crm');
     expect(rowIds()).toEqual(['hubspot', 'salesforce']);
+    expect(screen.getByTestId('integrations-category-filter-btn')).toHaveTextContent('Category: CRM');
+  });
+
+  it('shows how many entries each filter value holds', async () => {
+    renderGallery();
+    await userEvent.click(screen.getByTestId('integrations-status-filter-btn'));
+    expect(await screen.findByTestId('integrations-status-option-connected')).toHaveTextContent(/^Connected1$/);
+    expect(screen.getByTestId('integrations-status-option-coming-soon')).toHaveTextContent(/^Coming soon19$/);
   });
 
   it('toggles a request and shows the request count', async () => {
@@ -226,9 +242,31 @@ describe('IntegrationsGallery', () => {
     expect(screen.getByTestId('integrations-model-group-voice')).toBeInTheDocument();
     expect(screen.queryByTestId('integrations-row-github')).toBeNull();
 
-    await userEvent.click(screen.getByTestId('integrations-kind-chip-music'));
+    await pick('kind', 'music');
     expect(screen.queryAllByTestId(/^integrations-model-row-/).map(el => el.getAttribute('data-testid'))).toEqual([
       'integrations-model-row-lyria',
     ]);
+  });
+
+  it('renders cards instead of dense rows below md', async () => {
+    compact = true;
+    renderGallery();
+    expect(screen.queryAllByTestId(/^integrations-row-/)).toHaveLength(0);
+    expect(within(group('connected')).getByTestId('integrations-card-google-drive')).toBeInTheDocument();
+    expect(within(group('coming-soon')).getByTestId('integrations-card-hubspot')).toBeInTheDocument();
+    expect(screen.getByTestId('integrations-request-count-hubspot')).toHaveTextContent('41 requests');
+
+    await userEvent.click(screen.getByTestId('integrations-request-btn-hubspot'));
+    expect(h.toggleRequest).toHaveBeenCalledWith({ integrationId: 'hubspot', requested: false });
+    await userEvent.click(screen.getByTestId('integrations-card-notion'));
+    expect(await screen.findByTestId('integrations-drawer')).toBeInTheDocument();
+  });
+
+  it('renders model cards below md', async () => {
+    compact = true;
+    renderGallery();
+    await userEvent.click(screen.getByTestId('integrations-tab-models'));
+    expect(screen.getByTestId('integrations-model-card-anthropic')).toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^integrations-model-row-/)).toHaveLength(0);
   });
 });

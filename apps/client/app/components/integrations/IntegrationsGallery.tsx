@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react';
-import { Box, Button, Input, Stack, TabList, Tabs, Typography } from '@mui/joy';
+import { useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Box, Button, Input, Option, Select, Stack, TabList, Tabs, Typography } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
 import {
   INTEGRATION_CATEGORY_LABELS,
@@ -7,6 +7,7 @@ import {
   MODEL_PROVIDER_KIND_LABELS,
   canAccessTavern,
   type DerivedIntegration,
+  type DerivedIntegrationStatus,
   type IntegrationCategory,
   type IntegrationId,
   type ModelProvider,
@@ -14,6 +15,7 @@ import {
 } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
+import { useIsTablet } from '@client/app/hooks/useIsMobile';
 import { useIntegrationRequests, useToggleIntegrationRequest } from '@client/app/hooks/data/integrationRequests';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
@@ -40,55 +42,80 @@ import { isConnectable, useIntegrationConnect, useIntegrationConnections } from 
 
 type GalleryTab = 'integrations' | 'models';
 
-// Logo, name + description, category, status, requests, action. One template for the header
-// and every row so the columns line up; phones keep logo, name, status and action.
-const ROW_COLUMNS = {
-  xs: '28px minmax(0, 1fr) auto',
-  md: '28px minmax(0, 1fr) 120px 150px 84px 104px',
-};
-
 /** Entries whose drawer carries a setup form, as opposed to a pointer elsewhere. */
 const SET_UP_IDS: readonly IntegrationId[] = ['jupyter', 'email', 'blog', 'linkedin'];
 
-const FilterChip = ({
-  label,
-  active,
-  onClick,
+const MODEL_STATUS: DerivedIntegrationStatus = { status: 'available', betaTag: false, adminOnly: false };
+
+interface FilterOption<T extends string> {
+  value: T;
+  label: string;
+  count: number;
+}
+
+/**
+ * One filter as a compact select: the button names the active value and the list shows how
+ * many entries each value holds. An active filter takes the accent.
+ */
+function FilterSelect<T extends string>({
+  name,
+  allLabel,
+  value,
+  options,
+  total,
+  onChange,
   testId,
 }: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
+  name: string;
+  allLabel: string;
+  value: T | 'all';
+  options: FilterOption<T>[];
+  total: number;
+  onChange: (value: T | 'all') => void;
   testId: string;
-}) => (
-  <Button
-    size="sm"
-    variant="outlined"
-    color={active ? 'primary' : 'neutral'}
-    aria-pressed={active}
-    onClick={onClick}
-    data-testid={testId}
-    sx={{
-      '--Button-minHeight': '26px',
-      px: '10px',
-      fontSize: '12.5px',
-      fontWeight: active ? 600 : 400,
-      borderRadius: '6px',
-      color: active ? undefined : 'text.secondary',
-    }}
-  >
-    {label}
-  </Button>
-);
-
-const FilterRow = ({ label, children }: { label: string; children: ReactNode }) => (
-  <Stack direction="row" alignItems="center" gap="8px" flexWrap="wrap">
-    <Typography level="body-xs" sx={{ width: '56px', flexShrink: 0, color: 'text.tertiary' }}>
-      {label}
-    </Typography>
-    {children}
-  </Stack>
-);
+}) {
+  const active = value !== 'all';
+  const activeLabel = options.find(option => option.value === value)?.label;
+  const optionBody = (label: string, count: number) => (
+    <Stack direction="row" justifyContent="space-between" gap="16px" sx={{ width: '100%' }}>
+      <span>{label}</span>
+      <Box component="span" sx={{ color: 'text.tertiary' }}>
+        {count}
+      </Box>
+    </Stack>
+  );
+  return (
+    <Select<T | 'all'>
+      size="sm"
+      variant="outlined"
+      color={active ? 'primary' : 'neutral'}
+      value={value}
+      onChange={(_, next) => {
+        if (next !== null) onChange(next);
+      }}
+      renderValue={() => (active ? `${name}: ${activeLabel}` : allLabel)}
+      slotProps={{
+        button: { 'data-testid': `${testId}-filter-btn` },
+        listbox: { placement: 'bottom-end', sx: { minWidth: '200px' } },
+      }}
+      sx={{ '--Select-minHeight': '36px', flex: { xs: '1 1 0', sm: '0 0 auto' }, minWidth: { sm: '150px' } }}
+    >
+      <Option value="all" label={allLabel} data-testid={`${testId}-option-all`}>
+        {optionBody(allLabel, total)}
+      </Option>
+      {options.map(option => (
+        <Option
+          key={option.value}
+          value={option.value}
+          label={option.label}
+          data-testid={`${testId}-option-${option.value}`}
+        >
+          {optionBody(option.label, option.count)}
+        </Option>
+      ))}
+    </Select>
+  );
+}
 
 const GroupHeader = ({ label, count, testId }: { label: string; count: number; testId: string }) => (
   <Stack
@@ -110,9 +137,11 @@ const GroupHeader = ({ label, count, testId }: { label: string; count: number; t
   </Stack>
 );
 
+// Logo, name + description, category, status, requests, action. One template for the column
+// header and every row so the columns line up. Rows are desktop only; below md the page uses cards.
 const rowSx = {
   display: 'grid',
-  gridTemplateColumns: ROW_COLUMNS,
+  gridTemplateColumns: '28px minmax(0, 1fr) 120px 150px 84px 104px',
   columnGap: '14px',
   alignItems: 'center',
   px: '10px',
@@ -130,25 +159,68 @@ const RowText = ({ name, description, muted }: { name: string; description: stri
     >
       {name}
     </Typography>
-    <Typography
-      level="body-sm"
-      noWrap
-      sx={{ display: { xs: 'none', sm: 'block' }, minWidth: 0, fontSize: '13px', color: 'text.secondary' }}
-    >
+    <Typography level="body-sm" noWrap sx={{ minWidth: 0, fontSize: '13px', color: 'text.secondary' }}>
       {description}
     </Typography>
   </Stack>
 );
 
+const cardGridSx = {
+  display: 'grid',
+  gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))' },
+  gap: '12px',
+  mt: '4px',
+} as const;
+
+// Roadmap cards drop the fill and dash the border so they read as not-yet at a glance.
+const cardSx = (soon: boolean) =>
+  ({
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    p: '16px',
+    borderRadius: '12px',
+    border: '1px solid',
+    borderStyle: soon ? 'dashed' : 'solid',
+    borderColor: 'divider',
+    backgroundColor: soon ? 'transparent' : 'background.surface',
+  }) as const;
+
+const CardHead = ({ logo, name, sub, muted }: { logo: ReactNode; name: string; sub: string; muted: boolean }) => (
+  <Stack direction="row" alignItems="center" gap="12px" sx={{ minWidth: 0 }}>
+    {logo}
+    <Box sx={{ minWidth: 0 }}>
+      <Typography
+        level="title-sm"
+        noWrap
+        sx={{ fontSize: '15px', fontWeight: 600, color: muted ? 'text.secondary' : 'text.primary' }}
+      >
+        {name}
+      </Typography>
+      <Typography level="body-xs" noWrap sx={{ color: 'text.tertiary' }}>
+        {sub}
+      </Typography>
+    </Box>
+  </Stack>
+);
+
+const CardText = ({ children }: { children: ReactNode }) => (
+  <Typography level="body-sm" sx={{ flex: 1, fontSize: '13.5px', color: 'text.secondary' }}>
+    {children}
+  </Typography>
+);
+
 /**
- * The /integrations page body: every integration and model provider in one dense,
- * searchable directory. Statuses come from the registry in @bike4mind/common
- * (deriveIntegrationStatus), connection state from the sources Profile > Integrations reads.
+ * The /integrations page body: every integration and model provider in one searchable
+ * directory, as dense rows on desktop and a card grid below md. Statuses come from the registry
+ * in @bike4mind/common (deriveIntegrationStatus), connection state from the sources Profile >
+ * Integrations reads.
  */
 const IntegrationsGallery = () => {
   const currentUser = useUser(s => s.currentUser);
   const isAdmin = useUser(s => s.isAdmin);
   const { isFeatureEnabled } = useAdminSettingsCache();
+  const compact = useIsTablet();
   // /tavern is a codegen-mounted premium route; the same two-part gate as SidenavNav's Tavern row.
   const tavernRouteExists = premiumRoutes.some(route => route.path.startsWith('/tavern'));
   const viewer: GalleryViewer = {
@@ -219,24 +291,33 @@ const IntegrationsGallery = () => {
     return button(SET_UP_IDS.includes(id) ? 'Set up' : 'Details', open);
   };
 
+  // Rows and cards open the drawer on click, Enter or Space; the buttons inside stop propagation.
+  const openerProps = (id: IntegrationId, testId: string) => ({
+    role: 'button',
+    tabIndex: 0,
+    'data-testid': testId,
+    onClick: () => setOpenId(id),
+    onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
+      if (event.target !== event.currentTarget) return;
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        setOpenId(id);
+      }
+    },
+  });
+
+  const requestCount = (row: DerivedIntegration): string => {
+    const count = countOf(row.integration.id);
+    return row.integration.stage === 'planned' && count > 0 ? requestCountText(count) : '';
+  };
+
   const integrationRow = (row: DerivedIntegration) => {
     const { integration } = row;
-    const planned = integration.stage === 'planned';
-    const requestCount = countOf(integration.id);
+    const soon = row.status === 'coming-soon';
     return (
       <Box
         key={integration.id}
-        role="button"
-        tabIndex={0}
-        data-testid={`integrations-row-${integration.id}`}
-        onClick={() => setOpenId(integration.id)}
-        onKeyDown={event => {
-          if (event.target !== event.currentTarget) return;
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            setOpenId(integration.id);
-          }
-        }}
+        {...openerProps(integration.id, `integrations-row-${integration.id}`)}
         sx={theme => ({
           ...rowSx,
           cursor: 'pointer',
@@ -244,28 +325,64 @@ const IntegrationsGallery = () => {
           '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '-2px' },
         })}
       >
-        <IntegrationLogo logo={integration.logo} muted={row.status === 'coming-soon'} />
-        <Box sx={{ minWidth: 0 }}>
-          <RowText name={integration.name} description={integration.description} muted={row.status === 'coming-soon'} />
-          <Box sx={{ display: { xs: 'block', md: 'none' }, mt: '2px' }}>
-            <IntegrationStatusLabel derived={row} />
-          </Box>
-        </Box>
-        <Typography level="body-xs" noWrap sx={{ display: { xs: 'none', md: 'block' }, color: 'text.tertiary' }}>
+        <IntegrationLogo logo={integration.logo} muted={soon} />
+        <RowText name={integration.name} description={integration.description} muted={soon} />
+        <Typography level="body-xs" noWrap sx={{ color: 'text.tertiary' }}>
           {INTEGRATION_CATEGORY_LABELS[integration.category]}
         </Typography>
-        <Box sx={{ display: { xs: 'none', md: 'block' }, minWidth: 0 }}>
+        <Box sx={{ minWidth: 0 }}>
           <IntegrationStatusLabel derived={row} testId={`integrations-status-${integration.id}`} />
         </Box>
         <Typography
           level="body-xs"
           noWrap
           data-testid={`integrations-request-count-${integration.id}`}
-          sx={{ display: { xs: 'none', md: 'block' }, textAlign: 'right', color: 'text.tertiary' }}
+          sx={{ textAlign: 'right', color: 'text.tertiary' }}
         >
-          {planned && requestCount > 0 ? requestCountText(requestCount) : ''}
+          {requestCount(row)}
         </Typography>
         <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>{action(row, connections[integration.id])}</Box>
+      </Box>
+    );
+  };
+
+  const integrationCard = (row: DerivedIntegration) => {
+    const { integration } = row;
+    const soon = row.status === 'coming-soon';
+    const count = requestCount(row);
+    return (
+      <Box
+        key={integration.id}
+        {...openerProps(integration.id, `integrations-card-${integration.id}`)}
+        sx={theme => ({
+          ...cardSx(soon),
+          cursor: 'pointer',
+          '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '2px' },
+        })}
+      >
+        <CardHead
+          logo={<IntegrationLogo logo={integration.logo} size={44} muted={soon} />}
+          name={integration.name}
+          sub={INTEGRATION_CATEGORY_LABELS[integration.category]}
+          muted={soon}
+        />
+        <CardText>{integration.description}</CardText>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" gap="8px">
+          <IntegrationStatusLabel derived={row} testId={`integrations-status-${integration.id}`} />
+          <Stack direction="row" alignItems="center" gap="10px">
+            {count && (
+              <Typography
+                level="body-xs"
+                noWrap
+                data-testid={`integrations-request-count-${integration.id}`}
+                sx={{ color: 'text.tertiary' }}
+              >
+                {count}
+              </Typography>
+            )}
+            {action(row, connections[integration.id])}
+          </Stack>
+        </Stack>
       </Box>
     );
   };
@@ -274,12 +391,23 @@ const IntegrationsGallery = () => {
     <Box key={model.id} data-testid={`integrations-model-row-${model.id}`} sx={rowSx}>
       <IntegrationLogo logo={model.logo} />
       <RowText name={model.name} description={model.description} muted={false} />
-      <Typography level="body-xs" noWrap sx={{ display: { xs: 'none', md: 'block' }, color: 'text.tertiary' }}>
+      <Typography level="body-xs" noWrap sx={{ color: 'text.tertiary' }}>
         {MODEL_PROVIDER_KIND_LABELS[model.kind]}
       </Typography>
-      <Box sx={{ display: { xs: 'none', md: 'block' } }}>
-        <IntegrationStatusLabel derived={{ status: 'available', betaTag: false, adminOnly: false }} />
-      </Box>
+      <IntegrationStatusLabel derived={MODEL_STATUS} />
+    </Box>
+  );
+
+  const modelCard = (model: ModelProvider) => (
+    <Box key={model.id} data-testid={`integrations-model-card-${model.id}`} sx={cardSx(false)}>
+      <CardHead
+        logo={<IntegrationLogo logo={model.logo} size={44} />}
+        name={model.name}
+        sub={MODEL_PROVIDER_KIND_LABELS[model.kind]}
+        muted={false}
+      />
+      <CardText>{model.description}</CardText>
+      <IntegrationStatusLabel derived={MODEL_STATUS} />
     </Box>
   );
 
@@ -288,7 +416,6 @@ const IntegrationsGallery = () => {
       aria-hidden
       sx={{
         ...rowSx,
-        display: { xs: 'none', md: 'grid' },
         mt: '10px',
         py: '6px',
         '& > span': {
@@ -318,12 +445,16 @@ const IntegrationsGallery = () => {
     </Typography>
   );
 
+  function groupBody<T>(items: T[], asRow: (item: T) => ReactNode, asCard: (item: T) => ReactNode) {
+    return compact ? <Box sx={cardGridSx}>{items.map(asCard)}</Box> : items.map(asRow);
+  }
+
   const integrationsBody = () => {
     const groups = groupIntegrations(filterIntegrations(rows, { query, category, status }));
     if (groups.length === 0) return empty;
     return (
       <>
-        {columnHeader}
+        {!compact && columnHeader}
         {groups.map(group => (
           <Box key={group.key} data-testid={`integrations-group-${group.key}`}>
             <GroupHeader
@@ -331,7 +462,7 @@ const IntegrationsGallery = () => {
               count={group.rows.length}
               testId={`integrations-group-header-${group.key}`}
             />
-            {group.rows.map(integrationRow)}
+            {groupBody(group.rows, integrationRow, integrationCard)}
           </Box>
         ))}
       </>
@@ -343,7 +474,7 @@ const IntegrationsGallery = () => {
     if (groups.length === 0) return empty;
     return (
       <>
-        {columnHeader}
+        {!compact && columnHeader}
         {groups.map(group => (
           <Box key={group.key} data-testid={`integrations-model-group-${group.key}`}>
             <GroupHeader
@@ -351,24 +482,68 @@ const IntegrationsGallery = () => {
               count={group.rows.length}
               testId={`integrations-model-group-header-${group.key}`}
             />
-            {group.rows.map(modelRow)}
+            {groupBody(group.rows, modelRow, modelCard)}
           </Box>
         ))}
       </>
     );
   };
 
+  const filters =
+    tab === 'integrations' ? (
+      <>
+        <FilterSelect<IntegrationCategory>
+          name="Category"
+          allLabel="All categories"
+          value={category}
+          options={categoriesOf(rows).map(c => ({
+            value: c,
+            label: INTEGRATION_CATEGORY_LABELS[c],
+            count: rows.filter(r => r.integration.category === c).length,
+          }))}
+          total={rows.length}
+          onChange={setCategory}
+          testId="integrations-category"
+        />
+        <FilterSelect<Exclude<StatusFilter, 'all'>>
+          name="Status"
+          allLabel="All statuses"
+          value={status}
+          options={STATUS_FILTERS.filter(s => s !== 'all').map(s => ({
+            value: s,
+            label: STATUS_LABELS[s],
+            count: filterIntegrations(rows, { query: '', category: 'all', status: s }).length,
+          }))}
+          total={rows.length}
+          onChange={setStatus}
+          testId="integrations-status"
+        />
+      </>
+    ) : (
+      <FilterSelect<ModelProviderKind>
+        name="Kind"
+        allLabel="All kinds"
+        value={modelKind}
+        options={modelKindsOf(MODEL_PROVIDERS).map(k => ({
+          value: k,
+          label: MODEL_PROVIDER_KIND_LABELS[k],
+          count: MODEL_PROVIDERS.filter(m => m.kind === k).length,
+        }))}
+        total={MODEL_PROVIDERS.length}
+        onChange={setModelKind}
+        testId="integrations-kind"
+      />
+    );
+
   const open = openId ? (rows.find(r => r.integration.id === openId) ?? null) : null;
 
   return (
     <Box data-testid="integrations-page-body">
-      <Box
-        sx={{
-          display: 'grid',
-          gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1fr) auto' },
-          gap: '16px',
-          alignItems: 'end',
-        }}
+      <Stack
+        direction={{ xs: 'column', md: 'row' }}
+        gap="16px"
+        alignItems={{ xs: 'stretch', md: 'flex-end' }}
+        justifyContent="space-between"
       >
         <Box>
           <Typography level="h2" sx={{ fontWeight: 500, fontSize: '20px' }}>
@@ -382,18 +557,21 @@ const IntegrationsGallery = () => {
             {countLine(counts)}.
           </Typography>
         </Box>
-        <Input
-          size="sm"
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-          placeholder="Search integrations and models"
-          startDecorator={<SearchIcon sx={{ fontSize: '18px' }} />}
-          slotProps={{
-            input: { 'aria-label': 'Search integrations and models', 'data-testid': 'integrations-search-input' },
-          }}
-          sx={{ width: { xs: '100%', sm: '280px' }, '--Input-minHeight': '36px' }}
-        />
-      </Box>
+        <Stack direction="row" gap="8px" flexWrap="wrap" data-testid="integrations-filters">
+          <Input
+            size="sm"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder="Search integrations and models"
+            startDecorator={<SearchIcon sx={{ fontSize: '18px' }} />}
+            slotProps={{
+              input: { 'aria-label': 'Search integrations and models', 'data-testid': 'integrations-search-input' },
+            }}
+            sx={{ flex: { xs: '1 1 100%', sm: '0 0 260px' }, '--Input-minHeight': '36px' }}
+          />
+          {filters}
+        </Stack>
+      </Stack>
 
       <Tabs
         value={tab}
@@ -416,59 +594,6 @@ const IntegrationsGallery = () => {
           </PageTab>
         </TabList>
       </Tabs>
-
-      <Stack gap="8px" sx={{ mt: '12px', mb: '4px' }}>
-        {tab === 'integrations' ? (
-          <>
-            <FilterRow label="Category">
-              <FilterChip
-                label="All"
-                active={category === 'all'}
-                onClick={() => setCategory('all')}
-                testId="integrations-category-chip-all"
-              />
-              {categoriesOf(rows).map(c => (
-                <FilterChip
-                  key={c}
-                  label={INTEGRATION_CATEGORY_LABELS[c]}
-                  active={category === c}
-                  onClick={() => setCategory(c)}
-                  testId={`integrations-category-chip-${c}`}
-                />
-              ))}
-            </FilterRow>
-            <FilterRow label="Status">
-              {STATUS_FILTERS.map(s => (
-                <FilterChip
-                  key={s}
-                  label={s === 'all' ? 'All' : STATUS_LABELS[s]}
-                  active={status === s}
-                  onClick={() => setStatus(s)}
-                  testId={`integrations-filter-chip-${s}`}
-                />
-              ))}
-            </FilterRow>
-          </>
-        ) : (
-          <FilterRow label="Kind">
-            <FilterChip
-              label="All"
-              active={modelKind === 'all'}
-              onClick={() => setModelKind('all')}
-              testId="integrations-kind-chip-all"
-            />
-            {modelKindsOf(MODEL_PROVIDERS).map(k => (
-              <FilterChip
-                key={k}
-                label={MODEL_PROVIDER_KIND_LABELS[k]}
-                active={modelKind === k}
-                onClick={() => setModelKind(k)}
-                testId={`integrations-kind-chip-${k}`}
-              />
-            ))}
-          </FilterRow>
-        )}
-      </Stack>
 
       {tab === 'integrations' ? integrationsBody() : modelsBody()}
 
