@@ -21,6 +21,17 @@ describe('InspectableSettingsButton', () => {
     expect(button.getAttribute('aria-label')).toBe('AI Settings, model: GPT-5 Mini');
   });
 
+  it('keeps the model in the accessible name when the name is hidden to save room', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <InspectableSettingsButton onClick={() => {}} modelName="GPT-5 Mini" hideModelName />
+      </CssVarsProvider>
+    );
+    const button = screen.getByTestId('ai-settings-btn');
+    expect(button.textContent).not.toContain('GPT-5 Mini');
+    expect(button.getAttribute('aria-label')).toBe('AI Settings, model: GPT-5 Mini');
+  });
+
   it('falls back to a plain label without a model name', () => {
     renderButton();
     expect(screen.getByTestId('ai-settings-btn').getAttribute('aria-label')).toBe('AI Settings');

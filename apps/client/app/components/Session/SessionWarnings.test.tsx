@@ -12,7 +12,7 @@ vi.mock('./CreditOfferActions', () => ({
   ),
 }));
 
-import { CreditsWarning, LowCreditsWarning, NoModelsWarning } from './SessionWarnings';
+import { CreditsWarning, LowCreditsWarning, NoModelsPlaceholder, noModelsPlaceholder } from './SessionWarnings';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -20,50 +20,34 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-describe('NoModelsWarning', () => {
-  it('renders nothing when show is false', () => {
-    const { container } = render(
-      <TestWrapper>
-        <NoModelsWarning show={false} />
-      </TestWrapper>
-    );
-    expect(container.firstChild).toBeNull();
-  });
-
-  it('renders the warning when show is true', () => {
+describe('NoModelsPlaceholder', () => {
+  it('names the permissions problem when the user can reach no model, with nothing to retry', () => {
     render(
       <TestWrapper>
-        <NoModelsWarning show={true} />
+        <NoModelsPlaceholder loadError={false} />
       </TestWrapper>
     );
-
-    expect(screen.getByTestId('session-no-models-warning')).toBeInTheDocument();
-    expect(screen.getByTestId('no-models-warning-text')).toBeInTheDocument();
-  });
-
-  it('displays the correct warning message', () => {
-    render(
-      <TestWrapper>
-        <NoModelsWarning show={true} />
-      </TestWrapper>
-    );
-
     expect(screen.getByTestId('no-models-warning-text')).toHaveTextContent("You don't have access to any AI models.");
     expect(screen.getByText(/contact your administrator/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('no-models-retry-btn')).toBeNull();
   });
 
-  it('offers a retry instead of the permissions message when the model list failed to load', () => {
+  it('points at the connection, not permissions, and offers Retry when the model list failed to load', () => {
     const onRetry = vi.fn();
     render(
       <TestWrapper>
-        <NoModelsWarning show={true} loadError onRetry={onRetry} />
+        <NoModelsPlaceholder loadError onRetry={onRetry} />
       </TestWrapper>
     );
-
     expect(screen.getByTestId('no-models-warning-text')).toHaveTextContent("Couldn't load AI models.");
-    expect(screen.queryByText(/contact your administrator/i)).toBeNull();
+    expect(screen.queryByText(/administrator/i)).toBeNull();
     fireEvent.click(screen.getByTestId('no-models-retry-btn'));
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives assistive tech the same notice as one sentence', () => {
+    expect(noModelsPlaceholder(false)).toMatch(/^You don't have access to any AI models\. Please contact/);
+    expect(noModelsPlaceholder(true)).toMatch(/^Couldn't load AI models\. Check your connection/);
   });
 });
 
