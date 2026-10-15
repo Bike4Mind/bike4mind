@@ -2109,7 +2109,7 @@ describe('convertCodeBlocksToArtifacts - tool-output JSON and code fences', () =
     assertLinearGrowth(
       n => `mermaid\n${'```\n`a`\n```\n`b\n'.repeat(n)}`,
       20000,
-      undefined,
+      (out, input) => expect(out).toBe(input),
       convertCodeBlocksToArtifacts,
       HEAVY_INPUT_MIN_BASELINE_MS
     );
