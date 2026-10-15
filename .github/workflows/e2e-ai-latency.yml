@@ -822,6 +822,19 @@ jobs:
           QA_LATENCY_BREACH: ${{ steps.aggregate.outputs.latency_breach }}
         run: node qa-src/scripts/qa-report.mjs --results-dir downloaded-results --latency-dir downloaded-results
 
+      - name: Ingest QA run to production (shadow)
+        if: ${{ !cancelled() && needs.e2e-ai-latency.outputs.preview_skipped != 'true' && vars.QA_INGEST_URL_PROD != '' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          QA_INGEST_URL: ${{ vars.QA_INGEST_URL_PROD }}
+          QA_INGEST_KEY: ${{ secrets.QA_INGEST_KEY_PROD }}
+          QA_PRODUCT: ${{ vars.QA_PRODUCT }}
+          QA_SUITE: AI Latency
+          QA_ENV: ${{ steps.config.outputs.env_label }}
+          QA_TRIGGER: ${{ steps.trigger.outputs.label }}
+        run: node qa-src/scripts/qa-report.mjs --results-dir downloaded-results --latency-dir downloaded-results
+
       - name: Send Slack notification
         if: always()
         uses: slackapi/slack-github-action@v2.1.0
