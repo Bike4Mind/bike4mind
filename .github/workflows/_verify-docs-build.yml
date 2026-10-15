@@ -33,14 +33,17 @@ jobs:
 
       - name: Check for docs changes
         id: docs-changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           # Check if any files in docs-site/ were changed
           # For PRs, fetch base branch efficiently
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch --depth=1 origin ${{ github.base_ref }}
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git fetch --depth=1 origin "$BASE_REF"
           fi
           
-          DOCS_CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD 2>/dev/null | grep '^docs-site/' || echo "")
+          DOCS_CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD" 2>/dev/null | grep '^docs-site/' || echo "")
           if [ -n "$DOCS_CHANGED" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
             TOTAL=$(echo "$DOCS_CHANGED" | wc -l | tr -d ' ')
