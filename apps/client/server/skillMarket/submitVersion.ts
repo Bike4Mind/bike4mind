@@ -51,7 +51,14 @@ const plainVersion = (doc: ISkillListingVersionDocument): ISkillListingVersion =
 
 /** A different author already sells this exact content: blocks clone/copycat spam. */
 async function duplicateFinding(listing: ISkillListing, contentHash: string): Promise<ISkillScanFinding | null> {
-  const sameContent = await SkillListingVersion.find({ contentHash, listingId: { $ne: String(listing.id) } })
+  // Only a version that actually passed (and is still live or waiting) is a real duplicate; a
+  // failed copy that never published must not block the original author from re-publishing.
+  const sameContent = await SkillListingVersion.find({
+    contentHash,
+    listingId: { $ne: String(listing.id) },
+    scanStatus: 'passed',
+    reviewStatus: { $in: ['pending', 'approved', 'auto_approved'] },
+  })
     .select('listingId')
     .limit(50)
     .lean();
@@ -84,7 +91,12 @@ export async function submitListingVersion(
     listingId: String(listing.id),
     contentHash,
     'snapshot.name': snapshot.name,
-    reviewStatus: { $in: ['pending', 'approved', 'auto_approved'] },
+    // Only content that is live or already waiting is "unchanged"; an older approved version the
+    // author reverted to is a legitimate new submission, not a no-op.
+    $or: [
+      { reviewStatus: 'pending' },
+      ...(listing.currentApprovedVersionId ? [{ _id: listing.currentApprovedVersionId }] : []),
+    ],
   });
   if (unchanged) throw new BadRequestError('This exact content is already live or waiting for review');
 
@@ -132,7 +144,6 @@ async function scanAndDecide(
   const versionId = String(version.id);
 
   const findings = runDeterministicScan(version.snapshot, {
-    visibility: listing.visibility,
     highRiskTools: settings.highRiskTools,
     urlAllowlist: settings.urlAllowlist,
   });
@@ -169,13 +180,16 @@ async function scanAndDecide(
     return reload(versionId);
   }
 
-  // The honest summary is model output an adversarial body can steer, and it is shown publicly.
+  // The honest summary is model output an adversarial body can steer, and every field of it is
+  // shown to viewers, so the whole summary is scanned - not just the prose fields.
   const summaryFindings = classifier?.ok
     ? scanPublicText(
         [
           classifier.honestSummary.whatItDoes,
           classifier.honestSummary.dataItTouches,
           ...classifier.honestSummary.riskNotes,
+          classifier.honestSummary.mismatchNote ?? '',
+          ...classifier.honestSummary.toolsUsed,
         ].join('\n'),
         settings.urlAllowlist
       ).map(f => ({ ...f, rule: `summary_${f.rule}`, severity: 'high' as const, message: `AI summary: ${f.message}` }))
