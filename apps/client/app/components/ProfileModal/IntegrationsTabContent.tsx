@@ -1,4 +1,5 @@
-import { Box, Stack, Typography } from '@mui/joy';
+import { Box, Link, Stack, Typography } from '@mui/joy';
+import { useNavigate } from '@tanstack/react-router';
 import EmailIntegrationSection from './SettingsTabContent/EmailIntegrationSection';
 import SlackIntegrationSection from './SettingsTabContent/SlackIntegrationSection';
 import McpSection from './SettingsTabContent/McpSection';
@@ -29,11 +30,21 @@ import { ContextHelpButton } from '@client/app/components/help';
  */
 const IntegrationsTabContent = () => {
   const { currentUser } = useUser();
+  const navigate = useNavigate();
   return (
     <Box>
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 3 }}>
         <Typography level="h3">Integrations</Typography>
         <ContextHelpButton helpId="features/slack-multi-workspace-oauth" tooltipText="Learn about Integrations" />
+        <Link
+          component="button"
+          level="body-sm"
+          onClick={() => navigate({ to: '/integrations' })}
+          data-testid="profile-integrations-browse-link"
+          sx={{ ml: 'auto' }}
+        >
+          Browse all integrations
+        </Link>
       </Stack>
       <Typography level="body-md" sx={{ mb: 4, color: 'text.secondary' }}>
         Connect external services and manage your integrations
