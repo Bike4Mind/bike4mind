@@ -332,14 +332,10 @@ export async function decideVersion(
         throw new BadRequestError('Acknowledge the description mismatch before approving a Public listing');
       }
     }
-    const won = await approvePendingListingVersion(
-      String(listing.id),
-      versionId,
-      version.version,
-      denormFor(version, false)
-    );
-    if (!won) throw new ConflictError('This version was superseded or already decided');
-    await SkillListingVersion.updateOne(
+    // Stamp the version before publishing it, so a crash can never leave the listing pointing at a
+    // version that is still `pending` (imports and detail read the version's own review state).
+    // If the publish CAS then loses, roll the stamp back so the version is not left marked approved.
+    const stamped = await SkillListingVersion.updateOne(
       { _id: versionId, reviewStatus: 'pending' },
       {
         $set: {
@@ -355,6 +351,31 @@ export async function decideVersion(
         },
       }
     );
+    if (stamped.modifiedCount === 0) throw new ConflictError('This version was superseded or already decided');
+    const won = await approvePendingListingVersion(
+      String(listing.id),
+      versionId,
+      version.version,
+      denormFor(version, false)
+    );
+    if (!won) {
+      await SkillListingVersion.updateOne(
+        { _id: versionId, reviewStatus: 'approved', reviewedAt: now },
+        {
+          $set: { reviewStatus: 'pending' },
+          $unset: {
+            reviewerUserId: 1,
+            reviewedAt: 1,
+            reviewAckHighRisk: 1,
+            reviewAckMismatch: 1,
+            reviewNote: 1,
+            auditSample: 1,
+            auditedAt: 1,
+          },
+        }
+      );
+      throw new ConflictError('This version was superseded or already decided');
+    }
     await notifyUser(
       listing.authorUserId,
       `/${version.snapshot.name} v${version.version} was approved`,
