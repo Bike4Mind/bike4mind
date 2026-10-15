@@ -109,7 +109,7 @@ export type LakeMembershipFilter = Record<string, unknown>;
 
 /**
  * The resolved convergence-pause picture for one sweep run. Built by `toChunkScanConvergencePause`
- * (server/dataLakes/convergencePauseScope.ts), which is also where the reasoning for the two arms lives.
+ * (dataLakes/convergencePauseScope.ts), which is also where the reasoning for the two arms lives.
  *
  * Only lakes carrying an OVERRIDE appear in `paused`/`running` - every other lake resolves to
  * `platformPaused`, so listing it would change nothing. Both arrays empty therefore means "platform

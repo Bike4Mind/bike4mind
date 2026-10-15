@@ -5,7 +5,7 @@
  * of the three call sites resolved gates itself and then passed the value on, and replacing that value
  * with a hardcoded `{ v1: true, v2: true }` at ALL THREE sites left the entire suite green - the whole
  * opt-out could be reverted with CI none the wiser. The composition removed the fabrication
- * opportunity; these tests pin the composition itself (#1337).
+ * opportunity; these tests pin the composition itself.
  *
  * resolveAndBuildMementosPreamble is covered here; resolveAndPublishMementoCompletion is covered in
  * apps/client/server/utils/mementoGateWiring.test.ts.
@@ -50,7 +50,7 @@ const ADAPTERS = {
   },
 };
 
-describe('memento gate wiring (composed entry points, #1337)', () => {
+describe('memento gate wiring (composed entry points)', () => {
   beforeEach(() => {
     resolveExecutionMementoGatesMock.mockReset();
     recallMementosV2Mock.mockReset();

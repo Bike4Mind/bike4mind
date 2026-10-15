@@ -43,7 +43,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 // Faithful-but-minimal stand-ins: meta-tag membership and lake-rung overrides are all these cases
 // use. The real predicate and the real narrower-wins resolution are exercised unmocked in
-// server/dataLakes/convergencePauseScope.test.ts and settings/resolveScopedSetting.test.ts.
+// apps/workers/src/dataLakes/convergencePauseScope.test.ts and settings/resolveScopedSetting.test.ts.
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     satisfiesMembershipScope: (scope: { datalakeTag: string }, file: { tags?: { name: string }[] }) =>
