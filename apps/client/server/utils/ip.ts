@@ -1,5 +1,4 @@
 import { isPrivateIP } from '@bike4mind/fab-pipeline';
-import type { Request } from 'express';
 
 // Extracts the most accurate client IP behind proxies/CDNs.
 //
@@ -16,6 +15,17 @@ import type { Request } from 'express';
 // compose.caddy.yaml, which sets it for the bundled Caddy proxy).
 
 const TRUSTED_PROXY_HOPS_ENV = 'TRUSTED_PROXY_HOPS';
+
+/**
+ * The parts of a request the resolver reads. Structural so an express Request, a NextApiRequest
+ * and a bare IncomingMessage all fit without a cast; `ip` is express-only.
+ */
+export type ClientIpRequest = {
+  headers?: Record<string, string | string[] | undefined>;
+  socket?: { remoteAddress?: string } | null;
+  connection?: { remoteAddress?: string } | null;
+  ip?: string;
+};
 
 function stripPort(token: string): string {
   // Strip bracketed IPv6 with port (e.g., [::1]:8080 -> ::1) or IPv4 port (e.g., 1.2.3.4:8080 -> 1.2.3.4).
@@ -46,7 +56,7 @@ function readTrustedProxyHops(): number {
   return Number(raw);
 }
 
-function getSocketIp(req: Request): string {
+function getSocketIp(req: ClientIpRequest): string {
   const socketIp = cleanIp(req.socket?.remoteAddress || req.connection?.remoteAddress);
   if (socketIp) return socketIp;
   return req.ip || 'unknown';
@@ -55,7 +65,7 @@ function getSocketIp(req: Request): string {
 // Each trusted proxy appends the peer it saw, so the client is the token `hops` places from the
 // right; anything left of it is client-supplied. With fewer tokens than hops, the leftmost is the
 // furthest address any proxy vouched for (same rule as Express's numeric `trust proxy`).
-function getSelfHostClientIp(req: Request): string {
+function getSelfHostClientIp(req: ClientIpRequest): string {
   const hops = readTrustedProxyHops();
   if (hops === 0) return getSocketIp(req);
 
@@ -69,7 +79,7 @@ function getSelfHostClientIp(req: Request): string {
   return tokens[Math.max(0, tokens.length - hops)];
 }
 
-export function getClientIp(req: Request): string {
+export function getClientIp(req: ClientIpRequest): string {
   if (isSelfHost()) return getSelfHostClientIp(req);
 
   // CloudFront sets `cloudfront-viewer-address` to the real TCP peer as

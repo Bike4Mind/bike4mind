@@ -1041,7 +1041,7 @@ It **does not**: enable Mongo authentication, change your MinIO credentials, con
 
 ### Client IP and trusted proxies (`TRUSTED_PROXY_HOPS`)
 
-Per-IP rate limits (sign-in codes, unauthenticated endpoints), the SSO failure log behind the IP blocklist, and most audit records key on the client IP. On self-host the app **ignores every forwarding header by default** - `X-Forwarded-For`, `X-Real-IP`, `True-Client-IP`, `CF-Connecting-IP`, `CloudFront-Viewer-Address` and the rest - because with nothing in front to overwrite them, any client can forge a fresh "source IP" per request and walk straight past those limits. It uses the TCP peer address instead.
+Per-IP rate limits (sign-in codes, unauthenticated endpoints), the SSO failure log behind the IP blocklist, and the auth, session, API-key and integration audit records all key on the client IP. On self-host the app **ignores every forwarding header by default** - `X-Forwarded-For`, `X-Real-IP`, `True-Client-IP`, `CF-Connecting-IP`, `CloudFront-Viewer-Address` and the rest - because with nothing in front to overwrite them, any client can forge a fresh "source IP" per request and walk straight past those limits. It uses the TCP peer address instead.
 
 Behind a reverse proxy that peer is the proxy, so every visitor would share one rate-limit bucket. Tell the app how many proxies sit in front of it:
 
