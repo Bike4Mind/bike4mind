@@ -483,7 +483,7 @@ export interface paths {
     put?: never;
     /**
      * Create a session
-     * @description Creates a session (called a "notebook" in the product UI). Pass the returned `id` as `sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as `ai:chat`. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from `GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on forced retrieval.
+     * @description Creates a session (called a "notebook" in the product UI). Pass the returned `id` as `sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as `ai:chat`. A key holding `ai:generate` without `notebooks:write` may create a bare session only (`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from `GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on forced retrieval.
      */
     post: operations['createSession'];
     delete?: never;
@@ -9459,7 +9459,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The key lacks `notebooks:write`, is not bound to a requested data lake, or the caller is not entitled to the requested `surface`. */
+      /** @description The key lacks `notebooks:write` (or holds only `ai:generate` and set a field beyond a bare session), is not bound to a requested data lake, or the caller is not entitled to the requested `surface`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
