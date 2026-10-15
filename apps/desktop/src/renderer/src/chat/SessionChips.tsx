@@ -144,7 +144,8 @@ const FOLDER_MENU_WIDTH = 280;
 
 /**
  * One Recent entry: picking it binds the folder with no dialog, and its own button forgets it.
- * The remove button stops the click so forgetting an entry does not also choose it.
+ * The remove button stops the click so forgetting an entry does not also choose it; from the
+ * keyboard, Delete or Backspace on the focused row forgets it.
  */
 function RecentFolderItem({
   folder,
@@ -162,9 +163,15 @@ function RecentFolderItem({
       <MenuItem
         selected={current}
         onClick={onChoose}
+        onKeyDown={event => {
+          if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+          event.preventDefault();
+          onRemove();
+        }}
         sx={{
           '& .recent-folder-remove': { opacity: 0 },
-          '&:hover .recent-folder-remove, &:focus-visible .recent-folder-remove': { opacity: 1 },
+          '&:hover .recent-folder-remove, &:focus-visible .recent-folder-remove, &.Mui-focusVisible .recent-folder-remove':
+            { opacity: 1 },
         }}
         data-testid="session-chip-project-recent"
         data-path={folder.path}
@@ -179,6 +186,7 @@ function RecentFolderItem({
           variant="plain"
           color="neutral"
           aria-label={`Remove ${folder.name} from recent folders`}
+          tabIndex={-1}
           onClick={event => {
             event.stopPropagation();
             onRemove();

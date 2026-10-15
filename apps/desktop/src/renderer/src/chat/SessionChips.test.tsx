@@ -645,6 +645,21 @@ describe("the folder chip's recent folders", () => {
     expect(inMenu('session-chip-project-recent').map(item => item.textContent)).toEqual(['main']);
   });
 
+  it('forgets the focused entry on Delete without choosing it', async () => {
+    removeRecentFolder.mockResolvedValue([recent[0]]);
+    await show(project());
+    await openMenu();
+
+    await act(async () => {
+      inMenu('session-chip-project-recent')[1].dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true })
+      );
+    });
+
+    expect(removeRecentFolder).toHaveBeenCalledWith(OTHER);
+    expect(chooseDirectory).not.toHaveBeenCalled();
+  });
+
   it('shows the full path on hover, so folders with the same name can be told apart', async () => {
     await show(project());
     await openMenu();
