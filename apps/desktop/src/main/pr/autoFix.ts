@@ -20,9 +20,10 @@ export const MAX_AUTO_FIX_ATTEMPTS = 5;
 const LEGACY_MAX_AUTO_FIX_ATTEMPTS = 3;
 
 /**
- * The attempts this PR's box was ticked for. Kept per binding so raising the limit never restarts
- * a PR that already gave up: only re-ticking the box grants the new budget. A binding ticked before
- * the budget was stored had the legacy one.
+ * The attempts this PR's box was ticked for. Kept per binding so changing the limit never restarts
+ * a PR that already gave up - raising it does not grant more, and lowering it does not cut the turn
+ * budget short: only re-ticking the box grants the new budget. A binding ticked before the budget
+ * was stored had the legacy one.
  */
 export function autoFixBudget(binding: PrBinding): number {
   return binding.autoFixMax ?? LEGACY_MAX_AUTO_FIX_ATTEMPTS;
