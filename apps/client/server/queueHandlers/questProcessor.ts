@@ -59,7 +59,13 @@ import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver'
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
 import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
-import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
+import { buildMusicToolConfig } from '@server/musicGenerations/buildMusicToolConfig';
+import {
+  getCreateMusicJobDeps,
+  getCreateVideoJobDeps,
+  getMusicJobDeps,
+  getVideoJobDeps,
+} from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
@@ -222,6 +228,12 @@ export const getVideoToolConfigResolver = (apiKeyId: string | undefined, userId:
     ? undefined
     : () => buildVideoToolConfig(userId, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() });
 
+/** Same rule as video: the music-generations contract's scope check and rate limit must not be bypassed. */
+export const getMusicToolConfigResolver = (apiKeyId: string | undefined, userId: string) =>
+  apiKeyId
+    ? undefined
+    : () => buildMusicToolConfig(userId, { availability: getMusicJobDeps(), createDeps: getCreateMusicJobDeps() });
+
 /**
  * Quest Processor - shared processing core.
  *
@@ -343,6 +355,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     logger,
     externalTools,
     videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
+    musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
   });
 
   await recordFirstChatValue({

@@ -2,7 +2,7 @@ import type { Logger } from '@bike4mind/observability';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { ImageModerationBlockedError, UnsupportedImageFormatError } from '@bike4mind/utils/imageModeration';
 import type { ImageModerationIncident } from '@bike4mind/common';
-import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { SupportedFabFileMimeTypes, UNSUPPORTED_FORMAT_BLOCK_REASON } from '@bike4mind/common';
 import { fileTypeFromBuffer } from 'file-type';
 
 /**
@@ -87,7 +87,7 @@ export interface ModerateUploadedFileResult {
    * scanned at all - distinct from a confirmed explicit-content match, for
    * logging/telemetry.
    */
-  blockReason?: 'unsupported_format';
+  blockReason?: typeof UNSUPPORTED_FORMAT_BLOCK_REASON;
 }
 
 /**
@@ -169,7 +169,7 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
       // forever, leaving the file stuck 'pending' ("Scanning...") indefinitely. UX tradeoff:
       // the uploader must re-upload as JPEG/PNG to get a real scan and be served.
       logger.warn(`[Q2b] uploaded image ${fabFileId} unsupported_format, blocking (fail-closed): ${err.message}`);
-      return { moderationStatus: 'blocked', correctedMimeType, blockReason: 'unsupported_format' };
+      return { moderationStatus: 'blocked', correctedMimeType, blockReason: UNSUPPORTED_FORMAT_BLOCK_REASON };
     }
     // Not a confirmed block or unsupported format (e.g. detector unavailable, throttling,
     // download failure) - rethrow so the caller can retry instead of permanently false-blocking a

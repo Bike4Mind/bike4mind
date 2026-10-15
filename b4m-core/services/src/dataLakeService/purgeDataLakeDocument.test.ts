@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
 import { purgeDataLakeDocument } from './purgeDataLakeDocument';
 
 const LAKE = {
@@ -13,6 +14,7 @@ const FILE = {
   fileName: 'q3.pdf',
   userId: 'owner-1',
   tags: [{ name: 'datalake:sales', strength: 1 }],
+  storageChargedAt: new Date('2026-10-10T00:00:00Z'),
 };
 
 const OWNER = { userId: 'owner-1', isAdmin: false };
@@ -450,6 +452,41 @@ describe('purgeDataLakeDocument', () => {
 
   it('reports no bytes to return for a row that never stored an object', async () => {
     const db = makeDb();
+    const onPurged = vi.fn(async () => {});
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), onPurged });
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
+  });
+
+  it('reports no bytes to return for a stored object that was never charged', async () => {
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707, storageChargedAt: undefined, status: 'pending' });
+    const onPurged = vi.fn(async () => {});
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), onPurged });
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
+  });
+
+  // A `complete` row from before the stamping release was charged by the upload event, so it refunds
+  // in full - a stamp-only rule would drop these.
+  it('reports the full charged size for a legacy pre-stamp complete row', async () => {
+    const db = makeDb({
+      filePath: 'uploads/q3.pdf',
+      fileSize: 27707,
+      storageChargedAt: undefined,
+      status: 'complete',
+      createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000),
+    });
+    const onPurged = vi.fn(async () => {});
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), onPurged });
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 27707 }));
+  });
+
+  it('reports no bytes for a post-stamp complete row that was never charged', async () => {
+    const db = makeDb({
+      filePath: 'uploads/q3.pdf',
+      fileSize: 27707,
+      storageChargedAt: undefined,
+      status: 'complete',
+      createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() + 1000),
+    });
     const onPurged = vi.fn(async () => {});
     await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), onPurged });
     expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));

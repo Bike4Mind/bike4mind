@@ -162,6 +162,7 @@ export class StatusManager {
           ...(quest.fallbackInfo ? { fallbackInfo: quest.fallbackInfo } : {}),
           images: quest.images ?? [],
           ...(quest.videoJobIds?.length ? { videoJobIds: quest.videoJobIds } : {}),
+          ...(quest.generationJobs?.length ? { generationJobs: quest.generationJobs } : {}),
           // Include pendingAction for MCP button confirmation flow
           ...(quest.pendingAction ? { pendingAction: quest.pendingAction } : {}),
           // Include uiSideEffects so the client can dispatch them when streaming completes

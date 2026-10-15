@@ -80,7 +80,6 @@ export const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
   fmp_financial_data: 'Requires an FMP API key, configured in Admin > API Keys.',
   image_generation:
     'Requires an image generation API key (e.g. BFL or OpenAI) in Admin > API Keys, or a self-hosted local image server (IMAGE_GEN_BASE_URL).',
-  music_generation: 'Requires an ElevenLabs API key, configured in Admin > API Keys.',
   audio_generation: 'Requires an OpenAI or ElevenLabs API key, configured in Admin > API Keys.',
   search_knowledge_base:
     'Requires an embeddings API key (VoyageAI or OpenAI) in Admin > API Keys, or a self-hosted local Ollama embedder (OLLAMA_BASE_URL).',

@@ -14,6 +14,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ReActAgent } from '@bike4mind/agents';
 import { isEarlyStop } from '@bike4mind/common';
 import type { ModelInfo } from '@bike4mind/common';
+import { PENDING_ASSISTANT_CONTENT } from '../storage';
 import type { SessionStore, ConfigStore, CommandHistoryStore, Session, Message, CliConfig } from '../storage';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { MessageBuilder } from '../utils/messageBuilder.js';
@@ -185,7 +186,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         });
 
         if (compactionPrompt) {
-          const result = await agent.run(compactionPrompt, { maxIterations: 1 });
+          const result = await agent.run(compactionPrompt, { maxIterations: 1, streamText: false });
 
           // Flush decisions/blockers logged in prior turns but not yet synced
           // onto the session, so the compacted session carries current workflow
@@ -247,7 +248,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     const pendingAssistantMessage: Message = {
       id: uuidv4(),
       role: 'assistant',
-      content: '...',
+      content: PENDING_ASSISTANT_CONTENT,
       timestamp: new Date().toISOString(),
       metadata: {
         steps: [],
@@ -450,7 +451,8 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     // Defense in depth: a bare network-level abort (e.g. `Error: aborted`
     // from a TLS socket close, the symptom that rendered as a cryptic
     // "❌ aborted") is not the user cancelling - it's the connection dropping.
-    // The streaming backend retries these and rewrites the message, but if a
+    // The streaming backend retries these (until reply text has streamed) and
+    // rewrites the message either way, but if a
     // bare one ever reaches here from another path (other backends, etc.),
     // surface something the user can act on rather than a one-word error.
     // Reuse the shared retry-policy classifier so this stays in lockstep with

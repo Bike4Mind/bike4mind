@@ -1,3 +1,4 @@
+import { chargedBytes } from '@bike4mind/common';
 import type {
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
@@ -154,7 +155,14 @@ export const unarchiveDataLake = async (
         // takes it out of the counted set - the same transition deleteDataLake's own sweep debits,
         // just reached from the archive axis. Grouped by owner, not the lake's creator: a duplicate
         // can belong to any contributor (see groupStorageDeltaByOwner).
-        await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(duplicates, -1), logger);
+        await bestEffortAdjustOwnerStorage(
+          db.users,
+          groupStorageDeltaByOwner(
+            duplicates.map(f => ({ id: f.id, userId: f.userId, fileSize: chargedBytes(f) })),
+            -1
+          ),
+          logger
+        );
       }
     }
   }

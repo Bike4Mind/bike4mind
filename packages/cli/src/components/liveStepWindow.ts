@@ -138,3 +138,54 @@ export function windowLiveTrace(
 
   return { steps: [steps[newest]], hiddenSteps: countRenderable(steps.slice(0, newest), showThoughts) };
 }
+
+/** Rows the live reply Box spends beyond its text: its bottom margin. */
+const REPLY_BOX_CHROME_ROWS = 1;
+
+/**
+ * Hard-wraps streamed reply text into rows of at most `columns` characters.
+ * MessageItem renders each row as its own `truncate-end` line, so a row is
+ * exactly one terminal row; a wide character can only clip a row's end in the
+ * live view, never add a row. The full markdown render lands via <Static>.
+ */
+export function wrapReplyRows(text: string, columns: number): string[] {
+  const width = Math.max(1, Math.floor(columns));
+  const rows: string[] = [];
+  for (const line of text.split('\n')) {
+    if (line.length === 0) {
+      rows.push('');
+      continue;
+    }
+    for (let start = 0; start < line.length; start += width) rows.push(line.slice(start, start + width));
+  }
+  return rows;
+}
+
+export interface LiveRowSplit {
+  /** Rows for the step trace, including its Box chrome (the `rows` of windowLiveTrace). */
+  traceRows: number;
+  /** Newest reply rows that fit; empty when the reply gets no room. */
+  replyRows: string[];
+}
+
+/**
+ * Splits the live frame's row budget between the step trace and the streaming
+ * reply. The reply gets what the trace leaves over, and never less than half
+ * the budget once it needs it, so a long trace cannot starve the answer the
+ * user is waiting on. The reply shows its tail: the newest text is what moves.
+ */
+export function splitLiveRows(
+  rows: number,
+  { steps, replyRows, showThoughts = true }: { steps: AgentStep[]; replyRows: string[]; showThoughts?: boolean }
+): LiveRowSplit {
+  const budget = Math.max(0, Math.floor(rows));
+  if (replyRows.length === 0) return { traceRows: budget, replyRows: [] };
+
+  const traceNeeded = steps.length > 0 ? measureTraceRows(steps, { showThoughts }) + TRACE_BOX_CHROME_ROWS : 0;
+  const replyNeeded = replyRows.length + REPLY_BOX_CHROME_ROWS;
+  const replyBudget = Math.min(replyNeeded, Math.max(budget - traceNeeded, Math.ceil(budget / 2)));
+  const visibleReplyRows = replyBudget - REPLY_BOX_CHROME_ROWS;
+  if (visibleReplyRows <= 0) return { traceRows: budget, replyRows: [] };
+
+  return { traceRows: budget - replyBudget, replyRows: replyRows.slice(-visibleReplyRows) };
+}

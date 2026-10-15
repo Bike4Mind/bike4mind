@@ -809,7 +809,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'sesRule:infra/emailIngestion.ts:emailReceiptRule',
-    'a816198e28833710385b33220cb180ac2ddaf3d4e052cc4a8da95a3d543a8dcd'
+    '149ae3de5b22c02958053d3325afe648873ca141260f64d4b5b46168534b2f42'
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',

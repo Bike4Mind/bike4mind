@@ -41,21 +41,26 @@ path does not apply to them.
   additionally filters `$ne: 'blocked'` in the delete predicate (belt-and-suspenders).
 - The data lake sweep and purge callers catch the resulting legal-hold error and skip the
   blocked file rather than re-throwing for DLQ retry.
+- An owner deleting a blocked upload, singly or in bulk (`fabFileService/delete.ts`) or through
+  "delete all my files" (`DELETE /api/files`), soft-deletes the FabFile and refunds its quota but
+  keeps its S3 objects, including retained versions and the generated copy. Both go through
+  `deleteStoredObjects`, which holds a file per `isModerationEvidenceHold`: a block for
+  `blockReason: 'unsupported_format'` (bytes that could not be scanned never raise an incident)
+  is not held. Only the bytes follow that rule: the DB-row guards above still hold every
+  `'blocked'` row, including `unsupported_format`.
 - An `ImageModerationIncident` row written at block time carries the labels, user ID, session,
   and file reference. It has no TTL and is retained indefinitely.
 
 **What is NOT yet protected**
 
-- **S3 object bytes.** The data lake sweep paths (`cleanupDeletedDataLake`, `purgeDataLakeConnectionFiles`)
-  delete S3 objects before reaching the hard-delete guard. A lake containing a blocked file
-  will skip the DB row but will lose the S3 bytes. Operators should apply S3 Object Lock
-  to blocked files at block time to make byte preservation explicit and tamper-evident.
-- **User-initiated file delete.** `fabFileService/delete.ts` does not currently check
-  `moderationStatus` before deleting the S3 object. A user who uploaded the blocked file
-  can trigger the S3 deletion through the normal delete flow. The FabFile DB row is still
-  protected by the hard-delete guard.
+- **S3 object bytes.** The data lake sweep and purge paths (`cleanupDeletedDataLake`,
+  `purgeDataLakeConnectionFiles`, and the per-document `purgeDataLakeDocument`, which a user can
+  run on their own file in their own lake) delete S3 objects before reaching the hard-delete
+  guard. A lake containing a blocked file will skip the DB row but will lose the S3 bytes.
+  Operators should apply S3 Object Lock to blocked files at block time to make byte
+  preservation explicit and tamper-evident.
 
-Both gaps are tracked as follow-up work. The DB row and the NCMEC report are durable; the
+This gap is tracked as follow-up work. The DB row and the NCMEC report are durable; the
 primary evidence for the identity of the uploader and the timestamp is preserved.
 
 ## Block-to-triage flow
