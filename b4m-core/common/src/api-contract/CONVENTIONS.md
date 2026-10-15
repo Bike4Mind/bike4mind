@@ -411,6 +411,13 @@ anything - a field, an alias, a whole endpoint - means: mark it deprecated in th
 contract, state a sunset date in the description, keep serving it until that date, and
 announce it before the date rather than after.
 
+For a whole endpoint, that is one field on its contract:
+`deprecated: { since, sunset, successor? }` (dates `YYYY-MM-DD`, checked by
+`defineEndpoint`). It flags the operation `deprecated: true` in the spec, leads its
+description with the sunset and successor, and makes the Next adapter send RFC 9745
+`Deprecation`, RFC 8594 `Sunset` and `Link: rel="successor-version"` on every response
+the handler produces. `POST /api/ai/music` is the reference.
+
 Undocumented legacy routes still count as published if they are reachable, so they go
 through the same window unless nobody is left to warn. Check who calls one first: the
 admin **API Key Scope Preflight** tab lists every API key that hit a path prefix over the

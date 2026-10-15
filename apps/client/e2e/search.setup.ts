@@ -6,6 +6,9 @@ const TEST_RUN_ID = Date.now().toString().slice(-6);
 setupSpecUser({
   key: 'search',
   authFile: 'search-user.json',
+  // The file browser toolbar layout depends on the Research action being present, so the layout specs in
+  // search.spec.ts exercise the same width the toolbar is tuned for.
+  prefs: { experimentalFeatures: { enableResearchEngine: true } },
   afterCreate: async ({ request, accessToken }) => {
     // Create files with distinct names and types for search/filter tests
     await apiCreateFile(request, accessToken, {

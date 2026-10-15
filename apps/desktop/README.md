@@ -102,6 +102,10 @@ defaulting to `macos-26-runner` when unset or empty. The selected runner must be
 Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`.
 Paid runner usage is billed by GitHub.
 
+Publication uses the existing release App with repository-scoped contents write access
+to create protected tags. The workflow token and PR build jobs remain read-only. Missing
+App credentials fail publication rather than falling back to the workflow token.
+
 Storage is deliberately short-lived: platform installers, checksums, and release notes
 expire after one day; startup evidence expires after three days. Installers are stored
 only once per platform; there is no duplicate combined installer upload.

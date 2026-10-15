@@ -110,6 +110,7 @@ export class ChatCompletionInvoke {
       enableLattice,
       promptMode,
       skipAutoOffers,
+      disableUserIntegrations,
       skipReplyChoices,
       deniedTools,
       systemPrompt,
@@ -473,6 +474,7 @@ export class ChatCompletionInvoke {
         // dispatchQuest ships to the async worker, so a field omitted here is silently dropped on
         // every path except `wait: true`.
         skipAutoOffers,
+        disableUserIntegrations,
         skipReplyChoices,
         deniedTools,
         authOrigin,

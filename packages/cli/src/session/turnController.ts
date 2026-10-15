@@ -92,6 +92,16 @@ export interface TurnContext {
  * recurses with the same context for messages submitted mid-turn.
  */
 export async function runTurn(message: string, ctx: TurnContext): Promise<void> {
+  // Held across the whole turn: it snapshots the session below and writes it back after awaits.
+  const releaseSession = useCliStore.getState().holdSession();
+  try {
+    await runHeldTurn(message, ctx);
+  } finally {
+    releaseSession();
+  }
+}
+
+async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
   const {
     agent,
     sessionStore,
