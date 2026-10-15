@@ -251,8 +251,14 @@ async function pollUntilSettled(
       if ((error as { status?: number }).status === 429) {
         // A rate-limited read is this app spending its own read budget too fast, not the job
         // failing. The song is already billed and still rendering, so wait out the window the
-        // server names (Retry-After) instead of counting it toward giving up.
-        waitMs = (error as { retryAfterMs?: number }).retryAfterMs ?? MUSIC_RATE_LIMIT_BACKOFF_MS;
+        // server names (Retry-After) instead of counting it toward giving up. The wait never
+        // shrinks the gap this poll has grown to: a server that floors Retry-After at a second
+        // would otherwise put the reads back to full speed.
+        waitMs = Math.max(
+          (error as { retryAfterMs?: number }).retryAfterMs ?? MUSIC_RATE_LIMIT_BACKOFF_MS,
+          waitMs,
+          MUSIC_POLL_INTERVAL_MS
+        );
         continue;
       }
       consecutiveFailures += 1;

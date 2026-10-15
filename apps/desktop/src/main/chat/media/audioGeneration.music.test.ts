@@ -181,6 +181,20 @@ describe('generateMusic', () => {
     expect(t.sleep.mock.calls.map(call => call[0])).toEqual([MUSIC_POLL_INTERVAL_MS, 45_000]);
   });
 
+  it('does not shorten the poll gap when a rate-limited read asks for less', async () => {
+    const t = setup([job({ state: 'running' }), job({ state: 'running' }), job({ state: 'running' })]);
+    const limited = Object.assign(new MediaToolError('slow down'), { status: 429, retryAfterMs: 1_000 });
+    t.client.getMusicGeneration.mockRejectedValueOnce(limited).mockResolvedValueOnce(succeeded(output()));
+    await generateMusic(request, t.deps, t.options);
+
+    // By the time the 429 lands the gap has reached its cap, so the server's one-second
+    // Retry-After must not send the reads back to full speed.
+    const waits = t.sleep.mock.calls.map(call => call[0]);
+    expect(waits[waits.length - 2]).toBe(30_000);
+    expect(waits[waits.length - 1]).toBe(30_000);
+    expect(waits.every(wait => wait >= MUSIC_POLL_INTERVAL_MS)).toBe(true);
+  });
+
   it('does not give up on a song while the reads keep getting rate limited', async () => {
     const t = setup([]);
     const limited = Object.assign(new MediaToolError('slow down'), { status: 429 });
