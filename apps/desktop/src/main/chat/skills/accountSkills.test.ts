@@ -17,13 +17,17 @@ const USER = 'u1';
  * they exist at all, and it runs inside `registerChat`, which nothing test-loads. So it is
  * exercised here directly, over a stub AuthService - the same shape the renderer path relies on.
  */
-function authStub(state: { api: AuthenticatedApiClient | null; userId: string | undefined }): SkillsAuth {
+function authStub(state: {
+  api: AuthenticatedApiClient | null;
+  userId: string | undefined;
+  url?: string;
+}): SkillsAuth {
   return {
     getApiClient: () => state.api,
     getState: () =>
       ({
         status: state.userId ? 'signed-in' : 'signed-out',
-        environment: { url: URL },
+        environment: { url: state.url ?? URL },
         user: state.userId ? { id: state.userId } : undefined,
       }) as unknown as AuthState,
   };
@@ -93,6 +97,44 @@ describe('accountSkillsProvider', () => {
 
     state.api = null;
     expect(provider()).toBeNull();
+  });
+
+  it('serves the new account when a re-sign-in reuses the same client', async () => {
+    const api = client({
+      get: async () => ({ data: [{ id: 'b1', name: 'other-skill', description: 'd', body: 'b', userId: 'u2' }] }),
+      getCurrentUser: async () => ({ id: 'u2' }),
+    });
+    const state: { api: AuthenticatedApiClient | null; userId: string | undefined } = { api, userId: USER };
+    const provider = accountSkillsProvider(authStub(state), userData);
+
+    const first = provider();
+    expect(first?.key).toBe(remoteSkillsKey(URL, USER));
+
+    // AuthService holds one AuthenticatedApiClient per environment for the life of the app, so a
+    // sign-out and a second sign-in on the same backend hand back the SAME instance. Nothing but
+    // the account key distinguishes the two, so it has to be what invalidates the memo.
+    state.userId = 'u2';
+    const second = provider();
+    expect(second).not.toBe(first);
+    expect(second?.key).toBe(remoteSkillsKey(URL, 'u2'));
+
+    await expect(second!.source.fetchSkills()).resolves.toMatchObject([{ name: 'other-skill' }]);
+    expect(existsSync(join(userData, 'remote-skills', `${second!.key}.json`))).toBe(true);
+    expect(existsSync(join(userData, 'remote-skills', `${first!.key}.json`))).toBe(false);
+  });
+
+  it('rebuilds when the backend URL changes under the same client and account', () => {
+    const state: { api: AuthenticatedApiClient | null; userId: string | undefined; url?: string } = {
+      api: client(),
+      userId: USER,
+    };
+    const provider = accountSkillsProvider(authStub(state), userData);
+
+    const first = provider();
+    state.url = 'https://other.example.test';
+    const second = provider();
+    expect(second).not.toBe(first);
+    expect(second?.key).toBe(remoteSkillsKey('https://other.example.test', USER));
   });
 
   it('works as the catalog provider, so account skills reach a state read', async () => {
