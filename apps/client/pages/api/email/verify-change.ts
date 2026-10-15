@@ -106,7 +106,7 @@ const handler = baseApi({ auth: false })
         // pendingEmail, and entitlementsForEmail tolerates null regardless.
         //
         // Access (derive-on-read) updates here, but the one-time signup credits
-        // (see verify.ts Phase 2b) are DELIBERATELY not granted on email change -
+        // (see server/auth/emailVerifiedGrants.ts) are DELIBERATELY not granted on email change -
         // they are strictly a signup-time perk, and gating them here would open an
         // email-swap credit-farming vector. The idempotent `domain-grant-credits:`
         // key means adding it here later (if product wants it) stays safe.
