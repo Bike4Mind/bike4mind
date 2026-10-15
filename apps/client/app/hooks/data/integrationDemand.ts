@@ -62,7 +62,7 @@ export interface RequesterEmails {
 /**
  * Every distinct email among an integration's requesters, across pages rather than only the loaded
  * ones, newest first. Stops at REQUESTER_EMAILS_MAX_PAGES pages so a huge list cannot hold the tab
- * (or the route's limiter) hostage; `truncated` says it did. Deleted accounts carry no email.
+ * (or the route's limiter) hostage; `truncated` says it did. Deleted accounts are skipped.
  */
 export async function fetchAllRequesterEmails(integrationId: string): Promise<RequesterEmails> {
   const emails = new Set<string>();
@@ -71,7 +71,7 @@ export async function fetchAllRequesterEmails(integrationId: string): Promise<Re
     const { data } = await api.get<IntegrationRequestersResponse>(requestersPath(integrationId), {
       params: { limit: REQUESTERS_MAX_PAGE_SIZE, cursor },
     });
-    for (const requester of data.data) if (requester.email) emails.add(requester.email);
+    for (const requester of data.data) if (requester.email && !requester.deleted) emails.add(requester.email);
     cursor = data.next_cursor ?? undefined;
     if (!cursor) return { emails: [...emails], truncated: false };
   }

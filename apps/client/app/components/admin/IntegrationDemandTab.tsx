@@ -131,7 +131,7 @@ const RequestersPanel: React.FC<{ integration: IntegrationDemand }> = ({ integra
             <tbody>
               {rows.map(row => (
                 <tr key={row.userId} data-testid={`admin-integration-demand-requester-${row.userId}`}>
-                  <td>{row.name ?? 'Deleted account'}</td>
+                  <td>{row.deleted ? 'Deleted account' : (row.name ?? '-')}</td>
                   <td>{row.email ?? '-'}</td>
                   <td>{row.organizationName ?? (row.organizationId ? 'Deleted organization' : '-')}</td>
                   <td>{formatDate(row.requestedAt)}</td>

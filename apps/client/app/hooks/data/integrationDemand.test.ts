@@ -13,8 +13,9 @@ vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn() } }));
 
 const get = vi.mocked(api.get);
 
-const requester = (email: string | null): IntegrationRequester => ({
+const requester = (email: string | null, deleted = false): IntegrationRequester => ({
   userId: `user-${email}`,
+  deleted,
   name: null,
   email,
   organizationId: null,
@@ -22,8 +23,15 @@ const requester = (email: string | null): IntegrationRequester => ({
   requestedAt: '2026-03-01T00:00:00.000Z',
 });
 
-const page = (emails: Array<string | null>, next: string | null): { data: IntegrationRequestersResponse } => ({
-  data: { data: emails.map(requester), next_cursor: next },
+const page = (
+  emails: Array<string | null>,
+  next: string | null,
+  deletedEmails: string[] = []
+): { data: IntegrationRequestersResponse } => ({
+  data: {
+    data: [...emails.map(email => requester(email)), ...deletedEmails.map(email => requester(email, true))],
+    next_cursor: next,
+  },
 });
 
 const status = (code: number) =>
@@ -49,6 +57,12 @@ describe('fetchAllRequesterEmails', () => {
       ['/api/admin/integrations/demand/hubspot/requesters', { limit: 100, cursor: 'c1' }],
       ['/api/admin/integrations/demand/hubspot/requesters', { limit: 100, cursor: 'c2' }],
     ]);
+  });
+
+  it('leaves out a deleted account even if its email somehow arrives', async () => {
+    get.mockResolvedValueOnce(page(['a@x.test'], null, ['gone@x.test']));
+
+    expect((await fetchAllRequesterEmails('hubspot')).emails).toEqual(['a@x.test']);
   });
 
   it('stops at the page cap and says the list is longer', async () => {

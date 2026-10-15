@@ -274,6 +274,7 @@ describe('GET /api/admin/integrations/demand/{integrationId}/requesters', () => 
     expect(body.data).toEqual([
       {
         userId: ids.ghostUser,
+        deleted: true,
         name: null,
         email: null,
         organizationId: ids.ghostOrg,
@@ -282,6 +283,7 @@ describe('GET /api/admin/integrations/demand/{integrationId}/requesters', () => 
       },
       {
         userId: ids.third,
+        deleted: false,
         name: 'Tia Third',
         email: 'tia@example.com',
         organizationId: null,
@@ -290,6 +292,7 @@ describe('GET /api/admin/integrations/demand/{integrationId}/requesters', () => 
       },
       {
         userId: ids.admin,
+        deleted: false,
         name: 'Ada Admin',
         email: 'ada@example.com',
         organizationId: ids.org,
@@ -298,6 +301,7 @@ describe('GET /api/admin/integrations/demand/{integrationId}/requesters', () => 
       },
       {
         userId: ids.member,
+        deleted: false,
         name: 'Max Member',
         email: 'max@example.com',
         organizationId: ids.org,
@@ -308,7 +312,7 @@ describe('GET /api/admin/integrations/demand/{integrationId}/requesters', () => 
   });
 
   it('pages with an opaque cursor, resolving each page in one users read and one organizations read', async () => {
-    const findUsers = vi.spyOn(userRepository, 'findByIds');
+    const findUsers = vi.spyOn(userRepository, 'findRequesterProfilesByIds');
     const findOrgs = vi.spyOn(organizationRepository, 'find');
 
     const first = await getRequesters({ session: ids.admin }, { limit: '3' });
@@ -322,6 +326,70 @@ describe('GET /api/admin/integrations/demand/{integrationId}/requesters', () => 
     expect(second.body.next_cursor).toBeNull();
     expect(findUsers).toHaveBeenCalledTimes(2);
     expect(findOrgs).toHaveBeenCalledTimes(2);
+  });
+
+  describe('account and organization hygiene', () => {
+    const seedExtra = async () => {
+      const [gone, mover] = await User.create([
+        { username: 'demand-gone', name: 'Gus Gone', email: 'gus@example.com' },
+        { username: 'demand-mover', name: 'Mia Mover', email: 'mia@example.com' },
+      ]);
+      // deletedAt is not on the user schema, so it is written past mongoose, as the other soft-delete guards read it.
+      await User.collection.updateOne({ _id: gone._id }, { $set: { deletedAt: new Date() } });
+      const otherOrg = await Organization.create({ name: 'Other Org', userId: String(mover._id) });
+      await User.updateOne({ _id: mover._id }, { $set: { organizationId: otherOrg._id } });
+      await IntegrationRequest.create([
+        {
+          userId: String(gone._id),
+          organizationId: ids.org,
+          integrationId: 'gmail',
+          createdAt: at('2026-04-01T00:00:00Z'),
+        },
+        {
+          userId: String(mover._id),
+          organizationId: ids.org,
+          integrationId: 'gmail',
+          createdAt: at('2026-04-02T00:00:00Z'),
+        },
+        // No organization on the user, so the one stored on the request stands.
+        { userId: ids.third, organizationId: ids.org, integrationId: 'gmail', createdAt: at('2026-04-03T00:00:00Z') },
+      ]);
+      return { gone: String(gone._id), mover: String(mover._id), otherOrg: String(otherOrg._id) };
+    };
+
+    it('blanks a soft-deleted account instead of returning its name and email', async () => {
+      const { gone } = await seedExtra();
+
+      const { status, body } = await getRequesters({ session: ids.admin }, {}, 'gmail');
+
+      expect(status).toBe(200);
+      expect(body.data.find((r: { userId: string }) => r.userId === gone)).toMatchObject({
+        deleted: true,
+        name: null,
+        email: null,
+      });
+      expect(JSON.stringify(body)).not.toMatch(/gus@example\.com|Gus Gone/);
+    });
+
+    it("shows the organization a user belongs to now, falling back to the request's own only for a user with none", async () => {
+      const { mover, otherOrg } = await seedExtra();
+
+      const { body } = await getRequesters({ session: ids.admin }, {}, 'gmail');
+
+      const byUser = (userId: string) => body.data.find((r: { userId: string }) => r.userId === userId);
+      expect(byUser(mover)).toMatchObject({ organizationId: otherOrg, organizationName: 'Other Org' });
+      expect(byUser(ids.third)).toMatchObject({ organizationId: ids.org, organizationName: 'Example Org' });
+    });
+  });
+
+  it('rejects a cursor longer than 512 characters before reading anything', async () => {
+    const list = vi.spyOn(integrationRequestRepository, 'requestersFor');
+
+    const { status, body } = await getRequesters({ session: ids.admin }, { cursor: 'x'.repeat(513) });
+
+    expect(status).toBe(422);
+    expect(JSON.stringify(body)).toMatch(/512/);
+    expect(list).not.toHaveBeenCalled();
   });
 
   it("refuses a cursor minted for another integration's list", async () => {

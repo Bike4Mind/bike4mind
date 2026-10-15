@@ -14,11 +14,15 @@ import { isValidObjectId } from '@server/utils/objectId';
  * Any id with rows is accepted, not only planned ones, so the history of a promoted entry stays
  * readable. Names, emails and organization names are resolved in two batched reads per page and
  * reduced to those fields here; nothing else from either document reaches the response.
+ *
+ * A requester whose account is gone or soft-deleted comes back `deleted: true` with no name or
+ * email, and the organization shown is the one the user belongs to now (the request's stored one
+ * only when the user has none), since requests keep the organization they were filed under.
  */
 
 const QuerySchema = z.object({
   integrationId: z.string().min(1).max(64),
-  cursor: z.string().min(1).optional(),
+  cursor: z.string().min(1).max(512).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
 });
 
@@ -56,24 +60,29 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       after: after && { createdAt: after.at, id: after.id },
     });
 
-    const orgIds = [...new Set(items.map(item => item.organizationId).filter(isValidObjectId))];
-    const [users, organizations] = await Promise.all([
-      userRepository.findByIds([...new Set(items.map(item => item.userId))]),
-      orgIds.length > 0 ? organizationRepository.find({ _id: { $in: orgIds } }, { name: 1 }) : Promise.resolve([]),
-    ]);
-    const userById = new Map(users.map(user => [String(user.id), { name: user.name, email: user.email }]));
+    const users = await userRepository.findRequesterProfilesByIds([...new Set(items.map(item => item.userId))]);
+    const userById = new Map(users.map(user => [user.id, user]));
+    const organizationIdOf = (item: (typeof items)[number]) =>
+      userById.get(item.userId)?.organizationId ?? item.organizationId;
+
+    const orgIds = [...new Set(items.map(organizationIdOf).filter(isValidObjectId))];
+    const organizations =
+      orgIds.length > 0 ? await organizationRepository.find({ _id: { $in: orgIds } }, { name: 1 }) : [];
     const orgNameById = new Map(organizations.map(org => [String(org._id), org.name]));
 
     const last = items[items.length - 1];
     const body: IntegrationRequestersResponse = {
       data: items.map(item => {
         const user = userById.get(item.userId);
+        const deleted = !user || user.deleted;
+        const organizationId = organizationIdOf(item);
         return {
           userId: item.userId,
-          name: user?.name ?? null,
-          email: user?.email ?? null,
-          organizationId: item.organizationId,
-          organizationName: (item.organizationId && orgNameById.get(item.organizationId)) || null,
+          deleted,
+          name: deleted ? null : (user.name ?? null),
+          email: deleted ? null : (user.email ?? null),
+          organizationId,
+          organizationName: (organizationId && orgNameById.get(organizationId)) || null,
           requestedAt: item.createdAt.toISOString(),
         };
       }),

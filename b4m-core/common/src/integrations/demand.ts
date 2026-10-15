@@ -27,9 +27,11 @@ export interface IntegrationDemandResponse {
 /** One row of GET /api/admin/integrations/demand/{integrationId}/requesters. */
 export interface IntegrationRequester {
   userId: string;
-  /** Null when the account no longer resolves. */
+  /** True when the account no longer resolves or is soft-deleted; name and email are then null. */
+  deleted: boolean;
   name: string | null;
   email: string | null;
+  /** The organization the requester belongs to now, else the one stored on the request. */
   organizationId: string | null;
   organizationName: string | null;
   requestedAt: string;

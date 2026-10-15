@@ -47,6 +47,7 @@ const demandRow = (over: Partial<IntegrationDemand> = {}): IntegrationDemand => 
 
 const requester = (over: Partial<IntegrationRequester> = {}): IntegrationRequester => ({
   userId: 'u1',
+  deleted: false,
   name: 'Ada Admin',
   email: 'ada@example.com',
   organizationId: 'org1',
@@ -126,7 +127,14 @@ describe('IntegrationDemandTab', () => {
     m.useIntegrationRequesters.mockReturnValue(
       requestersState([
         requester(),
-        requester({ userId: 'u2', name: null, email: null, organizationId: 'gone', organizationName: null }),
+        requester({
+          userId: 'u2',
+          deleted: true,
+          name: null,
+          email: null,
+          organizationId: 'gone',
+          organizationName: null,
+        }),
         requester({
           userId: 'u3',
           name: 'Tia Third',
