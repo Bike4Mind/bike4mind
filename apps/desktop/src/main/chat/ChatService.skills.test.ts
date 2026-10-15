@@ -3,12 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { RemoteSkillSource } from '@bike4mind/cli/skills';
 import type { ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
-import { SkillCatalog } from './skills/SkillCatalog';
+import { remoteSkillsKey, SkillCatalog, type RemoteSkills } from './skills/SkillCatalog';
 import type { AccessStore } from './tools/AccessStore';
 
 function frame(payload: unknown): string {
@@ -50,7 +51,21 @@ describe('ChatService and skills', () => {
       'Notes.',
     ]);
 
-    catalog = new SkillCatalog(new ProjectTrustStore(join(base, 'trust.json')));
+    // The account's own skill, available in every posture - including the untrusted project a
+    // code session starts in - so the send path is exercised against a real RemoteSkillSource.
+    const accountSkills: RemoteSkills = () => {
+      const api = {
+        get: async () => ({
+          data: [
+            { id: 'a1', name: 'web-summary', description: 'Summarise a page.', body: 'Summarise $ARGUMENTS', userId: 'me' },
+          ],
+        }),
+        getCurrentUser: async () => ({ id: 'me' }),
+      } as unknown as ConstructorParameters<typeof RemoteSkillSource>[0];
+      const key = remoteSkillsKey('http://localhost:3000', 'me');
+      return { key, source: new RemoteSkillSource(api, { cacheFilePath: join(base, `${key}.json`) }) };
+    };
+    catalog = new SkillCatalog(new ProjectTrustStore(join(base, 'trust.json')), accountSkills);
     events = [];
     streams = [];
     post = vi.fn().mockImplementation(() => {
@@ -127,5 +142,16 @@ describe('ChatService and skills', () => {
     const first = systemText(await turn(id, 'first', 1));
     await skill(project, 'late-arrival', ['---', 'description: Added mid-session.', '---', '', 'Late.']);
     expect(systemText(await turn(id, 'second', 2))).toBe(first);
+  });
+
+  it('records an account skill send as account, so the thread can label it', async () => {
+    const id = await session();
+
+    await turn(id, '/web-summary the release notes', 1);
+    expect((await service.getSession(id))?.messages[0]?.skill).toEqual({
+      name: 'web-summary',
+      args: 'the release notes',
+      source: 'account',
+    });
   });
 });
