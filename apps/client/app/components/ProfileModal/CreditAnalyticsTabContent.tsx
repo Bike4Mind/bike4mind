@@ -30,7 +30,7 @@ import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy/styles';
 import { useTranslation } from 'react-i18next';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
-import { ModelBackend, ModelInfo, usdToCredits } from '@bike4mind/common';
+import { CreditHolderType, ModelBackend, ModelInfo, usdToCredits } from '@bike4mind/common';
 import { bedrockChipLabels, dedupePricingRows, textModelPriceCells } from './modelPricingRows';
 import { aggregateUsageByModel } from './usageByModel';
 import SectionContainer from './SectionContainer';
@@ -38,6 +38,15 @@ import { TYPE } from './settingsStyles';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import { computeBurnStats, MIN_DAYS_FOR_PROJECTION } from './creditBurnRate';
+import dynamic from 'next/dynamic';
+
+const UsageDashboard = dynamic(
+  () =>
+    import('@client/app/components/admin/CreditAnalysis/components/UsageDashboard').then(m => ({
+      default: m.UsageDashboard,
+    })),
+  { ssr: false }
+);
 
 const TIME_PERIODS = {
   WEEK: '7d',
@@ -56,6 +65,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
   const {
     accessibleTextModels,
     accessibleImageModels,
+    accessibleVideoModels,
     isLoading: isLoadingModels,
     isModelsError,
   } = useAccessibleModels();
@@ -110,6 +120,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const textToSpeechUsageTransactions = sortedTransactions.filter(t => t.type === 'text_to_speech_usage');
     const soundEffectsUsageTransactions = sortedTransactions.filter(t => t.type === 'sound_effects_usage');
     const musicUsageTransactions = sortedTransactions.filter(t => t.type === 'music_generation_usage');
+    const videoUsageTransactions = sortedTransactions.filter(t => t.type === 'video_generation_usage');
 
     // Combined deduct transactions for burn rate calculation
     const allDeductTransactions = [
@@ -125,6 +136,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...textToSpeechUsageTransactions,
       ...soundEffectsUsageTransactions,
       ...musicUsageTransactions,
+      ...videoUsageTransactions,
     ];
 
     const { burnRate, usageTrend, daysRemaining, observedDays } = computeBurnStats({
@@ -137,6 +149,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const modelUsageMap = aggregateUsageByModel(allDeductTransactions, [
       ...accessibleTextModels,
       ...accessibleImageModels,
+      ...accessibleVideoModels,
     ]);
 
     // Aggregate transactions by day for each type
@@ -155,6 +168,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const soundEffectsUsageDailyData = new Map<string, { x: string; y: number }>();
     const decisionUsageDailyData = new Map<string, { x: string; y: number }>();
     const musicUsageDailyData = new Map<string, { x: string; y: number }>();
+    const videoUsageDailyData = new Map<string, { x: string; y: number }>();
     const creditsAddedDailyData = new Map<string, { x: string; y: number }>(); // Combined purchases, subscriptions, and generic adds
     const allUsageDailyData = new Map<string, { x: string; y: number }>(); // Combined all usage types including generic deducts
 
@@ -190,6 +204,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     processTransactionType(soundEffectsUsageTransactions, soundEffectsUsageDailyData);
     processTransactionType(musicUsageTransactions, musicUsageDailyData);
     processTransactionType(decisionUsageTransactions, decisionUsageDailyData);
+    processTransactionType(videoUsageTransactions, videoUsageDailyData);
 
     // Create combined credits added (purchases + subscriptions + generic adds)
     [...purchaseTransactions, ...subscriptionTransactions, ...genericAddTransactions].forEach(transaction => {
@@ -215,6 +230,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...textToSpeechUsageTransactions,
       ...soundEffectsUsageTransactions,
       ...musicUsageTransactions,
+      ...videoUsageTransactions,
     ].forEach(transaction => {
       const day = dayjs(transaction.createdAt).format('YYYY-MM-DD');
       if (!allUsageDailyData.has(day)) {
@@ -245,6 +261,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
         soundEffectsUsageDailyData,
         musicUsageDailyData,
         decisionUsageDailyData,
+        videoUsageDailyData,
         creditsAddedDailyData,
         allUsageDailyData,
       ].forEach(dataMap => {
@@ -275,6 +292,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const soundEffectsUsageDataPoints = sortDataPoints(soundEffectsUsageDailyData);
     const musicUsageDataPoints = sortDataPoints(musicUsageDailyData);
     const decisionUsageDataPoints = sortDataPoints(decisionUsageDailyData);
+    const videoUsageDataPoints = sortDataPoints(videoUsageDailyData);
     const creditsAddedDataPoints = sortDataPoints(creditsAddedDailyData);
     const allUsageDataPoints = sortDataPoints(allUsageDailyData);
 
@@ -425,6 +443,14 @@ const CreditAnalyticsTabContent: React.FC = () => {
         });
       }
 
+      if (videoUsageDataPoints.some(p => p.y > 0)) {
+        lines.push({
+          id: 'video_generation_usage',
+          data: videoUsageDataPoints,
+          color: theme.palette.warning[700],
+        });
+      }
+
       dataToReturn = lines;
     }
 
@@ -436,7 +462,16 @@ const CreditAnalyticsTabContent: React.FC = () => {
       daysRemaining,
       observedDays,
     };
-  }, [transactions, timePeriod, viewMode, theme.palette, currentUser, accessibleTextModels, accessibleImageModels]);
+  }, [
+    transactions,
+    timePeriod,
+    viewMode,
+    theme.palette,
+    currentUser,
+    accessibleTextModels,
+    accessibleImageModels,
+    accessibleVideoModels,
+  ]);
 
   // Tooltip text for days remaining, adjusted based on selected time period
   // Only when a projection would otherwise exist: no burn or no balance is N/A, not "too early".
@@ -595,11 +630,13 @@ const CreditAnalyticsTabContent: React.FC = () => {
 
   // Format model usage data for pie chart
   const pieChartData = useMemo(() => {
-    return Object.entries(usageByModel).map(([key, value]) => ({
-      id: key,
-      label: key,
-      value: value,
-    }));
+    return Object.entries(usageByModel)
+      .map(([key, value]) => ({
+        id: key,
+        label: key,
+        value: value,
+      }))
+      .sort((a, b) => b.value - a.value);
   }, [usageByModel]);
 
   return (
@@ -922,6 +959,8 @@ const CreditAnalyticsTabContent: React.FC = () => {
                       return 'Music Generation';
                     case 'decision_usage':
                       return 'Decisions';
+                    case 'video_generation_usage':
+                      return 'Video Generation';
                     case 'usage':
                       return t('credits.credits_used');
                     case 'credits_added':
@@ -966,11 +1005,14 @@ const CreditAnalyticsTabContent: React.FC = () => {
         </Card>
 
         {viewMode === 'usage' && Object.keys(usageByModel).length > 0 && (
-          <Card variant="outlined" sx={{ p: 2, height: 420 }}>
-            <Stack direction="row" alignItems="center" sx={{ mb: 1 }}>
+          <Card variant="outlined" sx={{ p: 2 }}>
+            <Stack direction="row" alignItems="center" sx={{ mb: 0.5 }}>
               <PieChartIcon sx={{ mr: 1 }} />
               <Typography level="title-md">{t('credits.usage_by_model')}</Typography>
             </Stack>
+            <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
+              From the credit ledger over the range selected above; may differ from the usage-event breakdown below.
+            </Typography>
 
             <Box sx={{ height: 340 }}>
               <ResponsivePie
@@ -1017,11 +1059,41 @@ const CreditAnalyticsTabContent: React.FC = () => {
                 }}
               />
             </Box>
+
+            {/* The pie skips labels on thin slices, so a cheap model can look absent; this list names every one. */}
+            <Stack component="ul" sx={{ m: 0, p: 0, listStyle: 'none' }} data-testid="credit-analytics-model-list">
+              {pieChartData.map(item => (
+                <Stack
+                  component="li"
+                  key={item.id}
+                  direction="row"
+                  justifyContent="space-between"
+                  spacing={2}
+                  sx={{ py: 0.25 }}
+                >
+                  <Typography level="body-sm">{item.label}</Typography>
+                  <Typography level="body-sm" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {item.value.toLocaleString()} {t('credits.credits')}
+                  </Typography>
+                </Stack>
+              ))}
+            </Stack>
           </Card>
         )}
 
         {/* Removed bottom current balance card (duplicated at top) */}
       </Stack>
+
+      {/* Owner-scoped usage-event breakdown. It keeps its own 30/60/90-day toggle: the credit
+          ledger behind the charts above offers different ranges. */}
+      {currentUser?.id && (
+        <Box data-testid="usage-spend-breakdown">
+          <Divider sx={{ my: 4 }}>
+            <Typography level="title-md">Spend by key, model, feature and source</Typography>
+          </Divider>
+          <UsageDashboard ownerType={CreditHolderType.User} ownerId={currentUser.id} />
+        </Box>
+      )}
 
       {/* Model Pricing - promoted from an inner sub-tab to a bottom section.
           Both tables render side by side (responsive) rather than behind a toggle. */}

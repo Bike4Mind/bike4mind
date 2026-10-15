@@ -64,20 +64,47 @@ auto-update can.
 ### Automated releases
 
 [`Desktop Release`](../../.github/workflows/desktop-release.yml) runs on pushes to
-`main` touching desktop, shared core packages, CLI sources, build configuration, or
-dependencies. It can also be run manually from Actions on `main`.
+`main` and pull requests touching `apps/desktop/**` or the desktop release workflow,
+version script, dependency gate, and their tests. It can also be run manually from
+Actions on `main`.
+
+Automatic triggers are temporarily desktop-only. Shared/core/backend sources, root
+dependencies, lockfiles, patches, and shared configuration alone do not start this
+workflow, even when desktop depends on them. Until dependency-aware triggers are
+restored, those changes need a manual run or a later desktop change to package.
+
+When a run starts, before packaging,
+`scripts/desktop_affected.py` compares the desktop workspace dependency closure on both
+sides, including dev/typecheck dependencies and transitively resolved lockfile entries.
+The same check governs semantic bumps and release notes, excluding unrelated workspace
+and web-only changes. Shared workspace/build configuration remains a conservative
+input within an existing run; malformed or missing historical inputs require a build.
+Pull requests compare their base with the head. Pushes and manual runs check every
+commit since the last desktop release, including pending shared dependency changes.
 
 Pull requests targeting `main` run the same builds and artifact validation without
 publishing a release. In the workflow run's Artifacts section, download
-`desktop-mac-arm64`, `desktop-mac-x64`, and `desktop-linux-x64` for installers,
+`desktop-mac-arm64` and `desktop-linux-x64` for installers,
 plus `installer-checksums` for `SHA256SUMS.txt`. PR jobs have only
 read access to repository contents; the publication job runs only for pushes or manual
 dispatches on `main`. PR runs are isolated from the main release concurrency group.
 
 The workflow installs from the frozen lockfile, builds shared packages, runs desktop
-typechecks and tests on macOS and Linux, then packages both macOS architectures and
-Linux x64. Publication waits for all three build jobs and validates all five artifacts.
+typechecks and tests on macOS and Linux, then packages Apple Silicon and Linux x64.
+The two platform jobs run in parallel; Turbo also builds independent shared packages
+in parallel while respecting dependency order. Intel macOS release builds are temporarily
+paused; local x64 packaging remains available. Publication waits for both build jobs and
+validates the arm64 DMG, arm64 ZIP, and Linux AppImage.
 Failed uploads leave a draft release, not a partially published download page.
+
+macOS jobs read the repository or organization Actions variable `OSX_RUNNER_LABEL`,
+defaulting to `macos-26-runner` when unset or empty. The selected runner must be
+Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`.
+Paid runner usage is billed by GitHub.
+
+Publication uses the existing release App with repository-scoped contents write access
+to create protected tags. The workflow token and PR build jobs remain read-only. Missing
+App credentials fail publication rather than falling back to the workflow token.
 
 Storage is deliberately short-lived: platform installers, checksums, and release notes
 expire after one day; startup evidence expires after three days. Installers are stored
@@ -99,8 +126,8 @@ real workstation, or authenticated chat. Those still need real-machine acceptanc
 
 The macOS job mounts the native-architecture DMG read-only, copies the app to a temporary
 installation directory, and runs the same startup checks with an isolated profile.
-`mac-arm64-smoke-results` and `mac-x64-smoke-results` contain screenshots and logs.
-Both architectures run on native standard runners. The tests use a mock keychain
+`mac-arm64-smoke-results` contains screenshots and logs.
+Apple Silicon runs on a native standard runner. The tests use a mock keychain
 to avoid system prompts or accessing a real login keychain. It does not verify secure
 credential persistence. This does
 not verify Gatekeeper approval on a fresh machine.
@@ -459,14 +486,17 @@ restores the transparent corners with a circular mask.
 | File | Consumed by |
 | --- | --- |
 | `build/icon.icns` | electron-builder, macOS app bundle |
+| `build/icon-mac.png` | macOS development Dock icon (1024x1024) |
 | `build/icon.ico` | electron-builder, Windows |
 | `build/icon.png` | electron-builder, Linux (512x512) |
 | `src/renderer/favicon.png` | the renderer's `<link rel="icon">` |
 
-The mark is inset rather than bled to the edge: 824/1024 on macOS, which is Apple's icon
-grid, and a looser 0.92 elsewhere, where there is no grid to match. It stops reading as a
-wheel below about 32px - the white filigree inside the disc washes out into a pale blob at
-16px - but the disc silhouette and the brand blue still carry it.
+macOS uses the full-size mark with its own blue gradient extended behind it, making the
+circular edge seamless with the rounded-square tile. The corner radius is 22% of the tile
+width. The tile retains the 824/1024 outer inset for the macOS icon grid; the
+transparent margin is outside the tile, not between a circular silhouette and the grid.
+Windows, Linux, and the favicon keep the circular mark with a 0.92 inset. At small sizes,
+the fine detail softens, but the silhouette and brand blue still carry it.
 
 Where the icon actually shows:
 
@@ -475,7 +505,9 @@ Where the icon actually shows:
   path is correct both in dev and when packaged.
 - **macOS** ignores that option - its windows have no icon - and reads the dock icon from the
   app bundle, which only exists once the app is packaged. `app.dock.setIcon()` covers the gap
-  for `pnpm dev`.
+  for `pnpm dev`, using `build/icon-mac.png` with the same tile as the bundle icon. Restart
+  dev after regenerating icons. An installed app needs to be rebuilt and replaced before
+  its bundle icon changes.
 - The renderer's favicon is cosmetic inside Electron, which does not apply a page favicon to
   the window. It is there for where the renderer is opened as a page: devtools and
   `electron-vite preview`.

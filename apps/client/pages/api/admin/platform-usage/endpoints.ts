@@ -8,7 +8,7 @@ import { z } from 'zod';
 const ENDPOINT_TTL_DAYS = 90;
 
 const QuerySchema = z.object({
-  // Only api/cli traffic is logged, so no other source can match. Omit to span both
+  // Only api/cli/desktop traffic is logged, so no other source can match. Omit to span all
   // plus rows logged before source stamping existed (a source filter cannot match those).
   source: z.enum(API_KEY_COMPLETION_SOURCES).optional(),
 });

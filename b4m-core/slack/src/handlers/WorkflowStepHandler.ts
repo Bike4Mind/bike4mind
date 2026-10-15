@@ -394,13 +394,14 @@ export class WorkflowStepHandler {
       const { defineAbilitiesFor } = getSlackDb();
       const { sessionManager } = getSlackDeps();
       const ability = defineAbilitiesFor(user);
+      // Never make this the runner's lastNotebookId: the builder names it and later steps can
+      // write builder-authored prompts into it, and the runner's ordinary Slack chat falls back
+      // to lastNotebookId (see getOrCreateNotebookForSlackUser in notebook-manager.ts).
       const newSession = await (sessionManager as any).createSession(
         user.id,
         { name: notebookName, origin: { channel: 'slack' } },
         ability,
-        {
-          setLastNotebook: true,
-        }
+        { setLastNotebook: false }
       );
 
       const appUrl = process.env.APP_URL;
