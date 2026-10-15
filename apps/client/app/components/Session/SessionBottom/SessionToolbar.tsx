@@ -183,6 +183,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
           >
             <Box
               className="session-bottom-actions"
+              data-testid="session-bottom-actions"
               sx={{
                 display: 'flex',
                 flexDirection: 'row',
