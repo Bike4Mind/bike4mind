@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   startPasskeyAuthentication: vi.fn(),
   logAuthAudit: vi.fn(),
   publishEmail: vi.fn(),
+  endRealtimeConnections: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -116,11 +117,13 @@ vi.mock('@bike4mind/database', () => ({
   authSessionRepository,
   passkeyCredentialRepository: { countByUser: h.countPasskeys },
   passkeyChallengeRepository: {},
+  realtimeConnectionRepository: {},
 }));
 
 vi.mock('@bike4mind/services', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
   return {
+    authSessionService: { endRealtimeConnections: h.endRealtimeConnections },
     userService: {
       sendOTC: actual.userService.sendOTC,
       OTC_EXPIRY_MS: actual.userService.OTC_EXPIRY_MS,
@@ -317,11 +320,13 @@ describe('POST /api/auth/step-up - password', () => {
       expect(res._getJSONData()).toMatchObject({ attemptsRemaining: 5 - attempt });
       expect(sessions.get('sid-1')!.revokedAt).toBeNull();
     }
+    expect(h.endRealtimeConnections).not.toHaveBeenCalled();
 
     const lockedOut = await call(stepUpHandler, { body: { method: 'password', password: 'nope' } });
     expectStepUpFailed(lockedOut);
     expect(lockedOut._getJSONData()).toMatchObject({ attemptsRemaining: 0 });
     expect(sessions.get('sid-1')!.revokedAt).toBeInstanceOf(Date);
+    expect(h.endRealtimeConnections).toHaveBeenCalledWith({ sid: 'sid-1' }, expect.anything());
 
     // A right and a wrong guess get the same answer, so the revoked session learns nothing.
     for (const password of ['correct horse', 'still-wrong']) {

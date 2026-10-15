@@ -828,7 +828,8 @@ const baselineMove = (proposed: number, current: number): number => {
  * no row to carry from - a model's first row. Absent from that first write, a
  * cache_read does not fall back to the literal at all: the read path replaces
  * each tier WHOLESALE (applyModelPriceCatalog), so getTextModelCost lands on
- * input * CACHE_READ_MULTIPLIER instead.
+ * input * CACHE_READ_MULTIPLIER instead, or on the full input rate for Gemini and
+ * xAI (PUBLISHED_CACHE_READ_BACKENDS in common/src/models.ts).
  */
 function buildTier(
   price: DiscoveredRates,

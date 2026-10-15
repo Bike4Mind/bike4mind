@@ -11,6 +11,7 @@ export * from './adminDelete';
 export * from './revokeSessions';
 export * from './searchUserCollection';
 export * from './recalculateUserStorage';
+export * from './reconcileUserStorage';
 export * from './listRecentActivities';
 export * from './sendEmailVerification';
 export * from './verifyEmailToken';

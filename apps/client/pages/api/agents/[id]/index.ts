@@ -143,13 +143,6 @@ const updateBodySchema = z.object({
     ])
     .optional(),
   useOwnCredits: z.boolean().optional(),
-  // Kept writable only because `AgentForm` sends it on every save. It is a plain Number path here
-  // with no accounting: the debit from the owner's balance lives in
-  // `POST /api/agents/[id]/transfer-credits`, not in this route, so a PUT moves the agent's
-  // balance without a matching user debit or a `creditTransaction` row. Typing it is all this
-  // guard can do -- closing the gap means routing the form's credit field through
-  // transfer-credits, which changes the form's contract and is not a cast-safety fix.
-  currentCredits: z.number().optional(),
   systemPrompt: z.string().optional(),
   lastSystemPromptGeneratedAt: dateParamSchema.optional(),
   // The seven fields below keep the imperative validators in `agentValidation.ts`, which already

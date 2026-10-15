@@ -89,6 +89,7 @@ vi.mock('@bike4mind/database', () => ({
     countByUser: async () => 0,
   },
   passkeyChallengeRepository: {},
+  realtimeConnectionRepository: {},
   trustedDeviceRepository: { revokeAllForUser: async () => 0 },
   withTransaction: (fn: () => unknown) => fn(),
 }));

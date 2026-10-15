@@ -60,6 +60,8 @@ export const API_ERROR_CODES = [
   'unsupported_vocals',
   'lyrics_with_instrumental',
   'lyrics_too_long',
+  /** A cancel that arrived after the provider started (and so billed) the song; returned with a 409. */
+  'not_cancellable',
   // Decisions (POST /api/v1/decisions); see DECISIONS_ERROR_CODES.
   /** The provider stayed overloaded or timed out through our one retry; the response carries Retry-After. */
   'provider_overloaded',

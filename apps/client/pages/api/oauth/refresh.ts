@@ -1,7 +1,7 @@
 import { ACCESS_TOKEN_TTL_SECONDS, authTokenGenerator } from '@server/auth/tokenGenerator';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
-import { User, userRepository, authSessionRepository } from '@bike4mind/database';
+import { User, userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { HTTPError, UnauthorizedError } from '@bike4mind/utils';
@@ -34,7 +34,11 @@ const handler = baseApi({ auth: false })
       // New session-store path: rotate the opaque refresh token against the AuthSession store.
       if (authSessionService.isOpaqueRefreshToken(refresh_token)) {
         const rotated = await authSessionService.rotateSession(refresh_token, {
-          db: { authSessions: authSessionRepository, users: userRepository },
+          db: {
+            authSessions: authSessionRepository,
+            users: userRepository,
+            realtimeConnections: realtimeConnectionRepository,
+          },
           signAccessToken,
           audit: event =>
             logAuthAudit(req, {

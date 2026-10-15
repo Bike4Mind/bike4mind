@@ -151,6 +151,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
 
   return {
     kind: 'video',
+    submitMode: 'async',
 
     async submit(job, context) {
       let prepared: PreparedSubmit | VideoStepResult;

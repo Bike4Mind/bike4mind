@@ -12,7 +12,7 @@ const handler = baseApi().post(
       return res.status(403).json({ error: 'Admin access required' });
     }
 
-    await userService.recalculateUserStorage(
+    const { truth } = await userService.recalculateUserStorage(
       { userId },
       {
         db: {
@@ -21,14 +21,12 @@ const handler = baseApi().post(
         },
       }
     );
-
-    // Fetch the updated user to return the new storage values
-    const updatedUser = await userRepository.findById(userId);
+    const user = await userRepository.findById(userId);
 
     return res.status(200).json({
       success: true,
-      currentStorageSize: updatedUser?.currentStorageSize || 0,
-      storageLimit: updatedUser?.storageLimit || 0,
+      currentStorageSize: truth,
+      storageLimit: user?.storageLimit || 0,
     });
   })
 );
