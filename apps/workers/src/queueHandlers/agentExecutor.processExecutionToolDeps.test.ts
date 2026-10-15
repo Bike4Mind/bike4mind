@@ -68,7 +68,9 @@ vi.mock('./agentExecutor.musicToolConfig', async () => {
   return {
     ...actual,
     getAgentMusicToolConfigDeps: vi.fn().mockReturnValue({
+      resolveTrackLimit: vi.fn().mockResolvedValue(2),
       buildBaseConfig: vi.fn().mockResolvedValue({ usableModels: ['test-music'], createJob: vi.fn() }),
+      slots: { claim: vi.fn().mockResolvedValue(true), release: vi.fn().mockResolvedValue(undefined) },
       logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
     }),
   };

@@ -1896,6 +1896,7 @@ async function processExecution(
       musicConfig: await buildAgentMusicToolConfig(
         {
           userId: execution.userId,
+          organizationId: execution.organizationId,
           apiKeyId: execution.apiKeyId,
           questId: runQuestId,
           toolEnabled: profileEnabledTools.includes('music_generation'),
