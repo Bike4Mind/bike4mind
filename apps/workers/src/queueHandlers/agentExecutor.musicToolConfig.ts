@@ -70,8 +70,8 @@ export function limitMusicTracksPerRun(
 
 /**
  * Null means the tool is not offered: not in the toolbelt, an API-key run (same exclusion as chat), no
- * Quest to count on or attach the song card to, a cap of 0, no usable music model, or a failed read
- * (fail closed).
+ * Quest to count on or attach the song card to, a cap of 0, no usable music model, or a failed config
+ * build (fail closed). A failed settings read does not land here: resolveAgentRunLimit degrades it.
  */
 export async function buildAgentMusicToolConfig(
   { userId, organizationId, apiKeyId, questId, toolEnabled }: BuildAgentMusicToolConfigInput,

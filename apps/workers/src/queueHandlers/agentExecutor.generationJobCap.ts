@@ -64,7 +64,11 @@ export const questGenerationSlots = (kind: GenerationJobKind): AgentGenerationSl
   release: questId => questRepository.releaseAgentGenerationSlot(questId, kind),
 });
 
-/** Production per-run limit read. The run's organizationId is membership-checked at run start (see agentExecutor toolDeps). */
+/**
+ * Production per-run limit read. The run's organizationId is membership-checked at run start (see agentExecutor toolDeps).
+ * Never throws: resolveScopedSetting degrades a settings outage to the wider scope or the coded default, so an outage can
+ * lift an org's 0 back to the platform value.
+ */
 export const resolveAgentRunLimit =
   (key: 'agentVideoClipsPerRun' | 'agentMusicTracksPerRun', logger: Logger) =>
   async (caller: AgentRunLimitCaller): Promise<number> => {

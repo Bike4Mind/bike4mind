@@ -71,7 +71,8 @@ export function limitVideoClipsPerRun(
 
 /**
  * Null means the tool is not offered: not in the toolbelt, an API-key run (same exclusion as chat), no Quest to count on
- * or attach the clip card to, a cap of 0, no usable video model, or a failed read (fail closed).
+ * or attach the clip card to, a cap of 0, no usable video model, or a failed config build (fail closed). A failed settings
+ * read does not land here: resolveAgentRunLimit degrades it.
  */
 export async function buildAgentVideoToolConfig(
   { userId, organizationId, apiKeyId, questId, toolEnabled }: BuildAgentVideoToolConfigInput,
