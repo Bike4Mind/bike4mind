@@ -286,6 +286,26 @@ describe('ReActAgent transcript owner', () => {
       // system + stale call + its synthesized result + query
       expect(result.checkpoint.initialMessageCount).toBe(4);
     });
+
+    it('keeps the query protected when a resumed checkpoint is repaired inside its prefix', async () => {
+      const rounds = Array.from({ length: 7 }, (_, i) => [
+        { id: `call-${i}`, name: 'read', arguments: `{"path": "${i}.ts"}` },
+      ]);
+      const { llm, requests } = createRecordingLlm(rounds);
+      const agent = new ReActAgent(createContext(llm));
+      agent.fromCheckpoint(
+        checkpointWith([{ role: 'system', content: 'system' }, staleCall, { role: 'user', content: 'THE QUERY' }])
+      );
+
+      const result = await runToCompletion(agent);
+
+      expect(result.checkpoint.initialMessageCount).toBe(4);
+      const sent = requests();
+      expect(sent).toHaveLength(8);
+      for (const request of sent) {
+        expect(request.some(message => message.content === 'THE QUERY')).toBe(true);
+      }
+    });
   });
 
   it('gives identical parallel calls with different ids their own results', async () => {

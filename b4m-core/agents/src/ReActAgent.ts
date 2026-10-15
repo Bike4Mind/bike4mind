@@ -1381,7 +1381,12 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       }
 
       appendWorkflowReminder(this.messages, options.workflowReminder);
+      // A resumed checkpoint can need repair inside its protected prefix; keep the prefix ending at the
+      // same message so trimming never drops the query.
+      const lastProtected = this.messages[this.initialMessageCount - 1];
       this.repairTranscriptBeforeRequest(this.messages);
+      const lastProtectedIndex = lastProtected ? this.messages.indexOf(lastProtected) : -1;
+      if (lastProtectedIndex >= 0) this.initialMessageCount = lastProtectedIndex + 1;
 
       let iterationComplete = false;
       let currentText = '';
