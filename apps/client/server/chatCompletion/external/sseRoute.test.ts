@@ -212,7 +212,13 @@ describe('JWT rate limiting', () => {
 
   it('hands the calling client to the rate limiter, so its own cap applies', async () => {
     expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(200);
-    expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith('u1', 'api', { client: 'b4m-desktop/0.1.0' });
+    expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith('u1', 'desktop', { client: 'b4m-desktop/0.1.0' });
+  });
+
+  it("attributes a b4m-desktop client as source 'desktop' on the completion and its analytics", async () => {
+    expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
+    expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
   });
 
   /**

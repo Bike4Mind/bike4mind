@@ -17,6 +17,7 @@ import {
   recordUsageSource,
   selectExternal,
   selectExternalSignups,
+  selectInternal,
   toUtcDay,
   windowStartDay,
   type UserDayMap,
@@ -311,7 +312,7 @@ describe('buildReport cohorts', () => {
 describe('isApiSource', () => {
   it("is true only for 'api': an unset or empty source is app activity", () => {
     expect(isApiSource('api')).toBe(true);
-    for (const source of [undefined, null, '', 'web', 'cli', 'chat', 'agent', 'system']) {
+    for (const source of [undefined, null, '', 'web', 'cli', 'desktop', 'chat', 'agent', 'system']) {
       expect(isApiSource(source)).toBe(false);
     }
   });
@@ -330,6 +331,65 @@ describe('mergeUserDays', () => {
     expect(merged.get('u1')).toEqual(daysOf('2026-10-10', '2026-10-11'));
     expect(merged.get('u2')).toEqual(daysOf('2026-10-10'));
     expect(app.get('u1')).toEqual(daysOf('2026-10-10'));
+  });
+});
+
+describe('buildReport internal users', () => {
+  const rules = buildExclusionRules('staff.example.com', /\+test/i);
+  const created = at('2026-10-10');
+  const users = new Map<string, UserRecord>([
+    ['ext', { email: 'a@customer.example', createdAt: created }],
+    ['admin', { email: 'boss@customer.example', isAdmin: true, createdAt: created }],
+    ['staff', { email: 'dev@staff.example.com', createdAt: created }],
+    ['tester', { email: 'qa+test@customer.example', createdAt: created }],
+    ['apiAdmin', { email: 'ops@customer.example', isAdmin: true, createdAt: created }],
+  ]);
+  const usersByDay = (rows: { day: string; users: number }[]) => Object.fromEntries(rows.map(r => [r.day, r.users]));
+  const build = () =>
+    buildReport({
+      userDays: new Map([
+        ['ext', daysOf('2026-10-10')],
+        ['admin', daysOf('2026-10-10', '2026-10-11')],
+        ['staff', daysOf('2026-10-10')],
+        ['tester', daysOf('2026-10-10')],
+        ['ghost', daysOf('2026-10-10')],
+      ]),
+      apiUserDays: new Map([['apiAdmin', daysOf('2026-10-10')]]),
+      sourceCounts: new Map([
+        ['ext', new Map([['web', 2]])],
+        ['admin', new Map([['web', 5]])],
+      ]),
+      users,
+      rules,
+      days: DEFAULT_DAYS,
+      now: NOW,
+    });
+
+  it('shows an admin and a staff-domain user in Internal and not in DAU', () => {
+    const result = build();
+
+    expect(result.internalUsers).toBe(2);
+    expect(usersByDay(result.internal)['2026-10-10']).toBe(2);
+    expect(usersByDay(result.internal)['2026-10-11']).toBe(1);
+    expect(result.internal).toHaveLength(result.dau.length);
+    expect(result.externalUsers).toBe(1);
+    expect(usersByDay(result.dau)['2026-10-10']).toBe(1);
+    expect(usersByDay(result.dau)['2026-10-11']).toBe(0);
+  });
+
+  it('leaves test-pattern, unknown and API-only internal users out of Internal, and still excludes them', () => {
+    const result = build();
+
+    expect(result.internalUsers).toBe(2); // not tester, ghost or apiAdmin (API activity only)
+    expect(result.externalApiUsers).toBe(0);
+    expect(result.excluded).toEqual({ noUser: 1, admin: 2, staffDomain: 1, testPattern: 1 });
+  });
+
+  it('keeps internal users out of the per-source rows and the cohorts', () => {
+    const result = build();
+
+    expect(result.sources).toEqual([{ source: 'web', rows: 2 }]);
+    expect(result.cohorts.rows).toEqual([expect.objectContaining({ signups: 1, activated: 1 })]);
   });
 });
 
@@ -357,6 +417,23 @@ describe('buildReport API users', () => {
     expect(usersByDay(result.apiUsers)['2026-10-10']).toBe(1);
     expect(usersByDay(result.apiUsers)['2026-10-11']).toBe(1);
     expect(result.sources).toEqual([{ source: 'api', rows: 3 }]);
+  });
+
+  it('counts a desktop-only user in DAU and externalUsers, not in API users, with their source rows', () => {
+    const result = report(
+      new Map([['dt', daysOf('2026-10-10', '2026-10-11')]]),
+      new Map(),
+      new Map([['dt', { email: 'dt@customer.example', createdAt: at('2026-10-10') }]]),
+      new Map([['dt', new Map([['desktop', 4]])]])
+    );
+
+    expect(result.externalUsers).toBe(1);
+    expect(result.externalApiUsers).toBe(0);
+    expect(usersByDay(result.dau)['2026-10-10']).toBe(1);
+    expect(usersByDay(result.dau)['2026-10-11']).toBe(1);
+    expect(result.apiUsers.every(r => r.users === 0)).toBe(true);
+    expect(result.sources).toEqual([{ source: 'desktop', rows: 4 }]);
+    expect(result.cohorts.rows[0]).toMatchObject({ signups: 1, activated: 1 });
   });
 
   it('counts a user with web and API activity on one day once in DAU and once in API users', () => {
@@ -470,6 +547,27 @@ describe('parseReportArgs', () => {
   });
 });
 
+describe('selectInternal', () => {
+  const rules = buildExclusionRules('staff.example.com', /\+test/i);
+
+  it('keeps admins and staff-domain users, and drops external, test-pattern and unknown users', () => {
+    const userDays: UserDayMap = new Map(
+      ['ext', 'admin', 'staff', 'tester', 'ghost'].map((id): [string, Set<number>] => [id, daysOf('2026-10-10')])
+    );
+    const users = new Map<string, UserRecord>([
+      ['ext', { email: 'a@customer.example' }],
+      ['admin', { email: 'boss@customer.example', isAdmin: true }],
+      ['staff', { email: 'dev@staff.example.com' }],
+      ['tester', { email: 'qa+test@customer.example' }],
+    ]);
+
+    const internal = selectInternal(userDays, users, rules);
+
+    expect([...internal.keys()].sort()).toEqual(['admin', 'staff']);
+    expect(internal.get('admin')).toBe(userDays.get('admin'));
+  });
+});
+
 describe('formatReport', () => {
   const build = (staffDomains: string | undefined, days = DEFAULT_DAYS) =>
     formatReport(
@@ -477,6 +575,7 @@ describe('formatReport', () => {
         userDays: new Map([
           ['u1', daysOf('2026-09-01', '2026-09-02', '2026-10-13')],
           ['u2', daysOf('2026-10-12')],
+          ['u4', daysOf('2026-10-13')],
         ]),
         apiUserDays: new Map([['u3', daysOf('2026-10-13')]]),
         sourceCounts: new Map([['u1', new Map([['chat', 2]])]]),
@@ -484,6 +583,7 @@ describe('formatReport', () => {
           ['u1', { email: 'a@customer.example', createdAt: at('2026-09-01') }],
           ['u2', { email: 'b@customer.example', createdAt: at('2026-10-12') }],
           ['u3', { email: 'c@customer.example', createdAt: at('2026-01-05') }],
+          ['u4', { email: 'boss@customer.example', isAdmin: true, createdAt: at('2026-01-05') }],
         ]),
         rules: buildExclusionRules(staffDomains, /\+test/i),
         days,
@@ -495,10 +595,11 @@ describe('formatReport', () => {
     const text = build('staff.example.com');
 
     expect(text).toContain('DAU (UTC, last 30 days)');
-    expect(text).toMatch(/Day\s+DAU\s+API users/);
-    expect(text).toMatch(/2026-10-13 {2}1 +1 {2}\(partial day\)/);
-    expect(text).toMatch(/2026-10-12 {2}1 +0\n/);
+    expect(text).toMatch(/Day\s+DAU\s+API users\s+Internal/);
+    expect(text).toMatch(/2026-10-13 {2}1 +1 +1 {2}\(partial day\)/);
+    expect(text).toMatch(/2026-10-12 {2}1 +0 +0\n/);
     expect(text).toContain('External users with API activity (not in DAU): 1');
+    expect(text).toContain('Internal users with app, CLI or desktop activity: 1');
     expect(text).toMatch(/chat\s+2/);
     expect(text).toContain('Weekly signup cohorts');
     expect(text).toMatch(/Cohort\s+Signups\s+Activated\s+Act %\s+D1\s+D7\s+D30/);

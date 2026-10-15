@@ -142,6 +142,28 @@ describe('runExternalActivityReport', () => {
     ]);
   });
 
+  it('shows admin and staff-domain users in Internal, not in DAU, and drops test-pattern and unknown users', async () => {
+    await seed();
+    // API-only activity does not count as Internal, as it does not count as DAU.
+    const apiStaff = await insertUser('api@staff.example.com');
+    await usage(apiStaff, '2026-10-11', { source: 'api' });
+    const lines: string[] = [];
+
+    const report = await run({ log: message => lines.push(message) });
+
+    const internal = Object.fromEntries(report.internal.map(row => [row.day, row.users]));
+    expect(report.internal).toHaveLength(30);
+    expect(report.internalUsers).toBe(2); // staff and admin, via their Quest and AgentExecution
+    expect(internal['2026-10-10']).toBe(2); // quests
+    expect(internal['2026-10-11']).toBe(0); // API UsageEvents only
+    expect(internal['2026-10-12']).toBe(2); // AgentExecutions
+    expect(report.externalUsers).toBe(3); // internal users are in no external figure
+    expect(report.excluded).toEqual({ noUser: 2, admin: 1, staffDomain: 2, testPattern: 1 });
+    expect(lines[0]).toMatch(/Day\s+DAU\s+API users\s+Internal/);
+    expect(lines[0]).toMatch(/2026-10-10\s+3\s+0\s+2/);
+    expect(lines[0]).toContain('Internal users with app, CLI or desktop activity: 2');
+  });
+
   it('buckets the three users into their signup week with D1 measured and D7 too young', async () => {
     await seed();
 
@@ -308,6 +330,25 @@ describe('runExternalActivityReport API activity', () => {
     expect(row.signups).toBe(3);
     expect(row.activated).toBe(2); // apiOnly has no app activity
     expect(row.retention[1]).toBeCloseTo(33.33, 1); // only both is app-active on 10-11
+  });
+
+  it("treats source 'desktop' as app activity: in DAU and cohorts, not an API user", async () => {
+    const desktopOnly = await insertUser('desktop-only@customer.example');
+    await usage(desktopOnly, '2026-10-10', { source: 'desktop' });
+    await usage(desktopOnly, '2026-10-11', { source: 'desktop' });
+
+    const report = await run();
+
+    const dau = Object.fromEntries(report.dau.map(row => [row.day, row.users]));
+    expect(report.externalUsers).toBe(1);
+    expect(report.externalApiUsers).toBe(0);
+    expect(dau['2026-10-10']).toBe(1);
+    expect(dau['2026-10-11']).toBe(1);
+    expect(report.apiUsers.every(row => row.users === 0)).toBe(true);
+    expect(report.sources).toEqual([{ source: 'desktop', rows: 2 }]);
+    expect(report.cohorts.rows).toEqual([
+      expect.objectContaining({ signups: 1, activated: 1, retention: { 1: 100, 7: null, 30: null } }),
+    ]);
   });
 
   it('prints the API users column and the headline split', async () => {
