@@ -120,11 +120,26 @@ test.describe('File Browser Search', () => {
         expect(filtersCenter).toBeGreaterThan(actionsCenter + 4);
       }
 
-      // No action may be squeezed below its label.
-      const clippedActions = await toolbarActions.evaluate(
-        el => Array.from(el.querySelectorAll('button')).filter(button => button.scrollWidth > button.clientWidth).length
-      );
-      expect(clippedActions).toBe(0);
+      // No action label may be squeezed or wrapped: a squeezed label overflows its button horizontally, a
+      // wrapped one renders more than one line box. Measure once the webfonts have settled so a late swap
+      // cannot change the widths mid-read.
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
+      const badActions = await toolbarActions.evaluate(el => {
+        const lineBoxes = (button: HTMLElement) => {
+          const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+          let boxes = 0;
+          while (walker.nextNode()) {
+            const range = document.createRange();
+            range.selectNodeContents(walker.currentNode);
+            boxes += range.getClientRects().length;
+          }
+          return boxes;
+        };
+        return Array.from(el.querySelectorAll('button')).filter(
+          button => button.scrollWidth > button.clientWidth || lineBoxes(button) > 1
+        ).length;
+      });
+      expect(badActions).toBe(0);
     });
   }
 });
