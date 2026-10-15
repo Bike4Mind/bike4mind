@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { arityPrefix, commandTokens, directoryOptionValues, droppedOnlySafeOptions } from './bashArity';
 import { parseBash } from './bashParser';
@@ -78,6 +78,42 @@ function writesFile(node: Node): boolean {
   return !HARMLESS_REDIRECT_TARGETS.has(text) && !text.startsWith('&') && text !== '-';
 }
 
+/** A write can sit inside a heredoc redirect: `cat <<'EOF' >> .git/config` nests it one level down. */
+function hasWriteRedirect(node: Node): boolean {
+  return node.namedChildren.some(
+    child =>
+      child !== null &&
+      (writesFile(child) ||
+        (child.type === 'heredoc_redirect' &&
+          child.descendantsOfType('file_redirect').some(n => n !== null && writesFile(n))))
+  );
+}
+
+/**
+ * Arithmetic assigns while the argument expands, before the command is looked up -
+ * `git status $((PATH=0))` - and so does an indexed array subscript.
+ */
+const EVALUATES_ARITHMETIC = /\$\(\(|\$\[|\$\{[^}]*\[/;
+
+/** Bash does not let a leading `*` or `?` match a dotfile, so `cat *` never reads `.env`. */
+const ENV_FILE_SAMPLES = ['.env', '.env.local'];
+
+function globMayMatchEnvFile(path: string): boolean {
+  const name = basename(path);
+  if (isEnvFile(name.replace(/\[[^\]]*\]|[?*]/g, ''))) return true;
+  if (/^[?*[]/.test(name)) return false;
+  const pattern = name
+    .replace(/[.+^${}()|\\]/g, '\\$&')
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.');
+  try {
+    const matcher = new RegExp(`^${pattern}$`);
+    return ENV_FILE_SAMPLES.some(sample => matcher.test(sample));
+  } catch {
+    return true;
+  }
+}
+
 function unquote(text: string): string {
   if (text.length < 2) return text;
   const first = text[0];
@@ -148,7 +184,8 @@ export async function scanShell(
 
     const noteEnvFile = (raw: string): void => {
       const path = expandHome(unquote(raw));
-      if (!isDynamic(path) && isEnvFile(path)) envFiles.add(path);
+      if (isDynamic(path)) return;
+      if (globPrefix(path) === path ? isEnvFile(path) : globMayMatchEnvFile(path)) envFiles.add(path);
     };
 
     const check = async (raw: string, cwd: string): Promise<string | null> => {
@@ -182,11 +219,12 @@ export async function scanShell(
 
       const normalised = commandTokens(tokens);
       const assigns = node.namedChildren.some(child => child?.type === 'variable_assignment');
-      const writes = writtenCommands.has(node.id) || node.namedChildren.some(child => child && writesFile(child));
+      const writes = writtenCommands.has(node.id) || hasWriteRedirect(node);
+      const arithmetic = tokens.some(token => EVALUATES_ARITHMETIC.test(token));
       commands.push({
         text: normalised.join(' '),
         always: `${arityPrefix(normalised).join(' ')} *`,
-        coverable: !assigns && !writes && droppedOnlySafeOptions(tokens),
+        coverable: !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens),
       });
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
@@ -246,7 +284,7 @@ export async function scanShell(
         for (const child of node.children) if (child) await visit(child);
         return;
       }
-      if (node.type === 'redirected_statement' && node.namedChildren.some(child => child && writesFile(child))) {
+      if (node.type === 'redirected_statement' && hasWriteRedirect(node)) {
         const body = node.childForFieldName('body');
         if (body?.type === 'command') {
           writtenCommands.add(body.id);

@@ -117,13 +117,19 @@ describe('scanShell', () => {
       ['. ./.env', ['./.env']],
       ['wc -l < .env', ['.env']],
       ['cat "config/.env.production"', ['config/.env.production']],
+      ['cat .env*', ['.env*']],
+      ['cat .en?', ['.en?']],
+      ['cat config/*.env', ['config/*.env']],
     ])('flags %s', async (command, envFiles) => {
       expect((await scan(command)).envFiles).toEqual(envFiles);
     });
 
-    it.each(['cat .env.example', 'ls -la', 'cat "$ENV_FILE"', 'echo x > .env'])('does not flag %s', async command => {
-      expect((await scan(command)).envFiles).toEqual([]);
-    });
+    it.each(['cat .env.example', 'ls -la', 'cat "$ENV_FILE"', 'echo x > .env', 'cat *', 'ls src/*.ts'])(
+      'does not flag %s',
+      async command => {
+        expect((await scan(command)).envFiles).toEqual([]);
+      }
+    );
   });
 
   describe('tracking cd', () => {
@@ -278,6 +284,8 @@ describe('a standing "always" on git status', () => {
     [['git status'], '{ git status; } > out.txt'],
     [['git status'], '(git status) >| out.txt'],
     [['git status'], 'for f in a; do git status; done > out.txt'],
+    [['cat package.json', 'git status'], "cat <<'EOF' >> .git/config\n[core]\n\tfsmonitor = x\nEOF\ngit status"],
+    [['cat package.json', 'git status'], 'cat <<EOF > .git/config && git status\nx\nEOF'],
   ])('patterns %j do not cover a script that writes a file: %s', async (allowed, command) => {
     const gate = await gateAllowingAll(allowed);
     expect(gate.coversCommands('s', await alwaysFor(command))).toBe(false);
@@ -295,7 +303,10 @@ describe('a standing "always" on git status', () => {
     ['git status', 'for HOME in .; do git status; done'],
     ['git status', 'select HOME in .; do git status; done'],
     ['git status', 'for ((HOME=0; HOME<1; HOME++)); do git status; done'],
-  ])('a standing %s does not cover a loop that rebinds a variable: %s', async (allowed, command) => {
+    ['git status', 'git status $((PATH=0))'],
+    ['git status', 'git status "$((HOME+=1))"'],
+    ['git status', 'git status ${a[PATH=0]}'],
+  ])('a standing %s does not cover a script that rebinds a variable: %s', async (allowed, command) => {
     const gate = await gateAllowing(allowed);
     expect(gate.coversCommands('s', await alwaysFor(command))).toBe(false);
   });
