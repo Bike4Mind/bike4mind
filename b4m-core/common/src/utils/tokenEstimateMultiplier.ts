@@ -40,11 +40,12 @@ export function tokenEstimateMultiplier(modelId: string | undefined): number {
 }
 
 /**
- * Lower-bound token count for `chars` characters of streamed model output, for a call whose stream
- * was cut short before the provider reported its output tokens (Anthropic sends them only on the
- * final message_delta). CHARS_PER_TOKEN_SERVE_BOUND is an upper bound on chars per cl100k token and
- * tokenEstimateMultiplier a lower bound on the model's tokens per cl100k token, so the product stays
- * a lower bound: it can under-bill the partial reply, never over-bill it.
+ * Approximately a lower-bound token count for `chars` characters of streamed model output, for a call
+ * whose stream was cut short before the provider reported its output tokens (Anthropic sends them only
+ * on the final message_delta). CHARS_PER_TOKEN_SERVE_BOUND is an upper bound on chars per cl100k token
+ * and tokenEstimateMultiplier a lower bound on the model's tokens per cl100k token, so for the model's
+ * own text the product under-bills rather than over-bills. Callers that count wrapper markup in `chars`
+ * (the CLI path counts <think> markers and escaped reasoning) can overshoot slightly.
  */
 export function estimateStreamedOutputTokens(chars: number, modelId: string | undefined): number {
   if (!(chars > 0)) return 0;
