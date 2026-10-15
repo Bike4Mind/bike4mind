@@ -197,7 +197,7 @@ jobs:
           name: desktop-installers
           path: installers/*
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 1
 
   publish:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')

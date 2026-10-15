@@ -78,9 +78,9 @@ typechecks and tests on macOS and Linux, then packages both macOS architectures 
 Linux x64. Publication waits for both build jobs and validates all five artifacts.
 Failed uploads leave a draft release, not a partially published download page.
 
-Storage is deliberately short-lived: intermediate platform artifacts expire after
-one day, and the combined installer download and startup evidence expire after three
-days. Superseded PR runs are canceled; main release runs are not interrupted.
+Storage is deliberately short-lived: intermediate platform artifacts and the combined
+installer download expire after one day; startup evidence expires after three days.
+Superseded PR runs are canceled; main release runs are not interrupted.
 Dependency caching is disabled for this workflow, including setup-node's automatic
 package-manager cache. Runner-local build files disappear with the hosted runner.
 Published GitHub Release assets remain available for downloads and rollback separately
