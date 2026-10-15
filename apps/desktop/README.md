@@ -97,6 +97,11 @@ paused; local x64 packaging remains available. Publication waits for both build 
 validates the arm64 DMG, arm64 ZIP, and Linux AppImage.
 Failed uploads leave a draft release, not a partially published download page.
 
+macOS jobs read the repository or organization Actions variable `OSX_RUNNER_LABEL`,
+defaulting to `macos-26-runner` when unset or empty. The selected runner must be
+Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`.
+Paid runner usage is billed by GitHub.
+
 Storage is deliberately short-lived: platform installers, checksums, and release notes
 expire after one day; startup evidence expires after three days. Installers are stored
 only once per platform; there is no duplicate combined installer upload.

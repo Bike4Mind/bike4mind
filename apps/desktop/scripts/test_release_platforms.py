@@ -41,6 +41,12 @@ class ReleasePlatformsTest(unittest.TestCase):
         self.assertNotIn('macos-15-intel', matrix)
         self.assertNotIn('max-parallel: 1', WORKFLOW)
 
+    def test_macos_runner_is_configurable(self):
+        matrix = WORKFLOW.split('        include:\n', 1)[1].split('    runs-on:', 1)[0]
+        self.assertIn("- os: ${{ vars.OSX_RUNNER_LABEL || 'macos-26-runner' }}", matrix)
+        self.assertIn('- os: ubuntu-24.04', matrix)
+        self.assertIn('runs-on: ${{ matrix.os }}', WORKFLOW)
+
 
 if __name__ == '__main__':
     unittest.main()
