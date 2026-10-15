@@ -870,7 +870,7 @@ const AttachFileButton = ({
           {currentView === 'briefcase' ? (
             <BriefcasePanel onLaunched={closeMenu} />
           ) : currentView === 'image' ? (
-            <ImageOptionsPanel onOpenPromptBuilder={closeMenu} />
+            <ImageOptionsPanel onOpenPromptBuilder={closeMenu} showTitle={false} />
           ) : (
             <UploadScopeOptions
               value={attachScopeMode}

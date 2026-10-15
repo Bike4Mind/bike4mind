@@ -57,6 +57,18 @@ describe('ImageOptionsPanel', () => {
     hoisted.llm = { model: 'gpt-image-2', n: 1 };
   });
 
+  it('titles itself unless a header already names it', () => {
+    const { unmount } = renderPanel();
+    expect(screen.getByText('Image options')).toBeInTheDocument();
+    unmount();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <ImageOptionsPanel showTitle={false} />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByText('Image options')).toBeNull();
+  });
+
   it('sets images per prompt within 1-4', () => {
     renderPanel();
     const input = screen.getByTestId('image-response-count-input').querySelector('input')!;

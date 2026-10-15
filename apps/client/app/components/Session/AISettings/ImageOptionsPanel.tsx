@@ -25,7 +25,11 @@ const Row: FC<{ label: string; children: ReactNode }> = ({ label, children }) =>
  * (AttachFileButton) only while an image model is selected. PromptBuilderModal itself stays
  * mounted in AdvancedAISettings; this only opens it.
  */
-const ImageOptionsPanel: FC<{ onOpenPromptBuilder?: () => void }> = ({ onOpenPromptBuilder }) => {
+const ImageOptionsPanel: FC<{
+  onOpenPromptBuilder?: () => void;
+  /** Off where a header already names the panel (the phone submenu). */
+  showTitle?: boolean;
+}> = ({ onOpenPromptBuilder, showTitle = true }) => {
   const model = useLLM(s => s.model);
   const n = useLLM(s => s.n);
   const { setState: setLLM } = useLLM;
@@ -47,9 +51,11 @@ const ImageOptionsPanel: FC<{ onOpenPromptBuilder?: () => void }> = ({ onOpenPro
 
   return (
     <Box data-testid="image-options-panel" sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: '4px 8px' }}>
-      <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-        Image options
-      </Typography>
+      {showTitle && (
+        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+          Image options
+        </Typography>
+      )}
       {/* `n` reaches only the image services; more images cost proportionally more credits. */}
       <Row label="Images per prompt">
         <Input
