@@ -628,8 +628,8 @@ describe('CookieConsentBanner', () => {
       expect(screen.queryByTestId('cookie-consent-cancel-btn')).not.toBeInTheDocument();
     });
 
-    // Pairs each loader the grant fires today with the vendor the ask names. It does not catch a
-    // new loader on its own: one added to activateConsent needs a name here AND an assertion below.
+    // Pairs each loader the grant fires with the vendor the ask names. A loader added outside
+    // CONSENT_VENDORS injects a script the inventory check below does not expect, so it fails here.
     it('names every vendor the grant then loads on the first-run ask', () => {
       vi.stubEnv('NEXT_PUBLIC_GA_MEASUREMENT_ID', 'G-TEST');
       vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
