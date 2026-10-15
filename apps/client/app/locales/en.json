@@ -329,6 +329,38 @@
     },
     "users_profile": "{{ name }}'s Profile",
     "storage_used": "Storage Used",
+    "storage_breakdown": {
+      "show": "What's using my storage?",
+      "hide": "Hide breakdown",
+      "loading": "Loading breakdown...",
+      "error": "Couldn't load the storage breakdown.",
+      "retry": "Retry",
+      "empty": "No stored files yet.",
+      "files_one": "{{count}} file",
+      "files_other": "{{count}} files",
+      "archived": "{{size}} archived",
+      "unaccounted": "Unaccounted",
+      "unaccounted_hint": "Difference between your usage counter and the files counted just now. A file changing mid-count can cause a small, temporary gap.",
+      "open_lake": "Open lake",
+      "unavailable_lake": "{{source}}: lake unavailable",
+      "no_lake": "{{source}}: no lake",
+      "source": {
+        "manual_upload": "Uploads",
+        "salesforce": "Salesforce",
+        "google_drive": "Google Drive",
+        "slack": "Slack",
+        "proposal_approval": "Approved proposals",
+        "github": "GitHub",
+        "tool_generated": "Generated files"
+      },
+      "media": {
+        "image": "Generated images",
+        "audio": "Generated audio",
+        "video": "Generated video",
+        "document": "Generated documents",
+        "other": "Other generated files"
+      }
+    },
     "credits": "Credits",
     "subscription": "Subscription",
     "edit": "Edit Profile",

@@ -166,3 +166,4 @@ export * from './retry';
 export * from './memoryContext';
 export * from './zipEntry';
 export * from './storageCharge';
+export * from './storageBreakdown';
