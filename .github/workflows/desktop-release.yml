@@ -65,6 +65,8 @@ jobs:
           persist-credentials: false
       - name: Test semantic version selection
         run: python3 -m unittest discover -s scripts -p test_desktop_release_version.py -v
+      - name: Test update feed
+        run: python3 -m unittest discover -s apps/desktop/scripts -p 'test_*.py' -v
       - name: Choose installer version
         id: version
         env:
@@ -99,6 +101,8 @@ jobs:
     env:
       DESKTOP_VERSION: ${{ needs.version.outputs.version }}
       B4M_DEFAULT_API_URL: ${{ vars.B4M_DEFAULT_API_URL }}
+      # Baked into the app; the AppImage gets none because only a macOS feed is published.
+      B4M_UPDATE_FEED_URL: ${{ matrix.platform == 'mac' && (vars.B4M_UPDATE_FEED_URL || format('{0}/{1}/releases/download/desktop-feed', github.server_url, github.repository)) || '' }}
       VITEST_MAX_WORKERS: '2'
     steps:
       - uses: actions/checkout@v6
@@ -140,6 +144,7 @@ jobs:
           APPLE_ID: ${{ secrets.DESKTOP_APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.DESKTOP_APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.DESKTOP_APPLE_TEAM_ID }}
+          B4M_DESKTOP_SIGNED: 'true'
         run: |
           for key in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
             if [ -z "${!key}" ]; then echo "Missing signing credential: $key"; exit 1; fi
@@ -271,3 +276,21 @@ jobs:
           (cd installers && sha256sum --check SHA256SUMS.txt)
           bash apps/desktop/scripts/publish-release.sh installers notes/desktop-release-notes.md
           printf 'Desktop release: https://github.com/%s/releases/tag/desktop-v%s\n' "$GH_REPO" "$DESKTOP_VERSION" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish update feed
+        env:
+          DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TARGET: ${{ github.sha }}
+          SIGNED: ${{ vars.DESKTOP_MAC_SIGNING == 'true' }}
+          ASSET_BASE: ${{ format('{0}/{1}/releases/download/desktop-v{2}', github.server_url, github.repository, needs.validate.outputs.version) }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! gh release view desktop-feed >/dev/null 2>&1; then
+            gh release create desktop-feed --target "$RELEASE_TARGET" --latest=false --title 'Desktop update feed' \
+              --notes 'Read by the desktop app to find updates. Installers are on the desktop-v* releases.'
+          fi
+          gh release download desktop-feed --pattern latest-mac.yml --dir previous-feed || true
+          python3 apps/desktop/scripts/update_feed.py --installers installers --version "$DESKTOP_VERSION" \
+            --asset-base "$ASSET_BASE" --notes notes/desktop-release-notes.md --signed "$SIGNED" \
+            --previous previous-feed/latest-mac.yml --out feed/latest-mac.yml
+          if [ -f feed/latest-mac.yml ]; then gh release upload desktop-feed feed/latest-mac.yml --clobber; fi
