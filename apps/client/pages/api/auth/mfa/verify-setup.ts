@@ -4,6 +4,7 @@ import { mfaService, userService } from '@bike4mind/services';
 import { userRepository, authSessionRepository, passkeyCredentialRepository } from '@bike4mind/database';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { logSecondFactorSignIn, readSignInOrigin } from '@server/auth/signInSecondFactor';
 import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import * as z from 'zod';
@@ -30,6 +31,10 @@ const handler = baseApi()
 
       if (!user) {
         return res.status(401).json({ error: 'User not found' });
+      }
+
+      if (readSignInOrigin(req.user)?.createdVia === 'emergency') {
+        return res.status(403).json({ error: 'Authenticator enrollment is not available during emergency sign-in.' });
       }
 
       // Get fresh user data (incl. select:false MFA secrets) to verify setup + check lockout
@@ -69,13 +74,18 @@ const handler = baseApi()
           db: { users: userRepository, authSessions: authSessionRepository },
           logger: req.logger,
         });
+        // Enrollment that finishes a sign-in (enforceMFA) is that sign-in's session, so it keeps
+        // the first-factor origin exactly as completeMfaLogin does. Enrolling from an existing
+        // session carries no origin, and there the session is the enrollment itself.
+        const signInOrigin = readSignInOrigin(req.user);
         const { accessToken } = await issueBrowserSession(req, res, result.user.id, {
-          createdVia: 'mfa-setup',
+          createdVia: signInOrigin?.createdVia ?? 'mfa-setup',
           tokenVersion: newTokenVersion,
         });
         const tokens = { accessToken };
 
         await logAuthAudit(req, { userId: result.user.id, event: 'mfa_enrolled' });
+        if (signInOrigin) await logSecondFactorSignIn(req, result.user.id, signInOrigin);
 
         setupBody = {
           success: result.success,

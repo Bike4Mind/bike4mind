@@ -54,4 +54,5 @@ reconcile_expiry "$PUBLISHED_ARTIFACTS_BUCKET" drafts/ 7
 reconcile_expiry "$HISTORY_IMPORT_BUCKET" '' 7
 reconcile_expiry "$FAB_FILE_BUCKET" exports/ 1
 reconcile_expiry "$FAB_FILE_BUCKET" generated-audio-offload/ 1
+reconcile_expiry "$FAB_FILE_BUCKET" text-edit-backups/ 30
 printf 'initialized\n' | mc pipe "local/$APP_FILES_BUCKET/.initialized-$INITIALIZATION_REVISION"

@@ -39,6 +39,7 @@ vi.mock('@googleapis/drive', () => ({
   drive: vi.fn(),
 }));
 
+import { User } from '@bike4mind/database';
 import { BadRequestError } from '@server/utils/errors';
 import { getValidConnectionDriveAccessToken, getValidUserDriveAccessToken } from './common';
 
@@ -54,6 +55,7 @@ const liveUserGrant = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(User.updateOne).mockResolvedValue({} as never);
 });
 
 describe('getValidConnectionDriveAccessToken', () => {
@@ -95,6 +97,31 @@ describe('getValidConnectionDriveAccessToken', () => {
     );
 
     await expect(getValidConnectionDriveAccessToken('conn1', personalOwner)).rejects.toThrow(/revoked/);
+    expect(h.updateHealth).toHaveBeenCalledWith('conn1', {
+      status: 'credential_error',
+      lastError: 'Google Drive access was revoked - reconnect required',
+    });
+  });
+
+  it('forwards forceRefresh to the user-grant path, bypassing the cached token', async () => {
+    h.findByIdWithCredentials.mockResolvedValue({ id: 'conn1', connectedBy: 'user-1' });
+    h.userFindById.mockResolvedValue(liveUserGrant);
+    h.refreshAccessToken.mockResolvedValue({ credentials: { access_token: 'fresh-access' } });
+
+    await expect(getValidConnectionDriveAccessToken('conn1', personalOwner, { forceRefresh: true })).resolves.toBe(
+      'fresh-access'
+    );
+    expect(h.refreshAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks credential_error when a forced refresh finds the grant revoked despite an unexpired cache', async () => {
+    h.findByIdWithCredentials.mockResolvedValue({ id: 'conn1', connectedBy: 'user-1' });
+    h.userFindById.mockResolvedValue(liveUserGrant);
+    h.refreshAccessToken.mockRejectedValue(new Error('invalid_grant'));
+
+    await expect(getValidConnectionDriveAccessToken('conn1', personalOwner, { forceRefresh: true })).rejects.toThrow(
+      /revoked/
+    );
     expect(h.updateHealth).toHaveBeenCalledWith('conn1', {
       status: 'credential_error',
       lastError: 'Google Drive access was revoked - reconnect required',
@@ -168,6 +195,26 @@ describe('getValidUserDriveAccessToken', () => {
     expect(failure).toHaveProperty('message', 'Google Drive access was revoked - reconnect required');
   });
 
+  it('expires the cached access token on a revoked grant so the browser stops being handed it', async () => {
+    h.userFindById.mockResolvedValue(expiredGrant);
+    h.refreshAccessToken.mockRejectedValue(new Error('invalid_grant'));
+
+    await expect(getValidUserDriveAccessToken('user-1')).rejects.toBeInstanceOf(BadRequestError);
+    expect(User.updateOne).toHaveBeenCalledWith({ _id: 'user-1' }, { 'googleDrive.expiresAt': new Date(0) });
+  });
+
+  it('still throws the reconnect 400 when expiring the cached token fails', async () => {
+    h.userFindById.mockResolvedValue(expiredGrant);
+    h.refreshAccessToken.mockRejectedValue(new Error('invalid_grant'));
+    vi.mocked(User.updateOne).mockRejectedValueOnce(new Error('write failed'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const failure = await getValidUserDriveAccessToken('user-1').catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(BadRequestError);
+    expect(failure).toHaveProperty('message', 'Google Drive access was revoked - reconnect required');
+    warn.mockRestore();
+  });
+
   it('rethrows a transient refresh failure untouched', async () => {
     h.userFindById.mockResolvedValue(expiredGrant);
     const blip = Object.assign(new Error('Backend Error'), {
@@ -176,5 +223,23 @@ describe('getValidUserDriveAccessToken', () => {
     h.refreshAccessToken.mockRejectedValue(blip);
 
     await expect(getValidUserDriveAccessToken('user-1')).rejects.toBe(blip);
+    expect(User.updateOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('getValidUserDriveAccessToken forceRefresh', () => {
+  it('returns the unexpired cached token by default', async () => {
+    h.userFindById.mockResolvedValue(liveUserGrant);
+
+    await expect(getValidUserDriveAccessToken('user-1')).resolves.toBe('user-access');
+    expect(h.refreshAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('bypasses an unexpired cached token and refreshes when forceRefresh is true', async () => {
+    h.userFindById.mockResolvedValue(liveUserGrant);
+    h.refreshAccessToken.mockResolvedValue({ credentials: { access_token: 'fresh-access' } });
+
+    await expect(getValidUserDriveAccessToken('user-1', { forceRefresh: true })).resolves.toBe('fresh-access');
+    expect(h.refreshAccessToken).toHaveBeenCalledTimes(1);
   });
 });

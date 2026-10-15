@@ -37,6 +37,7 @@ import {
   filterKnownTools,
   questReplyText,
   toToolPayloads,
+  type ChatToolMode,
   type SimplifiedChatRequest,
 } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
@@ -344,7 +345,7 @@ function buildToolMeta({
   autoSelectedTools,
   unrecognizedTools,
 }: {
-  toolMode: 'fast' | 'smart' | undefined;
+  toolMode: ChatToolMode | undefined;
   effectiveTools: B4MLLMTools[] | undefined;
   autoSelectedTools: B4MLLMTools[];
   unrecognizedTools: string[];
@@ -479,6 +480,7 @@ function transformToInternalFormat(
     fabFileIds: [], // Empty by default, clients can use the full API for fab files
     messageFileIds: request.fileIds,
     organizationId, // Include for team-wide system prompts
+    toolMode: request.toolMode,
     params: {
       model: request.model,
       // Any of max_tokens / maxTokens / maxOutputTokens expresses the caller's budget.

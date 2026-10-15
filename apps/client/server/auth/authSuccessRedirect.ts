@@ -13,3 +13,23 @@
 export function authSuccessRedirectQuery(redirectTo: string | null | undefined): string {
   return redirectTo ? `?redirectTo=${encodeURIComponent(redirectTo)}` : '';
 }
+
+/**
+ * Fragment handing an SSO sign-in that still owes a second factor to `/auth/success`, which
+ * opens the MFA challenge (or enrollment) with the mfaPending token instead of a session.
+ * Deliberately not `token=`: a client that predates this must never mistake it for a session.
+ * Must stay in sync with parseHashParams in app/utils/authParams.ts.
+ */
+export function mfaHandoffFragment({
+  mfaToken,
+  userId,
+  mode,
+  passkeyAvailable,
+}: {
+  mfaToken: string;
+  userId: string;
+  mode: 'verify' | 'setup';
+  passkeyAvailable: boolean;
+}): string {
+  return `#mfaToken=${mfaToken}&userId=${userId}&mfa=${mode}${passkeyAvailable ? '&passkey=1' : ''}`;
+}

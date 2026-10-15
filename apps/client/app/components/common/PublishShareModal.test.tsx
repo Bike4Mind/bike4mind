@@ -255,9 +255,9 @@ describe('PublishShareModal — Team (organization) visibility option', () => {
     expect(radio('organization')).toBeNull();
   });
 
-  it('offers Team but not Private in the shared phase after an org-tier publish', async () => {
-    // org-tier record: 'private' is not a valid override (SCOPE_POLICY), so it must not be a
-    // dead-end option; Team/Public are the valid live changes.
+  it('offers Public, Team and Private in the shared phase after an org-tier publish', async () => {
+    // org-tier record: Private is valid at every tier (SCOPE_POLICY), so the owner can take a
+    // Team page back to owner-only from here.
     const publish = vi.fn().mockResolvedValue(publishResult);
     render(
       <Wrapper>
@@ -278,7 +278,7 @@ describe('PublishShareModal — Team (organization) visibility option', () => {
     await screen.findByTestId('publish-share-url');
     expect(radio('public')).not.toBeNull();
     expect(radio('organization')).not.toBeNull();
-    expect(radio('private')).toBeNull();
+    expect(radio('private')).not.toBeNull();
   });
 });
 
@@ -733,5 +733,210 @@ describe('PublishShareModal - plain-language copy', () => {
     expect(document.body.textContent).not.toContain('List in search engines');
     // The gate options name the same secret the passphrase option asks for.
     expect(document.body.textContent).not.toContain('passcode');
+  });
+});
+
+describe('PublishShareModal - reopening an already-published reply', () => {
+  const live: PublishResult = {
+    publicId: 'live-1',
+    url: '/p/r/live-1',
+    tier: 'user',
+    scopeId: 'u1',
+    slug: 'r-live-1',
+    visibility: 'public',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
+
+  const renderReopened = (resolvePublished: () => Promise<PublishResult | null>) => {
+    apiGet.mockReset().mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/share-token')
+          ? { data: { shareToken: null } }
+          : {
+              data: {
+                artifact: { visibility: 'public', accessGate: null, commentPolicy: 'none', discoverable: false },
+              },
+            }
+      )
+    );
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    const publish = vi.fn();
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={publish}
+          title="An answer"
+          resolvePublished={resolvePublished}
+        />
+      </Wrapper>
+    );
+    return publish;
+  };
+
+  it('opens on the existing link and its current visibility, not a blank form', async () => {
+    renderReopened(() => Promise.resolve(live));
+    const url = (await screen.findByTestId('publish-share-url')) as HTMLInputElement;
+    expect(url.value).toContain('/p/r/live-1');
+    expect(radio('public')?.checked).toBe(true);
+    expect(screen.getByTestId('publish-share-intro').textContent).not.toContain('Nothing is published');
+  });
+
+  it('choosing Private PATCHes the existing record instead of publishing again', async () => {
+    const publish = renderReopened(() => Promise.resolve(live));
+    await screen.findByTestId('publish-share-url');
+    fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/live-1', { visibility: 'private' })
+    );
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('holds the create button until the lookup settles, then falls back to the publish form', async () => {
+    let settle: (v: PublishResult | null) => void = () => {};
+    renderReopened(() => new Promise(r => (settle = r)));
+    expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(true);
+    settle(null);
+    await waitFor(() => expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByTestId('publish-share-url')).toBeNull();
+  });
+
+  it('reopening seeds every control from the record, not from the lookup row', async () => {
+    renderReopened(() => Promise.resolve({ ...live, visibility: 'public' }));
+    apiGet.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/share-token')
+          ? { data: { shareToken: 'tok-zq9' } }
+          : {
+              data: {
+                artifact: {
+                  visibility: 'private',
+                  accessGate: { kind: 'domain', allowedDomains: ['example.com'] },
+                  commentPolicy: 'open',
+                  discoverable: true,
+                },
+              },
+            }
+      )
+    );
+    await screen.findByTestId('publish-share-url');
+    await waitFor(() => expect(radio('private')?.checked).toBe(true));
+    expect(radio('public')?.checked).toBe(false);
+    expect((screen.getByTestId('publish-share-comments-toggle') as HTMLInputElement).checked).toBe(true);
+    expect(((await screen.findByTestId('publish-share-token-url')) as HTMLInputElement).value).toContain('/a/tok-zq9');
+    // The gate control only renders while public; switching there shows the seeded gate.
+    fireEvent.click(screen.getByTestId('publish-share-visibility-public'));
+    const domains = (await screen.findByTestId('publish-share-gate-domains')) as HTMLInputElement;
+    expect(domains.value).toBe('example.com');
+  });
+
+  it('reopening seeds the search-listing switch from the record when it is public and ungated', async () => {
+    renderReopened(() => Promise.resolve({ ...live, visibility: 'private' }));
+    apiGet.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/share-token')
+          ? { data: { shareToken: null } }
+          : {
+              data: {
+                artifact: { visibility: 'public', accessGate: null, commentPolicy: 'none', discoverable: true },
+              },
+            }
+      )
+    );
+    await screen.findByTestId('publish-share-url');
+    await waitFor(() => expect(radio('public')?.checked).toBe(true));
+    expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('reopening still shows the link and lookup visibility when the record read fails', async () => {
+    renderReopened(() => Promise.resolve({ ...live, visibility: 'private' }));
+    apiGet.mockImplementation((url: string) =>
+      url.endsWith('/share-token') ? Promise.resolve({ data: { shareToken: null } }) : Promise.reject(new Error('boom'))
+    );
+    const url = (await screen.findByTestId('publish-share-url')) as HTMLInputElement;
+    expect(url.value).toContain('/p/r/live-1');
+    await waitFor(() => expect(radio('private')?.checked).toBe(true));
+  });
+
+  it('reopening falls back to the publish form when the lookup rejects', async () => {
+    renderReopened(() => Promise.reject(new Error('x')));
+    await waitFor(() => expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByTestId('publish-share-url')).toBeNull();
+    expect(screen.queryByText(/Checking/)).toBeNull();
+  });
+
+  it('a reopened Team page shows Team as selected even outside a team context', async () => {
+    renderReopened(() =>
+      Promise.resolve({ ...live, tier: 'organization', scopeId: 'org1', visibility: 'organization' })
+    );
+    apiGet.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/share-token')
+          ? { data: { shareToken: null } }
+          : {
+              data: {
+                artifact: { visibility: 'organization', accessGate: null, commentPolicy: 'none', discoverable: false },
+              },
+            }
+      )
+    );
+    await screen.findByTestId('publish-share-url');
+    await waitFor(() => expect(radio('organization')?.checked).toBe(true));
+    expect(radio('public')?.checked).toBe(false);
+    expect(radio('private')?.checked).toBe(false);
+  });
+
+  it('a reopened Team page can be taken to Private on the same record', async () => {
+    const publish = renderReopened(() =>
+      Promise.resolve({ ...live, tier: 'organization', scopeId: 'org1', visibility: 'organization' })
+    );
+    apiGet.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('/share-token')
+          ? { data: { shareToken: null } }
+          : {
+              data: {
+                artifact: { visibility: 'organization', accessGate: null, commentPolicy: 'none', discoverable: false },
+              },
+            }
+      )
+    );
+    await screen.findByTestId('publish-share-url');
+    await waitFor(() => expect(radio('organization')?.checked).toBe(true));
+    fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/live-1', { visibility: 'private' })
+    );
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('closing mid-lookup does not hold the create button on the next open without a lookup', async () => {
+    const publish = vi.fn();
+    const { rerender } = render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={publish}
+          title="An answer"
+          resolvePublished={() => new Promise<PublishResult | null>(() => {})}
+        />
+      </Wrapper>
+    );
+    expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(true);
+    rerender(
+      <Wrapper>
+        <PublishShareModal open={false} onClose={() => {}} publish={publish} title="An answer" />
+      </Wrapper>
+    );
+    rerender(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={publish} title="An artifact" />
+      </Wrapper>
+    );
+    await waitFor(() => expect((screen.getByTestId('publish-share-create') as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.getByTestId('publish-share-intro').textContent).not.toContain('Checking');
   });
 });

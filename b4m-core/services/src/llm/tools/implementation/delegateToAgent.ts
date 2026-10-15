@@ -4,7 +4,11 @@ import type { Logger } from '@bike4mind/observability';
 import type { ThoroughnessLevel } from '@bike4mind/agents';
 import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import { ServerSubagentOrchestrator } from '../../agents/ServerSubagentOrchestrator';
-import type { ServerSubagentTracker, SubagentHandoffSignal } from '../../agents/ServerSubagentOrchestrator';
+import type {
+  ServerSubagentTracker,
+  SubagentHandoffSignal,
+  SubagentToolPermissions,
+} from '../../agents/ServerSubagentOrchestrator';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
 
 /**
@@ -136,6 +140,12 @@ export interface DelegateToAgentToolDeps {
    * delegation depth, not just the first.
    */
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
+  /**
+   * The parent run's tool-permission lists; forwarded to the orchestrator, see
+   * `ServerOrchestratorDeps.toolPermissions`. Spread into the nested grandchild tool
+   * (`...deps`) so the child gate holds at every delegation depth.
+   */
+  toolPermissions?: SubagentToolPermissions;
 }
 
 /**
@@ -265,6 +275,7 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
         depth: childDepth,
         optInTools: deps.optInTools,
         checkMemberCreditCap: deps.checkMemberCreditCap,
+        toolPermissions: deps.toolPermissions,
       });
 
       // Background mode: dispatch + return a structured payload immediately. The LLM

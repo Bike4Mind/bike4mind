@@ -421,6 +421,50 @@ describe.each(SPECS)('$name token accumulation', spec => {
   });
 });
 
+// Adapters that report per-request usage (CompletionInfo.turnUsage). Gemini and xAI are covered below.
+describe.each([anthropicSpec, openaiSpec])('$name per-request usage', spec => {
+  it('reports one turnUsage entry per round-trip, summing to the aggregates', async () => {
+    const { backend, setMockSequence } = spec.build();
+    setMockSequence([
+      spec.turnWithToolCall('add', 'tool_t1', { a: 1, b: 1 }, { input: 80, output: 15 }),
+      spec.turnWithToolCall('add', 'tool_t2', { a: 2, b: 2 }, { input: 150, output: 18 }),
+      spec.turnWithText('Done.', { input: 220, output: 8 }),
+    ]);
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      spec.model,
+      [{ role: 'user', content: 'Run two adds.' }],
+      { stream: true, tools: [ADD_TOOL], executeTools: true },
+      cb
+    );
+
+    const lastCb = finalCbInfo(calls);
+    expect(lastCb!.turnUsage).toEqual([
+      { inputTokens: 80, outputTokens: 15 },
+      { inputTokens: 150, outputTokens: 18 },
+      { inputTokens: 220, outputTokens: 8 },
+    ]);
+    expect(lastCb!.inputTokens).toBe(450);
+    expect(lastCb!.outputTokens).toBe(41);
+  });
+
+  it('reports the call as a turn when tool calls are passed through (executeTools: false)', async () => {
+    const { backend, setMockSequence } = spec.build();
+    setMockSequence([spec.turnWithToolCall('add', 'tool_t1', { a: 1, b: 1 }, { input: 80, output: 15 })]);
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      spec.model,
+      [{ role: 'user', content: 'Add.' }],
+      { stream: true, tools: [ADD_TOOL], executeTools: false },
+      cb
+    );
+
+    expect(finalCbInfo(calls)!.turnUsage).toEqual([{ inputTokens: 80, outputTokens: 15 }]);
+  });
+});
+
 // --- Per-request usage: Gemini and xAI ---
 //
 // Both report cache-INCLUSIVE prompt counts. Each provider request must land as its own turnUsage

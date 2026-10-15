@@ -43,6 +43,9 @@ vi.mock('@bike4mind/services', () => ({
   userService: { revokeUserSessions: vi.fn(() => Promise.resolve()) },
 }));
 
+const mockReadEnforceMfa = vi.fn(() => Promise.resolve(false));
+vi.mock('@server/auth/signInSecondFactor', () => ({ readEnforceMfa: () => mockReadEnforceMfa() }));
+
 vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
   redactUserSecretsForSelf: (user: unknown) => user,

@@ -171,6 +171,33 @@ describe('getTurnsCost', () => {
     expect(String(errorSpy.mock.calls[0][0])).toContain('[UNPRICED_MODEL]');
     errorSpy.mockRestore();
   });
+
+  it('alarms once when a single turn prices at $0 inside an otherwise priced chain', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const zeroUpperTier = {
+      ...baseModel,
+      pricing: {
+        200_000: { input: perM(2), output: perM(12) },
+        1_048_576: { input: 0, output: 0 },
+      },
+    } as ModelInfo;
+    const short = { inputTokens: 1_000, outputTokens: 100 };
+    const long = { inputTokens: 250_000, outputTokens: 100 };
+    expect(getTurnsCost(zeroUpperTier, [short, long])).toBeCloseTo(getTurnsCost(zeroUpperTier, [short]), 12);
+    errorSpy.mockClear();
+    getTurnsCost(zeroUpperTier, [short, long]);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(String(errorSpy.mock.calls[0][0])).toContain('[UNPRICED_MODEL]');
+    errorSpy.mockRestore();
+  });
+
+  it('alarms once, not per turn, for a chain on an unpriced model', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const turn = { inputTokens: 100, outputTokens: 10 };
+    getTurnsCost({ ...baseModel, pricing: {} }, [turn, turn, turn]);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    errorSpy.mockRestore();
+  });
 });
 
 describe('getTextModelCost tierBasisTokens', () => {

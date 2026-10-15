@@ -16,7 +16,7 @@ import { type MigrationFile } from './index';
  * This migration only counts and logs; it does not decide anything, because "re-point",
  * "delete", or "notify the affected owner" all depend on the actual row and cannot be chosen
  * generically. The migration runner (see updateDatabase in
- * apps/client/server/utils/manageDatabase.ts) runs on every deploy, so this migration itself
+ * apps/workers/src/database/manageDatabase.ts) runs on every deploy, so this migration itself
  * runs once, on the first deploy after merge, and its output lands in that deploy's logs.
  *
  * Idempotent: a second run finds the same rows (nothing here is mutated) and logs the same count.

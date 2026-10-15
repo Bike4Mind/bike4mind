@@ -9,7 +9,13 @@ import {
   PublishTagsSchema,
   normalizePublishTags,
 } from '@bike4mind/common';
-import { resolveVisibility, invalidatePublishCdn, toCacheTarget, validateEmbedOrigins } from '@server/services/publish';
+import {
+  resolveVisibility,
+  invalidatePublishCdn,
+  restrictDuplicatePublications,
+  toCacheTarget,
+  validateEmbedOrigins,
+} from '@server/services/publish';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 /**
@@ -264,9 +270,15 @@ const handler = baseApi()
     // embed allowlist changed while still open-public - the served frame-ancestors
     // CSP header is part of the cached bytes; (c) discoverability changed - the robots
     // header and <meta> are cached too, and an owner turning discovery OFF must not
-    // keep serving an indexable copy for up to an hour. Fire-and-forget, best-effort.
+    // keep serving an indexable copy for up to an hour. Best-effort; awaited because a Lambda can
+    // freeze before a dangling promise sends, and this is the revoke the owner is waiting on.
     if ((wasOpenPublic && !isOpenPublicNow) || (isOpenPublicNow && (embedOriginsChanged || discoverableChanged))) {
-      void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
+      await invalidatePublishCdn(toCacheTarget(artifact), req.logger);
+    }
+    // A reply/file published before one-record-per-owner+source may have an older copy still
+    // serving; a downgrade here must reach it too (restrictDuplicatePublications only narrows).
+    if (parsed.data.visibility !== undefined) {
+      await restrictDuplicatePublications(artifact, req.logger);
     }
     const json = artifact.toJSON() as Record<string, unknown> & {
       accessGate?: { passphraseHash?: string | null } | null;
