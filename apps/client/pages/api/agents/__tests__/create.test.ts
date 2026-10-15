@@ -105,6 +105,28 @@ describe('POST /api/agents - credit allocation', () => {
     expect(h.addCredits).not.toHaveBeenCalled();
   });
 
+  it('fails with 400 and does not credit the agent when the user debit finds no user', async () => {
+    h.subtractCredits.mockResolvedValue(null);
+    const { run, json, status } = post({ name: 'Agent', useOwnCredits: true, currentCredits: 30 });
+
+    await run();
+
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({ error: 'User not found' });
+    expect(h.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('fails the create when crediting the agent finds no agent', async () => {
+    h.subtractCredits.mockResolvedValue({ id: 'user-1', currentCredits: 70 });
+    h.addCredits.mockResolvedValue(null);
+    const { run, json, status } = post({ name: 'Agent', useOwnCredits: true, currentCredits: 30 });
+
+    await run();
+
+    expect(status).toHaveBeenCalledWith(500);
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ details: 'Failed to fund agent credits' }));
+  });
+
   it.each([-5, 'abc', Number.NaN])('rejects a funded create with currentCredits %s', async currentCredits => {
     const { run, json, status } = post({ name: 'Agent', useOwnCredits: true, currentCredits });
 
