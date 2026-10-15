@@ -660,11 +660,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     throw error;
   }
 
-  // A Stop or degeneration abort ends a Claude stream before message_delta, the only event carrying
-  // output tokens, yet the provider bills what streamed. The adapters estimate it on call 2+ only
-  // (see anthropicBackend's withAbortedOutputEstimate), so a first call arrives here with 0 output.
-  // Requiring a reported prompt keeps this to that signature: an adapter that reports no usage at
-  // all on an abort is a different gap, left as it was.
+  // Any adapter reporting a prompt but 0 output on a Stop or degenerate abort lands here (today only
+  // Claude, which sends output tokens on message_delta alone); call 2+ is estimated in the adapter.
+  // The char sum counts think markup. Zero usage on an abort is a different gap, left as it was.
   if (
     finalOutputTokens === 0 &&
     finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens > 0 &&
