@@ -76,6 +76,19 @@ describe('withRepoScope', () => {
         `Repository "${BLOCKED.fullName}" is not in the repositories selected`
       );
     });
+
+    it.each([{}, { owner: 'acme' }, { owner: 1, repo: 'x' }])(
+      'refuses %j, which has no usable owner and repo to check',
+      async args => {
+        const { handler, inner } = registerThroughGuard('get_repository', resolversReturning(null));
+
+        const result = await handler(args);
+
+        expect(inner).not.toHaveBeenCalled();
+        expect(result.isError).toBe(true);
+        expect(parseResponse(result).error).toContain('Both owner and repo are required');
+      }
+    );
   });
 
   describe('node-ID addressed tools', () => {
@@ -177,6 +190,28 @@ describe('the real tool registrations', () => {
     const registered = registerAllTools();
 
     expect([...registered.keys()].sort()).toEqual([...ALL_TOOL_NAMES].sort());
+  });
+
+  it('pairs each tool policy with the arguments that tool actually declares', () => {
+    const { server } = createMockServer();
+    registerGitHubTools(server, resolversReturning(BLOCKED));
+
+    const argsByTool = new Map(
+      vi
+        .mocked(server.tool)
+        .mock.calls.map(call => [call[0] as string, call[call.length - 2] as Record<string, unknown>])
+    );
+
+    for (const name of ALL_TOOL_NAMES) {
+      const policy = TOOL_REPO_POLICIES[name];
+      const args = Object.keys(argsByTool.get(name) ?? {});
+
+      if (policy.kind === 'owner-repo') {
+        expect(args, `${name} addresses a repository`).toEqual(expect.arrayContaining(['owner', 'repo']));
+      } else if (policy.kind === 'node-id') {
+        expect(args, `${name} resolves its node from ${policy.param}`).toContain(policy.param);
+      }
+    }
   });
 
   it('refuses a confirmed create_issue in an unselected repository before calling GitHub', async () => {
