@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 
-from desktop_release_version import bump_level, relevant, release_notes, select_version
+from desktop_release_version import bump_level, release_notes, select_version
 
 
 class DesktopVersionTest(unittest.TestCase):
@@ -132,11 +132,6 @@ class DesktopVersionTest(unittest.TestCase):
                                ('fix: change\n\nBREAKING-CHANGE: new format', 3)]:
             with self.subTest(message=message):
                 self.assertEqual(bump_level(message), level)
-
-    def test_relevant_paths(self):
-        self.assertTrue(relevant('b4m-core/common/src/index.ts'))
-        self.assertTrue(relevant('pnpm-lock.yaml'))
-        self.assertFalse(relevant('apps/client/page.tsx'))
 
     def test_release_notes_are_scoped_and_explain_bump(self):
         self.commit('feat(web): unrelated', 'apps/client/page.tsx')

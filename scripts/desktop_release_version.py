@@ -1,4 +1,4 @@
-"""Select desktop SemVer from release tags and desktop-relevant first-parent commits."""
+"""Select desktop SemVer from release tags and first-parent commits that affect desktop inputs."""
 
 import json
 import os
@@ -8,15 +8,6 @@ import subprocess
 from desktop_affected import affected, commit_affected
 
 
-PATHS = (
-    'apps/desktop/', 'b4m-core/', 'packages/cli/', 'packages/database/',
-    'packages/sdk/', 'packages/typescript-config/', 'patches/',
-)
-FILES = {
-    'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'turbo.json', '.npmrc',
-    '.github/workflows/desktop-release.yml', 'scripts/desktop_release_version.py',
-    'scripts/test_desktop_release_version.py',
-}
 VERSION = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)')
 
 
@@ -34,10 +25,6 @@ def bump_level(message):
     if match and match[1] in {'docs', 'test', 'ci', 'style'}:
         return 0
     return 1
-
-
-def relevant(path):
-    return path in FILES or path.startswith(PATHS)
 
 
 def release_notes(version, previous, repository):
