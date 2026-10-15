@@ -60,10 +60,13 @@ import { useQueryClient } from '@tanstack/react-query';
 // Pagination constants
 const FILES_PER_PAGE = 20;
 
-// Desktop toolbar widths (px) at which its rows merge. With Research shown, tabs + actions need ~770 and
-// tabs + filters + actions ~1260 (the single-row switch keeps some headroom above that).
-const TOOLBAR_TWO_ROW_MIN_WIDTH_PX = 800;
-const TOOLBAR_SINGLE_ROW_MIN_WIDTH_PX = 1280;
+// Desktop toolbar widths (px) at which its rows merge. The widest translated Research label (ru) is 34px
+// wider than the English one, putting tabs + actions at ~804 and tabs + filters + actions at ~1294, so each
+// switch sits above that with roughly 35px and 25px of headroom. Re-measure if the view tabs (fixed at 360px
+// in ViewActions.tsx) or the action labels change: a label that outgrows the headroom spills across the row
+// instead of wrapping.
+const TOOLBAR_TWO_ROW_MIN_WIDTH_PX = 840;
+const TOOLBAR_SINGLE_ROW_MIN_WIDTH_PX = 1320;
 
 const FileBrowserContent = () => {
   const { t } = useTranslation();
