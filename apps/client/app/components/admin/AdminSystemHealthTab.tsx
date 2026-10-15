@@ -98,7 +98,6 @@ interface CircuitBreakerStatus {
   mode: CircuitBreakerMode;
   autoTripped: boolean;
   noData?: boolean;
-  allConfigMissing?: boolean;
 }
 
 interface IntegrationHealthSummary {
@@ -1182,16 +1181,7 @@ const AdminSystemHealthTab = () => {
                               )}
                               {integration.circuitBreaker.mode === 'auto' &&
                                 !integration.circuitBreaker.autoTripped &&
-                                integration.circuitBreaker.noData &&
-                                integration.circuitBreaker.allConfigMissing && (
-                                  <Chip size="sm" color="neutral" variant="outlined">
-                                    N/A (not connected)
-                                  </Chip>
-                                )}
-                              {integration.circuitBreaker.mode === 'auto' &&
-                                !integration.circuitBreaker.autoTripped &&
-                                integration.circuitBreaker.noData &&
-                                !integration.circuitBreaker.allConfigMissing && (
+                                integration.circuitBreaker.noData && (
                                   <Chip size="sm" color="neutral" variant="outlined">
                                     OK (no data)
                                   </Chip>
@@ -1247,6 +1237,7 @@ const AdminSystemHealthTab = () => {
                                   onClick={() => handleCircuitBreakerOverride(integration.integration, 'auto')}
                                   loading={overridingIntegration === integration.integration}
                                   disabled={overridingIntegration !== null}
+                                  title="Also resets the real-time Read/Write breakers for all users"
                                   data-testid={`circuit-breaker-reset-${integration.integration}-btn`}
                                 >
                                   Reset to Auto
@@ -1272,8 +1263,12 @@ const AdminSystemHealthTab = () => {
                             sx={{ flexWrap: 'wrap' }}
                             data-testid={`realtime-breaker-${integration.integration}`}
                           >
-                            <Typography level="body-xs" color="neutral">
-                              Real-time:
+                            <Typography
+                              level="body-xs"
+                              color="neutral"
+                              title="Worst state across users: OPEN means open for at least one user"
+                            >
+                              Real-time (worst across users):
                             </Typography>
                             {readSnapshot &&
                               (() => {

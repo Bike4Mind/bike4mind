@@ -27,6 +27,8 @@ vi.mock('@server/utils/cloudwatch', () => ({
   recordRateLimitEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
+import { rateLimitSnapshotRepository } from '@bike4mind/database';
+import { recordRateLimitEvent } from '@server/utils/cloudwatch';
 import { persistRateLimitEvents, throttleIfNearRateLimit } from './mcpRateLimitSnapshots';
 
 const TENANT_A = 'tenant-a';
@@ -82,6 +84,26 @@ describe('mcpRateLimitSnapshots', () => {
     );
 
     expect(persisted).toBe(1);
+  });
+
+  it('leaves an event uncounted when its snapshot write fails and still persists the next one', async () => {
+    vi.mocked(rateLimitSnapshotRepository.create).mockRejectedValueOnce(new Error('mongo down'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const persisted = await persistRateLimitEvents([exhaustedGitHubEvent(), exhaustedGitHubEvent()], TENANT_A);
+
+    expect(persisted).toBe(1);
+    expect(snapshots).toHaveLength(1);
+  });
+
+  it('does not change the persisted count when the CloudWatch metric emit fails', async () => {
+    vi.mocked(recordRateLimitEvent).mockRejectedValueOnce(new Error('cloudwatch down'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const persisted = await persistRateLimitEvents([exhaustedGitHubEvent()], TENANT_A);
+
+    expect(persisted).toBe(1);
+    expect(snapshots).toHaveLength(1);
   });
 
   it("throttles the tenant that exhausted its limit and leaves another tenant's calls alone", async () => {

@@ -1,7 +1,7 @@
 /**
  * Tests for integrationCircuitBreaker service
  *
- * Covers: cache behavior, manual override priority, configMissing filtering,
+ * Covers: cache behavior, manual override priority, legacy configMissing filtering,
  * auto-trip logic, MCP server mapping, Atlassian both-down logic, clearCache.
  */
 

@@ -5,7 +5,7 @@
  * per-tenant isolation and LRU bounding, getAllBreakerStates, resetBreaker.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 // Mock CloudWatch to avoid real AWS calls
 vi.mock('@server/utils/cloudwatch', () => ({
@@ -234,12 +234,79 @@ describe('mcpCircuitBreakers', () => {
   });
 
   describe('getAllBreakerStates across tenants', () => {
-    it("reports the worst tenant's state under the server:op key", async () => {
-      getBreaker(TENANT_B, 'agg-worst', 'read');
-      await tripBreaker(getBreaker(TENANT_A, 'agg-worst', 'read'));
+    type Condition = 'closed' | 'closed-1-failure' | 'closed-3-failures' | 'half-open' | 'open';
 
-      expect(getAllBreakerStates()['agg-worst:read'].state).toBe('OPEN');
+    const PAST_RESET_TIMEOUT_MS = 61_000; // read breakers go HALF_OPEN after 60s
+    let serverCounter = 0;
+
+    afterEach(() => {
+      vi.useRealTimers();
     });
+
+    async function fail(breaker: CircuitBreaker, times: number): Promise<void> {
+      for (let i = 0; i < times; i++) {
+        await breaker.execute(() => Promise.reject(new Error('ECONNRESET'))).catch(() => undefined);
+      }
+    }
+
+    async function bringTo(breaker: CircuitBreaker, condition: Condition): Promise<void> {
+      if (condition === 'closed-1-failure') await fail(breaker, 1);
+      if (condition === 'closed-3-failures') await fail(breaker, 3);
+      if (condition === 'open') await tripBreaker(breaker);
+      if (condition === 'half-open') {
+        await tripBreaker(breaker);
+        vi.setSystemTime(Date.now() + PAST_RESET_TIMEOUT_MS);
+      }
+    }
+
+    /**
+     * Brings both tenants to the given conditions, then touches the breakers so the registry
+     * iterates `last` after the other one: the aggregate must not depend on that order.
+     */
+    async function aggregate(first: Condition, second: Condition, last: 'first' | 'second') {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const server = `agg-${serverCounter++}`;
+      const firstBreaker = getBreaker(TENANT_A, server, 'read');
+      const secondBreaker = getBreaker(TENANT_B, server, 'read');
+
+      // HALF_OPEN goes first: advancing the clock would otherwise also age an OPEN breaker.
+      const setups = [
+        { breaker: firstBreaker, condition: first },
+        { breaker: secondBreaker, condition: second },
+      ].sort((left, right) => Number(right.condition === 'half-open') - Number(left.condition === 'half-open'));
+      for (const { breaker, condition } of setups) await bringTo(breaker, condition);
+
+      const touchOrder = last === 'first' ? [TENANT_B, TENANT_A] : [TENANT_A, TENANT_B];
+      for (const tenant of touchOrder) getBreaker(tenant, server, 'read');
+
+      return getAllBreakerStates()[`${server}:read`];
+    }
+
+    const cases: ReadonlyArray<{ worse: Condition; weaker: Condition; state: string; failureCount: number }> = [
+      { worse: 'open', weaker: 'closed', state: 'OPEN', failureCount: 5 },
+      { worse: 'open', weaker: 'half-open', state: 'OPEN', failureCount: 5 },
+      { worse: 'half-open', weaker: 'closed', state: 'HALF_OPEN', failureCount: 5 },
+      { worse: 'closed-3-failures', weaker: 'closed-1-failure', state: 'CLOSED', failureCount: 3 },
+      { worse: 'closed-1-failure', weaker: 'closed', state: 'CLOSED', failureCount: 1 },
+    ];
+
+    it.each(
+      cases.flatMap(testCase => [
+        { ...testCase, worseIs: 'first' as const },
+        { ...testCase, worseIs: 'second' as const },
+      ])
+    )(
+      'reports $worse over $weaker with the worse tenant $worseIs, in either iteration order',
+      async ({ worse, weaker, worseIs, state, failureCount }) => {
+        const [first, second] = worseIs === 'first' ? [worse, weaker] : [weaker, worse];
+
+        for (const last of ['first', 'second'] as const) {
+          const snapshot = await aggregate(first, second, last);
+          expect(snapshot.state).toBe(state);
+          expect(snapshot.failureCount).toBe(failureCount);
+        }
+      }
+    );
   });
 
   describe('resetBreaker across tenants', () => {

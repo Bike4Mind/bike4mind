@@ -48,7 +48,8 @@ const PROBE_TIMEOUT_MS = 10_000;
  * tenant's problem, and treating it as an outage would block the integration for every tenant.
  * Per-tenant failures are tracked by the per-tenant breakers in mcpCircuitBreakers instead, which
  * probe results never feed. Any HTTP response below 500 - including 401/403/404/429 for the
- * missing credential - proves the provider is reachable.
+ * missing credential - proves the provider is reachable. The one exception is Slack's `ok` body,
+ * which is only checked on a 2xx.
  */
 type ProbeTarget = {
   url: string;
@@ -60,6 +61,8 @@ type ProbeTarget = {
 const PROBE_TARGETS: Record<IntegrationName, ProbeTarget> = {
   slack: { url: 'https://slack.com/api/api.test', method: 'POST', requiresOkBody: true },
   github: { url: 'https://api.github.com/', method: 'GET' },
+  // The Atlassian gateway answers 404 itself, so these detect gateway reachability, not Jira/Confluence
+  // backend health: a product outage behind the gateway still reads healthy.
   jira: { url: 'https://api.atlassian.com/ex/jira', method: 'GET' },
   confluence: { url: 'https://api.atlassian.com/ex/confluence', method: 'GET' },
 };
@@ -91,7 +94,7 @@ async function probeReachability(integration: IntegrationName): Promise<ProbeRes
       };
     }
 
-    if (requiresOkBody) {
+    if (requiresOkBody && response.ok) {
       const body = (await response.json()) as { ok?: boolean; error?: string };
       if (!body.ok) {
         return {

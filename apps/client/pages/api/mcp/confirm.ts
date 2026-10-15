@@ -264,6 +264,7 @@ const handler = baseApi().post(async (req, res) => {
       toolArgs: { ...toolParams, _executeFromButton: true },
       action: 'callTool',
       selectedRepositories,
+      userId: user.id,
     });
 
     let resultData: any = result;

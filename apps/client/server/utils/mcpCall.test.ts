@@ -53,6 +53,21 @@ describe('mcpCall rate-limit ingest', () => {
     expect(postedBody()).toEqual({ events: [JSON.parse(h.rateLimitLine)], tenantKey: 'user-1' });
   });
 
+  it('hands the events back on the result when the ingest route rejects them (old route during a deploy)', async () => {
+    h.fetch.mockResolvedValue(new Response('tenantKey unexpected', { status: 400 }));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler({
+      name: 'github',
+      action: 'callTool',
+      toolName: 'get_issue',
+      userId: 'user-1',
+      envVariables: [],
+    });
+
+    expect(result).toEqual({ content: [], _rateLimitEvents: [JSON.parse(h.rateLimitLine)] });
+  });
+
   it('posts events from a call with no user under the unattributed tenant', async () => {
     await handler({ name: 'github', action: 'callTool', toolName: 'get_issue', envVariables: [] });
 

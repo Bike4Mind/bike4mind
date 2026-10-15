@@ -52,7 +52,23 @@ async function extractAndPersistRateLimitEvents(
   await persistRateLimitEvents(events, tenantKey);
 }
 
-export async function invokeMcpHandler<T = unknown>(payload: Parameters<typeof localMcpHandler>[0]): Promise<T> {
+/**
+ * `userId` is required so a caller cannot drop out of the per-tenant throttle and breaker by
+ * omission. Pass `null` only for a call that genuinely has no user; it then runs unthrottled and
+ * outside any shared breaker (see UNATTRIBUTED_MCP_TENANT).
+ */
+export type InvokeMcpHandlerPayload = {
+  action: string;
+  name: string;
+  userId: string | null;
+  toolName?: string;
+  toolArgs?: unknown;
+  id?: string;
+  envVariables?: unknown[];
+  selectedRepositories?: string[];
+};
+
+export async function invokeMcpHandler<T = unknown>(payload: InvokeMcpHandlerPayload): Promise<T> {
   // Circuit breaker: short-circuit if the integration is known to be unhealthy
   if (payload?.name) {
     const { available, reason } = await isMcpServerAvailable(payload.name);
@@ -80,7 +96,7 @@ export async function invokeMcpHandler<T = unknown>(payload: Parameters<typeof l
         integrationName: name as IntegrationAuditIntegrationName,
         action: `mcp_callTool_${toolName || 'unknown'}`,
         requestId: randomUUID().split('-')[0],
-        userId,
+        userId: userId ?? undefined,
         metadata: { mcpServerId, toolName },
       });
     }

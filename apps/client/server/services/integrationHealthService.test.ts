@@ -83,6 +83,40 @@ describe('integrationHealthService probes', () => {
     expect(check).toMatchObject({ integration: 'slack', status: 'unhealthy', error: 'service_unavailable' });
   });
 
+  it('treats a Slack 429 as reachable even when its body is ok: false', async () => {
+    h.fetch.mockResolvedValue(new Response(JSON.stringify({ ok: false, error: 'ratelimited' }), { status: 429 }));
+
+    expect(await runProbe('slack')).toMatchObject({
+      integration: 'slack',
+      status: 'healthy',
+      statusCode: 429,
+      error: null,
+    });
+  });
+
+  it('aborts a hung probe after 10s and records it unhealthy with no status code', async () => {
+    vi.useFakeTimers();
+    try {
+      h.fetch.mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () =>
+              reject(new DOMException('The operation was aborted', 'AbortError'))
+            );
+          })
+      );
+
+      const pending = runProbe('github');
+      await vi.advanceTimersByTimeAsync(10_000);
+      const check = await pending;
+
+      expect(check).toMatchObject({ integration: 'github', status: 'unhealthy', statusCode: null });
+      expect(h.recordCheck).toHaveBeenCalledWith(expect.objectContaining({ status: 'unhealthy', statusCode: null }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('marks Slack healthy when api.test answers ok: true', async () => {
     h.fetch.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
 

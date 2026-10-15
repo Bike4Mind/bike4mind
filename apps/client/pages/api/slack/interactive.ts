@@ -1440,6 +1440,7 @@ async function handleAttachmentDownload(
       toolName,
       toolArgs: { attachmentId },
       action: 'callTool',
+      userId: dbUser.id,
     });
 
     // Parse result
@@ -1785,6 +1786,7 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
       toolName,
       toolArgs: { attachmentId, confirmed: true, _executeFromButton: true },
       action: 'callTool',
+      userId: dbUser.id,
     });
 
     // For Confluence: clean up page content to remove macros referencing the deleted attachment
