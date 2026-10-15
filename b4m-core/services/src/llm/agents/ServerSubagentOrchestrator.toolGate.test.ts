@@ -82,8 +82,13 @@ function makeTool(name: string): ICompletionOptionTools {
   };
 }
 
-async function runGated(name: string, approvedTools: string[], deniedTools: string[]): Promise<string> {
-  const [tool] = gateSubagentTools([makeTool(name)], { approvedTools, deniedTools }, makeLogger());
+async function runGated(
+  name: string,
+  approvedTools: string[],
+  deniedTools: string[],
+  claimedServers: string[] = []
+): Promise<string> {
+  const [tool] = gateSubagentTools([makeTool(name)], { approvedTools, deniedTools }, makeLogger(), claimedServers);
   return tool.toolFn({});
 }
 
@@ -119,13 +124,26 @@ describe('gateSubagentTools', () => {
   });
 
   it('runs a confirming MCP server tool the parent never approved, since its writes only preview', async () => {
-    expect(await runGated('github__list_issues', [], [])).toBe('github__list_issues ok');
-    expect(await runGated('atlassian__jira_create_issue', [], [])).toBe('atlassian__jira_create_issue ok');
+    const claimed = ['github', 'atlassian'];
+    expect(await runGated('github__list_issues', [], [], claimed)).toBe('github__list_issues ok');
+    expect(await runGated('atlassian__jira_create_issue', [], [], claimed)).toBe('atlassian__jira_create_issue ok');
     expect(ran).toEqual(['github__list_issues', 'atlassian__jira_create_issue']);
   });
 
+  it('refuses a confirming MCP server tool when the agent does not claim that server', async () => {
+    expect(await runGated('github__list_issues', [], [])).toMatch(/needs the user's approval/);
+    expect(await runGated('atlassian__jira_create_issue', [], [], ['github'])).toMatch(/needs the user's approval/);
+    expect(ran).toEqual([]);
+  });
+
+  it('runs a confirming server tool for an agent that claims only that server', async () => {
+    expect(await runGated('github__list_issues', [], [], ['github'])).toBe('github__list_issues ok');
+  });
+
   it('still refuses a confirming MCP server tool the user denied', async () => {
-    expect(await runGated('github__create_issue', [], ['github__create_issue'])).toMatch(/the user denied it/);
+    expect(await runGated('github__create_issue', [], ['github__create_issue'], ['github'])).toMatch(
+      /the user denied it/
+    );
     expect(ran).toEqual([]);
   });
 

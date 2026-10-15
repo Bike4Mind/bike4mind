@@ -36,10 +36,17 @@ const CONFIRMABLE_TOOLS_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = ne
 
 const MCP_NAMESPACE_SEPARATOR = '__';
 
+/** The confirming server a namespaced `server__tool` id belongs to, or undefined for any other tool. */
+export function confirmingServerOf(toolName: string): string | undefined {
+  const separatorIndex = toolName.indexOf(MCP_NAMESPACE_SEPARATOR);
+  if (separatorIndex <= 0) return undefined;
+  const server = toolName.slice(0, separatorIndex);
+  return CONFIRMABLE_TOOLS_BY_SERVER.has(server) ? server : undefined;
+}
+
 /** True for a namespaced `server__tool` id from a confirming server. */
 export function isConfirmingMcpTool(toolName: string): boolean {
-  const separatorIndex = toolName.indexOf(MCP_NAMESPACE_SEPARATOR);
-  return separatorIndex > 0 && CONFIRMABLE_TOOLS_BY_SERVER.has(toolName.slice(0, separatorIndex));
+  return confirmingServerOf(toolName) !== undefined;
 }
 
 const CONFIRM_NEXT_STEP = 'Click the Confirm or Cancel button below to proceed.';
