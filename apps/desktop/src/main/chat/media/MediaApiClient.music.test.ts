@@ -1,6 +1,7 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { AxiosError, AxiosHeaders } from 'axios';
 import { describe, expect, it, vi } from 'vitest';
-import { MediaApiClient } from './MediaApiClient';
+import { MediaApiClient, type MediaToolError } from './MediaApiClient';
 
 const model = {
   id: 'lyria-3.5',
@@ -72,5 +73,22 @@ describe('music job client', () => {
   it('rejects a response that does not parse as a music job', async () => {
     const get = vi.fn().mockResolvedValue({ id: 'x' });
     await expect(clientWith({ get }).getMusicGeneration('x')).rejects.toThrow();
+  });
+
+  it('keeps the status and the Retry-After a rate-limited read came back with', async () => {
+    const response = {
+      status: 429,
+      data: { error: 'Rate limit exceeded. Try again in 45 seconds.' },
+      statusText: '',
+      headers: new AxiosHeaders({ 'retry-after': '45' }),
+      config: { headers: new AxiosHeaders() },
+    };
+    const get = vi.fn().mockRejectedValue(new AxiosError('rejected', '429', undefined, undefined, response));
+    const error = (await clientWith({ get })
+      .getMusicGeneration('x')
+      .catch((e: unknown) => e)) as MediaToolError;
+
+    expect(error.status).toBe(429);
+    expect(error.retryAfterMs).toBe(45_000);
   });
 });

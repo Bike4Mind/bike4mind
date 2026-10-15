@@ -76,17 +76,30 @@ export async function generateSoundEffect(request: SoundEffectsRequest, deps: Au
   return storeAudio(await deps.client.generateSoundEffect(request), request.text, deps);
 }
 
-/** How often a running music job is re-read. */
-export const MUSIC_POLL_INTERVAL_MS = 3000;
+/**
+ * The gap a running music job is re-read at, and the one it grows from.
+ *
+ * The read is rate limited per user (as low as 10 a minute, and shared with any web tab the user
+ * has open), so the first read waits and each later one spreads further apart rather than hammering
+ * the window the user's own tab is also spending from.
+ */
+export const MUSIC_POLL_INTERVAL_MS = 10_000;
 
 /** Longest a tool call waits on one song; a slower job keeps rendering and still lands in Files. */
 export const MUSIC_DEADLINE_MS = 10 * 60 * 1000;
 
+/** How much longer each read waits while the job is still running. */
+const MUSIC_POLL_BACKOFF = 1.5;
+
+/** Where the growing gap stops: while the job renders, and while its finished file is being scanned. */
+const MUSIC_MAX_POLL_INTERVAL_MS = 30_000;
+const MUSIC_SCAN_POLL_INTERVAL_MS = 5 * 60_000;
+
 /** Consecutive failed job reads that end the wait; one blip must not lose a song already paid for. */
 export const MUSIC_MAX_POLL_FAILURES = 3;
 
-/** How long a rate-limited read waits before the next one. */
-export const MUSIC_RATE_LIMIT_BACKOFF_MS = 15_000;
+/** How long a rate-limited read waits when the server sends no Retry-After of its own. */
+export const MUSIC_RATE_LIMIT_BACKOFF_MS = 60_000;
 
 export interface MusicJobRequest {
   /** A model id from the server's music-model list. */
@@ -225,9 +238,16 @@ async function pollUntilSettled(
     try {
       job = await deps.client.getMusicGeneration(job.id, signal);
       consecutiveFailures = 0;
-      waitMs = MUSIC_POLL_INTERVAL_MS;
+      waitMs = nextWaitMs(job, waitMs);
     } catch (error) {
       if (signal?.aborted) throw new MediaToolError(STOPPED_MESSAGE);
+      if ((error as { status?: number }).status === 429) {
+        // A rate-limited read is this app spending its own read budget too fast, not the job
+        // failing. The song is already billed and still rendering, so wait out the window the
+        // server names (Retry-After) instead of counting it toward giving up.
+        waitMs = (error as { retryAfterMs?: number }).retryAfterMs ?? MUSIC_RATE_LIMIT_BACKOFF_MS;
+        continue;
+      }
       consecutiveFailures += 1;
       if (consecutiveFailures >= MUSIC_MAX_POLL_FAILURES) {
         throw new MediaToolError(
@@ -235,9 +255,15 @@ async function pollUntilSettled(
             `The job (${created.id}) keeps running there, so the song may still land in Files.`
         );
       }
-      waitMs = (error as { status?: number }).status === 429 ? MUSIC_RATE_LIMIT_BACKOFF_MS : MUSIC_POLL_INTERVAL_MS;
+      waitMs = Math.min(Math.round(waitMs * MUSIC_POLL_BACKOFF), MUSIC_MAX_POLL_INTERVAL_MS);
     }
   }
+}
+
+/** The next gap: longer each read while the job runs, and much longer once its finished file is being scanned. */
+function nextWaitMs(job: MusicGeneration, previousMs: number): number {
+  const cap = isScanning(job) ? MUSIC_SCAN_POLL_INTERVAL_MS : MUSIC_MAX_POLL_INTERVAL_MS;
+  return Math.min(Math.round(previousMs * MUSIC_POLL_BACKOFF), cap);
 }
 
 async function cancelQuietly(jobId: string, deps: AudioDeps): Promise<void> {

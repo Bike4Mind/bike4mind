@@ -31,6 +31,8 @@ import { parseMusicModels } from './musicModels';
 export class MediaToolError extends Error {
   /** The HTTP status behind it, when there was one; the video poller backs off differently per status. */
   status?: number;
+  /** How long the server asked this caller to wait, in ms, when a 429 carried a Retry-After. */
+  retryAfterMs?: number;
 
   constructor(
     message: string,
@@ -415,6 +417,18 @@ function decodeArrayBufferErrorBody(error: unknown): unknown {
   return error;
 }
 
+/**
+ * Retry-After as milliseconds, the way RFC 9110 allows it: delta-seconds or an HTTP-date. The rate
+ * limiter sends whole seconds; the date form is accepted so a proxy's rewrite is still honoured.
+ */
+function parseRetryAfterMs(value: unknown): number | undefined {
+  if (typeof value !== 'string' || value.trim() === '') return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now());
+}
+
 /** The error body these routes share; every field is optional because 5xx bodies carry none. */
 interface ApiErrorBody {
   error?: string;
@@ -438,6 +452,8 @@ export function toMediaError(error: unknown, action: string): MediaToolError {
   if (isAxiosError(error)) {
     const mapped = fromAxiosError(error, action);
     mapped.status = error.response?.status;
+    const retryAfterMs = parseRetryAfterMs(error.response?.headers['retry-after']);
+    if (retryAfterMs !== undefined) mapped.retryAfterMs = retryAfterMs;
     return mapped;
   }
 

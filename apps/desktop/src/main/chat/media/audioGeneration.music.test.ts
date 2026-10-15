@@ -173,6 +173,28 @@ describe('generateMusic', () => {
     expect(t.sleep.mock.calls.map(call => call[0])).toEqual([MUSIC_POLL_INTERVAL_MS, MUSIC_RATE_LIMIT_BACKOFF_MS]);
   });
 
+  it('waits out a rate-limited read for as long as the server asked', async () => {
+    const t = setup([]);
+    const limited = Object.assign(new MediaToolError('slow down'), { status: 429, retryAfterMs: 45_000 });
+    t.client.getMusicGeneration.mockRejectedValueOnce(limited).mockResolvedValueOnce(succeeded(output()));
+    await generateMusic(request, t.deps, t.options);
+    expect(t.sleep.mock.calls.map(call => call[0])).toEqual([MUSIC_POLL_INTERVAL_MS, 45_000]);
+  });
+
+  it('does not give up on a song while the reads keep getting rate limited', async () => {
+    const t = setup([]);
+    const limited = Object.assign(new MediaToolError('slow down'), { status: 429 });
+    // One past the failure cap: a 429 is this app's own read budget, not the job failing, so the
+    // song that is already billed has to survive more of them than a network error would.
+    for (let i = 0; i <= MUSIC_MAX_POLL_FAILURES; i += 1) {
+      t.client.getMusicGeneration.mockRejectedValueOnce(limited);
+    }
+    t.client.getMusicGeneration.mockResolvedValueOnce(succeeded(output()));
+    await generateMusic(request, t.deps, t.options);
+    expect(t.client.getMusicGeneration).toHaveBeenCalledTimes(MUSIC_MAX_POLL_FAILURES + 2);
+    expect(t.save).toHaveBeenCalledOnce();
+  });
+
   it('cancels the job when stopped after it exists', async () => {
     const controller = new AbortController();
     const t = setup([]);
