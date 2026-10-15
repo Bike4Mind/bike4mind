@@ -789,7 +789,7 @@ describe('planCatalogWrites', () => {
       expect(result.dropped).toEqual([]);
     });
 
-    it('lets an aggregator set a new future date once the held one has passed', () => {
+    it('keeps a held date that has passed when an aggregator reports a later one', () => {
       const result = plan({
         base: held({ status: 'active', deprecationDate: '2026-07-01' }),
         priorDiscoveryGroups,
@@ -797,8 +797,14 @@ describe('planCatalogWrites', () => {
         contributions: [{ name: 'openai', kind: 'provider', records: [gpt6()] }, litellmDate],
       });
 
-      expect(result.rows).toHaveLength(1);
-      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'active', deprecationDate: FUTURE });
+      // Dates only move earlier below operator: a later date would un-hide the model.
+      expect(result.rows).toEqual([]);
+      expect(result.dropped).toContainEqual(
+        expect.objectContaining({
+          modelId: 'gpt-6',
+          reason: `lifecycle deprecationDate "${FUTURE}" is later than the "2026-07-01" in force; kept "2026-07-01"`,
+        })
+      );
     });
 
     it('keeps the date of a model held in a sunset status', () => {

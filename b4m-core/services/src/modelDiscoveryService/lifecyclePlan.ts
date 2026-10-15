@@ -131,7 +131,7 @@ export function planLifecycleSignals({ contributions, droppedDocsSources }: Life
       if (
         contribution.kind === 'provider' &&
         lifecycle.status !== undefined &&
-        !SUNSET_STATUSES.has(lifecycle.status) &&
+        !LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status) &&
         lifecycle.deprecationDate === undefined &&
         !providerUndated.has(record.modelId)
       ) {

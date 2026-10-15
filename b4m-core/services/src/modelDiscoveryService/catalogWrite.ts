@@ -758,7 +758,7 @@ function dropsFutureDeprecation(
   // isModelDeprecated hides a model from the day its date arrives, so a date of today has passed.
   const today = input.runStartedAt.toISOString().slice(0, 10);
   if (typeof date !== 'string' || date <= today) return false;
-  if (typeof status !== 'string' || SUNSET_STATUSES.has(status)) return false;
+  if (typeof status !== 'string' || LIFECYCLE_SUNSET_STATUSES.has(status)) return false;
 
   const held = isPlainObject(base.lifecycle) ? base.lifecycle : {};
   const heldDate = typeof held.deprecationDate === 'string' ? held.deprecationDate : undefined;
