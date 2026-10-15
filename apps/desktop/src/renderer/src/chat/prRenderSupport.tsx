@@ -2,6 +2,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import type { PrBarState, PrDisplayState, PrState, PrSummary } from '@shared/pullRequest';
+import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { PrStatusBar } from './PrStatusBar';
 import { SessionList } from './SessionList';
 
@@ -92,6 +93,8 @@ export function renderSidebar(
         onTogglePin={() => {}}
         onToggleArchived={() => {}}
         onRename={() => {}}
+        userSections={EMPTY_SIDEBAR_SECTIONS}
+        sectionActions={{ create: () => {}, rename: () => {}, remove: () => {}, move: () => {} }}
       />
     </CssVarsProvider>
   );

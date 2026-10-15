@@ -135,3 +135,57 @@ describe('archived sessions', () => {
     expect(orderedSessions(sections).map(entry => entry.id)).toEqual(['live']);
   });
 });
+
+describe('user sections', () => {
+  const userSections = {
+    sections: [
+      { id: 'work', name: 'Work' },
+      { id: 'home', name: 'Home' },
+    ],
+    assignments: { filed: 'work', 'pinned-filed': 'work', 'archived-filed': 'work', 'stale-filed': 'gone' },
+  };
+
+  it('moves a filed session out of its project group and into its section', () => {
+    const sections = groupSessions(
+      [
+        session({ id: 'filed', mode: 'code', project: project('/r/one', 'one') }),
+        session({ id: 'unfiled', mode: 'code', project: project('/r/one', 'one') }),
+      ],
+      'code',
+      userSections
+    );
+
+    expect(sections.custom.map(group => [group.section.name, group.sessions.map(entry => entry.id)])).toEqual([
+      ['Work', ['filed']],
+      ['Home', []],
+    ]);
+    expect(sections.projects.flatMap(group => group.sessions).map(entry => entry.id)).toEqual(['unfiled']);
+  });
+
+  it('lets pinning and archiving outrank a section, and ignores a section that is gone', () => {
+    const sections = groupSessions(
+      [
+        session({ id: 'pinned-filed', pinned: true }),
+        session({ id: 'archived-filed', archived: true }),
+        session({ id: 'stale-filed' }),
+      ],
+      'chat',
+      userSections
+    );
+
+    expect(sections.pinned.map(entry => entry.id)).toEqual(['pinned-filed']);
+    expect(sections.archived.map(entry => entry.id)).toEqual(['archived-filed']);
+    expect(sections.loose.map(entry => entry.id)).toEqual(['stale-filed']);
+    expect(sections.custom.every(group => group.sessions.length === 0)).toBe(true);
+  });
+
+  it('counts section rows in the quick-switch order right after the pinned ones', () => {
+    const sections = groupSessions(
+      [session({ id: 'loose' }), session({ id: 'filed' }), session({ id: 'pin', pinned: true })],
+      'chat',
+      userSections
+    );
+
+    expect(orderedSessions(sections).map(entry => entry.id)).toEqual(['pin', 'filed', 'loose']);
+  });
+});

@@ -44,6 +44,7 @@ import type {
 } from './chat';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
+import type { SidebarSectionsState } from './sidebarSections';
 import type { SkillsState } from './skills';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
@@ -245,6 +246,12 @@ export const IPC_CHANNELS = {
   prGetSummaries: 'pr:get-summaries',
   /** main -> renderer push; one conversation's sidebar PR icon changed. */
   prSummaryChanged: 'pr:summary-changed',
+  /** The user's sidebar sections. Every change answers with the whole state. */
+  sidebarGetSections: 'sidebar:get-sections',
+  sidebarCreateSection: 'sidebar:create-section',
+  sidebarRenameSection: 'sidebar:rename-section',
+  sidebarDeleteSection: 'sidebar:delete-section',
+  sidebarMoveSession: 'sidebar:move-session',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -671,6 +678,17 @@ export interface DesktopApi {
     reconnectServer(id: string): Promise<McpServersState>;
     /** Subscribe to connection-state pushes; returns the unsubscribe. */
     onChanged(listener: (state: McpServersState) => void): () => void;
+  };
+  /** User-made sidebar sections; see @shared/sidebarSections. */
+  sidebar: {
+    getSections(): Promise<SidebarSectionsState>;
+    /** Makes a section and, when given a session, moves it in. A blank name changes nothing. */
+    createSection(name: string, sessionId?: string): Promise<SidebarSectionsState>;
+    renameSection(sectionId: string, name: string): Promise<SidebarSectionsState>;
+    /** Deletes the section only; its sessions go back to the default groups. */
+    deleteSection(sectionId: string): Promise<SidebarSectionsState>;
+    /** Null takes the session out of its section. */
+    moveSession(sessionId: string, sectionId: string | null): Promise<SidebarSectionsState>;
   };
   tools: {
     getAccess(): Promise<ToolAccessState>;

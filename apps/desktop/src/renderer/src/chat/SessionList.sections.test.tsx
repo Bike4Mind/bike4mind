@@ -1,0 +1,356 @@
+// @vitest-environment jsdom
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { CssVarsProvider } from '@mui/joy/styles';
+import type { ChatSessionSummary } from '@shared/chat';
+import { normalizeSectionName, type SidebarSectionsState } from '@shared/sidebarSections';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { desktopTheme } from '../theme';
+import { SessionList } from './SessionList';
+import { useSidebarSections } from './useSidebarSections';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+vi.mock('./SessionBadge', () => ({ SessionBadge: () => null }));
+
+window.matchMedia ??= ((query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addListener: () => {},
+  removeListener: () => {},
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  dispatchEvent: () => false,
+})) as typeof window.matchMedia;
+
+window.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver;
+
+const summary = (id: string, title: string, extra: Partial<ChatSessionSummary> = {}) =>
+  ({
+    id,
+    title,
+    mode: 'chat',
+    messageCount: 1,
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+    ...extra,
+  }) as ChatSessionSummary;
+
+/** Stands in for main's SidebarSectionStore: same answers, kept in memory. */
+function fakeSidebarBridge(initial: SidebarSectionsState) {
+  let state = initial;
+  let nextId = 0;
+  const answer = (next: SidebarSectionsState) => {
+    state = next;
+    return Promise.resolve(state);
+  };
+  return {
+    getSections: vi.fn(() => Promise.resolve(state)),
+    createSection: vi.fn((name: string, sessionId?: string) => {
+      const id = `new-${++nextId}`;
+      return answer({
+        sections: [...state.sections, { id, name: normalizeSectionName(name) }],
+        assignments: sessionId ? { ...state.assignments, [sessionId]: id } : state.assignments,
+      });
+    }),
+    renameSection: vi.fn((sectionId: string, name: string) =>
+      answer({
+        ...state,
+        sections: state.sections.map(section => (section.id === sectionId ? { ...section, name } : section)),
+      })
+    ),
+    deleteSection: vi.fn((sectionId: string) =>
+      answer({
+        sections: state.sections.filter(section => section.id !== sectionId),
+        assignments: Object.fromEntries(Object.entries(state.assignments).filter(([, id]) => id !== sectionId)),
+      })
+    ),
+    moveSession: vi.fn((sessionId: string, sectionId: string | null) => {
+      const { [sessionId]: _previous, ...rest } = state.assignments;
+      return answer({ ...state, assignments: sectionId ? { ...rest, [sessionId]: sectionId } : rest });
+    }),
+  };
+}
+
+let root: Root | null = null;
+let host: HTMLElement | null = null;
+let bridge = fakeSidebarBridge({ sections: [], assignments: {} });
+let onCreate = vi.fn<() => void>();
+let onDelete = vi.fn<(id: string) => void>();
+
+function Harness({ sessions }: { sessions: ChatSessionSummary[] }) {
+  const { sections, actions } = useSidebarSections();
+  return (
+    <SessionList
+      sessions={sessions}
+      mode="chat"
+      onModeChange={() => {}}
+      loading={false}
+      activeId={null}
+      statuses={new Map()}
+      prSummaries={new Map()}
+      collapsed={false}
+      onToggleCollapsed={() => {}}
+      onSelect={() => {}}
+      onCreate={onCreate}
+      onOpenArtifacts={() => {}}
+      onCreateInProject={() => {}}
+      onDelete={onDelete}
+      onTogglePin={() => {}}
+      onToggleArchived={() => {}}
+      onRename={() => {}}
+      userSections={sections}
+      sectionActions={actions}
+    />
+  );
+}
+
+async function mount(
+  sessions: ChatSessionSummary[],
+  initial: SidebarSectionsState = { sections: [], assignments: {} }
+) {
+  bridge = fakeSidebarBridge(initial);
+  (window as unknown as { b4m: unknown }).b4m = { sidebar: bridge };
+  host = document.createElement('div');
+  document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => {
+    root?.render(
+      <CssVarsProvider theme={desktopTheme}>
+        <Harness sessions={sessions} />
+      </CssVarsProvider>
+    );
+  });
+}
+
+const all = (testId: string, scope: ParentNode = document) =>
+  Array.from(scope.querySelectorAll<HTMLElement>(`[data-testid="${testId}"]`));
+const el = (testId: string, scope: ParentNode = document) => {
+  const found = scope.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+  if (!found) throw new Error(`no ${testId}`);
+  return found;
+};
+const query = (testId: string) => document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+const settle = () => act(async () => undefined);
+const click = async (node: HTMLElement) => {
+  act(() => node.click());
+  await settle();
+};
+
+const sectionNamed = (name: string) => {
+  const section = all('sidebar-section').find(node => el('sidebar-section-name', node).textContent === name);
+  if (!section) throw new Error(`no section ${name}`);
+  return section;
+};
+const titlesIn = (scope: ParentNode) => all('chat-session-title-text', scope).map(node => node.textContent);
+const looseTitles = () =>
+  all('chat-session-title-text')
+    .filter(node => !node.closest('[data-testid="sidebar-section"]'))
+    .map(node => node.textContent);
+
+const rightClick = (node: HTMLElement) =>
+  act(() => {
+    node.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 300 }));
+  });
+
+const openRowMenu = async (title: string) => {
+  const row = all('chat-session-item').find(item => item.textContent === title);
+  await click(el('chat-session-menu-btn', row?.closest('li') ?? document));
+};
+
+const openMoveTo = async (title: string) => {
+  await openRowMenu(title);
+  await click(el('chat-move-session-btn'));
+};
+
+function typeName(text: string) {
+  const input = el('section-name-input') as HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  act(() => {
+    setter?.call(input, text);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+const workAndHome: SidebarSectionsState = {
+  sections: [
+    { id: 'work', name: 'Work' },
+    { id: 'home', name: 'Home' },
+  ],
+  assignments: { a: 'work' },
+};
+
+beforeEach(() => {
+  onCreate = vi.fn();
+  onDelete = vi.fn();
+});
+
+afterEach(() => {
+  act(() => root?.unmount());
+  host?.remove();
+  root = null;
+  host = null;
+});
+
+describe('the sidebar context menu', () => {
+  it('opens on a right-click in empty space with New session and New section', async () => {
+    await mount([summary('a', 'Alpha')]);
+
+    rightClick(el('sidebar-session-scroll'));
+    await settle();
+
+    expect(query('sidebar-context-new-session-btn')).not.toBeNull();
+    expect(query('sidebar-context-new-section-btn')).not.toBeNull();
+    await click(el('sidebar-context-new-session-btn'));
+    expect(onCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a right-click on a session row alone', async () => {
+    await mount([summary('a', 'Alpha')]);
+
+    rightClick(el('chat-session-item'));
+    await settle();
+
+    expect(query('sidebar-context-new-section-btn')).toBeNull();
+  });
+
+  it('creates an empty, named section from New section', async () => {
+    await mount([summary('a', 'Alpha')]);
+
+    rightClick(el('sidebar-session-scroll'));
+    await settle();
+    await click(el('sidebar-context-new-section-btn'));
+    expect((el('section-name-submit-btn') as HTMLButtonElement).disabled).toBe(true);
+    typeName('  Side   projects ');
+    await click(el('section-name-submit-btn'));
+
+    expect(bridge.createSection).toHaveBeenCalledWith('Side projects', undefined);
+    expect(query('section-name-dialog')).toBeNull();
+    const section = sectionNamed('Side projects');
+    expect(query('sidebar-section-empty')).not.toBeNull();
+    expect(titlesIn(section)).toEqual([]);
+    expect(looseTitles()).toEqual(['Alpha']);
+  });
+});
+
+describe('moving a session from its menu', () => {
+  it('lists every section with a check on the current one, and Remove from it', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
+
+    await openMoveTo('Alpha');
+
+    const targets = all('chat-move-to-section-btn');
+    expect(targets.map(node => node.textContent)).toEqual(['Work', 'Home']);
+    // The check is the only glyph a section entry draws.
+    expect(targets.map(node => node.querySelector('svg') !== null)).toEqual([true, false]);
+    expect(el('chat-move-remove-btn').textContent).toBe('Remove from Work');
+  });
+
+  it('offers no Remove for a session in no section', async () => {
+    await mount([summary('b', 'Beta')], workAndHome);
+
+    await openMoveTo('Beta');
+
+    expect(query('chat-move-remove-btn')).toBeNull();
+    expect(query('chat-move-new-section-btn')).not.toBeNull();
+  });
+
+  it('moves the row under the section it was moved to', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
+
+    await openMoveTo('Beta');
+    await click(all('chat-move-to-section-btn').find(node => node.textContent === 'Home') ?? el('missing'));
+
+    expect(bridge.moveSession).toHaveBeenCalledWith('b', 'home');
+    expect(titlesIn(sectionNamed('Home'))).toEqual(['Beta']);
+    expect(looseTitles()).toEqual([]);
+  });
+
+  it('returns the row to the default list on Remove from', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
+
+    await openMoveTo('Alpha');
+    await click(el('chat-move-remove-btn'));
+
+    expect(bridge.moveSession).toHaveBeenCalledWith('a', null);
+    expect(titlesIn(sectionNamed('Work'))).toEqual([]);
+    expect(looseTitles()).toEqual(['Alpha', 'Beta']);
+  });
+
+  it('creates a section with the session already in it from New section', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')]);
+
+    await openMoveTo('Beta');
+    await click(el('chat-move-new-section-btn'));
+    typeName('Later');
+    await click(el('section-name-submit-btn'));
+
+    expect(bridge.createSection).toHaveBeenCalledWith('Later', 'b');
+    expect(titlesIn(sectionNamed('Later'))).toEqual(['Beta']);
+    expect(looseTitles()).toEqual(['Alpha']);
+  });
+
+  it('goes back to the main items, and opens on them again next time', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    await openMoveTo('Alpha');
+    await click(el('chat-move-back-btn'));
+    expect(query('chat-pin-session-btn')).not.toBeNull();
+
+    // Shut while on the Move to items, by the same button that opened it.
+    await click(el('chat-move-session-btn'));
+    expect(query('chat-move-back-btn')).not.toBeNull();
+    await openRowMenu('Alpha');
+    expect(query('chat-move-back-btn')).toBeNull();
+
+    await openRowMenu('Alpha');
+    expect(query('chat-pin-session-btn')).not.toBeNull();
+  });
+});
+
+describe("a section's own menu", () => {
+  it('renames the section', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    await click(el('sidebar-section-menu-btn', sectionNamed('Work')));
+    await click(el('sidebar-section-rename-btn'));
+    expect((el('section-name-input') as HTMLInputElement).value).toBe('Work');
+    // An unchanged name is not a rename.
+    expect((el('section-name-submit-btn') as HTMLButtonElement).disabled).toBe(true);
+    typeName('Day job');
+    await click(el('section-name-submit-btn'));
+
+    expect(bridge.renameSection).toHaveBeenCalledWith('work', 'Day job');
+    expect(titlesIn(sectionNamed('Day job'))).toEqual(['Alpha']);
+  });
+
+  it('deletes the section and puts its sessions back, deleting none of them', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
+
+    await click(el('sidebar-section-menu-btn', sectionNamed('Work')));
+    await click(el('sidebar-section-delete-btn'));
+
+    expect(bridge.deleteSection).toHaveBeenCalledWith('work');
+    expect(all('sidebar-section-name').map(node => node.textContent)).toEqual(['Home']);
+    expect(looseTitles()).toEqual(['Alpha', 'Beta']);
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it('cancels a rename without changing anything', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    await click(el('sidebar-section-menu-btn', sectionNamed('Work')));
+    await click(el('sidebar-section-rename-btn'));
+    typeName('Nope');
+    await click(el('section-name-cancel-btn'));
+
+    expect(bridge.renameSection).not.toHaveBeenCalled();
+    expect(query('section-name-dialog')).toBeNull();
+    expect(sectionNamed('Work')).toBeTruthy();
+  });
+});

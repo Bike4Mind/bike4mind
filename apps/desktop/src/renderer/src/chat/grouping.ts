@@ -1,4 +1,5 @@
 import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import { EMPTY_SIDEBAR_SECTIONS, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 
 export interface ProjectGroup {
   /** The project directory, which is the grouping identity - two projects can share a name. */
@@ -7,8 +8,19 @@ export interface ProjectGroup {
   sessions: ChatSessionSummary[];
 }
 
+/** A section the user made, with the sessions they moved into it. */
+export interface CustomGroup {
+  section: SidebarSection;
+  sessions: ChatSessionSummary[];
+}
+
 export interface SidebarSections {
   pinned: ChatSessionSummary[];
+  /**
+   * Every section the user made, in their order, including the empty ones - an empty section
+   * still has to be on screen to be renamed, deleted, or found again.
+   */
+  custom: CustomGroup[];
   /** Code sessions, one group per project directory. */
   projects: ProjectGroup[];
   /** Chat sessions, which have no project and sit outside the groups. */
@@ -32,8 +44,16 @@ export interface SidebarSections {
  *
  * Group order follows the most recently updated session in each group, so the project being
  * worked on now rises to the top - the same rule the flat list already used for rows.
+ *
+ * A session the user moved into a section sits there and nowhere else. Archiving and pinning
+ * both outrank it, for the same reason archiving outranks pinning: the later, louder action is
+ * the one that has to show.
  */
-export function groupSessions(sessions: readonly ChatSessionSummary[], mode: ChatSessionMode): SidebarSections {
+export function groupSessions(
+  sessions: readonly ChatSessionSummary[],
+  mode: ChatSessionMode,
+  userSections: SidebarSectionsState = EMPTY_SIDEBAR_SECTIONS
+): SidebarSections {
   const inMode = sessions.filter(session => session.mode === mode);
   // Archiving outranks pinning: a pinned session that is then archived has been put away, and
   // leaving it at the top would make archive the one action with no visible effect.
@@ -42,10 +62,18 @@ export function groupSessions(sessions: readonly ChatSessionSummary[], mode: Cha
   const pinned = visible.filter(session => session.pinned);
   const rest = visible.filter(session => !session.pinned);
 
+  const custom = userSections.sections.map(section => ({ section, sessions: [] as ChatSessionSummary[] }));
+  const bySection = new Map(custom.map(group => [group.section.id, group]));
   const byDirectory = new Map<string, ProjectGroup>();
   const loose: ChatSessionSummary[] = [];
 
   for (const session of rest) {
+    const sectionId = userSections.assignments[session.id];
+    const sectionGroup = sectionId === undefined ? undefined : bySection.get(sectionId);
+    if (sectionGroup) {
+      sectionGroup.sessions.push(session);
+      continue;
+    }
     const project = session.project;
     if (!project) {
       loose.push(session);
@@ -56,7 +84,7 @@ export function groupSessions(sessions: readonly ChatSessionSummary[], mode: Cha
     else byDirectory.set(project.directory, { directory: project.directory, name: project.name, sessions: [session] });
   }
 
-  return { pinned, projects: [...byDirectory.values()], loose, archived };
+  return { pinned, custom, projects: [...byDirectory.values()], loose, archived };
 }
 
 /** How many rows the modifier-plus-digit shortcut reaches. */
@@ -71,5 +99,10 @@ export const QUICK_SWITCH_LIMIT = 9;
 export function orderedSessions(sections: SidebarSections): ChatSessionSummary[] {
   // Archived rows are left out: the shortcut counts what the sidebar draws, and those sit
   // behind a disclosure that is shut by default.
-  return [...sections.pinned, ...sections.projects.flatMap(group => group.sessions), ...sections.loose];
+  return [
+    ...sections.pinned,
+    ...sections.custom.flatMap(group => group.sessions),
+    ...sections.projects.flatMap(group => group.sessions),
+    ...sections.loose,
+  ];
 }
