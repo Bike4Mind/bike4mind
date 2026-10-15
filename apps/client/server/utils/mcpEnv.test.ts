@@ -58,4 +58,20 @@ describe('buildMcpEnvVariables', () => {
 
     expect(await buildMcpEnvVariables(server)).toEqual(notionEnv);
   });
+
+  it('drops a malformed saved name that the server could not parse', async () => {
+    const env = await buildMcpEnvVariables(
+      githubServer({ metadata: { selectedRepositories: [repository('acme'), repository('acme/widgets')] } })
+    );
+
+    expect(env).toEqual([TOKEN, { key: 'GITHUB_SELECTED_REPOSITORIES', value: JSON.stringify(['acme/widgets']) }]);
+  });
+
+  it('restricts to nothing when no saved name is usable, rather than leaving every repository open', async () => {
+    const env = await buildMcpEnvVariables(
+      githubServer({ metadata: { selectedRepositories: [repository('acme'), repository('a/b/c')] } })
+    );
+
+    expect(env).toEqual([TOKEN, { key: 'GITHUB_SELECTED_REPOSITORIES', value: '[]' }]);
+  });
 });
