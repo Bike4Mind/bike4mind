@@ -738,6 +738,16 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    */
   incrementCurrentStorage: (userId: string, count: number) => Promise<void>;
   /**
+   * Compare-and-set `currentStorageSize`: writes `next` only while the stored counter still equals
+   * `expected` (a missing counter counts as 0). Returns false when a concurrent charge or refund moved
+   * it, so a recalculated absolute value never overwrites an adjustment it did not see.
+   */
+  setCurrentStorageIfUnchanged: (userId: string, expected: number, next: number) => Promise<boolean>;
+  /** The user's `currentStorageSize` (missing counts as 0), or null when the user does not exist. */
+  findCurrentStorageSize: (userId: string) => Promise<number | null>;
+  /** One keyset page of user ids in `_id` order, starting after `afterId` (null = first page). */
+  listUserIdsAfter: (afterId: string | null, limit: number) => Promise<string[]>;
+  /**
    * Atomically bump the user's tokenVersion - the server-side session kill switch.
    * Every currently-issued access/refresh token for the user carries the old version and
    * is rejected on its next request (per-request check in auth.ts, and at WS connect).

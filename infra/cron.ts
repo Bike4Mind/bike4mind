@@ -754,6 +754,34 @@ const creditPurchaseReconciliationCron = new sst.aws.Cron('creditPurchaseReconci
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Storage Reconciliation -- compares each user's currentStorageSize with the bytes their charged
+// files hold, records drift and alerts over threshold. Dry run unless STORAGE_RECONCILIATION_REPAIR
+// is 'true'; a daily pass resumes across hourly invocations.
+const storageReconciliationCron = new sst.aws.Cron('storageReconciliation', {
+  schedule: 'rate(1 hour)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/storageReconciliation.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      STORAGE_RECONCILIATION_REPAIR: 'false',
+    },
+    logging: {
+      retention: '1 week',
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 /**
  * Drive-as-Lake Re-sync Poll (#1591 E1)
  * Re-enqueues each due Google Drive connection onto the ingest handler, which diffs the folder
@@ -1015,6 +1043,7 @@ export {
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
   creditPurchaseReconciliationCron,
+  storageReconciliationCron,
   driveLakeResyncPollCron,
   githubLakeReconcileCron,
   lakeConnectorOrphanReapCron,

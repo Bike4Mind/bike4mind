@@ -767,6 +767,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap('schedule:infra/cron.ts:spendReconciliation', '90fb2c16ceb5e2102a38e7442ad104309e991a2bddd141b71fd9ea9ae4181d60'),
   gap(
+    'schedule:infra/cron.ts:storageReconciliation',
+    'c97adbcf46b4f8eae3e5c83b438e884a777cf4b2a723d235cefe865c698ae3b0',
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  gap(
     'schedule:infra/cron.ts:SreStaleDispatchCron',
     '8cc9319c75a522cd4adb7040f068c1724a66dbc2b310cec65a047c69bbc5a31e'
   ),
