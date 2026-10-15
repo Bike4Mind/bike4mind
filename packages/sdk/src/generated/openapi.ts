@@ -6709,7 +6709,6 @@ export interface operations {
           'audio/opus': string;
           'audio/L16': string;
           'audio/basic': string;
-          'application/octet-stream': string;
         };
       };
       /** @description Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: "base64"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200. */
@@ -6842,7 +6841,7 @@ export interface operations {
           'application/json': components['schemas']['generateMusicResponse413'];
         };
       };
-      /** @description Request body failed validation, or the caller cannot afford the track - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
+      /** @description Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the track - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -6977,7 +6976,6 @@ export interface operations {
           'audio/opus': string;
           'audio/L16': string;
           'audio/basic': string;
-          'application/octet-stream': string;
         };
       };
       /** @description Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: "base64"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200. */
@@ -7092,7 +7090,7 @@ export interface operations {
           'application/json': components['schemas']['generateSoundEffectResponse413'];
         };
       };
-      /** @description Request body failed validation, or the caller cannot afford the effect - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
+      /** @description Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the effect - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

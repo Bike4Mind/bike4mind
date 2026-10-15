@@ -261,9 +261,9 @@ describe('POST /api/v1/decisions', () => {
     expect(settle).not.toHaveBeenCalled();
   });
 
-  it('refunds once and still surfaces an unexpected error when the refund itself fails', async () => {
+  // A failing refund is absorbed inside reservation.refund() itself (reserveRequestCredits.test.ts).
+  it('refunds once and still surfaces an unexpected error', async () => {
     providerSpy.mockRejectedValueOnce(new Error('adapter bug'));
-    refund.mockRejectedValueOnce(new Error('ledger down'));
     const { status } = await run({ input: 'x' });
     expect(status).toBe(500);
     expect(refund).toHaveBeenCalledTimes(1);

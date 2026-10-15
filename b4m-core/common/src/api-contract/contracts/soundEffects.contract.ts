@@ -42,7 +42,8 @@ export const generateSoundEffectContract = defineEndpoint({
     400: { description: 'The billing user or organization could not be resolved.', schema: ApiErrorSchema },
     422: {
       description:
-        'Request body failed validation, or the caller cannot afford the effect - the latter is tagged ' +
+        'Request body failed validation (including a `format` whose codec the provider cannot produce), or ' +
+        'the caller cannot afford the effect - the latter is tagged ' +
         '`errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted).',
       schema: InsufficientCreditsErrorSchema,
     },
