@@ -44,6 +44,16 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('grep -q \'^Authority=Developer ID Application:\'', WORKFLOW)
         self.assertIn('B4M_UPDATE_FEED_URL: ${{ needs.version.outputs.feed }}', WORKFLOW)
 
+    def test_embedded_blockmap_checks_run_after_linux_packaging(self):
+        build = job('build')
+        self.assertIn('node apps/desktop/scripts/smoke-differential.cjs', build)
+        self.assertIn('distribution.py verify-linux apps/desktop/release', build)
+        self.assertLess(build.index('--linux --publish never'), build.index('distribution.py verify-linux'))
+        reserve = job('publish').split('- name: Reserve protected source version tag', 1)[1].split('- name:', 1)[0]
+        self.assertIn('GH_TOKEN: ${{ steps.release-token.outputs.token }}', reserve)
+        self.assertIn('run: python3 apps/desktop/scripts/reserve-source-tag.py', reserve)
+        self.assertNotIn('2>/dev/null', reserve)
+
     def test_token_guard_fails_closed(self):
         guard = next(line.strip() for line in WORKFLOW.splitlines()
                      if 'if [ -z "$GH_TOKEN" ]; then' in line)
