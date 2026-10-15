@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { Types, isObjectIdOrHexString } from 'mongoose';
 import { isObjectIdShaped } from './objectId';
 
 /**
@@ -36,6 +37,32 @@ describe('isObjectIdShaped', () => {
     ['an object', { $ne: null }],
   ])('rejects %s', (_label, id) => {
     expect(isObjectIdShaped(id)).toBe(false);
+  });
+
+  it('accepts an ObjectId instance', () => {
+    expect(isObjectIdShaped(new Types.ObjectId())).toBe(true);
+  });
+
+  // The helper re-implements Mongoose's predicate to keep mongoose out of the CLI's startup path;
+  // this pins the copy to the original across every class above.
+  it("agrees with Mongoose's isObjectIdOrHexString", () => {
+    const cases: unknown[] = [
+      '68b0f3a2c1d4e5f60718293a',
+      '68B0F3A2C1D4E5F60718293A',
+      'w7154539641',
+      'abcdefghijkl',
+      '',
+      ' 68b0f3a2c1d4e5f60718293a ',
+      12,
+      null,
+      undefined,
+      { $ne: null },
+      { _bsontype: 'Decimal128' },
+      new Types.ObjectId(),
+    ];
+    for (const value of cases) {
+      expect({ value, shaped: isObjectIdShaped(value) }).toEqual({ value, shaped: isObjectIdOrHexString(value) });
+    }
   });
 
   it('rejects an artifact id, which is matched on a string `id` field and never on `_id`', () => {

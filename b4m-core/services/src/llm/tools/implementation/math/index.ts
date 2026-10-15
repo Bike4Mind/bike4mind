@@ -1,11 +1,21 @@
 import { Logger } from '@bike4mind/observability';
 import { ToolDefinition } from '../../base/types';
-import { create, all } from 'mathjs';
+import type { MathJsInstance } from 'mathjs';
 
-const math = create(all, {
-  number: 'BigNumber',
-  precision: 14,
-});
+// Built on first use, not at import: create(all) instantiates the whole mathjs
+// function set (~0.5 s), and this module is loaded by every CLI launch through
+// the tool registry whether or not the math tool ever runs.
+let mathInstance: Promise<MathJsInstance> | null = null;
+
+function loadMath(): Promise<MathJsInstance> {
+  mathInstance ??= import('mathjs').then(({ create, all }) =>
+    create(all, {
+      number: 'BigNumber',
+      precision: 14,
+    })
+  );
+  return mathInstance;
+}
 
 interface MathParams {
   expression: string;
@@ -20,7 +30,7 @@ interface MathParams {
  * significant figures (fixed notation would reinterpret it as decimal places and
  * could round a small result to 0).
  */
-function formatResult(value: unknown, precision?: number): string {
+function formatResult(math: MathJsInstance, value: unknown, precision?: number): string {
   // mathjs result types (BigNumber, etc.) are handled at runtime; cast for the
   // typed signatures.
   const v = value as Parameters<typeof math.format>[0];
@@ -38,6 +48,7 @@ async function evaluateMath(params: MathParams): Promise<string> {
   Logger.globalInstance.log('🔢 Math Tool: Starting evaluation of expression:', params.expression);
 
   try {
+    const math = await loadMath();
     let expression = params.expression.trim();
 
     // Strip block comments /* ... */ and line comments // (not supported by mathjs)
@@ -78,10 +89,10 @@ async function evaluateMath(params: MathParams): Promise<string> {
           return `Matrix result:\n${math.format(lastResult, { precision: params.precision })}`;
         }
 
-        return formatResult(lastResult, params.precision);
+        return formatResult(math, lastResult, params.precision);
       }
 
-      return formatResult(result, params.precision);
+      return formatResult(math, result, params.precision);
     }
 
     // Handle different equation formats that LLMs might generate
@@ -171,7 +182,7 @@ async function evaluateMath(params: MathParams): Promise<string> {
       return `Matrix result:\n${math.format(result, { precision: params.precision })}`;
     }
 
-    const formattedResult = formatResult(result, params.precision);
+    const formattedResult = formatResult(math, result, params.precision);
     Logger.globalInstance.log('🔢 Math Tool: Final formatted result:', formattedResult);
     return formattedResult;
   } catch (error: unknown) {
