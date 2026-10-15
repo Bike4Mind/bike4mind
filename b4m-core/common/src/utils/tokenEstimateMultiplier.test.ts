@@ -93,4 +93,9 @@ describe('estimateStreamedOutputTokens', () => {
     expect(estimateStreamedOutputTokens(-5, 'claude-opus-4-7')).toBe(0);
     expect(estimateStreamedOutputTokens(1, 'claude-opus-4-7')).toBe(1);
   });
+
+  it('is 0 for a non-numeric count and x1 for an unknown model', () => {
+    expect(estimateStreamedOutputTokens(Number.NaN, 'claude-opus-4-7')).toBe(0);
+    expect(estimateStreamedOutputTokens(600, undefined)).toBe(100);
+  });
 });

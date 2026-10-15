@@ -1,5 +1,3 @@
-import { CHARS_PER_TOKEN_SERVE_BOUND } from '../constants/chunking';
-
 /**
  * The local token estimate counts every non-OpenAI model with tiktoken's cl100k_base, because tiktoken
  * has no other vendor's encoding (see TiktokenTokenizer in @bike4mind/utils). Claude's tokenizers spend
@@ -39,15 +37,20 @@ export function tokenEstimateMultiplier(modelId: string | undefined): number {
   return 1;
 }
 
+// Chars per token for the streamed-output estimate. Deliberately its own constant, not the
+// retrieval-side CHARS_PER_TOKEN_SERVE_BOUND: that one tunes chunk size, and retuning it must not
+// silently change what an aborted call bills. The value matches the serve bound today.
+const CHARS_PER_TOKEN_OUTPUT_ESTIMATE = 6;
+
 /**
  * Approximately a lower-bound token count for `chars` characters of streamed model output, for a call
  * whose stream was cut short before the provider reported its output tokens (Anthropic sends them only
- * on the final message_delta). CHARS_PER_TOKEN_SERVE_BOUND is an upper bound on chars per cl100k token
- * and tokenEstimateMultiplier a lower bound on the model's tokens per cl100k token, so for the model's
+ * on the final message_delta). CHARS_PER_TOKEN_OUTPUT_ESTIMATE bounds chars per cl100k token and
+ * tokenEstimateMultiplier a lower bound on the model's tokens per cl100k token, so for the model's
  * own text the product under-bills rather than over-bills. Callers that count wrapper markup in `chars`
  * (the CLI path counts <think> markers and escaped reasoning) can overshoot slightly.
  */
 export function estimateStreamedOutputTokens(chars: number, modelId: string | undefined): number {
   if (!(chars > 0)) return 0;
-  return Math.max(1, Math.floor((chars / CHARS_PER_TOKEN_SERVE_BOUND) * tokenEstimateMultiplier(modelId)));
+  return Math.max(1, Math.floor((chars / CHARS_PER_TOKEN_OUTPUT_ESTIMATE) * tokenEstimateMultiplier(modelId)));
 }
