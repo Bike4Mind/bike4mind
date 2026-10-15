@@ -146,6 +146,10 @@ const handler = baseApi()
     if (!canManage(artifact, req.user)) {
       return res.status(403).json({ error: 'Not authorized to update this artifact' });
     }
+    // Both are rendered into the cached share page (header, <title>, link-preview card, markdown export).
+    const displayChanged =
+      (parsed.data.title !== undefined && parsed.data.title !== artifact.title) ||
+      (parsed.data.description !== undefined && parsed.data.description !== (artifact.description ?? ''));
     if (parsed.data.title !== undefined) artifact.title = parsed.data.title;
     if (parsed.data.description !== undefined) artifact.description = parsed.data.description;
     // Normalize at the write site rather than in the schema: the API conventions forbid a
@@ -265,14 +269,19 @@ const handler = baseApi()
     await artifact.save();
 
     // Any change that alters the CACHED public response must purge the CDN, or the
-    // stale copy keeps serving up to its TTL. Three triggers: (a) leaving open-public
+    // stale copy keeps serving up to its TTL. Four triggers: (a) leaving open-public
     // (downgrade OR newly-gated) removes the page from cache-eligibility; (b) the
     // embed allowlist changed while still open-public - the served frame-ancestors
     // CSP header is part of the cached bytes; (c) discoverability changed - the robots
     // header and <meta> are cached too, and an owner turning discovery OFF must not
-    // keep serving an indexable copy for up to an hour. Best-effort; awaited because a Lambda can
-    // freeze before a dangling promise sends, and this is the revoke the owner is waiting on.
-    if ((wasOpenPublic && !isOpenPublicNow) || (isOpenPublicNow && (embedOriginsChanged || discoverableChanged))) {
+    // keep serving an indexable copy for up to an hour; (d) the title or description
+    // changed, so the page does not show the old ones while the owner's list shows the new.
+    // Best-effort; awaited because a Lambda can freeze before a dangling promise sends,
+    // and this is the revoke the owner is waiting on.
+    if (
+      (wasOpenPublic && !isOpenPublicNow) ||
+      (isOpenPublicNow && (embedOriginsChanged || discoverableChanged || displayChanged))
+    ) {
       await invalidatePublishCdn(toCacheTarget(artifact), req.logger);
     }
     // A reply/file published before one-record-per-owner+source may have an older copy still

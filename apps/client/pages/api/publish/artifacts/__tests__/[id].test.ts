@@ -559,3 +559,52 @@ describe('PATCH /api/publish/artifacts/[id] - a gate needs an ENFORCING surface,
     expect(invalidatePublishCdn).not.toHaveBeenCalled();
   });
 });
+
+describe('PATCH /api/publish/artifacts/[id] - title/description purge the cached share page', () => {
+  function titled(overrides: Record<string, unknown> = {}) {
+    return Object.assign(makeArtifact(), { title: 'Old title', description: 'Old description' }, overrides);
+  }
+
+  async function patchBody(body: Record<string, unknown>, artifact = titled()) {
+    const { invalidatePublishCdn } = await import('@server/services/publish');
+    vi.mocked(invalidatePublishCdn).mockClear();
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = body;
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    return vi.mocked(invalidatePublishCdn);
+  }
+
+  it('purges when the title of an open-public artifact changes', async () => {
+    expect(await patchBody({ title: 'New title' })).toHaveBeenCalledTimes(1);
+  });
+
+  it('purges when the description of an open-public artifact changes', async () => {
+    expect(await patchBody({ description: 'New description' })).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT purge when the title and description are re-sent unchanged', async () => {
+    expect(await patchBody({ title: 'Old title', description: 'Old description' })).not.toHaveBeenCalled();
+  });
+
+  it('does NOT purge when an absent description is sent as empty', async () => {
+    expect(await patchBody({ description: '' }, titled({ description: undefined }))).not.toHaveBeenCalled();
+  });
+
+  it('does NOT purge a tags-only change - tags are not rendered into the share page', async () => {
+    expect(await patchBody({ tags: ['weekly'] })).not.toHaveBeenCalled();
+  });
+
+  it('does NOT purge a renamed private artifact - it was never cached', async () => {
+    expect(await patchBody({ title: 'New title' }, titled({ visibility: 'private' }))).not.toHaveBeenCalled();
+  });
+
+  it('does NOT purge a renamed gated public artifact - it is not cache-eligible', async () => {
+    const gated = titled({ accessGate: { kind: 'passphrase', passphraseHash: 'x' } });
+    expect(await patchBody({ title: 'New title' }, gated)).not.toHaveBeenCalled();
+  });
+});
