@@ -1281,6 +1281,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         this.isInThinkingBlock = false;
         this.reasoningEscaper = createThinkMarkerEscaper();
         this.assistantReasoningBlocks = [];
+        // output_tokens is deliberately omitted: message_start reports only a placeholder for it, and
+        // base.ts's stopped-call estimate keys on a 0 output count to detect that the terminal usage
+        // event never arrived. Forwarding it here would silently disable that estimate; keep in sync
+        // with the guard in base.ts.
         choice = {
           chunkText: '',
           usage: {
