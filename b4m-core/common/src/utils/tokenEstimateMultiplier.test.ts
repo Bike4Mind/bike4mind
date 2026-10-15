@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ChatModels } from '../models';
-import { tokenEstimateMultiplier } from './tokenEstimateMultiplier';
+import { estimateStreamedOutputTokens, tokenEstimateMultiplier } from './tokenEstimateMultiplier';
 
 // Every Claude id in the catalogue, with the factor it must get. The completeness test below fails when a
 // new Claude id lands without a row here, so its bucket is a decision rather than whatever the regex says.
@@ -77,5 +77,25 @@ describe('tokenEstimateMultiplier', () => {
 
   it('does not read a date suffix as a minor version', () => {
     expect(tokenEstimateMultiplier('claude-opus-4-20250514')).toBe(1);
+  });
+});
+
+describe('estimateStreamedOutputTokens', () => {
+  it('scales chars by the serve bound and the model multiplier, rounded down', () => {
+    // 600 chars / 6 chars per token = 100 cl100k tokens; x1.5 for a 4.7+ Claude.
+    expect(estimateStreamedOutputTokens(600, 'claude-opus-4-7')).toBe(150);
+    expect(estimateStreamedOutputTokens(600, 'claude-sonnet-4-5')).toBe(109);
+    expect(estimateStreamedOutputTokens(600, 'gpt-4o')).toBe(100);
+  });
+
+  it('is 0 for no output and at least 1 for any output', () => {
+    expect(estimateStreamedOutputTokens(0, 'claude-opus-4-7')).toBe(0);
+    expect(estimateStreamedOutputTokens(-5, 'claude-opus-4-7')).toBe(0);
+    expect(estimateStreamedOutputTokens(1, 'claude-opus-4-7')).toBe(1);
+  });
+
+  it('is 0 for a non-numeric count and x1 for an unknown model', () => {
+    expect(estimateStreamedOutputTokens(Number.NaN, 'claude-opus-4-7')).toBe(0);
+    expect(estimateStreamedOutputTokens(600, undefined)).toBe(100);
   });
 });
