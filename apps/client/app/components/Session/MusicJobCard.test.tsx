@@ -104,6 +104,12 @@ describe('MusicJobCard states', () => {
     expect(screen.getByTestId('music-job-card-meta')).toHaveTextContent(/^30s$/);
   });
 
+  it('hides a hold left on a terminal job, which was released rather than charged', () => {
+    showJob(musicJob({ state: 'failed', credits: { reserved: 10, settled: null } }));
+    render(card());
+    expect(screen.getByTestId('music-job-card-meta')).toHaveTextContent(/^30s$/);
+  });
+
   it('shows Finishing while a succeeded frame has no output yet', () => {
     showJob(succeeded(null));
     render(card());
@@ -143,6 +149,15 @@ describe('MusicJobCard player', () => {
     expect(player).toHaveAttribute('data-mime-type', 'audio/mpeg');
     expect(player).toHaveAttribute('data-src', 'https://files.example/song-1.mp3?sig=a');
     expect(player).toHaveAttribute('data-expires-at', '2026-10-07T00:15:00.000Z');
+    expect(screen.getByTestId('music-job-card-player')).toContainElement(player);
+  });
+
+  it('plays a song whose signed url has lapsed through the file, which re-signs itself', () => {
+    showJob(succeeded(musicOutput({ url: null, expires_at: null })));
+    render(card());
+    const player = screen.getByTestId('media-player-stub');
+    expect(player).toHaveAttribute('data-file-id', 'file-1');
+    expect(player).not.toHaveAttribute('data-src');
     expect(screen.getByTestId('music-job-card-player')).toContainElement(player);
   });
 
