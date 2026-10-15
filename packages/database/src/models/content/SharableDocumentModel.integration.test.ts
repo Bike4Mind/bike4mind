@@ -202,6 +202,18 @@ describe('ShareableDocumentRepository.findShareAccessById (sessions)', () => {
   const seedSession = (overrides: Record<string, unknown> = {}) =>
     Session.create({ name: 'n', userId: 'owner-1', lastUpdated: new Date(), firstCreated: new Date(), ...overrides });
 
+  it('grants the owner', async () => {
+    const doc = await seedSession();
+    const got = await sessionRepository.shareable.findShareAccessById({ id: 'owner-1', groups: [] }, doc.id);
+    expect(got?.id).toBe(doc.id);
+  });
+
+  it('grants a member of a group with a share grant', async () => {
+    const doc = await seedSession({ groups: [{ groupId: 'grp-1', permissions: ['read', 'share'] }] });
+    const got = await sessionRepository.shareable.findShareAccessById({ id: 'someone', groups: ['grp-1'] }, doc.id);
+    expect(got?.id).toBe(doc.id);
+  });
+
   it('grants a sharee holding read and share', async () => {
     const doc = await seedSession({ users: [{ userId: 'sharer-1', permissions: ['read', 'share'] }] });
     const got = await sessionRepository.shareable.findShareAccessById({ id: 'sharer-1', groups: [] }, doc.id);

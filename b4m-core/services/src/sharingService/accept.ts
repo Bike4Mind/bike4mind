@@ -349,7 +349,8 @@ const permissionsInviterCanStillGrant = (
   permissions: Permission[],
   inviter: Inviter
 ): Permission[] => {
-  if (!invite.inviterId || invite.inviterId === doc.userId) return permissions;
+  // An empty invite grants nothing either way; without this it would read as a lost share.
+  if (!invite.inviterId || invite.inviterId === doc.userId || permissions.length === 0) return permissions;
 
   const granted = reshareableBy(doc, inviter, permissions);
   if (granted.length === 0) throw new ForbiddenError('The person who shared this can no longer share it');

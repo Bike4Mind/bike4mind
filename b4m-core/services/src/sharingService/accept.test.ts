@@ -975,6 +975,14 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
     }
   );
 
+  it('accepts an empty non-owner invite as a no-op grant, like an owner-minted one', async () => {
+    const adapters = makeAdapters(InviteType.FabFile, [], makeDoc(null), sharerId);
+
+    await acceptInvite(userId, { id: inviteId }, adapters as never);
+
+    expect(adapters.db.fabFiles.update.mock.calls[0][0].users).toStrictEqual([acceptedRow([])]);
+  });
+
   it.each([InviteType.FabFile, InviteType.Project])('caps a %s link to what the minter currently holds', async type => {
     const adapters = makeAdapters(type, fullLink, makeDoc(shareLink), sharerId);
 
