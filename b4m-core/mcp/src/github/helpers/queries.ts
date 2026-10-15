@@ -280,14 +280,6 @@ export const GET_REPOSITORY_FROM_ISSUE_NODE_ID_QUERY = `
           name
         }
       }
-      ... on PullRequest {
-        repository {
-          owner {
-            login
-          }
-          name
-        }
-      }
     }
   }
 `;

@@ -23,7 +23,7 @@ type ToolRepoPolicy =
   | { kind: 'no-repository' };
 
 export type RepositoryResolvers = {
-  /** Issue or pull request node ID to its repository; null when it cannot be resolved. */
+  /** Issue node ID to its repository; null when it cannot be resolved. */
   fromIssueNodeId: (nodeId: string) => Promise<RepositoryInfo | null>;
   /** Project item ID to the repository of its issue or pull request; null for a draft or on error. */
   fromProjectItemId: (itemId: string) => Promise<RepositoryInfo | null>;
