@@ -1,4 +1,4 @@
-import type { IMessage } from '@bike4mind/common';
+import type { IMessage, TurnUsage } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { RepeatedCallGuardOptions } from './repeatedCallGuard';
@@ -73,6 +73,8 @@ export interface AgentResult {
     totalCacheReadTokens?: number;
     /** Total tokens written to prompt cache (initial cache creation) */
     totalCacheWriteTokens?: number;
+    /** The same usage per provider request; price with getTurnsCost (long-context tiers are per request). */
+    turnUsage?: TurnUsage[];
     /** Number of iterations performed */
     iterations: number;
     /** Number of tool calls made */
@@ -245,6 +247,11 @@ export interface AgentRunOptions {
    */
   previousMessages?: IMessage[];
   signal?: AbortSignal;
+  /**
+   * Request live `text_delta` output for this run. Defaults to whether anything listens to
+   * `text_delta`; pass false for a run with no live view so the backend keeps full retry.
+   */
+  streamText?: boolean;
   /** Enable parallel execution of read-only tools for performance improvement */
   parallelExecution?: boolean;
   /** Custom function to determine if a tool is read-only (defaults to built-in check) */
@@ -361,6 +368,8 @@ export interface AgentCheckpoint {
   totalOutputTokens: number;
   totalCacheReadTokens: number;
   totalCacheWriteTokens: number;
+  /** Per-request breakdown of the totals; absent on checkpoints saved before it was tracked. */
+  turnUsage?: TurnUsage[];
   /** Cumulative credit usage */
   totalCredits: number;
   /** Total tool calls executed */

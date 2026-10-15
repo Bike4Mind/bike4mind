@@ -225,6 +225,7 @@ export async function executePendingAction(
       toolArgs: { ...toolParams, _executeFromButton: true },
       action: 'callTool',
       selectedRepositories,
+      userId: dbUser.id,
     });
 
     let resultData: Record<string, unknown> = {};

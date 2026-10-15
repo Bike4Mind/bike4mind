@@ -24,7 +24,6 @@ import {
   SCHEDULE_MESSAGE_CALLBACK_ID,
   parseScheduleMessageSubmission,
   SlackAuditLogger,
-  getClientIp,
   handleGlobalShortcut,
   handleCreateNotebookSubmission,
   handleQuickAskSubmission,
@@ -57,6 +56,7 @@ import timezone from 'dayjs/plugin/timezone';
 import { McpServer } from '@bike4mind/database/ai';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { ImageModels, IUserDocument, McpServerName } from '@bike4mind/common';
+import { getClientIp } from '@server/utils/ip';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -1440,6 +1440,7 @@ async function handleAttachmentDownload(
       toolName,
       toolArgs: { attachmentId },
       action: 'callTool',
+      userId: dbUser.id,
     });
 
     // Parse result
@@ -1785,6 +1786,7 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
       toolName,
       toolArgs: { attachmentId, confirmed: true, _executeFromButton: true },
       action: 'callTool',
+      userId: dbUser.id,
     });
 
     // For Confluence: clean up page content to remove macros referencing the deleted attachment

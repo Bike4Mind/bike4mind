@@ -88,6 +88,7 @@ describe('executePendingAction', () => {
     );
     expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
     expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({ _executeFromButton: true });
+    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].userId).toBe(dbUser.id);
     expect(vi.mocked(Quest.findOneAndUpdate).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(invokeMcpHandler).mock.invocationCallOrder[0]
     );

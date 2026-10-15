@@ -166,10 +166,10 @@ export function App({
   const [terminalCols, terminalRows] = useStdoutDimensions();
 
   // Ink wipes and rebuilds scrollback on every frame taller than the viewport
-  // (see liveStepWindow.ts), so the trace only gets the rows left over. On a
-  // terminal too short to have any left over it drops out entirely - keeping
-  // scrollback usable matters more than a two-line trace.
-  const liveTraceRows = Math.max(0, terminalRows - LIVE_CHROME_ROWS - messageQueue.length - promptRows);
+  // (see liveStepWindow.ts), so the trace and streaming reply only get the rows
+  // left over. On a terminal too short to have any left over they drop out
+  // entirely - keeping scrollback usable matters more than a two-line trace.
+  const liveRows = Math.max(0, terminalRows - LIVE_CHROME_ROWS - messageQueue.length - promptRows);
 
   const handleSubmit = React.useCallback(
     async (input: string) => {
@@ -265,7 +265,7 @@ export function App({
             <Box flexDirection="column">
               {pendingMessages.map(message => (
                 <Box key={message.id} flexDirection="column">
-                  <MessageItem message={message} showThoughts={showThoughts} liveTraceRows={liveTraceRows} />
+                  <MessageItem message={message} showThoughts={showThoughts} liveRows={liveRows} />
                 </Box>
               ))}
             </Box>

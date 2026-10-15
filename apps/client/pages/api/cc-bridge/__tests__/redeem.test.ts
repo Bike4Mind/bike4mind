@@ -86,7 +86,11 @@ describe('POST /api/cc-bridge/redeem', () => {
   });
 
   it('redeems a valid token for a CC_BRIDGE-only key bound to the token owner', async () => {
-    const res = await redeem({ ...validBody, bridgeVersion: '1.2.3' }, { 'x-forwarded-for': '1.1.1.1, 9.9.9.9' });
+    // CloudFront's viewer address is authoritative; a client-sent x-forwarded-for must not win.
+    const res = await redeem(
+      { ...validBody, bridgeVersion: '1.2.3' },
+      { 'x-forwarded-for': '1.1.1.1', 'cloudfront-viewer-address': '9.9.9.9:443' }
+    );
 
     expect(res._getStatusCode()).toBe(201);
     expect(res._getJSONData()).toEqual({

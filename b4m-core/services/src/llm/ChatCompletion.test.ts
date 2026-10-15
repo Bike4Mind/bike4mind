@@ -60,6 +60,8 @@ import {
   type BuildToolPromptArgs,
   type BuildToolsArgs,
 } from './tools/ToolBuilder';
+import type { VideoToolConfig } from './tools/implementation/videoGeneration';
+import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
@@ -1867,6 +1869,29 @@ describe('ChatCompletionProcess', () => {
         await runTurn();
 
         expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
+      it('adds no notice when a tool started a generation job and the model wrote no caption', async () => {
+        setupTurn(async cb => {
+          const toolsUsed = [{ name: 'music_generation', arguments: '{"prompt":"a shanty"}', id: 't1' }];
+          // What applyQuestStatusChanges does when the tool calls statusUpdate({ generationJobs }).
+          mockQuest.generationJobs = [...(mockQuest.generationJobs ?? []), { id: 'job-1', kind: 'music' }];
+          await cb(['<think>started</think>'], { toolsUsed });
+          await cb([], { toolsUsed, stopReason: 'end_turn' });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
+      it('still adds the notice when the only job card is from an earlier turn', async () => {
+        mockQuest.videoJobIds = ['old-job'];
+        setupTurn(cb => toolLoop(cb, ['<think>', 'more reasoning', '</think>']));
+
+        await runTurn();
+
+        expect(mockQuest.replies.at(-1)).toBe(`\n\n${INCOMPLETE_ANSWER_NOTICE}`);
       });
 
       it('adds no notice when a tool left a pendingAction for the user and wrote no text', async () => {
@@ -6205,6 +6230,8 @@ describe('ChatCompletionProcess', () => {
       sessionAgentIds?: string[];
       allowedAgents?: string[];
       priorToolNames?: string[];
+      disableUserIntegrations?: boolean;
+      mcpServers?: string[];
     }) => {
       // vi.spyOn on a prototype is idempotent across tests: the same underlying
       // mock survives, so `mock.calls` accumulates. Clear before each invocation
@@ -6247,6 +6274,10 @@ describe('ChatCompletionProcess', () => {
         projectId: undefined,
         organizationId: undefined,
         ...(params.allowedAgents !== undefined ? { allowedAgents: params.allowedAgents } : {}),
+        ...(params.disableUserIntegrations !== undefined
+          ? { disableUserIntegrations: params.disableUserIntegrations }
+          : {}),
+        ...(params.mcpServers !== undefined ? { mcpServers: params.mcpServers } : {}),
       };
       await service.process({ body, logger: mockLogger });
 
@@ -6308,6 +6339,47 @@ describe('ChatCompletionProcess', () => {
       expect(agentStore).toBeUndefined();
     });
 
+    // The request flag hard-vetoes delegation even when every positive signal is present: an
+    // @mention, an attached agent and an explicit allowlist. The unflagged control runs the same turn.
+    it.each([
+      { disableUserIntegrations: undefined, offered: true },
+      { disableUserIntegrations: true, offered: false },
+    ])(
+      'request disableUserIntegrations=$disableUserIntegrations -> delegate_to_agent offered=$offered',
+      async ({ disableUserIntegrations, offered }) => {
+        const agentStore = await runWithBuildToolsSpy({
+          message: '@researcher please look up the latest smartphone specs',
+          sessionAgentIds: ['some-agent-id'],
+          allowedAgents: ['researcher'],
+          disableUserIntegrations,
+        });
+        expect(agentStore !== undefined).toBe(offered);
+      }
+    );
+
+    it.each([
+      { disableUserIntegrations: undefined, expected: ['notion'] },
+      { disableUserIntegrations: true, expected: [] },
+    ])(
+      'request disableUserIntegrations=$disableUserIntegrations -> requested MCP servers $expected',
+      async ({ disableUserIntegrations, expected }) => {
+        const buildMcpToolsSpy = vi
+          .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+          .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {} });
+        buildMcpToolsSpy.mockClear();
+        try {
+          await runWithBuildToolsSpy({
+            message: 'Compare the smartphones',
+            disableUserIntegrations,
+            mcpServers: ['notion'],
+          });
+          expect(buildMcpToolsSpy.mock.calls[0]?.[0]?.requestedMcpServers).toEqual(expected);
+        } finally {
+          buildMcpToolsSpy.mockRestore();
+        }
+      }
+    );
+
     it('treats an empty allowedAgents allowlist as "no delegation" rather than "delegation to nothing"', async () => {
       // Pre-fix, `allowedAgents: []` would still trip the `!= null` predicate and
       // expose `delegate_to_agent` to the model, but the resulting store had zero
@@ -6365,6 +6437,91 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockRestore();
 
       expect(toolAvailability).toBeTypeOf('object');
+    });
+  });
+
+  // The job-tool configs come from resolvers injected at this call site. sharedToolBuilder.jobToolGate.test.ts
+  // proves buildSharedTools offers a job tool only when its config is present, but it cannot prove
+  // ChatCompletionProcess actually calls the resolver and forwards the result - deleting either line would leave
+  // that suite green. Asserted against the args handed to buildTools, not the resolver in isolation.
+  describe('video/music tool-config resolvers threaded into buildTools', () => {
+    const runWithResolvers = async (opts: {
+      enabledTools: string[];
+      videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
+      musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
+    }) => {
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      buildToolsSpy.mockClear();
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = { ...startQuestParams, tools: opts.enabledTools, projectId: undefined, organizationId: undefined };
+      try {
+        await service.process({
+          body,
+          logger: mockLogger,
+          videoToolConfigResolver: opts.videoToolConfigResolver,
+          musicToolConfigResolver: opts.musicToolConfigResolver,
+        });
+        return buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined;
+      } finally {
+        buildToolsSpy.mockRestore();
+        buildToolPromptSpy.mockRestore();
+      }
+    };
+
+    it('calls musicToolConfigResolver and threads its config into buildTools', async () => {
+      const config = { usableModels: [], createJob: vi.fn() } as MusicToolConfig;
+      const resolver = vi.fn().mockResolvedValue(config);
+      const passed = await runWithResolvers({ enabledTools: ['music_generation'], musicToolConfigResolver: resolver });
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(passed?.config?.music_generation).toBe(config);
+    });
+
+    it('does not call the music resolver when music_generation is not enabled', async () => {
+      const resolver = vi.fn().mockResolvedValue(null);
+      const passed = await runWithResolvers({ enabledTools: [], musicToolConfigResolver: resolver });
+      expect(resolver).not.toHaveBeenCalled();
+      expect(passed?.config?.music_generation).toBeUndefined();
+    });
+
+    it('calls videoToolConfigResolver and threads its config into buildTools', async () => {
+      const config = { usableModels: [], createJob: vi.fn() } as VideoToolConfig;
+      const resolver = vi.fn().mockResolvedValue(config);
+      const passed = await runWithResolvers({ enabledTools: ['video_generation'], videoToolConfigResolver: resolver });
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(passed?.config?.video_generation).toBe(config);
+    });
+
+    it('does not call the video resolver when video_generation is not enabled', async () => {
+      const resolver = vi.fn().mockResolvedValue(null);
+      const passed = await runWithResolvers({ enabledTools: [], videoToolConfigResolver: resolver });
+      expect(resolver).not.toHaveBeenCalled();
+      expect(passed?.config?.video_generation).toBeUndefined();
     });
   });
 
@@ -6530,14 +6687,28 @@ describe('ChatCompletionProcess', () => {
       message: string;
       catalog?: ISkill[];
       resolved?: ISkill[];
+      /** Drive the real feature-list gate instead of pre-registering SkillsFeature. */
+      useRealFeatureBuild?: boolean;
+      disableUserIntegrations?: boolean;
     }): Promise<string> => {
       mockDb.skills = {
         listAccessibleInvocableForUser: vi.fn().mockResolvedValue(params.catalog ?? []),
         findAccessibleByNamesForUser: vi.fn().mockResolvedValue(params.resolved ?? []),
       };
-      // buildOptimizedFeatures is stubbed in beforeEach, so register the real feature under the
-      // same key the assembly reads. This exercises both phases against the live feature.
-      service.features.set('skills', new SkillsFeature(service));
+      if (params.useRealFeatureBuild) {
+        // The stub in beforeEach swallows the feature list, so the per-request gate on 'skills'
+        // would be invisible. Delegate to the real builder so the gate decides what gets built.
+        vi.spyOn(service as any, 'buildOptimizedFeatures').mockImplementation(function (
+          this: unknown,
+          ...args: unknown[]
+        ) {
+          return (ChatCompletionProcess.prototype as any).buildOptimizedFeatures.apply(service, args);
+        });
+      } else {
+        // buildOptimizedFeatures is stubbed in beforeEach, so register the real feature under the
+        // same key the assembly reads. This exercises both phases against the live feature.
+        service.features.set('skills', new SkillsFeature(service));
+      }
 
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
@@ -6570,6 +6741,9 @@ describe('ChatCompletionProcess', () => {
         tools: [],
         projectId: undefined,
         organizationId: undefined,
+        ...(params.disableUserIntegrations !== undefined
+          ? { disableUserIntegrations: params.disableUserIntegrations }
+          : {}),
       };
       await service.process({ body, logger: mockLogger });
 
@@ -6600,6 +6774,33 @@ describe('ChatCompletionProcess', () => {
       expect(systemText).not.toContain('Available Skills');
       expect(systemText).not.toContain('Skill Invoked');
     });
+
+    // The request flag is the per-turn twin of the session flag: a caller running a prompt the user
+    // did not author must not get the user's own skills expanded into it. Asserted at the enforcement
+    // point (the real feature build), with the unflagged control proving the setup does expand them.
+    it.each([
+      { disableUserIntegrations: undefined, expanded: true },
+      { disableUserIntegrations: true, expanded: false },
+    ])(
+      'skills expansion with request disableUserIntegrations=$disableUserIntegrations -> expanded=$expanded',
+      async ({ disableUserIntegrations, expanded }) => {
+        const systemText = await runAndCaptureSystemText({
+          message: '/greet Bob',
+          catalog: [ownedSkill({ name: 'greet', description: 'Greet someone' })],
+          resolved: [ownedSkill({ name: 'greet', body: 'Say hello to $ARGUMENTS' })],
+          useRealFeatureBuild: true,
+          disableUserIntegrations,
+        });
+
+        expect(systemText.includes('Available Skills')).toBe(expanded);
+        expect(systemText.includes('Skill Invoked: /greet')).toBe(expanded);
+        expect(systemText.includes('Say hello to Bob')).toBe(expanded);
+        if (!expanded) {
+          expect(mockDb.skills.listAccessibleInvocableForUser).not.toHaveBeenCalled();
+          expect(mockDb.skills.findAccessibleByNamesForUser).not.toHaveBeenCalled();
+        }
+      }
+    );
 
     // The `skill` LLM tool used to be offered unconditionally. These pin the conditional gate to
     // the SAME catalog/session state runAndCaptureSystemText already exercises for the

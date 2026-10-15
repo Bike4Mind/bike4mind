@@ -1,3 +1,4 @@
+{{- if not .Values.externalMongo.enabled }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -107,6 +108,7 @@ spec:
   publishNotReadyAddresses: true
   selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: mongo}
   ports: [{name: service, port: 27017, targetPort: service}]
+{{- end }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

@@ -1,5 +1,4 @@
 import type { Connection } from 'mongoose';
-import { supportsAtlasVectorSearch } from '@bike4mind/db-core';
 import { Logger } from '@bike4mind/observability';
 import { OPENAI_EMBEDDING_MODEL_MAP } from '../embeddings/providers/OpenAIEmbeddingService';
 import { VOYAGEAI_EMBEDDING_MODEL_MAP } from '../embeddings/providers/VoyageAIEmbeddingService';
@@ -111,6 +110,9 @@ export const allAtlasVectorIndexDefinitions = (): AtlasVectorIndexDefinition[] =
  * indexes from being created.
  */
 export const ensureAtlasVectorSearchIndexes = async (conn: Connection, logger: Logger): Promise<void> => {
+  // Loaded here, not at module top: @bike4mind/db-core imports mongoose for a side effect, and
+  // this module rides fab-pipeline's barrel into the CLI, where nothing else needs mongoose.
+  const { supportsAtlasVectorSearch } = await import('@bike4mind/db-core');
   if (!supportsAtlasVectorSearch()) {
     logger.log('[ensureAtlasVectorSearchIndexes] backend does not support Atlas Search, skipping');
     return;

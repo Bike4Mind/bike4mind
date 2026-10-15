@@ -1,4 +1,4 @@
-import { getTextModelCost, IUserDocument, ModelInfo } from '@bike4mind/common';
+import { getTextModelCost, getTurnsCost, IUserDocument, ModelInfo } from '@bike4mind/common';
 import { recordOperationalUsage } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -60,7 +60,9 @@ export async function recordSessionOperationalUsage(args: RecordSessionOperation
       return;
     }
     const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
-    const costUsd = getTextModelCost(modelInfo, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
+    const costUsd = completionInfo?.turnUsage?.length
+      ? getTurnsCost(modelInfo, completionInfo.turnUsage)
+      : getTextModelCost(modelInfo, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
 
     await recordOperationalUsage(
       {

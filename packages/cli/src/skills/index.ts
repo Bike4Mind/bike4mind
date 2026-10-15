@@ -16,10 +16,14 @@
  * against `process.cwd()` and shells out through the CLI's own permission gate, and neither of
  * those is meaningful in an Electron main process. Hosts share the PARSING and supply their own
  * confinement and approval. Keeping that line is also what keeps this subpath's runtime closure
- * down to `zod` and `gray-matter`.
+ * down to `zod`, `gray-matter` and the reserved-name list in `config/commands`.
+ *
+ * RemoteSkillSource is here because its owner/reserved-name filter is the same kind of rule: a
+ * host passes its own authenticated client and cache path, and does all HTTP in its own process.
  */
 
 export { CustomCommandStore, type CustomCommandStoreOptions } from '../storage/CustomCommandStore.js';
+export { RemoteSkillSource, type RemoteSkillSourceOptions } from '../storage/RemoteSkillSource.js';
 export type { AgentConfig, CustomCommand, CustomCommandFrontmatter, SkillHooks } from '../storage/types.js';
 export { extractCommandName, isValidCommandName, parseCommandFile } from '../utils/commandParser.js';
 export { hasArgumentPatterns, parseArguments, substituteArguments } from '../utils/argumentSubstitution.js';

@@ -219,9 +219,10 @@ export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
                     color={mode === 'force_block' ? 'danger' : mode === 'force_open' ? 'success' : 'neutral'}
                     onClick={() => onOverride(entry.name, mode)}
                     loading={isUpdatingOverride}
+                    title={mode === 'auto' ? 'Also resets the in-memory MCP breakers for all users' : undefined}
                     data-testid={`circuit-breaker-${mode}-btn-${entry.name}`}
                   >
-                    {mode === 'auto' ? 'Auto' : mode === 'force_open' ? 'Force Open' : 'Force Block'}
+                    {mode === 'auto' ? 'Auto (all users)' : mode === 'force_open' ? 'Force Open' : 'Force Block'}
                   </Button>
                 ))}
               </Stack>
@@ -229,8 +230,12 @@ export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
               {/* In-memory breaker states (per-operation CircuitBreaker snapshots) */}
               {(readBreaker || writeBreaker) && (
                 <Stack direction="row" spacing={1} alignItems="center">
-                  <Typography level="body-xs" color="neutral">
-                    In-memory MCP:
+                  <Typography
+                    level="body-xs"
+                    color="neutral"
+                    title="Worst state across users: OPEN means open for at least one user"
+                  >
+                    In-memory MCP (worst across users):
                   </Typography>
                   {readBreaker && (
                     <Chip size="sm" variant="soft" color={statusColor(readBreaker.state)}>
