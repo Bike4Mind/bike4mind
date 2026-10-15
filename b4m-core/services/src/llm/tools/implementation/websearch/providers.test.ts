@@ -359,6 +359,7 @@ describe('SerpAPI geo-targeting', () => {
 describe('outgoing search request logging', () => {
   const FAKE_KEY = 'fake-serp-key-1234567890';
   let logSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
   const loggedRequest = (spy: ReturnType<typeof vi.spyOn>, message: string) =>
@@ -366,16 +367,18 @@ describe('outgoing search request logging', () => {
       spy.mock.calls.find(([msg]) => String(msg).includes(message))?.[1] as
         { request?: Record<string, string> } | undefined
     )?.request;
-  const allLoggedText = () => JSON.stringify([...logSpy.mock.calls, ...errorSpy.mock.calls]);
+  const allLoggedText = () => JSON.stringify([...logSpy.mock.calls, ...warnSpy.mock.calls, ...errorSpy.mock.calls]);
 
   beforeEach(() => {
     mockGetSerperKey.mockResolvedValue(FAKE_KEY);
     logSpy = vi.spyOn(Logger.globalInstance, 'log').mockImplementation(() => undefined);
+    warnSpy = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
     errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
     logSpy.mockRestore();
+    warnSpy.mockRestore();
     errorSpy.mockRestore();
   });
 
@@ -410,7 +413,7 @@ describe('outgoing search request logging', () => {
     await expect(serpApiSearch(adapters, 'job shop scheduling', 5, { maxAttempts: 1 })).rejects.toThrow('boom');
 
     for (const message of ['WebSearch Tool: API error details:', 'WebSearch Tool: SerpAPI request failed:']) {
-      expect(loggedRequest(errorSpy, message)).toMatchObject({ q: 'job shop scheduling', num: '5' });
+      expect(loggedRequest(warnSpy, message)).toMatchObject({ q: 'job shop scheduling', num: '5' });
     }
     expect(allLoggedText()).not.toContain(FAKE_KEY);
   });
@@ -669,8 +672,11 @@ describe('serpApiSearch retry behavior', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('returns results when the first attempt times out and the second succeeds', async () => {
+  it('returns results when the first attempt times out and the second succeeds, without an error log', async () => {
     mockGetSerperKey.mockResolvedValue('serp-key');
+    // A recovered attempt must not raise an error-level log: those page the production alert channel.
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
     let calls = 0;
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       calls += 1;
@@ -687,6 +693,13 @@ describe('serpApiSearch retry behavior', () => {
 
     await pending;
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenCalledWith(
+      '❌ WebSearch Tool: SerpAPI request failed:',
+      expect.objectContaining({ timedOut: true })
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 
   it('retries a 500 and succeeds on the second attempt', async () => {

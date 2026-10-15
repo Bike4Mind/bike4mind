@@ -388,6 +388,9 @@ function summarizeSerpApiRequest(url: URL): Record<string, string> {
  * One SerpAPI organic-search attempt, bounded by SERPAPI_ATTEMPT_TIMEOUT_MS. Never throws -
  * failures (timeout, network error, non-OK response) come back as a tagged result so
  * serpApiSearch can decide whether to retry without duplicating the timeout/abort bookkeeping.
+ * Logs at warn, not error: a failed attempt is often recovered by the retry or by the hedged
+ * backup provider, and the error-level alert belongs to whichever caller sees the final failure
+ * (performWebSearch, runLakeResearch).
  */
 async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApiAttemptResult> {
   const controller = new AbortController();
@@ -406,7 +409,7 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     if (response.ok) return { ok: true, data: (await response.json()) as SerpApiResponse };
 
     const errorText = await response.text();
-    Logger.globalInstance.error('❌ WebSearch Tool: API error details:', {
+    Logger.globalInstance.warn('❌ WebSearch Tool: API error details:', {
       status: response.status,
       statusText: response.statusText,
       errorText,
@@ -426,7 +429,7 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     // A network-level failure (DNS, connection reset, TLS, ...) surfaces from fetch as a
     // TypeError; anything else is unexpected and is not treated as transient.
     const retryable = timedOut || error instanceof TypeError;
-    Logger.globalInstance.error('❌ WebSearch Tool: SerpAPI request failed:', {
+    Logger.globalInstance.warn('❌ WebSearch Tool: SerpAPI request failed:', {
       attempt,
       request,
       timedOut,
