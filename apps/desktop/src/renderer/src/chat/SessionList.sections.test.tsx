@@ -523,4 +523,98 @@ describe('dragging a session', () => {
 
     expect(el('chat-session-item').getAttribute('draggable')).toBe('false');
   });
+
+  it('clears the drag state on a drop even when dragend never arrives', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
+    const transfer = fakeDataTransfer();
+
+    fireDrag(rowNamed('Beta'), 'dragstart', transfer);
+    await nextFrame();
+    expect(query('sidebar-section-drop-zone')).not.toBeNull();
+    fireDrag(el('sidebar-section-drop-zone'), 'dragover', transfer);
+    fireDrag(el('sidebar-section-drop-zone'), 'drop', transfer);
+    await settle();
+
+    expect(bridge.moveSession).toHaveBeenCalledWith('b', 'home');
+    expect(query('sidebar-section-drop-zone')).toBeNull();
+    expect(sectionNamed('Home').dataset.dropTarget).toBeUndefined();
+  });
+
+  it('does not let a frame pending at drop time re-open the drop slots', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
+    const transfer = fakeDataTransfer();
+
+    fireDrag(rowNamed('Beta'), 'dragstart', transfer);
+    fireDrag(sectionNamed('Home'), 'dragover', transfer);
+    fireDrag(sectionNamed('Home'), 'drop', transfer);
+    await nextFrame();
+
+    expect(query('sidebar-section-drop-zone')).toBeNull();
+  });
+
+  it('does not pick up a pinned row for a section', async () => {
+    await mount([summary('a', 'Alpha'), summary('p', 'Pinned one', { pinned: true })], workAndHome);
+    const transfer = fakeDataTransfer();
+
+    const row = rowNamed('Pinned one');
+    fireDrag(row, 'dragstart', transfer);
+    await nextFrame();
+    expect(query('sidebar-section-drop-zone')).toBeNull();
+    const accepted = fireDrag(el('sidebar-section-header', sectionNamed('Home')), 'dragover', transfer);
+    fireDrag(el('sidebar-section-header', sectionNamed('Home')), 'drop', transfer);
+    fireDrag(row, 'dragend', transfer);
+    await settle();
+
+    expect(accepted).toBe(false);
+    expect(sectionNamed('Home').dataset.dropTarget).toBeUndefined();
+    expect(bridge.moveSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('Move to for rows outside the sections', () => {
+  it('is not offered for a pinned row', async () => {
+    await mount([summary('a', 'Alpha'), summary('p', 'Pinned one', { pinned: true })], workAndHome);
+
+    await openRowMenu('Pinned one');
+
+    expect(query('chat-pin-session-btn')).not.toBeNull();
+    expect(query('chat-move-session-btn')).toBeNull();
+  });
+
+  it('is not offered for an archived row', async () => {
+    await mount([summary('a', 'Alpha'), summary('z', 'Old one', { archived: true })], workAndHome);
+
+    await click(el('sidebar-archived-btn'));
+    await openRowMenu('Old one');
+
+    expect(query('chat-pin-session-btn')).not.toBeNull();
+    expect(query('chat-move-session-btn')).toBeNull();
+  });
+});
+
+describe('searching with sections', () => {
+  const search = async (text: string) => {
+    const input = el('chat-search-input') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(input, text);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await settle();
+  };
+
+  it('hides sections with no matching session, and shows them again when cleared', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
+    expect(all('sidebar-section-name').map(node => node.textContent)).toEqual(['Work', 'Home']);
+
+    await search('alp');
+    expect(all('sidebar-section-name').map(node => node.textContent)).toEqual(['Work']);
+
+    await search('zzz');
+    expect(all('sidebar-section')).toEqual([]);
+    expect(query('chat-sessions-empty')).not.toBeNull();
+
+    await search('');
+    expect(all('sidebar-section-name').map(node => node.textContent)).toEqual(['Work', 'Home']);
+  });
 });

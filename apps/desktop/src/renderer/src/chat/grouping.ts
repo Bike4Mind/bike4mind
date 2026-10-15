@@ -35,20 +35,7 @@ export interface SidebarSections {
   archived: ChatSessionSummary[];
 }
 
-/**
- * Split the session list into what the sidebar draws.
- *
- * A pinned session appears ONLY in the pinned section, not a second time inside its project
- * group: two rows for one conversation, one of which silently mirrors the other, reads as a
- * duplicate rather than as emphasis.
- *
- * Group order follows the most recently updated session in each group, so the project being
- * worked on now rises to the top - the same rule the flat list already used for rows.
- *
- * A session the user moved into a section sits there and nowhere else. Archiving and pinning
- * both outrank it, for the same reason archiving outranks pinning: the later, louder action is
- * the one that has to show.
- */
+/** Splits sessions into what the sidebar draws; each shows once, archived over pinned over a section. */
 export function groupSessions(
   sessions: readonly ChatSessionSummary[],
   mode: ChatSessionMode,
