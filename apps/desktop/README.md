@@ -24,6 +24,10 @@ System Settings > Privacy & Security after a blocked launch. Only approve a down
 you trust. `SHA256SUMS.txt` accompanies each release for checksum verification.
 Windows packaging exists locally but is not yet part of the release pipeline.
 
+Once installed, the macOS app finds newer versions on its own. A signed build updates with
+one click on **Restart to update**; an unsigned one offers the new installer instead. See
+[Updates](#updates).
+
 ## Running it
 
 ```bash
@@ -127,9 +131,8 @@ not replace the repository's overall latest release. Keep desktop release tags i
 changing the package version does not override existing release history.
 
 Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
-Without it, users must select their own backend. The workflow deliberately leaves
-`B4M_UPDATE_FEED_URL` unset: downloadable releases do not configure in-app updates.
-Installing a newer release is currently manual. Only the final publication job has
+Without it, users must select their own backend. macOS builds also get an update feed
+baked in, and publication refreshes it; see [Updates](#updates). Only the final publication job has
 `contents: write`; build jobs have read-only tokens. PR builds have no signing credentials.
 
 Release notes list desktop-relevant first-parent changes and explain the semantic bump.
@@ -403,15 +406,11 @@ identically in dev and when packaged.
 ## Updates
 
 `electron-updater` against a `generic` feed, wired in `src/main/update`. The feed URL is baked
-in at build time from `B4M_UPDATE_FEED_URL`, exactly like `B4M_DEFAULT_API_URL` above, and for
-one extra reason: this repo is public, and a release feed is a host or a bucket behind one. The
-`generic` provider is what makes that possible - `s3` and `github` want a bucket name or an
-owner/repo in committed configuration, whereas `generic` takes a plain URL any static host can
-serve. Set nothing and the build simply does not check, which is right for a fork that
-publishes no releases.
-
-Only https is accepted, plus http on the loopback so the check path can be exercised against a
-local static server. See `resolveFeedUrl` in `src/main/update/feed.ts`.
+in at build time from `B4M_UPDATE_FEED_URL`, exactly like `B4M_DEFAULT_API_URL` above. The
+`generic` provider takes a plain URL, so no host, bucket or owner/repo is committed here. A
+build with no feed does not check, which is right for a fork that publishes no releases. Only
+https is accepted, plus http on the loopback for local testing; see `resolveFeedUrl` in
+`src/main/update/feed.ts`.
 
 | When | What |
 | --- | --- |
@@ -419,22 +418,67 @@ local static server. See `resolveFeedUrl` in `src/main/update/feed.ts`.
 | Every 6 hours | Because this app is left running for days, so "on launch" alone is not enough |
 | The Customize row | On demand |
 
-Nothing downloads or installs itself. `autoDownload` and `autoInstallOnAppQuit` are both off:
-the user presses Download, and then Restart. An install asks main what is in flight first - a
-streaming reply, a session at the approval gate, a background process still up - and refuses
-with that report rather than quitting, so the restart is never a surprise. Background children
-are killed before the app is handed to the installer, not left to the quit handlers.
+A newer version downloads in the background as soon as a check finds it. Once it is staged the
+sidebar shows "Version X is ready" with the release notes behind "What's new" and one button,
+**Restart to update**. Nothing installs on quit. A restart asks main what is in flight first - a
+streaming reply, a session at the approval gate, a background process - and, if anything is,
+names it and waits for "Restart anyway" rather than quitting. Background children are killed
+before the app is handed to the installer.
 
 A failed check is never surfaced. No network, a dead feed and a malformed manifest all land as
 one quiet state that keeps showing the current version, and none of them can retract an update
-that is already downloaded and waiting. The state machine is in `src/shared/update.ts` and is
-unit-tested there, which matters more than usual: **macOS will not auto-update an unsigned
-app**, so until code-signing certificates exist the full download-and-install cycle cannot be
-exercised on macOS at all. Do not "fix" that by relaxing the signature check - an updater that
+that is already downloaded. The state machine is `src/shared/update.ts`.
+
+### Where the feed comes from
+
+The [release workflow](../../.github/workflows/desktop-release.yml) publishes it. After the
+`desktop-v<version>` release is up, `scripts/update_feed.py` writes one `latest-mac.yml` for
+both architectures (sha512 and size of each zip, the `## Changes` bullets as release notes) and
+uploads it to a rolling release tagged `desktop-feed`, created on first use with
+`--latest=false`. The baked URL is that release's download directory,
+`<server>/<owner>/<repo>/releases/download/desktop-feed`, built from the workflow context.
+
+Why a rolling release rather than electron-updater's `github` provider: that provider finds
+the newest version through `/releases/latest`, which is repo-wide, and desktop releases are
+published with `--latest=false`; its prerelease mode instead requires the tag itself to be
+semver, which `desktop-v1.2.3` is not. A fixed asset URL needs neither. Every file URL in the
+feed is absolute and points at the versioned release, so installers are stored once. The feed
+only moves forward: a rerun of an older commit leaves a newer feed alone.
+
+No blockmaps are published, so every update is a full download
+(`disableDifferentialDownload`).
+
+### Unsigned builds
+
+**macOS will not auto-update an unsigned app**: Squirrel.Mac validates the code signature of
+both the running app and the update. Do not "fix" that by relaxing the check - an updater that
 accepts unsigned payloads is a remote code execution path.
 
-Packaging (the macOS `zip` target the updater consumes) is a separate concern; see the
-packaging config once it lands.
+So the app knows whether it was signed. The workflow's signing step bakes
+`B4M_DESKTOP_SIGNED=true`, and the feed carries `signed: false` for an unsigned release. When
+either is unsigned, nothing downloads in the background; the sidebar and Settings say that
+updating from inside the app needs a code-signed build, and offer **Download installer**, which
+opens this machine's dmg from the feed's `installers` map in the browser.
+
+### What DevOps configures
+
+| Setting | Kind | Needed for |
+| --- | --- | --- |
+| `DESKTOP_MAC_SIGNING=true` | variable | Signed, notarized builds - and with them, restart-to-update |
+| `DESKTOP_CSC_LINK`, `DESKTOP_CSC_KEY_PASSWORD` | secrets | The Developer ID Application certificate (base64 `.p12`) |
+| `DESKTOP_APPLE_ID`, `DESKTOP_APPLE_APP_SPECIFIC_PASSWORD`, `DESKTOP_APPLE_TEAM_ID` | secrets | Notarization |
+| `B4M_UPDATE_FEED_URL` | variable, optional | Points macOS builds at a different feed. Unset, they read `desktop-feed` |
+
+Nothing else: the feed release is created by the first publish, with the workflow's own token.
+If `B4M_UPDATE_FEED_URL` is set, whatever it names must serve the same `latest-mac.yml`; the
+workflow still publishes only the GitHub one.
+
+Builds made before signing was switched on keep offering the installer download, since they
+cannot install an update themselves. Their users install one signed release by hand; every
+update after that is a restart.
+
+To pull a broken release from in-app updates, publish a fixed one: the feed follows the newest
+release. Marking a release as a prerelease does not remove it from the feed.
 
 ## App icon
 
