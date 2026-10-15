@@ -325,6 +325,33 @@ describe('CheckpointStore', () => {
       expect(diff.trim()).toBe('');
     });
 
+    it('flags output git truncated at the buffer limit instead of passing it off as the whole diff', async () => {
+      const filePath = 'big.txt';
+      await fs.writeFile(path.join(testDir, filePath), 'v1', 'utf-8');
+      await checkpointStore.createCheckpoint('edit_local_file', [filePath]);
+      await fs.writeFile(path.join(testDir, filePath), 'v2', 'utf-8');
+
+      // A diff larger than GIT_MAX_BUFFER makes git reject with only the partial stdout.
+      const store = checkpointStore as unknown as { git: (...args: string[]) => Promise<string> };
+      const realGit = store.git.bind(checkpointStore);
+      store.git = (...args: string[]) => {
+        if (args[0] === 'diff') {
+          return Promise.reject(
+            Object.assign(new Error('maxBuffer exceeded'), {
+              code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+              stdout: Buffer.from('-old\n+new\n'),
+            })
+          );
+        }
+        return realGit(...args);
+      };
+
+      const diff = await checkpointStore.getCheckpointDiff(1);
+
+      expect(diff).toContain('-old\n+new');
+      expect(diff).toContain('(diff truncated)');
+    });
+
     it('should throw for invalid checkpoint index', async () => {
       await expect(checkpointStore.getCheckpointDiff(99)).rejects.toThrow('Checkpoint #99 not found');
     });

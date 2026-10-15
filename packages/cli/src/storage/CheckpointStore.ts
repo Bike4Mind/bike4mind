@@ -435,9 +435,15 @@ export class CheckpointStore {
         } catch (diffError: unknown) {
           // git diff --no-index exits with 1 when files differ (that's expected)
           if (diffError && typeof diffError === 'object' && 'stdout' in diffError) {
-            const output = (diffError as { stdout: Buffer }).stdout?.toString() || '';
+            const { stdout, code } = diffError as { stdout?: Buffer; code?: string };
+            const output = stdout?.toString() || '';
             if (output) {
-              diffParts.push(`--- ${filePath} (checkpoint #${index})\n+++ ${filePath} (current)\n${output}`);
+              // Past GIT_MAX_BUFFER git kills the child mid-diff and rejects with only the
+              // partial stdout, so flag it rather than present a cut-off diff as the whole one.
+              const truncated = code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? '\n(diff truncated)\n' : '';
+              diffParts.push(
+                `--- ${filePath} (checkpoint #${index})\n+++ ${filePath} (current)\n${output}${truncated}`
+              );
             }
           }
         }
