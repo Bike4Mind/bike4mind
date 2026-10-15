@@ -100,4 +100,13 @@ describe('createToolFailureGuard', () => {
     await expect(math.toolFn()).rejects.toThrow(/Not run/);
     expect(impl).toHaveBeenCalledTimes(TOOL_FAILURE_BLOCK_AFTER);
   });
+
+  it('leaves input-dependent lookup tools unguarded', async () => {
+    const impl = vi.fn(() => Promise.reject(new Error('404')));
+    const [fetch] = createToolFailureGuard().apply([tool('web_fetch', impl)]);
+    for (let i = 0; i <= TOOL_FAILURE_BLOCK_AFTER; i++) {
+      await expect(fetch.toolFn({ url: `https://example.com/${i}` })).rejects.toThrow(/^404$/);
+    }
+    expect(impl).toHaveBeenCalledTimes(TOOL_FAILURE_BLOCK_AFTER + 1);
+  });
 });

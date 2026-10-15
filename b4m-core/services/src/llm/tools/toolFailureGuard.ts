@@ -13,6 +13,14 @@ export const TOOL_FAILURE_BLOCK_AFTER = 4;
  */
 const ERROR_RESULT_PREFIX = 'Error:';
 
+/** Whether a tool result reports a failure in-band. Shared with telemetry/toolInvocationTelemetry.ts. */
+export function isErrorToolResult(result: unknown): boolean {
+  return typeof result === 'string' && result.startsWith(ERROR_RESULT_PREFIX);
+}
+
+/** Lookups whose failures depend on the input (a dead URL, a missing id), so a run of them is not a loop. */
+const UNGUARDED_TOOLS = new Set(['web_fetch', 'retrieve_knowledge_content', 'file_read']);
+
 function retryNudge(name: string, count: number): string {
   return (
     ` ("${name}" has now failed ${count} times in a row. Do not retry it with a similar input; ` +
@@ -21,17 +29,13 @@ function retryNudge(name: string, count: number): string {
 }
 
 /**
- * Stops a chat turn from spending its whole tool-call budget on a tool that keeps failing (for
- * example a model re-sending math_evaluate an expression it cannot parse, with small variations
- * each time). Counts consecutive failures per tool name, whatever the arguments: a throw, or a
- * result starting with "Error:". A success resets the count, and a permission denial is not
- * counted. The failure still reaches the model as before, with a retry nudge appended from the
- * second one. Applied by the chat turn alongside createWebSearchBudget (websearch/index.ts), with
- * the same scope; call `reset()` wherever that budget is reset.
+ * Nudges, then blocks, a tool after consecutive failures (per tool name, whatever the arguments).
+ * Same scope as createWebSearchBudget (websearch/index.ts): call `reset()` wherever that budget is reset.
  */
 export function createToolFailureGuard() {
   const consecutiveFailures = new Map<string, number>();
-  // Read at failure time, not before the await, so parallel calls in one round each count.
+  // Read at failure time, not before the await, so parallel calls in one round each count. The
+  // block check runs before the await, so every parallel call in one round still executes.
   const recordFailure = (name: string): number => {
     const count = (consecutiveFailures.get(name) ?? 0) + 1;
     consecutiveFailures.set(name, count);
@@ -42,6 +46,7 @@ export function createToolFailureGuard() {
     apply: (tools: ICompletionOptionTools[]): ICompletionOptionTools[] =>
       tools.map(tool => {
         const name = tool.toolSchema.name;
+        if (UNGUARDED_TOOLS.has(name)) return tool;
         return {
           ...tool,
           toolFn: async (parameters, apiKey) => {
@@ -68,7 +73,7 @@ export function createToolFailureGuard() {
               nudged.name = error.name;
               throw nudged;
             }
-            if (typeof result === 'string' && result.startsWith(ERROR_RESULT_PREFIX)) {
+            if (isErrorToolResult(result)) {
               const count = recordFailure(name);
               return count < TOOL_FAILURE_NUDGE_AFTER ? result : result + retryNudge(name, count);
             }
