@@ -78,6 +78,26 @@ function applyConsent(value: Consent) {
   activateConsent(value);
 }
 
+function joinList(items: string[]): string {
+  return items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0];
+}
+
+/** Names each third party a grant loads, so consent is informed. Must stay in sync with what
+ * activateConsent loads. */
+function describeCookieKinds(): string {
+  const adVendors = [
+    process.env.NEXT_PUBLIC_META_PIXEL_ID && 'Meta',
+    process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID && 'Reddit',
+  ].filter((vendor): vendor is string => Boolean(vendor));
+  const kinds = [
+    process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID && 'analytics (Google Analytics)',
+    adVendors.length > 0 && `advertising (${adVendors.join(', ')})`,
+    'email marketing (MailerLite)',
+    'campaign attribution',
+  ].filter((kind): kind is string => Boolean(kind));
+  return joinList(kinds);
+}
+
 export function CookieConsentBanner() {
   const [asking, setAsking] = useState(false);
   const settingsOpen = useCookieSettings(s => s.isOpen);
@@ -119,12 +139,7 @@ export function CookieConsentBanner() {
   // With nothing in force yet there is nothing to manage, so a reopen shows the first-run ask.
   const current = resolveConsent();
   const managing = settingsOpen && current !== 'unset';
-  const kinds = [
-    process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID && 'analytics',
-    (process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID || process.env.NEXT_PUBLIC_META_PIXEL_ID) && 'advertising',
-    'campaign attribution',
-  ].filter(Boolean) as string[];
-  const cookieKinds = kinds.length > 1 ? `${kinds.slice(0, -1).join(', ')} and ${kinds[kinds.length - 1]}` : kinds[0];
+  const cookieKinds = describeCookieKinds();
 
   const choose = (value: Consent) => {
     applyConsent(value);
