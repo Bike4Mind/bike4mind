@@ -2744,7 +2744,7 @@ export const settingsMap = {
     name: 'Skill Market High-Risk Tools',
     defaultValue: '',
     description:
-      'Comma-separated tool names that force a Skill Market listing into human review. Empty uses the built-in list (outbound fetch, file edit, publishing, data-lake writes, agent delegation). Tools not in the built-in catalog are always high-risk.',
+      'Comma-separated tool names that force a Skill Market listing into human review, in addition to the built-in list (outbound fetch, file edit, publishing, data-lake writes, agent delegation). Tools not in the built-in catalog are always high-risk.',
     category: 'AI Moderation',
   }),
   SkillMarketUrlAllowlist: makeStringSetting({

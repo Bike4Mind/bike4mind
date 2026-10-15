@@ -14,9 +14,10 @@ import {
  * LLM classifier, and the classifier can only ADD findings, never clear these - so prompt-injecting
  * the classifier cannot launder a body these rules catch.
  *
- * Why strict: an imported skill becomes owner-scoped to the importer, so at runtime its body is
- * framed as the user's own trusted instructions (renderInvokedSkill in skillSafety.ts), not wrapped
- * as untrusted content.
+ * Why strict: a published snapshot is copied into the importer's own skill namespace, so at run time
+ * its body is framed as the user's own trusted instructions (renderInvokedSkill in skillSafety.ts),
+ * not wrapped as untrusted content - and the copy may be re-shared from there. This scan is the
+ * only gate before that happens, so a body that is unsafe to run must be caught here.
  */
 
 /**
@@ -39,8 +40,7 @@ export const DEFAULT_HIGH_RISK_TOOLS = [
 const KNOWN_TOOLS = new Set<string>(b4mLLMTools.options);
 
 export type ScanOptions = {
-  visibility: SkillListingVisibility;
-  /** Overrides DEFAULT_HIGH_RISK_TOOLS when non-empty (admin setting). */
+  /** Tools that force human review, ADDED to DEFAULT_HIGH_RISK_TOOLS (admin setting). */
   highRiskTools?: string[];
   /** Hosts a skill may reference without a finding; subdomains match. */
   urlAllowlist?: string[];
@@ -211,7 +211,9 @@ export function runDeterministicScan(snapshot: ISkillSnapshot, options: ScanOpti
     );
   }
 
-  const highRisk = new Set(options.highRiskTools?.length ? options.highRiskTools : DEFAULT_HIGH_RISK_TOOLS);
+  // The admin setting ADDS to the built-in list: a custom tool must never silently drop web_fetch
+  // and the other defaults out of the review gate.
+  const highRisk = new Set<string>([...DEFAULT_HIGH_RISK_TOOLS, ...(options.highRiskTools ?? [])]);
   // A tool outside the built-in catalog (an MCP or overlay tool) is unknown to this gate, so it is
   // treated as high-risk rather than silently trusted.
   const riskyTools = (snapshot.allowedTools ?? []).filter(t => highRisk.has(t) || !KNOWN_TOOLS.has(t));

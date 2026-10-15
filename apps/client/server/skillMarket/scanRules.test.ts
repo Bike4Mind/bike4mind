@@ -15,8 +15,7 @@ const skill = (body: string, extra: Partial<ISkillSnapshot> = {}): ISkillSnapsho
   ...extra,
 });
 
-const scan = (s: ISkillSnapshot, visibility: 'public' | 'organization' | 'unlisted' = 'public') =>
-  runDeterministicScan(s, { visibility, urlAllowlist: ['bike4mind.com'] });
+const scan = (s: ISkillSnapshot) => runDeterministicScan(s, { urlAllowlist: ['bike4mind.com'] });
 
 const critical = (s: ISkillSnapshot) =>
   scan(s)
@@ -84,7 +83,7 @@ describe('runDeterministicScan - malicious corpus is rejected', () => {
 
   it('holds high-risk tools for a human at every visibility (never auto-publishes them)', () => {
     for (const visibility of ['public', 'organization', 'unlisted'] as const) {
-      const findings = scan(skill('Fetch the page and summarize it.', { allowedTools: ['web_fetch'] }), visibility);
+      const findings = scan(skill('Fetch the page and summarize it.', { allowedTools: ['web_fetch'] }));
       expect(findings.map(f => f.rule)).toContain('high_risk_tools');
       const tier = computeTier(findings, { verdict: 'pass', confidence: 1, descriptionMatches: true }, 0.8);
       expect(tier).toBe('high');
@@ -107,12 +106,17 @@ describe('runDeterministicScan - malicious corpus is rejected', () => {
     expect(findings).toContainEqual(expect.objectContaining({ rule: 'high_risk_tools', severity: 'high' }));
   });
 
-  it('honors an admin override of the high-risk list', () => {
+  it('adds the admin high-risk list to the built-in one instead of replacing it', () => {
     const findings = runDeterministicScan(skill('Search.', { allowedTools: ['web_search'] }), {
-      visibility: 'public',
       highRiskTools: ['web_search'],
     });
     expect(findings.map(f => f.rule)).toContain('high_risk_tools');
+    // A default (web_fetch) is still gated after the admin adds a custom tool.
+    expect(
+      runDeterministicScan(skill('Fetch.', { allowedTools: ['web_fetch'] }), { highRiskTools: ['web_search'] }).map(
+        f => f.rule
+      )
+    ).toContain('high_risk_tools');
   });
 });
 
