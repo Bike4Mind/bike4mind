@@ -14,7 +14,7 @@ import {
  * Contract for POST /api/chat. Single source of truth: the Next.js handler
  * (apps/client/pages/api/chat.ts) derives its auth + validation from this, and
  * the OpenAPI spec derives the operation from this. The same object could back a
- * Lambda handler unchanged (see server/cli/defineLambdaRoute.ts).
+ * Lambda handler unchanged (see apps/workers/src/cli/defineLambdaRoute.ts).
  */
 export const chatContract = defineEndpoint({
   method: 'post',

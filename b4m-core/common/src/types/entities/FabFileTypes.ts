@@ -485,7 +485,7 @@ export interface IFabFile {
    * terminal verdict - incremented by the rescue sweep's stale-claim reclaim and by a transient
    * release. The rescue sweep orders its selection by this ascending, so a never-attempted
    * stranded row always wins a bounded window over a cluster of repeatedly-failing siblings
-   * (see server/s3/moderationRescueSweep.ts). Absent on a row that has never failed.
+   * (see apps/workers/src/s3/moderationRescueSweep.ts). Absent on a row that has never failed.
    */
   moderationAttempts?: number;
 

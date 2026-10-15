@@ -19,8 +19,8 @@
  * an unresolved purchase is reported on every run whose window still covers it.
  *
  * Subscription invoices are out of scope: their grants are keyed by an invoice-derived idempotency
- * key and are legitimately skipped by the re-subscribe cooldown (lib/userSubscriptions/serverUtils.ts),
- * so a missing row there is not a reliable signal.
+ * key and are legitimately skipped by the re-subscribe cooldown
+ * (apps/workers/src/lib/userSubscriptions/serverUtils.ts), so a missing row there is not a reliable signal.
  *
  * Schedule: daily at 7am UTC
  * Enabled: production + dev

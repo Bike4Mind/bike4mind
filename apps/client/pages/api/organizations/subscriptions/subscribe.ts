@@ -70,7 +70,7 @@ const handler = baseApi()
     // string. `isValidObjectId` accepts uppercase hex and findById casts it, so an owner could
     // send an uppercase spelling of their own org id, miss the byte-exact `ownerId` match in the
     // duplicate-subscription guard below (rows are written from `org.id`, always lowercase - see
-    // Subscription.ts and lib/userSubscriptions/serverUtils.ts) and open a second checkout
+    // Subscription.ts and apps/workers/src/lib/userSubscriptions/serverUtils.ts) and open a second checkout
     // session: a double charge with only one entitlement. Same reason the Stripe metadata uses it.
     const gatedOrganizationId = organization?.id;
 

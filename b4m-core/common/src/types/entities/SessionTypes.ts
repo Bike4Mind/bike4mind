@@ -890,7 +890,7 @@ export interface VoiceHoldMarkers {
  * `taggedAt` on that failure would bound the spend but close the gate forever on a notebook that
  * was never tagged: no operator or automated path clears `taggedAt`, only a user re-importing that
  * one notebook. A cooldown bounds the spend without that, the same trade
- * `apps/client/server/s3/moderationRescueSweep.ts` makes and for the same reason - a terminal
+ * `apps/workers/src/s3/moderationRescueSweep.ts` makes and for the same reason - a terminal
  * give-up state is unrecoverable when there is no operator re-run route.
  *
  * Bounds the SPIDER's dispatch only. `sessionSummarization.ts` auto-tags after a summary and
