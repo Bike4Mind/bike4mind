@@ -577,6 +577,35 @@ describe('isDriveFileAccessDeniedError', () => {
   });
 });
 
+describe('getFolderAccess on a rejected token', () => {
+  const driveWithGet = (get: ReturnType<typeof vi.fn>) => ({ files: { get } }) as unknown as drive_v3.Drive;
+
+  it('reports a 401 as unauthorized, NOT as a missing folder', async () => {
+    const get = vi.fn().mockRejectedValue(Object.assign(new Error('Invalid Credentials'), { code: 401 }));
+    expect(await getFolderAccess(driveWithGet(get), 'FOLDER_X')).toMatchObject({ ok: false, reason: 'unauthorized' });
+  });
+
+  it('reports a revoked-scope 403 as unauthorized too, NOT as a missing folder', async () => {
+    const get = vi.fn().mockRejectedValue(
+      Object.assign(new Error('Insufficient Permission'), {
+        code: 403,
+        errors: [{ reason: 'insufficientPermissions' }],
+      })
+    );
+    expect(await getFolderAccess(driveWithGet(get), 'FOLDER_X')).toMatchObject({ ok: false, reason: 'unauthorized' });
+  });
+
+  it('still reports a 404 as exists: false', async () => {
+    const get = vi.fn().mockRejectedValue(Object.assign(new Error('File not found'), { code: 404 }));
+    expect(await getFolderAccess(driveWithGet(get), 'FOLDER_X')).toEqual({
+      ok: true,
+      exists: false,
+      isFolder: false,
+      canRead: false,
+    });
+  });
+});
+
 describe('probeConnectedFolder', () => {
   afterEach(() => vi.useRealTimers());
 
@@ -631,6 +660,22 @@ describe('probeConnectedFolder', () => {
     ['accessNotConfigured', throttle(403, 'accessNotConfigured')],
     ['no reason', Object.assign(new Error('Forbidden'), { code: 403, response: { status: 403 } })],
   ])('throws a project-wide 403 (%s) rather than reporting the folder gone', async (_label, err) => {
+    const get = vi.fn().mockRejectedValue(err);
+    await expect(probeConnectedFolder(driveWithGet(get), 'FOLDER_X')).rejects.toBe(err);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('rethrows a revoked-scope 403 as a credential verdict rather than reporting the folder forbidden', async () => {
+    const err = Object.assign(new Error('Insufficient Permission'), {
+      code: 403,
+      errors: [{ reason: 'insufficientPermissions' }],
+    });
+    const get = vi.fn().mockRejectedValue(err);
+    await expect(probeConnectedFolder(driveWithGet(get), 'FOLDER_X')).rejects.toBe(err);
+  });
+
+  it('rethrows a 401 as a credential verdict rather than reporting the folder gone', async () => {
+    const err = Object.assign(new Error('Invalid Credentials'), { code: 401 });
     const get = vi.fn().mockRejectedValue(err);
     await expect(probeConnectedFolder(driveWithGet(get), 'FOLDER_X')).rejects.toBe(err);
     expect(get).toHaveBeenCalledTimes(1);

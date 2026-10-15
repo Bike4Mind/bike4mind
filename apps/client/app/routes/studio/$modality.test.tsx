@@ -25,23 +25,24 @@ vi.mock('@client/app/components/VideoStudio/VideoStudioForm', () => ({
 }));
 
 import { rangeModel } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
-import VideoStudioPage from './video';
+import StudioPage from './$modality';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderPage = () =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <VideoStudioPage />
+      <StudioPage modality="video" />
     </CssVarsProvider>
   );
 
 beforeEach(() => vi.clearAllMocks());
 
-describe('VideoStudioPage', () => {
-  it('sets the tab title', () => {
+describe('StudioPage (video)', () => {
+  it('sets the tab title and keeps the video page heading and test id', () => {
     h.models = { isPending: true, data: undefined };
     renderPage();
     expect(h.useDocumentTitle).toHaveBeenCalledWith('Video Studio');
+    expect(screen.getByTestId('video-studio-page')).toHaveTextContent('Video Studio');
   });
 
   it('renders the form and the gallery when a model is usable', () => {
@@ -55,7 +56,9 @@ describe('VideoStudioPage', () => {
   it('explains that video is not enabled, and still shows past videos', () => {
     h.models = { data: [], isPending: false, isError: false };
     renderPage();
-    expect(screen.getByTestId('video-studio-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('video-studio-empty')).toHaveTextContent(
+      'Video generation is not available for your account yet.'
+    );
     expect(screen.queryByTestId('video-form-stub')).not.toBeInTheDocument();
     expect(screen.getByTestId('video-gallery-stub')).toBeInTheDocument();
   });
@@ -67,7 +70,9 @@ describe('VideoStudioPage', () => {
     unmount();
     h.models = { data: undefined, isPending: false, isError: true };
     renderPage();
-    expect(screen.getByTestId('video-studio-error')).toBeInTheDocument();
+    expect(screen.getByTestId('video-studio-error')).toHaveTextContent(
+      'Could not load the video models. Refresh to try again.'
+    );
   });
 
   it('keeps the form when a background models refetch failed', () => {

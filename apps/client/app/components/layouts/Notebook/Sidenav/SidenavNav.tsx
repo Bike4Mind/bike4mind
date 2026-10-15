@@ -299,7 +299,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             isActive: location.pathname.startsWith('/studio/video'),
             onClick: () => {
               closeOnMobile();
-              navigate({ to: '/studio/video' });
+              navigate({ to: '/studio/$modality', params: { modality: 'video' } });
             },
           },
         ]

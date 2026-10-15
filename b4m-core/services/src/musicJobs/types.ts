@@ -6,6 +6,7 @@ import type {
   MusicGenerationSettings,
   MusicProviderId,
   MusicValidationErrorCode,
+  StorageLimitErrorInfo,
   UsageEventStatus,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
@@ -61,8 +62,8 @@ export type MusicJobDeps = {
 
 export type CreateMusicJobDeps = MusicJobDeps & {
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
-  /** Whether the user's Files quota has room for `bytes` more; the song is saved there, as saveToFiles does. */
-  hasStorageFor(userId: string, bytes: number): Promise<boolean>;
+  /** The refusal detail when the user's Files quota lacks room for `bytes` more (the song is saved there, as saveToFiles does); undefined when there is room. */
+  checkStorageFor(userId: string, bytes: number): Promise<StorageLimitErrorInfo | undefined>;
 };
 
 // The most a song can take per second (320 kbps MP3), for the create-time storage check.
@@ -90,4 +91,11 @@ export type CreateMusicJobErrorCode =
 
 export type CreateMusicJobResult =
   | { ok: true; job: MusicJob; created: boolean }
-  | { ok: false; status: 400 | 402 | 403 | 422; code: CreateMusicJobErrorCode; message: string };
+  | {
+      ok: false;
+      status: 400 | 402 | 403 | 422;
+      code: Exclude<CreateMusicJobErrorCode, 'storage_quota_exceeded'>;
+      message: string;
+    }
+  // A 400 like the Files routes' storage_limit_exceeded, carrying the same used/limit/requested detail.
+  | { ok: false; status: 400; code: 'storage_quota_exceeded'; message: string; storage: StorageLimitErrorInfo };

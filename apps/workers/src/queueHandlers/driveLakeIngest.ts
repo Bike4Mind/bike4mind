@@ -37,16 +37,19 @@ import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import {
   disableDriveConnectionForLake,
   getValidConnectionDriveAccessToken,
+  isTerminalDriveGrantError,
   releaseDriveConnection,
 } from '@server/integrations/google/drive/common';
 import {
   createDriveClient,
+  isDriveAuthError,
   isDriveRateLimitError,
   listChanges,
   getStartPageToken,
   isDriveInvalidCursorError,
   isFolder,
   probeConnectedFolder,
+  REJECTED_DRIVE_TOKEN_MESSAGE,
   UNREACHABLE_FOLDER_MESSAGES,
   type ConnectedFolderReachability,
   type DriveChange,
@@ -632,10 +635,28 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     }
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
 
+    // A revoked/expired grant reaches this run at one of two token resolutions - the fetch below or the
+    // probe's forced refresh - and both exits do the same thing: the connection is already
+    // credential_error (which ends the claim), so log, settle the adopted batch, and stop rather than
+    // let SQS redeliver into the DLQ. Mirrors drive-sync.ts's retry-on-401 policy (getFolderAccessAsUser):
+    // keep the two in sync.
+    const stopOnRevokedGrant = async () => {
+      logger.warn('[driveLakeIngest] Drive grant was revoked; connection marked credential_error', { connectionId });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+    };
+
     // An org connection's own token, else (every personal connection) the connecting user's live grant.
-    // A credential failure marks the connection credential_error and throws so SQS retries -> DLQ.
-    const accessToken = await getValidConnectionDriveAccessToken(connectionId, connectionOwner);
-    const drive = createDriveClient(accessToken);
+    // A terminal grant failure has already marked the connection credential_error (which ends the claim),
+    // so the run stops here like the probe's revoked-grant exit below; only a transient one throws for SQS.
+    let accessToken: string;
+    try {
+      accessToken = await getValidConnectionDriveAccessToken(connectionId, connectionOwner);
+    } catch (e) {
+      if (!isTerminalDriveGrantError(e)) throw e;
+      await stopOnRevokedGrant();
+      return;
+    }
+    let drive = createDriveClient(accessToken);
 
     // 1) Resolve this run's Drive-side signal: an incremental `changes.list` pull (scoped to what
     //    happened since the stored cursor) whenever the connection already carries one and the caller
@@ -717,10 +738,41 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // empty delta forever. A definite "gone" parks the connection in needs_reconnect (excluded from
     // findDueForPoll and claimForSync) until the user re-picks the folder, which heals it via
     // drive-sync's updateCredential.
+    //
+    // A 401 (or a revoked-scope 403, isDriveAuthError) is Drive rejecting the token itself, which a grant
+    // revoked at Google does well before a cached user token's expiresAt. One retry through a forced
+    // refresh lets Google's invalid_grant decide: that marks the connection credential_error (and ends
+    // the claim) inside getValidConnectionDriveAccessToken, so the run stops here rather than retrying
+    // through SQS to the DLQ.
+    const probeFolder = async (): Promise<ConnectedFolderReachability> => {
+      try {
+        return await probeConnectedFolder(drive, connection.driveFolderId);
+      } catch (e) {
+        if (!isDriveAuthError(e)) throw e;
+        drive = createDriveClient(
+          await getValidConnectionDriveAccessToken(connection.id, connectionOwner, { forceRefresh: true })
+        );
+        return probeConnectedFolder(drive, connection.driveFolderId);
+      }
+    };
     let folderReachability: ConnectedFolderReachability;
     try {
-      folderReachability = await probeConnectedFolder(drive, connection.driveFolderId);
+      folderReachability = await probeFolder();
     } catch (e) {
+      if (isTerminalDriveGrantError(e)) {
+        await stopOnRevokedGrant();
+        return;
+      }
+      // probeFolder already retried a rejected token on a fresh one, so this one is Drive refusing the grant itself.
+      if (isDriveAuthError(e)) {
+        logger.warn('[driveLakeIngest] Drive rejected a freshly refreshed token; needs reconnect', { connectionId });
+        await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
+          status: 'credential_error',
+          lastError: REJECTED_DRIVE_TOKEN_MESSAGE,
+        });
+        if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+        return;
+      }
       if (!isDriveRateLimitError(e)) throw e;
       await deferDriveSync('folder_probe', 'rate_limited', e);
       return;
