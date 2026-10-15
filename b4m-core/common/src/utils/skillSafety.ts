@@ -73,6 +73,7 @@ export function renderInvokedSkill(skill: RenderableSkill, rawArgs: string, invo
   const expandedBody = substituteArguments(skill.body, parseSkillArguments(rawArgs));
 
   // A Skill Market import is owned by the importer but authored by someone else, so it stays untrusted.
+  // The LLM `skill` tool (services/src/llm/tools/implementation/skill) applies the same rule; keep in sync.
   const isOwner = skill.userId === invokerUserId && !skill.importedFrom;
   if (isOwner) {
     return `## Skill Invoked: /${skill.name}\n\n${expandedBody}\n\n---\nFollow the instructions above for this turn.`;

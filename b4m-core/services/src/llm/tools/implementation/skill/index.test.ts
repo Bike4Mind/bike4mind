@@ -111,6 +111,16 @@ describe('skillTool', () => {
     expect(result).toContain('Do: now');
   });
 
+  it('wraps a Skill Market import as untrusted even though the caller owns the copy', async () => {
+    const importedFrom = { listingId: 'l1', versionId: 'v1', version: 1, contentHash: 'h' };
+    const findAccessibleByNameForUser = vi.fn().mockResolvedValue(makeSkill({ importedFrom }));
+    const tool = skillTool.implementation(makeContext({ findAccessibleByNameForUser }), {});
+    const result = await tool.toolFn({ name: 'summarize', args: 'now' });
+
+    expect(result).toContain('UNTRUSTED_SKILL_CONTENT');
+    expect(result).toContain('a Skill Market author');
+  });
+
   it("surfaces a shared skill's allowedTools as a requested tool scope", async () => {
     const findAccessibleByNameForUser = vi
       .fn()

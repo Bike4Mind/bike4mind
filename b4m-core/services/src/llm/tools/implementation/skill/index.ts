@@ -70,12 +70,20 @@ export const skillTool: ToolDefinition = {
       // Owner-authored skills are trusted prompt content. Anything else
       // (shared / org / system) is authored by someone other than the invoker,
       // so wrap it as untrusted to neutralize prompt-injection in the body.
-      const isOwner = skill.userId === context.userId;
+      // A Skill Market import is owned by the importer but authored by someone else (same rule as
+      // renderInvokedSkill in skillSafety.ts; keep the two in sync).
+      const isOwner = skill.userId === context.userId && !skill.importedFrom;
       if (isOwner) {
         return `## Skill: /${skill.name}\n\n${expandedBody}\n\n---\nFollow the instructions above for the rest of this turn.`;
       }
 
-      const ownerLabel = skill.organizationId ? 'your organization' : skill.isSystem ? 'the system' : 'another user';
+      const ownerLabel = skill.importedFrom
+        ? 'a Skill Market author'
+        : skill.organizationId
+          ? 'your organization'
+          : skill.isSystem
+            ? 'the system'
+            : 'another user';
       const wrapped = wrapUntrustedSkillBody(skill.name, expandedBody, ownerLabel);
 
       // A shared skill may only narrow the tool surface, never widen it. There
