@@ -181,19 +181,20 @@ async function scanAndDecide(
   }
 
   // The honest summary is model output an adversarial body can steer, and every field of it is
-  // shown to viewers, so the whole summary is scanned - not just the prose fields.
-  const summaryFindings = classifier?.ok
-    ? scanPublicText(
-        [
-          classifier.honestSummary.whatItDoes,
-          classifier.honestSummary.dataItTouches,
-          ...classifier.honestSummary.riskNotes,
-          classifier.honestSummary.mismatchNote ?? '',
-          ...classifier.honestSummary.toolsUsed,
-        ].join('\n'),
-        settings.urlAllowlist
-      ).map(f => ({ ...f, rule: `summary_${f.rule}`, severity: 'high' as const, message: `AI summary: ${f.message}` }))
+  // shown to viewers, so the whole summary is scanned - not just the prose fields. Each field is
+  // scanned on its own: joining them lets a `<` in one field pair with a `>` in the next.
+  const summaryFields = classifier?.ok
+    ? [
+        classifier.honestSummary.whatItDoes,
+        classifier.honestSummary.dataItTouches,
+        ...classifier.honestSummary.riskNotes,
+        classifier.honestSummary.mismatchNote ?? '',
+        ...classifier.honestSummary.toolsUsed,
+      ]
     : [];
+  const summaryFindings = summaryFields
+    .flatMap(field => scanPublicText(field, settings.urlAllowlist))
+    .map(f => ({ ...f, rule: `summary_${f.rule}`, severity: 'high' as const, message: `AI summary: ${f.message}` }));
   const allFindings = classifier?.ok ? [...findings, ...classifier.findings, ...summaryFindings] : findings;
   const tier = classifier?.ok
     ? computeTier(
