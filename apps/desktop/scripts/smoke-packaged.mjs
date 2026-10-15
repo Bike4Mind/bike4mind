@@ -17,6 +17,10 @@ if (process.platform === 'linux') {
   executable = join(release, images[0]);
   platformArgs.push('--appimage-extract-and-run', '--no-sandbox', '--disable-dev-shm-usage');
 }
+if (process.platform === 'darwin') {
+  // A temporary HOME has no login keychain; startup tests must not prompt or touch the real one.
+  platformArgs.push('--use-mock-keychain');
+}
 assert.ok(executable, 'Pass the installed macOS app executable');
 const server = createServer();
 await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen));

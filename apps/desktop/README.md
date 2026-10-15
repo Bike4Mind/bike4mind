@@ -87,8 +87,10 @@ real workstation, or authenticated chat. Those still need real-machine acceptanc
 
 The macOS job mounts the native-architecture DMG read-only, copies the app to a temporary
 installation directory, and runs the same startup checks with an isolated profile.
-`mac-smoke-results` contains the screenshot and logs. The other architecture is packaged
-but not launched. This does not verify Gatekeeper approval on a fresh machine.
+`mac-smoke-results` contains the screenshot and logs. The test uses a mock keychain
+to avoid system prompts or accessing a real login keychain. It does not verify secure
+credential persistence. The other architecture is packaged but not launched. This does
+not verify Gatekeeper approval on a fresh machine.
 
 Installer versions follow SemVer, selected automatically by
 `scripts/desktop_release_version.py`. The first release uses the package version
