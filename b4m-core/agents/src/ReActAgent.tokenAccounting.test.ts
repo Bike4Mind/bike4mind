@@ -287,4 +287,21 @@ describe('foldCompletionInfo (#657 assign-not-add contract)', () => {
     expect(folded.inputTokens).toBe(2000);
     expect(folded.cacheReadTokens).toBe(100); // baseline only, not 100 + 800
   });
+
+  it('never folds cacheStats cache writes alone', () => {
+    const folded = foldCompletionInfo({ inputTokens: 1000, cacheStats: cacheStats(0, 300) }, baselines, {
+      ...baselines,
+    });
+    expect(folded.cacheWriteTokens).toBe(50); // baseline only, not 50 + 300
+  });
+
+  it('takes the top-level cache fields over cacheStats when both are set and differ', () => {
+    const folded = foldCompletionInfo(
+      { inputTokens: 500, cacheStats: cacheStats(999, 777), cacheReadInputTokens: 800, cacheCreationInputTokens: 200 },
+      baselines,
+      { ...baselines }
+    );
+    expect(folded.cacheReadTokens).toBe(900); // 100 + 800
+    expect(folded.cacheWriteTokens).toBe(250); // 50 + 200
+  });
 });

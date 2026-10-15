@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { ReActAgent } from './ReActAgent';
 import type { AgentContext, AgentCheckpoint } from './types';
 import type { ICompletionBackend, CompletionInfo, ICompletionOptions } from '@bike4mind/llm-adapters';
-import type { IMessage } from '@bike4mind/common';
+import { PermissionDeniedError, type IMessage } from '@bike4mind/common';
 
 type Frame = CompletionInfo & { text: string };
 
@@ -101,6 +101,16 @@ describe('ReActAgent per-request usage', () => {
     ]);
     expect(result.completionInfo.totalInputTokens).toBe(3000);
     expect(result.completionInfo.totalCacheReadTokens).toBe(301_000);
+  });
+
+  it('run(): a permission denial still reports the turns and cache totals billed so far', async () => {
+    const agent = new ReActAgent(context(scriptedLlm([toolIteration, new PermissionDeniedError('shell')])));
+
+    const result = await agent.run('find it');
+
+    expect(result.finalAnswer).toContain('Permission denied');
+    expect(result.completionInfo.turnUsage).toEqual(toolIteration.turnUsage);
+    expect(result.completionInfo.totalCacheReadTokens).toBe(150_000);
   });
 
   it('run(): drops a failed attempt rolled back by reactive compaction', async () => {
