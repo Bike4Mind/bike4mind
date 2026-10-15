@@ -670,6 +670,7 @@ export function SessionList({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [draggedSession, setDraggedSession] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const dragFrame = useRef(0);
   const [nameRequest, setNameRequest] = useState<SectionNameRequest | null>(null);
 
   const sections = useMemo(() => groupSessions(matching, mode, userSections), [matching, mode, userSections]);
@@ -717,8 +718,15 @@ export function SessionList({
       moveToSection: (sessionId, sectionId) => target.current.sectionActions.move(sessionId, sectionId),
       requestNewSection: sessionId => setNameRequest({ kind: 'create', sessionId }),
       drag: sessionId => {
-        setDraggedSession(sessionId);
-        if (!sessionId) setDropTarget(null);
+        cancelAnimationFrame(dragFrame.current);
+        if (!sessionId) {
+          setDraggedSession(null);
+          setDropTarget(null);
+          return;
+        }
+        // A frame late: Chromium drops a drag whose dragstart reflows the list under it, and
+        // starting one is what opens the empty sections' drop slots.
+        dragFrame.current = requestAnimationFrame(() => setDraggedSession(sessionId));
       },
     }),
     []
@@ -840,14 +848,32 @@ export function SessionList({
           {group.sessions.map(row)}
         </List>
       ) : (
-        <Typography
-          level="body-xs"
-          textColor="text.tertiary"
-          sx={{ px: 1, py: 0.25 }}
-          data-testid="sidebar-section-empty"
-        >
-          {query.trim() ? 'No matches' : 'Drag a session here, or use its menu'}
-        </Typography>
+        // Nothing at rest - a line of text here sat exactly where a row would and read as one.
+        // While a row is in the air the empty section needs somewhere to aim, so it gets a
+        // dashed slot, which nothing else in the list looks like.
+        draggedSession && (
+          <Box
+            sx={{
+              mx: 0.5,
+              my: 0.25,
+              height: 28,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: '6px',
+              border: '1px dashed',
+              borderColor:
+                dropTarget?.kind === 'section' && dropTarget.sectionId === group.section.id
+                  ? 'primary.outlinedBorder'
+                  : 'neutral.outlinedBorder',
+            }}
+            data-testid="sidebar-section-drop-zone"
+          >
+            <Typography level="body-xs" textColor="text.tertiary">
+              Drop here
+            </Typography>
+          </Box>
+        )
       )}
     </Box>
   );

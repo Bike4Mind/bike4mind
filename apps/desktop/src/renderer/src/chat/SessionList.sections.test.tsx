@@ -232,7 +232,8 @@ describe('the sidebar context menu', () => {
     expect(bridge.createSection).toHaveBeenCalledWith('Side projects', undefined);
     expect(query('section-name-dialog')).toBeNull();
     const section = sectionNamed('Side projects');
-    expect(query('sidebar-section-empty')).not.toBeNull();
+    // An empty section is its header alone; nothing under it that could pass for a row.
+    expect(query('sidebar-section-drop-zone')).toBeNull();
     expect(titlesIn(section)).toEqual([]);
     expect(looseTitles()).toEqual(['Alpha']);
   });
@@ -381,6 +382,9 @@ function fireDrag(node: HTMLElement, type: string, dataTransfer: FakeTransfer) {
   return event.defaultPrevented;
 }
 
+/** Lets the frame the sidebar waits for before opening its drop slots go by. */
+const nextFrame = () => act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+
 const rowNamed = (title: string) => {
   const row = all('chat-session-item').find(item => item.textContent === title);
   if (!row) throw new Error(`no row ${title}`);
@@ -392,6 +396,7 @@ async function dragRowOnto(title: string, target: HTMLElement) {
   const transfer = fakeDataTransfer();
   const row = rowNamed(title);
   fireDrag(row, 'dragstart', transfer);
+  await nextFrame();
   const accepted = fireDrag(target, 'dragover', transfer);
   fireDrag(target, 'drop', transfer);
   fireDrag(row, 'dragend', transfer);
@@ -403,7 +408,7 @@ describe('dragging a session', () => {
   it('moves a row dropped on a section into it', async () => {
     await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
 
-    const accepted = await dragRowOnto('Beta', el('sidebar-section-empty', sectionNamed('Home')));
+    const accepted = await dragRowOnto('Beta', el('sidebar-section-header', sectionNamed('Home')));
 
     expect(accepted).toBe(true);
     expect(bridge.moveSession).toHaveBeenCalledWith('b', 'home');
@@ -425,12 +430,48 @@ describe('dragging a session', () => {
     const transfer = fakeDataTransfer();
 
     fireDrag(rowNamed('Beta'), 'dragstart', transfer);
+    await nextFrame();
     fireDrag(sectionNamed('Home'), 'dragover', transfer);
     expect(sectionNamed('Home').dataset.dropTarget).toBe('true');
     expect(sectionNamed('Work').dataset.dropTarget).toBeUndefined();
 
     fireDrag(rowNamed('Beta'), 'dragend', transfer);
     expect(sectionNamed('Home').dataset.dropTarget).toBeUndefined();
+  });
+
+  it('opens a drop slot in empty sections only while a row is dragged', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
+    const transfer = fakeDataTransfer();
+    expect(query('sidebar-section-drop-zone')).toBeNull();
+
+    fireDrag(rowNamed('Beta'), 'dragstart', transfer);
+    await nextFrame();
+    // Home is empty; Work already has a row to drop onto.
+    expect(
+      all('sidebar-section-drop-zone').map(
+        zone => zone.closest<HTMLElement>('[data-testid="sidebar-section"]')?.dataset.sectionId
+      )
+    ).toEqual(['home']);
+
+    const accepted = fireDrag(el('sidebar-section-drop-zone'), 'dragover', transfer);
+    fireDrag(el('sidebar-section-drop-zone'), 'drop', transfer);
+    fireDrag(rowNamed('Beta'), 'dragend', transfer);
+    await settle();
+
+    expect(accepted).toBe(true);
+    expect(bridge.moveSession).toHaveBeenCalledWith('b', 'home');
+    expect(query('sidebar-section-drop-zone')).toBeNull();
+  });
+
+  it('opens no drop slots for a drag that ended before its first frame', async () => {
+    await mount([summary('b', 'Beta')], workAndHome);
+    const transfer = fakeDataTransfer();
+
+    fireDrag(rowNamed('Beta'), 'dragstart', transfer);
+    fireDrag(rowNamed('Beta'), 'dragend', transfer);
+    await nextFrame();
+
+    expect(query('sidebar-section-drop-zone')).toBeNull();
   });
 
   it('takes a row out of its section when dropped on the list outside every section', async () => {
