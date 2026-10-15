@@ -148,6 +148,7 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `generate_sound_effect` | Generate a sound effect from a text description | `ai:generate` |
 | `generate_image` | Generate an image from a text prompt and return its quest id, file names, and URLs | `ai:generate` |
 | `text_to_speech` | Synthesize speech from text; return a saved file URL or inline audio | `ai:generate` |
+| `publish_artifact` | Publish an artifact you own to a shareable `/p/...` link (`visibility` defaults to `public`); republishing the same artifact updates the same link | `files:write` |
 
 `text_to_speech` accepts `text` and optional provider, voice, model, format, and voice settings. It uses the scoped `/api/ai/tts` route and spends generation credits. Set `preview: true` to skip saving a copy. The result takes one of three shapes:
 
@@ -156,6 +157,8 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 - **Too large to inline** - no audio block; a time-limited `url` to the audio and its `byteLength`, plus `saved` and `file` describing any saved copy (`saved: false` when none was kept, e.g. with `preview: true`).
 
 `generate_sound_effect` returns the same three shapes.
+
+`publish_artifact` uploads the artifact's raw content and the server renders the page, so the result matches a publish from the app's Share flow. It returns `{ publicId, url, visibility }`, where `url` is absolute. The publish routes require no API-key scope today; `files:write` is the scope named if a key is refused.
 
 It also exposes four resource templates, each with a working `list` and `read` that return `application/json`:
 

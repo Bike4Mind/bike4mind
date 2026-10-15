@@ -25,6 +25,7 @@ import {
   generateSoundEffect,
   generateImage,
   textToSpeech,
+  publishArtifact,
 } from './tools';
 
 const mockClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>>): B4mApiClient =>
@@ -50,6 +51,7 @@ describe('TOOL_NAMES', () => {
       'generate_sound_effect',
       'text_to_speech',
       'generate_image',
+      'publish_artifact',
     ]);
   });
 });
@@ -1566,5 +1568,161 @@ describe('registerTools', () => {
       expect(getQuest).toHaveBeenCalledTimes(1);
       expect(sendNotification).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('publishArtifact', () => {
+  const ARTIFACT_ID = 'artifact_html_generated_chart_1700000000000_1';
+  const record = {
+    artifact: { id: ARTIFACT_ID, type: 'html', title: 'Sales Chart', userId: 'user1' },
+    content: { content: '<h1>café</h1>' },
+  };
+
+  const publishClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>> = {}) => {
+    const fns = {
+      getArtifact: vi.fn().mockResolvedValue(record),
+      requestPublishUpload: vi.fn().mockResolvedValue({
+        draftId: 'draft1',
+        uploadUrls: [{ path: 'index.html', url: 'https://s3/put', expiresAt: '2026-10-15T00:10:00Z' }],
+      }),
+      uploadPublishDraftFile: vi.fn().mockResolvedValue(undefined),
+      finalizePublish: vi.fn().mockResolvedValue({
+        publicId: 'pub1',
+        url: '/p/u/user1/sales-chart-abc',
+        tier: 'user',
+        scopeId: 'user1',
+        slug: 'sales-chart-abc',
+        visibility: 'public',
+        publishedAt: '2026-10-15T00:00:00Z',
+      }),
+    };
+    return { client: mockClient({ ...fns, ...overrides }), fns };
+  };
+
+  it('uploads the raw content for server-side rendering, then finalizes and returns an absolute URL', async () => {
+    const { client, fns } = publishClient();
+
+    const result = await publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'public' });
+
+    expect(fns.getArtifact).toHaveBeenCalledWith(ARTIFACT_ID);
+    expect(fns.requestPublishUpload).toHaveBeenCalledWith({
+      tier: 'user',
+      scopeId: 'user1',
+      slug: expect.stringMatching(/^sales-chart-[0-9a-f]{8}$/),
+      title: 'Sales Chart',
+      visibility: 'public',
+      source: { kind: 'bundle', artifactId: ARTIFACT_ID, artifactType: 'html' },
+      // UTF-8 byte length, not string length: the e-acute is two bytes.
+      files: [{ path: 'index.html', size: 14, mimeType: 'text/html' }],
+    });
+    expect(fns.uploadPublishDraftFile).toHaveBeenCalledWith('https://s3/put', '<h1>café</h1>', 'text/html');
+    expect(fns.finalizePublish).toHaveBeenCalledWith('draft1');
+    expect(result).toEqual({
+      publicId: 'pub1',
+      url: 'http://localhost:3000/p/u/user1/sales-chart-abc',
+      visibility: 'public',
+    });
+  });
+
+  it('derives the same slug on republish and a different one for another artifact', async () => {
+    const otherId = `${ARTIFACT_ID}2`;
+    const { client, fns } = publishClient();
+    await publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'public' });
+    await publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'public' });
+    fns.getArtifact.mockResolvedValueOnce({ ...record, artifact: { ...record.artifact, id: otherId } });
+    await publishArtifact(client, { artifactId: otherId, visibility: 'public' });
+
+    const [first, second, other] = fns.requestPublishUpload.mock.calls.map(([request]) => request.slug);
+    expect(second).toBe(first);
+    expect(other).not.toBe(first);
+  });
+
+  it('applies a title override to both the page title and the slug', async () => {
+    const { client, fns } = publishClient();
+
+    await publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'private', title: '  Q4 Report  ' });
+
+    const [request] = fns.requestPublishUpload.mock.calls[0];
+    expect(request.title).toBe('Q4 Report');
+    expect(request.slug).toMatch(/^q4-report-[0-9a-f]{8}$/);
+    expect(request.visibility).toBe('private');
+  });
+
+  it('retries once under a discriminated slug when another publisher owns the derived one', async () => {
+    const collision = new B4mApiError(
+      403,
+      { error: 'Only the owner can republish this slug', code: 'slug_owned_by_other' },
+      new Headers()
+    );
+    const { client, fns } = publishClient();
+    fns.requestPublishUpload.mockRejectedValueOnce(collision);
+
+    await publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'public' });
+
+    const [first, retry] = fns.requestPublishUpload.mock.calls.map(([request]) => request.slug);
+    expect(retry).toMatch(new RegExp(`^${first}-[0-9a-f]{6}$`));
+    expect(fns.finalizePublish).toHaveBeenCalledWith('draft1');
+  });
+
+  it('does not retry other upload-url failures', async () => {
+    const { client, fns } = publishClient();
+    fns.requestPublishUpload.mockRejectedValueOnce(apiError(400));
+
+    await expect(publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'public' })).rejects.toBeInstanceOf(
+      B4mApiError
+    );
+    expect(fns.requestPublishUpload).toHaveBeenCalledTimes(1);
+    expect(fns.uploadPublishDraftFile).not.toHaveBeenCalled();
+  });
+
+  it('refuses an artifact with no content before opening a draft', async () => {
+    const { client, fns } = publishClient({
+      getArtifact: vi.fn().mockResolvedValue({ ...record, content: { content: '   ' } }),
+    });
+
+    await expect(publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'public' })).rejects.toThrow(
+      'has no content to publish'
+    );
+    expect(fns.requestPublishUpload).not.toHaveBeenCalled();
+  });
+
+  it('refuses an artifact type the publish route cannot render', async () => {
+    const { client } = publishClient({
+      getArtifact: vi.fn().mockResolvedValue({ ...record, artifact: { ...record.artifact, type: 'hologram' } }),
+    });
+
+    await expect(publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'public' })).rejects.toThrow(
+      'unsupported type (hologram)'
+    );
+  });
+
+  it('stops before finalize when the byte upload fails', async () => {
+    const { client, fns } = publishClient({
+      uploadPublishDraftFile: vi.fn().mockRejectedValue(new Error('publish upload failed (403)')),
+    });
+
+    await expect(publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'public' })).rejects.toThrow(
+      'publish upload failed (403)'
+    );
+    expect(fns.finalizePublish).not.toHaveBeenCalled();
+  });
+
+  it('maps a finalize failure to an error tool result through registerTools', async () => {
+    const tools = new Map<string, (args: unknown) => Promise<CallToolResult>>();
+    const server = {
+      registerTool: (name: string, _config: unknown, cb: (args: unknown) => Promise<CallToolResult>) =>
+        tools.set(name, cb),
+    } as unknown as McpServer;
+    const { client } = publishClient({
+      finalizePublish: vi
+        .fn()
+        .mockRejectedValue(new B4mApiError(404, { error: 'Draft not found or expired' }, new Headers())),
+    });
+    registerTools(server, client);
+
+    const result = await tools.get('publish_artifact')!({ artifactId: ARTIFACT_ID, visibility: 'public' });
+
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toBe('Draft not found or expired');
   });
 });

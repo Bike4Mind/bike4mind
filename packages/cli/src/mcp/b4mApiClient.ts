@@ -17,9 +17,12 @@ import {
   type GenerateImageResponse,
   type ImagePromptResolution,
   type PromptBatchQueryType,
+  type PublishResult,
   type QuestErrorCode,
   type SessionDeleteResponse,
   type TTSRequest,
+  type UploadUrlRequest,
+  type UploadUrlResponse,
 } from '@bike4mind/common';
 
 export const NOTEBOOK_ID_PATTERN = /^[a-f0-9]{24}$/i;
@@ -446,6 +449,30 @@ export class B4mApiClient {
     });
   }
 
+  /** POST /api/publish/artifact/upload-url: opens a publish draft and mints one upload URL per file. */
+  async requestPublishUpload(request: UploadUrlRequest): Promise<UploadUrlResponse> {
+    return this.client.post<UploadUrlResponse>('/api/publish/artifact/upload-url', request);
+  }
+
+  /**
+   * PUT one draft file to the URL upload-url minted. Plain fetch, never the app
+   * client: that client injects auth headers, which break an S3 presigned
+   * signature. Self-host mints a relative proxy URL, so resolve against baseURL.
+   */
+  async uploadPublishDraftFile(uploadUrl: string, body: string, mimeType: string): Promise<void> {
+    const res = await fetch(new URL(uploadUrl, this.baseURL), {
+      method: 'PUT',
+      headers: { 'Content-Type': mimeType },
+      body,
+    });
+    if (!res.ok) throw new Error(`publish upload failed (${res.status})`);
+  }
+
+  /** POST /api/publish/artifact/finalize: validates the uploaded draft and makes it live. */
+  async finalizePublish(draftId: string): Promise<PublishResult> {
+    return this.client.post<PublishResult>('/api/publish/artifact/finalize', { draftId });
+  }
+
   /**
    * POST /api/briefcase/catalog: a key -> prompts map, one entry per query key.
    *
@@ -472,6 +499,9 @@ export class B4mApiClient {
     return result.prompt;
   }
 }
+
+/** Error code the publish routes put on a slug-collision 403/409. */
+export const SLUG_OWNED_BY_OTHER = 'slug_owned_by_other';
 
 /**
  * Turn an API failure into an actionable, transport-agnostic message. `scope` is
@@ -505,6 +535,12 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     // where the key-scope fallback below would misdirect. Other 403s keep that fallback.
     // The match is wording-based: must stay in sync with the ForbiddenError messages in
     // apps/client/server/middlewares/csrfProtection.ts.
+    // The publish routes answer 403 when the slug belongs to another publisher; no key
+    // scope fixes that. Must stay in sync with SLUG_OWNED_BY_OTHER in
+    // apps/client/server/services/publish/slugOwnership.ts.
+    if (apiErrorCode(error) === SLUG_OWNED_BY_OTHER) {
+      return extractServerMessage(data) ?? 'this publish slug belongs to another publisher';
+    }
     const csrfMessage = extractServerMessage(data);
     if (csrfMessage && /CSRF|request origin/i.test(csrfMessage)) return csrfMessage;
     const base = "API key forbidden: check the key's scopes and account access";
@@ -550,6 +586,14 @@ function httpFailure(error: unknown): { status?: number; data?: unknown } | unde
 }
 
 /** The HTTP status of a failed API call from either transport. */
+/** The machine-readable `code` a route put on its error body, when it set one. */
+export function apiErrorCode(error: unknown): string | undefined {
+  const data = httpFailure(error)?.data;
+  if (!data || typeof data !== 'object') return undefined;
+  const code = (data as Record<string, unknown>).code;
+  return typeof code === 'string' ? code : undefined;
+}
+
 export function apiErrorStatus(error: unknown): number | undefined {
   return httpFailure(error)?.status;
 }

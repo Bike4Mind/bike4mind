@@ -812,3 +812,85 @@ describe('mapApiError', () => {
     expect(mapApiError(new Error('boom'), 'http://x')).toBe('boom');
   });
 });
+
+describe('B4mApiClient publish', () => {
+  let client: B4mApiClient;
+  const globalFetch = vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('fetch', globalFetch);
+    client = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_key');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('opens a draft and finalizes it through the authenticated client', async () => {
+    mockPost.mockResolvedValueOnce({ draftId: 'd1', uploadUrls: [] }).mockResolvedValueOnce({ publicId: 'p1' });
+    const request = {
+      tier: 'user' as const,
+      scopeId: 'u1',
+      slug: 'chart-abc',
+      title: 'Chart',
+      files: [{ path: 'index.html', size: 3, mimeType: 'text/html' }],
+    };
+
+    await client.requestPublishUpload(request);
+    await client.finalizePublish('d1');
+
+    expect(mockPost).toHaveBeenNthCalledWith(1, '/api/publish/artifact/upload-url', request);
+    expect(mockPost).toHaveBeenNthCalledWith(2, '/api/publish/artifact/finalize', { draftId: 'd1' });
+  });
+
+  it('PUTs draft bytes with plain fetch so no auth header breaks a presigned signature', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
+
+    await client.uploadPublishDraftFile(
+      'https://bucket.s3.amazonaws.com/drafts/d1/index.html?X-Amz=1',
+      '<p/>',
+      'text/html'
+    );
+
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+    const [url, init] = globalFetch.mock.calls[0];
+    expect(String(url)).toBe('https://bucket.s3.amazonaws.com/drafts/d1/index.html?X-Amz=1');
+    expect(init).toEqual({ method: 'PUT', headers: { 'Content-Type': 'text/html' }, body: '<p/>' });
+  });
+
+  it('resolves a self-host relative proxy URL against the base URL', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
+
+    await client.uploadPublishDraftFile('/api/publish/artifact/draft-upload?token=t', '<p/>', 'text/html');
+
+    expect(String(globalFetch.mock.calls[0][0])).toBe(
+      'http://localhost:3000/api/publish/artifact/draft-upload?token=t'
+    );
+  });
+
+  it('fails loudly when the upload is rejected', async () => {
+    globalFetch.mockResolvedValue(new Response(null, { status: 403 }));
+
+    await expect(client.uploadPublishDraftFile('https://s3/x', '<p/>', 'text/html')).rejects.toThrow(
+      'publish upload failed (403)'
+    );
+  });
+});
+
+describe('mapApiError publish slug collisions', () => {
+  it('surfaces the server message instead of a key-scope hint', () => {
+    const err = axiosError(403, {
+      data: { error: 'Only the owner can republish this slug', code: 'slug_owned_by_other' },
+    });
+
+    expect(mapApiError(err, 'http://x', 'files:write')).toBe('Only the owner can republish this slug');
+  });
+
+  it('keeps the key-scope hint for any other 403', () => {
+    expect(mapApiError(axiosError(403, { data: { error: 'nope' } }), 'http://x', 'files:write')).toContain(
+      'recommended scope: files:write'
+    );
+  });
+});
