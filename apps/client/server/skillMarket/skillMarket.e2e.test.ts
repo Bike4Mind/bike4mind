@@ -366,6 +366,11 @@ describe('Skill Market (real mongod)', () => {
     const renamed = await call(importHandler, 'POST', OTHER, { id: listing.id }, { name: 'x-2' });
     expect(renamed._getStatusCode()).toBe(201);
     expect((await SkillListing.findById(listing.id))!.importCount).toBe(1);
+    // Renaming the copy on import is not a local edit, so it reads as current, not modified.
+    const [renamedStatus] = await attachMarketStatus([
+      (await skillRepository.findById(renamed._getJSONData().skill.id))!,
+    ]);
+    expect(renamedStatus.marketStatus).toMatchObject({ state: 'current', locallyModified: false });
 
     await SkillListing.updateOne({ _id: listing.id }, { $set: { status: 'delisted' } });
     [status] = await attachMarketStatus([updated]);
@@ -534,6 +539,10 @@ describe('Skill Market (real mongod)', () => {
       await call(reportHandler, 'POST', u, { id: listing.id }, report, false, u === 'new-4' ? new Date() : undefined);
     }
     expect((await SkillListing.findById(listing.id))!.hiddenByReports).toBe(true);
+
+    // A report-hidden listing disappears from browse and can no longer be imported.
+    expect((await browse()).data).toEqual([]);
+    await expect(call(importHandler, 'POST', OTHER, { id: listing.id })).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it('update: refuses to apply a version other than the one the importer reviewed', async () => {
