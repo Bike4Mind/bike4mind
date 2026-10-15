@@ -75,6 +75,7 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './project/git';
+import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
@@ -282,9 +283,12 @@ export function registerChat(auth: AuthService): RegisteredChat {
     REASONING_EFFORT
   );
   const access = new AccessStore(join(userData, 'tool-access.json'));
-  // Its own file beside tool-access.json, and for the same reason: both record a consent the
-  // user gave once and should not be asked for again on every launch.
-  const skills = new SkillCatalog(new ProjectTrustStore(join(userData, 'project-skill-trust.json')));
+  // The trust file is its own file beside tool-access.json, and for the same reason: both record
+  // a consent the user gave once and should not be asked for again on every launch.
+  const skills = new SkillCatalog(
+    new ProjectTrustStore(join(userData, 'project-skill-trust.json')),
+    accountSkillsProvider(auth, userData)
+  );
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
