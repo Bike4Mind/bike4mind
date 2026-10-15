@@ -56,6 +56,7 @@ const SkillListingSchema = new Schema<ISkillListingDocument>(
     /** Set when distinct-reporter count crosses SkillMarketReportAutoHideThreshold; cleared by an admin restore. */
     hiddenByReports: { type: Boolean, default: false },
     delistedReason: { type: String, maxlength: 1000 },
+    delistedBySuperAdmin: { type: Boolean },
   },
   {
     timestamps: true,
@@ -121,6 +122,10 @@ export async function setPendingListingVersion(
     { new: false }
   );
   if (!before) return false;
+  // A resubmission after a rejection is under review again, not still "Not published".
+  if (before.status === 'rejected') {
+    await SkillListing.updateOne({ _id: listingId, status: 'rejected' }, { $set: { status: 'in_review' } });
+  }
   return { displacedVersionId: before.pendingVersionId ?? null };
 }
 

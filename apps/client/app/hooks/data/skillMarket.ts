@@ -210,9 +210,12 @@ export const useImportListing = () => {
       name?: string;
       targetSkillId?: string;
       overwrite?: boolean;
+      expectedVersionId?: string;
     }) =>
       (await api.post<{ skill: { id: string; name: string } }>(`/api/skills/market/${listingId}/import`, body)).data,
     onSuccess: invalidate,
+    // A 409 version_changed means the detail behind the diff is stale; refetch it.
+    onError: invalidate,
   });
 };
 

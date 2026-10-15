@@ -52,6 +52,13 @@ describe('renderInvokedSkill', () => {
     expect(rendered).toContain('your organization');
   });
 
+  it('keeps a Skill Market import untrusted even though the invoker owns the copy', () => {
+    const importedFrom = { listingId: 'l1', versionId: 'v1', version: 1, contentHash: 'h' };
+    const rendered = renderInvokedSkill(makeSkill({ importedFrom }), '', 'owner-1');
+    expect(rendered).toContain('UNTRUSTED_SKILL_CONTENT');
+    expect(rendered).toContain('a Skill Market author');
+  });
+
   it('labels a system skill as belonging to the system', () => {
     const rendered = renderInvokedSkill(makeSkill({ userId: 'someone-else', isSystem: true }), '', 'owner-1');
     expect(rendered).toContain('the system');

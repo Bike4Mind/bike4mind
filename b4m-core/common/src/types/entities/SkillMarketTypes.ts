@@ -84,6 +84,8 @@ export interface ISkillListing {
   /** Hidden from the market after enough distinct reports, until an admin restores or delists it. */
   hiddenByReports?: boolean;
   delistedReason?: string;
+  /** Set on a super-admin takedown, which only a super-admin may reverse. */
+  delistedBySuperAdmin?: boolean;
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
@@ -141,6 +143,8 @@ export interface ISkillListingReport {
   reporterId: string;
   reason: SkillListingReportReason;
   details?: string;
+  /** False for a brand-new account that hasn't imported the listing: kept for moderators, not counted toward auto-hide. */
+  countsTowardHide?: boolean;
   status: 'open' | 'actioned' | 'dismissed';
   resolvedBy?: string | null;
   resolvedAt?: Date | null;

@@ -14,7 +14,7 @@ export async function attachMarketStatus<T extends ISkill>(
   if (listingIds.length === 0) return skills;
 
   const listings = await SkillListing.find({ _id: { $in: listingIds } })
-    .select('status currentVersion deletedAt')
+    .select('status currentVersion deletedAt hiddenByReports')
     .lean();
   const byId = new Map(listings.map(l => [String(l._id), l]));
 
@@ -26,7 +26,8 @@ export async function attachMarketStatus<T extends ISkill>(
     let state: ISkillMarketStatus['state'] = 'current';
     if (!listing || listing.deletedAt || listing.status === 'withdrawn') state = 'removed';
     else if (listing.status === 'delisted') state = 'delisted';
-    else if ((listing.currentVersion ?? 0) > from.version) state = 'stale';
+    // A report-hidden listing can't be imported from until a moderator decides, so don't offer the update yet.
+    else if ((listing.currentVersion ?? 0) > from.version && !listing.hiddenByReports) state = 'stale';
     return {
       ...skill,
       marketStatus: {

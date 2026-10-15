@@ -12,6 +12,8 @@ import { BadRequestError, NotFoundError } from '@bike4mind/common';
 import { canSeeListing, findListing, loadMarketSettings, memberOrgIdsFor } from '@server/skillMarket/market';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 const bodySchema = z.object({
   reason: z.enum(SKILL_LISTING_REPORT_REASONS),
   details: z.string().trim().max(2000).optional(),
@@ -20,7 +22,8 @@ const bodySchema = z.object({
 
 /**
  * POST /api/skills/market/[id]/report - flag a listing. One open report per (listing, reporter);
- * once open reports from SkillMarketReportAutoHideThreshold distinct users pile up, the listing is
+ * once open reports from SkillMarketReportAutoHideThreshold distinct established users (importers, or
+ * accounts past SkillMarketPublicMinAccountAgeDays) pile up, the listing is
  * hidden from the market until an admin restores or delists it (mirrors app-store takedown
  * queues). Rate-limited per user so one account can't flood the queue across many listings.
  */
@@ -38,12 +41,17 @@ const handler = baseApi({ auth: 'jwtOnly' })
     }
     if (listing.authorUserId === userId) throw new BadRequestError("You can't report your own listing");
 
+    const { reportAutoHideThreshold, publicMinAccountAgeDays } = await loadMarketSettings();
+    // Same bar as publishing Public, so a few throwaway accounts can't take a listing down.
+    const ageDays = (Date.now() - new Date(req.user!.createdAt).getTime()) / DAY_MS;
+    const countsTowardHide = hasImported || Boolean(req.user!.isAdmin) || ageDays >= publicMinAccountAgeDays;
     try {
       await SkillListingReport.create({
         listingId: String(listing.id),
         reporterId: userId,
         reason: body.reason,
         details: body.details,
+        countsTowardHide,
         status: 'open',
       });
     } catch (error) {
@@ -51,8 +59,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
       throw error;
     }
 
-    const { reportAutoHideThreshold } = await loadMarketSettings();
-    const openReports = await SkillListingReport.countDocuments({ listingId: String(listing.id), status: 'open' });
+    const openReports = await SkillListingReport.countDocuments({
+      listingId: String(listing.id),
+      status: 'open',
+      countsTowardHide: { $ne: false },
+    });
     if (openReports >= reportAutoHideThreshold) {
       await SkillListing.updateOne({ _id: listing.id, status: 'approved' }, { $set: { hiddenByReports: true } });
     }

@@ -20,7 +20,7 @@ import {
   type ISkillListingVersion,
   type ISkillScanFinding,
 } from '@bike4mind/common';
-import { computeTier, reviewStatusFor, runDeterministicScan } from './scanRules';
+import { computeTier, reviewStatusFor, runDeterministicScan, scanPublicText } from './scanRules';
 import type { ClassifierLlm, ClassifierResult } from './classifySkill';
 import { classifySkill } from './classifySkill';
 import {
@@ -169,7 +169,18 @@ async function scanAndDecide(
     return reload(versionId);
   }
 
-  const allFindings = classifier?.ok ? [...findings, ...classifier.findings] : findings;
+  // The honest summary is model output an adversarial body can steer, and it is shown publicly.
+  const summaryFindings = classifier?.ok
+    ? scanPublicText(
+        [
+          classifier.honestSummary.whatItDoes,
+          classifier.honestSummary.dataItTouches,
+          ...classifier.honestSummary.riskNotes,
+        ].join('\n'),
+        settings.urlAllowlist
+      ).map(f => ({ ...f, rule: `summary_${f.rule}`, severity: 'high' as const, message: `AI summary: ${f.message}` }))
+    : [];
+  const allFindings = classifier?.ok ? [...findings, ...classifier.findings, ...summaryFindings] : findings;
   const tier = classifier?.ok
     ? computeTier(
         allFindings,

@@ -51,7 +51,7 @@ export function wrapUntrustedSkillBody(skillName: string, body: string, ownerLab
 }
 
 /** The subset of skill fields needed to render an invocation into the prompt. */
-export type RenderableSkill = Pick<ISkill, 'name' | 'body' | 'userId' | 'organizationId' | 'isSystem'>;
+export type RenderableSkill = Pick<ISkill, 'name' | 'body' | 'userId' | 'organizationId' | 'isSystem' | 'importedFrom'>;
 
 /**
  * Render a user-invoked `/skill-name args` mention into the prompt text the
@@ -72,12 +72,19 @@ export type RenderableSkill = Pick<ISkill, 'name' | 'body' | 'userId' | 'organiz
 export function renderInvokedSkill(skill: RenderableSkill, rawArgs: string, invokerUserId: string): string {
   const expandedBody = substituteArguments(skill.body, parseSkillArguments(rawArgs));
 
-  const isOwner = skill.userId === invokerUserId;
+  // A Skill Market import is owned by the importer but authored by someone else, so it stays untrusted.
+  const isOwner = skill.userId === invokerUserId && !skill.importedFrom;
   if (isOwner) {
     return `## Skill Invoked: /${skill.name}\n\n${expandedBody}\n\n---\nFollow the instructions above for this turn.`;
   }
 
-  const ownerLabel = skill.organizationId ? 'your organization' : skill.isSystem ? 'the system' : 'another user';
+  const ownerLabel = skill.importedFrom
+    ? 'a Skill Market author'
+    : skill.organizationId
+      ? 'your organization'
+      : skill.isSystem
+        ? 'the system'
+        : 'another user';
   return wrapUntrustedSkillBody(skill.name, expandedBody, ownerLabel);
 }
 

@@ -1,7 +1,7 @@
 // apps/client/pages/api/skills/market/publish.ts
 import { z } from 'zod';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { SkillListing, skillRepository } from '@bike4mind/database';
+import { SkillListing, SkillListingVersion, skillRepository } from '@bike4mind/database';
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, type ISkillListing } from '@bike4mind/common';
 import {
   loadMarketSettings,
@@ -77,11 +77,27 @@ const handler = baseApi({ auth: 'jwtOnly' })
       description: skill.description,
     });
     const listing = created.toJSON() as unknown as ISkillListing;
+    // The exists() check above races a concurrent publish of the same skill; the younger listing yields.
+    const first = await SkillListing.findOne({ ...live, sourceSkillId: skill.id })
+      .sort({ _id: 1 })
+      .select('_id');
+    if (first && String(first._id) !== listing.id) {
+      await SkillListing.deleteOne({ _id: listing.id });
+      throw new ConflictError('This skill already has a listing. Submit a new version from My listings instead.');
+    }
 
-    const version = await submitListingVersion(listing, skill, {
-      settings,
-      getClassifier: () => getOperationsClassifierLlm(req.logger, user.id),
-    });
+    let version;
+    try {
+      version = await submitListingVersion(listing, skill, {
+        settings,
+        getClassifier: () => getOperationsClassifierLlm(req.logger, user.id),
+      });
+    } catch (error) {
+      // Don't leave an empty listing counting toward maxListingsPerUser.
+      if (!(await SkillListingVersion.exists({ listingId: listing.id })))
+        await SkillListing.deleteOne({ _id: listing.id });
+      throw error;
+    }
 
     const fresh = await SkillListing.findById(listing.id);
     res.status(201).json({ listing: serializeListing(fresh!, { privileged: true }), version });

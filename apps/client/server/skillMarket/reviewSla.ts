@@ -38,7 +38,15 @@ export async function runSkillMarketReviewSla(now: Date = new Date()): Promise<{
     if (claimed.modifiedCount === 0) continue;
 
     const listing = await SkillListing.findById(version.listingId);
-    if (!listing || listing.pendingVersionId !== String(version._id)) continue;
+    if (!listing || listing.pendingVersionId !== String(version._id)) {
+      // Days past its verdict and still not the listing's pending pointer: an orphan from a write
+      // that never landed. Nobody can decide it, so retire it.
+      await SkillListingVersion.updateOne(
+        { _id: version._id, reviewStatus: 'pending' },
+        { $set: { reviewStatus: 'superseded' } }
+      );
+      continue;
+    }
 
     let reviewers: string[];
     if (listing.visibility === 'organization' && listing.organizationId) {

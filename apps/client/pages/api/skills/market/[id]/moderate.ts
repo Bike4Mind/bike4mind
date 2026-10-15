@@ -13,7 +13,8 @@ const bodySchema = z.discriminatedUnion('action', [
 
 /**
  * POST /api/skills/market/[id]/moderate - one-click takedown (`delist`) or `restore` by a
- * moderator (super-admin, or an admin of the owning org for Organization listings).
+ * moderator (super-admin, or an admin of the owning org for Organization listings). An org admin
+ * can't restore their own listing or reverse a super-admin's delist.
  *
  * Delist hides the listing and blocks new imports; existing copies are kept and show a "delisted
  * by moderators" warning. Restore clears a report-threshold hide (dismissing its reports) or
@@ -27,6 +28,13 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   if (!canDelistListing(listing, actor, await organizationRepository.findIdsAdministeredBy(actor.id))) {
     throw new ForbiddenError("You don't have permission to moderate this listing");
   }
+  if (
+    body.action === 'restore' &&
+    !actor.isAdmin &&
+    (listing.authorUserId === actor.id || (listing.status === 'delisted' && listing.delistedBySuperAdmin))
+  ) {
+    throw new ForbiddenError('Only a platform moderator can restore this listing');
+  }
   const listingId = String(listing.id);
   const resolved = { resolvedBy: actor.id, resolvedAt: new Date() };
 
@@ -37,6 +45,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
         $set: {
           status: 'delisted',
           delistedReason: body.reason,
+          delistedBySuperAdmin: Boolean(actor.isAdmin),
           hiddenByReports: false,
           pendingVersionId: null,
           pendingVersion: null,
@@ -59,7 +68,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
     await SkillListing.updateOne({ _id: listingId }, { $set: { hiddenByReports: false } });
     await SkillListing.updateOne(
       { _id: listingId, status: 'delisted', currentApprovedVersionId: { $ne: null } },
-      { $set: { status: 'approved' }, $unset: { delistedReason: 1 } }
+      { $set: { status: 'approved' }, $unset: { delistedReason: 1, delistedBySuperAdmin: 1 } }
     );
   }
   res.json({ ok: true });

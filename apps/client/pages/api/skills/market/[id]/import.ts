@@ -23,6 +23,8 @@ const bodySchema = z.object({
   targetSkillId: z.string().optional(),
   /** Confirms overwriting a copy the importer has edited since importing. */
   overwrite: z.boolean().optional(),
+  /** The version the caller reviewed (e.g. in the update diff); 409 if a newer one was approved since. */
+  expectedVersionId: z.string().max(64).optional(),
 });
 
 /** First free `<name>-N` for the caller, offered back on a name collision. */
@@ -59,6 +61,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const version = versionDoc?.toJSON() as unknown as ISkillListingVersion | undefined;
     if (!version || !['approved', 'auto_approved'].includes(version.reviewStatus)) {
       throw new NotFoundError('Listing not found');
+    }
+    if (body.expectedVersionId && body.expectedVersionId !== String(version.id)) {
+      throw new ConflictError('A newer version was approved since you reviewed this one', {
+        code: 'version_changed',
+      });
     }
 
     const snap = version.snapshot;

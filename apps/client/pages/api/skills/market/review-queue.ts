@@ -102,6 +102,9 @@ const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: 
     .flatMap(v => {
       const listing = byId.get(v.listingId);
       if (!listing) return [];
+      // Only the listing's pending pointer is decidable; a "pending" row the pointer never reached
+      // (a crash between the verdict and pointer writes) would 409 on every approve or reject.
+      if (filter !== 'audit' && listing.pendingVersionId !== String(v._id)) return [];
       const plain = listing.toJSON() as unknown as ISkillListing;
       const prev = listing.currentApprovedVersionId ? previousById.get(listing.currentApprovedVersionId) : undefined;
       return [

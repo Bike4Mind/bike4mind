@@ -52,6 +52,12 @@ const Empty: FC<{ text: string }> = ({ text }) => (
   </Card>
 );
 
+const LoadError: FC<{ error: unknown }> = ({ error }) => (
+  <Alert color="danger" variant="soft" data-testid="market-review-error">
+    Could not load the queue: {getErrorMessage(error)}
+  </Alert>
+);
+
 const Loading = () => (
   <Stack alignItems="center" sx={{ py: 6 }}>
     <CircularProgress />
@@ -240,8 +246,9 @@ const VersionReviewCard: FC<{ item: ReviewQueueVersionItem; mode: 'pending' | 'a
 };
 
 const VersionQueue: FC<{ mode: 'pending' | 'audit' }> = ({ mode }) => {
-  const { data = [], isLoading } = useReviewQueue(mode);
+  const { data = [], isLoading, isError, error } = useReviewQueue(mode);
   if (isLoading) return <Loading />;
+  if (isError) return <LoadError error={error} />;
   if (!data.length)
     return (
       <Empty text={mode === 'pending' ? 'Nothing is waiting for review.' : 'No sampled listings left to audit.'} />
@@ -262,11 +269,12 @@ const VersionQueue: FC<{ mode: 'pending' | 'audit' }> = ({ mode }) => {
 };
 
 const ReportsQueue: FC = () => {
-  const { data = [], isLoading } = useReviewQueue('reports');
+  const { data = [], isLoading, isError, error } = useReviewQueue('reports');
   const moderate = useModerateListing();
   const navigate = useNavigate();
   const [delist, setDelist] = useState<{ id: string; name: string } | null>(null);
   if (isLoading) return <Loading />;
+  if (isError) return <LoadError error={error} />;
   if (!data.length) return <Empty text="No open reports." />;
   return (
     <Stack spacing={2}>
@@ -344,8 +352,9 @@ const ReportsQueue: FC = () => {
 };
 
 const LegacyQueue: FC = () => {
-  const { data = [], isLoading } = useReviewQueue('legacy');
+  const { data = [], isLoading, isError, error } = useReviewQueue('legacy');
   if (isLoading) return <Loading />;
+  if (isError) return <LoadError error={error} />;
   if (!data.length) return <Empty text="No legacy global skills." />;
   return (
     <Stack spacing={2}>

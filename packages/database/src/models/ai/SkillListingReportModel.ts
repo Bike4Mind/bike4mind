@@ -17,6 +17,7 @@ const SkillListingReportSchema = new Schema<ISkillListingReportDocument>(
     reporterId: { type: String, required: true },
     reason: { type: String, required: true, enum: SKILL_LISTING_REPORT_REASONS },
     details: { type: String, maxlength: 2000 },
+    countsTowardHide: { type: Boolean, default: true },
     status: { type: String, enum: ['open', 'actioned', 'dismissed'], default: 'open' },
     resolvedBy: { type: String, default: null },
     resolvedAt: { type: Date, default: null },

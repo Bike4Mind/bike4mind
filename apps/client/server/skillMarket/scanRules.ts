@@ -121,6 +121,10 @@ const TEXT_RULES: Rule[] = [
 const EXFIL_VERB_DATA =
   /\b(send|post|upload|forward|exfiltrate|transmit|e-?mail|leak|copy|sync|beacon|report)\b[^.\n]{0,80}\b(conversations?|chat history|messages|files?|documents?|attachments?|api[ _-]?keys?|keys|tokens?|secrets?|credentials?|passwords?|memor(?:y|ies)|context|system prompt|personal (?:data|information)|user data)\b/i;
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"'`)\]]+/gi;
+// A scheme-less host ("evil.com/c") is still a destination the model can be told to use. Common TLDs
+// only, so prose like "Node.js" or "e.g." doesn't read as a link.
+const BARE_HOST_PATTERN =
+  /(?<![@\w./-])((?:[a-z0-9-]+\.)+(?:com|net|org|io|co|ai|app|dev|me|info|biz|xyz|site|online|top|ru|cn|tk|ly|gg))(?![\w-]|\.\w)/gi;
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
 
 // Zero-width, bidi overrides/isolates, soft hyphen, BOM, invisible tag characters, and C0/C1
@@ -159,6 +163,7 @@ export function extractUrlHosts(text: string): string[] {
       hosts.add(match[0].slice(0, 80));
     }
   }
+  for (const match of text.replace(URL_PATTERN, ' ').matchAll(BARE_HOST_PATTERN)) hosts.add(match[1].toLowerCase());
   return [...hosts];
 }
 
@@ -215,18 +220,41 @@ export function runDeterministicScan(snapshot: ISkillSnapshot, options: ScanOpti
       finding('high_risk_tools', 'high', 'Declares tools that act outside the conversation', riskyTools.join(', '))
     );
   }
+  // No declared tools means no restriction at run time (see intersectAllowedTools), so a body that
+  // names a high-risk tool can still drive it.
+  if (!snapshot.allowedTools?.length) {
+    const named = [...highRisk].filter(t =>
+      new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)
+    );
+    if (named.length > 0) {
+      findings.push(
+        finding(
+          'high_risk_tools',
+          'high',
+          'Names tools that act outside the conversation',
+          named.slice(0, 5).join(', ')
+        )
+      );
+    }
+  }
 
   return findings;
 }
 
-/** Lighter scan for user-written rating reviews and report details shown to other users. */
-export function scanPublicText(text: string): ISkillScanFinding[] {
+/**
+ * Lighter scan for user-written rating reviews and AI-written summaries shown to other users. Links
+ * are refused unless every host is on `urlAllowlist` (reviews pass none, so any link is refused).
+ */
+export function scanPublicText(text: string, urlAllowlist: string[] = []): ISkillScanFinding[] {
   const findings: ISkillScanFinding[] = [];
   if (HIDDEN_CHARS.test(text)) findings.push(finding('hidden_characters', 'critical', 'Contains invisible characters'));
   if (/<\s*\/?\s*[a-z]+[^>]*>|javascript\s*:/i.test(text)) {
     findings.push(finding('html_or_script', 'critical', 'Contains HTML or script markup'));
   }
-  if (extractUrlHosts(text).length > 0) findings.push(finding('external_url', 'critical', 'Links are not allowed'));
+  const allowlist = urlAllowlist.map(h => h.toLowerCase());
+  if (extractUrlHosts(text).some(h => !hostAllowed(h, allowlist))) {
+    findings.push(finding('external_url', 'critical', 'Links are not allowed'));
+  }
   return findings;
 }
 

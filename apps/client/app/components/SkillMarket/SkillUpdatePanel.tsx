@@ -73,13 +73,25 @@ const SkillUpdatePanel: FC<{ skill: ISkillWithSharing }> = ({ skill }) => {
   }
 
   const latest = data?.version;
+  // Tools, description and argument hint change what the copy does as much as the body does.
+  const fieldChanges = latest
+    ? [
+        {
+          label: 'Tools',
+          before: (skill.allowedTools ?? []).join(', '),
+          after: (latest.snapshot.allowedTools ?? []).join(', '),
+        },
+        { label: 'Description', before: skill.description ?? '', after: latest.snapshot.description },
+        { label: 'Argument hint', before: skill.argumentHint ?? '', after: latest.snapshot.argumentHint ?? '' },
+      ].filter(c => c.before !== c.after)
+    : [];
   const update = async (asNewCopy: boolean) => {
     setError(null);
     try {
       const { skill: result } = await importListing.mutateAsync(
         asNewCopy
-          ? { listingId, name: `${skill.name}-v${status.latestVersion}` }
-          : { listingId, targetSkillId: skill.id, overwrite: confirmOverwrite }
+          ? { listingId, name: `${skill.name}-v${status.latestVersion}`, expectedVersionId: latest?.id }
+          : { listingId, targetSkillId: skill.id, overwrite: confirmOverwrite, expectedVersionId: latest?.id }
       );
       toast.success(
         asNewCopy ? `Saved v${status.latestVersion} as /${result.name}` : `Updated to v${status.latestVersion}`
@@ -90,7 +102,9 @@ const SkillUpdatePanel: FC<{ skill: ISkillWithSharing }> = ({ skill }) => {
       setError(
         conflict?.code === 'name_taken'
           ? `You already have /${skill.name}-v${status.latestVersion}. Rename or delete it first.`
-          : getErrorMessage(e)
+          : conflict?.code === 'version_changed'
+            ? 'A newer version was just approved. Review the changes again before updating.'
+            : getErrorMessage(e)
       );
     }
   };
@@ -123,6 +137,15 @@ const SkillUpdatePanel: FC<{ skill: ISkillWithSharing }> = ({ skill }) => {
               Changes to the instructions (your copy {'->'} v{latest.version})
             </Typography>
             <BodyDiff before={skill.body} after={latest.snapshot.body} testId="skill-market-update-diff" />
+            {fieldChanges.length > 0 ? (
+              <Stack spacing={0.5} data-testid="skill-market-update-field-changes">
+                {fieldChanges.map(c => (
+                  <Typography key={c.label} level="body-sm">
+                    <b>{c.label}:</b> {c.before || '(none)'} {'->'} {c.after || '(none)'}
+                  </Typography>
+                ))}
+              </Stack>
+            ) : null}
           </Stack>
         ) : null}
 
