@@ -135,4 +135,19 @@ describe('BottomSheet', () => {
     expect(area).toHaveAttribute('data-more-above');
     expect(area).not.toHaveAttribute('data-more-below');
   });
+
+  it('renders nothing until first opened, then shows its content', async () => {
+    const ui = (open: boolean) => (
+      <CssVarsProvider theme={appTheme}>
+        <BottomSheet open={open} onClose={vi.fn()} label="Menu" data-testid="x">
+          <button>Row</button>
+        </BottomSheet>
+      </CssVarsProvider>
+    );
+    const { rerender } = render(ui(false));
+    expect(screen.queryByTestId('x')).toBeNull();
+    expect(document.body.querySelector('button')).toBeNull();
+    rerender(ui(true));
+    expect(await screen.findByRole('button', { name: 'Row' })).toBeInTheDocument();
+  });
 });

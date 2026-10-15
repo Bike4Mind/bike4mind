@@ -754,10 +754,13 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                           }}
                         />
                       )}
-                      {/* The editor shows its placeholder only while empty, so with a draft in the box
-                          (a restored one, say) the notice and its Retry move above the text. */}
+                      {/* The editor shows its placeholder only while empty (whitespace counts as text), so with a
+                          draft in the box (a restored one, say) the notice and its Retry move above it. */}
                       {noModels && chatInputValue !== '' && (
-                        <Box sx={{ pb: '8px' }}>
+                        <Box
+                          data-testid="session-no-models-notice"
+                          sx={{ position: 'static', pointerEvents: 'auto', px: 1, pb: 0.5 }}
+                        >
                           <NoModelsPlaceholder loadError={isModelsError} onRetry={() => void refetchModels()} />
                         </Box>
                       )}

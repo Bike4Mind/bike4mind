@@ -30,16 +30,20 @@ export function useOverflowCompact(rowRef: RefObject<HTMLElement | null>): boole
     check();
     const observer = new ResizeObserver(check);
     observer.observe(row);
-    const observeChildren = () => Array.from(row.children).forEach(child => observer.observe(child));
-    observeChildren();
-    const mutations = new MutationObserver(() => {
-      observeChildren();
-      check();
-    });
-    mutations.observe(row, { childList: true });
+    Array.from(row.children).forEach(child => observer.observe(child));
+    const mutations =
+      typeof MutationObserver === 'undefined'
+        ? null
+        : new MutationObserver(() => {
+            observer.disconnect();
+            observer.observe(row);
+            Array.from(row.children).forEach(child => observer.observe(child));
+            check();
+          });
+    mutations?.observe(row, { childList: true });
     return () => {
+      mutations?.disconnect();
       observer.disconnect();
-      mutations.disconnect();
     };
   }, [rowRef, compact]);
 
