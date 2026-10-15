@@ -33,6 +33,9 @@ interface CheckpointMetadata {
 /** Maximum file size to checkpoint (10MB) */
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
+// Headroom over MAX_FILE_SIZE for git's own framing in `diff` output.
+const GIT_MAX_BUFFER = MAX_FILE_SIZE * 2;
+
 /** Default number of checkpoints to keep */
 const DEFAULT_KEEP_COUNT = 50;
 
@@ -109,6 +112,10 @@ export class CheckpointStore {
   // is detected instead of silently followed.
   private realProjectDir: string | null = null;
   private realShadowRepoDir: string | null = null;
+  // Tail of the queue that runs shadow-repo operations one at a time. Each one is a multi-step git
+  // sequence on a shared index (add, commit, rev-parse; or /diff's temp files), and subagents can
+  // checkpoint concurrently, so interleaving them loses checkpoints or records the wrong commit.
+  private operationQueue: Promise<unknown> = Promise.resolve();
 
   constructor(projectDir: string) {
     this.projectDir = projectDir;
@@ -185,6 +192,14 @@ export class CheckpointStore {
    * @param name - Optional human-readable checkpoint name
    */
   async createCheckpoint(toolName: string, filePaths: string[], name?: string): Promise<Checkpoint | null> {
+    return this.exclusive(() => this.createCheckpointExclusive(toolName, filePaths, name));
+  }
+
+  private async createCheckpointExclusive(
+    toolName: string,
+    filePaths: string[],
+    name?: string
+  ): Promise<Checkpoint | null> {
     if (!this.initialized || !this.sessionId) {
       return null;
     }
@@ -311,6 +326,10 @@ export class CheckpointStore {
    * @returns The checkpoint that was restored to
    */
   async restoreCheckpoint(index: number): Promise<Checkpoint> {
+    return this.exclusive(() => this.restoreCheckpointExclusive(index));
+  }
+
+  private async restoreCheckpointExclusive(index: number): Promise<Checkpoint> {
     const checkpoint = this.getCheckpoint(index);
     if (!checkpoint) {
       throw new Error(`Checkpoint #${index} not found. Use /checkpoints to see available restore points.`);
@@ -359,6 +378,10 @@ export class CheckpointStore {
    * @returns Unified diff string
    */
   async getCheckpointDiff(index: number = 1): Promise<string> {
+    return this.exclusive(() => this.getCheckpointDiffExclusive(index));
+  }
+
+  private async getCheckpointDiffExclusive(index: number): Promise<string> {
     const checkpoint = this.getCheckpoint(index);
     if (!checkpoint) {
       throw new Error(`Checkpoint #${index} not found. Use /checkpoints to see available restore points.`);
@@ -442,6 +465,10 @@ export class CheckpointStore {
    * Prune old checkpoints beyond the keep count
    */
   async pruneCheckpoints(keepCount: number = DEFAULT_KEEP_COUNT): Promise<void> {
+    return this.exclusive(() => this.pruneCheckpointsExclusive(keepCount));
+  }
+
+  private async pruneCheckpointsExclusive(keepCount: number): Promise<void> {
     if (!this.metadata) return;
 
     const total = this.metadata.checkpoints.length;
@@ -589,6 +616,12 @@ export class CheckpointStore {
     }
   }
 
+  private exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationQueue.then(operation);
+    this.operationQueue = result.catch(() => undefined);
+    return result;
+  }
+
   /**
    * Execute a git command in the shadow repo.
    *
@@ -604,6 +637,8 @@ export class CheckpointStore {
       cwd: this.shadowRepoDir,
       encoding: 'utf-8',
       timeout: 10000,
+      // `git show` returns whole checkpointed files, which can be up to MAX_FILE_SIZE.
+      maxBuffer: GIT_MAX_BUFFER,
       env: {
         ...process.env,
         GIT_CONFIG_GLOBAL: '/dev/null',

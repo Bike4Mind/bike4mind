@@ -88,7 +88,7 @@ describe('searchFiles - symlinked entries in an absolute-path listing', () => {
     expect(find(results, 'unrelated.txt')).toBeUndefined();
   });
 
-  it('caps a huge absolute directory at 15 entries, in name order', async () => {
+  it('caps a huge absolute directory at 15 entries', async () => {
     const names = Array.from({ length: 40 }, (_, i) => `file-${String(i).padStart(2, '0')}.txt`);
     await Promise.all(names.map(name => fsp.writeFile(path.join(dir, name), 'x')));
 

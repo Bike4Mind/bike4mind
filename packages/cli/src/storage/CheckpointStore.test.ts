@@ -123,6 +123,30 @@ describe('CheckpointStore', () => {
       expect(await checkpointStore.createCheckpoint('edit_local_file', [filePath])).not.toBeNull();
     });
 
+    it('keeps every checkpoint intact when subagents checkpoint concurrently', async () => {
+      const files = ['a.ts', 'b.ts', 'c.ts', 'd.ts'];
+      await Promise.all(files.map(file => fs.writeFile(path.join(testDir, file), `original ${file}`, 'utf-8')));
+
+      // Staggered so each call's git sequence starts while another's is mid-flight.
+      const checkpoints = await Promise.all(
+        files.map(async (file, i) => {
+          await new Promise(resolve => setTimeout(resolve, i * 10));
+          return checkpointStore.createCheckpoint('edit_local_file', [file]);
+        })
+      );
+
+      expect(checkpoints.every(checkpoint => checkpoint !== null)).toBe(true);
+      expect(new Set(checkpoints.map(checkpoint => checkpoint!.id)).size).toBe(files.length);
+
+      await Promise.all(files.map(file => fs.writeFile(path.join(testDir, file), 'edited', 'utf-8')));
+      for (const checkpoint of checkpoints) {
+        const index = checkpointStore.listCheckpoints().findIndex(listed => listed.id === checkpoint!.id) + 1;
+        await checkpointStore.restoreCheckpoint(index);
+        const [file] = checkpoint!.filePaths;
+        expect(await fs.readFile(path.join(testDir, file), 'utf-8')).toBe(`original ${file}`);
+      }
+    });
+
     it('should record absent marker for non-existent files', async () => {
       // File does not exist yet (will be created by create_file)
       const filePath = 'new-file.ts';
@@ -244,6 +268,18 @@ describe('CheckpointStore', () => {
 
       const content = await fs.readFile(path.join(testDir, filePath), 'utf-8');
       expect(content).toBe('original');
+    });
+
+    it('restores a file larger than the default 1 MiB subprocess buffer', async () => {
+      const filePath = 'large.txt';
+      const original = 'x'.repeat(2_000_000);
+      await fs.writeFile(path.join(testDir, filePath), original, 'utf-8');
+      await checkpointStore.createCheckpoint('edit_local_file', [filePath]);
+
+      await fs.writeFile(path.join(testDir, filePath), 'modified', 'utf-8');
+      await checkpointStore.undoLast();
+
+      expect(await fs.readFile(path.join(testDir, filePath), 'utf-8')).toBe(original);
     });
 
     it('should throw when no checkpoints exist', async () => {
