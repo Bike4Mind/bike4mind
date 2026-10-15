@@ -222,7 +222,7 @@ export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
                     title={mode === 'auto' ? 'Also resets the in-memory MCP breakers for all users' : undefined}
                     data-testid={`circuit-breaker-${mode}-btn-${entry.name}`}
                   >
-                    {mode === 'auto' ? 'Auto' : mode === 'force_open' ? 'Force Open' : 'Force Block'}
+                    {mode === 'auto' ? 'Auto (all users)' : mode === 'force_open' ? 'Force Open' : 'Force Block'}
                   </Button>
                 ))}
               </Stack>

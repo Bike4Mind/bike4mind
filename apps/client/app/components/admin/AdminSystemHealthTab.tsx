@@ -1237,10 +1237,10 @@ const AdminSystemHealthTab = () => {
                                   onClick={() => handleCircuitBreakerOverride(integration.integration, 'auto')}
                                   loading={overridingIntegration === integration.integration}
                                   disabled={overridingIntegration !== null}
-                                  title="Also resets the real-time Read/Write breakers for all users"
+                                  title="Also resets the in-memory MCP breakers for all users"
                                   data-testid={`circuit-breaker-reset-${integration.integration}-btn`}
                                 >
-                                  Reset to Auto
+                                  Reset to Auto (all users)
                                 </Button>
                               )}
                             </Stack>
