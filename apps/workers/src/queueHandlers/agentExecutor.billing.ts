@@ -182,6 +182,8 @@ export type IterationBillingEffects = {
     cumulativeCost: number;
     previousCumulativeCost: number;
   }) => void;
+  /** The checkpoint's turns did not reconcile with its totals and counters (see unbilledTurns). */
+  logTurnsFallback: (details: { turnSum: IterationTokenDeltas; totals: IterationTokenDeltas }) => void;
   usdToCredits: (usd: number) => number;
   now: () => number;
 };
@@ -255,9 +257,15 @@ const sameTokens = (a: TokenSums, b: TokenSums): boolean =>
  * iteration deadline leaves its partial usage in the checkpoint the continuation resumes from, and
  * a Lambda lost between the checkpoint write and the billing record leaves an unbilled iteration -
  * and pricing those as one request would tier them on their combined prompt. Falls back to
- * `deltas` as one request when there are no turns or they do not reconcile with the totals.
+ * `deltas` as one request when there are no turns or they do not reconcile with the totals; the
+ * latter warns via `logTurnsFallback`, since the #657 guard in billIteration relies on it.
  */
-function unbilledTurns(checkpoint: BillingCheckpoint, counters: BillingCounters, deltas: TokenSums): TurnUsage[] {
+function unbilledTurns(
+  checkpoint: BillingCheckpoint,
+  counters: BillingCounters,
+  deltas: TokenSums,
+  effects: IterationBillingEffects
+): TurnUsage[] {
   const turns = checkpoint.turnUsage;
   if (turns?.length) {
     const sum: TokenSums = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
@@ -277,6 +285,7 @@ function unbilledTurns(checkpoint: BillingCheckpoint, counters: BillingCounters,
       cacheWriteTokens: checkpoint.totalCacheWriteTokens,
     };
     if (billedCount >= 0 && sameTokens(sum, totals)) return turns.slice(billedCount);
+    effects.logTurnsFallback({ turnSum: sum, totals });
   }
   return [iterationTurn(deltas)];
 }
@@ -331,7 +340,7 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
 
   // Price each request this bill covers on its own tier (see unbilledTurns), cache tokens at
   // their own rates: totalInputTokens EXCLUDES cache-read/write. Mirrors the chat path.
-  const turns = unbilledTurns(checkpoint, counters, deltas);
+  const turns = unbilledTurns(checkpoint, counters, deltas, effects);
   const agentCostDelta = getTurnsCost(modelInfo, turns);
   const cumulativeCost = counters.cumulativeCost + agentCostDelta;
   // Settle the agent's own cost growth plus any tool-internal spend (#630). Tool spend is
@@ -359,7 +368,8 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
   // alarm and skip the credit charge rather than deduct a bogus amount.
   // Checked per request (the same turns priced above), so a bill legitimately covering two
   // requests cannot trip it on their sum. Corrupt totals stop reconciling with the adapter's
-  // turns, so unbilledTurns falls back to the whole delta as one request and it still trips.
+  // turns, so unbilledTurns falls back to the whole delta as one request (warning via
+  // logTurnsFallback) and it still trips.
   // Guard on the AGENT input delta only (tool spend is a different, smaller model and is
   // not part of this sanity bound). On a trip we skip the whole iteration charge - the
   // snapshotted tool spend goes with it, consistent with dropping the agent charge; the

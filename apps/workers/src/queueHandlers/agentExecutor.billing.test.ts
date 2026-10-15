@@ -57,6 +57,7 @@ function makeEffects(usdToCredits: (usd: number) => number = usd => usd): {
     sendProgress: ReturnType<typeof vi.fn>;
     logGuardTrip: ReturnType<typeof vi.fn>;
     logNegativeDelta: ReturnType<typeof vi.fn>;
+    logTurnsFallback: ReturnType<typeof vi.fn>;
   };
 } {
   const spies = {
@@ -66,6 +67,7 @@ function makeEffects(usdToCredits: (usd: number) => number = usd => usd): {
     sendProgress: vi.fn(async () => {}),
     logGuardTrip: vi.fn(),
     logNegativeDelta: vi.fn(),
+    logTurnsFallback: vi.fn(),
   };
   return {
     spies,
@@ -558,10 +560,37 @@ describe('billIteration (context-window guard is per request)', () => {
     expect(spies.deductCredits).not.toHaveBeenCalled();
   });
 
+  it('checks the largest request, not the last one', async () => {
+    const spies = await guard({
+      ...checkpoint(300_000),
+      turnUsage: [
+        { inputTokens: 250_000, outputTokens: 0 },
+        { inputTokens: 50_000, outputTokens: 0 },
+      ],
+    });
+    expect(spies.logGuardTrip).toHaveBeenCalledWith({ requestInputTokens: 250_000, contextWindow: 200_000 });
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+  });
+
   it('still trips on corrupt totals that no longer reconcile with the turns', async () => {
     const spies = await guard({ ...checkpoint(49_000_000), turnUsage: [{ inputTokens: 72_000, outputTokens: 0 }] });
     expect(spies.logGuardTrip).toHaveBeenCalledWith({ requestInputTokens: 49_000_000, contextWindow: 200_000 });
     expect(spies.deductCredits).not.toHaveBeenCalled();
+    expect(spies.logTurnsFallback).toHaveBeenCalledWith({
+      turnSum: { inputTokens: 72_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      totals: { inputTokens: 49_000_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    });
+  });
+
+  it('does not warn when the turns reconcile', async () => {
+    const spies = await guard({
+      ...checkpoint(300_000),
+      turnUsage: [
+        { inputTokens: 150_000, outputTokens: 0 },
+        { inputTokens: 150_000, outputTokens: 0 },
+      ],
+    });
+    expect(spies.logTurnsFallback).not.toHaveBeenCalled();
   });
 });
 
@@ -789,6 +818,54 @@ describe('billIteration (long-context tiers)', () => {
       turnUsage: [{ inputTokens: 150_000, outputTokens: 1_000 }],
     });
     expect(charged).toBeCloseTo(300_000 * perM(4) + 2_000 * perM(18), 10);
+  });
+
+  it('falls back to the delta when the counters land inside a turn, not on a boundary', async () => {
+    // A pre-turnUsage checkpoint restores as one synthesized turn equal to the totals; a Lambda lost
+    // between the checkpoint write and the billing record leaves the reseeded counters inside it.
+    const charged = await billOnce(
+      {
+        ...checkpoint(300_000, { output: 2_000 }),
+        turnUsage: [{ inputTokens: 300_000, outputTokens: 2_000 }],
+      },
+      makeCounters({ inputTokens: 200_000, outputTokens: 1_000 })
+    );
+    expect(charged).toBeCloseTo(100_000 * perM(2) + 1_000 * perM(12), 10);
+  });
+});
+
+describe('billIteration (two-tier model, per-iteration pricing)', () => {
+  const perM = (usd: number) => usd / 1_000_000;
+  // Shaped like a two-tier Gemini Pro: <=200K prompt at $1.25/$10, >200K at $2.50/$15.
+  const twoTier = {
+    ...makeModelInfo(1_048_576),
+    pricing: {
+      200_000: { input: perM(1.25), output: perM(10) },
+      1_048_576: { input: perM(2.5), output: perM(15) },
+    },
+  } as ModelInfo;
+
+  it('bills two iterations whose summed prompts cross 200K at the <=200K rate when each stays under', async () => {
+    const { effects, spies } = makeEffects();
+    const counters = makeCounters();
+    // Cumulative checkpoint totals after iterations of 120K and 110K prompts (230K summed).
+    for (const [i, cp] of [checkpoint(120_000, { output: 2_000 }), checkpoint(230_000, { output: 4_000 })].entries()) {
+      await billIteration({
+        iterationIndex: i + 1,
+        checkpoint: cp,
+        counters,
+        modelInfo: twoTier,
+        model: 'test-model',
+        startTime: 0,
+        effects,
+      });
+    }
+    const charged = spies.recordUsageEvent.mock.calls.map(([e]) => e.costUsd as number);
+    expect(charged).toHaveLength(2);
+    expect(charged[0]).toBeCloseTo(120_000 * perM(1.25) + 2_000 * perM(10), 10);
+    // Pricing the cumulative 230K totals would put this iteration on the >200K rate.
+    expect(charged[1]).toBeCloseTo(110_000 * perM(1.25) + 2_000 * perM(10), 10);
+    expect(counters.cumulativeCost).toBeCloseTo(230_000 * perM(1.25) + 4_000 * perM(10), 10);
   });
 });
 

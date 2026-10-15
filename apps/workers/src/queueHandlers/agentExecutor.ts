@@ -2229,6 +2229,17 @@ async function processExecution(
               iterationIndex,
               ...details,
             }),
+          logTurnsFallback: details =>
+            logger.warn(
+              '[agentExecutor] checkpoint turns do not reconcile with its totals; pricing the delta as one request',
+              {
+                executionId,
+                sessionId: execution.sessionId,
+                model: execution.model,
+                iterationIndex,
+                ...details,
+              }
+            ),
           deductCredits: async ({ credits, inputTokens, outputTokens }) => {
             await creditService.deductCreditsWithOrgSupport(
               {
