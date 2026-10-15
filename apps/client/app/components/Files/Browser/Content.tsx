@@ -60,6 +60,11 @@ import { useQueryClient } from '@tanstack/react-query';
 // Pagination constants
 const FILES_PER_PAGE = 20;
 
+// Desktop toolbar widths (px) at which its rows merge. With Research shown, tabs + actions need ~770 and
+// tabs + filters + actions ~1200.
+const TOOLBAR_TWO_ROW_MIN_WIDTH_PX = 800;
+const TOOLBAR_SINGLE_ROW_MIN_WIDTH_PX = 1240;
+
 const FileBrowserContent = () => {
   const { t } = useTranslation();
   const { currentUser } = useUser();
@@ -711,39 +716,57 @@ const FileBrowserContent = () => {
             </Box>
           </Stack>
 
-          {/* Desktop Actions - Always visible */}
-          <Stack
+          {/* Desktop toolbar: sized by the dialog's width, not the viewport's, since it renders in dialogs of
+              different widths. */}
+          <Box
             className="file-browser-desktop-actions"
-            direction={{ xs: 'column', sm: 'row' }}
-            gap={{ xs: '8px', sm: '10px' }}
-            sx={{
-              display: { xs: 'none', md: 'flex' },
-              flexWrap: { sm: 'wrap' },
-            }}
+            sx={{ display: { xs: 'none', md: 'block' }, containerType: 'inline-size' }}
           >
-            <Stack direction={{ xs: 'column', sm: 'row' }} gap={{ xs: '8px', sm: '10px' }} sx={{ flex: 1 }}>
-              <FileBrowserViewActions
-                value={viewAction}
-                onChange={f => {
-                  setNavigatedFromTags(false);
-                  setViewActions(f);
-                }}
-              />
-              <FileBrowserFilter value={filter} onChange={handleFilterChange} />
-
-              {isResearchEngineFeatureEnabled && <ResearchEngineModal />}
-            </Stack>
-            <Stack
-              direction={{ xs: 'column', sm: 'row' }}
-              gap={{ xs: '8px', sm: '10px' }}
+            <Box
               sx={{
-                width: { xs: '100%', sm: 'auto' },
+                display: 'grid',
+                alignItems: 'center',
+                gap: '10px',
+                gridTemplateColumns: 'minmax(0, 1fr)',
+                gridTemplateAreas: '"views" "actions" "filters"',
+                [`@container (min-width: ${TOOLBAR_TWO_ROW_MIN_WIDTH_PX}px)`]: {
+                  gridTemplateColumns: 'auto minmax(0, 1fr)',
+                  gridTemplateAreas: '"views actions" "filters filters"',
+                },
+                [`@container (min-width: ${TOOLBAR_SINGLE_ROW_MIN_WIDTH_PX}px)`]: {
+                  // globals.css sets `min-width: 0` on everything, so without this floor the filters column
+                  // collapses and its controls overlap the actions.
+                  gridTemplateColumns: 'auto minmax(min-content, 1fr) auto',
+                  gridTemplateAreas: '"views filters actions"',
+                },
               }}
             >
-              <UploadDropdown isLoading={isLoading} />
-              <GenerateAudioButton />
-            </Stack>
-          </Stack>
+              <Box sx={{ gridArea: 'views' }}>
+                <FileBrowserViewActions
+                  value={viewAction}
+                  onChange={f => {
+                    setNavigatedFromTags(false);
+                    setViewActions(f);
+                  }}
+                />
+              </Box>
+              <Box sx={{ gridArea: 'filters', display: 'flex' }}>
+                <FileBrowserFilter value={filter} onChange={handleFilterChange} />
+              </Box>
+              <Stack
+                direction="row"
+                gap="10px"
+                sx={{
+                  gridArea: 'actions',
+                  [`@container (min-width: ${TOOLBAR_TWO_ROW_MIN_WIDTH_PX}px)`]: { justifySelf: 'end' },
+                }}
+              >
+                {isResearchEngineFeatureEnabled && <ResearchEngineModal />}
+                <UploadDropdown isLoading={isLoading} />
+                <GenerateAudioButton />
+              </Stack>
+            </Box>
+          </Box>
 
           {viewAction.viewMode === 'home' && (
             <HomeViewPanel

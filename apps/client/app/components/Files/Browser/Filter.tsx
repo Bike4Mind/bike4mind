@@ -60,7 +60,8 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
         sx={theme => ({
           flexGrow: 1,
           width: '70%',
-          minWidth: 0,
+          // Sets the toolbar's filter column floor; at `minWidth: 0` the row crushed the search to its icon.
+          minWidth: '160px',
           minHeight: '32px',
           boxShadow: 'none',
           fontSize: '14px',

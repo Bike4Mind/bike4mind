@@ -9,7 +9,6 @@ interface ResearchEngineModalButtonProps {
   variant?: 'solid' | 'outlined' | 'plain';
   color?: 'primary' | 'neutral' | 'danger' | 'success' | 'warning';
   size?: 'sm' | 'md' | 'lg';
-  sx?: any;
 }
 
 const ResearchEngineModal: FC<ResearchEngineModalButtonProps> = ({
@@ -17,7 +16,6 @@ const ResearchEngineModal: FC<ResearchEngineModalButtonProps> = ({
   variant = 'outlined',
   color = 'neutral',
   size = 'md',
-  sx = {},
 }) => {
   const [open, setOpen] = useState(false);
   const { t } = useTranslation();
@@ -37,7 +35,7 @@ const ResearchEngineModal: FC<ResearchEngineModalButtonProps> = ({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              padding: '6px 30px',
+              padding: '6px 14px',
               '@media (max-width: 600px)': {
                 width: '100%',
               },
@@ -53,8 +51,6 @@ const ResearchEngineModal: FC<ResearchEngineModalButtonProps> = ({
               fontSize: '14px',
               fontWeight: '400',
               lineHeight: '150%',
-              letterSpacing: '1px',
-              ...sx,
             }}
           >
             {t('file_browser.research')}
