@@ -51,9 +51,14 @@ export class SessionStore {
     await this.init();
     const filePath = this.sessionFilePath(session.id);
 
+    // Write-then-rename: saves can overlap (a `!` command result lands while a turn saves), and
+    // two truncating writes to one file can interleave into JSON that no longer parses.
+    const tempPath = `${filePath}.${uuidv4()}.tmp`;
     try {
-      await fs.writeFile(filePath, JSON.stringify(session, null, 2), 'utf-8');
+      await fs.writeFile(tempPath, JSON.stringify(session, null, 2), 'utf-8');
+      await fs.rename(tempPath, filePath);
     } catch (error) {
+      await fs.rm(tempPath, { force: true });
       console.error('Failed to save session:', error);
       throw error;
     }
