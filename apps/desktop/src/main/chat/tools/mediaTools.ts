@@ -340,13 +340,17 @@ export const generateSoundEffectTool: ToolDefinition = {
 };
 
 /**
- * The model for a song. The server lists only models this caller can use, so the pick is the
- * first one that is not a provider-labelled preview (which can be retired at short notice),
- * and the first of all when every one is a preview.
+ * The model for a song. The server lists only models this caller can use, so the pick skips the
+ * non-production test provider - preview, dev and staging register it next to the real ones, and
+ * its first non-preview entry would otherwise be a deterministic test tone - and then any
+ * provider-labelled preview, which can be retired at short notice. Each falls back only when
+ * nothing else is offered.
  */
 async function resolveMusicModel(media: MediaContext): Promise<PublicMusicModel> {
   const offered = await media.client.listMusicModels();
-  const model = offered.find(candidate => !candidate.preview) ?? offered[0];
+  const real = offered.filter(candidate => candidate.provider !== 'test');
+  const pool = real.length > 0 ? real : offered;
+  const model = pool.find(candidate => !candidate.preview) ?? pool[0];
   if (!model) throw new MediaToolError('No music models are available on this server.');
   return model;
 }

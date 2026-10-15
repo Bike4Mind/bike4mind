@@ -84,6 +84,19 @@ describe('generate_music', () => {
     expect((await generateMusicTool.approval!({ prompt: 'x' }, context)).detail).toContain('Name a');
   });
 
+  it('skips the non-production test model when a real one is offered', async () => {
+    const { context } = await setup([
+      model('test-music', false, { provider: 'test' }),
+      model('music_v2_5', false, { provider: 'elevenlabs' }),
+    ]);
+    expect((await generateMusicTool.approval!({ prompt: 'x' }, context)).detail).toContain('Name music_v2_5');
+  });
+
+  it('uses the test model when it is the only one offered', async () => {
+    const { context } = await setup([model('test-music', false, { provider: 'test' })]);
+    expect((await generateMusicTool.approval!({ prompt: 'x' }, context)).detail).toContain('Name test-music');
+  });
+
   it('refuses when the server offers no music model', async () => {
     const { context } = await setup([]);
     await expect(generateMusicTool.approval!({ prompt: 'x' }, context)).rejects.toThrow(
