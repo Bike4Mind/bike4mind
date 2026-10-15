@@ -174,32 +174,47 @@ const INLINE_SCRIPT: Record<string, RegExp> = {
 };
 
 /**
- * The option letters whose value is the rest of the flag cluster, so a letter after one is that
- * value rather than another flag: `ruby -rset` loads the library `set`, it does not run `-e`.
- * Keep in step with INLINE_SCRIPT above - a value letter must never be an inline-script flag.
+ * The option letters whose value is glued to the flag, so a letter after one is that value rather
+ * than another flag: `ruby -rset` loads the library `set`, it does not run `-e`. Only list letters
+ * the interpreter documents as taking a value.
  */
 const OPTION_VALUE_LETTERS: Record<string, string> = {
   python: 'WX',
-  node: 'r',
-  bun: 'r',
+  node: 'rC',
+  bun: 'rld',
   perl: 'IMmx',
-  ruby: 'rICCEKFx',
+  ruby: 'rICEKFx',
   osascript: 'ls',
-  sh: 'oO',
-  bash: 'oO',
   zsh: 'oO',
-  dash: 'o',
+};
+
+/**
+ * Value letters that take only a glued value (`ruby -xdir`): even at the end of a cluster they do
+ * not swallow the next word, so a script's own `-e` after `ruby -x script.rb` is not ruby's option.
+ */
+const GLUED_ONLY_LETTERS: Record<string, string> = {
+  perl: 'x',
+  ruby: 'xKF',
 };
 
 /** The long forms of the above whose value is the next argument rather than glued to the flag. */
 const OPTION_VALUE_WORDS: Record<string, readonly string[]> = {
   node: ['--require', '--import'],
-  bun: ['--require'],
-  bash: ['--rcfile'],
+  bun: ['--require', '--preload'],
+  bash: ['--rcfile', '--init-file'],
 };
+
+/** Shells where -o/-O (and +o/+O) name an option in the next word, leaving the rest of the cluster as flags. */
+const SHELL_OPTION_WORD = new Set(['sh', 'bash', 'dash']);
 
 function optionValueLetters(program: string): string {
   return /^python[\d.]*$/.test(program) ? OPTION_VALUE_LETTERS.python : (OPTION_VALUE_LETTERS[program] ?? '');
+}
+
+/** The value letters that take the next word when they end a cluster; glued-only letters do not. */
+function nextWordLetters(program: string): string {
+  const glued = GLUED_ONLY_LETTERS[program] ?? '';
+  return [...optionValueLetters(program)].filter(letter => !glued.includes(letter)).join('');
 }
 
 /** A flag cluster cut at its first value-taking letter: everything after it is that value. */
@@ -213,22 +228,40 @@ function flagRun(arg: string, letters: string): string {
 function takesNextArgument(program: string, arg: string): boolean {
   if (arg.startsWith('--')) return !arg.includes('=') && (OPTION_VALUE_WORDS[program] ?? []).includes(arg);
   const cluster = arg.slice(1);
-  const at = [...cluster].findIndex(char => optionValueLetters(program).includes(char));
+  const letters = nextWordLetters(program);
+  const at = [...cluster].findIndex(char => letters.includes(char));
   return at !== -1 && at === cluster.length - 1;
+}
+
+/** A word that could be an option's value rather than the start of another option. */
+function plainWord(arg: string | undefined): boolean {
+  return arg !== undefined && !arg.startsWith('-') && !arg.startsWith('+');
 }
 
 /**
  * An interpreter's options up to its first operand. A value-taking option swallows the rest of its
  * cluster (`ruby -rset x.rb`) or its next argument (`python3 -W ignore -c ...`), so neither the
- * swallowed word nor a later script argument is read as one of the interpreter's own options.
+ * swallowed word nor a later script argument is read as one of the interpreter's own options. An
+ * unrecognised long option is assumed to take the next word, so a script after it cannot end the
+ * option prefix early (`node --loader ./x.mjs -e ...` still runs `-e`).
  */
 function interpreterOptions(program: string, args: readonly string[]): string[] {
   const letters = optionValueLetters(program);
+  const shellWord = SHELL_OPTION_WORD.has(program);
   const options: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    if (!args[i].startsWith('-')) break;
-    options.push(flagRun(args[i], letters));
-    if (takesNextArgument(program, args[i])) i++;
+    const arg = args[i];
+    // `bash -oc pipefail '...'` is `-o pipefail` plus `-c`: `o` takes the next word and the letters
+    // after it stay flags, unlike the glued value other interpreters read.
+    if (shellWord && /^[+-][a-zA-Z]*[oO]/.test(arg)) {
+      options.push(arg);
+      i += [...arg.slice(1)].filter(letter => letter === 'o' || letter === 'O').length;
+      continue;
+    }
+    if (!arg.startsWith('-')) break;
+    options.push(flagRun(arg, letters));
+    if (takesNextArgument(program, arg)) i++;
+    else if (arg.startsWith('--') && arg !== '--' && !arg.includes('=') && plainWord(args[i + 1])) i++;
   }
   return options;
 }
@@ -392,9 +425,7 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   // A name built from a command substitution carries what it read into the lookup itself.
   if (RESOLVERS.has(program) && computed) return `${program} with a computed argument`;
   const inlineScript = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
-  // Only the interpreter's own options count: a script's own arguments (`python3 x.py -config`) are
-  // not options, and neither is the value of a value-taking option, whose word is swallowed before
-  // the operand starts (`python3 -W ignore -c ...` still runs an inline script).
+  // A script's own arguments are not options: `python3 x.py -config` never runs an inline script.
   const options = interpreterOptions(program, args);
   const inline = inlineScript ? options.find(arg => inlineScript.test(arg)) : undefined;
   if (inline) return `${program} ${(inlineScript?.exec(inline)?.[0] ?? inline.split('=')[0]).replace(/=$/, '')}`;
