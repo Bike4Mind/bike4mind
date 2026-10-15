@@ -8,14 +8,15 @@
  * but nothing is minted and nothing is released beyond the boolean, so there is
  * no scope, grant or consent gate.
  *
- * Response: 200 { is_admin: boolean }. A subject that resolves to no B4M user
- * is simply not an admin.
+ * Response: 200 { is_admin: boolean }. A subject that resolves to no B4M user,
+ * or to a blocked (banned, suspended, disputed) account, is simply not an admin.
  */
 
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { cacheRepository } from '@bike4mind/database';
+import { userService } from '@bike4mind/services';
 import { oauthClientRepository, userRepository } from '@bike4mind/database/auth';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 
@@ -90,9 +91,9 @@ const handler = baseApi({ auth: false })
       );
     }
 
-    // 5. A subject that resolves to no B4M user is not an admin.
+    // 5. A subject that resolves to no B4M user, or to a blocked account, is not an admin.
     const user = await userRepository.findById(b4mUserId);
-    const isAdmin = user?.isAdmin === true;
+    const isAdmin = user?.isAdmin === true && userService.accountBlockReasons(user).length === 0;
     if (isAdmin) {
       req.logger.info(`[OAUTH_FEDERATED_ADMIN] user ${b4mUserId} confirmed admin for client ${client_id}`);
     }

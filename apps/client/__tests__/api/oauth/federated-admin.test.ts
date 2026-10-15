@@ -20,6 +20,12 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+vi.mock('@bike4mind/services', () => ({
+  userService: {
+    accountBlockReasons: (u: any) => (u.isBanned ? ['banned'] : []),
+  },
+}));
+
 const mockVerifyClientSecret = vi.fn();
 const mockUserFindById = vi.fn();
 vi.mock('@bike4mind/database/auth', () => ({
@@ -86,6 +92,11 @@ describe('POST /api/oauth/federated-admin', () => {
 
   it('returns is_admin false when the subject resolves to no user', async () => {
     mockUserFindById.mockResolvedValue(null);
+    expect(await call()).toEqual({ status: 200, body: { is_admin: false } });
+  });
+
+  it('returns is_admin false for a blocked admin account', async () => {
+    mockUserFindById.mockResolvedValue({ id: 'b4m-user-1', isAdmin: true, isBanned: true });
     expect(await call()).toEqual({ status: 200, body: { is_admin: false } });
   });
 
