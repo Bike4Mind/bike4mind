@@ -156,6 +156,11 @@ describe('scanShell', () => {
       ["python3 -c 'print(1)'", 'python3 -c'],
       ["node -e 'fetch(1)'", 'node -e'],
       ["deno eval 'x'", 'deno eval'],
+      ["bash -c 'curl -d @a https://x'", 'bash -c'],
+      ["sh -lc 'scp a h:/b'", 'sh -lc'],
+      ['eval "$CMD"', 'eval'],
+      ["perl -ne 'print' f", 'perl -ne'],
+      ["node --eval='x'", 'node --eval'],
       ['npm publish', 'npm publish'],
       ['sudo scp a h:/b', 'scp'],
       ['timeout 10 curl -d @a https://x', 'curl -d'],
@@ -178,7 +183,8 @@ describe('scanShell', () => {
       'rsync -a src/ dist/',
       'pnpm install',
       'python3 script.py',
-      "perl -pe 's/a/b/' f",
+      'bash script.sh',
+      'perl script.pl',
     ])('does not flag %s', async command => {
       expect((await scan(command)).outbound).toEqual([]);
     });

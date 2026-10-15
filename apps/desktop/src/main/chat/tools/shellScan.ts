@@ -155,13 +155,18 @@ const CURL_SENDS = /^(-d|--data.*|-F|--form.*|-T|--upload-file|--json)$/;
 const WGET_SENDS = /^--(post|body)-(data|file)$/;
 
 /** Options that run a script given inline, which can open a socket no scan of the text sees. */
-const INLINE_SCRIPT: Record<string, string[]> = {
-  node: ['-e', '--eval', '-p', '--print'],
-  ruby: ['-e'],
-  perl: ['-e', '-E'],
-  php: ['-r'],
-  bun: ['-e', '--eval'],
-  osascript: ['-e'],
+const SHELL_SCRIPT = /^-[a-zA-Z]*c$/;
+const INLINE_SCRIPT: Record<string, RegExp> = {
+  node: /^(-e|-p|--eval|--print)(=|$)/,
+  ruby: /^-[a-zA-Z]*e$/,
+  perl: /^-[a-zA-Z]*[eE]$/,
+  php: /^-r$/,
+  bun: /^(-e|--eval)(=|$)/,
+  osascript: /^-e$/,
+  sh: SHELL_SCRIPT,
+  bash: SHELL_SCRIPT,
+  zsh: SHELL_SCRIPT,
+  dash: SHELL_SCRIPT,
 };
 
 /** The value an option sets, as `-X POST`, `-XPOST` or `--request=POST`; undefined when absent. */
@@ -181,9 +186,9 @@ function sendsBody(method: string | undefined): boolean {
 }
 
 /**
- * Why one simple command can send data off this computer, or null. Defence in depth only: an
- * `eval`, a script file or a wrapper not listed here slips past, which is why a reply that has read
- * untrusted content asks before any command at all (see ChatService's DirectoryTurn.untrusted).
+ * Why one simple command can send data off this computer, or null. Defence in depth only: a
+ * script file, a decoded payload or a wrapper not listed here slips past, which is why a reply that
+ * has read untrusted content asks before any command at all (see ChatService's DirectoryTurn.untrusted).
  */
 export function outboundReason(raw: readonly string[]): string | null {
   const tokens = raw.map(unquote);
@@ -231,8 +236,9 @@ export function outboundReason(raw: readonly string[]): string | null {
   }
   if (/^python[\d.]*$/.test(program)) return args.includes('-c') ? `${program} -c` : null;
   if (program === 'deno') return args[0] === 'eval' ? 'deno eval' : null;
-  const inline = INLINE_SCRIPT[program]?.find(flag => args.some(arg => arg === flag || arg.startsWith(`${flag}=`)));
-  if (inline) return `${program} ${inline}`;
+  if (program === 'eval') return 'eval';
+  const inline = args.find(arg => INLINE_SCRIPT[program]?.test(arg));
+  if (inline) return `${program} ${inline.split('=')[0]}`;
   if ((program === 'npm' || program === 'pnpm' || program === 'yarn') && args.includes('publish')) {
     return `${program} publish`;
   }

@@ -3392,10 +3392,8 @@ export class ChatService {
     const stuck = looping && mode === 'auto';
     // Once this reply has read web, MCP or skill content, an injected instruction may be steering
     // it, so a call that can send data out is asked whatever "always" was answered before.
-    const tainted = mode === 'auto' && !!directories.untrusted && sendsOut(call.name);
-    if (tainted && directories.untrusted) {
-      prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(directories.untrusted)}` };
-    }
+    const tainted = mode === 'auto' && sendsOut(call.name) ? directories.untrusted : undefined;
+    if (tainted) prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(tainted)}` };
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
@@ -3425,7 +3423,7 @@ export class ChatService {
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
-    if (this.autoApproves(mode, sessionId, call, prompt, stuck || tainted)) {
+    if (this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted)) {
       return { input: applyOption(call.input, runnable[0]) };
     }
 
