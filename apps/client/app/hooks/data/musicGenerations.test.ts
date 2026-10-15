@@ -200,6 +200,8 @@ describe('useCancelMusicGeneration', () => {
       await result.current.mutateAsync('music-1').catch(() => undefined);
     });
     expect(h.toastError).toHaveBeenCalledWith('Could not cancel the song. Try again.');
+  });
+});
 
 const axiosError = (status: number, data: unknown): AxiosError =>
   new AxiosError('request failed', String(status), undefined, undefined, {
