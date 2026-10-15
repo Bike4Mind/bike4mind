@@ -125,7 +125,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'inbox/create.ts',
   'inbox/index.ts',
   'inbox/read.ts',
-  'infer.ts',
   'integrations/[integration]/rotate-token.ts',
   'invites/[id]/accept.ts',
   'invites/[id]/index.ts',
