@@ -31,7 +31,7 @@ import {
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { sendToConnection } from '@server/websocket/utils';
 import { Config } from '@server/utils/config';
-import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
+import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/errorSanitization';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
@@ -256,7 +256,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             await sendToConnections({
               action: 'cli_completion_error' as const,
               requestId,
-              error: sanitizeErrorMessage(error),
+              ...cliCompletionErrorFields(error),
             });
           } catch {
             // Best effort

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CliCompletionChunkAction } from '@bike4mind/common';
+import { BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
 
 const mockExecuteCompletion = vi.fn();
 const mockLogCompletionAnalytics = vi.fn();
@@ -181,5 +181,32 @@ describe('cliCompletion websocket handler', () => {
     expect(mockLogCompletionAnalytics).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'failure', source: 'cli' })
     );
+  });
+
+  it('keeps the message and errorCode of a 4xx the caller must fix', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(
+      new BadRequestError('Model does not support tool search.', { errorCode: 'tool_search_unsupported' })
+    );
+
+    await run();
+
+    expect(sendToConnection).toHaveBeenCalledWith('conn-1', 'https://example.test/test', {
+      action: 'cli_completion_error',
+      requestId: '7f0c3f0e-5b1a-4c58-9a57-2f1e8f6f3a11',
+      error: 'Model does not support tool search.',
+      errorCode: 'tool_search_unsupported',
+    });
+  });
+
+  it('sanitizes any other error', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(new Error('db exploded at 10.0.0.1'));
+
+    await run();
+
+    expect(sendToConnection).toHaveBeenCalledWith('conn-1', 'https://example.test/test', {
+      action: 'cli_completion_error',
+      requestId: '7f0c3f0e-5b1a-4c58-9a57-2f1e8f6f3a11',
+      error: 'Internal server error',
+    });
   });
 });

@@ -106,6 +106,18 @@ describe('prepareWireTools', () => {
     expect(refusal(() => prepareWireTools([custom('a')], echoed, OPENAI)).errorCode).toBe('tool_search_unsupported');
   });
 
+  it('lets a non-search server_tool_use echo through on a model without tool search', () => {
+    const echoedWebSearch = [
+      { role: 'user', content: 'news?' },
+      {
+        role: 'assistant',
+        content: [{ type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: 'news' } }],
+      },
+      { role: 'user', content: 'go on' },
+    ] as IMessage[];
+    expect(() => prepareWireTools([custom('a')], echoedWebSearch, OPENAI)).not.toThrow();
+  });
+
   it('refuses a server tool that is not a tool search tool', () => {
     const webSearch = {
       serverTool: { type: 'web_search_20250305', name: 'web_search', max_uses: 50 },
@@ -154,6 +166,34 @@ describe('prepareWireTools', () => {
         .errorCode
     ).toBe('unknown_tool_reference');
     expect(refusal(() => prepareWireTools(tools, withToolResult([{ type: 'tool_reference' }]), DIRECT)).errorCode).toBe(
+      'unknown_tool_reference'
+    );
+  });
+
+  it('checks the tool_references of an echoed tool_search_tool_result against tools', () => {
+    const echoedSearch = (toolName: string) =>
+      [
+        { role: 'user', content: 'weather?' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: {} },
+            {
+              type: 'tool_search_tool_result',
+              tool_use_id: 'srvtoolu_1',
+              content: {
+                type: 'tool_search_tool_search_result',
+                tool_references: [{ type: 'tool_reference', tool_name: toolName }],
+              },
+            },
+          ],
+        },
+        { role: 'user', content: 'go on' },
+      ] as IMessage[];
+    const tools = [custom('find_tools'), custom('get_weather', { defer_loading: true }), searchTool];
+
+    expect(() => prepareWireTools(tools, echoedSearch('get_weather'), DIRECT)).not.toThrow();
+    expect(refusal(() => prepareWireTools(tools, echoedSearch('nope'), DIRECT)).errorCode).toBe(
       'unknown_tool_reference'
     );
   });

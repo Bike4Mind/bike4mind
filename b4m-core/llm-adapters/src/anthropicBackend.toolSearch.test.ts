@@ -576,6 +576,66 @@ describe('AnthropicBackend plain tool loop replay (thinking off, no server block
   });
 });
 
+describe('AnthropicBackend plain tool loop replay (thinking on, no server blocks)', () => {
+  it('replays one assistant turn and one tool_result message for parallel tool calls', async () => {
+    const toolUseEvents = (index: number, id: string) => [
+      { type: 'content_block_start', index, content_block: { type: 'tool_use', id, name: 'get_weather', input: {} } },
+      { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: '{"city":"Oslo"}' } },
+      { type: 'content_block_stop', index },
+    ];
+    const parallelTurn = [
+      messageStart,
+      { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'two calls' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Checking both.' } },
+      { type: 'content_block_stop', index: 1 },
+      ...toolUseEvents(2, 'toolu_1'),
+      ...toolUseEvents(3, 'toolu_2'),
+      { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 20 } },
+      { type: 'message_stop' },
+    ];
+    const { backend, captured } = buildBackend([parallelTurn, finalTurn]);
+
+    await backend.complete(
+      ChatModels.CLAUDE_5_OPUS,
+      [{ role: 'user', content: 'weather in Oslo, twice?' }],
+      { stream: true, executeTools: true, reasoningEffort: 'low', tools: [tool('get_weather')] },
+      collect().cb
+    );
+
+    expect(captured[0].thinking).toEqual({ type: 'adaptive' });
+    const sent = captured[1].messages as Array<{ role: string; content: unknown }>;
+    const toolUseIds = sent.flatMap(m =>
+      Array.isArray(m.content)
+        ? (m.content as Array<Record<string, unknown>>).filter(b => b.type === 'tool_use').map(b => b.id)
+        : []
+    );
+    expect(toolUseIds).toEqual(['toolu_1', 'toolu_2']);
+    const toolUse = (id: string) => ({ type: 'tool_use', id, name: 'get_weather', input: { city: 'Oslo' } });
+    expect(sent.slice(-2)).toEqual([
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'two calls', signature: 'sig' },
+          { type: 'text', text: 'Checking both.' },
+          toolUse('toolu_1'),
+          toolUse('toolu_2'),
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' },
+          { type: 'tool_result', tool_use_id: 'toolu_2', content: 'ok' },
+        ],
+      },
+    ]);
+  });
+});
+
 describe('AnthropicBackend server_tool_use input', () => {
   const serverToolStart = {
     type: 'content_block_start',
@@ -635,6 +695,46 @@ describe('AnthropicBackend server_tool_use input', () => {
       0
     );
   });
+
+  it('defaults input to {} when content_block_start omits it, in both the frame and the replay', async () => {
+    const serverToolUse = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex' };
+    const { backend, captured } = buildBackend([
+      [
+        messageStart,
+        { type: 'content_block_start', index: 0, content_block: serverToolUse },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'content_block_start', index: 1, content_block: searchResult },
+        { type: 'content_block_stop', index: 1 },
+        {
+          type: 'content_block_start',
+          index: 2,
+          content_block: { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: {} },
+        },
+        { type: 'content_block_stop', index: 2 },
+        { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 20 } },
+        { type: 'message_stop' },
+      ],
+      finalTurn,
+    ]);
+    const { cb, providerBlocks } = collect();
+
+    await backend.complete(
+      ChatModels.CLAUDE_5_SONNET,
+      [{ role: 'user', content: 'weather?' }],
+      {
+        stream: true,
+        executeTools: true,
+        reasoningEffort: 'none',
+        tools: [tool('get_weather', { defer_loading: true })],
+        providerTools: [searchTool],
+      },
+      cb
+    );
+
+    expect(providerBlocks()[0]).toEqual({ provider: 'anthropic', block: { ...serverToolUse, input: {} } });
+    const replayed = (captured[1].messages as Array<{ role: string; content: unknown[] }>).at(-2);
+    expect(replayed?.content[0]).toEqual({ ...serverToolUse, input: {} });
+  });
 });
 
 describe('AnthropicBackend non-streaming provider block replay (thinking off)', () => {
@@ -676,5 +776,35 @@ describe('AnthropicBackend non-streaming provider block replay (thinking off)', 
       { role: 'assistant', content: [serverToolUse, searchResult, toolUse] },
       { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
     ]);
+  });
+});
+
+describe('AnthropicBackend request with no tools offered', () => {
+  it('strips echoed server blocks from a history with no tool_use or tool_result', async () => {
+    const { backend, captured } = buildBackend([
+      { content: [{ type: 'text', text: 'hi' }], usage: { input_tokens: 1, output_tokens: 1 } },
+    ]);
+    const messages = [
+      { role: 'user', content: 'weather?' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: searchInput },
+          searchResult,
+          { type: 'text', text: 'No weather tool here.' },
+        ],
+      },
+      { role: 'user', content: 'ok, just guess' },
+    ] as IMessage[];
+
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      messages,
+      { stream: false, executeTools: false, tools: [] },
+      async () => undefined
+    );
+
+    const sent = captured[0].messages as Array<{ role: string; content: unknown }>;
+    expect(sent[1]).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'No weather tool here.' }] });
   });
 });

@@ -24,16 +24,36 @@ function toolSearchError(message: string, errorCode: CompletionToolErrorCode): B
   return new BadRequestError(message, { errorCode });
 }
 
+type ScannedBlock = { type?: unknown; name?: unknown; content?: unknown };
+
+/**
+ * A block only tool search produces. Other server tools (web_search, ...) also emit server_tool_use,
+ * and those are left alone here as they were before tool search existed.
+ */
+function isToolSearchBlock(block: ScannedBlock): boolean {
+  if (block.type === 'server_tool_use') {
+    return typeof block.name === 'string' && block.name.startsWith('tool_search_tool_');
+  }
+  return typeof block.type === 'string' && TOOL_SEARCH_BLOCK_TYPES.has(block.type);
+}
+
+/** tool_reference blocks sit in a tool_result's content array, or in a tool_search_tool_result's `content.tool_references`. */
+function toolReferencesOf(block: ScannedBlock): unknown[] {
+  if (block.type === 'tool_result') return Array.isArray(block.content) ? block.content : [];
+  if (block.type !== 'tool_search_tool_result') return [];
+  const references = (block.content as { tool_references?: unknown } | null | undefined)?.tool_references;
+  return Array.isArray(references) ? references : [];
+}
+
 function scanMessages(messages: IMessage[]): { referencedTools: unknown[]; echoesToolSearchBlocks: boolean } {
   const referencedTools: unknown[] = [];
   let echoesToolSearchBlocks = false;
   for (const message of messages) {
     if (!Array.isArray(message.content)) continue;
-    for (const block of message.content as Array<{ type?: unknown; content?: unknown }>) {
+    for (const block of message.content as ScannedBlock[]) {
       if (typeof block?.type !== 'string') continue;
-      if (TOOL_SEARCH_BLOCK_TYPES.has(block.type)) echoesToolSearchBlocks = true;
-      if (block.type !== 'tool_result' || !Array.isArray(block.content)) continue;
-      for (const inner of block.content as Array<{ type?: unknown; tool_name?: unknown }>) {
+      if (isToolSearchBlock(block)) echoesToolSearchBlocks = true;
+      for (const inner of toolReferencesOf(block) as Array<{ type?: unknown; tool_name?: unknown } | null>) {
         if (inner?.type === 'tool_reference') referencedTools.push(inner.tool_name);
       }
     }

@@ -14,7 +14,7 @@ import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constant
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
 import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
-import { CompletionProviderBlockEventSchema, ResponseFormatSchema } from './cliCompletions';
+import { CompletionProviderBlockEventSchema, CompletionToolSchema, ResponseFormatSchema } from './cliCompletions';
 
 // Schemas for actions sent over the WebSocket connection.
 
@@ -91,7 +91,7 @@ export const CliCompletionRequestAction = z.object({
       temperature: z.number().optional(),
       maxTokens: z.number().optional(),
       stream: z.boolean().optional(),
-      tools: z.array(z.unknown()).optional(),
+      tools: z.array(CompletionToolSchema).optional(),
       response_format: ResponseFormatSchema.optional(),
     })
     .optional(),
@@ -621,6 +621,8 @@ export const CliCompletionErrorAction = z.object({
   error: z.string(),
   /** Seconds until the caller's rate-limit window reopens; present only on a rate-limit refusal. */
   retryAfter: z.number().optional(),
+  /** Machine-readable reason on a request the caller must fix (a 4xx), e.g. `tool_search_unsupported`. */
+  errorCode: z.string().optional(),
 });
 export type ICliCompletionErrorAction = z.infer<typeof CliCompletionErrorAction>;
 

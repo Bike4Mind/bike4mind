@@ -43,7 +43,9 @@ export const createCompletionContract = defineEndpoint({
     "Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then " +
     'carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each ' +
     'block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a ' +
-    '`tool_result`. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside ' +
+    '`tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: ' +
+    '"pause_turn"`; continue by re-sending the conversation with that assistant turn\'s provider blocks echoed. ' +
+    'A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside ' +
     "a `tool_result`'s content. On every other model, Bedrock-served Claude included, `defer_loading` is ignored (every " +
     'tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a ' +
     '`400` rather than run without it.\n\n' +

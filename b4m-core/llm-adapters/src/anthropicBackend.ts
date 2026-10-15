@@ -1048,19 +1048,23 @@ export class AnthropicBackend implements ICompletionBackend {
     const countToolBlocks = (msgs: IMessage[]) => {
       let useCount = 0;
       let resultCount = 0;
+      let serverCount = 0;
       for (const msg of msgs) {
         if (!Array.isArray(msg.content)) continue;
         for (const b of msg.content as Array<{ type?: string }>) {
           if (b.type === 'tool_use') useCount++;
           if (b.type === 'tool_result') resultCount++;
+          if (isProviderBlock(b)) serverCount++;
         }
       }
-      return { useCount, resultCount };
+      return { useCount, resultCount, serverCount };
     };
 
-    let { useCount: toolUseCount, resultCount: toolResultCount } = countToolBlocks(filteredMessages);
+    const initialToolBlockCounts = countToolBlocks(filteredMessages);
+    let { useCount: toolUseCount, resultCount: toolResultCount } = initialToolBlockCounts;
+    const serverBlockCount = initialToolBlockCounts.serverCount;
 
-    if (toolUseCount > 0 || toolResultCount > 0) {
+    if (toolUseCount > 0 || toolResultCount > 0 || serverBlockCount > 0) {
       this.logger.debug(
         `[Pre-API #6181] Sending ${filteredMessages.length} messages with ${toolUseCount} tool_use and ${toolResultCount} tool_result blocks`
       );
@@ -1072,7 +1076,7 @@ export class AnthropicBackend implements ICompletionBackend {
       // ChatCompletionProcess's isToolPairingError net to recover a request we can predict fails.
       if (!options.tools?.length) {
         this.logger.warn(
-          `[Pre-API #6181] Tool blocks present (tool_use: ${toolUseCount}, tool_result: ${toolResultCount}) but no tools offered this turn. Stripping all tool blocks.`
+          `[Pre-API #6181] Tool blocks present (tool_use: ${toolUseCount}, tool_result: ${toolResultCount}, server: ${serverBlockCount}) but no tools offered this turn. Stripping all tool blocks.`
         );
         filteredMessages = stripAllToolBlocks(filteredMessages, this.logger);
         ({ useCount: toolUseCount, resultCount: toolResultCount } = countToolBlocks(filteredMessages));
@@ -1721,6 +1725,8 @@ export class AnthropicBackend implements ICompletionBackend {
                       }
                     } else if (serverToolInputJson.has(event.index)) {
                       const block = collectedContent[event.index];
+                      // content_block_start may omit input; the API rejects a replayed server_tool_use without one.
+                      block.input ??= {};
                       const inputJson = serverToolInputJson.get(event.index);
                       if (inputJson) {
                         try {
