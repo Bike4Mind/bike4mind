@@ -44,7 +44,7 @@ permissions:
 
 concurrency:
   group: desktop-release-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
@@ -98,7 +98,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-          cache: pnpm
+          package-manager-cache: false
       - run: pnpm install --frozen-lockfile
       - name: Build shared packages
         run: pnpm turbo:core:build
@@ -142,12 +142,12 @@ jobs:
         with:
           name: ${{ matrix.platform }}-smoke-results
           path: apps/desktop/smoke-results/
-          retention-days: 7
+          retention-days: 3
       - uses: actions/upload-artifact@v6
         with:
           name: desktop-${{ matrix.platform }}
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
           path: |
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
@@ -197,7 +197,7 @@ jobs:
           name: desktop-installers
           path: installers/*
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
 
   publish:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
