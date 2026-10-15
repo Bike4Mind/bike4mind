@@ -426,7 +426,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 0.015 / 1000, output: 0.075 / 1000 }, // Placeholder pricing - update with public rates
+          200000: { input: 0.015 / 1000, output: 0.075 / 1000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -449,7 +449,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 0.015 / 1000, output: 0.075 / 1000 }, // Placeholder pricing - update with public rates
+          200000: { input: 0.015 / 1000, output: 0.075 / 1000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -472,7 +472,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 0.003 / 1000, output: 0.015 / 1000 }, // Placeholder pricing - update with public rates
+          200000: { input: 0.003 / 1000, output: 0.015 / 1000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -518,7 +518,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 1 / 1_000_000, output: 5 / 1_000_000 }, // Placeholder pricing - update with public rates
+          200000: { input: 1 / 1_000_000, output: 5 / 1_000_000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',

@@ -113,7 +113,7 @@ import type { SessionActivity } from './SessionActivity';
 import { deriveTitle, isValidSessionId, type SessionStore } from './SessionStore';
 import { expandSkill, parseSkillInvocation } from './skills/expand';
 import { SkillsPromptCache } from './skills/prompt';
-import type { SkillCatalog } from './skills/SkillCatalog';
+import { skillSource, type SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { desktopAppGuidance, mcpServerLines } from './mcp/prompt';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
@@ -1375,7 +1375,7 @@ export class ChatService {
       content = expanded.body;
       skill = {
         name: skillCommand.name,
-        source: skillCommand.source === 'project' ? 'project' : 'global',
+        source: skillSource(skillCommand),
         ...(invocation.args ? { args: invocation.args } : {}),
       };
     }

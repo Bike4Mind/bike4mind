@@ -65,6 +65,19 @@ describe('expandSkill', () => {
     expect(result.errors).toEqual([]);
   });
 
+  it('expands an account skill, whose filePath is a b4m: URL and never opened', async () => {
+    await writeFile(join(granted, 'notes.txt'), 'remember this', 'utf8');
+    const remote: CustomCommand = {
+      ...command('Summarise $ARGUMENTS using @notes.txt'),
+      source: 'remote',
+      filePath: 'b4m:/api/skills/x',
+    };
+    const result = await expandSkill(remote, 'the diff', [granted], granted);
+    expect(result.body).toContain('Summarise the diff');
+    expect(result.body).toContain('remember this');
+    expect(result.errors).toEqual([]);
+  });
+
   it('refuses an @file that escapes the granted roots', async () => {
     const outside = join(base, 'secret.txt');
     await writeFile(outside, 'do not read me', 'utf8');

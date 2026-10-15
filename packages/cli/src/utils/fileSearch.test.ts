@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { promises as fsp } from 'fs';
+import os from 'os';
+import path from 'path';
 import { isPathWithinCwd, isBinaryFile } from './fileSearch.js';
 
 describe('fileSearch utils', () => {
@@ -13,105 +16,141 @@ describe('fileSearch utils', () => {
     });
 
     describe('valid paths within cwd', () => {
-      it('should return true for a simple relative file path', () => {
-        expect(isPathWithinCwd('file.txt')).toBe(true);
+      it('should return true for a simple relative file path', async () => {
+        await expect(isPathWithinCwd('file.txt')).resolves.toBe(true);
       });
 
-      it('should return true for a nested relative path', () => {
-        expect(isPathWithinCwd('src/utils/file.ts')).toBe(true);
+      it('should return true for a nested relative path', async () => {
+        await expect(isPathWithinCwd('src/utils/file.ts')).resolves.toBe(true);
       });
 
-      it('should return true for current directory reference', () => {
-        expect(isPathWithinCwd('.')).toBe(true);
+      it('should return true for current directory reference', async () => {
+        await expect(isPathWithinCwd('.')).resolves.toBe(true);
       });
 
-      it('should return true for path starting with ./', () => {
-        expect(isPathWithinCwd('./src/file.ts')).toBe(true);
+      it('should return true for path starting with ./', async () => {
+        await expect(isPathWithinCwd('./src/file.ts')).resolves.toBe(true);
       });
 
-      it('should return true for deeply nested path', () => {
-        expect(isPathWithinCwd('a/b/c/d/e/file.js')).toBe(true);
+      it('should return true for deeply nested path', async () => {
+        await expect(isPathWithinCwd('a/b/c/d/e/file.js')).resolves.toBe(true);
       });
     });
 
     describe('path traversal attempts that should be blocked', () => {
-      it('should return false for simple parent directory traversal', () => {
-        expect(isPathWithinCwd('../file.txt')).toBe(false);
+      it('should return false for simple parent directory traversal', async () => {
+        await expect(isPathWithinCwd('../file.txt')).resolves.toBe(false);
       });
 
-      it('should return false for multiple parent directory traversal', () => {
-        expect(isPathWithinCwd('../../etc/passwd')).toBe(false);
+      it('should return false for multiple parent directory traversal', async () => {
+        await expect(isPathWithinCwd('../../etc/passwd')).resolves.toBe(false);
       });
 
-      it('should return false for hidden traversal in middle of path', () => {
-        expect(isPathWithinCwd('src/../../../etc/passwd')).toBe(false);
+      it('should return false for hidden traversal in middle of path', async () => {
+        await expect(isPathWithinCwd('src/../../../etc/passwd')).resolves.toBe(false);
       });
 
-      it('should return false for traversal that goes out and comes back in', () => {
+      it('should return false for traversal that goes out and comes back in', async () => {
         // This goes: /home/user/project/src -> /home/user/project -> /home/user -> /home -> /etc
-        expect(isPathWithinCwd('src/../../../../../../etc/passwd')).toBe(false);
+        await expect(isPathWithinCwd('src/../../../../../../etc/passwd')).resolves.toBe(false);
       });
 
-      it('should return false for absolute paths outside cwd', () => {
-        expect(isPathWithinCwd('/etc/passwd')).toBe(false);
+      it('should return false for absolute paths outside cwd', async () => {
+        await expect(isPathWithinCwd('/etc/passwd')).resolves.toBe(false);
       });
 
-      it('should return false for absolute path to different directory', () => {
-        expect(isPathWithinCwd('/home/other/file.txt')).toBe(false);
+      it('should return false for absolute path to different directory', async () => {
+        await expect(isPathWithinCwd('/home/other/file.txt')).resolves.toBe(false);
       });
     });
 
     describe('edge cases', () => {
-      it('should return true for path that goes up and back down into cwd', () => {
+      it('should return true for path that goes up and back down into cwd', async () => {
         // /home/user/project/src/.. resolves to /home/user/project
-        expect(isPathWithinCwd('src/..')).toBe(true);
+        await expect(isPathWithinCwd('src/..')).resolves.toBe(true);
       });
 
-      it('should return true for path with redundant ./ components', () => {
-        expect(isPathWithinCwd('./././src/file.ts')).toBe(true);
+      it('should return true for path with redundant ./ components', async () => {
+        await expect(isPathWithinCwd('./././src/file.ts')).resolves.toBe(true);
       });
 
-      it('should return false for path with null bytes (potential bypass attempt)', () => {
+      it('should return false for path with null bytes (potential bypass attempt)', async () => {
         // Path normalization should handle this, but the resolved path would be outside
-        expect(isPathWithinCwd('../\0/etc/passwd')).toBe(false);
+        await expect(isPathWithinCwd('../\0/etc/passwd')).resolves.toBe(false);
       });
     });
 
     describe('case sensitivity (Windows compatibility)', () => {
-      it('should handle case variations on case-insensitive systems', () => {
+      it('should handle case variations on case-insensitive systems', async () => {
         // The current implementation lowercases both paths for comparison
         // This test verifies the normalization works
         vi.spyOn(process, 'cwd').mockReturnValue('/HOME/USER/PROJECT');
-        expect(isPathWithinCwd('file.txt')).toBe(true);
+        await expect(isPathWithinCwd('file.txt')).resolves.toBe(true);
       });
     });
 
     describe('symlink resolution', () => {
-      // Due to ESM limitations, fs.realpathSync.native cannot be mocked directly in tests.
-      // These tests verify the expected behavior through integration-style testing.
-      // The symlink resolution logic is tested by verifying that:
+      // The cases here mock cwd to a path that does not exist, so fsp.realpath throws and the
+      // escape guard is never reached; the real-filesystem cases below cover it. These tests
+      // verify only, integration-style, that:
       // 1. Paths within cwd are allowed (even if they would be symlinks in production)
       // 2. Paths outside cwd are blocked
       // 3. Non-existent paths within cwd are allowed for autocomplete
 
-      it('should allow paths within cwd that could be symlinked', () => {
+      it('should allow paths within cwd that could be symlinked', async () => {
         // Tests that relative paths within cwd are accepted
         // In production, these paths would be resolved through realpathSync
-        expect(isPathWithinCwd('src/file.ts')).toBe(true);
-        expect(isPathWithinCwd('./src/components/App.tsx')).toBe(true);
+        await expect(isPathWithinCwd('src/file.ts')).resolves.toBe(true);
+        await expect(isPathWithinCwd('./src/components/App.tsx')).resolves.toBe(true);
       });
 
-      it('should block paths that traverse outside cwd', () => {
+      it('should block paths that traverse outside cwd', async () => {
         // Even if a symlink tried to escape, path traversal is caught
-        expect(isPathWithinCwd('../outside-project/file.ts')).toBe(false);
-        expect(isPathWithinCwd('src/../../outside/malicious')).toBe(false);
+        await expect(isPathWithinCwd('../outside-project/file.ts')).resolves.toBe(false);
+        await expect(isPathWithinCwd('src/../../outside/malicious')).resolves.toBe(false);
       });
 
-      it('should handle non-existent paths within cwd for autocomplete', () => {
+      it('should handle non-existent paths within cwd for autocomplete', async () => {
         // Non-existent paths within cwd should be allowed for autocomplete suggestions
         // The implementation handles ENOENT gracefully by resolving relative to cwd
-        expect(isPathWithinCwd('src/new-file-that-does-not-exist.ts')).toBe(true);
-        expect(isPathWithinCwd('new-directory/new-file.js')).toBe(true);
+        await expect(isPathWithinCwd('src/new-file-that-does-not-exist.ts')).resolves.toBe(true);
+        await expect(isPathWithinCwd('new-directory/new-file.js')).resolves.toBe(true);
+      });
+    });
+
+    describe('symlink resolution on the real filesystem', () => {
+      let projectDir: string;
+      let outsideDir: string;
+
+      beforeEach(async () => {
+        // realpath so cwd's own resolution is a no-op: os.tmpdir() is itself a symlink on
+        // macOS (/var -> /private/var), and the escape assertion depends on a lexical
+        // match between cwd and the resolved path when the candidate is not a link.
+        projectDir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'b4m-pathwithin-')));
+        outsideDir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'b4m-pathwithin-out-')));
+        vi.spyOn(process, 'cwd').mockReturnValue(projectDir);
+      });
+
+      afterEach(async () => {
+        vi.restoreAllMocks();
+        await fsp.rm(projectDir, { recursive: true, force: true }).catch(() => {});
+        await fsp.rm(outsideDir, { recursive: true, force: true }).catch(() => {});
+      });
+
+      it('should block a path reached through a symlink that escapes cwd', async () => {
+        // Without realpath the candidate stays lexically under cwd and is allowed.
+        await fsp.writeFile(path.join(outsideDir, 'secret.txt'), 'x', 'utf-8');
+        await fsp.symlink(outsideDir, path.join(projectDir, 'link'));
+
+        await expect(isPathWithinCwd('link/secret.txt')).resolves.toBe(false);
+      });
+
+      it('should allow a path reached through a symlink that stays inside cwd', async () => {
+        await fsp.mkdir(path.join(projectDir, 'real'));
+        await fsp.writeFile(path.join(projectDir, 'real', 'file.txt'), 'x', 'utf-8');
+        await fsp.symlink(path.join(projectDir, 'real'), path.join(projectDir, 'link'));
+
+        await expect(isPathWithinCwd('link/file.txt')).resolves.toBe(true);
       });
     });
   });

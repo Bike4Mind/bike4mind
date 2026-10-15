@@ -11,8 +11,11 @@
  * and never holds the text that gets sent on its behalf.
  */
 
-/** Where a skill came from. `project` means it arrived with the checked-out repository. */
-export type SkillSource = 'global' | 'project';
+/**
+ * Where a skill came from. `project` means it arrived with the checked-out repository; `account`
+ * means it is a Bike4Mind web skill (`/api/skills`) available to the signed-in user.
+ */
+export type SkillSource = 'global' | 'project' | 'account';
 
 export interface SkillSummary {
   /** What the user types after the slash. Derived from the filename or the SKILL.md parent dir. */
@@ -23,7 +26,10 @@ export interface SkillSummary {
   /** Frontmatter `argument-hint`, e.g. "[file] [priority]". Shown beside the name in the picker. */
   argumentHint?: string;
   source: SkillSource;
-  /** Absolute path, shown as the tooltip so a project skill can be read before it is run. */
+  /**
+   * Absolute path, shown as the tooltip so a project skill can be read before it is run. For an
+   * `account` skill it is `b4m:/api/skills/<id>`, never a file on disk.
+   */
   filePath: string;
 }
 

@@ -22,6 +22,7 @@ import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
+import { getClientIp } from '@server/utils/ip';
 
 const handler = baseApi({ auth: false })
   .use(async (req, res, next) => {
@@ -39,7 +40,7 @@ const handler = baseApi({ auth: false })
     // Okta state is handled via the JWT-based OktaJwtStateStore in auth.ts; the
     // state is self-contained in the JWT, so no session workaround is needed.
 
-    const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+    const ip = getClientIp(req);
     const userAgent = req.headers['user-agent'] || 'unknown';
 
     // In dev, derive callback URL from the actual request host so the token
