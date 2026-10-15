@@ -6,7 +6,9 @@
  * without keeping a separate admin list. Same client auth and ID-token trust as
  * /api/oauth/ai-token (see that file and server/auth/verifyFederatedIdToken.ts),
  * but nothing is minted and nothing is released beyond the boolean, so there is
- * no scope, grant or consent gate.
+ * no scope or consent gate. The grant gate still applies (enforced): without it a
+ * relying-party client's pool could name any B4M user in `identities[]` and learn
+ * whether they are an admin.
  *
  * Response: 200 { is_admin: boolean }. A subject that resolves to no B4M user,
  * or to a blocked (banned, suspended, disputed) account, is simply not an admin.
@@ -19,6 +21,7 @@ import { cacheRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { oauthClientRepository, userRepository } from '@bike4mind/database/auth';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
+import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 
 /** Per-`client_id` budget. A federated app caches the answer per user for minutes. */
 const PER_CLIENT_RATE_LIMIT = 300;
@@ -89,6 +92,22 @@ const handler = baseApi({ auth: false })
       req.logger.warn(
         `[OAUTH_FEDERATED_ADMIN] client ${client_id} resolves the user from the self-asserted 'identities' claim`
       );
+    }
+
+    // 4.5. Grant gate - relying-party clients only; see federatedGrantGate.ts. Enforced from the
+    //      start: this surface has no pre-grant callers to migrate.
+    const grantRejection = await checkFederatedGrant({
+      client,
+      clientId: client_id,
+      userId: b4mUserId,
+      scopes: [],
+      logger: req.logger,
+      logTag: 'OAUTH_FEDERATED_ADMIN',
+      enforce: true,
+    });
+    if (grantRejection) {
+      const { status, ...body } = grantRejection;
+      return res.status(status).json(body);
     }
 
     // 5. A subject that resolves to no B4M user, or to a blocked account, is not an admin.

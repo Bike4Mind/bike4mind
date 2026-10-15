@@ -44,6 +44,11 @@ vi.mock('@server/auth/verifyFederatedIdToken', () => ({
   },
 }));
 
+const mockCheckGrant = vi.fn();
+vi.mock('@server/auth/federatedGrantGate', () => ({
+  checkFederatedGrant: (...a: any[]) => mockCheckGrant(...a),
+}));
+
 import handler from '../../../pages/api/oauth/federated-admin';
 import { FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 
@@ -77,6 +82,7 @@ describe('POST /api/oauth/federated-admin', () => {
     mockVerifyClientSecret.mockResolvedValue(FEDERATED_CLIENT);
     mockVerifyIdToken.mockResolvedValue({ b4mUserId: 'b4m-user-1', claims: {} });
     mockUserFindById.mockResolvedValue({ id: 'b4m-user-1', isAdmin: true });
+    mockCheckGrant.mockResolvedValue(null);
   });
 
   it('returns is_admin true for an admin user', async () => {
@@ -98,6 +104,21 @@ describe('POST /api/oauth/federated-admin', () => {
   it('returns is_admin false for a blocked admin account', async () => {
     mockUserFindById.mockResolvedValue({ id: 'b4m-user-1', isAdmin: true, isBanned: true });
     expect(await call()).toEqual({ status: 200, body: { is_admin: false } });
+  });
+
+  it('enforces the grant gate before loading the user', async () => {
+    mockCheckGrant.mockResolvedValue({
+      status: 403,
+      error: 'access_denied',
+      error_description: 'User has not authorized this client',
+    });
+    const { status, body } = await call();
+    expect(status).toBe(403);
+    expect(body.error).toBe('access_denied');
+    expect(mockCheckGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ clientId: 'client-1', userId: 'b4m-user-1', scopes: [], enforce: true })
+    );
+    expect(mockUserFindById).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed body with 400', async () => {
