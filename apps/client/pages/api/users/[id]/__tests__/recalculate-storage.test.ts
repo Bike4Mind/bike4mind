@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ConflictError } from '@bike4mind/common';
 
 const { mockRecalculate, mockFindById } = vi.hoisted(() => ({
   mockRecalculate: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock('@bike4mind/services', () => ({
   userService: { recalculateUserStorage: (...a: unknown[]) => mockRecalculate(...a) },
 }));
 
+import errorHandler from '@server/middlewares/errorHandler';
 import handler from '../recalculate-storage';
 
 async function call(user: { id: string; isAdmin?: boolean }) {
@@ -51,10 +53,15 @@ describe('POST /api/users/:id/recalculate-storage', () => {
     expect(mockRecalculate).toHaveBeenCalledWith({ userId: 'target1' }, expect.anything());
   });
 
-  it('lets a CAS conflict from the service propagate to the error middleware', async () => {
-    const conflict = Object.assign(new Error('storage counter kept changing'), { name: 'ConflictError' });
-    mockRecalculate.mockRejectedValue(conflict);
+  it('maps a retried-out CAS conflict to a 409 through the error middleware', async () => {
+    mockRecalculate.mockRejectedValue(new ConflictError('storage counter kept changing'));
 
-    await expect(call({ id: 'admin1', isAdmin: true })).rejects.toBe(conflict);
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'target1' } });
+    (req as any).user = { id: 'admin1', isAdmin: true };
+    (req as any).logger = { warn: vi.fn(), error: vi.fn() };
+
+    await (handler as any)(req, res).catch((error: unknown) => errorHandler(error, req, res));
+
+    expect(res._getStatusCode()).toBe(409);
   });
 });
