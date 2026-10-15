@@ -42,4 +42,23 @@ describe('buildToolInvocationTelemetry', () => {
     const telemetry = buildToolInvocationTelemetry([{ name: 'github:create_issue' }], new Map());
     expect(telemetry.get('github:create_issue')).toMatchObject({ isMcpTool: true, mcpServerName: 'github' });
   });
+
+  it('counts a result reported as an "Error:" string as a failure', () => {
+    const telemetry = buildToolInvocationTelemetry(
+      [
+        { name: 'image_generation', success: true, returnValue: 'Error: provider unavailable' },
+        { name: 'image_generation', success: true, returnValue: 'done' },
+      ],
+      new Map()
+    );
+    expect(telemetry.get('image_generation')).toMatchObject({ invocationCount: 2, successCount: 1, failureCount: 1 });
+  });
+
+  it('keeps success + failure equal to invocations when health raises failures on an available tool', () => {
+    const telemetry = buildToolInvocationTelemetry(
+      [{ name: 'web_search' }, { name: 'web_search' }, { name: 'web_search' }],
+      new Map([['web_search', { available: true, failureCount: 2 }]])
+    );
+    expect(telemetry.get('web_search')).toMatchObject({ invocationCount: 3, successCount: 1, failureCount: 2 });
+  });
 });
