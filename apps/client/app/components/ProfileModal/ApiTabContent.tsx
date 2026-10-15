@@ -1,40 +1,32 @@
-import { Divider, Stack, Typography } from '@mui/joy';
-import dynamic from 'next/dynamic';
-import { CreditHolderType } from '@bike4mind/common';
-import { useUser } from '@client/app/contexts/UserContext';
+import { Link, Stack, Typography } from '@mui/joy';
+import { useNavigate } from '@tanstack/react-router';
 import ApiKeysSection from '@client/app/components/ProfileModal/SettingsTabContent/ApiKeysSection';
 import UserApiKeysSection from '@client/app/components/ProfileModal/SettingsTabContent/UserApiKeysSection';
 import AgentConnectSection from '@client/app/components/ProfileModal/AgentConnectSection';
 
-// Owner-scoped spend breakdown (by key / feature / source), shared with the admin
-// and org surfaces; pinned to the current user (ownerType=User). Lives here because
-// personal spend that lands on a User-owner pool is predominantly API-key traffic.
-const UsageDashboard = dynamic(
-  () =>
-    import('@client/app/components/admin/CreditAnalysis/components/UsageDashboard').then(m => ({
-      default: m.UsageDashboard,
-    })),
-  { ssr: false }
-);
-
+// Spend for these keys is shown only on the Usage tab, so usage has one home; this tab links to it.
 const ApiTabContent = () => {
-  const { currentUser } = useUser();
+  const navigate = useNavigate();
 
   return (
     <Stack spacing={3}>
       <UserApiKeysSection />
 
-      <ApiKeysSection />
+      <Typography level="body-sm" data-testid="api-keys-usage-link">
+        Spend by key, model, feature and source is on the{' '}
+        <Link
+          component="button"
+          onClick={() => navigate({ to: '/profile', search: { tab: 'usage' }, replace: true })}
+          data-testid="api-keys-usage-link-btn"
+        >
+          Usage tab
+        </Link>
+        .
+      </Typography>
 
       <AgentConnectSection />
 
-      {currentUser?.id && (
-        <>
-          <Divider />
-          <Typography level="title-md">Usage</Typography>
-          <UsageDashboard ownerType={CreditHolderType.User} ownerId={currentUser.id} />
-        </>
-      )}
+      <ApiKeysSection />
     </Stack>
   );
 };
