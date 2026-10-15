@@ -256,7 +256,7 @@ const handler = baseApi().post(async (req, res) => {
     slug: manifest.slug,
     deletedAt: null,
   })
-    .select('publicId publishedAt ownerId lastPublishedBy size sha256Index versions accessGate')
+    .select('publicId publishedAt ownerId lastPublishedBy size sha256Index versions accessGate visibility')
     .lean<{
       publicId: string;
       publishedAt: Date;
@@ -266,6 +266,7 @@ const handler = baseApi().post(async (req, res) => {
       sha256Index?: string;
       versions?: Array<{ sha256Index: string }>;
       accessGate?: unknown;
+      visibility?: string;
     } | null>();
 
   if (previous && !mayRepublishSlug(previous.ownerId, publishUser)) {
@@ -397,8 +398,11 @@ const handler = baseApi().post(async (req, res) => {
   // 7b. Re-publish overwrites the origin in place, but the public `/p/...` page is
   // CDN-cached (see serve route Cache-Control). Without invalidation the prior
   // version keeps serving for up to the TTL. Only public pages are cached
-  // (gated pages are no-store), so skip the invalidation otherwise. Best-effort.
-  if (saved.visibility === 'public') void invalidatePublishCdn(toCacheTarget(saved), req.logger);
+  // (gated pages are no-store), so skip the invalidation otherwise - unless the page WAS public:
+  // an update that downgrades it must purge the cached public copy too. Best-effort.
+  if (saved.visibility === 'public' || previous?.visibility === 'public') {
+    await invalidatePublishCdn(toCacheTarget(saved), req.logger);
+  }
 
   // 8. Best-effort draft cleanup
   void (async () => {

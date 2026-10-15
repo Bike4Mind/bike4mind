@@ -111,6 +111,7 @@ vi.mock('@client/app/utils/fabFileUtils', () => ({
 }));
 vi.mock('@client/app/utils/publishApi', () => ({
   replyPublisher: vi.fn(() => vi.fn()),
+  findPublishedByReply: vi.fn(),
 }));
 // Mutable so a test can flip between personal (null) and an active org account.
 let selectedAccountValue: { id: string; name: string; personal: boolean } | null = null;
@@ -170,7 +171,7 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
 }));
 
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
-import { replyPublisher } from '@client/app/utils/publishApi';
+import { replyPublisher, findPublishedByReply } from '@client/app/utils/publishApi';
 import MessageContent from './MessageContent';
 import { SessionReadOnlyProvider } from './SessionReadOnlyContext';
 
@@ -287,6 +288,7 @@ describe('MessageContent share reply - org (Team) visibility wiring', () => {
     isFeatureEnabled.mockReset();
     isFeatureEnabled.mockReturnValue(true);
     publishAndShareSpy.mockReset();
+    vi.mocked(findPublishedByReply).mockReset();
     replyPublisherMock.mockReset();
     replyPublisherMock.mockReturnValue(vi.fn());
     selectedAccountValue = null;
@@ -303,6 +305,16 @@ describe('MessageContent share reply - org (Team) visibility wiring', () => {
       orgOption: { label: 'Team', hint: 'Members of Acme' },
     });
     expect(replyPublisherMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org_42' }));
+  });
+
+  it('reopening share on a published reply looks up its existing publication by reply id', async () => {
+    renderAndClickPublishShare();
+
+    await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
+    const { resolvePublished } = publishAndShareSpy.mock.calls[0][0];
+    expect(findPublishedByReply).not.toHaveBeenCalled();
+    await resolvePublished();
+    expect(findPublishedByReply).toHaveBeenCalledWith('quest-1');
   });
 
   it('omits the Team option in a personal account context', async () => {

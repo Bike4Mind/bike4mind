@@ -9,6 +9,7 @@ import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
 import { COMPLETION_TOOL_ERROR_CODES, CompletionSseErrorEventSchema } from './schemas/cliCompletions';
 import { VIDEO_GENERATION_API_ERROR_CODES, VIDEO_JOB_PUBLIC_ERROR_CODES } from './schemas/videoGenerations';
+import { MUSIC_GENERATION_API_ERROR_CODES, MUSIC_JOB_PUBLIC_ERROR_CODES } from './schemas/musicGenerations';
 import { DECISIONS_ERROR_CODES } from './schemas/decisions';
 import { STORAGE_ERROR_CODES } from './errors';
 
@@ -41,6 +42,8 @@ describe('API_ERROR_CODES', () => {
       TTS_ERROR_CODES,
       VIDEO_GENERATION_API_ERROR_CODES,
       VIDEO_JOB_PUBLIC_ERROR_CODES,
+      MUSIC_GENERATION_API_ERROR_CODES,
+      MUSIC_JOB_PUBLIC_ERROR_CODES,
       DECISIONS_ERROR_CODES,
       STORAGE_ERROR_CODES,
       COMPLETION_TOOL_ERROR_CODES,

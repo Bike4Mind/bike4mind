@@ -34,6 +34,7 @@ const FORCED_MODELS = [
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_OPUS,
   ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_5_5_HAIKU,
 ];
 
 const SCHEMA = {
@@ -186,7 +187,6 @@ describe('supportsForcedToolChoice', () => {
     ...FORCED_MODELS,
     ChatModels.CLAUDE_5_SONNET_BEDROCK,
     ChatModels.CLAUDE_FABLE_5_BEDROCK,
-    ChatModels.CLAUDE_5_5_HAIKU,
     ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
     'anthropic.claude-haiku-5-5',
     'gpt-5',

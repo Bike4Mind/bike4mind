@@ -143,20 +143,24 @@ describe('AnthropicBedrockBackend current inference profiles', () => {
       backend.getPayload(ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, [{ role: 'user', content: 'Hello' }], {
         temperature: 0.2,
         topP: 0.8,
+        topK: 5,
       }).body
     ) as Record<string, unknown>;
 
     expect(body).not.toHaveProperty('temperature');
     expect(body).not.toHaveProperty('top_p');
+    // The Bedrock Anthropic body never carries top_k for any model; native top_k gating is pinned in anthropicBackend.dispatchModel.test.ts
+    expect(body).not.toHaveProperty('top_k');
   });
 
   it.each(profiles)('omits sampling parameters for %s', (id, _input, _output) => {
     const body = JSON.parse(
-      backend.getPayload(id, [{ role: 'user', content: 'Hello' }], { temperature: 0.2, topP: 0.8 }).body
+      backend.getPayload(id, [{ role: 'user', content: 'Hello' }], { temperature: 0.2, topP: 0.8, topK: 5 }).body
     ) as Record<string, unknown>;
 
     expect(body).not.toHaveProperty('temperature');
     expect(body).not.toHaveProperty('top_p');
+    expect(body).not.toHaveProperty('top_k');
   });
 });
 
