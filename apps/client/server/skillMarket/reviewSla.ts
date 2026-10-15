@@ -38,7 +38,13 @@ export async function runSkillMarketReviewSla(now: Date = new Date()): Promise<{
     if (claimed.modifiedCount === 0) continue;
 
     const listing = await SkillListing.findById(version.listingId);
-    if (!listing || listing.pendingVersionId !== String(version._id)) {
+    const versionId = String(version._id);
+    if (listing && listing.currentApprovedVersionId === versionId) {
+      // A crash between the approve CAS and the version stamp left the live version marked pending.
+      // It is not an orphan and must never be retired; a new submission by the author repairs it.
+      continue;
+    }
+    if (!listing || listing.pendingVersionId !== versionId) {
       // Days past its verdict and still not the listing's pending pointer: an orphan from a write
       // that never landed. Nobody can decide it, so retire it.
       await SkillListingVersion.updateOne(

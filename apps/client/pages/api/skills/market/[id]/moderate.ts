@@ -54,7 +54,10 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
     );
     if (res1.modifiedCount === 0) throw new ConflictError('This listing is already delisted or withdrawn');
     await SkillListingVersion.updateMany(
-      { listingId, reviewStatus: 'pending' },
+      // Never supersede the version the listing currently serves: a crash between the approve CAS
+      // and the version stamp can leave it marked pending while it is already live, and a restore
+      // must still find it approved.
+      { listingId, reviewStatus: 'pending', _id: { $ne: listing.currentApprovedVersionId } },
       { $set: { reviewStatus: 'superseded' } }
     );
     await SkillListingReport.updateMany({ listingId, status: 'open' }, { $set: { status: 'actioned', ...resolved } });
