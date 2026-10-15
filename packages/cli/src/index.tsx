@@ -33,7 +33,13 @@ import type { PendingMcpApproval } from './storage/ConfigStore';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
 import { LoginFlow } from './components/LoginFlow';
-import { SessionStore, ConfigStore, CommandHistoryStore, buildGlobalConfigPatch } from './storage';
+import {
+  SessionStore,
+  ConfigStore,
+  CommandHistoryStore,
+  buildGlobalConfigPatch,
+  PENDING_ASSISTANT_CONTENT,
+} from './storage';
 import type { Session, Message, CliConfig, ProjectConfig, ProjectLocalConfig, SessionHandoff } from './storage';
 import { CheckpointStore } from './storage/CheckpointStore.js';
 import { ImageStore } from './storage/ImageStore.js';
@@ -1395,7 +1401,7 @@ function CliApp() {
       const pendingAssistantMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
-        content: '...',
+        content: PENDING_ASSISTANT_CONTENT,
         timestamp: new Date().toISOString(),
         metadata: {
           steps: [],
@@ -1689,7 +1695,7 @@ function CliApp() {
       const pendingAssistantMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
-        content: '...',
+        content: PENDING_ASSISTANT_CONTENT,
         timestamp: new Date().toISOString(),
         metadata: {
           steps: [],

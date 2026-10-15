@@ -120,6 +120,12 @@ describe('wireAgentEvents', () => {
       expect(pendingContent()).toBe('...');
     });
 
+    it('clears streamed text on a tool call even when no thought step fired', () => {
+      emit('text_delta', { delta: '  ', iteration: 1 });
+      emit('action', { type: 'action', content: '', metadata: { toolName: 'grep' } });
+      expect(pendingContent()).toBe('...');
+    });
+
     it('leaves the placeholder alone on a tool call when nothing streamed', () => {
       emit('action', { type: 'action', content: '', metadata: { toolName: 'grep' } });
       expect(pendingContent()).toBe('...');

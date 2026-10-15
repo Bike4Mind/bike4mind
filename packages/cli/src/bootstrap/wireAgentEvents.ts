@@ -2,15 +2,8 @@ import { AgentStep, ReActAgent } from '@bike4mind/agents';
 import type { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
 import { type AgentContext, formatStep } from '../utils';
 import { useCliStore } from '../store';
-import type { Message } from '../storage';
+import { PENDING_ASSISTANT_CONTENT, type Message } from '../storage';
 import { bridgePresence } from '../features/bridgePresence/index.js';
-
-/**
- * Content of a pending assistant message before any reply text arrives.
- * Must stay in sync with the pending-message builders (turnController.ts) and
- * MessageItem.tsx, which hides a body equal to it.
- */
-const PENDING_CONTENT = '...';
 
 /** Apply `update` to the in-flight assistant message, if one is pending. */
 function updatePendingAssistant(update: (message: Message) => Message): void {
@@ -74,7 +67,7 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
   const clearLiveText = () => {
     if (!liveText.text) return;
     liveText = { ...liveText, text: '' };
-    updatePendingAssistant(message => ({ ...message, content: PENDING_CONTENT }));
+    updatePendingAssistant(message => ({ ...message, content: PENDING_ASSISTANT_CONTENT }));
   };
 
   // Subscribe to main agent events

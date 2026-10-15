@@ -3,6 +3,9 @@ import type { AgentStep, SubagentConfig, ThoroughnessLevel } from '@bike4mind/ag
 import type { MessageContentObject } from '@bike4mind/common';
 import type { SandboxConfig, PartialSandboxConfig } from '../sandbox/types.js';
 
+/** Content of a pending assistant message before any reply text arrives; MessageItem hides it. */
+export const PENDING_ASSISTANT_CONTENT = '...';
+
 /**
  * Message in a conversation
  */

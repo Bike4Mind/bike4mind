@@ -62,9 +62,10 @@ const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
  * decoded events, this owns everything subtle that used to be duplicated (and
  * divergent) in `ServerLlmBackend` and `WebSocketLlmBackend`:
  *
- * - stream visible text to the callback as deltas, at most every
- *   {@link TEXT_FLUSH_INTERVAL_MS}, then finalize the turn EXACTLY ONCE with the
- *   remaining text, tools and usage (deliver-once, no double-bill);
+ * - when the caller asked for live text (`options.streamText`), stream visible
+ *   text to the callback as deltas, at most every {@link TEXT_FLUSH_INTERVAL_MS};
+ * - finalize the turn EXACTLY ONCE with the remaining text, tools and usage
+ *   (deliver-once, no double-bill);
  * - retry a delivered-nothing attempt on a transient wire failure, with backoff;
  * - treat an empty completion as a retryable failure, never a silent blank turn
  *   (this is the WebSocket parity fix - its old path resolved empty without
@@ -96,6 +97,7 @@ export async function runCompletion(
   if (signal?.aborted) return;
 
   const backoffMs = policy.backoffMs ?? DEFAULT_BACKOFF_MS;
+  const streamText = req.options.streamText === true;
   let lastError: Error | undefined;
 
   for (let attempt = 0; attempt <= policy.maxRetries; attempt++) {
@@ -109,6 +111,7 @@ export async function runCompletion(
       for await (const event of transport.open(req, signal)) {
         if (signal?.aborted) break;
         accumulator.apply(event);
+        if (!streamText) continue;
         const now = Date.now();
         if (accumulator.hasUndeliveredText && now - lastFlushAt >= TEXT_FLUSH_INTERVAL_MS) {
           lastFlushAt = now;

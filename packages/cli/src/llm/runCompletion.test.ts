@@ -9,7 +9,8 @@ vi.mock('../utils/Logger', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const req: CompletionRequest = { model: 'test-model', messages: [], options: {} };
+// Live text on, as the TUI requests it; the opt-out path has its own test.
+const req: CompletionRequest = { model: 'test-model', messages: [], options: { streamText: true } };
 
 const content = (text: string): StreamEvent => ({ type: 'content', text });
 const toolUse = (name: string): StreamEvent => ({ type: 'tool_use', tools: [{ name, arguments: '{}', id: 't1' }] });
@@ -21,10 +22,16 @@ const policy = (maxRetries: number): RetryPolicy => ({
   backoffMs: 0,
 });
 
-const run = (scripts: ScriptedStep[][], p: RetryPolicy, signal?: AbortSignal, controller?: AbortController) => {
+const run = (
+  scripts: ScriptedStep[][],
+  p: RetryPolicy,
+  signal?: AbortSignal,
+  controller?: AbortController,
+  request: CompletionRequest = req
+) => {
   const transport = new InMemoryStreamTransport(scripts, controller);
   const callback = vi.fn().mockResolvedValue(undefined);
-  return { transport, callback, promise: runCompletion(transport, req, callback, p, signal) };
+  return { transport, callback, promise: runCompletion(transport, request, callback, p, signal) };
 };
 
 /** All text the callback received, in order: what the agent concatenates into its reply. */
@@ -44,6 +51,19 @@ describe('runCompletion', () => {
     // inside the throttle window, so it rides the final frame.
     expect(callback.mock.calls).toEqual([[['hello']], [[' world'], expect.anything()]]);
     expect(finalFrames(callback)).toHaveLength(1);
+  });
+
+  it('buffers the whole turn and keeps retrying when the caller did not ask for live text', async () => {
+    const { transport, callback, promise } = run(
+      [[{ emit: content('partial') }, { fail: new Error('boom') }], [{ emit: content('full answer') }]],
+      policy(2),
+      undefined,
+      undefined,
+      { ...req, options: {} }
+    );
+    await promise;
+    expect(transport.attempts).toBe(2);
+    expect(callback.mock.calls).toEqual([[['full answer'], expect.anything()]]);
   });
 
   it('throttles deltas to one per flush interval', async () => {

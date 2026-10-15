@@ -287,4 +287,30 @@ describe('ReActAgent text_delta emission (#8774)', () => {
 
     expect(deltas).toEqual(['real chunk']);
   });
+
+  describe('streamText request flag', () => {
+    const runCapturingOptions = async (listen: boolean) => {
+      const llm = createStreamingMockLlm([], 'done');
+      const complete = vi.spyOn(llm, 'complete');
+      const agent = new ReActAgent({
+        userId: 'u1',
+        logger: createMockLogger(),
+        llm,
+        model: 'test-model',
+        tools: [],
+        maxIterations: 5,
+      });
+      if (listen) agent.on('text_delta', () => {});
+      await agent.run('test query');
+      return complete.mock.calls[0][2];
+    };
+
+    it('asks for live text when a text_delta listener is attached', async () => {
+      expect((await runCapturingOptions(true)).streamText).toBe(true);
+    });
+
+    it('leaves live text off without a listener, so the backend keeps full retry', async () => {
+      expect((await runCapturingOptions(false)).streamText).toBe(false);
+    });
+  });
 });
