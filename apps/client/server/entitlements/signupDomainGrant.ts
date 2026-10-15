@@ -31,10 +31,9 @@ const NO_GRANT: SignupDomainGrantResult = { creditsGranted: 0, currentCredits: n
 /**
  * Everything a newly proven email's domain confers at signup: the one-time domain signup credits,
  * partner-rule org membership (with the seat-ceiling / at-capacity alerts), and the entitlement
- * cache wake-up. Shared by every path that proves email ownership: /api/email/verify,
- * /api/otc/verify (registration and an existing account's first verified login), and the OAuth
- * create and verifying-link branches in server/utils/auth/verifyCallback.ts and
- * pages/api/auth/okta/callback.ts (via server/utils/auth/oauthSignupGrants.ts).
+ * cache wake-up. Shared by every path that proves email ownership: the new-account branches of
+ * /api/otc/verify, server/utils/auth/verifyCallback.ts and pages/api/auth/okta/callback.ts, and
+ * every path that verifies an EXISTING account via server/auth/emailVerifiedGrants.ts.
  *
  * `email` must already be verified. Source precedence (issue #293): a DB PartnerSignupRule wins;
  * the env registry is the fallback for a domain not yet in the collection, and `matched` lets a rule

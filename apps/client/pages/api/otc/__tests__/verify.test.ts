@@ -703,7 +703,7 @@ describe('/api/otc/verify - existing user verification and pending free credits'
       organizationId: 'org-partner',
     });
 
-  it('releases pending credits and strips the tag in the same write that stamps emailVerified', async () => {
+  it('stamps emailVerified first, then strips the pending-credit tag in a separate write', async () => {
     mockFindByEmail.mockResolvedValue(pendingUser());
     mockReleasePending.mockResolvedValue({
       released: true,
@@ -716,11 +716,14 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockUserUpdate).toHaveBeenCalledTimes(1);
-    expect(mockUserUpdate).toHaveBeenCalledWith({
+    expect(mockUserUpdate).toHaveBeenCalledTimes(2);
+    expect(mockUserUpdate).toHaveBeenNthCalledWith(1, {
       id: 'u-existing',
       emailVerified: true,
       emailVerifiedAt: expect.any(Date),
+    });
+    expect(mockUserUpdate).toHaveBeenNthCalledWith(2, {
+      id: 'u-existing',
       tags: ['Customer'],
       pendingCreditGrant: null,
     });

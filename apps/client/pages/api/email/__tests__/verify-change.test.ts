@@ -43,6 +43,15 @@ vi.mock('@server/auth/endUserSessions', () => ({
   },
 }));
 
+const mockReleaseVerifiedPending = vi.fn();
+vi.mock('@server/auth/emailVerifiedGrants', () => ({
+  releaseVerifiedPendingFreeCredits: (...a: unknown[]) => mockReleaseVerifiedPending(...a),
+}));
+const mockApplySignupDomainGrant = vi.fn();
+vi.mock('@server/entitlements/signupDomainGrant', () => ({
+  applySignupDomainGrant: (...a: unknown[]) => mockApplySignupDomainGrant(...a),
+}));
+
 const mockFindByPendingToken = vi.fn();
 const mockExistsOtherUserWithEmail = vi.fn();
 vi.mock('@bike4mind/database', () => ({
@@ -86,6 +95,25 @@ describe('POST /api/email/verify-change', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockSessionEnded).toHaveBeenCalledWith({ userId: 'user-1', reason: 'email_changed' });
+  });
+
+  it('releases the deferred free credits for the user once the change succeeds, without the domain grant', async () => {
+    const { req, res } = fire();
+    await handler(req, res);
+
+    expect(mockReleaseVerifiedPending).toHaveBeenCalledTimes(1);
+    expect(mockReleaseVerifiedPending).toHaveBeenCalledWith(USER, 'email change (email verified)', req.logger);
+    expect(mockApplySignupDomainGrant).not.toHaveBeenCalled();
+  });
+
+  it('releases nothing when the new address is unavailable', async () => {
+    mockVerifyEmailChange.mockResolvedValue('unavailable');
+    const { req, res } = fire();
+
+    await handler(req, res).catch(() => undefined);
+
+    expect(mockReleaseVerifiedPending).not.toHaveBeenCalled();
+    expect(mockApplySignupDomainGrant).not.toHaveBeenCalled();
   });
 
   it('leaves sessions alone when the change itself fails', async () => {

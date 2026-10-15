@@ -19,6 +19,7 @@ import {
 } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
+import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
@@ -177,44 +178,29 @@ const handler = baseApi({ auth: false })
         existingUser.emailVerified = true;
         existingUser.emailVerifiedAt = new Date();
         try {
-          // A tagged account was registered with credits deferred until email ownership is
-          // proven; the code just proved it. Never throws. A failed grant keeps the tag, but
-          // emailVerified is persisted in this same write, so later logins skip this branch:
-          // the only retry is the backfillPendingFreeCredits script.
-          const release = await userService.releasePendingFreeCredits(existingUser, {
-            db: {
-              adminSettings: adminSettingsRepository,
-              creditTransactions: creditTransactionRepository,
-              creditLots: creditLotRepository,
-              users: userRepository,
-            },
-            reason: 'OTC login (email verified)',
-            logger: req.logger,
-          });
           // Write only the fields set here: a later loginRecords update below writes the same doc,
-          // and a whole-doc write on either would clobber the other's change. The release patch
-          // rides this same write so there is no extra round trip.
+          // and a whole-doc write on either would clobber the other's change.
           await userRepository.update({
             id: existingUser.id,
             emailVerified: existingUser.emailVerified,
             emailVerifiedAt: existingUser.emailVerifiedAt,
-            ...release.patch,
           });
-          if (release.released) {
-            existingUser.tags = release.patch.tags ?? existingUser.tags;
-            existingUser.pendingCreditGrant = null;
-            if (release.currentCredits !== null) existingUser.currentCredits = release.currentCredits;
-          }
-          // Mirrors /api/email/verify, which this account will never reach now that emailVerified is
-          // persisted: the verified domain's grant (credits, partner org). Never throws; idempotent.
-          const domainGrant = await applySignupDomainGrant({
-            userId: existingUser.id,
-            email: normalizedEmail,
+          // The code just proved email ownership, and later logins skip this branch, so this is
+          // the account's one chance at what /api/email/verify would have granted. A failed write
+          // above skips it, and the next login retries both.
+          const grants = await applyEmailVerifiedGrants({
+            user: existingUser,
+            verifiedEmail: normalizedEmail,
             trigger: 'otc-login-verification',
+            releaseReason: 'OTC login (email verified)',
             logger: req.logger,
           });
-          if (domainGrant.currentCredits !== null) existingUser.currentCredits = domainGrant.currentCredits;
-          if (domainGrant.joinedOrganizationId) existingUser.organizationId = domainGrant.joinedOrganizationId;
+          if (grants.tags) {
+            existingUser.tags = grants.tags;
+            existingUser.pendingCreditGrant = null;
+          }
+          if (grants.currentCredits !== null) existingUser.currentCredits = grants.currentCredits;
+          if (grants.joinedOrganizationId) existingUser.organizationId = grants.joinedOrganizationId;
         } catch (err) {
           req.logger.error('OTC login emailVerified update failed', err);
         }

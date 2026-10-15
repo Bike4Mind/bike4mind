@@ -14,6 +14,7 @@ export type SeatCeilingRaiseTrigger =
   | 'email-verification'
   | 'oauth-signup'
   | 'oauth-link-verification'
+  | 'admin-verification'
   | 'admin-backfill';
 
 interface SeatCeilingRaisedParams {

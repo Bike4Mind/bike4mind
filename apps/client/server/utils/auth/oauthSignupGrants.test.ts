@@ -39,6 +39,11 @@ describe('oauthSignupGrants', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUserUpdate.mockResolvedValue(undefined);
+    mockApplySignupDomainGrant.mockResolvedValue({
+      creditsGranted: 0,
+      currentCredits: null,
+      joinedOrganizationId: null,
+    });
   });
 
   describe('isEligibleForOAuthFreeCredits', () => {
@@ -131,14 +136,20 @@ describe('oauthSignupGrants', () => {
       );
     });
 
-    it('logs with the user id and never throws when the domain grant fails', async () => {
-      mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
-      mockApplySignupDomainGrant.mockRejectedValue(new Error('boom'));
+    it('persists the tag removal before the domain grant runs', async () => {
+      mockReleasePending.mockResolvedValue({
+        released: true,
+        creditsGranted: 100,
+        currentCredits: 100,
+        patch: { tags: [], pendingCreditGrant: null },
+      });
 
-      await expect(
-        applyOAuthLinkVerificationGrants(linkedUser, 'dee@partner.example', 'link test')
-      ).resolves.toBeUndefined();
-      expect(mockLoggerError).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
+      await applyOAuthLinkVerificationGrants(linkedUser, 'dee@partner.example', 'link test');
+
+      expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'user-1', tags: [], pendingCreditGrant: null });
+      expect(mockUserUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+        mockApplySignupDomainGrant.mock.invocationCallOrder[0]
+      );
     });
 
     it('still applies the domain grant when the pending-credit release fails', async () => {

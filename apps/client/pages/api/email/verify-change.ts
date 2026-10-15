@@ -10,6 +10,7 @@ import { AuthEvents, ConflictError } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
 import { entitlementsForEmail } from '@client/lib/entitlements/registry';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
+import { releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import { z } from 'zod';
 
 const VerifyEmailChangeRequestSchema = z.object({
@@ -63,6 +64,11 @@ const handler = baseApi({ auth: false })
           outcome => (outcome === 'changed' ? { userId: user.id, reason: 'email_changed' } : undefined)
         );
         if (outcome === 'unavailable') throw new ConflictError(userService.EMAIL_NO_LONGER_AVAILABLE_MESSAGE);
+
+        // The change stamps emailVerified, so an account still owed its deferred flat grant gets it
+        // here or never (/api/email/verify is now unreachable). No-op for an untagged account. The
+        // domain signup grant is deliberately NOT applied, see the note above the invalidation below.
+        await releaseVerifiedPendingFreeCredits(user, 'email change (email verified)', req.logger);
 
         // Log successful email change
         await logAuditEvent(
