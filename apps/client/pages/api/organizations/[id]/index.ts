@@ -2,7 +2,12 @@ import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { partnerSignupRuleRepository, userRepository, withTransaction } from '@bike4mind/database';
+import {
+  integrationRequestRepository,
+  partnerSignupRuleRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
 import { organizationService } from '@bike4mind/services';
@@ -100,6 +105,8 @@ const handler = baseApi()
     // still apply); only the org association is dropped. Cache invalidation makes it immediate.
     await partnerSignupRuleRepository.updateMany({ organizationId: id }, { organizationId: null });
     invalidatePartnerRuleCache();
+    // Same for roadmap integration requests: they are the members' own votes and stay.
+    await integrationRequestRepository.clearOrganization(id);
 
     return res.json({ id });
   });

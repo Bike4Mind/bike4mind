@@ -54,6 +54,26 @@ describe('integrationRequestRepository', () => {
     expect(await integrationRequestRepository.requestedBy('u2')).toEqual(['hubspot']);
   });
 
+  it("deletes every request a user filed, and only that user's", async () => {
+    await integrationRequestRepository.request('u1', 'hubspot');
+    await integrationRequestRepository.request('u1', 'gmail');
+    await integrationRequestRepository.request('u2', 'hubspot');
+
+    expect(await integrationRequestRepository.deleteAllForUser('u1')).toBe(2);
+    expect(await integrationRequestRepository.deleteAllForUser('u1')).toBe(0);
+    expect(await integrationRequestRepository.countsByIntegration()).toEqual({ hubspot: 1 });
+  });
+
+  it("drops a deleted organization from its members' requests and keeps the requests", async () => {
+    await integrationRequestRepository.request('u1', 'hubspot', 'org1');
+    await integrationRequestRepository.request('u2', 'hubspot', 'org2');
+
+    expect(await integrationRequestRepository.clearOrganization('org1')).toBe(1);
+    expect(await IntegrationRequest.countDocuments({ organizationId: 'org1' })).toBe(0);
+    expect(await IntegrationRequest.countDocuments({ organizationId: 'org2' })).toBe(1);
+    expect(await integrationRequestRepository.countsByIntegration()).toEqual({ hubspot: 2 });
+  });
+
   it('rejects a duplicate row written past the repository', async () => {
     await IntegrationRequest.create({ userId: 'u1', integrationId: 'hubspot' });
     await expect(IntegrationRequest.create({ userId: 'u1', integrationId: 'hubspot' })).rejects.toThrow(/E11000/);

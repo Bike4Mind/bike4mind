@@ -45,6 +45,7 @@ const groupRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository }));
 
 const updateMany = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const clearOrganization = vi.hoisted(() => vi.fn().mockResolvedValue(0));
 const withTransaction = vi.hoisted(() =>
   vi.fn(async (fn: any) => {
     txn.depth++;
@@ -58,6 +59,7 @@ const withTransaction = vi.hoisted(() =>
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   partnerSignupRuleRepository: { updateMany },
+  integrationRequestRepository: { clearOrganization },
   withTransaction,
 }));
 
@@ -76,6 +78,7 @@ describe('DELETE /api/organizations/[id]', () => {
   beforeEach(() => {
     deleteOrganization.mockClear();
     updateMany.mockClear();
+    clearOrganization.mockClear();
     invalidatePartnerRuleCache.mockClear();
     withTransaction.mockClear();
     findActiveSubscriptionsByOwner.mockClear().mockResolvedValue([]);
@@ -121,12 +124,19 @@ describe('DELETE /api/organizations/[id]', () => {
     expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
   });
 
+  it("drops the org from its members' integration requests after deleting", async () => {
+    await call();
+
+    expect(clearOrganization).toHaveBeenCalledWith('org1');
+  });
+
   it('does not clear the partner-rule reference if deleteOrganization throws', async () => {
     deleteOrganization.mockRejectedValueOnce(new Error('blocked'));
 
     await expect(call()).rejects.toThrow('blocked');
     expect(updateMany).not.toHaveBeenCalled();
     expect(invalidatePartnerRuleCache).not.toHaveBeenCalled();
+    expect(clearOrganization).not.toHaveBeenCalled();
   });
 
   it('still runs the active-subscriptions validation via canDeleteOrganization', async () => {

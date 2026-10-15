@@ -74,6 +74,21 @@ export class IntegrationRequestRepository extends BaseRepository<IIntegrationReq
     const rows = await this.model.find({ userId }).select('integrationId').lean<Array<{ integrationId: string }>>();
     return rows.map(r => r.integrationId);
   }
+
+  /** Account deletion: drop every request the user filed (apps/client/server/services/purgeDeletedUserData.ts). */
+  async deleteAllForUser(userId: string): Promise<number> {
+    const result = await this.model.deleteMany({ userId });
+    return result.deletedCount ?? 0;
+  }
+
+  /**
+   * Organization deletion: the requests are the members' own and survive the org; only the
+   * association is dropped (apps/client/pages/api/organizations/[id]/index.ts).
+   */
+  async clearOrganization(organizationId: string): Promise<number> {
+    const result = await this.model.updateMany({ organizationId }, { $set: { organizationId: null } });
+    return result.modifiedCount;
+  }
 }
 
 export const integrationRequestRepository = new IntegrationRequestRepository(IntegrationRequest);

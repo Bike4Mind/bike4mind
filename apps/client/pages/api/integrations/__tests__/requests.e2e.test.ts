@@ -80,6 +80,17 @@ describe('/api/integrations/requests on a real mongod', () => {
     expect(await IntegrationRequest.countDocuments({ userId: 'u1' })).toBe(1);
   });
 
+  it('never tells a caller who else requested something, only how many', async () => {
+    await IntegrationRequest.create({ userId: 'other-user-a', organizationId: 'other-org', integrationId: 'hubspot' });
+    await IntegrationRequest.create({ userId: 'other-user-b', integrationId: 'gmail' });
+
+    const { body } = await call('GET', 'u1');
+
+    expect(Object.keys(body).sort()).toEqual(['counts', 'mine']);
+    expect(body).toEqual({ counts: { hubspot: 1, gmail: 1 }, mine: [] });
+    expect(JSON.stringify(body)).not.toMatch(/other-user|other-org/);
+  });
+
   it("withdraws only the caller's own request", async () => {
     await call('POST', 'u1', { body: { integrationId: 'hubspot' } });
     await call('POST', 'u2', { body: { integrationId: 'hubspot' } });
