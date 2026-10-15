@@ -83,6 +83,7 @@ const handler = baseApi().post(async (req, res) => {
       toolName,
       toolArgs: { attachmentId },
       action: 'callTool',
+      userId: user.id,
     });
 
     const fileData = parseMcpResult(result, logger, '[Web MCP Download]');

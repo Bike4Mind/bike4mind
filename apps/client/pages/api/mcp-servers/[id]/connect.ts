@@ -28,6 +28,7 @@ const handler = baseApi().post(async (req, res) => {
       envVariables: decryptEnvVariables(server.envVariables),
       name: server.name,
       action: 'getTools',
+      userId: req.user.id,
     });
     if (Array.isArray(invoked)) {
       result = invoked;

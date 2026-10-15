@@ -177,6 +177,7 @@ const handler = baseApi().post(async (req, res) => {
       toolName,
       toolArgs: { attachmentId, confirmed: true, _executeFromButton: true },
       action: 'callTool',
+      userId: user.id,
     });
 
     const resultData = parseMcpResult(result, logger, '[Web MCP Delete]');
