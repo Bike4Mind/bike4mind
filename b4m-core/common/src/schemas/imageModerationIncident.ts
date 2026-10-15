@@ -10,6 +10,13 @@ import { z } from 'zod';
 export const INCIDENT_REVIEW_STATUSES = ['pending_review', 'confirmed_csam', 'false_positive', 'reported'] as const;
 export type IncidentReviewStatus = (typeof INCIDENT_REVIEW_STATUSES)[number];
 
+// 'manual' = an admin filed the CyberTip on the CyberTipline web form and recorded it via the
+// record_manual_report verdict. Absent = recorded without a channel: the API paths
+// (confirmed_csam, retry_finish) are always the API channel, while mark_reported can close a tip
+// that originated from either channel, so nothing can be attributed.
+export const INCIDENT_REPORT_CHANNELS = ['manual'] as const;
+export type IncidentReportChannel = (typeof INCIDENT_REPORT_CHANNELS)[number];
+
 export const ModerationLabelHitSchema = z.object({
   name: z.string(),
   parentName: z.string(),
@@ -37,6 +44,11 @@ export const ImageModerationIncidentSchema = z.object({
   // Populated when reviewStatus transitions to 'reported'. The CyberTipline report identifier
   // returned by NCMEC; retained as the audit trail that reporting occurred.
   ncmecReportId: z.string().optional(),
+  reportChannel: z.enum(INCIDENT_REPORT_CHANNELS).optional(),
+  // Admin user id that moved the incident to 'reported' (any channel).
+  reportedBy: z.string().optional(),
+  // When the incident moved to 'reported'; unlike updatedAt, later writes do not move it.
+  reportedAt: z.union([z.string(), z.date()]).optional(),
   createdAt: z.union([z.string(), z.date()]).optional(),
   updatedAt: z.union([z.string(), z.date()]).optional(),
 });

@@ -1,3 +1,4 @@
+import { signBrowserFileResponse } from '@server/files/signBrowserFileResponse';
 import {
   adminSettingsRepository,
   dataLakeRepository,
@@ -67,7 +68,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
         { ability: req.ability }
       );
 
-      return res.json(newFabFile);
+      return res.json(await signBrowserFileResponse(newFabFile));
     })
   );
 
