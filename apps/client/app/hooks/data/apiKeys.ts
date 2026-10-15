@@ -2,6 +2,7 @@ import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tansta
 import { getAPIKeysFromServer, upsertApiKey } from '@client/app/utils/keyAPICalls';
 import { ApiKeyType, IApiKeyDocument } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { SERVER_CONFIG_QUERY_KEY } from './queryKeys';
 
 /**
  * A personal key changes more than the key list: serverConfig.toolAvailability resolves each
@@ -10,7 +11,7 @@ import { api } from '@client/app/contexts/ApiContext';
  */
 const invalidateKeyDependentQueries = (queryClient: QueryClient) => {
   queryClient.invalidateQueries({ queryKey: ['api-keys'] });
-  queryClient.invalidateQueries({ queryKey: ['server-config'] });
+  queryClient.invalidateQueries({ queryKey: SERVER_CONFIG_QUERY_KEY });
 };
 
 export function useGetAllApiKeys() {
