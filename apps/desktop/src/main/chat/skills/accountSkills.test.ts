@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { AuthState } from '@shared/auth';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { accountSkillsProvider, type SkillsAuth } from './accountSkills';
-import { remoteSkillsKey, SkillCatalog } from './SkillCatalog';
+import { accountSkillsProvider, remoteSkillsKey, type SkillsAuth } from './accountSkills';
+import { SkillCatalog } from './SkillCatalog';
 import { ProjectTrustStore } from './ProjectTrustStore';
 
 const URL = 'https://app.example.test';

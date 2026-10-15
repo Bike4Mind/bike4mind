@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RemoteSkillSource } from '@bike4mind/cli/skills';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { remoteSkillsKey } from './accountSkills';
 import { ProjectTrustStore } from './ProjectTrustStore';
-import { remoteSkillsKey, SkillCatalog, type RemoteSkills } from './SkillCatalog';
+import { SkillCatalog, type RemoteSkills } from './SkillCatalog';
 
 /**
  * The gate, not the loader. Discovery is the CLI's and has its own tests; what is proven here is

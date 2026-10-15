@@ -9,7 +9,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
-import { remoteSkillsKey, SkillCatalog, type RemoteSkills } from './skills/SkillCatalog';
+import { remoteSkillsKey } from './skills/accountSkills';
+import { SkillCatalog, type RemoteSkills } from './skills/SkillCatalog';
 import type { AccessStore } from './tools/AccessStore';
 
 function frame(payload: unknown): string {

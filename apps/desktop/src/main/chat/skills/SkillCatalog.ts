@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import {
@@ -31,15 +30,6 @@ import type { ProjectTrustStore } from './ProjectTrustStore';
  * keys every cache below.
  */
 export type RemoteSkills = () => { key: string; source: RemoteSkillSource } | null;
-
-/**
- * A stable, filename-safe id for one account on one backend. The desktop's remote-skill cache is
- * a file per key under userData, never the CLI's shared ~/.bike4mind/cache/remote-skills.json,
- * so neither another account nor another backend can read it.
- */
-export function remoteSkillsKey(environmentUrl: string, userId: string): string {
-  return createHash('sha256').update(`${environmentUrl}\u0000${userId}`).digest('hex').slice(0, 16);
-}
 
 /**
  * How long a scan is reused before the directories are walked again.

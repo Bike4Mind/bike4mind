@@ -1,9 +1,10 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { AxiosRequestConfig } from 'axios';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { RemoteSkillSource } from '@bike4mind/cli/skills';
 import type { AuthState } from '@shared/auth';
-import { remoteSkillsKey, type RemoteSkills } from './SkillCatalog';
+import type { RemoteSkills } from './SkillCatalog';
 
 /**
  * The two reads the account-skill provider needs, narrowed so a test can hand it a stub rather
@@ -23,6 +24,15 @@ export interface SkillsAuth {
  * degrades to its cached snapshot, or to nothing; the next read is not blocked either way.
  */
 const REMOTE_SKILLS_TIMEOUT_MS = 5_000;
+
+/**
+ * A stable, filename-safe id for one account on one backend. The desktop's remote-skill cache is
+ * a file per key under userData, never the CLI's shared ~/.bike4mind/cache/remote-skills.json,
+ * so neither another account nor another backend can read it.
+ */
+export function remoteSkillsKey(environmentUrl: string, userId: string): string {
+  return createHash('sha256').update(`${environmentUrl}\u0000${userId}`).digest('hex').slice(0, 16);
+}
 
 /**
  * The signed-in account's skill source, or null when signed out.

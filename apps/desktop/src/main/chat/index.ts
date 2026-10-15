@@ -284,9 +284,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
   );
   const access = new AccessStore(join(userData, 'tool-access.json'));
   // The trust file is its own file beside tool-access.json, and for the same reason: both record
-  // a consent the user gave once and should not be asked for again on every launch. Account
-  // skills come from accountSkillsProvider - per (backend, user), under userData, and nothing at
-  // all while signed out. See ./skills/accountSkills.
+  // a consent the user gave once and should not be asked for again on every launch.
   const skills = new SkillCatalog(
     new ProjectTrustStore(join(userData, 'project-skill-trust.json')),
     accountSkillsProvider(auth, userData)
