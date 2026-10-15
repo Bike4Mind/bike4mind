@@ -154,10 +154,11 @@ describe('GenerationUpdatesListener', () => {
       exact: true,
       refetchType: 'all',
     });
-    expect(invalidate).toHaveBeenCalledTimes(3);
+    // The two video details plus the video and music gallery lists.
+    expect(invalidate).toHaveBeenCalledTimes(4);
 
     rerender(tree());
-    expect(invalidate).toHaveBeenCalledTimes(3);
+    expect(invalidate).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -223,6 +224,46 @@ describe('GenerationUpdatesListener music jobs', () => {
       exact: true,
       refetchType: 'all',
     });
+  });
+});
+
+describe('GenerationUpdatesListener music gallery', () => {
+  const musicList = (...jobs: MusicGeneration[]) => ({
+    pages: [{ data: jobs, next_cursor: null }],
+    pageParams: [undefined],
+  });
+
+  it('patches a song listed in the gallery', async () => {
+    queryClient.setQueryData(musicGenerationKeys.list, musicList(musicJob({ id: 'song-1', state: 'pending' })));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'song-1', kind: 'music', state: 'running' }));
+    const list = queryClient.getQueryData<ReturnType<typeof musicList>>(musicGenerationKeys.list);
+    expect(list?.pages[0].data[0].state).toBe('running');
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: musicGenerationKeys.list });
+  });
+
+  it('refreshes the gallery for a song started elsewhere (chat, API)', async () => {
+    queryClient.setQueryData(musicGenerationKeys.list, musicList(musicJob()));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'from-chat', kind: 'music', state: 'pending' }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: musicGenerationKeys.list });
+  });
+
+  it('refreshes the gallery on reconnect', async () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { rerender } = renderListener();
+    const tree = () => (
+      <QueryClientProvider client={queryClient}>
+        <GenerationUpdatesListener />
+      </QueryClientProvider>
+    );
+    h.readyState = 3;
+    rerender(tree());
+    h.readyState = 1;
+    rerender(tree());
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: musicGenerationKeys.list });
   });
 });
 

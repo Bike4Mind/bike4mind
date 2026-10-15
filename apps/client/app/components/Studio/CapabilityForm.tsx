@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import {
   Alert,
   Box,
@@ -15,7 +15,8 @@ import {
   Typography,
 } from '@mui/joy';
 import { formatCredits } from '@client/app/utils/formatUsd';
-import type { CapabilityControl, CapabilityField, CapabilityOption } from './capabilityFields';
+import type { CapabilityControl, CapabilityField, CapabilityOption, TextField } from './capabilityFields';
+import { insertSnippet } from './insertSnippet';
 
 type CapabilityFormProps = {
   // Every data-testid in the form starts with this, e.g. `video-form-<field id>-select`.
@@ -38,24 +39,66 @@ type CapabilityFormProps = {
 const isOption = (options: readonly CapabilityOption[], value: string | null): value is string =>
   value !== null && options.some(option => option.value === value);
 
+const snippetSlug = (snippet: string): string =>
+  snippet
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+
+const TextControl = ({ field, testId }: { field: TextField; testId: string }) => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const insert = (snippet: string) => {
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? field.value.length;
+    const end = textarea?.selectionEnd ?? field.value.length;
+    const next = insertSnippet(field.value, snippet, start, end);
+    if (next.value.length > field.maxLength) return;
+    field.onChange(next.value);
+    // After React writes the new value, put the caret right after the inserted tag so typing continues there.
+    requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(next.caret, next.caret);
+    });
+  };
+
+  return (
+    <FormControl disabled={field.disabled}>
+      <FormLabel>{field.label}</FormLabel>
+      {field.snippets && field.snippets.length > 0 && (
+        <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mb: 1 }}>
+          {field.snippets.map(snippet => (
+            <Button
+              key={snippet}
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              disabled={field.disabled}
+              onClick={() => insert(snippet)}
+              data-testid={`${testId}-${snippetSlug(snippet)}-snippet-btn`}
+            >
+              {snippet}
+            </Button>
+          ))}
+        </Stack>
+      )}
+      <Textarea
+        minRows={field.minRows ?? 3}
+        value={field.value}
+        placeholder={field.placeholder}
+        onChange={event => field.onChange(event.target.value)}
+        slotProps={{ textarea: { ref: textareaRef, 'data-testid': `${testId}-input`, maxLength: field.maxLength } }}
+      />
+      <Typography level="body-xs" sx={{ alignSelf: 'flex-end' }}>
+        {field.value.trim().length}/{field.maxLength}
+      </Typography>
+    </FormControl>
+  );
+};
+
 const Control = ({ field, testId }: { field: CapabilityControl; testId: string }) => {
   switch (field.kind) {
     case 'text':
-      return (
-        <FormControl disabled={field.disabled}>
-          <FormLabel>{field.label}</FormLabel>
-          <Textarea
-            minRows={field.minRows ?? 3}
-            value={field.value}
-            placeholder={field.placeholder}
-            onChange={event => field.onChange(event.target.value)}
-            slotProps={{ textarea: { 'data-testid': `${testId}-input`, maxLength: field.maxLength } }}
-          />
-          <Typography level="body-xs" sx={{ alignSelf: 'flex-end' }}>
-            {field.value.trim().length}/{field.maxLength}
-          </Typography>
-        </FormControl>
-      );
+      return <TextControl field={field} testId={testId} />;
     case 'segmented':
       return (
         <FormControl disabled={field.disabled}>

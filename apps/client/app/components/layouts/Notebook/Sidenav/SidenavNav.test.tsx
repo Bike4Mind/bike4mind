@@ -13,29 +13,41 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * page, so its row could never appear on its own. Feature FLAGS still gate, and
  * still fail closed.
  */
-const { useFeatureEnabledMock, useGearsNavSignalMock, useVideoModelsMock, navigate, navItems, entitlements } =
-  vi.hoisted(() => ({
-    useFeatureEnabledMock: vi.fn(),
-    useGearsNavSignalMock: vi.fn(),
-    useVideoModelsMock: vi.fn(),
-    navigate: vi.fn(),
-    // Mutable so a test can stand in for an overlay's nav contribution; empty is the open-core build.
-    navItems: [] as Array<{
-      path: string;
-      label: string;
-      icon?: ComponentType;
-      requireEntitlement?: string;
-      sidebar?: boolean;
-    }>,
-    entitlements: [] as string[],
-  }));
+const {
+  useFeatureEnabledMock,
+  useGearsNavSignalMock,
+  useVideoModelsMock,
+  useMusicModelsMock,
+  navigate,
+  location,
+  navItems,
+  entitlements,
+} = vi.hoisted(() => ({
+  useFeatureEnabledMock: vi.fn(),
+  useGearsNavSignalMock: vi.fn(),
+  useVideoModelsMock: vi.fn(),
+  useMusicModelsMock: vi.fn(),
+  navigate: vi.fn(),
+  location: { pathname: '/new' },
+  // Mutable so a test can stand in for an overlay's nav contribution; empty is the open-core build.
+  navItems: [] as Array<{
+    path: string;
+    label: string;
+    icon?: ComponentType;
+    requireEntitlement?: string;
+    sidebar?: boolean;
+  }>,
+  entitlements: [] as string[],
+}));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: useFeatureEnabledMock }),
 }));
 vi.mock('@client/app/hooks/useVisibleGears', () => ({ useGearsNavSignal: useGearsNavSignalMock }));
-// The row is gated on GET /api/v1/video-models (react-query); stubbed like the other data hooks here.
+// The Studio row is gated on GET /api/v1/video-models and /music-models (react-query); stubbed like the other
+// data hooks here.
 vi.mock('@client/app/hooks/data/videoGenerations', () => ({ useVideoModels: useVideoModelsMock }));
+vi.mock('@client/app/hooks/data/musicGenerations', () => ({ useMusicModels: useMusicModelsMock }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({ isFeatureEnabled: () => false }),
 }));
@@ -56,7 +68,7 @@ vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiu
 vi.mock('@client/app/premium-generated/premiumNavItems.generated', () => ({ premiumNavItems: navItems }));
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigate,
-  useLocation: () => ({ pathname: '/new', search: {} }),
+  useLocation: () => ({ pathname: location.pathname, search: {} }),
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -93,6 +105,8 @@ beforeEach(() => {
   useFeatureEnabledMock.mockImplementation((key: string) => key === 'enableHearth');
   useGearsNavSignalMock.mockReturnValue({ startHere: false, startHereCredits: 0, claimableCount: 0 });
   useVideoModelsMock.mockReturnValue({ data: [] });
+  useMusicModelsMock.mockReturnValue({ data: [] });
+  location.pathname = '/new';
   navItems.length = 0;
   entitlements.length = 0;
 });
@@ -164,28 +178,46 @@ describe('SidenavNav Gears row tag', () => {
   });
 });
 
-describe('SidenavNav Video Studio row', () => {
-  const videoRow = () => screen.queryByTestId('sidenav-nav-video-studio');
+describe('SidenavNav Studio row', () => {
+  const studioRow = () => screen.queryByTestId('sidenav-nav-studio');
+  const usable = { data: [{ id: 'some-model' }] };
 
-  it('shows when at least one video model is usable', () => {
-    useVideoModelsMock.mockReturnValue({ data: [{ id: 'grok-imagine-video-1.5' }] });
+  it('is one Studio row, shown when a video model is usable', () => {
+    useVideoModelsMock.mockReturnValue(usable);
     renderNav();
-    expect(videoRow()).toHaveTextContent('Video Studio');
+    expect(studioRow()).toHaveTextContent('Studio');
+    expect(screen.queryByTestId('sidenav-nav-video-studio')).not.toBeInTheDocument();
   });
 
-  it('hides when no model is usable or the models have not loaded', () => {
+  it('hides when no modality has a usable model or the models have not loaded', () => {
     renderNav();
-    expect(videoRow()).not.toBeInTheDocument();
+    expect(studioRow()).not.toBeInTheDocument();
     useVideoModelsMock.mockReturnValue({ data: undefined });
+    useMusicModelsMock.mockReturnValue({ data: undefined });
     renderNav();
-    expect(videoRow()).not.toBeInTheDocument();
+    expect(studioRow()).not.toBeInTheDocument();
   });
 
-  it('opens the video studio route with the modality param', () => {
-    useVideoModelsMock.mockReturnValue({ data: [{ id: 'grok-imagine-video-1.5' }] });
+  it('opens on the video tab when video is usable', () => {
+    useVideoModelsMock.mockReturnValue(usable);
+    useMusicModelsMock.mockReturnValue(usable);
     renderNav();
-    fireEvent.click(screen.getByTestId('sidenav-nav-video-studio'));
+    fireEvent.click(screen.getByTestId('sidenav-nav-studio'));
     expect(navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'video' } });
+  });
+
+  it('shows with only music usable, and opens on the music tab', () => {
+    useMusicModelsMock.mockReturnValue(usable);
+    renderNav();
+    fireEvent.click(screen.getByTestId('sidenav-nav-studio'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'music' } });
+  });
+
+  it('is active on any Studio tab', () => {
+    useMusicModelsMock.mockReturnValue(usable);
+    location.pathname = '/studio/music';
+    renderNav();
+    expect(studioRow()).toHaveAttribute('aria-current', 'page');
   });
 });
 

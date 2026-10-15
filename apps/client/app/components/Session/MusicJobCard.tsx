@@ -3,8 +3,10 @@ import { Box, Button, Card, Chip, LinearProgress, Stack, Typography, type ColorP
 import type { GenerationJobState, MusicGeneration } from '@bike4mind/common';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generationJobCard';
+import { MediaPlayer, type MediaPlayerFile } from '@client/app/components/Media/MediaPlayer';
 import { isTerminalGenerationState } from '@client/app/hooks/data/generationJobPolling';
 import { useCancelMusicGeneration, useMusicGeneration } from '@client/app/hooks/data/musicGenerations';
+import { formatCredits } from '@client/app/utils/formatUsd';
 
 const STATE_LABELS: Record<GenerationJobState, string> = {
   pending: 'Queued',
@@ -21,6 +23,23 @@ const FAILURE_FALLBACK: Partial<Record<GenerationJobState, string>> = {
   failed: 'This song could not be generated.',
   blocked: 'The provider declined to generate this song.',
   cancelled: 'The generation was cancelled.',
+};
+
+type MusicOutput = NonNullable<MusicGeneration['output']>;
+
+// Saved songs play from their Files copy, so the player re-signs through the file like every other file player.
+const toPlayerFile = (jobId: string, fileId: string, output: MusicOutput): MediaPlayerFile => ({
+  id: fileId,
+  fileName: `song-${jobId}.mp3`,
+  mimeType: output.content_type,
+  fileUrl: output.url ?? undefined,
+  fileUrlExpireAt: output.expires_at ? new Date(output.expires_at) : undefined,
+});
+
+// Settled once the song is billed; until then the hold, which is the most the song can cost.
+const creditsLabel = ({ reserved, settled }: MusicGeneration['credits']): string | null => {
+  if (settled !== null) return `${formatCredits(settled)} credits`;
+  return reserved === null ? null : `up to ${formatCredits(reserved)} credits`;
 };
 
 // The server refuses to cancel a storing job: the provider has already produced, and charged for, the song.
@@ -68,8 +87,14 @@ const MusicJobCard = ({ jobId }: { jobId: string }) => {
         <Chip size="sm" variant="soft" color={statusColor} data-testid="music-job-card-status">
           {statusLabel}
         </Chip>
-        <Typography level="body-xs">
-          {output?.duration_seconds ?? job.duration_seconds}s{job.instrumental ? ', Instrumental' : ''}
+        <Typography level="body-xs" data-testid="music-job-card-meta">
+          {[
+            `${output?.duration_seconds ?? job.duration_seconds}s`,
+            job.instrumental && 'Instrumental',
+            creditsLabel(job.credits),
+          ]
+            .filter(Boolean)
+            .join(', ')}
         </Typography>
       </Stack>
 
@@ -79,7 +104,12 @@ const MusicJobCard = ({ jobId }: { jobId: string }) => {
 
       {(!terminal || isSettling) && <LinearProgress data-testid="music-job-card-progress" />}
 
-      {job.state === 'succeeded' && output?.availability === 'ready' && player.src && (
+      {job.state === 'succeeded' && output?.availability === 'ready' && output.file_id && (
+        <Box data-testid="music-job-card-player">
+          <MediaPlayer file={toPlayerFile(job.id, output.file_id, output)} />
+        </Box>
+      )}
+      {job.state === 'succeeded' && output?.availability === 'ready' && !output.file_id && player.src && (
         <Box
           component="audio"
           controls
