@@ -433,7 +433,8 @@ that is already downloaded. The state machine is `src/shared/update.ts`.
 
 The [release workflow](../../.github/workflows/desktop-release.yml) publishes it. After the
 `desktop-v<version>` release is up, `scripts/update_feed.py` writes one `latest-mac.yml` for
-both architectures (sha512 and size of each zip, the `## Changes` bullets as release notes) and
+both architectures (sha512 and size of each zip as published, the `## Changes` bullets as
+release notes) and
 uploads it to a rolling release tagged `desktop-feed`, created on first use with
 `--latest=false`. The baked URL is that release's download directory,
 `<server>/<owner>/<repo>/releases/download/desktop-feed`, built from the workflow context.
@@ -443,7 +444,7 @@ the newest version through `/releases/latest`, which is repo-wide, and desktop r
 published with `--latest=false`; its prerelease mode instead requires the tag itself to be
 semver, which `desktop-v1.2.3` is not. A fixed asset URL needs neither. Every file URL in the
 feed is absolute and points at the versioned release, so installers are stored once. The feed
-only moves forward: a rerun of an older commit leaves a newer feed alone.
+only moves forward: a rerun leaves a feed that already names its version, or a newer one, alone.
 
 No blockmaps are published, so every update is a full download
 (`disableDifferentialDownload`).

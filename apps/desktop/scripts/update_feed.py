@@ -5,8 +5,8 @@ URL for "the newest desktop-v* release": /releases/latest is repo-wide and these
 published with --latest=false. Every file URL in the feed is absolute, pointing at the
 versioned release that actually holds the installers.
 
-Prints the reason and writes nothing when the feed already names a newer version, so a re-run
-of an old commit can never roll installed apps back.
+Prints the reason and writes nothing when the feed already names this version or a newer one,
+so a rerun can neither roll installed apps back nor rewrite a feed they are already reading.
 """
 
 import argparse
@@ -103,8 +103,8 @@ def main():
     previous = Path(args.previous) if args.previous else None
     if previous and previous.is_file():
         current = feed_version(previous.read_text())
-        if current and current > new:
-            print(f'Feed already offers {".".join(map(str, current))}; not rolling it back to {args.version}.')
+        if current and current >= new:
+            print(f'Feed already offers {".".join(map(str, current))}; leaving it for {args.version}.')
             return
 
     notes = change_notes(Path(args.notes).read_text()) if args.notes else ''

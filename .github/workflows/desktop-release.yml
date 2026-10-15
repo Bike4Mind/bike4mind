@@ -290,7 +290,9 @@ jobs:
               --notes 'Read by the desktop app to find updates. Installers are on the desktop-v* releases.'
           fi
           gh release download desktop-feed --pattern latest-mac.yml --dir previous-feed || true
-          python3 apps/desktop/scripts/update_feed.py --installers installers --version "$DESKTOP_VERSION" \
+          # Hash what users will download: a rerun leaves published assets unchanged, and a rebuild is not byte-identical.
+          gh release download "desktop-v$DESKTOP_VERSION" --pattern '*.zip' --dir published
+          python3 apps/desktop/scripts/update_feed.py --installers published --version "$DESKTOP_VERSION" \
             --asset-base "$ASSET_BASE" --notes notes/desktop-release-notes.md --signed "$SIGNED" \
             --previous previous-feed/latest-mac.yml --out feed/latest-mac.yml
           if [ -f feed/latest-mac.yml ]; then gh release upload desktop-feed feed/latest-mac.yml --clobber; fi

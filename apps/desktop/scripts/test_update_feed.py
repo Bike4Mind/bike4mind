@@ -75,10 +75,15 @@ class UpdateFeedTest(unittest.TestCase):
         (self.dir / 'previous.yml').write_text("version: '1.10.0'\n")
         result = self.run_script('--previous', str(self.dir / 'previous.yml'))
         self.assertFalse((self.dir / 'feed' / 'latest-mac.yml').exists())
-        self.assertIn('not rolling it back', result.stdout)
+        self.assertIn('leaving it', result.stdout)
 
-    def test_same_or_older_previous_is_replaced(self):
+    def test_leaves_a_feed_that_already_names_this_version(self):
         (self.dir / 'previous.yml').write_text("version: '1.2.3'\n")
+        self.run_script('--previous', str(self.dir / 'previous.yml'))
+        self.assertFalse((self.dir / 'feed' / 'latest-mac.yml').exists())
+
+    def test_older_previous_is_replaced(self):
+        (self.dir / 'previous.yml').write_text("version: '1.2.2'\n")
         self.run_script('--previous', str(self.dir / 'previous.yml'), '--signed', 'true')
         self.assertIn('signed: true', (self.dir / 'feed' / 'latest-mac.yml').read_text())
 
