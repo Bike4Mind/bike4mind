@@ -50,6 +50,8 @@ describe('QuestModel generationJobs persistence', () => {
       { id: 'b', kind: 'music' },
       { id: 'a', kind: 'video' },
     ]);
+    // A re-add carrying the same two fields in the other order must still be a no-op, not a duplicate row.
+    await questRepository.addGenerationJobs(created.id, [{ kind: 'music', id: 'b' }]);
     const readBack = await Quest.findById(created.id).lean();
     expect(readBack?.generationJobs).toEqual([
       { id: 'a', kind: 'video' },
