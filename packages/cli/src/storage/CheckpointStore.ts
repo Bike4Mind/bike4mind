@@ -655,7 +655,7 @@ export class CheckpointStore {
         GIT_WORK_TREE: undefined,
       },
     });
-    // execFileSync closed stdin immediately; do the same so git never waits on it.
+    // Close stdin so git never blocks waiting on it.
     pending.child.stdin?.end();
     const { stdout } = await pending;
     return stdout;
