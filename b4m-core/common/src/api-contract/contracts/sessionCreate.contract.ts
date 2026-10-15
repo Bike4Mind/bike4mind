@@ -12,14 +12,17 @@ export const createSessionContract = defineEndpoint({
     'Creates a session (called a "notebook" in the product UI). Pass the returned `id` as ' +
     '`sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API ' +
     'key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as ' +
-    '`ai:chat`. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from ' +
+    '`ai:chat`. A key holding `ai:generate` without `notebooks:write` may create a bare session only ' +
+    '(`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from ' +
     "`GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on " +
     'forced retrieval.',
   tags: ['Sessions'],
   auth: 'apiKeyOrJwt',
-  // notebooks:write only, and ai:chat is deliberately not OR'd in: create can attach the session
-  // to a project, which shares its files, so a chat-only key must not reach it.
-  scopes: [ApiKeyScope.WRITE_NOTEBOOKS],
+  // ai:chat is deliberately not OR'd in: create can attach the session to a project, which shares
+  // its files, so a chat-only key must not reach it. ai:generate is admitted only for a bare
+  // session: the handler 403s a key without notebooks:write that sets anything beyond the fields
+  // listed in the description.
+  scopes: [ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.AI_GENERATE],
   request: CreateSessionRequestSchema,
   emitsRateLimitHeaders: true,
   requestExample: { name: 'Quarterly analysis' },
@@ -28,7 +31,7 @@ export const createSessionContract = defineEndpoint({
     400: { description: 'The request could not be processed (for example a bad project id).', schema: ApiErrorSchema },
     403: {
       description:
-        'The key lacks `notebooks:write`, is not bound to a requested data lake, or the caller is not ' +
+        'The key lacks `notebooks:write` (or holds only `ai:generate` and set a field beyond a bare session), is not bound to a requested data lake, or the caller is not ' +
         'entitled to the requested `surface`.',
       schema: ScopeForbiddenErrorSchema,
     },
