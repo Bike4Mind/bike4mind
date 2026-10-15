@@ -114,6 +114,28 @@ describe('POST /api/mcp/confirm', () => {
     });
   });
 
+  it('leaves the action unclaimed and answers generically when the attachment download fails', async () => {
+    vi.mocked(downloadAttachmentUrl).mockRejectedValueOnce(
+      new Error('URL blocked for security reasons: Hostname resolves to private IP address (127.0.0.1)')
+    );
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: {
+        tool: JIRA_UPLOAD_ATTACHMENT,
+        params: { issueKey: 'K-1', filename: 'a.txt', slackFileUrl: 'http://internal.example/a' },
+        ts: pendingActionTs,
+      },
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(res._getStatusCode()).toBe(502);
+    expect(res._getJSONData().error).not.toContain('127.0.0.1');
+    // Left unclaimed so the user can fix the URL and retry.
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
   it('refuses before claiming or invoking anything while the MCP admin flag is off', async () => {
     vi.mocked(assertMcpServerEnabled).mockRejectedValueOnce(new ForbiddenError('MCP servers are disabled'));
 

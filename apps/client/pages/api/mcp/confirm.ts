@@ -216,6 +216,9 @@ const handler = baseApi().post(async (req, res) => {
         logger.error('[Web MCP Confirm] Failed to download file from URL', {
           error: urlError instanceof Error ? urlError.message : String(urlError),
         });
+        // Return before claiming so the action stays for a retry, matching the Slack executor. The
+        // message is generic: the guard's detail (e.g. what a hostname resolved to) is logged above.
+        return res.status(502).json({ success: false, error: 'Failed to download file' });
       }
     }
 
