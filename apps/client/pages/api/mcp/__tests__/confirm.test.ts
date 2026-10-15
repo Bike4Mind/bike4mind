@@ -328,16 +328,13 @@ describe('POST /api/mcp/confirm', () => {
         moderationStatus: 'pending',
       } as never);
       const slackBytes = Buffer.from('slack-bytes');
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array(slackBytes).buffer })
-      );
+      vi.mocked(downloadAttachmentUrl).mockResolvedValueOnce(slackBytes);
 
       const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
 
       expect(res._getStatusCode()).toBe(200);
       expect(getFilesStorage().download).not.toHaveBeenCalled();
-      expect(fetch).toHaveBeenCalledWith('https://files.example.test/a.txt');
+      expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://files.example.test/a.txt');
       expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
         content: slackBytes.toString('base64'),
       });
