@@ -47,7 +47,7 @@ import { notifySlackIndexingComplete } from '@workers/queueHandlers/notifySlackI
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
 import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
 import { isConvergenceHalted } from '@server/dataLakes/convergenceKillSwitch';
-import { makeDataLakeSpendNotifier } from '@server/utils/dataLakeSpendNotifier';
+import { makeDataLakeSpendNotifier } from '@workers/utils/dataLakeSpendNotifier';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';

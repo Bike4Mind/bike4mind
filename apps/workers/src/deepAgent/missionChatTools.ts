@@ -1,8 +1,13 @@
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import { Logger } from '@bike4mind/observability';
-import { enrollMissionForAgent, findAgentsByName, formatMissionStatusReport, listMissionsForAgent } from './missions';
-import { MongoDeepAgentStore } from './store';
-import { runMissionFirstWake } from './firstWake';
+import {
+  enrollMissionForAgent,
+  findAgentsByName,
+  formatMissionStatusReport,
+  listMissionsForAgent,
+} from '@server/deepAgent/missions';
+import { MongoDeepAgentStore } from '@server/deepAgent/store';
+import { runMissionFirstWake } from '@server/deepAgent/firstWake';
 
 /**
  * Chat-native missions - injected as externalTools into the agent executor so

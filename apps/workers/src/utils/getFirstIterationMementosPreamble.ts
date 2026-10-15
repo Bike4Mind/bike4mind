@@ -43,7 +43,7 @@ import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import type { IApiKeyRepository, IMementoRepository, IAdminSettingsRepository } from '@bike4mind/common';
 import { mementoService } from '@bike4mind/services';
 import { type MementoGates } from '@bike4mind/services/llm';
-import { resolveExecutionMementoGates, type MementoGateExecution } from './resolveExecutionMementoGates';
+import { resolveExecutionMementoGates, type MementoGateExecution } from '@server/utils/resolveExecutionMementoGates';
 
 export type MementoRetrievalExecution = Pick<
   IAgentExecution,

@@ -26,7 +26,9 @@ vi.mock('@bike4mind/observability', () => ({
   },
 }));
 const mockResolveAuth = vi.fn();
-vi.mock('./resolveContractAuth', () => ({ resolveContractAuth: (...args: unknown[]) => mockResolveAuth(...args) }));
+vi.mock('@server/cli/resolveContractAuth', () => ({
+  resolveContractAuth: (...args: unknown[]) => mockResolveAuth(...args),
+}));
 
 import { defineLambdaRoute } from './defineLambdaRoute';
 

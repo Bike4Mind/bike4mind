@@ -12,7 +12,7 @@ import { connectDB, mongoose } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { createMethodGuard } from '@server/utils/allowedMethods';
-import { resolveContractAuth, type ContractAuthResult } from './resolveContractAuth';
+import { resolveContractAuth, type ContractAuthResult } from '@server/cli/resolveContractAuth';
 
 export type LambdaRouteContext<C extends EndpointContract> = {
   validated: RequestBodyOf<C>;
