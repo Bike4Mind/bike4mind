@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -183,6 +183,10 @@ describe('FileBrowserItem inline media', () => {
   const audioFile = makeFile({ fileName: 'song.mp3', mimeType: 'audio/mpeg', fileUrl: 'https://example.com/song.mp3' });
   const videoFile = makeFile({ fileName: 'clip.mp4', mimeType: 'video/mp4', fileUrl: 'https://example.com/clip.mp4' });
 
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it.each(['list', 'grid'] as const)('%s plays an audio file without preloading it', viewType => {
     renderWithProviders(<FileBrowserItem file={audioFile} viewType={viewType} />);
     expect(screen.getByTestId('media-player-audio').getAttribute('preload')).toBe('none');
@@ -203,19 +207,44 @@ describe('FileBrowserItem inline media', () => {
     expect(thumbnail.querySelector('video')?.getAttribute('preload')).toBe('metadata');
   });
 
-  it('list opens the viewer from the video thumbnail', () => {
-    renderWithProviders(<FileBrowserItem file={videoFile} viewType="list" />);
+  it('list opens the viewer from the video thumbnail without toggling the row selection', () => {
+    const setSelectedIds = vi.fn();
+    renderWithProviders(
+      <FileBrowserInstanceProvider
+        value={{
+          selectedIds: new Set<string>(),
+          setSelectedIds,
+          open: true,
+          setOpen: vi.fn(),
+          fileToShare: null,
+          setFileToShare: vi.fn(),
+          config: {},
+        }}
+      >
+        <FileBrowserItem file={videoFile} viewType="list" />
+      </FileBrowserInstanceProvider>
+    );
     fireEvent.click(screen.getByTestId('file-browser-item-video-thumbnail'));
     expect(viewer.setSelectedFabFileId).toHaveBeenCalledWith(videoFile.id);
+    expect(viewer.setViewOnly).toHaveBeenCalledWith(false);
+    expect(viewer.setOpen).toHaveBeenCalledWith(true);
+    expect(setSelectedIds).not.toHaveBeenCalled();
+  });
+
+  it('list falls back to the video icon, still opening the viewer, when the thumbnail fails to load', () => {
+    renderWithProviders(<FileBrowserItem file={videoFile} viewType="list" />);
+    const thumbnail = screen.getByTestId('file-browser-item-video-thumbnail');
+    fireEvent.error(thumbnail.querySelector('video') as HTMLVideoElement);
+    expect(thumbnail.querySelector('video')).toBeNull();
+    expect(thumbnail.querySelector('[data-testid="VideocamIcon"]')).toBeTruthy();
+    fireEvent.click(thumbnail);
     expect(viewer.setOpen).toHaveBeenCalledWith(true);
   });
 
-  it('list falls back to the video icon when the thumbnail fails to load', () => {
-    const { container } = renderWithProviders(<FileBrowserItem file={videoFile} viewType="list" />);
-    const video = screen.getByTestId('file-browser-item-video-thumbnail').querySelector('video');
-    fireEvent.error(video as HTMLVideoElement);
-    expect(screen.queryByTestId('file-browser-item-video-thumbnail')).toBeNull();
-    expect(container.querySelector('[data-testid="VideocamIcon"]')).toBeTruthy();
+  it('list never hands an expired URL to the thumbnail', () => {
+    const expired = { ...videoFile, fileUrlExpireAt: new Date(Date.now() - 1000) } as IFabFileDocument;
+    renderWithProviders(<FileBrowserItem file={expired} viewType="list" />);
+    expect(screen.getByTestId('file-browser-item-video-thumbnail').querySelector('video')).toBeNull();
   });
 
   it('renders no player for a media file with no URL', () => {

@@ -25,7 +25,7 @@ import TagIcon from '@mui/icons-material/Tag';
 import TextSnippetIcon from '@mui/icons-material/TextSnippet';
 import VideocamIcon from '@mui/icons-material/Videocam';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import MediaPlayer from '@client/app/components/Media/MediaPlayer';
+import MediaPlayer, { hasExpired } from '@client/app/components/Media/MediaPlayer';
 import SegmentIcon from '@mui/icons-material/Segment';
 import WarningIcon from '@mui/icons-material/Warning';
 import { Box, Card, Chip, CircularProgress, Grid, IconButton, Input, Stack, Tooltip, Typography } from '@mui/joy';
@@ -61,23 +61,24 @@ const ImageThumbnail: FC<{ url: string; fileName: string; size: number }> = ({ u
 const isPlayableMedia = (file: IFabFileDocument): boolean =>
   isMediaOnlyMimeType(file.mimeType) && !!(file.fileUrl || file.presignedUrl);
 
-/** Inline player for audio and video rows. Audio loads nothing until played, so a long list stays cheap; video
+/** Inline player for audio rows and grid cards. Audio loads nothing until played, so a long list stays cheap; video
  *  loads its metadata for the poster frame. Download stays in the row's actions menu. */
 const RowMediaPlayer: FC<{ file: IFabFileDocument }> = ({ file }) => (
   <MediaPlayer file={file} preload={isVideoMimeType(file.mimeType) ? 'metadata' : 'none'} hideDownload />
 );
 
 /** A list row is a single line, so a video gets a poster-frame thumbnail that opens the viewer (where it plays)
- *  rather than an inline player, which would be far taller than the row. Falls back to the icon if it fails to load. */
+ *  rather than an inline player, which would be far taller than the row. Without a loadable URL it shows the icon
+ *  and still opens the viewer, which re-signs the URL itself. */
 const VideoRowThumbnail: FC<{ file: IFabFileDocument; fallback: React.ReactNode }> = ({ file, fallback }) => {
   const { t } = useTranslation();
-  const [failed, setFailed] = useState(false);
+  // Keyed by URL so a refetch that re-signs it retries the frame.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const [setFileId, setViewOnly, setOpen] = useKnowledgeModal(
     useShallow(s => [s.setSelectedFabFileId, s.setViewOnly, s.setOpen])
   );
   const url = file.fileUrl || file.presignedUrl;
-
-  if (failed || !url) return <>{fallback}</>;
+  const showFrame = !!url && url !== failedUrl && !hasExpired(file.fileUrlExpireAt);
 
   const openViewer = (event: React.MouseEvent) => {
     // The row's own click toggles selection.
@@ -92,29 +93,47 @@ const VideoRowThumbnail: FC<{ file: IFabFileDocument; fallback: React.ReactNode 
       component="button"
       type="button"
       onClick={openViewer}
-      aria-label={t('media_player.play_video', { name: file.fileName })}
+      aria-label={t('media_player.open_video', { name: file.fileName })}
       data-testid="file-browser-item-video-thumbnail"
-      sx={{ position: 'relative', width: '100%', height: '100%', p: 0, border: 0, bgcolor: 'black', cursor: 'pointer' }}
+      sx={{
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '100%',
+        height: '100%',
+        p: 0,
+        border: 0,
+        bgcolor: showFrame ? 'black' : 'transparent',
+        cursor: 'pointer',
+      }}
     >
-      <Box
-        component="video"
-        src={url}
-        preload="metadata"
-        muted
-        playsInline
-        onError={() => setFailed(true)}
-        sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-      />
-      <PlayArrowIcon
-        sx={{
-          position: 'absolute',
-          inset: 0,
-          m: 'auto',
-          // `&&` outranks the list icon column's `& svg` colour rule.
-          '&&': { color: 'common.white' },
-          filter: 'drop-shadow(0 0 2px black)',
-        }}
-      />
+      {showFrame ? (
+        <>
+          <Box
+            component="video"
+            // The fragment makes iOS Safari paint a first frame, which it skips for a bare preload="metadata".
+            src={`${url}#t=0.1`}
+            preload="metadata"
+            muted
+            playsInline
+            onError={() => setFailedUrl(url)}
+            sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          />
+          <PlayArrowIcon
+            sx={{
+              position: 'absolute',
+              inset: 0,
+              m: 'auto',
+              // `&&` outranks the list icon column's `& svg` colour rule.
+              '&&': { color: 'common.white' },
+              filter: 'drop-shadow(0 0 2px black)',
+            }}
+          />
+        </>
+      ) : (
+        fallback
+      )}
     </Box>
   );
 };

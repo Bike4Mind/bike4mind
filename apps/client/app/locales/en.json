@@ -595,7 +595,7 @@
     "load_failed": "This file could not be played",
     "retry": "Retry",
     "download_failed": "Failed to download file",
-    "play_video": "Play {{name}}"
+    "open_video": "Open {{name}}"
   },
   "generated_filter": {
     "label": "Generated"
