@@ -84,14 +84,21 @@ describe('AnthropicBackend reasoningEffort', () => {
     expect(request.max_tokens).toBe(8192);
   });
 
-  it('lets an explicit thinking request win over reasoningEffort', async () => {
-    const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
+  // The desktop sends thinking on every turn and its effort picker rides on reasoningEffort, so
+  // the request keeps thinking on and the effort sizes it (resolveAnthropicEffort).
+  it('keeps an explicit thinking request on and sizes it from reasoningEffort', async () => {
+    const off = await requestFor(ChatModels.CLAUDE_5_SONNET, {
       reasoningEffort: 'none',
       thinking: { enabled: true, budget_tokens: 8000 },
     });
+    expect(off.thinking).toEqual({ type: 'adaptive' });
+    expect(off.output_config).toEqual({ effort: 'low' });
 
-    expect(request.thinking).toEqual({ type: 'adaptive' });
-    expect(request.output_config).toEqual({ effort: 'high' });
+    const deep = await requestFor(ChatModels.CLAUDE_5_SONNET, {
+      reasoningEffort: 'xhigh',
+      thinking: { enabled: true, budget_tokens: 8000 },
+    });
+    expect(deep.output_config).toEqual({ effort: 'xhigh' });
   });
 
   it.each([
@@ -119,6 +126,19 @@ describe('AnthropicBackend reasoningEffort', () => {
   it('keeps adaptive thinking off under the forced response_format tool', async () => {
     const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
       reasoningEffort: 'low',
+      maxTokens: 2000,
+      responseFormat: jsonSchemaFormat,
+    });
+
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
+    expect(request.thinking).toBeUndefined();
+    expect(request.output_config).toBeUndefined();
+  });
+
+  it('drops an explicit thinking request under the forced response_format tool', async () => {
+    const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
+      reasoningEffort: 'high',
+      thinking: { enabled: true, budget_tokens: 8000 },
       maxTokens: 2000,
       responseFormat: jsonSchemaFormat,
     });

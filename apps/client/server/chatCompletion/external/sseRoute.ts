@@ -48,6 +48,7 @@ import { buildErrorBody, httpErrorToResponse } from '@server/middlewares/errorHa
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
+import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from './completionTiming';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -158,6 +159,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     track(done);
 
     const startTime = Date.now();
+    const timing = COMPLETION_TIMING_ENABLED ? createCompletionTiming() : undefined;
     const headers = flattenHeaders(req.headers);
     const logger = new Logger({ metadata: { service: 'chatCompletion', endpoint: COMPLETIONS_ENDPOINT } });
 
@@ -225,6 +227,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           : new UnauthorizedError('Authentication failed. Provide a valid API key or JWT token.');
       }
       userId = authResult.userId;
+      timing?.phase('authed');
 
       if (authResult.method === 'apiKey') {
         apiKeyInfo = authResult.apiKeyInfo;
@@ -239,6 +242,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         await checkRateLimit(userId, source, { client: resolveRequestClient(headers) });
       }
 
+      timing?.phase('rateLimited');
       logger.updateMetadata({ userId, model: body.model, apiKeyId: apiKeyInfo?.keyId });
       logger.info(`[CLI_LLM] Starting completion for user ${userId}, model: ${body.model}`, {
         authMethod: apiKeyInfo ? 'api_key' : 'jwt',
@@ -257,6 +261,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       let finalOutputTokens = 0;
       let hasToolCalls = false;
 
+      timing?.phase('completionStarted');
       await executeCompletion({
         userId,
         model: body.model,
@@ -287,6 +292,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           if (info?.inputTokens) finalInputTokens = info.inputTokens;
           if (info?.outputTokens) finalOutputTokens = info.outputTokens;
           if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
+          timing?.chunk(classifyChunk(text, info));
           write(serializeSSEEvent(buildSSEEvent(text, info)));
         },
       });
@@ -352,6 +358,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       }
     } finally {
       if (heartbeat) clearInterval(heartbeat);
+      if (timing) logger.info('[CLI_TIMING] completion phases', timing.summary());
     }
   });
   app.use(COMPLETIONS_ENDPOINT, handleBodyParserError);
