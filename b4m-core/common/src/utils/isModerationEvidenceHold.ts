@@ -6,9 +6,8 @@ export const UNSUPPORTED_FORMAT_BLOCK_REASON = 'unsupported_format';
  * may be section 2258A evidence pending triage. An 'unsupported_format' block (bytes that could
  * not be scanned at all) never raises an incident, so it is not held.
  *
- * Used by fabFileService/deleteStoredObjects.ts, which the single, bulk and delete-all file deletes
- * go through. Only the bytes follow this rule: the FabFile hard-delete row guards still hold every
- * 'blocked' row, including unsupported_format.
+ * Used by fabFileService/deleteStoredObjects.ts (see its callers). Only the bytes follow this rule:
+ * the FabFile hard-delete row guards still hold every 'blocked' row, including unsupported_format.
  */
 export function isModerationEvidenceHold(f: {
   moderationStatus?: string | null;
