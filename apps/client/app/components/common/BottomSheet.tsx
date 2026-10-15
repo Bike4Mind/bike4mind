@@ -1,4 +1,4 @@
-import { FC, PointerEvent, ReactNode, useRef, useState } from 'react';
+import { FC, PointerEvent, ReactNode, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { Box, Drawer } from '@mui/joy';
 
 // A drag past this distance closes the sheet, as does a quick flick past FLICK_MIN_PX.
@@ -11,6 +11,9 @@ interface BottomSheetProps {
   onClose: () => void;
   /** Accessible name for the sheet's dialog. */
   label: string;
+  /** Hold the height the sheet has now, e.g. while a sub-view replaces its list: a shorter view
+   *  leaves room below, a taller one scrolls, and the sheet does not jump under the finger. */
+  keepHeight?: boolean;
   children: ReactNode;
   'data-testid'?: string;
 }
@@ -19,9 +22,39 @@ interface BottomSheetProps {
  * Phone sheet that rises from the bottom edge, full width. Closes on a tap outside, Escape, or a
  * swipe down on the handle at its top. Content taller than the sheet scrolls inside it.
  */
-const BottomSheet: FC<BottomSheetProps> = ({ open, onClose, label, children, 'data-testid': testId }) => {
+const BottomSheet: FC<BottomSheetProps> = ({
+  open,
+  onClose,
+  label,
+  keepHeight = false,
+  children,
+  'data-testid': testId,
+}) => {
   const [dragY, setDragY] = useState<number | null>(null);
   const drag = useRef<{ startY: number; startTime: number; y: number } | null>(null);
+
+  // Holds the body at the height it had before keepHeight turned on. By the render that turns it on
+  // the children have already changed, so the height comes from the previous render's measurement.
+  // Set on the element directly, before paint: it is a measurement of what rendered, not state. The
+  // Drawer's portal mounts the body after this component's first render, so its mount re-renders
+  // this component (bodyMounted) to measure it too.
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const [, setBodyMounted] = useState(false);
+  const attachBody = useCallback((el: HTMLDivElement | null) => {
+    bodyRef.current = el;
+    setBodyMounted(!!el);
+  }, []);
+  const freeHeight = useRef(0);
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    if (keepHeight) {
+      if (!el.style.height && freeHeight.current > 0) el.style.height = `${freeHeight.current}px`;
+      return;
+    }
+    el.style.height = '';
+    freeHeight.current = el.offsetHeight;
+  });
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     drag.current = { startY: e.clientY, startTime: performance.now(), y: 0 };
@@ -89,7 +122,19 @@ const BottomSheet: FC<BottomSheetProps> = ({ open, onClose, label, children, 'da
           sx={{ width: '36px', height: '4px', borderRadius: '2px', backgroundColor: 'neutral.outlinedBorder' }}
         />
       </Box>
-      <Box sx={{ overflowY: 'auto', px: '8px' }}>{children}</Box>
+      <Box
+        ref={attachBody}
+        data-testid="bottom-sheet-body"
+        sx={{
+          overflowY: 'auto',
+          px: '8px',
+          // A held height still gives way to the sheet's own max height.
+          flexShrink: 1,
+          minHeight: 0,
+        }}
+      >
+        {children}
+      </Box>
     </Drawer>
   );
 };

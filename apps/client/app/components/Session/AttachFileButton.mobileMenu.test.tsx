@@ -132,4 +132,21 @@ describe('AttachFileButton plus menu (phone)', () => {
     openMenu();
     expect(screen.queryByText('Optimize Prompt')).toBeNull();
   });
+
+  it('heads a submenu with its name and a back arrow, not a Back row', () => {
+    openMenu();
+    fireEvent.click(screen.getByTestId('upload-scope-settings-btn'));
+    const title = screen.getByText('Files uploaded from this device');
+    expect(screen.queryByText('Back')).toBeNull();
+    // The header names the options, so the panel drops its own heading.
+    expect(screen.queryByText('FILES UPLOADED FROM THIS DEVICE')).toBeNull();
+    expect(screen.getByTestId('attach-file-scope-radiogroup')).toHaveAttribute('aria-labelledby', title.id);
+  });
+
+  it('goes back to the list from the arrow', () => {
+    openMenu();
+    fireEvent.click(screen.getByTestId('upload-scope-settings-btn'));
+    fireEvent.click(screen.getByTestId('attach-menu-back-btn'));
+    expect(screen.getByTestId('attach-menu-tools-btn')).toBeInTheDocument();
+  });
 });

@@ -55,6 +55,7 @@ import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import CountBadge from '@client/app/components/common/CountBadge';
 import BottomSheet from '@client/app/components/common/BottomSheet';
+import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
 import { useActiveTools } from '@client/app/components/Session/AISettings/useActiveTools';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePickerStyles';
@@ -124,29 +125,40 @@ const LIST_GROUP_SX = { display: 'contents' } as const;
 
 type Submenu = 'briefcase' | 'image' | 'uploadScope';
 
+// Header of each submenu on phones, where it replaces the list. Desktop side panels need none.
+const SUBMENU_TITLES: Record<Submenu, string> = {
+  briefcase: 'Prompt catalog',
+  image: 'Image options',
+  uploadScope: 'Files uploaded from this device',
+};
+
 /**
  * How long a file uploaded from this device stays in the notebook. Only the device upload (and a
  * drop onto the composer) honours it - Drive, the file browser and paste always keep the file.
  * Three-valued, not a switch: "this document, just once" and "this image, keep it" are opposite
  * overrides of the default and a boolean can only express one of them.
  */
-const UploadScopeOptions: FC<{ value: AttachScopeMode; onChange: (mode: AttachScopeMode) => void }> = ({
-  value,
-  onChange,
-}) => (
+const UploadScopeOptions: FC<{
+  value: AttachScopeMode;
+  onChange: (mode: AttachScopeMode) => void;
+  /** Id of a heading that already names the options (the phone submenu header); hides its own. */
+  labelledBy?: string;
+}> = ({ value, onChange, labelledBy }) => (
   // Same element as the sidebar's filter radios (layouts/Notebook/Sidenav/FiltersPanel.tsx,
   // FilterRadioRow and sectionTitleSx), with a description under each label - keep them in sync.
   <Box sx={{ display: 'flex', flexDirection: 'column', p: '4px' }}>
-    <Typography
-      id="attach-scope-heading"
-      level="body-xs"
-      sx={{ color: 'text.tertiary', fontSize: '12px', fontWeight: 400, letterSpacing: 0, mb: '12px', px: 1 }}
-    >
-      FILES UPLOADED FROM THIS DEVICE
-    </Typography>
+    {!labelledBy && (
+      <Typography
+        id="attach-scope-heading"
+        level="body-xs"
+        sx={{ color: 'text.tertiary', fontSize: '12px', fontWeight: 400, letterSpacing: 0, mb: '12px', px: 1 }}
+      >
+        FILES UPLOADED FROM THIS DEVICE
+      </Typography>
+    )}
     <Box
       role="radiogroup"
-      aria-labelledby="attach-scope-heading"
+      aria-labelledby={labelledBy ?? 'attach-scope-heading'}
       data-testid="attach-file-scope-radiogroup"
       sx={{ display: 'flex', flexDirection: 'column', gap: '4px' }}
     >
@@ -837,24 +849,34 @@ const AttachFileButton = ({
         </Box>
       ) : currentView === 'briefcase' || currentView === 'image' || currentView === 'uploadScope' ? (
         <Box sx={LIST_GROUP_SX}>
-          {/* Phones have no room for a side panel, so a submenu replaces the list. */}
-          <ListItem sx={{ p: 0 }}>
-            <ListItemButton
+          {/* Phones have no room for a side panel, so a submenu replaces the list, under a header
+              naming it, with an arrow back to the list. */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', minHeight: '44px' }}>
+            <IconButton
+              data-testid="attach-menu-back-btn"
+              aria-label="Back"
+              variant="plain"
+              color="neutral"
               onClick={() => setCurrentView('main')}
-              sx={{ color: 'text.primary', borderBottom: '1px solid', borderColor: 'divider', mb: 0.5 }}
+              // Like the Tools and Agents dropdown headers' buttons, a touch larger for a finger.
+              sx={{ ...HEADER_ICON_BUTTON_SX, '--IconButton-size': '32px' }}
             >
-              <ListItemDecorator>
-                <ArrowBack sx={{ color: 'text.primary50', fontSize: '18px' }} />
-              </ListItemDecorator>
-              Back
-            </ListItemButton>
-          </ListItem>
+              <ArrowBack sx={{ fontSize: '18px' }} />
+            </IconButton>
+            <Typography id="attach-menu-view-title" level="title-sm" sx={{ color: 'text.primary' }}>
+              {SUBMENU_TITLES[currentView]}
+            </Typography>
+          </Box>
           {currentView === 'briefcase' ? (
             <BriefcasePanel onLaunched={closeMenu} />
           ) : currentView === 'image' ? (
             <ImageOptionsPanel onOpenPromptBuilder={closeMenu} />
           ) : (
-            <UploadScopeOptions value={attachScopeMode} onChange={onAttachScopeModeChange} />
+            <UploadScopeOptions
+              value={attachScopeMode}
+              onChange={onAttachScopeModeChange}
+              labelledBy="attach-menu-view-title"
+            />
           )}
         </Box>
       ) : null}
@@ -878,7 +900,14 @@ const AttachFileButton = ({
       </Tooltip>
 
       {isMobile ? (
-        <BottomSheet open={isOpen} onClose={closeMenu} label="Add files and more" data-testid="attach-menu-sheet">
+        <BottomSheet
+          open={isOpen}
+          onClose={closeMenu}
+          label="Add files and more"
+          // A sub-view replaces the list at the list's height, so the sheet does not jump.
+          keepHeight={currentView !== 'main'}
+          data-testid="attach-menu-sheet"
+        >
           {menuList}
         </BottomSheet>
       ) : (

@@ -63,4 +63,29 @@ describe('BottomSheet', () => {
     swipe(-200, 100);
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it('holds the height it had while a sub-view replaces its content, then sizes freely again', () => {
+    let height = 300;
+    const spy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(() => height);
+    const ui = (keepHeight: boolean, rows: number) => (
+      <CssVarsProvider theme={appTheme}>
+        <BottomSheet open onClose={vi.fn()} label="Menu" keepHeight={keepHeight}>
+          {Array.from({ length: rows }, (_, i) => (
+            <div key={i}>row {i}</div>
+          ))}
+        </BottomSheet>
+      </CssVarsProvider>
+    );
+    const { rerender } = render(ui(false, 10));
+    const body = screen.getByTestId('bottom-sheet-body');
+    expect(body.style.height).toBe('');
+
+    height = 100;
+    rerender(ui(true, 2));
+    expect(body.style.height).toBe('300px');
+
+    rerender(ui(false, 10));
+    expect(body.style.height).toBe('');
+    spy.mockRestore();
+  });
 });
