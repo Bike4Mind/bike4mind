@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RemoteSkillSource } from '@bike4mind/cli/skills';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { remoteSkillsKey } from './accountSkills';
 import { ProjectTrustStore } from './ProjectTrustStore';
 import { SkillCatalog, type RemoteSkills } from './SkillCatalog';
@@ -275,6 +275,26 @@ describe('SkillCatalog account skills', () => {
     const store = catalog();
     await Promise.all([store.state(null), store.forModel(null)]);
     expect(fetches).toBe(1);
+  });
+
+  it('re-scans after the scan cache expires, so a settled read does not stick', async () => {
+    const now = vi.spyOn(Date, 'now');
+    const start = Date.now();
+
+    try {
+      const store = catalog();
+      await Promise.all([store.state(null), store.forModel(null)]);
+      expect(fetches).toBe(1);
+
+      // Past the catalog's 2s scan cache AND the source's own 5-minute snapshot TTL, so the read
+      // must walk the roots again rather than replay the promise the first read already settled.
+      now.mockReturnValue(start + 6 * 60_000);
+
+      expect(await names(store, null)).toContain('web-summary');
+      expect(fetches).toBe(2);
+    } finally {
+      now.mockRestore();
+    }
   });
 });
 
