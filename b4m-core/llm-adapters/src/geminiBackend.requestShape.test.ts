@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { GenerateContentResponse } from '@google/genai';
-import { ChatModels, type ICompletionOptionTools, type IMessage } from '@bike4mind/common';
+import { ChatModels, type ICompletionOptionTools, type IMessage, type ModelInfo } from '@bike4mind/common';
 import { GeminiBackend } from './geminiBackend';
 
 type Usage = NonNullable<GenerateContentResponse['usageMetadata']>;
@@ -17,8 +17,9 @@ const toolCallResponse = (usage?: Usage) => ({
 });
 
 // Serves one canned response per SDK call, repeating the last one if the backend calls more often.
-function backendWithCapture(responses: unknown[]) {
+function backendWithCapture(responses: unknown[], dispatchInfo?: ModelInfo) {
   const backend = new GeminiBackend('test-key');
+  if (dispatchInfo) backend.setDispatchModel(dispatchInfo);
   const requests: CapturedRequest[] = [];
   const next = (request: CapturedRequest) => {
     requests.push(request);
@@ -66,13 +67,15 @@ describe.each([
     options = {},
     model = NON_THINKING_MODEL,
     responses = [textResponse({ promptTokenCount: 1, candidatesTokenCount: 1 })],
+    dispatchInfo,
   }: {
     msgs?: IMessage[];
     options?: Record<string, unknown>;
     model?: ChatModels;
     responses?: unknown[];
+    dispatchInfo?: ModelInfo;
   } = {}): Promise<{ requests: CapturedRequest[]; infos: CallbackInfo[] }> => {
-    const { backend, requests } = backendWithCapture(responses);
+    const { backend, requests } = backendWithCapture(responses, dispatchInfo);
     const infos: CallbackInfo[] = [];
     await backend.complete(model, msgs, { stream, ...options }, async (_text, info) => {
       if (info) infos.push(info as CallbackInfo);
@@ -121,6 +124,33 @@ describe.each([
   it('omits temperature when none is given', async () => {
     const { requests } = await run();
     expect(requests[0].config).not.toHaveProperty('temperature');
+  });
+
+  // A model absent from the built-in catalog reaches the backend through setDispatchModel, and
+  // can_think is the only thing that decides whether it gets an output cap.
+  describe('a model resolved from a dispatch record', () => {
+    const DISCOVERED_MODEL = 'gemini-discovered-test' as ChatModels;
+    const discoveredRecord = async (canThink: boolean | undefined): Promise<ModelInfo> => {
+      const catalog = await new GeminiBackend('test-key').getModelInfo();
+      const base = catalog.find(model => model.id === NON_THINKING_MODEL);
+      if (!base) throw new Error('catalog row missing');
+      return { ...base, id: DISCOVERED_MODEL, can_think: canThink };
+    };
+
+    it('omits maxOutputTokens and temperature when the record says it thinks', async () => {
+      const { requests } = await run({
+        model: DISCOVERED_MODEL,
+        dispatchInfo: await discoveredRecord(true),
+        options: { maxTokens: 600, temperature: 0.5 },
+      });
+      expect(requests[0].config).not.toHaveProperty('maxOutputTokens');
+      expect(requests[0].config).not.toHaveProperty('temperature');
+    });
+
+    it('caps output when the record omits can_think', async () => {
+      const { requests } = await run({ model: DISCOVERED_MODEL, dispatchInfo: await discoveredRecord(undefined) });
+      expect(requests[0].config?.maxOutputTokens).toBe(8192);
+    });
   });
 
   it('passes tools in config.tools when supplied', async () => {
