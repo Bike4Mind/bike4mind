@@ -6,8 +6,14 @@ import { MUSIC_MODEL_CATALOG, MUSIC_MODEL_IDS, VIDEO_MODEL_CATALOG, VIDEO_MODEL_
 
 const mutate = vi.fn();
 let updatePending = false;
+// Sections call useUpdateSettings in render order (video, then music); null applies updatePending to both.
+let pendingSection: 'video' | 'music' | null = null;
+let updateHookCalls = 0;
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useUpdateSettings: () => ({ mutate, isPending: updatePending }),
+  useUpdateSettings: () => {
+    const section = updateHookCalls++ % 2 === 0 ? 'video' : 'music';
+    return { mutate, isPending: pendingSection ? pendingSection === section : updatePending };
+  },
 }));
 let storedSettings: Record<string, unknown> = {};
 let authedSettingsLoaded = true;
@@ -46,6 +52,8 @@ const MODALITIES: {
 beforeEach(() => {
   vi.clearAllMocks();
   updatePending = false;
+  pendingSection = null;
+  updateHookCalls = 0;
   authedSettingsLoaded = true;
 });
 
@@ -150,6 +158,15 @@ describe('AdminGenerationModelsSetting', () => {
     expect(screen.queryByTestId(`admin-generation-models-music-${id}-default-note`)).toBeNull();
     fireEvent.click(musicSwitch(id));
     expect(mutate.mock.calls[0][0]).toEqual({ key: 'musicGeneration', value: { enabledModels: { [id]: true } } });
+  });
+
+  it.each(['video', 'music'] as const)('locks only the %s section while its save is in flight', pending => {
+    pendingSection = pending;
+    renderSetting({});
+    const firstSwitch = (modality: string, id: string) =>
+      screen.getByTestId(`admin-generation-models-${modality}-${id}-switch`).querySelector('input') as HTMLInputElement;
+    expect(firstSwitch('video', VIDEO_MODEL_IDS[0]).disabled).toBe(pending === 'video');
+    expect(firstSwitch('music', MUSIC_MODEL_IDS[0]).disabled).toBe(pending === 'music');
   });
 
   it('keeps the two settings independent', () => {
