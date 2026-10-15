@@ -5,6 +5,7 @@ import { SkillListing, SkillListingReport, SkillListingVersion } from '@bike4min
 import { organizationRepository } from '@bike4mind/database/infra';
 import { ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/common';
 import { canDelistListing, canRestoreListing, findListing, notifyUser } from '@server/skillMarket/market';
+import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 
 const bodySchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('delist'), reason: z.string().trim().min(1).max(1000) }),
@@ -49,14 +50,13 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
           pendingVersionId: null,
           pendingVersion: null,
         },
+        $unset: { activeSlot: 1 },
       },
       { new: false }
     );
     if (!res1) throw new ConflictError('This listing is already delisted or withdrawn');
     await SkillListingVersion.updateMany(
-      // Never supersede the version the listing currently serves: a crash between the approve CAS
-      // and the version stamp can leave it marked pending while it is already live, and a restore
-      // must still find it approved.
+      // Defensive: never supersede the version the listing serves, so a restore can still serve it.
       { listingId, reviewStatus: 'pending', _id: { $ne: res1.currentApprovedVersionId } },
       { $set: { reviewStatus: 'superseded' } }
     );
@@ -67,12 +67,20 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
       `A moderator delisted it. Reason: ${body.reason}`
     );
   } else {
+    // Close the reports behind a hide, so the same reporters must report afresh to hide it again.
     await SkillListingReport.updateMany({ listingId, status: 'open' }, { $set: { status: 'dismissed', ...resolved } });
     await SkillListing.updateOne({ _id: listingId }, { $set: { hiddenByReports: false } });
-    await SkillListing.updateOne(
-      { _id: listingId, status: 'delisted', currentApprovedVersionId: { $ne: null } },
-      { $set: { status: 'approved' }, $unset: { delistedReason: 1, delistedBySuperAdmin: 1 } }
-    );
+    try {
+      await SkillListing.updateOne(
+        { _id: listingId, status: 'delisted', currentApprovedVersionId: { $ne: null } },
+        { $set: { status: 'approved', activeSlot: true }, $unset: { delistedReason: 1, delistedBySuperAdmin: 1 } }
+      );
+    } catch (error) {
+      if (isDuplicateKeyError(error)) {
+        throw new ConflictError('The author already has another active listing of this skill');
+      }
+      throw error;
+    }
   }
   res.json({ ok: true });
 });

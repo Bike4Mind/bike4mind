@@ -14,6 +14,8 @@ interface SkillToolParams {
 /** Cap on how many invocable skills are listed back when resolution fails. */
 const INVOCABLE_HINT_LIMIT = 50;
 
+const TOOL_NAME_SHAPE = /^[A-Za-z0-9_.:-]{1,64}$/;
+
 /**
  * LLM-invocable `skill` tool - the autonomous counterpart to user `/skill-name`
  * invocations handled by SkillsFeature.
@@ -94,7 +96,11 @@ export const skillTool: ToolDefinition = {
       // list is actually narrowed, this is advisory prompt guidance - keep the
       // wording soft rather than claiming a hard guarantee a model could ignore.
       const invokerAllowedTools: string[] | undefined = undefined;
-      const permittedTools = intersectAllowedTools(skill.allowedTools, invokerAllowedTools);
+      // allowedTools is author-controlled and rendered outside the untrusted delimiters, so only
+      // identifier-shaped names are echoed; anything else could smuggle an instruction.
+      const permittedTools = intersectAllowedTools(skill.allowedTools, invokerAllowedTools)?.filter(tool =>
+        TOOL_NAME_SHAPE.test(tool)
+      );
       const toolConstraint =
         permittedTools && permittedTools.length > 0
           ? `\n\nThis skill is intended to use only these tools: ${permittedTools.join(', ')}. Prefer to stay within that set.`

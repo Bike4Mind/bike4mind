@@ -107,6 +107,17 @@ describe('SidenavNav feature rows', () => {
   });
 });
 
+describe('SidenavNav Skill Market row', () => {
+  it('is always present and opens the market', () => {
+    useFeatureEnabledMock.mockReturnValue(false);
+    renderNav();
+    const row = screen.getByTestId('sidenav-nav-skill-market');
+    expect(row).toHaveTextContent('Skill Market');
+    fireEvent.click(row);
+    expect(navigate).toHaveBeenCalledWith({ to: '/skills/market' });
+  });
+});
+
 describe('SidenavNav Hearth row', () => {
   it('shows when the experimental flag is on', () => {
     renderNav();

@@ -86,12 +86,14 @@ const SkillUpdatePanel: FC<{ skill: ISkillWithSharing }> = ({ skill }) => {
       ].filter(c => c.before !== c.after)
     : [];
   const update = async (asNewCopy: boolean) => {
+    // The server's version_changed guard only fires when it is sent a version id.
+    if (!latest) return;
     setError(null);
     try {
       const { skill: result } = await importListing.mutateAsync(
         asNewCopy
-          ? { listingId, name: `${skill.name}-v${status.latestVersion}`, expectedVersionId: latest?.id }
-          : { listingId, targetSkillId: skill.id, overwrite: confirmOverwrite, expectedVersionId: latest?.id }
+          ? { listingId, name: `${skill.name}-v${status.latestVersion}`, expectedVersionId: latest.id }
+          : { listingId, targetSkillId: skill.id, overwrite: confirmOverwrite, expectedVersionId: latest.id }
       );
       toast.success(
         asNewCopy ? `Saved v${status.latestVersion} as /${result.name}` : `Updated to v${status.latestVersion}`
@@ -177,7 +179,7 @@ const SkillUpdatePanel: FC<{ skill: ISkillWithSharing }> = ({ skill }) => {
           <Button
             size="sm"
             loading={importListing.isPending}
-            disabled={status.locallyModified && !confirmOverwrite}
+            disabled={!latest || (status.locallyModified && !confirmOverwrite)}
             onClick={() => void update(false)}
             data-testid="skill-market-update-btn"
           >
@@ -188,6 +190,7 @@ const SkillUpdatePanel: FC<{ skill: ISkillWithSharing }> = ({ skill }) => {
               size="sm"
               variant="plain"
               loading={importListing.isPending}
+              disabled={!latest}
               onClick={() => void update(true)}
               data-testid="skill-market-update-new-copy-btn"
             >

@@ -45,11 +45,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
     }
 
     const { tags } = bodySchema.parse(req.body ?? {});
-    if (tags) await SkillListing.updateOne({ _id: listing.id }, { $set: { tags: validateListingTags(tags) } });
+    const validTags = tags ? validateListingTags(tags) : undefined;
 
     const version = await submitListingVersion(listing, skill, {
       getClassifier: () => getOperationsClassifierLlm(req.logger, user.id),
     });
+    // Only after the submit is accepted, so a refused resubmit leaves the listing untouched.
+    if (validTags) await SkillListing.updateOne({ _id: listing.id }, { $set: { tags: validTags } });
     const fresh = await SkillListing.findById(listing.id);
     res.status(201).json({ listing: serializeListing(fresh!, { privileged: true }), version });
   });

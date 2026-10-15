@@ -22,10 +22,10 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 
 const skill = { id: 'skill-1', name: 'Summarize', users: [], isGlobalRead: false, isGlobalWrite: false };
 
-const renderDialog = () =>
+const renderDialog = (overrides: Partial<typeof skill> = {}) =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <SkillShareDialog onClose={vi.fn()} skill={skill as unknown as ISkillWithSharing} />
+      <SkillShareDialog onClose={vi.fn()} skill={{ ...skill, ...overrides } as unknown as ISkillWithSharing} />
     </CssVarsProvider>
   );
 
@@ -54,6 +54,16 @@ describe('SkillShareDialog', () => {
     fireEvent.click(screen.getByTestId('skill-share-save-btn'));
     await waitFor(() => expect(h.mutateAsync).toHaveBeenCalled());
     expect(h.mutateAsync.mock.calls[0][0]).toMatchObject({ isGlobalRead: false, isGlobalWrite: false });
+  });
+
+  it('omits the global keys when a non-admin saves a skill whose legacy flags are true', async () => {
+    h.mutateAsync.mockResolvedValue({});
+    renderDialog({ isGlobalRead: true, isGlobalWrite: true });
+    fireEvent.click(screen.getByTestId('skill-share-save-btn'));
+    await waitFor(() => expect(h.mutateAsync).toHaveBeenCalled());
+    const payload = h.mutateAsync.mock.calls[0][0];
+    expect(payload).not.toHaveProperty('isGlobalRead');
+    expect(payload).not.toHaveProperty('isGlobalWrite');
   });
 
   // The live global-share surface. isGlobalRead/isGlobalWrite publish a skill to the whole

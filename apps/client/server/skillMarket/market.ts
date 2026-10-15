@@ -12,6 +12,9 @@ import {
   type ISkillSnapshot,
 } from '@bike4mind/common';
 import type { ISkillListingDocument } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'skillMarket' } });
 
 /**
  * Shared Skill Market helpers. The visibility gate lives ONLY in `marketVisibilityFilter` /
@@ -41,6 +44,18 @@ const splitList = (value: unknown): string[] =>
         .filter(Boolean)
     : [];
 
+/**
+ * An admin setting as a number, falling back to `fallback` when it is unset or not finite (a typo
+ * like 'abc' must not become NaN and silently disable a cap). `positive` also rejects 0 and below.
+ */
+export function numericSetting(value: unknown, fallback: number, opts: { positive?: boolean } = {}): number {
+  if (value === undefined || value === null || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (opts.positive && parsed <= 0) return fallback;
+  return parsed;
+}
+
 export async function loadMarketSettings(): Promise<MarketSettings> {
   const get = adminSettingsRepository.getSettingsValue.bind(adminSettingsRepository);
   const [tools, allow, minConf, sample, sla, daily, maxListings, minAge, hide] = await Promise.all([
@@ -57,13 +72,13 @@ export async function loadMarketSettings(): Promise<MarketSettings> {
   return {
     highRiskTools: splitList(tools),
     urlAllowlist: splitList(allow),
-    minConfidence: Number(minConf ?? 0.8),
-    auditSampleRate: Number(sample ?? 0.1),
-    reviewSlaHours: Number(sla ?? 72),
-    dailySubmitLimit: Number(daily ?? 20),
-    maxListingsPerUser: Number(maxListings ?? 25),
-    publicMinAccountAgeDays: Number(minAge ?? 3),
-    reportAutoHideThreshold: Number(hide ?? 3),
+    minConfidence: numericSetting(minConf, 0.8),
+    auditSampleRate: numericSetting(sample, 0.1),
+    reviewSlaHours: numericSetting(sla, 72, { positive: true }),
+    dailySubmitLimit: numericSetting(daily, 20, { positive: true }),
+    maxListingsPerUser: numericSetting(maxListings, 25, { positive: true }),
+    publicMinAccountAgeDays: numericSetting(minAge, 3),
+    reportAutoHideThreshold: numericSetting(hide, 3, { positive: true }),
   };
 }
 
@@ -195,7 +210,17 @@ export function serializeListing(listing: ISkillListing | ISkillListingDocument,
   const plain = (
     'toJSON' in listing && typeof listing.toJSON === 'function' ? listing.toJSON() : listing
   ) as ISkillListing & { _id?: unknown; __v?: unknown };
-  const { shareToken, sourceSkillId, pendingVersionId, pendingVersion, latestVersion, _id, __v: _v, ...rest } = plain;
+  const {
+    shareToken,
+    sourceSkillId,
+    pendingVersionId,
+    pendingVersion,
+    latestVersion,
+    _id,
+    __v: _v,
+    activeSlot: _activeSlot,
+    ...rest
+  } = plain as typeof plain & { activeSlot?: boolean };
   return {
     ...rest,
     id: String(rest.id ?? _id),
@@ -214,8 +239,16 @@ export const publicVersionView = (v: ISkillListingVersion) => ({
   createdAt: v.createdAt,
 });
 
+/**
+ * Best-effort inbox notice. Every caller has already committed its state change, so a failed
+ * notice is logged and swallowed rather than turning a committed action into a 500.
+ */
 export async function notifyUser(receiverId: string, title: string, message: string): Promise<void> {
-  await inboxRepository.createInboxMessage({ type: InboxType.COMMON, title, message, receiverId, userId: 'SYSTEM' });
+  try {
+    await inboxRepository.createInboxMessage({ type: InboxType.COMMON, title, message, receiverId, userId: 'SYSTEM' });
+  } catch (error) {
+    logger.error(`[SKILL_MARKET] inbox notice failed receiver=${receiverId} title=${JSON.stringify(title)}`, error);
+  }
 }
 
 export async function findListing(id: string): Promise<ISkillListing | null> {

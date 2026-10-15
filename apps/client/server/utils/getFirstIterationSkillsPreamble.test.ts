@@ -43,7 +43,7 @@ describe('getFirstIterationSkillsPreamble', () => {
     const result = await getFirstIterationSkillsPreamble('/share-demo x', 'user-1', repo, makeLogger());
 
     expect(result).toContain('untrusted content');
-    expect(result).toContain('<<<UNTRUSTED_SKILL_CONTENT>>>');
+    expect(result).toContain('<<<UNTRUSTED_SKILL_CONTENT ');
   });
 
   it('skips and logs a mention that does not resolve to an accessible skill', async () => {

@@ -12,6 +12,7 @@ import {
 } from '@server/skillMarket/market';
 import { submitListingVersion } from '@server/skillMarket/submitVersion';
 import { getOperationsClassifierLlm } from '@server/skillMarket/classifySkill';
+import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 
 const bodySchema = z.object({
   skillId: z.string().min(1),
@@ -21,6 +22,7 @@ const bodySchema = z.object({
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const ALREADY_LISTED = 'This skill already has a listing. Submit a new version from My listings instead.';
 
 /**
  * POST /api/skills/market/publish - create a listing from a skill the caller owns and submit its
@@ -58,33 +60,46 @@ const handler = baseApi({ auth: 'jwtOnly' })
       }
     }
 
+    // A moderator takedown is not the author's to undo by publishing the same skill again.
+    const takenDown = await SkillListing.exists({
+      authorUserId: user.id,
+      sourceSkillId: skill.id,
+      deletedAt: null,
+      $or: [{ status: 'delisted' }, { status: 'withdrawn', hiddenByReports: true }],
+    });
+    if (takenDown) {
+      throw new ForbiddenError(
+        'This skill was removed from the Skill Market by moderators. Contact a moderator to have it restored.'
+      );
+    }
+
     const live = { authorUserId: user.id, status: { $nin: ['withdrawn', 'delisted'] }, deletedAt: null };
     if (await SkillListing.exists({ ...live, sourceSkillId: skill.id })) {
-      throw new ConflictError('This skill already has a listing. Submit a new version from My listings instead.');
+      throw new ConflictError(ALREADY_LISTED);
     }
+    // Best-effort: two concurrent publishes of different skills can both pass this count.
     if ((await SkillListing.countDocuments(live)) >= settings.maxListingsPerUser) {
       throw new BadRequestError(`You can have at most ${settings.maxListingsPerUser} active listings`);
     }
 
-    const created = await SkillListing.create({
-      sourceSkillId: skill.id,
-      authorUserId: user.id,
-      authorName: (user.name || user.username || 'A Bike4Mind user').slice(0, 200),
-      visibility: body.visibility,
-      ...(body.visibility === 'organization' ? { organizationId: body.organizationId } : {}),
-      tags,
-      name: skill.name,
-      description: skill.description,
-    });
-    const listing = created.toJSON() as unknown as ISkillListing;
-    // The exists() check above races a concurrent publish of the same skill; the younger listing yields.
-    const first = await SkillListing.findOne({ ...live, sourceSkillId: skill.id })
-      .sort({ _id: 1 })
-      .select('_id');
-    if (first && String(first._id) !== listing.id) {
-      await SkillListing.deleteOne({ _id: listing.id });
-      throw new ConflictError('This skill already has a listing. Submit a new version from My listings instead.');
+    let created;
+    try {
+      created = await SkillListing.create({
+        sourceSkillId: skill.id,
+        authorUserId: user.id,
+        authorName: (user.name || user.username || 'A Bike4Mind user').slice(0, 200),
+        visibility: body.visibility,
+        ...(body.visibility === 'organization' ? { organizationId: body.organizationId } : {}),
+        tags,
+        name: skill.name,
+        description: skill.description,
+      });
+    } catch (error) {
+      // The partial unique index on (authorUserId, sourceSkillId) settles a concurrent publish.
+      if (isDuplicateKeyError(error)) throw new ConflictError(ALREADY_LISTED);
+      throw error;
     }
+    const listing = created.toJSON() as unknown as ISkillListing;
 
     let version;
     try {
@@ -93,9 +108,14 @@ const handler = baseApi({ auth: 'jwtOnly' })
         getClassifier: () => getOperationsClassifierLlm(req.logger, user.id),
       });
     } catch (error) {
-      // Don't leave an empty listing counting toward maxListingsPerUser.
-      if (!(await SkillListingVersion.exists({ listingId: listing.id })))
-        await SkillListing.deleteOne({ _id: listing.id });
+      // Don't leave an empty listing holding a slot. Soft delete by hand: the plugin's deleteOne
+      // would leave `activeSlot` set, so the unique index would still block a retry.
+      if (!(await SkillListingVersion.exists({ listingId: listing.id }))) {
+        await SkillListing.updateOne(
+          { _id: listing.id },
+          { $set: { deletedAt: new Date() }, $unset: { activeSlot: 1 } }
+        );
+      }
       throw error;
     }
 

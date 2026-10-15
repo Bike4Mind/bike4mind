@@ -42,7 +42,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   if (listing.authorUserId === actor.id) throw new ForbiddenError("You can't audit your own listing");
   const marked = await SkillListingVersion.updateOne(
     { _id: versionId, auditSample: true, auditedAt: null },
-    { $set: { auditedAt: new Date(), reviewerUserId: actor.id } }
+    { $set: { auditedAt: new Date(), auditedByUserId: actor.id } }
   );
   if (marked.modifiedCount === 0) throw new ConflictError('Already audited');
   res.json({ ok: true });

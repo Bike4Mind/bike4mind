@@ -25,14 +25,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
     const before = await SkillListing.findOneAndUpdate(
       { _id: listing.id, status: { $nin: ['withdrawn', 'delisted'] } },
-      { $set: { status: 'withdrawn', pendingVersionId: null, pendingVersion: null } },
+      { $set: { status: 'withdrawn', pendingVersionId: null, pendingVersion: null }, $unset: { activeSlot: 1 } },
       { new: false }
     );
     if (!before) throw new ConflictError('This listing is already withdrawn or delisted');
     await SkillListingVersion.updateMany(
-      // Never supersede the version the listing currently serves: a crash between the approve CAS
-      // and the version stamp can leave it marked pending while it is already live. Read the
-      // pre-image, since a concurrent approve could have moved the pointer since `listing` was read.
+      // Defensive: never supersede the version the listing serves. Read from the pre-image, since a
+      // concurrent approve could have moved the pointer since `listing` was read.
       { listingId: String(listing.id), reviewStatus: 'pending', _id: { $ne: before.currentApprovedVersionId } },
       { $set: { reviewStatus: 'superseded' } }
     );

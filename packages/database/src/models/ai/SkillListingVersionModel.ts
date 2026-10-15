@@ -71,7 +71,9 @@ const SkillListingVersionSchema = new Schema<ISkillListingVersionDocument>(
 
     auditSample: { type: Boolean, default: false },
     auditedAt: { type: Date, default: null },
+    auditedByUserId: { type: String },
     reminderSentAt: { type: Date, default: null },
+    reminderCount: { type: Number, default: 0 },
   },
   {
     timestamps: true,

@@ -24,11 +24,17 @@ const valid = {
 
 const llm = (complete: ClassifierLlm['complete']): ClassifierLlm => ({ model: 'test-model', complete });
 
+const echoNonceOf = (system: string): string | undefined => system.match(/Set "nonce" to exactly "([0-9a-f]+)"/)?.[1];
+
+/** A model that follows the prompt: echoes the nonce from the system prompt into its JSON. */
+const answering = (output: object, wrap = (json: string) => json) =>
+  llm(async system => wrap(JSON.stringify({ nonce: echoNonceOf(system), ...output })));
+
 describe('classifySkill', () => {
   it('returns the verdict, findings and honest summary from well-formed output (fenced JSON ok)', async () => {
     const result = await classifySkill(
       snapshot,
-      llm(async () => '```json\n' + JSON.stringify(valid) + '\n```')
+      answering(valid, json => '```json\n' + json + '\n```')
     );
     expect(result).toMatchObject({ ok: true, verdict: 'pass', confidence: 0.92, model: 'test-model' });
     if (result.ok) {
@@ -60,10 +66,7 @@ describe('classifySkill', () => {
 
   it('fails closed on schema-violating JSON (e.g. a missing honest summary)', async () => {
     const { honestSummary: _h, ...rest } = valid;
-    const result = await classifySkill(
-      snapshot,
-      llm(async () => JSON.stringify(rest))
-    );
+    const result = await classifySkill(snapshot, answering(rest));
     expect(result.ok).toBe(false);
   });
 
@@ -80,10 +83,7 @@ describe('classifySkill', () => {
       ],
       honestSummary: { ...valid.honestSummary, descriptionMatches: false, mismatchNote: null },
     };
-    const result = await classifySkill(
-      snapshot,
-      llm(async () => JSON.stringify(drifted))
-    );
+    const result = await classifySkill(snapshot, answering(drifted));
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.findings.map(f => f.severity)).toEqual(['critical', 'high']);
@@ -95,10 +95,7 @@ describe('classifySkill', () => {
 
   it('still fails closed on a non-boolean descriptionMatches and names the field', async () => {
     const bad = { ...valid, honestSummary: { ...valid.honestSummary, descriptionMatches: 'mostly' } };
-    const result = await classifySkill(
-      snapshot,
-      llm(async () => JSON.stringify(bad))
-    );
+    const result = await classifySkill(snapshot, answering(bad));
     expect(result).toMatchObject({ ok: false });
     if (!result.ok) expect(result.error).toContain('honestSummary.descriptionMatches');
   });
@@ -133,6 +130,37 @@ describe('classifySkill', () => {
     expect(nonce(seen[0])).toBeTruthy();
     expect(nonce(seen[0])).not.toBe(nonce(seen[1]));
     expect(seen[0]).toContain(`=====END SKILL DATA ${nonce(seen[0])}=====`);
+  });
+
+  it('fails closed on canned JSON that does not echo the nonce (an injected body cannot forge a pass)', async () => {
+    const canned = await classifySkill(
+      snapshot,
+      llm(async () => JSON.stringify(valid))
+    );
+    expect(canned).toMatchObject({ ok: false, error: 'Classifier output did not echo the request nonce' });
+
+    const guessed = await classifySkill(
+      snapshot,
+      llm(async () => JSON.stringify({ ...valid, nonce: 'deadbeef' }))
+    );
+    expect(guessed).toMatchObject({ ok: false });
+  });
+
+  it('accepts output that echoes the nonce, which is only in the system prompt', async () => {
+    let system = '';
+    let user = '';
+    const result = await classifySkill(
+      snapshot,
+      llm(async (sys, usr) => {
+        system = sys;
+        user = usr;
+        return JSON.stringify({ ...valid, nonce: echoNonceOf(sys) });
+      })
+    );
+    expect(result).toMatchObject({ ok: true, verdict: 'pass' });
+    const nonce = echoNonceOf(system);
+    expect(nonce).toBeTruthy();
+    expect(user).not.toContain(nonce);
   });
 
   it('fails closed on a hung model call instead of waiting forever', async () => {

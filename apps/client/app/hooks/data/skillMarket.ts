@@ -101,7 +101,7 @@ export const useRecommendedListings = (enabled = true) =>
 /** Detail by id, or by unlisted share token when `token` is given without an id. */
 export const useListingDetail = (args: { id?: string; token?: string }) =>
   useQuery({
-    queryKey: ['skill-market', 'listing', args.id ?? `token:${args.token}`],
+    queryKey: ['skill-market', 'listing', args.id ?? null, args.token ?? null],
     queryFn: async () => {
       const url = args.id
         ? `/api/skills/market/${args.id}${args.token ? `?token=${encodeURIComponent(args.token)}` : ''}`
@@ -154,11 +154,17 @@ export function useReviewQueue(filter: ReviewQueueFilter) {
   });
 }
 
-/** Invalidates everything market-shaped plus the skills list (staleness badges live there). */
+/**
+ * Invalidates everything market-shaped plus the skills list (staleness badges live there). The
+ * `me` query (orgs and reviewer/admin flags) cannot change from a market mutation, so it is skipped.
+ */
 const useInvalidateMarket = () => {
   const qc = useQueryClient();
   return () => {
-    void qc.invalidateQueries({ queryKey: ['skill-market'] });
+    void qc.invalidateQueries({
+      queryKey: ['skill-market'],
+      predicate: query => query.queryKey[1] !== 'me',
+    });
     void qc.invalidateQueries({ queryKey: ['skills'] });
     void qc.invalidateQueries({ queryKey: ['skill'] });
   };
@@ -244,8 +250,9 @@ export const useRateListing = () => {
   });
 };
 
-export const useReportListing = () =>
-  useMutation({
+export const useReportListing = () => {
+  const qc = useQueryClient();
+  return useMutation({
     mutationFn: async ({
       listingId,
       ...body
@@ -256,7 +263,12 @@ export const useReportListing = () =>
       token?: string;
     }) =>
       (await api.post<{ ok: boolean; alreadyReported?: boolean }>(`/api/skills/market/${listingId}/report`, body)).data,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['skill-market', 'review-queue', 'reports'] });
+      void qc.invalidateQueries({ queryKey: ['skill-market', 'listing'] });
+    },
   });
+};
 
 export const useModerateListing = () => {
   const invalidate = useInvalidateMarket();

@@ -22,10 +22,10 @@ const bodySchema = z.object({
 
 /**
  * POST /api/skills/market/[id]/report - flag a listing. One open report per (listing, reporter);
- * once open reports from SkillMarketReportAutoHideThreshold distinct established users (importers, or
- * accounts past SkillMarketPublicMinAccountAgeDays) pile up, the listing is
- * hidden from the market until an admin restores or delists it (mirrors app-store takedown
- * queues). Rate-limited per user so one account can't flood the queue across many listings.
+ * once open reports from SkillMarketReportAutoHideThreshold distinct established users (accounts past
+ * SkillMarketPublicMinAccountAgeDays, or super-admins) pile up, the listing is hidden from the
+ * market until an admin restores or delists it (mirrors app-store takedown queues). Rate-limited
+ * per user so one account can't flood the queue across many listings.
  */
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: 10, windowMs: 60 * 60 * 1000, bucket: 'skill-market-report' }))
@@ -42,9 +42,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (listing.authorUserId === userId) throw new BadRequestError("You can't report your own listing");
 
     const { reportAutoHideThreshold, publicMinAccountAgeDays } = await loadMarketSettings();
-    // Same bar as publishing Public, so a few throwaway accounts can't take a listing down.
+    // Same bar as publishing Public, so a few throwaway accounts can't take a listing down. Importing
+    // is no substitute: a fresh account can import any Public listing in one click.
     const ageDays = (Date.now() - new Date(req.user!.createdAt).getTime()) / DAY_MS;
-    const countsTowardHide = hasImported || Boolean(req.user!.isAdmin) || ageDays >= publicMinAccountAgeDays;
+    const countsTowardHide = Boolean(req.user!.isAdmin) || ageDays >= publicMinAccountAgeDays;
     try {
       await SkillListingReport.create({
         listingId: String(listing.id),

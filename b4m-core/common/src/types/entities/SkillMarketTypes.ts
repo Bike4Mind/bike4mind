@@ -116,7 +116,11 @@ export interface ISkillListingVersion {
   /** Auto-approved versions picked for the admin random-sample audit. */
   auditSample?: boolean;
   auditedAt?: Date | null;
+  /** Who audited it; `reviewerUserId` stays the original approver. */
+  auditedByUserId?: string;
   reminderSentAt?: Date | null;
+  /** SLA reminders sent so far; capped so a stuck review does not page reviewers forever. */
+  reminderCount?: number;
 
   createdAt: Date;
   updatedAt: Date;

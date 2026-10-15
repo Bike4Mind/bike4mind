@@ -14,6 +14,7 @@ import { softDeletePlugin } from '../../utils/mongo';
  */
 export interface ISkillListingDocument extends Omit<ISkillListing, 'id'>, Document {
   id: string;
+  activeSlot?: boolean;
 }
 
 /** 24 random bytes -> 192-bit base64url token for unlisted links. */
@@ -57,6 +58,12 @@ const SkillListingSchema = new Schema<ISkillListingDocument>(
     hiddenByReports: { type: Boolean, default: false },
     delistedReason: { type: String, maxlength: 1000 },
     delistedBySuperAdmin: { type: Boolean },
+    /**
+     * True while the listing holds its author's one slot for `sourceSkillId` (any status but
+     * withdrawn/delisted, not deleted). Unset by withdraw, delist and soft delete; set again by a
+     * restore. A partial unique index needs it: partialFilterExpression cannot express `$nin`.
+     */
+    activeSlot: { type: Boolean, default: true },
   },
   {
     timestamps: true,
@@ -80,6 +87,10 @@ SkillListingSchema.pre('validate', function (next) {
 SkillListingSchema.index({ status: 1, visibility: 1, organizationId: 1 });
 SkillListingSchema.index({ authorUserId: 1, createdAt: -1 });
 SkillListingSchema.index({ sourceSkillId: 1 });
+SkillListingSchema.index(
+  { authorUserId: 1, sourceSkillId: 1 },
+  { unique: true, partialFilterExpression: { activeSlot: true }, name: 'skill_listing_one_active_per_skill' }
+);
 SkillListingSchema.index(
   { name: 'text', description: 'text', tags: 'text', honestSummaryText: 'text' },
   { name: 'skill_listing_text', weights: { name: 10, tags: 5, description: 3, honestSummaryText: 2 } }

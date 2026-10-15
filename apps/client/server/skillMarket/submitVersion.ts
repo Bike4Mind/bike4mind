@@ -301,8 +301,9 @@ export type ReviewDecision =
   | { action: 'reject'; note: string };
 
 /**
- * A human decision on a held version. Approve is a CAS on the listing's `pendingVersionId`; only
- * the winner stamps the version, so a stale approve of a superseded version answers 409.
+ * A human decision on a held version. Both actions first CAS the version from `pending`, so approve
+ * and reject serialize on it; approve then CASes the listing's `pendingVersionId`, so a stale
+ * approve of a superseded version answers 409.
  */
 export async function decideVersion(
   versionId: string,
@@ -337,8 +338,7 @@ export async function decideVersion(
       }
     }
     // Stamp the version before publishing it, so a crash can never leave the listing pointing at a
-    // version that is still `pending` (imports and detail read the version's own review state).
-    // If the publish CAS then loses, roll the stamp back so the version is not left marked approved.
+    // version that is still `pending`. Approve and reject both stamp first, so they serialize here.
     const stamped = await SkillListingVersion.updateOne(
       { _id: versionId, reviewStatus: 'pending' },
       {
@@ -363,10 +363,13 @@ export async function decideVersion(
       denormFor(version, false)
     );
     if (!won) {
+      // Only a supersede, withdraw or delist moves the pointer off a version stamped approved, and
+      // their sweeps skipped it (they match `pending`), so it is retired here rather than left
+      // pending with nothing pointing at it.
       await SkillListingVersion.updateOne(
         { _id: versionId, reviewStatus: 'approved', reviewedAt: now },
         {
-          $set: { reviewStatus: 'pending' },
+          $set: { reviewStatus: 'superseded' },
           $unset: {
             reviewerUserId: 1,
             reviewedAt: 1,
@@ -386,12 +389,13 @@ export async function decideVersion(
       'A reviewer approved your skill and it is now live on the Skill Market.'
     );
   } else {
-    const won = await clearPendingListingVersion(String(listing.id), versionId);
-    if (!won) throw new ConflictError('This version was superseded or already decided');
-    await SkillListingVersion.updateOne(
+    const stamped = await SkillListingVersion.updateOne(
       { _id: versionId, reviewStatus: 'pending' },
       { $set: { reviewStatus: 'rejected', reviewerUserId: actor.id, reviewedAt: now, reviewNote: decision.note } }
     );
+    if (stamped.modifiedCount === 0) throw new ConflictError('This version was superseded or already decided');
+    // A newer submit, withdraw or delist may already have moved the pointer; the reject still stands.
+    await clearPendingListingVersion(String(listing.id), versionId);
     await notifyUser(
       listing.authorUserId,
       `/${version.snapshot.name} v${version.version} was not approved`,
