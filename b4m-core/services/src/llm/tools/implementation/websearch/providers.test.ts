@@ -727,6 +727,12 @@ describe('serpApiSearch retry behavior', () => {
 
     await pending;
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    // A retryable attempt a retry recovers must not raise an error-level log.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('API error details'),
+      expect.objectContaining({ status: 429 })
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 
   it('retries a network-level TypeError (DNS/connection reset/TLS) and succeeds on the second attempt', async () => {
@@ -744,6 +750,12 @@ describe('serpApiSearch retry behavior', () => {
 
     await pending;
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    // A network-level failure is transient, so a retry that recovers it must not raise error.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('SerpAPI request failed'),
+      expect.objectContaining({ timedOut: false })
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 
   // Regression: the final error used to read ONLY the last attempt's outcome, so a first
