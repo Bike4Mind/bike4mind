@@ -9,7 +9,7 @@
  */
 
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
@@ -18,7 +18,7 @@ import { allSecrets, secrets } from './secrets';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
-import { agentContinuationQueue } from './queues';
+import { agentContinuationQueue, generationJobQueue } from './queues';
 import { toolRuntimeAssets } from './toolRuntimeAssets';
 
 // Re-export websocketApi route setup for the agent_execute route.
@@ -45,9 +45,16 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     eventBus,
     imageProcessor,
     agentContinuationQueue,
+    // The music/video tools enqueue their generation job from here, same as the chat path
+    // (infra/chatCompletion.ts). resolveGenerationJobQueueUrl reads this direct link; the
+    // sourceQueueUrls registry it falls back to is only linked on the web function.
+    generationJobQueue,
   ],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    // Same test providers as the chat path, so keyless non-production stages still offer the
+    // music/video tools in agent mode.
+    ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     // Instance-service dataset seam, consumed by optihashi_decompose. It reads these as
