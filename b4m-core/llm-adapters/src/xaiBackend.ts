@@ -84,11 +84,11 @@ export class XAIBackend implements ICompletionBackend {
           // Tiered on prompt size. < 200K: $2 / 1M in, $6 / 1M out, $0.30 / 1M cache read.
           // >= 200K: $4 / 1M in, $12 / 1M out, $0.60 / 1M cache read. Cache read is 0.15x input,
           // not the 0.1x default; the docs page lists all three rates per tier.
-          // Keyed 199999, not 200000: xAI bills a prompt that REACHES 200K at the higher rate, and
-          // pricingTierForTokens picks the first key >= the prompt, so 200000 would bill exactly
-          // 200,000 tokens at the cheap tier.
+          // Known edge: pricingTierForTokens picks the first key >= the prompt, so a prompt of
+          // exactly 200,000 tokens bills this lower tier while xAI bills it at the higher rate.
+          // Kept at 200000 so model discovery's planLadder matches LiteLLM's 200000 breakpoint.
           // @see https://docs.x.ai/developers/models
-          199999: { input: 2 / 1000000, output: 6 / 1000000, cache_read: 0.3 / 1000000 },
+          200000: { input: 2 / 1000000, output: 6 / 1000000, cache_read: 0.3 / 1000000 },
           500000: { input: 4 / 1000000, output: 12 / 1000000, cache_read: 0.6 / 1000000 },
         },
         can_think: true,

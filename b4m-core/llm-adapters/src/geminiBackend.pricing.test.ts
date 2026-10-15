@@ -29,7 +29,7 @@ const PUBLISHED_CACHE_READ: Partial<Record<ChatModels, Record<number, number>>> 
   [ChatModels.GEMINI_2_5_PRO]: { 200000: 0.125, 2097152: 0.25 },
   [ChatModels.GEMINI_2_5_FLASH]: { 1048576: 0.03 },
   [ChatModels.GEMINI_2_5_FLASH_LITE]: { 1048576: 0.01 },
-  [ChatModels.GROK_4_5]: { 199999: 0.3, 500000: 0.6 },
+  [ChatModels.GROK_4_5]: { 200000: 0.3, 500000: 0.6 },
 };
 
 describe('Gemini and xAI cache-read rates', () => {
