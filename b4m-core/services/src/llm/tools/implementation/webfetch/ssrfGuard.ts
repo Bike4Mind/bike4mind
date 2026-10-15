@@ -15,7 +15,7 @@ import { lookup } from 'node:dns/promises';
  *
  * Because plainFetchScrape returns content, the lookup->connect DNS-rebind race matters there: it
  * uses `resolveAndVetUrl` and pins the vetted IP for http (see plainFetch.ts), which removes the
- * race for http. The `unsafeFetchUrlReason` boolean form (llms.txt probe, Firecrawl pre-flight)
+ * race for http. The `unsafeFetchUrlReason` boolean form (llms.txt probe)
  * keeps the repo's accepted best-effort posture (external-image.ts) since its body is never read.
  *
  * Private-address classification is delegated to `isPrivateIP` from `@bike4mind/fab-pipeline` -
