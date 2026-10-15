@@ -6,6 +6,11 @@ describe('isModerationEvidenceHold', () => {
     expect(isModerationEvidenceHold({ moderationStatus: 'blocked' })).toBe(true);
   });
 
+  // A read that projects the field still returns null when the row has none; that must read as held.
+  it('holds a blocked file whose reason is null', () => {
+    expect(isModerationEvidenceHold({ moderationStatus: 'blocked', blockReason: null })).toBe(true);
+  });
+
   it('holds a block with any other reason (only unsupported_format is exempt)', () => {
     expect(isModerationEvidenceHold({ moderationStatus: 'blocked', blockReason: 'explicit' })).toBe(true);
   });
