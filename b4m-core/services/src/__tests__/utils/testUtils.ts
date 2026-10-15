@@ -239,6 +239,7 @@ export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepo
     setStepUpEmailChallenge: vi.fn(),
     findStepUpEmailChallenge: vi.fn(),
     recordStepUpEmailChallengeFailure: vi.fn(),
+    recordStepUpPasswordFailure: vi.fn(),
     consumeStepUpEmailChallenge: vi.fn(),
     revokeBySid: vi.fn(),
     revokeAllByUserId: vi.fn(),

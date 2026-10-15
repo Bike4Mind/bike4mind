@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
 
 /**
- * Every route that requires recent verification, run through its real middleware chain (with the
- * real step-up gate and the real error handler) so the wire response is what is asserted.
+ * Every route that requires recent verification, run through the real step-up gate and error
+ * handler so the wire response is what is asserted. `baseApi` is replaced by a minimal runner, so
+ * the `auth: 'jwtOnly'` checks only pin the option string; they are not runtime proof that an API
+ * key is refused (that lives in server/middlewares/baseApi.ts).
  */
 
 type Middleware = (req: unknown, res: unknown, next: (error?: unknown) => void) => unknown;
@@ -80,7 +82,7 @@ vi.mock('@bike4mind/database', () => ({
     findById: async () => h.user,
     findByIdWithMfaSecrets: async () => h.user,
   },
-  adminSettingsRepository: { findBySettingName: async () => null },
+  adminSettingsRepository: { findBySettingName: async () => null, findBySettingNames: async () => [] },
   passkeyCredentialRepository: {
     remove: h.removePasskey,
     removeAllForUser: h.removeAllPasskeys,
@@ -226,6 +228,41 @@ describe('POST /api/auth/mfa/setup during sign-in enrollment', () => {
     const res = await call(setupRoute, { user: { id: USER.id, mfaPending: true } });
     expect(res._getStatusCode()).toBe(200);
     expect(h.findBySid).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/auth/mfa/setup right after a first-factor sign-in (SSO under forced enrollment)', () => {
+  const session = (overrides: Record<string, unknown>) =>
+    h.findBySid.mockResolvedValue({
+      sid: 'sid-1',
+      userId: 'user-1',
+      revokedAt: null,
+      expiresAt: new Date(Date.now() + 86_400_000),
+      stepUpAt: null,
+      createdAt: new Date(),
+      ...overrides,
+    });
+
+  beforeEach(() => {
+    h.user.mfa = undefined;
+  });
+
+  it('skips step-up for a session minted moments ago', async () => {
+    session({});
+    const res = await call(setupRoute, {});
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.setupMFA).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['an older session', { createdAt: new Date(Date.now() - 60 * 60 * 1000) }],
+    ['an impersonation session', { impersonatedBy: 'admin-1' }],
+    ['a revoked session', { revokedAt: new Date() }],
+  ])('still requires step-up for %s', async (_label, overrides) => {
+    session(overrides);
+    const res = await call(setupRoute, {});
+    expect(res._getStatusCode()).toBe(403);
+    expect(h.setupMFA).not.toHaveBeenCalled();
   });
 });
 

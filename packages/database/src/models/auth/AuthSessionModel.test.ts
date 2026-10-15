@@ -153,6 +153,20 @@ describe('AuthSessionModel repository', () => {
     expect(await authSessionRepository.markStepUp('missing', 'owner', at)).toBeNull();
   });
 
+  it('counts wrong step-up passwords on a live owned session and clears them on a successful step-up', async () => {
+    await authSessionRepository.create(base({ sid: 'pw', userId: 'owner' }));
+    expect(await authSessionRepository.recordStepUpPasswordFailure('pw', 'owner')).toBe(1);
+    expect(await authSessionRepository.recordStepUpPasswordFailure('pw', 'owner')).toBe(2);
+    expect(await authSessionRepository.recordStepUpPasswordFailure('pw', 'someone-else')).toBeNull();
+
+    await authSessionRepository.markStepUp('pw', 'owner', new Date());
+    expect(await authSessionRepository.recordStepUpPasswordFailure('pw', 'owner')).toBe(1);
+
+    await authSessionRepository.create(base({ sid: 'pw-revoked', userId: 'owner', revokedAt: new Date() }));
+    expect(await authSessionRepository.recordStepUpPasswordFailure('pw-revoked', 'owner')).toBeNull();
+    expect(await authSessionRepository.recordStepUpPasswordFailure('missing', 'owner')).toBeNull();
+  });
+
   describe('emailed step-up challenge', () => {
     const challenge = (o: Record<string, unknown> = {}) => ({
       tokenHash: 'tok',

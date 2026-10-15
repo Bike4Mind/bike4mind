@@ -39,6 +39,7 @@ const AuthSessionSchema = new Schema<IAuthSessionDocument>(
     expiresAt: { type: Date, required: true },
     revokedAt: { type: Date, default: null },
     stepUpAt: { type: Date, default: null },
+    stepUpPasswordFailures: { type: Number, default: 0 },
     stepUpEmailChallenge: { type: StepUpEmailChallengeSchema, default: null, select: false },
   },
   {
@@ -174,9 +175,19 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
   async markStepUp(sid: string, userId: string, at: Date): Promise<IAuthSessionDocument | null> {
     return AuthSessionModel.findOneAndUpdate(
       { sid, userId, revokedAt: null, expiresAt: { $gt: at } },
-      { $set: { stepUpAt: at } },
+      { $set: { stepUpAt: at, stepUpPasswordFailures: 0 } },
       { new: true }
     ).exec();
+  }
+
+  async recordStepUpPasswordFailure(sid: string, userId: string): Promise<number | null> {
+    const now = new Date();
+    const session = await AuthSessionModel.findOneAndUpdate(
+      { sid, userId, revokedAt: null, expiresAt: { $gt: now } },
+      { $inc: { stepUpPasswordFailures: 1 } },
+      { new: true }
+    ).exec();
+    return session ? (session.stepUpPasswordFailures ?? 0) : null;
   }
 
   async setStepUpEmailChallenge(

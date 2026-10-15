@@ -39,6 +39,7 @@ type FakeSession = {
   revokedAt: Date | null;
   expiresAt: Date;
   stepUpAt: Date | null;
+  stepUpPasswordFailures?: number;
   stepUpEmailChallenge: IAuthSessionStepUpEmailChallenge | null;
 };
 const { sessions, authSessionRepository } = vi.hoisted(() => {
@@ -54,6 +55,18 @@ const { sessions, authSessionRepository } = vi.hoisted(() => {
       const s = live(sid, userId);
       if (!s) return null;
       s.stepUpAt = at;
+      return s;
+    },
+    recordStepUpPasswordFailure: async (sid: string, userId: string) => {
+      const s = live(sid, userId);
+      if (!s) return null;
+      s.stepUpPasswordFailures = (s.stepUpPasswordFailures ?? 0) + 1;
+      return s.stepUpPasswordFailures;
+    },
+    revokeBySid: async (sid: string) => {
+      const s = sessions.get(sid);
+      if (!s || s.revokedAt) return null;
+      s.revokedAt = new Date();
       return s;
     },
     setStepUpEmailChallenge: async (
@@ -295,6 +308,25 @@ describe('POST /api/auth/step-up - password', () => {
     const res = await call(stepUpHandler, { body: { method: 'password', password: 'correct horse' } });
     expect(res._getStatusCode()).toBe(200);
     expect(sessions.get('sid-1')!.stepUpAt).toBeInstanceOf(Date);
+  });
+
+  it('revokes the session after too many wrong passwords, even if the next one is right', async () => {
+    for (let attempt = 1; attempt < 5; attempt += 1) {
+      const res = await call(stepUpHandler, { body: { method: 'password', password: 'nope' } });
+      expectStepUpFailed(res);
+      expect(res._getJSONData()).toMatchObject({ attemptsRemaining: 5 - attempt });
+      expect(sessions.get('sid-1')!.revokedAt).toBeNull();
+    }
+
+    const lockedOut = await call(stepUpHandler, { body: { method: 'password', password: 'nope' } });
+    expectStepUpFailed(lockedOut);
+    expect(lockedOut._getJSONData()).toMatchObject({ attemptsRemaining: 0 });
+    expect(sessions.get('sid-1')!.revokedAt).toBeInstanceOf(Date);
+
+    await expect(
+      call(stepUpHandler, { body: { method: 'password', password: 'correct horse' } })
+    ).rejects.toMatchObject({ statusCode: 403, additionalInfo: { code: 'step_up_unavailable' } });
+    expect(sessions.get('sid-1')!.stepUpAt).toBeNull();
   });
 
   it('is refused (400) for an MFA-enrolled user even with the right password', async () => {

@@ -11,6 +11,12 @@ import { authSessionRepository, passkeyCredentialRepository } from '@bike4mind/d
  */
 export const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
 
+/** Wrong step-up passwords a session may submit before it is revoked. */
+export const STEP_UP_MAX_PASSWORD_FAILURES = 5;
+
+/** A session this young was minted by a first-factor sign-in that has just proved the user. */
+export const FRESH_SIGN_IN_WINDOW_MS = 5 * 60 * 1000;
+
 export { STEP_UP_REQUIRED_CODE, STEP_UP_FAILED_CODE, type StepUpMethod } from '@bike4mind/common';
 
 type StepUpUser = Pick<IUserDocument, 'id'> & { sid?: string };
@@ -23,6 +29,20 @@ export const stepUpUnavailableError = () =>
   new ForbiddenError('Verification is not available for this session. Please sign in again.', {
     code: 'step_up_unavailable',
   });
+
+/**
+ * True for a live, non-impersonated session created within FRESH_SIGN_IN_WINDOW_MS. Lets enrollment
+ * forced right after any sign-in (SSO included, not only the email-code path that mints an
+ * mfaPending token) start without a second prompt. Refresh rotation keeps the row's createdAt, so
+ * a long-lived session never qualifies.
+ */
+export async function isFreshSignIn(user: StepUpUser, now = new Date()): Promise<boolean> {
+  if (!user.sid) return false;
+  const session = await authSessionRepository.findBySid(user.sid);
+  if (!session || session.userId !== user.id || session.revokedAt || session.impersonatedBy) return false;
+  if (session.expiresAt <= now) return false;
+  return now.getTime() - new Date(session.createdAt).getTime() < FRESH_SIGN_IN_WINDOW_MS;
+}
 
 /** End of the current step-up window for this request's session, or null when not stepped up. */
 export async function getStepUpUntil(user: StepUpUser, now = new Date()): Promise<Date | null> {
@@ -49,10 +69,10 @@ export async function requireStepUp(req: Pick<Request, 'user'>): Promise<void> {
  * that is only bounced for verification does not spend the caller's allowance.
  */
 export const stepUpGate =
-  (options: { skip?: (req: Request) => boolean } = {}): RequestHandler =>
+  (options: { skip?: (req: Request) => boolean | Promise<boolean> } = {}): RequestHandler =>
   async (req, _res, next) => {
     try {
-      if (!options.skip?.(req)) await requireStepUp(req);
+      if (!(await options.skip?.(req))) await requireStepUp(req);
       next();
     } catch (error) {
       next(error);

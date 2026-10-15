@@ -73,6 +73,8 @@ export interface IAuthSession {
   /** Last time the user re-proved their identity in this session; sensitive account changes
    *  require it to be recent (see apps/client/server/auth/stepUp.ts). Survives refresh rotation. */
   stepUpAt?: Date | null;
+  /** Wrong passwords submitted to step-up since the last successful step-up. Absent on older rows. */
+  stepUpPasswordFailures?: number;
   /** Outstanding emailed step-up code for this session (select:false). Bound to the session, so a
    *  sign-in code from /api/otc/send can never satisfy it. */
   stepUpEmailChallenge?: IAuthSessionStepUpEmailChallenge | null;
@@ -191,6 +193,9 @@ export interface IAuthSessionRepository extends IBaseRepository<IAuthSessionDocu
   /** Stamp `stepUpAt` on a live session owned by `userId`. Returns the doc, or null when the
    *  session is missing, revoked, expired, or belongs to someone else. */
   markStepUp: (sid: string, userId: string, at: Date) => Promise<IAuthSessionDocument | null>;
+  /** Count a wrong step-up password against a live session owned by `userId`. Returns the new
+   *  total, or null when the session is missing, revoked, expired, or not theirs. */
+  recordStepUpPasswordFailure: (sid: string, userId: string) => Promise<number | null>;
   /** Replace this live session's emailed step-up challenge (attempts reset). False when the
    *  session is missing, revoked, expired, or not owned by `userId`. */
   setStepUpEmailChallenge: (

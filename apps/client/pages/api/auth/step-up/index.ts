@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import * as z from 'zod';
 import type { IUserDocument } from '@bike4mind/common';
 import { mfaService } from '@bike4mind/services';
-import { userRepository } from '@bike4mind/database';
+import { authSessionRepository, userRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { sendFailedMfaAttempt, sendIfLockedOut } from '@server/auth/mfaLockout';
@@ -17,6 +17,7 @@ import {
 import {
   markStepUp,
   STEP_UP_FAILED_CODE,
+  STEP_UP_MAX_PASSWORD_FAILURES,
   stepUpMethodsFor,
   stepUpUnavailableError,
   type StepUpMethod,
@@ -121,7 +122,19 @@ const handler = baseApi({ auth: 'jwtOnly' })
       case 'password': {
         if (!user.password || !(await bcrypt.compare(body.password, user.password))) {
           await audit(req, user.id, 'password', false);
-          return sendStepUpFailed(res, { error: 'Incorrect password.' });
+          // Per-session count, so a stolen session cannot grind guesses: past the cap it is revoked.
+          const failures = await authSessionRepository.recordStepUpPasswordFailure(sid, user.id);
+          if (failures !== null && failures >= STEP_UP_MAX_PASSWORD_FAILURES) {
+            await authSessionRepository.revokeBySid(sid);
+            return sendStepUpFailed(res, {
+              error: 'Too many incorrect attempts. Please sign in again.',
+              attemptsRemaining: 0,
+            });
+          }
+          return sendStepUpFailed(res, {
+            error: 'Incorrect password.',
+            ...(failures !== null && { attemptsRemaining: STEP_UP_MAX_PASSWORD_FAILURES - failures }),
+          });
         }
         return succeed(req, res, 'password', await markStepUp(req.user));
       }
