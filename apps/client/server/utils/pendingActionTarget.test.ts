@@ -14,7 +14,8 @@ vi.mock('@server/utils/storage', () => {
 
 import { fabFileRepository } from '@bike4mind/database';
 import { getFilesStorage } from '@server/utils/storage';
-import { loadFabFileAttachment } from './pendingActionTarget';
+import { ConfluenceResource, GitHubResource, JiraResource } from '@bike4mind/slack';
+import { loadFabFileAttachment, resolvePendingActionTarget } from './pendingActionTarget';
 
 const FAB_FILE_ID = 'cccccccccccccccccccccccc';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
@@ -84,5 +85,34 @@ describe('loadFabFileAttachment', () => {
 
     expect(result).toEqual({ status: 'unavailable' });
     expect(logger.error).toHaveBeenCalled();
+  });
+});
+
+describe('resolvePendingActionTarget', () => {
+  it('routes a GitHub write tool to the GitHub server', () => {
+    const target = resolvePendingActionTarget('create_issue', user, logger);
+
+    expect(target?.mcpName).toBe('github');
+    expect(target?.resource).toBeInstanceOf(GitHubResource);
+  });
+
+  it('routes a Jira write tool to a Jira resource on the Atlassian server', () => {
+    const target = resolvePendingActionTarget('jira_create_issue', user, logger);
+
+    expect(target?.mcpName).toBe('atlassian');
+    expect(target?.resource).toBeInstanceOf(JiraResource);
+    expect(target?.resource).not.toBeInstanceOf(ConfluenceResource);
+  });
+
+  it('routes a Confluence write tool to a Confluence resource on the Atlassian server', () => {
+    const target = resolvePendingActionTarget('confluence_create_page', user, logger);
+
+    expect(target?.mcpName).toBe('atlassian');
+    expect(target?.resource).toBeInstanceOf(ConfluenceResource);
+    expect(target?.resource).not.toBeInstanceOf(JiraResource);
+  });
+
+  it.each(['get_issue', 'image_generation', 'unknown_tool'])('refuses the non-confirmable tool %s', tool => {
+    expect(resolvePendingActionTarget(tool, user, logger)).toBeNull();
   });
 });
