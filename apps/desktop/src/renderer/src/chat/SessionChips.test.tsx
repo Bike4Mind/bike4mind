@@ -658,12 +658,23 @@ describe("the folder chip's recent folders", () => {
     expect(tooltips).toContain(OTHER);
   });
 
-  it('goes straight to the picker when there are no recent folders', async () => {
+  it('offers only Open folder when there are no recent folders', async () => {
     listRecent.mockResolvedValue([]);
     await show(null);
     await openMenu();
 
-    expect(pickDirectory).toHaveBeenCalledTimes(1);
-    expect(inMenu('session-chip-project-menu').some(menu => menu.checkVisibility?.() ?? true)).toBe(false);
+    expect(inMenu('session-chip-project-recent')).toHaveLength(0);
+    expect(inMenu('session-chip-project-recent-heading')).toHaveLength(0);
+    expect(inMenu('session-chip-project-open-folder')).toHaveLength(1);
+    expect(pickDirectory).not.toHaveBeenCalled();
+  });
+
+  /** The reported bug: the first pick was recorded, but the chip kept going to Finder. */
+  it('lists a folder recorded after the chip mounted the next time it opens', async () => {
+    listRecent.mockResolvedValueOnce([]).mockResolvedValue([recent[1]]);
+    await show(null);
+    await openMenu();
+
+    expect(inMenu('session-chip-project-recent').map(item => item.textContent)).toEqual(['thing']);
   });
 });

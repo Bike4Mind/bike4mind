@@ -199,8 +199,9 @@ function RecentFolderItem({
  * Drawn in primary rather than neutral while unset, because on a new Code session this is the
  * one control that has to be found: nothing else the session can do works until it is answered.
  *
- * With recent folders on record it opens a menu of them above "Open folder..."; with none it
- * goes straight to the OS picker, since a menu holding only that entry is a click for nothing.
+ * Always opens a menu - recent folders above "Open folder..." - rather than deciding from the
+ * list it last read: that list is re-read on every open, so a folder recorded since then (the
+ * first pick in this very session, say) shows up the next time without a remount.
  */
 function ProjectChip({ binding, current }: { binding: ChipBinding; current: string | null }) {
   const { folder, unset } = binding.chips;
@@ -208,10 +209,6 @@ function ProjectChip({ binding, current }: { binding: ChipBinding; current: stri
   const [open, setOpen] = useState(false);
 
   const onOpenChange = (_event: unknown, wantsOpen: boolean): void => {
-    if (wantsOpen && recent.folders.length === 0) {
-      void binding.pickDirectory();
-      return;
-    }
     if (wantsOpen) recent.refresh();
     setOpen(wantsOpen);
   };
@@ -249,9 +246,11 @@ function ProjectChip({ binding, current }: { binding: ChipBinding; current: stri
         sx={{ maxHeight: 360, overflow: 'auto', width: FOLDER_MENU_WIDTH, maxWidth: 'calc(100vw - 32px)' }}
         data-testid="session-chip-project-menu"
       >
-        <Typography level="body-xs" sx={{ px: 1.5, py: 0.5 }} data-testid="session-chip-project-recent-heading">
-          Recent
-        </Typography>
+        {recent.folders.length > 0 && (
+          <Typography level="body-xs" sx={{ px: 1.5, py: 0.5 }} data-testid="session-chip-project-recent-heading">
+            Recent
+          </Typography>
+        )}
         {recent.folders.map(entry => (
           <RecentFolderItem
             key={entry.path}
@@ -261,7 +260,7 @@ function ProjectChip({ binding, current }: { binding: ChipBinding; current: stri
             onRemove={() => void recent.remove(entry.path)}
           />
         ))}
-        <ListDivider />
+        {recent.folders.length > 0 && <ListDivider />}
         <MenuItem
           onClick={() => {
             setOpen(false);
