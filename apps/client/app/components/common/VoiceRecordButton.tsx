@@ -161,8 +161,11 @@ export const VoiceRecordButton = forwardRef<VoiceRecordButtonRef, IProps>(
 
         // Step 3: trigger transcription against the uploaded object.
         const response = await api.post<{ text: string }>('/api/ai/transcribe', { fileKey });
-        if (response?.data?.text) {
-          onRecordingEnd(response.data.text);
+        const text = response?.data?.text?.trim();
+        if (text) {
+          onRecordingEnd(text);
+        } else {
+          onRecordingError();
         }
       } catch (error) {
         console.error('Transcription error:', error);

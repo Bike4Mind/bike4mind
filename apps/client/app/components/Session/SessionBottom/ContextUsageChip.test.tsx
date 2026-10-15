@@ -79,4 +79,13 @@ describe('ContextUsageChip', () => {
     expect(chip).toHaveAttribute('data-band', 'danger');
     expect(screen.getByRole('status')).toHaveTextContent('"q3-report.pdf" is too large for GPT-5.4 Mini - about 42%');
   });
+
+  it('says the file is too large in the chip itself when there is no usage yet', () => {
+    renderChip({
+      usage: null,
+      modelName: 'GPT-5.4 Mini',
+      attachment: { fileName: 'q3-report.pdf', deliveredPercent: 42, measured: 'extracted', siblingCount: 0 },
+    });
+    expect(screen.getByTestId('context-usage-chip')).toHaveTextContent('File too large');
+  });
 });

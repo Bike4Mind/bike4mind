@@ -755,6 +755,14 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                           }}
                         />
                       )}
+                      {noModels && chatInputValue.trim() !== '' && (
+                        <Box
+                          data-testid="session-no-models-notice"
+                          sx={{ position: 'static', pointerEvents: 'auto', px: 1, pb: 0.5 }}
+                        >
+                          <NoModelsPlaceholder loadError={isModelsError} onRetry={() => void refetchModels()} />
+                        </Box>
+                      )}
                       <LexicalChatInput
                         ref={lexicalInputRef}
                         value={chatInputValue}

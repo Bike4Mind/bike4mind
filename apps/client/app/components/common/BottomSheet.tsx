@@ -33,6 +33,19 @@ const BottomSheet: FC<BottomSheetProps> = ({
   'data-testid': testId,
 }) => {
   const [dragY, setDragY] = useState<number | null>(null);
+  // The Drawer keeps its children while closed, so it is not mounted until the first open. The
+  // double frame lets the first open still animate in from closed.
+  const [mounted, setMounted] = useState(open);
+  const [shown, setShown] = useState(open);
+  useEffect(() => {
+    if (!open) {
+      setShown(false);
+      return;
+    }
+    setMounted(true);
+    const id = requestAnimationFrame(() => requestAnimationFrame(() => setShown(true)));
+    return () => cancelAnimationFrame(id);
+  }, [open]);
   const drag = useRef<{ startY: number; startTime: number; y: number } | null>(null);
 
   // Holds the body at the height it had before keepHeight turned on. By the render that turns it on
@@ -99,10 +112,12 @@ const BottomSheet: FC<BottomSheetProps> = ({
     if (d.y > CLOSE_DISTANCE_PX || (d.y > FLICK_MIN_PX && speed > FLICK_SPEED_PX_PER_MS)) onClose();
   };
 
+  if (!mounted) return null;
+
   return (
     <Drawer
       anchor="bottom"
-      open={open}
+      open={shown}
       onClose={onClose}
       slotProps={{
         content: {

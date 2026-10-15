@@ -102,7 +102,7 @@ const ContextUsageChip: FC<ContextUsageChipProps> = ({ usage, modelName, inputOv
     }
   }
 
-  const label = usage ? `${pct}%` : 'Too long';
+  const label = attachment ? 'File too large' : usage ? `${pct}%` : 'Too long';
   const ariaLabel = usage ? `Context ${label} used` : `Context: ${label}`;
 
   return (
