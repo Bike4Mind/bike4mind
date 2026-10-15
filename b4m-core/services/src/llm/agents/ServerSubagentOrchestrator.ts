@@ -1,6 +1,12 @@
 import { ReActAgent, selectSubagentTools, humanizeToolName } from '@bike4mind/agents';
 import type { AgentResult, AgentStep, ThoroughnessLevel, ServerAgentDefinition } from '@bike4mind/agents';
-import { DELEGATION_TOOLS, classifyToolPermission, getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
+import {
+  DELEGATION_TOOLS,
+  classifyToolPermission,
+  getTextModelCost,
+  getTurnsCost,
+  type ModelInfo,
+} from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
