@@ -13,3 +13,4 @@ export type {
   SessionHandoff,
 } from './types';
 export type { Checkpoint } from './CheckpointStore';
+export { PENDING_ASSISTANT_CONTENT } from './types';

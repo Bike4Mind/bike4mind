@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  githubUsernameSchema,
   ownerSchema,
   repoSchema,
   orgSchema,
@@ -63,6 +64,17 @@ describe('Schema Validations', () => {
       invalid.forEach(name => {
         expect(() => repoSchema.parse(name)).toThrow();
       });
+    });
+  });
+
+  describe('githubUsernameSchema', () => {
+    it('accepts a GitHub username', () => {
+      expect(githubUsernameSchema.safeParse('octo-cat1').success).toBe(true);
+      expect(githubUsernameSchema.safeParse('app/dependabot').success).toBe(true);
+    });
+
+    it('rejects a value that would add a search qualifier', () => {
+      expect(githubUsernameSchema.safeParse('x repo:other/secret').success).toBe(false);
     });
   });
 

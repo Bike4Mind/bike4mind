@@ -166,16 +166,15 @@ import {
   takeToolUsage,
   foldGeneratedMediaUsd,
   settleSubagentMediaUsage,
+  type BillingCheckpoint,
   type BillingCounters,
   type MediaCostPhase,
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
-import {
-  attachVideoJobsToRunQuest,
-  buildAgentVideoToolConfig,
-  getAgentVideoToolConfigDeps,
-} from './agentExecutor.videoToolConfig';
+import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
+import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
+import { attachGenerationJobsToRunQuest } from './agentExecutor.generationJobs';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
@@ -1773,8 +1772,8 @@ async function processExecution(
             if (!generatedImages.includes(img)) generatedImages.push(img);
           }
         }
-        // In-process subagents share these callbacks, so their clips land here too.
-        await attachVideoJobsToRunQuest(changes?.videoJobIds, runQuestId, questRepository, logger);
+        // In-process subagents share these callbacks, so their clips and songs land here too.
+        await attachGenerationJobsToRunQuest(changes?.generationJobs, runQuestId, questRepository, logger);
         if (changes?.promptMeta?.retrieval) {
           retrievalSummary = mergeRetrievalSummary(retrievalSummary, changes.promptMeta.retrieval);
         }
@@ -1893,6 +1892,15 @@ async function processExecution(
           toolEnabled: profileEnabledTools.includes('video_generation'),
         },
         getAgentVideoToolConfigDeps(logger)
+      ),
+      musicConfig: await buildAgentMusicToolConfig(
+        {
+          userId: execution.userId,
+          apiKeyId: execution.apiKeyId,
+          questId: runQuestId,
+          toolEnabled: profileEnabledTools.includes('music_generation'),
+        },
+        getAgentMusicToolConfigDeps(logger)
       ),
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
@@ -2154,8 +2162,8 @@ async function processExecution(
     // Track cumulative usage for delta-based billing.
     // Token counts in iterationBilling are stored as per-iteration deltas, so
     // summing them gives the cumulative-since-start figure. `cumulativeCost`
-    // must be in USD to match `getTextModelCost` output used at billing time -
-    // recompute it from cumulative tokens rather than summing `billing.credits`
+    // must be in USD to match what `billIteration` prices - re-price it from the
+    // persisted per-iteration tokens (reseedCounters) rather than summing `billing.credits`
     // (which is in credits, not USD; a prior bug had the loop summing credits
     // into a USD-typed counter, which made every iteration after a Lambda
     // re-invoke compute a negative costDelta and silently skip billing).
@@ -2180,13 +2188,7 @@ async function processExecution(
     // are fixed for the lifetime of the Lambda invocation.
     const billIterationIfNeeded = async (
       iterationIndex: number,
-      checkpoint: {
-        totalInputTokens: number;
-        totalOutputTokens: number;
-        totalCacheReadTokens: number;
-        totalCacheWriteTokens: number;
-        finishReason?: string;
-      },
+      checkpoint: BillingCheckpoint,
       counters: BillingCounters
     ) => {
       if (!modelInfo) return;
@@ -2215,14 +2217,14 @@ async function processExecution(
         effects: {
           usdToCredits: usdToCreditsStochastic,
           now: () => Date.now(),
-          logGuardTrip: ({ inputTokensDelta, contextWindow }) =>
+          logGuardTrip: ({ requestInputTokens, contextWindow }) =>
             logger.error(
-              '[agentExecutor] iteration input tokens exceed model context window; skipping charge to avoid over-billing (#657)',
+              "[agentExecutor] a request's input tokens exceed the model context window; skipping charge to avoid over-billing (#657)",
               {
                 executionId,
                 sessionId: execution.sessionId,
                 model: execution.model,
-                inputTokensDelta,
+                requestInputTokens,
                 contextWindow,
               }
             ),
@@ -2234,6 +2236,17 @@ async function processExecution(
               iterationIndex,
               ...details,
             }),
+          logTurnsFallback: details =>
+            logger.warn(
+              '[agentExecutor] checkpoint turns do not reconcile with its totals; pricing the delta as one request',
+              {
+                executionId,
+                sessionId: execution.sessionId,
+                model: execution.model,
+                iterationIndex,
+                ...details,
+              }
+            ),
           deductCredits: async ({ credits, inputTokens, outputTokens }) => {
             await creditService.deductCreditsWithOrgSupport(
               {

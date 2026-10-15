@@ -1,5 +1,6 @@
 import { MCPClient } from '@bike4mind/mcp';
 import { Resource } from 'sst';
+import { resolveMcpTenantKey } from './mcpTenantKey';
 
 const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
   return Promise.race([
@@ -9,7 +10,7 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: st
 };
 
 export const handler = async (params: any) => {
-  const { envVariables, name, toolName, toolArgs, action } = params;
+  const { envVariables, name, toolName, toolArgs, action, userId } = params;
 
   // Capture rate limit events from the MCP server's stderr stream.
   // All rate limit logging uses console.error in the child process (stderr),
@@ -87,7 +88,7 @@ export const handler = async (params: any) => {
               'Content-Type': 'application/json',
               ...(ingestToken && { 'x-rate-limit-ingest-token': ingestToken }),
             },
-            body: JSON.stringify({ events: rateLimitEvents }),
+            body: JSON.stringify({ events: rateLimitEvents, tenantKey: resolveMcpTenantKey(userId) }),
           });
           if (!resp.ok) {
             throw new Error(`HTTP ${resp.status}: ${await resp.text().catch(() => 'no body')}`);

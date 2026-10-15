@@ -78,15 +78,20 @@ vi.mock('@server/utils/validators', () => ({
 }));
 vi.mock('@server/security/secretEncryption', () => ({ encryptSecret: (v: string) => `enc:${v}` }));
 vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
-vi.mock('@bike4mind/observability', () => ({
-  Logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-}));
-// Signup/link grants are unit-tested in oauthSignupGrants.test.ts; assert the callback's wiring here.
+vi.mock('@bike4mind/observability', () => {
+  const instance = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  return {
+    Logger: { ...instance, globalInstance: instance },
+  };
+});
+// Signup/link grants are unit-tested in emailVerifiedGrants.test.ts; assert the callback's wiring here.
 const mockApplyOAuthSignupDomainGrant = vi.fn();
-const mockReleaseOAuthPendingFreeCredits = vi.fn();
+const mockApplyEmailVerifiedGrants = vi.fn();
 vi.mock('@server/utils/auth/oauthSignupGrants', () => ({
   applyOAuthSignupDomainGrant: (...a: unknown[]) => mockApplyOAuthSignupDomainGrant(...a),
-  releaseOAuthPendingFreeCredits: (...a: unknown[]) => mockReleaseOAuthPendingFreeCredits(...a),
+}));
+vi.mock('@server/auth/emailVerifiedGrants', () => ({
+  applyEmailVerifiedGrants: (...a: unknown[]) => mockApplyEmailVerifiedGrants(...a),
 }));
 
 // Import after mocks are registered.
@@ -250,13 +255,20 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(updateArg.$set.emailVerified).toBe(true);
     expect(updateArg.$set.emailVerifiedAt).toBeInstanceOf(Date);
     expect(updateArg.$inc).toEqual({ tokenVersion: 1 });
-    expect(mockReleaseOAuthPendingFreeCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'u5' }),
-      'Okta account link (email verified)'
+    expect(mockApplyEmailVerifiedGrants).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'u5' }),
+      verifiedEmail: 'user@example.com',
+      trigger: 'oauth-link-verification',
+      releaseReason: 'Okta account link (email verified)',
+      logger: expect.anything(),
+    });
+    // Membership re-reads emailVerified, so the grants must follow the write that persists it.
+    expect(mockUpdateOne.mock.invocationCallOrder[0]).toBeLessThan(
+      mockApplyEmailVerifiedGrants.mock.invocationCallOrder[0]
     );
   });
 
-  it('releases a pending free-credit tag only when the link promotes emailVerified', async () => {
+  it('applies the link verification grants only when the link promotes emailVerified', async () => {
     await runCallback({
       user: {
         id: 'u7',
@@ -272,7 +284,7 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     });
 
     expect(mockUpdateOne).toHaveBeenCalled();
-    expect(mockReleaseOAuthPendingFreeCredits).not.toHaveBeenCalled();
+    expect(mockApplyEmailVerifiedGrants).not.toHaveBeenCalled();
   });
 
   it('refuses to promote/link on a username-only match with a null local email (takeover guard)', async () => {

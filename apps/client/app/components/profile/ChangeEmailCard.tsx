@@ -22,6 +22,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearch, useNavigate } from '@tanstack/react-router';
 import { api } from '@client/app/contexts/ApiContext';
+import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -112,6 +113,7 @@ const ChangeEmailModal = ({ open, onClose, currentEmail }: ChangeEmailModalProps
         setSuccess(null);
       }, 1500);
     } catch (err: unknown) {
+      if (isStepUpCancelled(err)) return;
       const apiErr = err as { response?: { status?: number; data?: { message?: string } }; message?: string };
       if (apiErr.response?.status === 429) {
         setError(

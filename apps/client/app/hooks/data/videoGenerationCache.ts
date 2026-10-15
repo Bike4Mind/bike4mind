@@ -3,43 +3,25 @@
  * listener all go through here so one set of ordering rules decides what may overwrite what.
  */
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
-import { TERMINAL_GENERATION_JOB_STATES, type GenerationJobState, type VideoGeneration } from '@bike4mind/common';
+import type { GenerationJobState, VideoGeneration } from '@bike4mind/common';
+import {
+  isAwaitingGenerationOutput,
+  isTerminalGenerationState,
+  movesLiveStateBackwards,
+  shouldReplaceGenerationJob,
+} from './generationJobPolling';
 import { videoGenerationKeys } from './videoGenerationKeys';
 
 export type VideoGenerationPage = { data: VideoGeneration[]; next_cursor: string | null };
 export type VideoGenerationList = InfiniteData<VideoGenerationPage, string | undefined>;
 export type VideoJobLiveUpdate = { id: string; state: GenerationJobState; progress?: number };
 
-export const isTerminalVideoState = (state: GenerationJobState): boolean =>
-  TERMINAL_GENERATION_JOB_STATES.includes(state);
-
-// The websocket frame writes 'succeeded' before the output exists; the job is not done until it arrives.
-export const isAwaitingVideoOutput = (job: VideoGeneration): boolean => job.state === 'succeeded' && !job.output;
-
-// A live job only ever moves forward through these. Frames and patched rows carry no newer timestamp, so the rank is
-// what tells a late 'running' apart from a real one.
-const LIVE_STATE_RANK: Partial<Record<GenerationJobState, number>> = { pending: 0, running: 1, storing: 2 };
-
-const movesLiveStateBackwards = (from: GenerationJobState, to: GenerationJobState): boolean => {
-  const fromRank = LIVE_STATE_RANK[from];
-  const toRank = LIVE_STATE_RANK[to];
-  return fromRank !== undefined && toRank !== undefined && toRank < fromRank;
-};
-
-// A terminal job is final, and a snapshot read earlier (a list request that was in flight while a detail
-// refetch landed) must not replace a later one.
+export const isTerminalVideoState = isTerminalGenerationState;
+export const isAwaitingVideoOutput = isAwaitingGenerationOutput;
 export const shouldReplaceVideoGeneration = (
   existing: VideoGeneration | undefined,
   incoming: VideoGeneration
-): boolean => {
-  if (!existing) return true;
-  if (isTerminalVideoState(existing.state) && !isTerminalVideoState(incoming.state)) return false;
-  const incomingAt = Date.parse(incoming.updated_at);
-  const existingAt = Date.parse(existing.updated_at);
-  // A websocket patch keeps the cached updated_at, so a list row read before the frame ties with it.
-  if (incomingAt === existingAt && movesLiveStateBackwards(existing.state, incoming.state)) return false;
-  return incomingAt >= existingAt;
-};
+): boolean => shouldReplaceGenerationJob(existing, incoming);
 
 const mapListedJobs = (queryClient: QueryClient, mapJob: (job: VideoGeneration) => VideoGeneration): void => {
   queryClient.setQueryData<VideoGenerationList>(

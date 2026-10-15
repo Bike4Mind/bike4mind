@@ -1,4 +1,8 @@
-import { IMcpServerDocument } from '@bike4mind/common';
+import { IGitHubRepository, IMcpServerDocument, McpServerName } from '@bike4mind/common';
+import {
+  GITHUB_REPOSITORY_FULL_NAME_PATTERN,
+  GITHUB_SELECTED_REPOSITORIES_ENV_KEY,
+} from '@bike4mind/mcp/github/constants';
 import { userRepository } from '@bike4mind/database';
 import {
   AtlassianTokenManager,
@@ -49,5 +53,37 @@ export const buildMcpEnvVariables = async (mcpServer: IMcpServerDocument): Promi
     ];
   }
 
-  return Array.isArray(mcpServer.envVariables) ? decryptEnvVariables(mcpServer.envVariables) : [];
+  const storedEnvVariables = Array.isArray(mcpServer.envVariables) ? decryptEnvVariables(mcpServer.envVariables) : [];
+
+  if (mcpServer.name === McpServerName.Github) {
+    return withGitHubRepositorySelection(storedEnvVariables, mcpServer.metadata?.selectedRepositories);
+  }
+
+  return storedEnvVariables;
 };
+
+/**
+ * The GitHub server enforces the user's repository selection from this variable. It is derived from
+ * metadata on every spawn, never taken from stored env, so the saved selection is the only source.
+ * An empty selection means the user has not restricted access, so the variable is omitted.
+ */
+function withGitHubRepositorySelection(
+  envVariables: EnvVariable[],
+  selectedRepositories: IGitHubRepository[] | undefined
+): EnvVariable[] {
+  const withoutStoredSelection = envVariables.filter(({ key }) => key !== GITHUB_SELECTED_REPOSITORIES_ENV_KEY);
+  if (!selectedRepositories?.length) return withoutStoredSelection;
+
+  // Rows saved before the route validated the shape can hold a name the server cannot parse. Drop
+  // those rather than hand the server a value that stops it starting. If nothing valid remains the
+  // empty list still restricts: an unknown selection must not widen access to every repository.
+  const fullNames = selectedRepositories
+    .map(({ fullName }) => fullName)
+    .filter(fullName => {
+      if (GITHUB_REPOSITORY_FULL_NAME_PATTERN.test(fullName)) return true;
+      console.warn(`Ignoring saved GitHub repository "${fullName}": not an "owner/repo" name`);
+      return false;
+    });
+
+  return [...withoutStoredSelection, { key: GITHUB_SELECTED_REPOSITORIES_ENV_KEY, value: JSON.stringify(fullNames) }];
+}

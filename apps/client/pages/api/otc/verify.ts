@@ -19,6 +19,7 @@ import {
 } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
+import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
@@ -34,6 +35,7 @@ import { setRefreshCookie } from '@server/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { Config } from '@server/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
+import { getClientIp } from '@server/utils/ip';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
@@ -177,34 +179,34 @@ const handler = baseApi({ auth: false })
         existingUser.emailVerified = true;
         existingUser.emailVerifiedAt = new Date();
         try {
-          // A tagged account was registered with credits deferred until email ownership is
-          // proven; the code just proved it. Never throws. A failed grant keeps the tag, but
-          // emailVerified is persisted in this same write, so later logins skip this branch:
-          // the only retry is the backfillPendingFreeCredits script.
-          const release = await userService.releasePendingFreeCredits(existingUser, {
-            db: {
-              adminSettings: adminSettingsRepository,
-              creditTransactions: creditTransactionRepository,
-              creditLots: creditLotRepository,
-              users: userRepository,
-            },
-            reason: 'OTC login (email verified)',
-            logger: req.logger,
-          });
           // Write only the fields set here: a later loginRecords update below writes the same doc,
-          // and a whole-doc write on either would clobber the other's change. The release patch
-          // rides this same write so there is no extra round trip.
+          // and a whole-doc write on either would clobber the other's change. The verification-link
+          // fields are cleared in the same write: this code just proved the email, so any link still
+          // pending on the account is stale, and a later click would re-run the verified-email grants.
           await userRepository.update({
             id: existingUser.id,
             emailVerified: existingUser.emailVerified,
             emailVerifiedAt: existingUser.emailVerifiedAt,
-            ...release.patch,
+            emailVerificationToken: null,
+            emailVerificationExpires: null,
+            emailVerificationSentAt: null,
           });
-          if (release.released) {
-            existingUser.tags = release.patch.tags ?? existingUser.tags;
+          // The code just proved email ownership, and later logins skip this branch, so this is
+          // the account's one chance at what /api/email/verify would have granted. A failed write
+          // above skips it, and the next login retries both.
+          const grants = await applyEmailVerifiedGrants({
+            user: existingUser,
+            verifiedEmail: normalizedEmail,
+            trigger: 'otc-login-verification',
+            releaseReason: 'OTC login (email verified)',
+            logger: req.logger,
+          });
+          if (grants.tags) {
+            existingUser.tags = grants.tags;
             existingUser.pendingCreditGrant = null;
-            if (release.currentCredits !== null) existingUser.currentCredits = release.currentCredits;
           }
+          if (grants.currentCredits !== null) existingUser.currentCredits = grants.currentCredits;
+          if (grants.joinedOrganizationId) existingUser.organizationId = grants.joinedOrganizationId;
         } catch (err) {
           req.logger.error('OTC login emailVerified update failed', err);
         }
@@ -240,7 +242,7 @@ const handler = baseApi({ auth: false })
       );
       setRefreshCookie(res, refreshToken);
       const tokens = { accessToken };
-      const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+      const ip = getClientIp(req);
 
       // Analytics + device history are best-effort for the same post-rotation reason as
       // above: the login is already proven, so none of these writes may fail the response.
@@ -271,7 +273,7 @@ const handler = baseApi({ auth: false })
           colorDepth: clientData.colorDepth || 0,
           pixelDepth: clientData.pixelDepth || 0,
           devicePixelRatio: clientData.devicePixelRatio || 1,
-          ip: req.ip || '',
+          ip: getClientIp(req),
         });
         existingUser.loginRecords = existingUser.loginRecords.slice(0, 15);
         try {
@@ -342,7 +344,7 @@ const handler = baseApi({ auth: false })
                 colorDepth: req.body.clientData.colorDepth || 0,
                 pixelDepth: req.body.clientData.pixelDepth || 0,
                 devicePixelRatio: req.body.clientData.devicePixelRatio || 1,
-                ip: req.ip || '',
+                ip: getClientIp(req),
               }
             : undefined,
         },

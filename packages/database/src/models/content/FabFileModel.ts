@@ -23,7 +23,9 @@ import {
   countTagPathsByTagSet,
   normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
+  STORAGE_CHARGED_FILTER,
   UNCATEGORIZED_TAG_SUFFIX,
+  chargedBytes,
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
   type FabFileTypeFilter,
@@ -1196,11 +1198,13 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * integer. `$ifNull` makes a missing or null `fileSize` count as 0, matching the
    * `|| 0` the load-all-and-reduce caller used to apply (the schema types `fileSize`
    * as a Number, so a non-numeric value is unreachable). Same live-file filter
-   * as findByUserId; mirrors the aggregate shape in computeDataLakeStats.
+   * as findByUserId, narrowed to rows counted as charged (STORAGE_CHARGED_FILTER, the Mongo form of
+   * the isStorageCharged every refund site uses), so recalc agrees with the counter. Mirrors the
+   * aggregate shape in computeDataLakeStats.
    */
   async sumFileSizeByUserId(userId: string): Promise<number> {
     const [row] = await this.fabFileModel.aggregate<{ total: number }>([
-      { $match: { userId, deletedAt: null } },
+      { $match: { userId, deletedAt: null, ...STORAGE_CHARGED_FILTER } },
       { $group: { _id: null, total: { $sum: { $ifNull: ['$fileSize', 0] } } } },
       { $project: { _id: 0, total: 1 } },
     ]);
@@ -3188,8 +3192,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // the 'restoring' state concurrently would otherwise both claim to have revived every row.
     // includeDeleted: the soft-delete plugin's pre('find') hook otherwise ANDs `deletedAt: null`
     // onto the filter, which contradicts the stamp bound and matches nothing.
-    // userId/fileSize are carried through so the caller can credit each file's own owner's quota.
-    const candidates = await this.fabFileModel.find(base, null, { includeDeleted: true }).select('_id userId fileSize');
+    // userId and charged bytes are carried through so the caller can re-charge each file's own owner.
+    const candidates = await this.fabFileModel
+      .find(base, null, { includeDeleted: true })
+      .select('_id userId fileSize storageChargedAt status createdAt');
     const restored: DataLakeSweptFile[] = [];
     for (const candidate of candidates) {
       // An aggregation-pipeline $set so one atomic write covers both fields: a row stamped by THIS
@@ -3210,7 +3216,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         restored.push({
           id: candidate._id.toString(),
           userId: String(candidate.userId),
-          fileSize: candidate.fileSize ?? 0,
+          fileSize: chargedBytes(candidate),
         });
       }
     }
@@ -3220,7 +3226,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<DataLakeSweptFile[]> {
     const docs = await this.fabFileModel.find(
       { ...buildDataLakeMembershipFilter(scope), deletedAt: null },
-      { _id: 1, userId: 1, fileSize: 1 }
+      { _id: 1, userId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 }
     );
     if (docs.length === 0) return [];
     // Per-row conditional write, not a bulk updateMany + read-back-by-stamp-equality: a bulk write
@@ -3237,7 +3243,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     for (const doc of docs) {
       const result = await this.fabFileModel.updateOne({ _id: doc._id, deletedAt: null }, { $set: { deletedAt: at } });
       if (result.modifiedCount === 1) {
-        flipped.push({ id: doc._id.toString(), userId: String(doc.userId), fileSize: doc.fileSize ?? 0 });
+        flipped.push({ id: doc._id.toString(), userId: String(doc.userId), fileSize: chargedBytes(doc) });
       }
     }
     return flipped;

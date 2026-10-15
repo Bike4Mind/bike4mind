@@ -20,6 +20,14 @@ export const repoSchema = z
   .regex(/^[a-zA-Z0-9._-]+$/, 'Invalid repository name format')
   .describe('Repository name');
 
+// GitHub username schema, with the `app/` prefix search uses for bot authors. Interpolated into
+// search queries, so the format check is what keeps a value like "x repo:other/name" from adding a
+// search qualifier.
+export const githubUsernameSchema = z
+  .string()
+  .regex(/^(app\/)?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/, 'Invalid GitHub username format')
+  .max(43, 'GitHub username too long');
+
 // Organization name schema
 export const orgSchema = z
   .string()

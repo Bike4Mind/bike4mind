@@ -1,6 +1,6 @@
 import { AxiosError } from 'axios';
 import { describe, expect, it } from 'vitest';
-import { describeVideoGenerationError, VIDEO_RATE_LIMITED_MESSAGE } from './videoGenerationErrors';
+import { describeVideoGenerationError, GENERATION_RATE_LIMITED_MESSAGE } from './videoGenerationErrors';
 
 const FALLBACK = 'Could not start the video. Try again.';
 const axiosError = (status: number, data: unknown) =>
@@ -28,7 +28,9 @@ describe('describeVideoGenerationError', () => {
   });
 
   it('explains a rate limit', () => {
-    expect(describeVideoGenerationError(axiosError(429, { error: 'x' }), FALLBACK)).toBe(VIDEO_RATE_LIMITED_MESSAGE);
+    expect(describeVideoGenerationError(axiosError(429, { error: 'x' }), FALLBACK)).toBe(
+      GENERATION_RATE_LIMITED_MESSAGE
+    );
   });
 
   it('falls back for a non-HTTP error', () => {

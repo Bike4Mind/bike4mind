@@ -51,9 +51,9 @@ export const rateLimit =
 
     // Behind API Gateway + Lambda, `req.ip` resolves to an internal AWS proxy
     // address that varies across warm pools - anonymous buckets would scatter
-    // and never fill. `getClientIp` walks the canonical CDN headers
-    // (Cloudflare, Akamai, X-Real-IP, X-Forwarded-For, Fly) and falls back to
-    // socket addresses, stripping ports and filtering private IPv4.
+    // and never fill. `getClientIp` resolves the real client IP from CDN
+    // headers on deployed stages, and on self-host from the socket or the
+    // trusted-proxy hop only (see TRUSTED_PROXY_HOPS in server/utils/ip.ts).
     const resolvedSubject = subject?.(req) ?? (req.user?.id || getClientIp(req));
     const key = `rate-limit:${resolvedSubject}:${pathname}`;
 

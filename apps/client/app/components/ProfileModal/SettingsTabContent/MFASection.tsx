@@ -15,6 +15,7 @@ import {
   useCancelMFASetup,
 } from '@client/app/hooks/data/mfa';
 import MFAModal from '@client/app/components/common/MFAModal';
+import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import TrustedDevicesSection from './TrustedDevicesSection';
 import PasskeysSection from './PasskeysSection';
@@ -59,6 +60,7 @@ const MFASection: React.FC = () => {
         toast.success('MFA setup initiated');
       },
       onError: (error: any) => {
+        if (isStepUpCancelled(error)) return;
         // Extract the actual error message from axios response
         const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
         toast.error(errorMessage);
@@ -84,6 +86,7 @@ const MFASection: React.FC = () => {
         queryClient.invalidateQueries({ queryKey: ['users'] });
       },
       onError: (error: any) => {
+        if (isStepUpCancelled(error)) return;
         // Extract the actual error message from axios response
         const errorMessage = error.response?.data?.error || error.message || 'Failed to disable MFA';
         toast.error(errorMessage);
@@ -112,6 +115,7 @@ const MFASection: React.FC = () => {
         queryClient.invalidateQueries({ queryKey: ['identify'] });
       },
       onError: (error: any) => {
+        if (isStepUpCancelled(error)) return;
         // Extract the actual error message from axios response
         const errorMessage = error.response?.data?.error || error.message || 'Failed to regenerate backup codes';
         toast.error(errorMessage);
@@ -200,6 +204,7 @@ const MFASection: React.FC = () => {
               color="primary"
               variant="solid"
               startDecorator={<VpnKeyIcon />}
+              data-testid="mfa-enable-btn"
               onClick={handleEnableMFA}
               loading={setupMFA.isPending}
               fullWidth
@@ -313,6 +318,7 @@ const MFASection: React.FC = () => {
               color="primary"
               variant="solid"
               startDecorator={<VpnKeyIcon />}
+              data-testid="mfa-enable-btn"
               onClick={handleEnableMFA}
               loading={setupMFA.isPending}
               fullWidth
@@ -329,6 +335,7 @@ const MFASection: React.FC = () => {
                 <StyledButton
                   color="danger"
                   startDecorator={<VpnKeyIcon />}
+                  data-testid="mfa-disable-btn"
                   onClick={handleDisableMFA}
                   loading={disableMFA.isPending}
                   fullWidth
@@ -342,6 +349,7 @@ const MFASection: React.FC = () => {
                 color="neutral"
                 variant="outlined"
                 startDecorator={<RefreshIcon />}
+                data-testid="mfa-regenerate-backup-codes-btn"
                 onClick={handleRegenerateBackupCodes}
                 loading={regenerateBackupCodes.isPending}
                 fullWidth

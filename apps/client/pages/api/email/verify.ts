@@ -1,11 +1,5 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import {
-  userRepository,
-  withTransaction,
-  adminSettingsRepository,
-  creditLotRepository,
-  creditTransactionRepository,
-} from '@bike4mind/database';
+import { userRepository, withTransaction } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userService } from '@bike4mind/services';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -14,7 +8,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { emitFunnelEvent } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
-import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
+import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { z } from 'zod';
 
 const VerifyEmailRequestSchema = z.object({
@@ -73,63 +67,22 @@ const handler = baseApi({ auth: false })
         throw error;
       }
 
-      // Phase 2: best-effort credit grant + tag removal. Runs OUTSIDE the verify transaction
-      // so a downstream failure here can't leave the user in a partially-committed state
-      // (the prior implementation depended on the entire withTransaction block being atomic,
-      // but a write committing out-of-transaction left users stranded with emailVerified=true
-      // and credits=0 + pending tag still present, with no retry path). Idempotency layers:
-      //  1) addCredits is keyed on a stable transactionId so a duplicate call is a no-op,
-      //  2) tag removal is a set-difference filter, also idempotent.
-      // If this throws, we log loudly but still return success - verification IS complete; the
-      // grant can be retried by an admin/maintenance flow without re-issuing a new email token.
-      // Summed across both grants below for the credits_granted funnel event.
-      let creditsGranted = 0;
-      if (userBeforeVerify) {
-        const release = await userService.releasePendingFreeCredits(userBeforeVerify, {
-          db: {
-            adminSettings: adminSettingsRepository,
-            creditTransactions: creditTransactionRepository,
-            creditLots: creditLotRepository,
-            users: userRepository,
-          },
-          reason: 'deferred registration credit grant (email verified)',
-          logger: req.logger,
-        });
-        if (release.released) {
-          try {
-            await userRepository.update({ id: userBeforeVerify.id, ...release.patch });
-            creditsGranted += release.creditsGranted;
-            req.logger.info(
-              release.creditsGranted > 0
-                ? `Granted ${release.creditsGranted} deferred free credits to verified user ${userBeforeVerify.id}`
-                : `Cleared pending-free-credits tag for user ${userBeforeVerify.id} (nothing to grant)`
-            );
-          } catch (updateError) {
-            req.logger.error(
-              `Email verified for user ${userBeforeVerify.id} but pending-free-credits tag removal failed; ` +
-                `user is verified but still tagged pending-free-credits - needs manual retry`,
-              updateError
-            );
-            // Deliberately swallow: verification succeeded, the user's email IS now verified,
-            // and re-throwing would show them "Verification Failed" despite the success.
-          }
-        }
-      }
-
-      // Phase 2b: the verified domain's signup grant - one-time domain credits (ADDITIVE on top
-      // of the flat grant above, distinct transactionId), partner-rule org membership, and the
-      // entitlement cache wake-up. Fires INDEPENDENT of the pending-free-credits tag, so invited
-      // domain users get it too. verifyEmailToken doesn't touch `email`, so userBeforeVerify.email
-      // IS the now-verified address. Never throws (see applySignupDomainGrant).
-      if (userBeforeVerify?.email) {
-        const domainGrant = await applySignupDomainGrant({
-          userId: userBeforeVerify.id,
-          email: userBeforeVerify.email,
-          trigger: 'email-verification',
-          logger: req.logger,
-        });
-        creditsGranted += domainGrant.creditsGranted;
-      }
+      // Phase 2: the verification grants (deferred flat credits, then the verified domain's signup
+      // grant). Runs OUTSIDE the verify transaction so a grant failure can't leave a partially
+      // committed state; it never throws, and both grants are idempotent per user, so verification
+      // still succeeds and a retry is safe. Fires independent of the pending-free-credits tag, so
+      // invited domain users get the domain grant too. verifyEmailToken doesn't touch `email`, so
+      // userBeforeVerify.email IS the now-verified address.
+      const grants = userBeforeVerify?.email
+        ? await applyEmailVerifiedGrants({
+            user: userBeforeVerify,
+            verifiedEmail: userBeforeVerify.email,
+            trigger: 'email-verification',
+            releaseReason: 'deferred registration credit grant (email verified)',
+            logger: req.logger,
+          })
+        : null;
+      const creditsGranted = grants?.creditsGranted ?? 0;
 
       // Audit + analytics for the success path.
       if (userBeforeVerify) {

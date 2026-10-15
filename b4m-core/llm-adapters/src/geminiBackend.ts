@@ -192,12 +192,11 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          // <=200K rates: $2 in, $0.20 cache read per 1M (>200K is $4 in, $0.40 cache read). Held
-          // flat until the agent executor prices per request: it prices a run's summed input today
-          // (apps/workers/src/queueHandlers/agentExecutor.billing.ts), so a >200K prompt would bill
-          // the whole run at the upper rate.
+          // List is $2/$12 per 1M up to 200k and $4/$18 above ($0.20/$0.40 cache read). Held flat until
+          // every billing path picks the tier per request: summed tool-loop or agent-run input would
+          // cross 200k and bill the whole run at the upper rate.
           // @see https://ai.google.dev/gemini-api/docs/pricing
-          2097152: { input: 2 / 1000000, output: 18.0 / 1000000, cache_read: 0.2 / 1000000 },
+          2097152: { input: 2 / 1000000, output: 18 / 1000000, cache_read: 0.2 / 1000000 },
         },
         supportsVision: true,
         supportsTools: true,
@@ -243,7 +242,10 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          2097152: { input: 2 / 1000000, output: 18.0 / 1000000 }, // $2.00/1M input, $8.00/1M output
+          // List is $2/$12 per 1M up to 200k and $4/$18 above. Held flat until every billing path
+          // picks the tier per request: summed tool-loop or agent-run input would cross 200k and
+          // bill the whole run at the upper rate.
+          2097152: { input: 2 / 1000000, output: 18 / 1000000 },
         },
         supportsVision: true,
         supportsTools: true,
@@ -268,7 +270,7 @@ export class GeminiBackend implements ICompletionBackend {
         can_think: true,
         pricing: {
           // $0.05/1M cache read. @see https://ai.google.dev/gemini-api/docs/pricing
-          2097152: { input: 2.0 / 1000000, output: 1.0 / 1000000, cache_read: 0.05 / 1000000 }, // $2.00/1M input, $1.00/1M output
+          2097152: { input: 0.5 / 1000000, output: 3.0 / 1000000, cache_read: 0.05 / 1000000 }, // $0.50/1M input, $3.00/1M output
         },
         supportsVision: true,
         supportsTools: true,
@@ -391,7 +393,7 @@ export class GeminiBackend implements ICompletionBackend {
         can_think: true,
         pricing: {
           // $0.03/1M cache read. @see https://ai.google.dev/gemini-api/docs/pricing
-          1048576: { input: 0.075 / 1000000, output: 0.6 / 1000000, cache_read: 0.03 / 1000000 }, // $0.075/1M input, $0.60/1M output
+          1048576: { input: 0.3 / 1000000, output: 2.5 / 1000000, cache_read: 0.03 / 1000000 }, // $0.30/1M input, $2.50/1M output
         },
         supportsVision: true,
         supportsTools: true,
@@ -417,7 +419,7 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         pricing: {
           // $0.01/1M cache read. @see https://ai.google.dev/gemini-api/docs/pricing
-          1048576: { input: 0.0375 / 1000000, output: 0.3 / 1000000, cache_read: 0.01 / 1000000 }, // $0.0375/1M input, $0.30/1M output
+          1048576: { input: 0.1 / 1000000, output: 0.4 / 1000000, cache_read: 0.01 / 1000000 }, // $0.10/1M input, $0.40/1M output
         },
         supportsVision: true,
         supportsTools: true,

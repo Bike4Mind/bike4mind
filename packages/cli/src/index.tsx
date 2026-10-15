@@ -33,7 +33,13 @@ import type { PendingMcpApproval } from './storage/ConfigStore';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
 import { LoginFlow } from './components/LoginFlow';
-import { SessionStore, ConfigStore, CommandHistoryStore, buildGlobalConfigPatch } from './storage';
+import {
+  SessionStore,
+  ConfigStore,
+  CommandHistoryStore,
+  buildGlobalConfigPatch,
+  PENDING_ASSISTANT_CONTENT,
+} from './storage';
 import type { Session, Message, CliConfig, ProjectConfig, ProjectLocalConfig, SessionHandoff } from './storage';
 import { CheckpointStore } from './storage/CheckpointStore.js';
 import { ImageStore } from './storage/ImageStore.js';
@@ -175,7 +181,7 @@ import {
 import { WorkItemsClient } from './api/WorkItemsClient.js';
 import { PostEditDiagnostics } from './diagnostics/PostEditDiagnostics.js';
 import { buildSkillsPromptSection } from './core/skillsPrompt';
-import { checkForUpdate } from './utils/updateChecker.js';
+import { getStartupUpdateStatus } from './utils/updateChecker.js';
 import { FeatureModuleRegistry } from './features/FeatureModuleRegistry.js';
 import { buildFeatureRegistry } from './features/buildFeatureRegistry.js';
 import { createBuiltinModules } from './features/createBuiltinModules.js';
@@ -1395,7 +1401,7 @@ function CliApp() {
       const pendingAssistantMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
-        content: '...',
+        content: PENDING_ASSISTANT_CONTENT,
         timestamp: new Date().toISOString(),
         metadata: {
           steps: [],
@@ -1689,7 +1695,7 @@ function CliApp() {
       const pendingAssistantMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
-        content: '...',
+        content: PENDING_ASSISTANT_CONTENT,
         timestamp: new Date().toISOString(),
         metadata: {
           steps: [],
@@ -1999,7 +2005,7 @@ function CliApp() {
     console.log('📝 Generating session handoff...');
     useCliStore.getState().setIsThinking(true);
     try {
-      const result = await state.agent.run(prompt, { maxIterations: 1 });
+      const result = await state.agent.run(prompt, { maxIterations: 1, streamText: false });
       const handoff = parseHandoffResponse(result.finalAnswer);
 
       if (!handoff) {
@@ -2786,7 +2792,7 @@ function CliApp() {
           return;
         }
         try {
-          const diffOutput = state.checkpointStore.getCheckpointDiff(diffTarget);
+          const diffOutput = await state.checkpointStore.getCheckpointDiff(diffTarget);
           if (!diffOutput.trim()) {
             console.log('No differences found between checkpoint and current state.');
           } else {
@@ -4173,19 +4179,13 @@ function CliApp() {
 
 // Banner is rendered alongside startup messages in init()
 
-// Non-blocking update check (best-effort, 3s timeout)
-try {
-  const updateResult = await Promise.race([
-    checkForUpdate(packageJson.version),
-    new Promise<null>(resolve => setTimeout(() => resolve(null), 3000)),
-  ]);
-  if (updateResult?.updateAvailable) {
-    console.log(
-      `\x1b[33m  ⬆ Update available: v${updateResult.currentVersion} → v${updateResult.latestVersion} (run: b4m update)\x1b[0m\n`
-    );
-  }
-} catch {
-  // Silently ignore update check failures
+// Update banner from the cached check only, so first paint never waits on the
+// network; the cache is refreshed in the background for the next launch.
+const cachedUpdate = await getStartupUpdateStatus(packageJson.version);
+if (cachedUpdate?.updateAvailable) {
+  console.log(
+    `\x1b[33m  \u2b06 Update available: v${cachedUpdate.currentVersion} \u2192 v${cachedUpdate.latestVersion} (run: b4m update)\x1b[0m\n`
+  );
 }
 
 // Show dev mode indicator when running via tsx (pnpm dev)
