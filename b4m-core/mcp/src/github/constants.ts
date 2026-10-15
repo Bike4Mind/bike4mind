@@ -79,6 +79,10 @@ export const TOOL_GET_JOB_LOGS = 'get_job_logs' as const;
 // The host (apps/client mcpEnv.ts) sets it and childEnv.ts allows it through.
 export const GITHUB_SELECTED_REPOSITORIES_ENV_KEY = 'GITHUB_SELECTED_REPOSITORIES' as const;
 
+// An "owner/repo" full name. The host's save route accepts exactly what this server can parse, so
+// both import this rather than keeping copies that could drift apart.
+export const GITHUB_REPOSITORY_FULL_NAME_PATTERN = /^[^/\s]+\/[^/\s]+$/;
+
 // Tool categories for organized logging and documentation
 export const TOOL_CATEGORIES = {
   User: [TOOL_CURRENT_USER],

@@ -7,13 +7,15 @@
  */
 
 import { z } from 'zod';
-import { GITHUB_SELECTED_REPOSITORIES_ENV_KEY } from './constants.js';
+import { GITHUB_REPOSITORY_FULL_NAME_PATTERN, GITHUB_SELECTED_REPOSITORIES_ENV_KEY } from './constants.js';
 
 export type RepoScope = { mode: 'all' } | { mode: 'selected'; repositories: ReadonlySet<string> };
 
 export const ALL_REPOSITORIES: RepoScope = { mode: 'all' };
 
-const selectedRepositoriesSchema = z.array(z.string().regex(/^[^/\s]+\/[^/\s]+$/, 'expected "owner/repo"'));
+const selectedRepositoriesSchema = z.array(
+  z.string().regex(GITHUB_REPOSITORY_FULL_NAME_PATTERN, 'expected "owner/repo"')
+);
 
 // GitHub owner and repository names are case-insensitive.
 const normalize = (fullName: string): string => fullName.toLowerCase();

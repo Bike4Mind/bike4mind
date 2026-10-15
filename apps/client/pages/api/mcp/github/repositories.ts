@@ -1,5 +1,6 @@
 import { mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
+import { GITHUB_REPOSITORY_FULL_NAME_PATTERN } from '@bike4mind/mcp/github/constants';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, InternalServerError, NotFoundError } from '@server/utils/errors';
@@ -16,7 +17,7 @@ const MAX_REPOS = 500;
 
 // The GitHub MCP server refuses to start on a malformed name, so only "owner/repo" is accepted.
 const SaveSelectionInput = z.object({
-  selectedRepositories: z.array(z.string().regex(/^[^/\s]+\/[^/\s]+$/, 'Expected "owner/repo"')),
+  selectedRepositories: z.array(z.string().regex(GITHUB_REPOSITORY_FULL_NAME_PATTERN, 'Expected "owner/repo"')),
 });
 
 /**
