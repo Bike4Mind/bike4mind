@@ -159,6 +159,10 @@ export async function generateMusic(
   const deadline = now() + MUSIC_DEADLINE_MS;
 
   if (signal?.aborted) throw new MediaToolError(STOPPED_MESSAGE);
+  // The submit deliberately runs without the signal. Aborting it mid-flight would leave the server
+  // holding credits for a job this app never learns the id of, so it could not cancel it; the
+  // idempotency key makes the submit safe to let finish, and a stop that lands during it is
+  // answered right below.
   const created = await deps.client.createMusicGeneration(
     {
       model: request.model,
@@ -166,9 +170,12 @@ export async function generateMusic(
       ...(request.instrumental !== undefined ? { instrumental: request.instrumental } : {}),
       ...(request.durationSeconds !== undefined ? { duration_seconds: request.durationSeconds } : {}),
     },
-    idempotencyKey,
-    signal
+    idempotencyKey
   );
+  if (signal?.aborted) {
+    await cancelQuietly(created.id, deps);
+    throw new MediaToolError(STOPPED_MESSAGE);
+  }
 
   let job: MusicGeneration;
   try {

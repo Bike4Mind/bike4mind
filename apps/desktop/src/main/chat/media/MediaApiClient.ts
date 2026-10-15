@@ -306,17 +306,15 @@ export class MediaApiClient {
   /**
    * Start a music job. Returns as soon as it is queued; the song renders server-side.
    * `idempotencyKey` makes a retried submit of the same call return the same job, not a second bill.
+   *
+   * Takes no abort signal on purpose: a submit cut off mid-flight would leave a job billing that
+   * the caller has no id for, so a stop is handled by cancelling the job this returns instead.
    */
-  async createMusicGeneration(
-    body: CreateMusicGenerationBody,
-    idempotencyKey: string,
-    signal?: AbortSignal
-  ): Promise<MusicGeneration> {
+  async createMusicGeneration(body: CreateMusicGenerationBody, idempotencyKey: string): Promise<MusicGeneration> {
     try {
       const response = await this.api.post<unknown>('/api/v1/music-generations', body, {
         timeout: TIMEOUT_MS.submit,
         headers: { 'Idempotency-Key': idempotencyKey },
-        signal,
       });
       return MusicGenerationSchema.parse(response);
     } catch (error) {

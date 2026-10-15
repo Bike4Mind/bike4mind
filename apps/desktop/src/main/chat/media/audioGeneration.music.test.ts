@@ -216,11 +216,27 @@ describe('generateMusic', () => {
     );
   });
 
-  it('passes the signal to the create call', async () => {
+  it('submits without the signal, so a stop cannot cut the create off', async () => {
     const controller = new AbortController();
     const t = setup([succeeded(output())]);
     await generateMusic(request, t.deps, { ...t.options, signal: controller.signal });
-    expect(t.client.createMusicGeneration.mock.calls[0][2]).toBe(controller.signal);
+    expect(t.client.createMusicGeneration.mock.calls[0][2]).toBeUndefined();
+  });
+
+  it('cancels the job the server created while the stop was arriving', async () => {
+    const controller = new AbortController();
+    const t = setup([]);
+    t.client.createMusicGeneration.mockImplementation(async () => {
+      controller.abort();
+      return job();
+    });
+
+    const error = await generateMusic(request, t.deps, { ...t.options, signal: controller.signal }).catch(
+      (e: unknown) => e
+    );
+    expect(t.client.cancelMusicGeneration).toHaveBeenCalledWith('job-1');
+    expect((error as Error).message).toMatch(/stopped/);
+    expect(t.client.getMusicGeneration).not.toHaveBeenCalled();
   });
 
   it('stops at once when the signal aborts mid-wait', async () => {
