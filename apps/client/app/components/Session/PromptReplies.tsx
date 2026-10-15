@@ -1,7 +1,7 @@
 import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
 import { GeneratedAudioPlayer } from '@client/app/components/Session/GeneratedAudioPlayer';
-import { GeneratedVideoJobs } from '@client/app/components/Session/GeneratedVideoJobs';
+import { GeneratedJobs } from '@client/app/components/Session/GeneratedJobs';
 import { Box, Stack, Chip, Avatar, Tooltip, Button, Alert } from '@mui/joy';
 import Typography from '@mui/joy/Typography';
 import React, {
@@ -48,7 +48,7 @@ import MementoIndicator from './MementoIndicator';
 import { agentAvatarFallbackSx } from '@client/app/components/Agent/AgentAvatar';
 import { assistantReplyRemarkPlugins, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import rehypeKatex from 'rehype-katex';
-import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
+import { questGenerationJobs, type ChessArtifact, type MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
@@ -551,7 +551,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
 
   const generatedImagesUrl = `${cdnUrl}/generated`;
   // quest.images carries every file a tool generated this turn, but not all of them are
-  // images - e.g. excel_generation drops an .xlsx and music_generation an audio track in
+  // images - e.g. excel_generation drops an .xlsx and audio_generation (or a pre-job music turn) an audio track in
   // here. Classify once into the inline grid, inline audio players, and download chips
   // (non-image/-audio files, also surfaced in the Knowledge Base) so each lands in exactly
   // one place instead of rendering as a broken <img>. See classifyGeneratedFiles.
@@ -609,7 +609,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         images={images}
         generatedFiles={generatedFiles}
         videos={videos}
-        videoJobIds={messageData.videoJobIds}
+        generationJobs={questGenerationJobs(messageData)}
         audio={audio}
         search={search}
         isExpandable={isExpandable}
@@ -1194,7 +1194,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   images = [],
   generatedFiles = [],
   videos = [],
-  videoJobIds = [],
+  generationJobs = [],
   audio = [],
   search,
   isExpandable = false,
@@ -1623,7 +1623,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                 images.length > 0 ||
                 generatedFiles.length > 0 ||
                 videos.length > 0 ||
-                videoJobIds.length > 0 ||
+                generationJobs.length > 0 ||
                 audio.length > 0 ||
                 navSuggestions) && (
                 <Box
@@ -1732,7 +1732,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           </Box>
                         )}
 
-                        <GeneratedVideoJobs jobIds={videoJobIds} />
+                        <GeneratedJobs jobs={generationJobs} />
 
                         {videos?.length > 0 && (
                           <Box
