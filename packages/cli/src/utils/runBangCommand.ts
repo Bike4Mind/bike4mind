@@ -59,10 +59,16 @@ export function runBangCommand(
       failure ??= reason;
       killCommand(child);
     };
-    const collect = (append: (text: string) => void) => (chunk: Buffer) => {
-      append(chunk.toString('utf-8'));
+    const collect = (append: (text: string) => void) => (text: string) => {
+      // Past a timeout or the cap, keep draining the pipe but stop growing the buffer.
+      if (failure) return;
+      append(text);
       if (stdout.length + stderr.length > BANG_COMMAND_MAX_OUTPUT_CHARS) stop('overflow');
     };
+    // setEncoding decodes through a StringDecoder, so a multi-byte character split across two
+    // pipe chunks is not mangled.
+    child.stdout?.setEncoding('utf-8');
+    child.stderr?.setEncoding('utf-8');
     child.stdout?.on(
       'data',
       collect(text => (stdout += text))

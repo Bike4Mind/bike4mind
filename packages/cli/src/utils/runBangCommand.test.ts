@@ -19,6 +19,12 @@ describe('runBangCommand', () => {
     });
   });
 
+  it('keeps multi-byte characters intact across pipe chunks', async () => {
+    const { output } = await runBangCommand(`node -e "process.stdout.write('\u3042'.repeat(100000))"`, { cwd });
+
+    expect(output).toBe('\u3042'.repeat(100000));
+  });
+
   it('stops a command whose output passes the cap', async () => {
     const result = await runBangCommand('yes', { cwd });
 
