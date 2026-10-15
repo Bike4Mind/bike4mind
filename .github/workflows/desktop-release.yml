@@ -114,6 +114,22 @@ jobs:
         run: |
           pnpm build
           pnpm exec electron-builder "--$PLATFORM" --publish never "-c.extraMetadata.version=$DESKTOP_VERSION"
+      - name: Install Linux smoke test runtime
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgbm1 libasound2t64
+      - name: Launch packaged Linux AppImage
+        if: matrix.platform == 'linux'
+        timeout-minutes: 3
+        run: xvfb-run -a node apps/desktop/scripts/smoke-appimage.mjs
+      - name: Upload Linux startup evidence
+        if: always() && matrix.platform == 'linux'
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-smoke-results
+          path: apps/desktop/smoke-results/
+          retention-days: 7
       - uses: actions/upload-artifact@v6
         with:
           name: desktop-${{ matrix.platform }}

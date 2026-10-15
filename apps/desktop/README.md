@@ -78,6 +78,13 @@ typechecks and tests on macOS and Linux, then packages both macOS architectures 
 Linux x64. Publication waits for both build jobs and validates all five artifacts.
 Failed uploads leave a draft release, not a partially published download page.
 
+The Linux job also launches the actual AppImage under Xvfb with an isolated temporary
+profile. It checks the rendered sign-in/environment screen, auth initialization, and
+the packaged version through main/preload IPC. `linux-smoke-results` contains a screenshot
+and startup logs. This smoke test uses AppImage extraction and `--no-sandbox` only in
+CI; it does not verify FUSE mounting, desktop integration, sandbox compatibility on a
+real workstation, or authenticated chat. Those still need real-machine acceptance tests.
+
 Installer versions follow SemVer, selected automatically by
 `scripts/desktop_release_version.py`. The first release uses the package version
 (`0.1.0`). After that, desktop release tags are the version source of truth; there is
