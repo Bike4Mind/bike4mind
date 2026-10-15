@@ -175,7 +175,7 @@ import {
 import { WorkItemsClient } from './api/WorkItemsClient.js';
 import { PostEditDiagnostics } from './diagnostics/PostEditDiagnostics.js';
 import { buildSkillsPromptSection } from './core/skillsPrompt';
-import { checkForUpdate, readCachedUpdate } from './utils/updateChecker.js';
+import { getStartupUpdateStatus } from './utils/updateChecker.js';
 import { FeatureModuleRegistry } from './features/FeatureModuleRegistry.js';
 import { buildFeatureRegistry } from './features/buildFeatureRegistry.js';
 import { createBuiltinModules } from './features/createBuiltinModules.js';
@@ -4174,15 +4174,13 @@ function CliApp() {
 // Banner is rendered alongside startup messages in init()
 
 // Update banner from the cached check only, so first paint never waits on the
-// network. The refresh below updates the cache for the next launch (and for
-// maybeAutoUpdateOnLaunch, which also reads only the cache); it never rejects.
-const cachedUpdate = await readCachedUpdate(packageJson.version);
+// network; the cache is refreshed in the background for the next launch.
+const cachedUpdate = await getStartupUpdateStatus(packageJson.version);
 if (cachedUpdate?.updateAvailable) {
   console.log(
     `\x1b[33m  \u2b06 Update available: v${cachedUpdate.currentVersion} \u2192 v${cachedUpdate.latestVersion} (run: b4m update)\x1b[0m\n`
   );
 }
-void checkForUpdate(packageJson.version);
 
 // Show dev mode indicator when running via tsx (pnpm dev)
 const isDevMode = import.meta.url.includes('/src/') || process.env.NODE_ENV === 'development';

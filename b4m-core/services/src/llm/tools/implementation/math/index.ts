@@ -8,12 +8,17 @@ import type { MathJsInstance } from 'mathjs';
 let mathInstance: Promise<MathJsInstance> | null = null;
 
 function loadMath(): Promise<MathJsInstance> {
-  mathInstance ??= import('mathjs').then(({ create, all }) =>
-    create(all, {
-      number: 'BigNumber',
-      precision: 14,
-    })
-  );
+  mathInstance ??= import('mathjs')
+    .then(({ create, all }) =>
+      create(all, {
+        number: 'BigNumber',
+        precision: 14,
+      })
+    )
+    .catch((error: unknown) => {
+      mathInstance = null; // let the next call retry rather than fail for the life of the process
+      throw error;
+    });
   return mathInstance;
 }
 

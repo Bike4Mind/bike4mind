@@ -148,7 +148,7 @@ export async function maybeAutoUpdateOnLaunch(): Promise<void> {
   const currentVersion = packageJson.version;
 
   // Cache only, so launch never waits on the network. The interactive app
-  // refreshes the cache in the background (index.tsx), so an update published
+  // refreshes the cache in the background (getStartupUpdateStatus), so an update published
   // since the last check is offered on the next launch.
   const result = await readCachedUpdate(currentVersion);
   if (!result?.updateAvailable) return;

@@ -204,7 +204,11 @@ async function writeCache(cache: UpdateCheckCache): Promise<void> {
   try {
     // Ensure directory exists
     await fs.mkdir(path.dirname(CACHE_FILE), { recursive: true });
-    await fs.writeFile(CACHE_FILE, JSON.stringify(cache, null, 2), 'utf-8');
+    // Temp file + rename: the refresh runs during a session, so an exit can land
+    // mid-write, and a truncated cache would hide the next launch's banner.
+    const tempFile = `${CACHE_FILE}.${process.pid}.tmp`;
+    await fs.writeFile(tempFile, JSON.stringify(cache, null, 2), 'utf-8');
+    await fs.rename(tempFile, CACHE_FILE);
   } catch {
     // Silently fail - cache is best-effort
   }
@@ -224,6 +228,18 @@ export async function readCachedUpdate(currentVersion: string): Promise<UpdateCh
   const cache = await readCache();
   if (!cache || cache.currentVersion !== currentVersion) return null;
   return toResult(currentVersion, cache.latestVersion);
+}
+
+/**
+ * Startup update status: the cached result now, plus a background refresh of
+ * the cache (registry fetch only when it is stale) for the next launch. This
+ * refresh is the only automatic writer of the cache, which both the banner and
+ * the launch auto-update prompt read.
+ */
+export async function getStartupUpdateStatus(currentVersion: string): Promise<UpdateCheckResult | null> {
+  const cached = await readCachedUpdate(currentVersion);
+  void checkForUpdate(currentVersion); // never rejects
+  return cached;
 }
 
 /**
