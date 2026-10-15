@@ -75,6 +75,12 @@ describe('planAutoFix', () => {
     });
   });
 
+  it('gives a binding ticked for the new budget five attempts', () => {
+    const last = planAutoFix({ ...binding, autoFixAttempts: 4 }, failing, false);
+    expect(last.kind === 'start' && last.prompt).toContain('Attempt 5 of 5');
+    expect(planAutoFix({ ...binding, autoFixAttempts: 5 }, failing, false)).toEqual({ kind: 'exhausted' });
+  });
+
   it('keeps a binding ticked before the budget was stored at three attempts', () => {
     const { autoFixMax: _, ...legacy } = binding;
     expect(planAutoFix({ ...legacy, autoFixAttempts: 3 }, failing, false)).toEqual({ kind: 'exhausted' });
