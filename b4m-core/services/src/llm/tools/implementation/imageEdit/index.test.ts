@@ -435,9 +435,10 @@ describe('imageEditTool - credit reservation counts the image that renders', () 
     mockEditSpy.mockRejectedValue(new Error('stop-after-dispatch'));
   });
 
-  // onStart is the single payload both credit rails bill from - ToolBuilder.reserveImageCredits
-  // for classic chat and estimateGeneratedMediaUsd for agent mode - so an n above 1 reaching it
-  // overcharged on both, for images edit() has never been able to return.
+  // onStart and onFinish carry the one cost input both credit rails bill from -
+  // ToolBuilder.settleImageCredits for classic chat and estimateGeneratedMediaUsd for agent
+  // mode - so an n above 1 reaching it overcharged on both, for images edit() has never been
+  // able to return.
   it('reserves one image however many the model asks for', async () => {
     const context = createFakeContext();
     context.onStart = vi.fn();

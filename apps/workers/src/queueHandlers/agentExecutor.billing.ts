@@ -79,16 +79,15 @@ export function addToolUsage(pending: PendingToolUsage, usage: ToolUsageTotals):
 
 /**
  * Which generative tools have their provider media cost folded into the iteration bill, keyed
- * by the callback phase that folds them. Image cost is fully determined at call time by
- * n/size/quality, so it is reserved on start (mirrors classic chat's reserve-on-start); audio
- * cost depends on the delivered clip, so it settles on finish (the tool's failure paths return
- * before onFinish, so an undelivered clip is never billed). video_generation and
- * music_generation bill in their job instead. Must stay in sync with the tool implementations
- * in b4m-core/services.
+ * by the callback phase that folds them. Image and audio both settle on finish: the tools'
+ * failure paths return before onFinish, so an undelivered image or clip is never billed. The
+ * start phase owns nothing today; it stays so a tool can opt into it explicitly.
+ * video_generation and music_generation bill in their job instead. Must stay in sync with the
+ * tool implementations in b4m-core/services.
  */
 const MEDIA_COST_TOOLS_BY_PHASE = {
-  start: ['image_generation', 'edit_image'],
-  finish: ['audio_generation'],
+  start: [],
+  finish: ['image_generation', 'edit_image', 'audio_generation'],
 } as const satisfies Record<'start' | 'finish', readonly string[]>;
 
 export type MediaCostPhase = keyof typeof MEDIA_COST_TOOLS_BY_PHASE;

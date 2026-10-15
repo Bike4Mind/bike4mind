@@ -1786,9 +1786,8 @@ async function processExecution(
         // toolCreditsMap drain never runs here. Fold the media USD into the same
         // per-iteration bucket (`pendingToolUsage.costUsd`) that `onToolLlmUsage` feeds, so
         // `billIteration` charges it on the existing agent rail - otherwise agent-mode
-        // generation is free. Image cost is known up front (n/size/quality), so it is read
-        // at start (mirrors classic reserve-on-start); music/audio settle at finish (see
-        // onToolFinish). The phase->tool routing + `usd > 0` guard live in the billing
+        // generation is free. Image and audio settle at finish (see onToolFinish), so a failed
+        // call is never billed. The phase->tool routing + `usd > 0` guard live in the billing
         // module so they are covered by agentExecutor.billing.test.ts.
         // processSubagentDispatch folds the same way but settles once per run.
         foldGeneratedMediaUsd({
@@ -1805,9 +1804,9 @@ async function processExecution(
         });
       },
       onToolFinish: async (toolName, data) => {
-        // Settle music/audio media cost on delivery (see onToolStart for the rail rationale):
-        // the tools' failure paths return before onFinish, so an undelivered clip is never
-        // billed. Charged into the current iteration's pendingToolUsage.
+        // Settle image/audio media cost on delivery (see onToolStart for the rail rationale):
+        // the tools' failure paths return before onFinish, so an undelivered image or clip is
+        // never billed. Charged into the current iteration's pendingToolUsage.
         foldGeneratedMediaUsd({
           phase: 'finish',
           toolName,
