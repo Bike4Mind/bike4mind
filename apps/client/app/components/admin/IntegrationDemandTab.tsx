@@ -4,12 +4,44 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { toast } from 'sonner';
 import type { IntegrationDemand, IntegrationStage } from '@bike4mind/common';
 import {
+  REQUESTER_EMAILS_MAX_ROWS,
   fetchAllRequesterEmails,
+  isRateLimited,
   useIntegrationDemand,
   useIntegrationRequesters,
+  type RequesterEmails,
 } from '@client/app/hooks/data/integrationDemand';
 
 const formatDate = (iso: string) => new Date(iso).toLocaleDateString();
+
+const RATE_LIMITED_MESSAGE = 'Too many requests, try again in a minute';
+
+type EmailLookup = { ok: true; found: RequesterEmails } | { ok: false; error: unknown };
+
+/**
+ * Put the emails on the clipboard. Safari only honours a clipboard write started inside the click
+ * itself, so where ClipboardItem exists the write starts at once with the emails still being
+ * fetched (ClipboardItem accepts a promise for its blob); elsewhere the fetch finishes first.
+ * The lookup settles on its own, so the caller reads its outcome whatever the write did.
+ */
+async function copyRequesterEmails(lookup: Promise<EmailLookup>): Promise<boolean> {
+  const text = async () => {
+    const result = await lookup;
+    if (!result.ok || result.found.emails.length === 0) throw new Error('Nothing to copy');
+    return result.found.emails.join(', ');
+  };
+  try {
+    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      const blob = text().then(joined => new Blob([joined], { type: 'text/plain' }));
+      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+    } else {
+      await navigator.clipboard.writeText(await text());
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const STAGE_CHIP: Record<IntegrationStage, { label: string; color: 'neutral' | 'warning' | 'success' }> = {
   planned: { label: 'Roadmap', color: 'neutral' },
@@ -34,20 +66,32 @@ const RequestersPanel: React.FC<{ integration: IntegrationDemand }> = ({ integra
   const [copying, setCopying] = useState(false);
   const rows = requesters.data?.pages.flatMap(page => page.data) ?? [];
 
+  // Not awaited before the clipboard write starts: see copyRequesterEmails.
   const copyEmails = async () => {
     setCopying(true);
-    try {
-      const emails = await fetchAllRequesterEmails(integrationId);
-      if (emails.length === 0) {
-        toast.info('None of these requesters has an email on file.');
-        return;
-      }
-      await navigator.clipboard.writeText(emails.join(', '));
-      toast.success(`Copied ${emails.length} email${emails.length === 1 ? '' : 's'}`);
-    } catch {
+    const lookup: Promise<EmailLookup> = fetchAllRequesterEmails(integrationId).then(
+      found => ({ ok: true, found }),
+      error => ({ ok: false, error })
+    );
+    const copied = await copyRequesterEmails(lookup);
+    const result = await lookup;
+    setCopying(false);
+    if (!result.ok) {
+      toast.error(isRateLimited(result.error) ? RATE_LIMITED_MESSAGE : "Couldn't copy the emails. Try again.");
+      return;
+    }
+    const { emails, truncated } = result.found;
+    if (emails.length === 0) {
+      toast.info('None of these requesters has an email on file.');
+    } else if (!copied) {
       toast.error("Couldn't copy the emails. Try again.");
-    } finally {
-      setCopying(false);
+    } else if (truncated) {
+      toast.warning(
+        `Copied ${emails.length} emails, but this list is longer than ${REQUESTER_EMAILS_MAX_ROWS.toLocaleString()} requesters and the rest are missing.`,
+        { duration: 10_000 }
+      );
+    } else {
+      toast.success(`Copied ${emails.length} email${emails.length === 1 ? '' : 's'}`);
     }
   };
 
@@ -69,7 +113,7 @@ const RequestersPanel: React.FC<{ integration: IntegrationDemand }> = ({ integra
 
       {requesters.error ? (
         <Alert color="danger" data-testid="admin-integration-demand-requesters-error">
-          Couldn&apos;t load the requesters.
+          {isRateLimited(requesters.error) ? RATE_LIMITED_MESSAGE : "Couldn't load the requesters."}
         </Alert>
       ) : requesters.isPending ? (
         <CircularProgress size="sm" />
