@@ -123,6 +123,8 @@ function withValidArguments(message: IMessage): { message: IMessage; replaced: n
  * A valid transcript is left untouched (same array contents, same message objects), so on the normal
  * path, where backends append each call and its result as a pair, repair changes no request bytes.
  * A call id that appears in two assistant messages is answered once, after the first.
+ * A result inside a mixed (non-pure) message answers its call even if it precedes it, so that call is
+ * neither synthesized nor moved.
  */
 export function repairTranscript(messages: IMessage[], buildResult: ToolResultBuilder): TranscriptRepairReport {
   const report: TranscriptRepairReport = {
