@@ -41,7 +41,8 @@ import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from '@server/utils/auth/createOAuthUser';
-import { applyOAuthLinkVerificationGrants, applyOAuthSignupDomainGrant } from '@server/utils/auth/oauthSignupGrants';
+import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
+import { applyOAuthSignupDomainGrant } from '@server/utils/auth/oauthSignupGrants';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
@@ -420,11 +421,13 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       // Mirrors verifyCallback.ts: promotion is this account's email verification, so apply its
       // grants here (OTC login and Resend no longer will once emailVerified is set).
       if (promoteEmailVerified) {
-        await applyOAuthLinkVerificationGrants(
-          { id: user.id, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
-          email,
-          'Okta account link (email verified)'
-        );
+        await applyEmailVerifiedGrants({
+          user: { id: user.id, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
+          verifiedEmail: email,
+          trigger: 'oauth-link-verification',
+          releaseReason: 'Okta account link (email verified)',
+          logger: Logger.globalInstance,
+        });
       }
       // Invariant (mirrors verifyCallback.ts): the new-provider tokenVersion bump must also revoke
       // AuthSessions, else an opaque refresh token -- never checked against tokenVersion -- rotates

@@ -1,20 +1,21 @@
 import { AuthStrategy, IAuthProviders } from '@bike4mind/common';
 import { User, authSessionRepository } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { omit } from 'lodash';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
+import {
+  applyEmailVerifiedGrants,
+  isEligibleForFreeCredits,
+  releaseVerifiedPendingFreeCredits,
+} from '@server/auth/emailVerifiedGrants';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { ForbiddenError } from '@server/utils/errors';
 import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAccountLink } from './oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
 import { OAuthFailureReason } from './oauthFailureReason';
 import { isOpenRegistrationAllowed } from './openRegistration';
-import {
-  applyOAuthLinkVerificationGrants,
-  applyOAuthSignupDomainGrant,
-  isEligibleForOAuthFreeCredits,
-  releaseOAuthPendingFreeCredits,
-} from './oauthSignupGrants';
+import { applyOAuthSignupDomainGrant } from './oauthSignupGrants';
 
 /**
  * Strategies where anyone on the internet can present an identity, so a first login
@@ -151,11 +152,13 @@ const authenticateUser = async (
       // emailVerified is set, OTC login no longer releases them and Resend is refused. Promotion
       // implies the provider email matched the local one, so `email` is set; the check narrows it.
       if (promoteEmailVerified && email) {
-        await applyOAuthLinkVerificationGrants(
-          { id: String(user._id), tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
-          email,
-          'OAuth account link (email verified)'
-        );
+        await applyEmailVerifiedGrants({
+          user: { id: String(user._id), tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
+          verifiedEmail: email,
+          trigger: 'oauth-link-verification',
+          releaseReason: 'OAuth account link (email verified)',
+          logger: Logger.globalInstance,
+        });
       }
 
       // Invariant: a tokenVersion bump must also revoke AuthSessions, or an opaque refresh token
@@ -209,7 +212,7 @@ const authenticateUser = async (
       const pendingFreeCredits =
         SELF_SERVE_STRATEGIES.has(strategy) &&
         !!emailForNewAccount &&
-        (await isEligibleForOAuthFreeCredits(emailForNewAccount));
+        (await isEligibleForFreeCredits(emailForNewAccount, Logger.globalInstance));
       user = await createUniqueOAuthUser({
         name,
         baseUsername,
@@ -219,9 +222,10 @@ const authenticateUser = async (
       });
       const newUserId = String(user._id);
       if (pendingFreeCredits) {
-        await releaseOAuthPendingFreeCredits(
+        await releaseVerifiedPendingFreeCredits(
           { id: newUserId, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
-          'OAuth signup (provider-verified email)'
+          'OAuth signup (provider-verified email)',
+          Logger.globalInstance
         );
       }
       // These accounts never reach /api/email/verify, so the domain grant runs here for every strategy.

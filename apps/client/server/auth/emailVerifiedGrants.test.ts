@@ -11,8 +11,12 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockReleasePending = vi.fn();
+const mockShouldBlock = vi.fn();
 vi.mock('@bike4mind/services', () => ({
-  userService: { releasePendingFreeCredits: (...a: unknown[]) => mockReleasePending(...a) },
+  userService: {
+    releasePendingFreeCredits: (...a: unknown[]) => mockReleasePending(...a),
+    shouldBlockDisposableEmail: (...a: unknown[]) => mockShouldBlock(...a),
+  },
 }));
 
 const mockApplySignupDomainGrant = vi.fn();
@@ -20,7 +24,11 @@ vi.mock('@server/entitlements/signupDomainGrant', () => ({
   applySignupDomainGrant: (...a: unknown[]) => mockApplySignupDomainGrant(...a),
 }));
 
-import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from './emailVerifiedGrants';
+import {
+  applyEmailVerifiedGrants,
+  isEligibleForFreeCredits,
+  releaseVerifiedPendingFreeCredits,
+} from './emailVerifiedGrants';
 
 const mockLoggerError = vi.fn();
 const logger = { info: vi.fn(), error: (...a: unknown[]) => mockLoggerError(...a) } as unknown as Logger;
@@ -39,6 +47,20 @@ describe('emailVerifiedGrants', () => {
     vi.clearAllMocks();
     mockUserUpdate.mockResolvedValue(undefined);
     mockApplySignupDomainGrant.mockResolvedValue(NO_DOMAIN_GRANT);
+  });
+
+  describe('isEligibleForFreeCredits', () => {
+    it('is the inverse of the disposable-email gate', async () => {
+      mockShouldBlock.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      expect(await isEligibleForFreeCredits('x@mailinator.com', logger)).toBe(false);
+      expect(await isEligibleForFreeCredits('x@gmail.com', logger)).toBe(true);
+    });
+
+    it('withholds the grant when the gate throws', async () => {
+      mockShouldBlock.mockRejectedValue(new Error('settings down'));
+      expect(await isEligibleForFreeCredits('x@gmail.com', logger)).toBe(false);
+      expect(mockLoggerError).toHaveBeenCalled();
+    });
   });
 
   describe('releaseVerifiedPendingFreeCredits', () => {
