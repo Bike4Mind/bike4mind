@@ -1,0 +1,157 @@
+name: Desktop Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/desktop/**'
+      - 'b4m-core/**'
+      - 'packages/cli/**'
+      - 'packages/database/**'
+      - 'packages/sdk/**'
+      - 'packages/typescript-config/**'
+      - 'patches/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'turbo.json'
+      - '.npmrc'
+      - '.github/workflows/desktop-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: mac
+          - os: ubuntu-24.04
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      B4M_DEFAULT_API_URL: ${{ vars.B4M_DEFAULT_API_URL }}
+      VITEST_MAX_WORKERS: '2'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build shared packages
+        run: pnpm turbo:core:build
+      - name: Check desktop types
+        run: pnpm --filter @bike4mind/desktop typecheck
+      - name: Test desktop
+        run: pnpm --filter @bike4mind/desktop test
+      - name: Choose installer version
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('apps/desktop/package.json', 'utf8'));
+          if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Desktop version must be major.minor.patch');
+          const [major, minor, patch] = version.split('.').map(Number);
+          const releaseVersion = `${major}.${minor}.${patch + Number(process.env.GITHUB_RUN_NUMBER)}`;
+          appendFileSync(process.env.GITHUB_ENV, `DESKTOP_VERSION=${releaseVersion}\n`);
+          NODE
+      - name: Package installers
+        working-directory: apps/desktop
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          pnpm build
+          pnpm exec electron-builder "--$PLATFORM" --publish never "-c.extraMetadata.version=$DESKTOP_VERSION"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: desktop-${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.AppImage
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: installers
+      - name: Validate and checksum installers
+        working-directory: installers
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+          files = sorted(p.name for p in Path('.').iterdir())
+          versions = [re.fullmatch(r'Bike4Mind-(\d+\.\d+\.\d+)-arm64\.dmg', f) for f in files]
+          versions = [m.group(1) for m in versions if m]
+          if len(versions) != 1:
+              raise SystemExit('Expected exactly one arm64 DMG')
+          version = versions[0]
+          expected = {
+              f'Bike4Mind-{version}-arm64.dmg', f'Bike4Mind-{version}-x64.dmg',
+              f'Bike4Mind-{version}-arm64.zip', f'Bike4Mind-{version}-x64.zip',
+              f'Bike4Mind-{version}-x64.AppImage',
+          }
+          if set(files) != expected:
+              raise SystemExit(f'Unexpected installer set: {files}')
+          if any(Path(f).stat().st_size == 0 for f in files):
+              raise SystemExit('Empty installer')
+          import os
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write(f'DESKTOP_VERSION={version}\n')
+          PY
+          sha256sum -- *.dmg *.zip *.AppImage > SHA256SUMS.txt
+      - name: Publish desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="desktop-v$DESKTOP_VERSION"
+          if gh release view "$tag" --json isDraft > release-state.json; then
+            if jq -e '.isDraft == false' release-state.json > /dev/null; then
+              echo "Release $tag is already published; leaving its assets unchanged."
+              exit 0
+            fi
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --draft --title "Desktop $DESKTOP_VERSION" --notes-file - <<'NOTES'
+          Download the installer for your platform below:
+
+          - macOS Apple Silicon: arm64.dmg
+          - macOS Intel: x64.dmg
+          - Linux x64: AppImage (mark executable before launching)
+
+          These builds are not signed or notarized. macOS may block launch until approved in System Settings > Privacy & Security. Only approve a download you trust. Windows installers are not included yet.
+
+          SHA256SUMS.txt contains checksums for all downloads. ZIP files are also available for macOS. In-app updates are not enabled by this release pipeline; download and install a newer release manually.
+          NOTES
+          fi
+          gh release upload "$tag" installers/* --clobber
+          gh release edit "$tag" --draft=false --latest=false
+          printf 'Desktop release: https://github.com/%s/releases/tag/%s\n' "$GH_REPO" "$tag" >> "$GITHUB_STEP_SUMMARY"

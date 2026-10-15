@@ -9,6 +9,21 @@ hydrates Tanstack Router, not a static bundle. So this app has its own lean rend
 over HTTP. Shared Zod schemas and types come from `@bike4mind/common`; components get
 ported over from `apps/client` only as later tasks need them.
 
+## Download and install
+
+Download installers from [Desktop releases](https://github.com/bike4mind/bike4mind/releases?q=desktop-v).
+No Node.js, pnpm, or source checkout is required.
+
+1. On macOS, choose `arm64.dmg` for Apple Silicon or `x64.dmg` for Intel, open it,
+   and drag Bike4Mind into Applications.
+2. On Linux x64, download the `.AppImage`, mark it executable (`chmod +x <file>.AppImage`),
+   and launch it. Some distributions require FUSE support to run AppImages.
+
+Builds are currently unsigned and not notarized. macOS may require approval in
+System Settings > Privacy & Security after a blocked launch. Only approve a download
+you trust. `SHA256SUMS.txt` accompanies each release for checksum verification.
+Windows packaging exists locally but is not yet part of the release pipeline.
+
 ## Running it
 
 ```bash
@@ -39,11 +54,40 @@ gitignored.
 | `pnpm package` | everything the host platform can build |
 | `pnpm package:mac` | `dmg` and `zip`, both for arm64 and x64 |
 | `pnpm package:win` | `nsis` installer, x64 |
+| `pnpm package:linux` | `AppImage`, x64 |
 | `pnpm package:dir` | an unpacked `.app`/directory, no installer - the fast loop |
 
 The macOS `zip` is not redundant with the `dmg`. The dmg is the human-facing installer;
 the zip is the format a Squirrel.Mac auto-updater consumes, so it has to exist before
 auto-update can.
+
+### Automated releases
+
+[`Desktop Release`](../../.github/workflows/desktop-release.yml) runs on pushes to
+`main` touching desktop, shared core packages, CLI sources, build configuration, or
+dependencies. It can also be run manually from Actions on `main`.
+
+The workflow installs from the frozen lockfile, builds shared packages, runs desktop
+typechecks and tests on macOS and Linux, then packages both macOS architectures and
+Linux x64. Publication waits for both build jobs and validates all five artifacts.
+Failed uploads leave a draft release, not a partially published download page.
+
+Installer versions use the package's `major.minor` and its patch plus the workflow run
+number. For example, package `0.1.0` on run 42 becomes `0.1.42`, tagged `desktop-v0.1.42`.
+Reruns reuse the same version; published assets are never overwritten. Keep the package
+version monotonic and do not rename the workflow, which would reset its run counter.
+Desktop releases do not replace the repository's overall latest release.
+
+Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
+Without it, users must select their own backend. The workflow deliberately leaves
+`B4M_UPDATE_FEED_URL` unset: downloadable releases do not configure in-app updates.
+Installing a newer release is currently manual. Only the final publication job has
+`contents: write`; build jobs have read-only tokens and no signing credentials.
+
+To roll back, download and reinstall an earlier desktop release. Back up the app's
+user-data directory before downgrading because older builds may not understand newer
+local data. If a release is broken, mark it as a prerelease or return it to draft in
+GitHub Releases, then rerun the workflow on corrected `main` to publish a new version.
 
 ### Baking the backend URL
 

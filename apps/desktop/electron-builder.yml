@@ -21,6 +21,7 @@ files:
   - package.json
 
 asar: true
+artifactName: ${productName}-${version}-${arch}.${ext}
 
 mac:
   icon: build/icon.icns
@@ -65,6 +66,13 @@ win:
   # Same shape as macOS: no certificate is named here. electron-builder picks one up
   # from WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD (or the platform-neutral CSC_LINK +
   # CSC_KEY_PASSWORD). Unsigned installers work, behind a SmartScreen warning.
+
+linux:
+  icon: build/icon.png
+  category: Development
+  target:
+    - target: AppImage
+      arch: [x64]
 
 nsis:
   oneClick: false

@@ -15,6 +15,7 @@
     "package": "electron-vite build && electron-builder --publish never",
     "package:mac": "electron-vite build && electron-builder --mac --publish never",
     "package:win": "electron-vite build && electron-builder --win --publish never",
+    "package:linux": "electron-vite build && electron-builder --linux --publish never",
     "package:dir": "electron-vite build && electron-builder --dir --publish never",
     "preview": "electron-vite preview",
     "start": "electron .",
