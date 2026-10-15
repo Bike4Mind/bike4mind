@@ -113,6 +113,12 @@ describe('ElevenLabsVoiceService', () => {
     }
   );
 
+  it('tags an invalid voice id as 422 so the API reports a bad request, not an outage', async () => {
+    await expect(aiVoiceService('elevenlabs', 'key', logger).synthesize('hi', { voice: '../x' })).rejects.toMatchObject(
+      { status: 422 }
+    );
+  });
+
   it('rejects a non-audio success body so it is never returned (and billed) as audio', async () => {
     mockedPost.mockResolvedValue({ data: Buffer.from('{"ok":true}'), headers: { 'content-type': 'application/json' } });
 

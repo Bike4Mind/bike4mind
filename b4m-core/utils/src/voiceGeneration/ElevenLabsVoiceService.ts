@@ -37,9 +37,12 @@ export class ElevenLabsVoiceService extends AIVoiceService {
 
     const voiceId = options.voice ?? DEFAULT_VOICE;
     // The id is interpolated into the request path, so a caller-supplied `/` or `..` would retarget
-    // the call to another endpoint on the account's key.
+    // the call to another endpoint on the account's key. Tagged 422 so the API reports it as a
+    // rejected request (the caller's input) rather than an upstream outage.
     if (!VOICE_ID_PATTERN.test(voiceId)) {
-      throw new Error(`Invalid ElevenLabs voice id: ${JSON.stringify(voiceId.slice(0, 64))}`);
+      throw Object.assign(new Error(`Invalid ElevenLabs voice id: ${JSON.stringify(voiceId.slice(0, 64))}`), {
+        status: 422,
+      });
     }
     const format = options.format ?? DEFAULT_FORMAT;
     const outputFormat = ELEVENLABS_OUTPUT_FORMAT[format];
