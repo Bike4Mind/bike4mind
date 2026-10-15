@@ -79,6 +79,7 @@ vi.mock('@bike4mind/database', () => ({
     tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a),
   },
   adminSettingsRepository: { findBySettingName: vi.fn() },
+  organizationRepository: {},
   registrationInviteRepository: {},
   subscriberRepository: {},
   creditTransactionRepository: {},
@@ -99,6 +100,7 @@ vi.mock('@bike4mind/database', () => ({
 const mockVerifyPendingOTC = vi.fn();
 const mockRegisterViaOTC = vi.fn();
 const mockAddCredits = vi.fn();
+const mockApplyPartnerRuleMembership = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   userService: {
     verifyPendingOTC: (...a: any[]) => mockVerifyPendingOTC(...a),
@@ -106,6 +108,7 @@ vi.mock('@bike4mind/services', () => ({
     releasePendingFreeCredits: (...a: unknown[]) => mockReleasePending(...a),
   },
   creditService: { addCredits: (...a: any[]) => mockAddCredits(...a) },
+  organizationService: { applyPartnerRuleMembership: (...a: unknown[]) => mockApplyPartnerRuleMembership(...a) },
   mfaService: { userHasMFAConfigured: () => false },
   authSessionService: {
     issueSession: vi.fn().mockResolvedValue({ accessToken: 'a', refreshToken: 'r', sid: 'sid' }),
@@ -669,17 +672,22 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
 });
 
 describe('/api/otc/verify - existing user verification and pending free credits', () => {
-  const pendingUser = (overrides: Record<string, unknown> = {}) => ({
-    id: 'u-existing',
-    isSystem: false,
-    isBanned: false,
-    emailVerified: false,
-    tags: ['Customer', PENDING_FREE_CREDITS_TAG],
-    pendingCreditGrant: null,
-    tokenVersion: 0,
-    toJSON: () => ({ id: 'u-existing', username: 'bob' }),
-    ...overrides,
-  });
+  // The handler mutates the doc in place and the login response serializes it through toJSON(),
+  // so the fixture must expose the CURRENT fields - a fixed toJSON would hide an unreflected grant.
+  const pendingUser = (overrides: Record<string, unknown> = {}) => {
+    const user: Record<string, unknown> = {
+      id: 'u-existing',
+      isSystem: false,
+      isBanned: false,
+      emailVerified: false,
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: null,
+      tokenVersion: 0,
+      ...overrides,
+    };
+    user.toJSON = () => ({ ...user });
+    return user;
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -688,10 +696,20 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockUserUpdate.mockResolvedValue(undefined);
     mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
+    mockAddCredits.mockResolvedValue({ currentCredits: 15_000 });
+    mockApplyPartnerRuleMembership.mockResolvedValue({ added: true, reason: 'added' });
   });
 
-  it('releases pending credits and strips the tag in the same write that stamps emailVerified', async () => {
-    mockFindByEmail.mockResolvedValue(pendingUser());
+  const partnerRuleGrant = () =>
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      entitlements: new Set(['partner:pro']),
+      signupCredits: 15_000,
+      organizationId: 'org-partner',
+    });
+
+  it('stamps emailVerified first, then strips the pending-credit tag in a separate write', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser({ pendingCreditGrant: 250 }));
     mockReleasePending.mockResolvedValue({
       released: true,
       creditsGranted: 100,
@@ -703,14 +721,22 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockUserUpdate).toHaveBeenCalledTimes(1);
-    expect(mockUserUpdate).toHaveBeenCalledWith({
+    expect(mockUserUpdate).toHaveBeenCalledTimes(2);
+    expect(mockUserUpdate).toHaveBeenNthCalledWith(1, {
       id: 'u-existing',
       emailVerified: true,
       emailVerifiedAt: expect.any(Date),
+      emailVerificationToken: null,
+      emailVerificationExpires: null,
+      emailVerificationSentAt: null,
+    });
+    expect(mockUserUpdate).toHaveBeenNthCalledWith(2, {
+      id: 'u-existing',
       tags: ['Customer'],
       pendingCreditGrant: null,
     });
+    // The release is reflected onto the response, not just the doc the handler mutated.
+    expect(res._getJSONData()).toMatchObject({ tags: ['Customer'], pendingCreditGrant: null });
   });
 
   it('leaves an already-verified user untouched', async () => {
@@ -736,6 +762,64 @@ describe('/api/otc/verify - existing user verification and pending free credits'
       id: 'u-existing',
       emailVerified: true,
       emailVerifiedAt: expect.any(Date),
+      emailVerificationToken: null,
+      emailVerificationExpires: null,
+      emailVerificationSentAt: null,
     });
+  });
+
+  it('applies the verified domain grant (credits and partner org) to an unverified existing user', async () => {
+    partnerRuleGrant();
+    const user = pendingUser();
+    mockFindByEmail.mockResolvedValue(user);
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+    const { req, res } = makeReqRes(DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    // Reflected onto the doc the response serializes, so the client sees the grant without a refetch.
+    expect(user).toMatchObject({ currentCredits: 15_000, organizationId: 'org-partner' });
+    expect(res._getJSONData()).toMatchObject({ currentCredits: 15_000, organizationId: 'org-partner' });
+    expect(mockAddCredits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerId: 'u-existing',
+        credits: 15_000,
+        transactionId: 'domain-grant-credits:u-existing',
+      }),
+      expect.anything()
+    );
+    expect(mockApplyPartnerRuleMembership).toHaveBeenCalledWith(
+      { userId: 'u-existing', organizationId: 'org-partner' },
+      expect.anything()
+    );
+  });
+
+  it('does not apply the domain grant to an already-verified existing user', async () => {
+    partnerRuleGrant();
+    mockFindByEmail.mockResolvedValue(pendingUser({ emailVerified: true }));
+    const { req, res } = makeReqRes(DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the domain grant when persisting emailVerified fails (next login retries)', async () => {
+    partnerRuleGrant();
+    mockFindByEmail.mockResolvedValue(pendingUser());
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+    mockUserUpdate.mockRejectedValue(new Error('db down'));
+    const { req, res } = makeReqRes(DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
   });
 });

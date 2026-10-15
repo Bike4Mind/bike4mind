@@ -7,6 +7,7 @@ import { BadRequestError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ApiKeyScope, AuthEvents } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
+import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 
 interface RequestQuery {
   userId: string;
@@ -28,7 +29,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         throw new BadRequestError('Invalid user ID');
       }
 
-      await withTransaction(async () => {
+      const verifiedUser = await withTransaction(async () => {
         // Get the user
         const user = await userRepository.findById(userId);
 
@@ -37,9 +38,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         }
 
         // Check if already verified
-        if (user.emailVerified) {
-          return res.json({ message: 'Email is already verified', alreadyVerified: true });
-        }
+        if (user.emailVerified) return null;
 
         // Update user email verification status
         await userRepository.update({
@@ -74,9 +73,26 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         req.logger.info(
           `Admin ${req.user.username} (${req.user.id}) manually verified email for user ${user.username} (${userId})`
         );
-
-        return res.json({ message: 'Email verified successfully' });
+        return user;
       });
+
+      if (!verifiedUser) {
+        return res.json({ message: 'Email is already verified', alreadyVerified: true });
+      }
+
+      // After the commit, not inside it: partner membership re-reads the persisted emailVerified.
+      // The account never reaches /api/email/verify now, so this is its one chance at those grants.
+      if (verifiedUser.email) {
+        await applyEmailVerifiedGrants({
+          user: verifiedUser,
+          verifiedEmail: verifiedUser.email,
+          trigger: 'admin-verification',
+          releaseReason: 'admin verified email',
+          logger: req.logger,
+        });
+      }
+
+      return res.json({ message: 'Email verified successfully' });
     })
   );
 
