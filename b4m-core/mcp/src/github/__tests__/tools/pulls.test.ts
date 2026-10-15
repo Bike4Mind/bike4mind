@@ -31,6 +31,7 @@ import {
   TOOL_CREATE_PULL_REQUEST,
   TOOL_UPDATE_PULL_REQUEST,
   TOOL_MERGE_PULL_REQUEST,
+  TOOL_SEARCH_PULL_REQUESTS,
 } from '../../constants.js';
 import { createMockServer, parseResponse, type RegisteredTool } from '../test-utils.js';
 
@@ -1688,6 +1689,21 @@ index abc123..def456 100644
           accept: 'application/vnd.github.diff',
         },
       });
+    });
+  });
+
+  describe(TOOL_SEARCH_PULL_REQUESTS, () => {
+    it('rejects an author that would add a search qualifier for another repository', () => {
+      const { server } = createMockServer();
+      registerPullTools(server);
+      const registration = vi.mocked(server.tool).mock.calls.find(([name]) => name === TOOL_SEARCH_PULL_REQUESTS)!;
+      // The input shape is the argument just before the handler.
+      const shape = registration[registration.length - 2] as Record<string, z.ZodType>;
+
+      expect(shape.author.safeParse('x repo:other/secret').success).toBe(false);
+      expect(shape.author.safeParse('octocat').success).toBe(true);
+      expect(shape.author.safeParse('app/dependabot').success).toBe(true);
+      expect(shape.author.safeParse('a'.repeat(44)).success).toBe(false);
     });
   });
 });
