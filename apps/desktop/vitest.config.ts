@@ -14,6 +14,6 @@ export default defineConfig({
     ...sharedTest,
     environment: 'node',
     setupFiles: [resolve(__dirname, 'vitest.setup.ts')],
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'scripts/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
 });

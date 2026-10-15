@@ -11,14 +11,13 @@ PASSED=0
 FAILED=0
 
 # Builds a throwaway workspace shaped like this repo: two publishable core
-# packages, one ignored core package, one private app, one private app that
-# opts in to changesets versioning, and one that sets the flag to a non-true value.
+# packages, one ignored core package, one private app.
 make_workspace() {
   local root
   root=$(mktemp -d)
 
   mkdir -p "$root/.changeset" "$root/b4m-core/common" "$root/b4m-core/auth" \
-    "$root/b4m-core/legacy" "$root/apps/client" "$root/apps/desktop" "$root/apps/kiosk"
+    "$root/b4m-core/legacy" "$root/apps/client"
 
   cat >"$root/.changeset/config.json" <<'EOF'
 { "ignore": ["@bike4mind/legacy"] }
@@ -34,12 +33,6 @@ EOF
 EOF
   cat >"$root/apps/client/package.json" <<'EOF'
 { "name": "@bike4mind/client", "private": true }
-EOF
-  cat >"$root/apps/desktop/package.json" <<'EOF'
-{ "name": "@bike4mind/desktop", "private": true, "changesetsVersioned": true }
-EOF
-  cat >"$root/apps/kiosk/package.json" <<'EOF'
-{ "name": "@bike4mind/kiosk", "private": true, "changesetsVersioned": "yes" }
 EOF
 
   printf '%s' "$root"
@@ -140,29 +133,6 @@ expect 'private package is never resolved' \
   'client' \
   'apps/client/src/index.ts' \
   ''
-
-expect 'private app that opts in to changesets versioning is resolved' \
-  'desktop' \
-  'apps/desktop/src/main/index.ts' \
-  '@bike4mind/desktop'
-
-expect 'opted-in app resolves alongside a core package' \
-  '' \
-  'apps/desktop/package.json
-b4m-core/common/src/index.ts' \
-  '@bike4mind/common
-@bike4mind/desktop'
-
-expect 'opt-in must be literally true' \
-  'kiosk' \
-  'apps/kiosk/src/index.ts' \
-  ''
-
-expect 'a scope naming the opted-in app with no changes there is reported' \
-  'desktop' \
-  'apps/client/src/index.ts' \
-  '' \
-  'unmatched-scope: @bike4mind/desktop'
 
 expect 'a directory that merely shares a name prefix does not match' \
   '' \

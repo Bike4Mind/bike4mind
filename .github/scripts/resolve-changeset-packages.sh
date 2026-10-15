@@ -28,9 +28,7 @@ print("\n".join(json.load(open(sys.argv[1])).get("ignore", [])))
 ' .changeset/config.json 2>/dev/null || echo "")
 fi
 
-# Lines of "<dir><TAB><package name>". A package qualifies by being published to npm, or - for a
-# private app that ships some other way, like the desktop client - by opting in with
-# `"changesetsVersioned": true`, so its PRs still produce the bump its own release reads.
+# Lines of "<dir><TAB><package name>".
 publishable=""
 for pkg_json in b4m-core/*/package.json apps/*/package.json packages/*/package.json; do
   [ -f "$pkg_json" ] || continue
@@ -39,18 +37,15 @@ for pkg_json in b4m-core/*/package.json apps/*/package.json packages/*/package.j
   fields=$(python3 -c '
 import json, sys
 p = json.load(open(sys.argv[1]))
-print(p.get("name", ""), "publishConfig" in p, bool(p.get("private", False)), p.get("changesetsVersioned") is True)
+print(p.get("name", ""), "publishConfig" in p, bool(p.get("private", False)))
 ' "$pkg_json")
   name=$(printf '%s' "$fields" | cut -d' ' -f1)
   has_publish=$(printf '%s' "$fields" | cut -d' ' -f2)
   is_private=$(printf '%s' "$fields" | cut -d' ' -f3)
-  opted_in=$(printf '%s' "$fields" | cut -d' ' -f4)
 
   [ -n "$name" ] || continue
-  if [ "$opted_in" != "True" ]; then
-    [ "$has_publish" = "True" ] || continue
-    [ "$is_private" = "False" ] || continue
-  fi
+  [ "$has_publish" = "True" ] || continue
+  [ "$is_private" = "False" ] || continue
   if [ -n "$ignore_list" ] && printf '%s\n' "$ignore_list" | grep -qxF "$name"; then
     continue
   fi

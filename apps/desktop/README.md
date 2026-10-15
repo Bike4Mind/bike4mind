@@ -89,8 +89,7 @@ Signing turns itself on once credentials are in the environment:
 | --- | --- |
 | `CSC_LINK` + `CSC_KEY_PASSWORD` | base64 `.p12` (or a file path) used on both platforms |
 | `WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD` | Windows-only certificate, for a combined build |
-| `APPLE_API_KEY` (path to the `.p8`), `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` | notarization via an App Store Connect API key (what the release workflow uses) |
-| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | notarization via an Apple ID, the alternative |
+| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | notarization credentials |
 
 A "Developer ID Application" identity already in the login keychain is picked up with no
 variables at all. `hardenedRuntime` and `build/entitlements.mac.plist` are always on: they
@@ -108,8 +107,7 @@ pnpm package:mac -c.mac.notarize=true
 **Still blocked on certificates:** a Developer ID Application certificate (macOS) and an
 EV or OV code-signing certificate (Windows). Until then a macOS user has to clear
 quarantine by hand and a Windows user gets a SmartScreen warning. The config does not
-change when they arrive - only the environment does. Releases are built, signed and
-published by CI, not by hand: see [docs/release.md](./docs/release.md).
+change when they arrive - only the environment does.
 
 ### What ships, and what does not
 
@@ -310,20 +308,13 @@ local static server. See `resolveFeedUrl` in `src/main/update/feed.ts`.
 | --- | --- |
 | 15s after launch | The first check, deliberately behind the window, auth and model catalog |
 | Every 6 hours | Because this app is left running for days, so "on launch" alone is not enough |
-| Settings | On demand |
+| The Customize row | On demand |
 
-A check that finds a newer version downloads it in the background straight away (the service's
-`autoDownload`; electron-updater's own flag stays off so one place decides). Once it is staged,
-a banner in the sidebar offers **Restart to update** with the release notes behind "What's new",
-and Settings shows the same. Nothing installs itself: `autoInstallOnAppQuit` is off, because an
-update applied when the user closed the window is one they never agreed to. An install asks main
-what is in flight first - a streaming reply, a session at the approval gate, a background process
-still up - and refuses with that report rather than quitting, so the restart is never a surprise.
-Background children are killed before the app is handed to the installer, not left to the quit
-handlers.
-
-Release notes come from the manifest's `releaseNotes` and are shown as plain text, never as
-markdown or HTML: they arrive over the network.
+Nothing downloads or installs itself. `autoDownload` and `autoInstallOnAppQuit` are both off:
+the user presses Download, and then Restart. An install asks main what is in flight first - a
+streaming reply, a session at the approval gate, a background process still up - and refuses
+with that report rather than quitting, so the restart is never a surprise. Background children
+are killed before the app is handed to the installer, not left to the quit handlers.
 
 A failed check is never surfaced. No network, a dead feed and a malformed manifest all land as
 one quiet state that keeps showing the current version, and none of them can retract an update
@@ -333,8 +324,8 @@ app**, so until code-signing certificates exist the full download-and-install cy
 exercised on macOS at all. Do not "fix" that by relaxing the signature check - an updater that
 accepts unsigned payloads is a remote code execution path.
 
-How releases are versioned, built, signed and published to the feed - and what ops has to
-provision before the first one - is in [docs/release.md](./docs/release.md).
+Packaging (the macOS `zip` target the updater consumes) is a separate concern; see the
+packaging config once it lands.
 
 ## App icon
 
