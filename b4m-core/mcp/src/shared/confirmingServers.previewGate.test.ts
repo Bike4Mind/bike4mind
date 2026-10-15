@@ -246,8 +246,23 @@ function stubFetch(): void {
 }
 
 // One body shaped loosely like a PR, a ref and a GraphQL envelope, so reads proceed to the write path.
+const PROJECT_FIXTURE = { __typename: 'ProjectV2', id: 'PVT_1', title: 'Board' };
+const ISSUE_FIXTURE = { __typename: 'Issue', number: 1, title: 't', repository: { nameWithOwner: 'octocat/test' } };
+
+// The write previews resolve the project, item and content before they answer, so the GraphQL envelope carries all three.
 const CANNED_BODY = {
-  data: {},
+  data: {
+    project: PROJECT_FIXTURE,
+    content: ISSUE_FIXTURE,
+    node: {
+      __typename: 'ProjectV2Item',
+      project: PROJECT_FIXTURE,
+      content: ISSUE_FIXTURE,
+      fields: { nodes: [{ id: 'PVTF_1', name: 'Status', dataType: 'TEXT' }] },
+    },
+  },
+  // The Jira delete preview names the file from the attachment lookup.
+  filename: 'file.txt',
   number: 1,
   title: 't',
   state: 'open',
