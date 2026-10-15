@@ -351,8 +351,9 @@ describe('optionsFromEnv', () => {
         STORAGE_RECONCILIATION_REPAIR: 'true',
         STORAGE_DRIFT_ALERT_BYTES: '5000',
         STORAGE_DRIFTED_USER_CEILING: 'abc',
+        STORAGE_DRIFT_CEILING_MIN_BYTES: '7',
       })
-    ).toEqual({ repair: true, driftAlertBytes: 5000, driftedUserCeiling: 50, ceilingMinDriftBytes: MB });
+    ).toEqual({ repair: true, driftAlertBytes: 5000, driftedUserCeiling: 50, ceilingMinDriftBytes: 7 });
   });
 });
 

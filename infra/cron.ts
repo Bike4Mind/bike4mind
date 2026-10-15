@@ -771,7 +771,7 @@ const storageReconciliationCron = new sst.aws.Cron('storageReconciliation', {
       // The cron's alert thresholds, named here so tuning them does not require a code change.
       STORAGE_DRIFT_ALERT_BYTES: String(100 * 1024 * 1024),
       STORAGE_DRIFTED_USER_CEILING: '50',
-      STORAGE_CEILING_MIN_DRIFT_BYTES: String(1024 * 1024),
+      STORAGE_DRIFT_CEILING_MIN_BYTES: String(1024 * 1024),
     },
     logging: {
       retention: '1 week',
