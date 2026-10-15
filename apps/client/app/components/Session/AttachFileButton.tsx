@@ -7,7 +7,6 @@ import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import SiGoogledrive, { defaultColor as SiGoogledriveHex } from '@icons-pack/react-simple-icons/icons/SiGoogledrive';
 import {
-  ArrowBack,
   ElectricBoltOutlined as BoltIcon,
   ChevronRight as ChevronRightIcon,
   ImageOutlined as ImageOutlinedIcon,
@@ -54,8 +53,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import CountBadge from '@client/app/components/common/CountBadge';
-import BottomSheet from '@client/app/components/common/BottomSheet';
-import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
+import BottomSheet, { BottomSheetHeader } from '@client/app/components/common/BottomSheet';
 import { useActiveTools } from '@client/app/components/Session/AISettings/useActiveTools';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePickerStyles';
@@ -851,22 +849,12 @@ const AttachFileButton = ({
         <Box sx={LIST_GROUP_SX}>
           {/* Phones have no room for a side panel, so a submenu replaces the list, under a header
               naming it, with an arrow back to the list. */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', minHeight: '44px' }}>
-            <IconButton
-              data-testid="attach-menu-back-btn"
-              aria-label="Back"
-              variant="plain"
-              color="neutral"
-              onClick={() => setCurrentView('main')}
-              // Like the Tools and Agents dropdown headers' buttons, a touch larger for a finger.
-              sx={{ ...HEADER_ICON_BUTTON_SX, '--IconButton-size': '32px' }}
-            >
-              <ArrowBack sx={{ fontSize: '18px' }} />
-            </IconButton>
-            <Typography id="attach-menu-view-title" level="title-sm" sx={{ color: 'text.primary' }}>
-              {SUBMENU_TITLES[currentView]}
-            </Typography>
-          </Box>
+          <BottomSheetHeader
+            title={SUBMENU_TITLES[currentView]}
+            titleId="attach-menu-view-title"
+            backTestId="attach-menu-back-btn"
+            onBack={() => setCurrentView('main')}
+          />
           {currentView === 'briefcase' ? (
             <BriefcasePanel onLaunched={closeMenu} />
           ) : currentView === 'image' ? (

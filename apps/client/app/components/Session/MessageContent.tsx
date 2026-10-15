@@ -2,7 +2,8 @@ import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import CopyTextButton from '@client/app/components/Session/CopyTextButton';
 import { chatActionButtonSx } from '@client/app/components/Session/chatActionButtonSx';
 import { messageMetaChipSx } from '@client/app/components/Session/messageMetaChipSx';
-import DownloadMenu from '../common/DownloadMenu';
+import DownloadMenu, { ReplyDownloadMenuItems } from '../common/DownloadMenu';
+import BottomSheet, { BottomSheetHeader } from '../common/BottomSheet';
 import PromptReplies from '@client/app/components/Session/PromptReplies';
 import RapidReplyBubble from '@client/app/components/Session/RapidReplyBubble';
 import ReasoningDisclosure from '@client/app/components/Session/AgentExecution/ReasoningDisclosure';
@@ -21,7 +22,7 @@ import {
 } from '@bike4mind/common';
 import { elidedReplyWarning } from '@client/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
-import { Menu, MenuItem, ListItemDecorator } from '@mui/joy';
+import { Menu, MenuItem, MenuList, ListItemDecorator } from '@mui/joy';
 import Box from '@mui/joy/Box';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
@@ -75,6 +76,8 @@ import { answerCostBreakdown, formatCostParts } from '@client/app/utils/answerCo
 import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { APP_NAME } from '@client/config/general';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import SaveAltIcon from '@mui/icons-material/SaveAlt';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ShareOutlinedIcon from '@mui/icons-material/ShareOutlined';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
 import { findPublishedByReply, replyPublisher } from '@client/app/utils/publishApi';
@@ -116,6 +119,18 @@ const ModelChip: React.FC<{ displayName: string }> = ({ displayName }) => (
     {displayName}
   </Chip>
 );
+
+// The phone actions sheet: rows tall enough for a finger, no frame of their own inside the sheet.
+// Icon slot, icon and text sizes match the plus menu's sheet (AttachFileButton plusMenuListSx).
+const ACTIONS_SHEET_LIST_SX = {
+  '--ListItem-minHeight': '44px',
+  '--List-padding': '0px',
+  '--ListItemDecorator-size': '30px',
+  '--Icon-fontSize': '18px',
+  fontSize: '14px',
+  boxShadow: 'none',
+  backgroundColor: 'transparent',
+} as const;
 
 const DeleteMessageModal = ({
   onConfirmDelete,
@@ -692,6 +707,128 @@ const MessageContent: React.FC<ContentProps> = memo(
 
     const costParts = answerCostBreakdown(messageData.promptMeta, getToolDisplayName);
 
+    // The More options entries, shared by the desktop menu and the phone actions sheet so the two
+    // cannot drift. Delete stays apart: the sheet lists Report before it.
+    const moreOptionsItems = (
+      <>
+        {!readOnly && (
+          <MenuItem
+            data-testid="message-menu-edit"
+            onClick={() => {
+              if (messageData.prompt) {
+                triggerEdit(messageData.id!, 'prompt');
+              } else {
+                triggerEdit(messageData.id!, 'reply');
+              }
+            }}
+          >
+            <ListItemDecorator>
+              <EditIcon />
+            </ListItemDecorator>
+            Edit
+          </MenuItem>
+        )}
+        <MenuItem onClick={handleOpenPromptMetaInspector}>
+          <ListItemDecorator>
+            <HiveIcon />
+          </ListItemDecorator>
+          {ANSWER_DIAGNOSIS_TITLE}
+        </MenuItem>
+        {contextBreakdownAvailable && (
+          <MenuItem data-testid="message-context-breakdown-btn" onClick={() => setShowContextBreakdown(true)}>
+            <ListItemDecorator>
+              <DonutSmallIcon />
+            </ListItemDecorator>
+            Context
+          </MenuItem>
+        )}
+        {!readOnly && (
+          <>
+            <MenuItem data-testid="message-menu-pin" onClick={() => onPinToggle(messageData)}>
+              <ListItemDecorator>{messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}</ListItemDecorator>
+              {messageData.pinned ? 'Unpin' : 'Pin'}
+            </MenuItem>
+            {canUseAdminTools && (
+              <MenuItem onClick={() => handlePreviewAsBlog(messageData)}>
+                <ListItemDecorator>
+                  <ArticleIcon />
+                </ListItemDecorator>
+                Publish
+              </MenuItem>
+            )}
+            {forkMenuItems}
+            <MenuItem data-testid="message-menu-quickstart" onClick={() => setShowSnipModal(true)}>
+              <ListItemDecorator>
+                <StartIcon />
+              </ListItemDecorator>
+              Quickstart
+            </MenuItem>
+            <MenuItem
+              data-testid="message-menu-try-again"
+              onClick={() => onSendMessage(messageData, { isRetry: true })}
+            >
+              <ListItemDecorator>
+                <Refresh />
+              </ListItemDecorator>
+              Try Again
+            </MenuItem>
+            <MenuItem
+              data-testid="message-menu-reprompt"
+              onClick={() => onSendMessage(messageData, { isVariation: true })}
+            >
+              <ListItemDecorator>
+                <AddIcon />
+              </ListItemDecorator>
+              Re-prompt
+            </MenuItem>
+          </>
+        )}
+        <MenuItem onClick={toggleSyntaxHighlight}>
+          <ListItemDecorator>
+            <CodeIcon />
+          </ListItemDecorator>
+          Toggle Code View
+        </MenuItem>
+        <MenuItem onClick={() => handleSaveAsFile(messageData)}>
+          <ListItemDecorator>
+            <SaveIcon />
+          </ListItemDecorator>
+          Save as {detectChatContentType(messageData.replies?.[0] || '')}
+        </MenuItem>
+        {!readOnly && isFeatureEnabled('EnableDataLakes') && (
+          <MenuItem onClick={() => handleSendReplyToDataLake(messageData)} data-testid="message-send-to-datalake">
+            <ListItemDecorator>
+              <DataLakeIcon />
+            </ListItemDecorator>
+            Send to {DATA_LAKE}
+          </MenuItem>
+        )}
+      </>
+    );
+    const deleteMenuItem = !readOnly ? (
+      <MenuItem data-testid="message-menu-delete" onClick={() => handleDelete(messageData)} color="danger">
+        <ListItemDecorator sx={{ color: 'inherit' }}>
+          <DeleteOutline />
+        </ListItemDecorator>
+        Delete
+      </MenuItem>
+    ) : null;
+
+    // Phones: every action but Copy lives in a sheet behind the More options button.
+    const [actionsSheetOpen, setActionsSheetOpen] = useState(false);
+    const [actionsSheetView, setActionsSheetView] = useState<'main' | 'download'>('main');
+    const closeActionsSheet = useCallback(() => {
+      setActionsSheetOpen(false);
+      setActionsSheetView('main');
+    }, []);
+    // Picking an entry closes the sheet, unless the entry opens a view inside it.
+    const closeActionsSheetOnPick = (event: React.MouseEvent) => {
+      const item = (event.target as Element).closest('[role="menuitem"]');
+      if (item && !item.hasAttribute('data-keeps-sheet-open') && item.getAttribute('aria-disabled') !== 'true') {
+        closeActionsSheet();
+      }
+    };
+
     return (
       <Stack
         key={index}
@@ -1066,118 +1203,8 @@ const MessageContent: React.FC<ContentProps> = memo(
                         borderRadius: '6px',
                       })}
                     >
-                      {!readOnly && (
-                        <MenuItem
-                          data-testid="message-menu-edit"
-                          onClick={() => {
-                            if (messageData.prompt) {
-                              triggerEdit(messageData.id!, 'prompt');
-                            } else {
-                              triggerEdit(messageData.id!, 'reply');
-                            }
-                          }}
-                        >
-                          <ListItemDecorator>
-                            <EditIcon />
-                          </ListItemDecorator>
-                          Edit
-                        </MenuItem>
-                      )}
-                      <MenuItem onClick={handleOpenPromptMetaInspector}>
-                        <ListItemDecorator>
-                          <HiveIcon />
-                        </ListItemDecorator>
-                        {ANSWER_DIAGNOSIS_TITLE}
-                      </MenuItem>
-                      {contextBreakdownAvailable && (
-                        <MenuItem
-                          data-testid="message-context-breakdown-btn"
-                          onClick={() => setShowContextBreakdown(true)}
-                        >
-                          <ListItemDecorator>
-                            <DonutSmallIcon />
-                          </ListItemDecorator>
-                          Context
-                        </MenuItem>
-                      )}
-                      {!readOnly && (
-                        <>
-                          <MenuItem data-testid="message-menu-pin" onClick={() => onPinToggle(messageData)}>
-                            <ListItemDecorator>
-                              {messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}
-                            </ListItemDecorator>
-                            {messageData.pinned ? 'Unpin' : 'Pin'}
-                          </MenuItem>
-                          {canUseAdminTools && (
-                            <MenuItem onClick={() => handlePreviewAsBlog(messageData)}>
-                              <ListItemDecorator>
-                                <ArticleIcon />
-                              </ListItemDecorator>
-                              Publish
-                            </MenuItem>
-                          )}
-                          {forkMenuItems}
-                          <MenuItem data-testid="message-menu-quickstart" onClick={() => setShowSnipModal(true)}>
-                            <ListItemDecorator>
-                              <StartIcon />
-                            </ListItemDecorator>
-                            Quickstart
-                          </MenuItem>
-                          <MenuItem
-                            data-testid="message-menu-try-again"
-                            onClick={() => onSendMessage(messageData, { isRetry: true })}
-                          >
-                            <ListItemDecorator>
-                              <Refresh />
-                            </ListItemDecorator>
-                            Try Again
-                          </MenuItem>
-                          <MenuItem
-                            data-testid="message-menu-reprompt"
-                            onClick={() => onSendMessage(messageData, { isVariation: true })}
-                          >
-                            <ListItemDecorator>
-                              <AddIcon />
-                            </ListItemDecorator>
-                            Re-prompt
-                          </MenuItem>
-                        </>
-                      )}
-                      <MenuItem onClick={toggleSyntaxHighlight}>
-                        <ListItemDecorator>
-                          <CodeIcon />
-                        </ListItemDecorator>
-                        Toggle Code View
-                      </MenuItem>
-                      <MenuItem onClick={() => handleSaveAsFile(messageData)}>
-                        <ListItemDecorator>
-                          <SaveIcon />
-                        </ListItemDecorator>
-                        Save as {detectChatContentType(messageData.replies?.[0] || '')}
-                      </MenuItem>
-                      {!readOnly && isFeatureEnabled('EnableDataLakes') && (
-                        <MenuItem
-                          onClick={() => handleSendReplyToDataLake(messageData)}
-                          data-testid="message-send-to-datalake"
-                        >
-                          <ListItemDecorator>
-                            <DataLakeIcon />
-                          </ListItemDecorator>
-                          Send to {DATA_LAKE}
-                        </MenuItem>
-                      )}
-                      {!readOnly && (
-                        <MenuItem
-                          data-testid="message-menu-delete"
-                          onClick={() => handleDelete(messageData)}
-                          color="danger"
-                        >
-                          <ListItemDecorator sx={{ color: 'inherit' }}>
-                            <DeleteOutline />
-                          </ListItemDecorator>
-                          Delete
-                        </MenuItem>
-                      )}
+                      {moreOptionsItems}
+                      {deleteMenuItem}
                     </Menu>
                   </Dropdown>
 
@@ -1215,163 +1242,95 @@ const MessageContent: React.FC<ContentProps> = memo(
               )}
             </Stack>
           ) : (
-            <Stack
-              className="action-buttons-mobile"
-              direction={'row'}
-              gap="4px"
-              alignItems="center"
-              // Six 44px targets plus gaps are ~284px: wrap rather than overflow at 320px.
-              flexWrap="wrap"
-            >
+            <Stack className="action-buttons-mobile" direction={'row'} gap="4px" alignItems="center">
               {!isProcessingPrompt && (
                 <>
-                  {/* Advanced actions in menu */}
-                  <Dropdown>
-                    <Tooltip title="More options">
-                      <MenuButton
-                        data-testid="message-actions-menu-btn"
-                        slots={{ root: IconButton }}
-                        slotProps={{ root: { variant: 'plain', color: 'neutral', size: 'sm' } }}
-                        sx={chatActionButtonSx}
-                      >
-                        <MoreVertIcon />
-                      </MenuButton>
-                    </Tooltip>
-                    <Menu
-                      placement="bottom-start"
-                      className="menuSurface advanced-menu-mobile"
-                      sx={_theme => ({
-                        minWidth: '180px',
-                        '--ListItem-minHeight': '32px',
-                        borderRadius: '6px',
-                      })}
+                  <Tooltip title="More options">
+                    <IconButton
+                      data-testid="message-actions-menu-btn"
+                      aria-label="More options"
+                      aria-haspopup="dialog"
+                      variant="plain"
+                      color="neutral"
+                      size="sm"
+                      onClick={() => setActionsSheetOpen(true)}
+                      sx={chatActionButtonSx}
                     >
-                      {!readOnly && (
-                        <MenuItem
-                          data-testid="message-menu-edit"
-                          onClick={() => {
-                            if (messageData.prompt) {
-                              triggerEdit(messageData.id!, 'prompt');
-                            } else {
-                              triggerEdit(messageData.id!, 'reply');
-                            }
-                          }}
-                        >
-                          <ListItemDecorator>
-                            <EditIcon />
-                          </ListItemDecorator>
-                          Edit
-                        </MenuItem>
-                      )}
-                      <MenuItem onClick={handleOpenPromptMetaInspector}>
-                        <ListItemDecorator>
-                          <HiveIcon />
-                        </ListItemDecorator>
-                        {ANSWER_DIAGNOSIS_TITLE}
-                      </MenuItem>
-                      {contextBreakdownAvailable && (
-                        <MenuItem
-                          data-testid="message-context-breakdown-btn"
-                          onClick={() => setShowContextBreakdown(true)}
-                        >
-                          <ListItemDecorator>
-                            <DonutSmallIcon />
-                          </ListItemDecorator>
-                          Context
-                        </MenuItem>
-                      )}
-                      {!readOnly && (
-                        <>
-                          <MenuItem data-testid="message-menu-pin" onClick={() => onPinToggle(messageData)}>
-                            <ListItemDecorator>
-                              {messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}
-                            </ListItemDecorator>
-                            {messageData.pinned ? 'Unpin' : 'Pin'}
-                          </MenuItem>
-                          {canUseAdminTools && (
-                            <MenuItem onClick={() => handlePreviewAsBlog(messageData)}>
-                              <ListItemDecorator>
-                                <ArticleIcon />
-                              </ListItemDecorator>
-                              Publish
-                            </MenuItem>
-                          )}
-                          {forkMenuItems}
-                          <MenuItem data-testid="message-menu-quickstart" onClick={() => setShowSnipModal(true)}>
-                            <ListItemDecorator>
-                              <StartIcon />
-                            </ListItemDecorator>
-                            Quickstart
-                          </MenuItem>
-                          <MenuItem
-                            data-testid="message-menu-try-again"
-                            onClick={() => onSendMessage(messageData, { isRetry: true })}
-                          >
-                            <ListItemDecorator>
-                              <Refresh />
-                            </ListItemDecorator>
-                            Try Again
-                          </MenuItem>
-                          <MenuItem
-                            data-testid="message-menu-reprompt"
-                            onClick={() => onSendMessage(messageData, { isVariation: true })}
-                          >
-                            <ListItemDecorator>
-                              <AddIcon />
-                            </ListItemDecorator>
-                            Re-prompt
-                          </MenuItem>
-                        </>
-                      )}
-                      <MenuItem onClick={toggleSyntaxHighlight}>
-                        <ListItemDecorator>
-                          <CodeIcon />
-                        </ListItemDecorator>
-                        Toggle Code View
-                      </MenuItem>
-                      <MenuItem onClick={() => handleSaveAsFile(messageData)}>
-                        <ListItemDecorator>
-                          <SaveIcon />
-                        </ListItemDecorator>
-                        Save as {detectChatContentType(messageData.replies?.[0] || '')}
-                      </MenuItem>
-                      {!readOnly && isFeatureEnabled('EnableDataLakes') && (
-                        <MenuItem
-                          onClick={() => handleSendReplyToDataLake(messageData)}
-                          data-testid="message-send-to-datalake"
-                        >
-                          <ListItemDecorator>
-                            <DataLakeIcon />
-                          </ListItemDecorator>
-                          Send to {DATA_LAKE}
-                        </MenuItem>
-                      )}
-                      {!readOnly && (
-                        <MenuItem
-                          data-testid="message-menu-delete"
-                          onClick={() => handleDelete(messageData)}
-                          color="danger"
-                        >
-                          <ListItemDecorator sx={{ color: 'inherit' }}>
-                            <DeleteOutline />
-                          </ListItemDecorator>
-                          Delete
-                        </MenuItem>
-                      )}
-                    </Menu>
-                  </Dropdown>
-
-                  {/* Always visible primary action */}
+                      <MoreVertIcon />
+                    </IconButton>
+                  </Tooltip>
+                  {/* The one action kept in the row: the most common thing done with an answer. */}
                   <CopyTextButton text={extractedReplies ? extractedReplies[0] : ''} />
-                  <DownloadMenu
-                    content={extractedReplies ? extractedReplies[0] : ''}
-                    fileName={`${messageData.id}.md`}
-                    variant="plain"
-                    triggerSx={chatActionButtonSx}
-                  />
-                  {!readOnly && reportButton}
-                  {correctAndRetryButton}
-                  {!readOnly && hasShareableReply && shareButton}
+                  {/* Reporting lives in the sheet; a reported answer keeps its orange mark here. */}
+                  {!readOnly && isReported && reportButton}
+
+                  <BottomSheet
+                    open={actionsSheetOpen}
+                    onClose={closeActionsSheet}
+                    label="Answer actions"
+                    keepHeight={actionsSheetView !== 'main'}
+                    data-testid="message-actions-sheet"
+                  >
+                    {actionsSheetView === 'download' ? (
+                      <>
+                        <BottomSheetHeader
+                          title="Download"
+                          backTestId="message-actions-back-btn"
+                          onBack={() => setActionsSheetView('main')}
+                        />
+                        <MenuList variant="plain" sx={ACTIONS_SHEET_LIST_SX} onClick={closeActionsSheetOnPick}>
+                          <ReplyDownloadMenuItems
+                            content={extractedReplies ? extractedReplies[0] : ''}
+                            fileName={`${messageData.id}.md`}
+                          />
+                        </MenuList>
+                      </>
+                    ) : (
+                      <MenuList variant="plain" sx={ACTIONS_SHEET_LIST_SX} onClick={closeActionsSheetOnPick}>
+                        {canCorrect && (
+                          <MenuItem data-testid="message-menu-correct-retry" onClick={() => setIsCorrecting(true)}>
+                            <ListItemDecorator>
+                              <EditNoteIcon />
+                            </ListItemDecorator>
+                            Correct and retry
+                          </MenuItem>
+                        )}
+                        {!readOnly && hasShareableReply && (
+                          <MenuItem data-testid="message-menu-share" onClick={handleShareReply}>
+                            <ListItemDecorator>
+                              <ShareOutlinedIcon />
+                            </ListItemDecorator>
+                            Publish & Share
+                          </MenuItem>
+                        )}
+                        <MenuItem
+                          data-testid="message-menu-download"
+                          data-keeps-sheet-open
+                          onClick={() => setActionsSheetView('download')}
+                        >
+                          <ListItemDecorator>
+                            <SaveAltIcon />
+                          </ListItemDecorator>
+                          Download
+                          <ChevronRightIcon sx={{ ml: 'auto', color: 'text.tertiary' }} />
+                        </MenuItem>
+                        {moreOptionsItems}
+                        {!readOnly && (
+                          <MenuItem
+                            data-testid="message-menu-report"
+                            color={isReported ? 'warning' : 'neutral'}
+                            onClick={handleOpenBugReportModal}
+                          >
+                            <ListItemDecorator sx={{ color: 'inherit' }}>
+                              <BugReportOutlinedIcon />
+                            </ListItemDecorator>
+                            {isReported ? 'Reported' : 'Report an issue'}
+                          </MenuItem>
+                        )}
+                        {deleteMenuItem}
+                      </MenuList>
+                    )}
+                  </BottomSheet>
 
                   {/* Keep the modals */}
                   <BugReportModal
