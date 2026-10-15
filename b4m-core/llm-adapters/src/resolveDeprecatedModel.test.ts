@@ -192,6 +192,7 @@ describe('DEPRECATED_MODEL_MAP invariants', () => {
     return {
       ids: new Set(models.map(m => String(m.id))),
       deprecated: new Set(models.filter(m => m.deprecationDate).map(m => String(m.id))),
+      disabled: new Set(models.filter(m => m.disabled).map(m => String(m.id))),
     };
   };
 
@@ -223,6 +224,16 @@ describe('DEPRECATED_MODEL_MAP invariants', () => {
       .map(([from, target]) => `${from} -> ${target}`);
 
     expect(badTargets, `mappings pointing at a deprecated model: ${badTargets.join(', ')}`).toEqual([]);
+  });
+
+  it('never maps a model to a disabled one, which no caller can run', async () => {
+    const { disabled } = await staticCatalog();
+
+    const unreachable = Object.entries(DEPRECATED_MODEL_MAP)
+      .filter(([, target]) => disabled.has(target))
+      .map(([from, target]) => `${from} -> ${target}`);
+
+    expect(unreachable, `mappings pointing at a disabled model: ${unreachable.join(', ')}`).toEqual([]);
   });
 
   it('maps only to models that exist in the catalog', async () => {
