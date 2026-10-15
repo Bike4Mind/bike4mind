@@ -64,9 +64,18 @@ test.describe('File Browser Search', () => {
     ).toBeVisible({ timeout: TIMEOUTS.ACTION });
   });
 
-  // The toolbar switches layout on the dialog's width; at each layout the search box must keep its floor and
-  // stay clear of the actions (see the toolbar breakpoints in Files/Browser/Content.tsx).
-  for (const width of [1024, 1280, 1440, 1460, 1920]) {
+  // The toolbar switches layout on the dialog's width, not the viewport's: the dialog is 90vw wide and the
+  // content has 32px of horizontal padding, so its container is 0.9 * viewport - 64. These viewports sit on
+  // both sides of each switch in the toolbar constants (Files/Browser/Content.tsx).
+  const toolbarViewports = [
+    { width: 930, singleRow: false }, // ~773px: single column
+    { width: 1020, singleRow: false }, // ~854px: views + actions over filters
+    { width: 1520, singleRow: false }, // ~1304px: two rows, just below the single-row switch
+    { width: 1560, singleRow: true }, // ~1340px: one row, just above it
+    { width: 1920, singleRow: true }, // ~1664px: one row
+  ];
+
+  for (const { width, singleRow } of toolbarViewports) {
     test(`should keep the search box usable at a ${width}px viewport`, async ({ page, basePage, fileUpload }) => {
       await page.setViewportSize({ width, height: 900 });
       await page.goto('/');
@@ -76,25 +85,42 @@ test.describe('File Browser Search', () => {
       await fileUpload.openFileBrowser();
 
       const searchInput = page.getByTestId('file-browser-search-input');
+      const toolbarFilters = page.getByTestId('file-browser-toolbar-filters');
       const toolbarActions = page.getByTestId('file-browser-toolbar-actions');
       await expect(searchInput).toBeVisible({ timeout: TIMEOUTS.ACTION });
       await expect(toolbarActions).toBeVisible({ timeout: TIMEOUTS.ACTION });
 
+      // The row is only the crowded one with Research present (the search user enables it in search.setup.ts).
+      await expect(toolbarActions.getByRole('button')).toHaveCount(3);
+
       const search = await searchInput.boundingBox();
+      const filters = await toolbarFilters.boundingBox();
       const actions = await toolbarActions.boundingBox();
       expect(search).not.toBeNull();
+      expect(filters).not.toBeNull();
       expect(actions).not.toBeNull();
-      if (!search || !actions) return;
+      if (!search || !filters || !actions) return;
 
       expect(search.width).toBeGreaterThanOrEqual(160);
+      // The whole filter row, not just the search box: the type select and the Generated toggle sit in it too.
       const overlaps =
-        search.x < actions.x + actions.width &&
-        actions.x < search.x + search.width &&
-        search.y < actions.y + actions.height &&
-        actions.y < search.y + search.height;
+        filters.x < actions.x + actions.width &&
+        actions.x < filters.x + filters.width &&
+        filters.y < actions.y + actions.height &&
+        actions.y < filters.y + filters.height;
       expect(overlaps).toBe(false);
 
-      // No action may be squeezed below its label, even near the single-row switch (1460).
+      // Confirm the band instead of assuming it: one row puts the filters beside the actions, the two-row and
+      // single-column layouts stack them underneath.
+      const actionsCenter = actions.y + actions.height / 2;
+      const filtersCenter = filters.y + filters.height / 2;
+      if (singleRow) {
+        expect(Math.abs(filtersCenter - actionsCenter)).toBeLessThanOrEqual(4);
+      } else {
+        expect(filtersCenter).toBeGreaterThan(actionsCenter + 4);
+      }
+
+      // No action may be squeezed below its label.
       const clippedActions = await toolbarActions.evaluate(
         el => Array.from(el.querySelectorAll('button')).filter(button => button.scrollWidth > button.clientWidth).length
       );

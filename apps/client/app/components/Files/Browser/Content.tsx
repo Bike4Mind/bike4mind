@@ -753,7 +753,7 @@ const FileBrowserContent = () => {
                   }}
                 />
               </Box>
-              <Box sx={{ gridArea: 'filters', display: 'flex' }}>
+              <Box data-testid="file-browser-toolbar-filters" sx={{ gridArea: 'filters', display: 'flex' }}>
                 <FileBrowserFilter value={filter} onChange={handleFilterChange} />
               </Box>
               <Stack
