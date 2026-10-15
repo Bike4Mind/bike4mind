@@ -487,6 +487,7 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
       expect(res._getStatusCode()).toBe(403);
       expect(res._getJSONData()).toMatchObject({ errorCode: 'billing_organization_mismatch' });
       expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
     });
 
     it('refuses an org-billed key whose org no longer exists (400) before enqueuing', async () => {
@@ -496,6 +497,7 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
       await handler(req, res);
       expect(res._getStatusCode()).toBe(400);
       expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
     });
 
     it('keeps a personal key on the home org when the body names none', async () => {
