@@ -1,5 +1,7 @@
-import { FC, PointerEvent, ReactNode, useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { Box, Drawer } from '@mui/joy';
+import { FC, PointerEvent, ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Box, Drawer, IconButton, Typography } from '@mui/joy';
+import ArrowBack from '@mui/icons-material/ArrowBack';
+import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
 
 // A drag past this distance closes the sheet, as does a quick flick past FLICK_MIN_PX.
 const CLOSE_DISTANCE_PX = 80;
@@ -39,22 +41,43 @@ const BottomSheet: FC<BottomSheetProps> = ({
   // Drawer's portal mounts the body after this component's first render, so its mount re-renders
   // this component (bodyMounted) to measure it too.
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const [, setBodyMounted] = useState(false);
+  const [bodyMounted, setBodyMounted] = useState(false);
   const attachBody = useCallback((el: HTMLDivElement | null) => {
     bodyRef.current = el;
     setBodyMounted(!!el);
   }, []);
   const freeHeight = useRef(0);
+
+  // Touch scrollbars are faint or hidden, so a fade at an edge says there is more past it. Marked on
+  // the wrapper as attributes (CSS shows the fades) for the same reason the height is set directly.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const markEdges = useCallback(() => {
+    const el = bodyRef.current;
+    const wrap = wrapRef.current;
+    if (!el || !wrap) return;
+    wrap.toggleAttribute('data-more-above', el.scrollTop > 1);
+    wrap.toggleAttribute('data-more-below', el.scrollHeight - el.scrollTop - el.clientHeight > 1);
+  }, []);
+
   useLayoutEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
     if (keepHeight) {
       if (!el.style.height && freeHeight.current > 0) el.style.height = `${freeHeight.current}px`;
-      return;
+    } else {
+      el.style.height = '';
+      freeHeight.current = el.offsetHeight;
     }
-    el.style.height = '';
-    freeHeight.current = el.offsetHeight;
+    // Content changes come with a render; size changes (rotation, the keyboard) do not.
+    markEdges();
   });
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(markEdges);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [bodyMounted, markEdges]);
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     drag.current = { startY: e.clientY, startTime: performance.now(), y: 0 };
@@ -123,20 +146,81 @@ const BottomSheet: FC<BottomSheetProps> = ({
         />
       </Box>
       <Box
-        ref={attachBody}
-        data-testid="bottom-sheet-body"
+        ref={wrapRef}
+        data-testid="bottom-sheet-scroll-area"
         sx={{
-          overflowY: 'auto',
-          px: '8px',
-          // A held height still gives way to the sheet's own max height.
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
           flexShrink: 1,
           minHeight: 0,
+          '&::before, &::after': {
+            content: '""',
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            height: '40px',
+            zIndex: 1,
+            pointerEvents: 'none',
+            opacity: 0,
+            transition: 'opacity 0.2s',
+          },
+          '&::before': {
+            top: 0,
+            background: 'linear-gradient(to bottom, var(--joy-palette-background-surface), transparent)',
+          },
+          '&::after': {
+            bottom: 0,
+            background: 'linear-gradient(to top, var(--joy-palette-background-surface), transparent)',
+          },
+          '&[data-more-above]::before, &[data-more-below]::after': { opacity: 1 },
         }}
       >
-        {children}
+        <Box
+          ref={attachBody}
+          data-testid="bottom-sheet-body"
+          onScroll={markEdges}
+          sx={{
+            overflowY: 'auto',
+            px: '8px',
+            // A held height still gives way to the sheet's own max height.
+            flexShrink: 1,
+            minHeight: 0,
+          }}
+        >
+          {children}
+        </Box>
       </Box>
     </Drawer>
   );
 };
+
+/**
+ * Header of a sub-view that replaces a sheet's list: a back arrow to the list and the view's name.
+ * `titleId` lets the view's content take the name as its label.
+ */
+export const BottomSheetHeader: FC<{ title: string; onBack: () => void; titleId?: string; backTestId?: string }> = ({
+  title,
+  onBack,
+  titleId,
+  backTestId,
+}) => (
+  <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', minHeight: '44px' }}>
+    <IconButton
+      data-testid={backTestId}
+      aria-label="Back"
+      variant="plain"
+      color="neutral"
+      onClick={onBack}
+      // Like the Tools and Agents dropdown headers' buttons, a touch larger for a finger.
+      sx={{ ...HEADER_ICON_BUTTON_SX, '--IconButton-size': '32px' }}
+    >
+      <ArrowBack sx={{ fontSize: '18px' }} />
+    </IconButton>
+    <Typography id={titleId} level="title-sm" sx={{ color: 'text.primary' }}>
+      {title}
+    </Typography>
+  </Box>
+);
 
 export default BottomSheet;

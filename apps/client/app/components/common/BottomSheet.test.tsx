@@ -88,4 +88,24 @@ describe('BottomSheet', () => {
     expect(body.style.height).toBe('');
     spy.mockRestore();
   });
+
+  it('fades the edge past which there is more to scroll', () => {
+    renderSheet();
+    const body = screen.getByTestId('bottom-sheet-body');
+    const area = screen.getByTestId('bottom-sheet-scroll-area');
+    Object.defineProperty(body, 'scrollHeight', { configurable: true, value: 700 });
+    Object.defineProperty(body, 'clientHeight', { configurable: true, value: 500 });
+
+    fireEvent.scroll(body, { target: { scrollTop: 0 } });
+    expect(area).not.toHaveAttribute('data-more-above');
+    expect(area).toHaveAttribute('data-more-below');
+
+    fireEvent.scroll(body, { target: { scrollTop: 100 } });
+    expect(area).toHaveAttribute('data-more-above');
+    expect(area).toHaveAttribute('data-more-below');
+
+    fireEvent.scroll(body, { target: { scrollTop: 200 } });
+    expect(area).toHaveAttribute('data-more-above');
+    expect(area).not.toHaveAttribute('data-more-below');
+  });
 });
