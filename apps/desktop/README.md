@@ -9,6 +9,21 @@ hydrates Tanstack Router, not a static bundle. So this app has its own lean rend
 over HTTP. Shared Zod schemas and types come from `@bike4mind/common`; components get
 ported over from `apps/client` only as later tasks need them.
 
+## Download and install
+
+Download installers from [Desktop releases](https://github.com/bike4mind/bike4mind/releases?q=desktop-v).
+No Node.js, pnpm, or source checkout is required.
+
+1. On macOS, choose `arm64.dmg` for Apple Silicon or `x64.dmg` for Intel, open it,
+   and drag Bike4Mind into Applications.
+2. On Linux x64, download the `.AppImage`, mark it executable (`chmod +x <file>.AppImage`),
+   and launch it. Some distributions require FUSE support to run AppImages.
+
+Builds are currently unsigned and not notarized. macOS may require approval in
+System Settings > Privacy & Security after a blocked launch. Only approve a download
+you trust. `SHA256SUMS.txt` accompanies each release for checksum verification.
+Windows packaging exists locally but is not yet part of the release pipeline.
+
 ## Running it
 
 ```bash
@@ -39,11 +54,105 @@ gitignored.
 | `pnpm package` | everything the host platform can build |
 | `pnpm package:mac` | `dmg` and `zip`, both for arm64 and x64 |
 | `pnpm package:win` | `nsis` installer, x64 |
+| `pnpm package:linux` | `AppImage`, x64 |
 | `pnpm package:dir` | an unpacked `.app`/directory, no installer - the fast loop |
 
 The macOS `zip` is not redundant with the `dmg`. The dmg is the human-facing installer;
 the zip is the format a Squirrel.Mac auto-updater consumes, so it has to exist before
 auto-update can.
+
+### Automated releases
+
+[`Desktop Release`](../../.github/workflows/desktop-release.yml) runs on pushes to
+`main` touching desktop, shared core packages, CLI sources, build configuration, or
+dependencies. It can also be run manually from Actions on `main`.
+
+Pull requests targeting `main` run the same builds and artifact validation without
+publishing a release. In the workflow run's Artifacts section, download
+`desktop-mac-arm64`, `desktop-mac-x64`, and `desktop-linux-x64` for installers,
+plus `installer-checksums` for `SHA256SUMS.txt`. PR jobs have only
+read access to repository contents; the publication job runs only for pushes or manual
+dispatches on `main`. PR runs are isolated from the main release concurrency group.
+
+The workflow installs from the frozen lockfile, builds shared packages, runs desktop
+typechecks and tests on macOS and Linux, then packages both macOS architectures and
+Linux x64. Publication waits for all three build jobs and validates all five artifacts.
+Failed uploads leave a draft release, not a partially published download page.
+
+Storage is deliberately short-lived: platform installers, checksums, and release notes
+expire after one day; startup evidence expires after three days. Installers are stored
+only once per platform; there is no duplicate combined installer upload.
+Superseded PR runs are canceled; main release runs are not interrupted.
+Dependency caching is disabled for this workflow, including setup-node's automatic
+package-manager cache. Runner-local build files disappear with the hosted runner.
+Published GitHub Release assets remain available for downloads and rollback separately
+from Actions artifact retention. Retention bounds lifetime, not total storage: many
+concurrent runs can still exhaust the shared artifact allowance. These settings do not
+delete existing artifacts or caches created by earlier runs or other workflows.
+
+The Linux job also launches the actual AppImage under Xvfb with an isolated temporary
+profile. It checks the rendered sign-in/environment screen, auth initialization, and
+the packaged version through main/preload IPC. `linux-x64-smoke-results` contains a screenshot
+and startup logs. This smoke test uses AppImage extraction and `--no-sandbox` only in
+CI; it does not verify FUSE mounting, desktop integration, sandbox compatibility on a
+real workstation, or authenticated chat. Those still need real-machine acceptance tests.
+
+The macOS job mounts the native-architecture DMG read-only, copies the app to a temporary
+installation directory, and runs the same startup checks with an isolated profile.
+`mac-arm64-smoke-results` and `mac-x64-smoke-results` contain screenshots and logs.
+Both architectures run on native standard runners. The tests use a mock keychain
+to avoid system prompts or accessing a real login keychain. It does not verify secure
+credential persistence. This does
+not verify Gatekeeper approval on a fresh machine.
+
+Installer versions follow SemVer, selected automatically by
+`scripts/desktop_release_version.py`. The first release uses the package version
+(`0.1.0`). After that, desktop release tags are the version source of truth; there is
+no version-bump commit or separate package release PR.
+
+- `feat: ...` bumps minor; `fix: ...`, dependency updates, builds, refactors, and
+  other relevant changes bump patch.
+- `type!: ...` or a `BREAKING CHANGE:` footer bumps major, including before `1.0`.
+- `docs`, `test`, `ci`, and `style` alone do not publish a new stable release.
+- The highest bump across unreleased, desktop-relevant first-parent commits wins.
+  Unrelated web-only commits do not affect the desktop version. Squash merges use the
+  PR title as their commit header, so set it to the intended release type.
+- PR installers use prereleases such as `0.2.0-pr.123.42`, with the PR title supplying
+  its intended bump. They never become stable releases or change the next stable version.
+
+Reruns at an already released commit reuse its version and leave published assets
+unchanged. Draft releases reserve their version so a failed upload can be retried.
+An older checkout cannot publish after a newer desktop release. Desktop releases do
+not replace the repository's overall latest release. Keep desktop release tags intact;
+changing the package version does not override existing release history.
+
+Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
+Without it, users must select their own backend. The workflow deliberately leaves
+`B4M_UPDATE_FEED_URL` unset: downloadable releases do not configure in-app updates.
+Installing a newer release is currently manual. Only the final publication job has
+`contents: write`; build jobs have read-only tokens. PR builds have no signing credentials.
+
+Release notes list desktop-relevant first-parent changes and explain the semantic bump.
+The publication script is `apps/desktop/scripts/publish-release.sh`, shared with
+`apps/desktop/scripts/verify-publication.sh`. Run the latter from the repository root
+with an explicitly selected sandbox `owner/repo` argument and a gh login with write
+access there. It creates a temporary release, downloads and compares its probe asset,
+checks that reruns do not overwrite published assets, then deletes the release and tag.
+It refuses the current repository. This tests the API flow, not the workflow token's
+production permissions or the full installer set. No sandbox is configured by default.
+
+Set `DESKTOP_MAC_SIGNING=true` only after configuring all five repository secrets:
+`DESKTOP_CSC_LINK`, `DESKTOP_CSC_KEY_PASSWORD`, `DESKTOP_APPLE_ID`,
+`DESKTOP_APPLE_APP_SPECIFIC_PASSWORD`, and `DESKTOP_APPLE_TEAM_ID`.
+Only trusted main runs receive these credentials. Opting in with incomplete credentials
+fails rather than silently publishing unsigned builds. Signed runs require code-signature
+and stapling validation. Without opt-in, releases remain unsigned. Signing credentials
+and end-to-end notarization verification are external setup requirements.
+
+To roll back, download and reinstall an earlier desktop release. Back up the app's
+user-data directory before downgrading because older builds may not understand newer
+local data. If a release is broken, mark it as a prerelease or return it to draft in
+GitHub Releases, then rerun the workflow on corrected `main` to publish a new version.
 
 ### Baking the backend URL
 
