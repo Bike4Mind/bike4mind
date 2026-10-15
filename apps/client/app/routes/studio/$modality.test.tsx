@@ -146,4 +146,16 @@ describe('StudioPage (music)', () => {
     );
     expect(screen.getByTestId('music-gallery-stub')).toBeInTheDocument();
   });
+
+  it('shows loading and error states for the music models', () => {
+    h.musicModels = { data: undefined, isPending: true, isError: false };
+    const { unmount } = renderPage('music');
+    expect(screen.getByTestId('music-studio-loading')).toBeInTheDocument();
+    unmount();
+    h.musicModels = { data: undefined, isPending: false, isError: true };
+    renderPage('music');
+    expect(screen.getByTestId('music-studio-error')).toHaveTextContent(
+      'Could not load the music models. Refresh to try again.'
+    );
+  });
 });
