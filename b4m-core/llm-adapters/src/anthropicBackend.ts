@@ -16,6 +16,7 @@ import {
   NO_TEMPERATURE_MODELS,
   PermissionDeniedError,
   REFUSAL_FALLBACK_MODELS,
+  estimateStreamedOutputTokens,
   supportsForcedToolChoice,
   type ModelInfo,
   type TurnUsage,
@@ -1372,6 +1373,16 @@ export class AnthropicBackend implements ICompletionBackend {
             cache_creation_input_tokens?: number;
           }
         | undefined;
+      // Chars this call streamed (text, thinking, tool arguments), read from the catch block too.
+      let streamedOutputChars = 0;
+      // A call stopped or aborted before message_delta (the only event carrying output_tokens) has
+      // no output count, though the provider billed what it streamed. Estimated only on call 2+:
+      // on a first call ChatCompletionProcess falls back to its tokenizer estimate of the whole
+      // reply, and cliCompletions applies the same char estimate itself.
+      const withAbortedOutputEstimate = (usage: AnthropicUsage): AnthropicUsage =>
+        usage?.output_tokens || !accumTurnUsage?.length || streamedOutputChars === 0
+          ? usage
+          : { ...usage, output_tokens: estimateStreamedOutputTokens(streamedOutputChars, model) };
       // This round's answer text, for shouldEndTurnAfterTools.
       let streamedRoundText = '';
       if (options.stream) {
@@ -1617,6 +1628,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   } else if (event.type === 'content_block_delta') {
                     if ('delta' in event && event.delta.type === 'thinking_delta') {
                       const thinkingText = event.delta.thinking;
+                      streamedOutputChars += thinkingText.length;
                       // Accumulate thinking content in the collected block - kept raw
                       // (unescaped) since this is resent to the API verbatim in tool-use loops.
                       if (collectedContent[event.index]) {
@@ -1631,12 +1643,14 @@ export class AnthropicBackend implements ICompletionBackend {
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       streamedText[event.index] = event.delta.text;
                       streamedRoundText += event.delta.text;
+                      streamedOutputChars += event.delta.text.length;
                       checkDegenerate(event.delta.text);
                       await cb(streamedText, {
                         toolsUsed: toolsUsed,
                         ...(usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
                       });
                     } else if ('delta' in event && event.delta.type === 'input_json_delta') {
+                      streamedOutputChars += event.delta.partial_json?.length ?? 0;
                       // response_format=json_schema: stream the tool's
                       // input JSON deltas directly to the caller as text. This
                       // is the structured response - the caller can JSON.parse
@@ -1710,9 +1724,8 @@ export class AnthropicBackend implements ICompletionBackend {
                   } else if (event.type === 'message_start') {
                     // Seed the prompt's usage: message_delta is the last event, so a stream cut
                     // short (Stop, degeneration abort) never sees it, yet the provider still bills
-                    // the prompt. output_tokens is left out because it is a placeholder here. On a first
-                    // call settlement then falls back to its estimate of the partial reply; on a later
-                    // call the provider basis applies and this call's partial output goes unbilled (known gap).
+                    // the prompt. output_tokens is left out because it is a placeholder here; the abort
+                    // emits fill it from streamedOutputChars instead (see withAbortedOutputEstimate).
                     const startUsage = event.message?.usage;
                     if (startUsage) {
                       usageInfo = {
@@ -1757,23 +1770,24 @@ export class AnthropicBackend implements ICompletionBackend {
                   model,
                   charsBeforeAbort: degenerateVerdict.totalChars,
                 });
+                const degenerateUsage = withAbortedOutputEstimate(usageInfo as AnthropicUsage);
                 await cb([], {
                   toolsUsed,
                   stopReason: DEGENERATE_STREAM_STOP_REASON,
                   // Forward the accumulated usage the clean terminal path forwards.
                   // Omitting it drops settlement to the local tokenizer estimate, and a
                   // degenerate turn is the worst case for an estimate: real output is large.
-                  inputTokens: accumInputTokens + ((usageInfo as AnthropicUsage)?.input_tokens ?? 0),
-                  outputTokens: accumOutputTokens + ((usageInfo as AnthropicUsage)?.output_tokens ?? 0),
+                  inputTokens: accumInputTokens + (degenerateUsage?.input_tokens ?? 0),
+                  outputTokens: accumOutputTokens + (degenerateUsage?.output_tokens ?? 0),
                   cacheReadInputTokens: totalCacheTokens(
                     accumCacheReadTokens,
-                    (usageInfo as AnthropicUsage)?.cache_read_input_tokens
+                    degenerateUsage?.cache_read_input_tokens
                   ),
                   cacheCreationInputTokens: totalCacheTokens(
                     accumCacheWriteTokens,
-                    (usageInfo as AnthropicUsage)?.cache_creation_input_tokens
+                    degenerateUsage?.cache_creation_input_tokens
                   ),
-                  turnUsage: appendAnthropicTurn(accumTurnUsage, usageInfo as AnthropicUsage),
+                  turnUsage: appendAnthropicTurn(accumTurnUsage, degenerateUsage),
                 });
                 resolve();
                 return;
@@ -1809,20 +1823,18 @@ export class AnthropicBackend implements ICompletionBackend {
                 }
                 if (options.abortSignal?.aborted) {
                   this.logger.info('[AnthropicBackend] Stream ended before message_stop after abort', { model });
+                  const abortedUsage = withAbortedOutputEstimate(usageInfo as AnthropicUsage);
                   await cb([], {
                     toolsUsed,
                     stopReason: STREAM_ABORTED_STOP_REASON,
-                    inputTokens: accumInputTokens + ((usageInfo as AnthropicUsage)?.input_tokens ?? 0),
-                    outputTokens: accumOutputTokens + ((usageInfo as AnthropicUsage)?.output_tokens ?? 0),
-                    cacheReadInputTokens: totalCacheTokens(
-                      accumCacheReadTokens,
-                      (usageInfo as AnthropicUsage)?.cache_read_input_tokens
-                    ),
+                    inputTokens: accumInputTokens + (abortedUsage?.input_tokens ?? 0),
+                    outputTokens: accumOutputTokens + (abortedUsage?.output_tokens ?? 0),
+                    cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, abortedUsage?.cache_read_input_tokens),
                     cacheCreationInputTokens: totalCacheTokens(
                       accumCacheWriteTokens,
-                      (usageInfo as AnthropicUsage)?.cache_creation_input_tokens
+                      abortedUsage?.cache_creation_input_tokens
                     ),
-                    turnUsage: appendAnthropicTurn(accumTurnUsage, usageInfo as AnthropicUsage),
+                    turnUsage: appendAnthropicTurn(accumTurnUsage, abortedUsage),
                   });
                   resolve();
                   return;
@@ -1999,22 +2011,23 @@ export class AnthropicBackend implements ICompletionBackend {
                     charsBeforeAbort: degenerateVerdict.totalChars,
                     repeats: degenerateVerdict.repeats,
                   });
+                  // `usageInfo` is out of scope in this catch; streamingTurnUsage holds the
+                  // same counts (message_start's prompt usage, since message_delta never came).
+                  const degenerateUsage = withAbortedOutputEstimate(streamingTurnUsage);
                   await cb([], {
                     toolsUsed,
                     stopReason: DEGENERATE_STREAM_STOP_REASON,
-                    // `usageInfo` is out of scope in this catch; streamingTurnUsage holds the
-                    // same counts (message_start's prompt usage, since message_delta never came).
-                    inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens || 0),
-                    outputTokens: accumOutputTokens + (streamingTurnUsage?.output_tokens || 0),
+                    inputTokens: accumInputTokens + (degenerateUsage?.input_tokens || 0),
+                    outputTokens: accumOutputTokens + (degenerateUsage?.output_tokens || 0),
                     cacheReadInputTokens: totalCacheTokens(
                       accumCacheReadTokens,
-                      streamingTurnUsage?.cache_read_input_tokens
+                      degenerateUsage?.cache_read_input_tokens
                     ),
                     cacheCreationInputTokens: totalCacheTokens(
                       accumCacheWriteTokens,
-                      streamingTurnUsage?.cache_creation_input_tokens
+                      degenerateUsage?.cache_creation_input_tokens
                     ),
-                    turnUsage: appendAnthropicTurn(accumTurnUsage, streamingTurnUsage),
+                    turnUsage: appendAnthropicTurn(accumTurnUsage, degenerateUsage),
                   });
                   resolve();
                 } else if (isIdleTimeout) {
