@@ -18,6 +18,7 @@ import {
   REFUSAL_FALLBACK_MODELS,
   supportsForcedToolChoice,
   type ModelInfo,
+  type TurnUsage,
 } from '@bike4mind/common';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
@@ -53,6 +54,7 @@ import {
 import {
   buildThinkingParams,
   planReasoningEffort,
+  resolveAnthropicEffort,
   resolveOutputMaxTokens,
   THINKING_ANSWER_HEADROOM_TOKENS,
   type AnthropicEffort,
@@ -140,6 +142,29 @@ const totalCacheTokens = (accum: number, turn: number | undefined): number | und
   const total = accum + (turn || 0);
   return total > 0 ? total : undefined;
 };
+
+type AnthropicUsage =
+  | {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    }
+  | undefined;
+
+/**
+ * `prior` plus one API call's usage (see CompletionInfo.turnUsage). Anthropic's input_tokens
+ * already exclude cache reads/writes, so the fields map across without a split.
+ */
+const appendAnthropicTurn = (prior: readonly TurnUsage[] | undefined, usage: AnthropicUsage): TurnUsage[] => [
+  ...(prior ?? []),
+  {
+    inputTokens: usage?.input_tokens || 0,
+    outputTokens: usage?.output_tokens || 0,
+    ...(usage?.cache_read_input_tokens ? { cacheReadInputTokens: usage.cache_read_input_tokens } : {}),
+    ...(usage?.cache_creation_input_tokens ? { cacheCreationInputTokens: usage.cache_creation_input_tokens } : {}),
+  },
+];
 
 /**
  * Associates a failed tool call's elapsed time with the thrown error object, so it survives
@@ -876,6 +901,7 @@ export class AnthropicBackend implements ICompletionBackend {
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
     const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
     const accumCacheWriteTokens = options._internal?.accumCacheWriteTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set, admin-tunable maxToolCalls); else the default.
@@ -1211,14 +1237,20 @@ export class AnthropicBackend implements ICompletionBackend {
         thinking?: { enabled?: boolean; budget_tokens?: number };
       };
       const isQuestMaster = thinkingOptions.questMaster === true;
-      const userThinkingEnabled = thinkingOptions.thinking?.enabled === true;
+      // The forced response_format tool cannot run alongside thinking, so an explicit request falls
+      // through to the reasoningEffort plan below, which only keeps the off switch there.
+      const userThinkingEnabled = thinkingOptions.thinking?.enabled === true && !usingResponseFormatToolUse;
 
       if (userThinkingEnabled || isQuestMaster) {
         // Determine budget and effort based on context
         const budgetTokens = isQuestMaster
           ? Math.min(Math.floor((options.maxTokens ?? 8192) * 0.25), 4096)
           : (thinkingOptions.thinking?.budget_tokens ?? 16000);
-        const effort = isQuestMaster ? ('medium' as const) : ('high' as const);
+        const effort = resolveAnthropicEffort({
+          questMaster: isQuestMaster,
+          anthropicEffort: options.anthropicEffort,
+          reasoningEffort: options.reasoningEffort,
+        });
 
         const result = buildThinkingParams(model, currentModelInfo, budgetTokens, apiParams.max_tokens ?? 4096, effort);
 
@@ -1675,13 +1707,29 @@ export class AnthropicBackend implements ICompletionBackend {
                     func[0].name = toolEvent.name;
                     func[0].parameters = JSON.stringify(toolEvent.input);
                     func[0].id = toolEvent.id;
+                  } else if (event.type === 'message_start') {
+                    // Seed the prompt's usage: message_delta is the last event, so a stream cut
+                    // short (Stop, degeneration abort) never sees it, yet the provider still bills
+                    // the prompt. output_tokens is left out because it is a placeholder here. On a first
+                    // call settlement then falls back to its estimate of the partial reply; on a later
+                    // call the provider basis applies and this call's partial output goes unbilled (known gap).
+                    const startUsage = event.message?.usage;
+                    if (startUsage) {
+                      usageInfo = {
+                        input_tokens: startUsage.input_tokens,
+                        cache_read_input_tokens: startUsage.cache_read_input_tokens ?? undefined,
+                        cache_creation_input_tokens: startUsage.cache_creation_input_tokens ?? undefined,
+                      };
+                      streamingTurnUsage = usageInfo as typeof streamingTurnUsage;
+                    }
                   } else if (event.type === 'message_delta') {
                     // Capture usage information for cache stats and outer-scope
                     // multi-turn accounting (see streamingTurnUsage).
                     if ('usage' in event) {
-                      // MessageDeltaUsage lacks an index signature, so it isn't directly
-                      // assignable to the (pre-existing) Record<string, unknown> local.
-                      usageInfo = event.usage as unknown as Record<string, unknown>;
+                      // Cumulative counts, so they replace message_start's; a null field keeps
+                      // the seeded value rather than erasing it.
+                      const deltaUsage = Object.fromEntries(Object.entries(event.usage).filter(([, v]) => v != null));
+                      usageInfo = { ...usageInfo, ...deltaUsage };
                       streamingTurnUsage = usageInfo as typeof streamingTurnUsage;
                     }
                     // The terminal message_delta carries delta.stop_reason. Keep the
@@ -1715,10 +1763,17 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Forward the accumulated usage the clean terminal path forwards.
                   // Omitting it drops settlement to the local tokenizer estimate, and a
                   // degenerate turn is the worst case for an estimate: real output is large.
-                  inputTokens:
-                    accumInputTokens + ((usageInfo as { input_tokens?: number } | undefined)?.input_tokens ?? 0),
-                  outputTokens:
-                    accumOutputTokens + ((usageInfo as { output_tokens?: number } | undefined)?.output_tokens ?? 0),
+                  inputTokens: accumInputTokens + ((usageInfo as AnthropicUsage)?.input_tokens ?? 0),
+                  outputTokens: accumOutputTokens + ((usageInfo as AnthropicUsage)?.output_tokens ?? 0),
+                  cacheReadInputTokens: totalCacheTokens(
+                    accumCacheReadTokens,
+                    (usageInfo as AnthropicUsage)?.cache_read_input_tokens
+                  ),
+                  cacheCreationInputTokens: totalCacheTokens(
+                    accumCacheWriteTokens,
+                    (usageInfo as AnthropicUsage)?.cache_creation_input_tokens
+                  ),
+                  turnUsage: appendAnthropicTurn(accumTurnUsage, usageInfo as AnthropicUsage),
                 });
                 resolve();
                 return;
@@ -1757,10 +1812,17 @@ export class AnthropicBackend implements ICompletionBackend {
                   await cb([], {
                     toolsUsed,
                     stopReason: STREAM_ABORTED_STOP_REASON,
-                    inputTokens:
-                      accumInputTokens + ((usageInfo as { input_tokens?: number } | undefined)?.input_tokens ?? 0),
-                    outputTokens:
-                      accumOutputTokens + ((usageInfo as { output_tokens?: number } | undefined)?.output_tokens ?? 0),
+                    inputTokens: accumInputTokens + ((usageInfo as AnthropicUsage)?.input_tokens ?? 0),
+                    outputTokens: accumOutputTokens + ((usageInfo as AnthropicUsage)?.output_tokens ?? 0),
+                    cacheReadInputTokens: totalCacheTokens(
+                      accumCacheReadTokens,
+                      (usageInfo as AnthropicUsage)?.cache_read_input_tokens
+                    ),
+                    cacheCreationInputTokens: totalCacheTokens(
+                      accumCacheWriteTokens,
+                      (usageInfo as AnthropicUsage)?.cache_creation_input_tokens
+                    ),
+                    turnUsage: appendAnthropicTurn(accumTurnUsage, usageInfo as AnthropicUsage),
                   });
                   resolve();
                   return;
@@ -1855,7 +1917,8 @@ export class AnthropicBackend implements ICompletionBackend {
                 // accumInputTokens > 0 means this is a continuation turn that
                 // already has prior usage, so missing usage here is expected
                 // for short final turns; only warn on standalone terminal turns.
-                if (!usage && accumInputTokens === 0 && accumOutputTokens === 0) {
+                // output_tokens, not `usage` itself: message_start seeds input before any delta.
+                if (usage?.output_tokens == null && accumInputTokens === 0 && accumOutputTokens === 0) {
                   this.logger.warn(
                     '[AnthropicBackend] Terminal streaming turn ended without usage info from message_delta. ' +
                       'Billing will report 0 tokens for this call. This may indicate an Anthropic API regression.',
@@ -1885,6 +1948,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     accumCacheWriteTokens,
                     usageWithCache?.cache_creation_input_tokens
                   ),
+                  turnUsage: appendAnthropicTurn(accumTurnUsage, usageWithCache),
                   ...(usingResponseFormatToolUse ? { responseFormatMode: 'tool_use' as const } : {}),
                   ...(usingResponseFormatNative ? { responseFormatMode: 'native' as const } : {}),
                   ...(usingResponseFormatPrompt ? { responseFormatMode: 'best-effort' as const } : {}),
@@ -1938,12 +2002,19 @@ export class AnthropicBackend implements ICompletionBackend {
                   await cb([], {
                     toolsUsed,
                     stopReason: DEGENERATE_STREAM_STOP_REASON,
-                    // No usage forwarded here: this is the AbortError path, so the
-                    // terminal message_delta that carries provider usage never arrived
-                    // and `usageInfo` is out of scope. The post-loop site above (stream
-                    // ended without throwing) does forward it.
-                    inputTokens: accumInputTokens,
-                    outputTokens: accumOutputTokens,
+                    // `usageInfo` is out of scope in this catch; streamingTurnUsage holds the
+                    // same counts (message_start's prompt usage, since message_delta never came).
+                    inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens || 0),
+                    outputTokens: accumOutputTokens + (streamingTurnUsage?.output_tokens || 0),
+                    cacheReadInputTokens: totalCacheTokens(
+                      accumCacheReadTokens,
+                      streamingTurnUsage?.cache_read_input_tokens
+                    ),
+                    cacheCreationInputTokens: totalCacheTokens(
+                      accumCacheWriteTokens,
+                      streamingTurnUsage?.cache_creation_input_tokens
+                    ),
+                    turnUsage: appendAnthropicTurn(accumTurnUsage, streamingTurnUsage),
                   });
                   resolve();
                 } else if (isIdleTimeout) {
@@ -2241,6 +2312,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   accumCacheWriteTokens,
                   streamingTurnUsage?.cache_creation_input_tokens
                 ),
+                turnUsage: appendAnthropicTurn(accumTurnUsage, streamingTurnUsage),
                 stopReason: 'tool_use',
               });
               if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
@@ -2279,6 +2351,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Cache tokens are billed per API call - accumulate like input/output.
                   accumCacheReadTokens: accumCacheReadTokens + (streamingTurnUsage?.cache_read_input_tokens || 0),
                   accumCacheWriteTokens: accumCacheWriteTokens + (streamingTurnUsage?.cache_creation_input_tokens || 0),
+                  accumTurnUsage: appendAnthropicTurn(accumTurnUsage, streamingTurnUsage),
                   artifactGuard,
                 },
               },
@@ -2308,6 +2381,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 accumCacheWriteTokens,
                 streamingTurnUsage?.cache_creation_input_tokens
               ),
+              turnUsage: appendAnthropicTurn(accumTurnUsage, streamingTurnUsage),
             });
           }
           return; // Exit after handling tools
@@ -2439,6 +2513,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   accumCacheWriteTokens,
                   usageWithCacheNS?.cache_creation_input_tokens
                 ),
+                turnUsage: appendAnthropicTurn(accumTurnUsage, usageWithCacheNS),
               }
             : {}),
           ...(isTerminalTurn && usingResponseFormatToolUse ? { responseFormatMode: 'tool_use' as const } : {}),
@@ -2672,6 +2747,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   accumCacheWriteTokens,
                   usageWithCacheNS?.cache_creation_input_tokens
                 ),
+                turnUsage: appendAnthropicTurn(accumTurnUsage, usageWithCacheNS),
                 stopReason: 'tool_use',
               });
               if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
@@ -2709,6 +2785,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Cache tokens are billed per API call - accumulate like input/output.
                   accumCacheReadTokens: accumCacheReadTokens + (usageWithCacheNS?.cache_read_input_tokens || 0),
                   accumCacheWriteTokens: accumCacheWriteTokens + (usageWithCacheNS?.cache_creation_input_tokens || 0),
+                  accumTurnUsage: appendAnthropicTurn(accumTurnUsage, usageWithCacheNS),
                   artifactGuard,
                 },
               },
@@ -2733,6 +2810,12 @@ export class AnthropicBackend implements ICompletionBackend {
             await cb([null], {
               inputTokens: accumInputTokens + (usage?.input_tokens || 0),
               outputTokens: accumOutputTokens + (usage?.output_tokens || 0),
+              cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCacheNS?.cache_read_input_tokens),
+              cacheCreationInputTokens: totalCacheTokens(
+                accumCacheWriteTokens,
+                usageWithCacheNS?.cache_creation_input_tokens
+              ),
+              turnUsage: appendAnthropicTurn(accumTurnUsage, usageWithCacheNS),
               toolsUsed,
               thinking: thinkingBlocks,
             });

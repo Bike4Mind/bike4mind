@@ -24,6 +24,8 @@ import LanguageSelector from '@client/app/components/LanguageSelector';
 import { useTranslation } from 'react-i18next';
 import VoicePreferenceSection from './VoicePreferenceSection';
 import ActiveSessionsSection from './ActiveSessionsSection';
+import PasskeysSection from './PasskeysSection';
+import TrustedDevicesSection from './TrustedDevicesSection';
 import ApprovedAppsSection from './ApprovedAppsSection';
 import DocxTemplateSection from './DocxTemplateSection';
 import { DeleteAllKnowledgeFilesConfirm, DeleteAllNotebooksConfirm } from './DeleteAllConfirmModals';
@@ -31,8 +33,11 @@ import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import { useExperimentalFeatureSettings, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup, useCancelMFASetup } from '@client/app/hooks/data/mfa';
 import MFAModal from '@client/app/components/common/MFAModal';
+import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import { useEffect, useRef, useState } from 'react';
 import { useSearch } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { useUser } from '@client/app/contexts/UserContext';
 
 const StyledButton = styled(Button)(({ theme }) => ({
   // Common style for action buttons for this screen
@@ -61,6 +66,8 @@ const GeneralSettingsTab = () => {
   const { isLoading: serverSettingsLoading } = useSettingsFromServer();
   const { data: experimentalSettingsWithDefaults } = useExperimentalFeatureSettings();
 
+  const { refreshUser } = useUser();
+  const queryClient = useQueryClient();
   const { data: mfaStatus } = useMFAStatus();
   const setupMFA = useSetupMFA();
   const verifyMFASetup = useVerifyMFASetup();
@@ -184,6 +191,7 @@ const GeneralSettingsTab = () => {
         toast.success('MFA setup initiated');
       },
       onError: (error: { response?: { data?: { error?: string } }; message?: string }) => {
+        if (isStepUpCancelled(error)) return;
         const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
         toast.error(errorMessage);
       },
@@ -200,6 +208,12 @@ const GeneralSettingsTab = () => {
             setShowBackupCodes(data.backupCodes);
           }
           toast.success('MFA enabled successfully');
+          // Same refresh as MFASection's enable handler: the status query drives this card and
+          // the Passkeys/Trusted Devices sections, and refetchOnWindowFocus is off.
+          queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] });
+          refreshUser();
+          queryClient.invalidateQueries({ queryKey: ['identify'] });
+          queryClient.invalidateQueries({ queryKey: ['users'] });
         },
         onError: (error: {
           response?: { data?: { error?: string; attemptsRemaining?: number } };
@@ -446,6 +460,7 @@ const GeneralSettingsTab = () => {
                     <StyledButton
                       color="primary"
                       variant="solid"
+                      data-testid="settings-enable-mfa-btn"
                       onClick={handleEnableMFA}
                       loading={setupMFA.isPending}
                       sx={{ fontSize: '13px' }}
@@ -458,6 +473,8 @@ const GeneralSettingsTab = () => {
             </Grid>
           </Grid>
 
+          <PasskeysSection enabled={!!mfaStatus?.enabled} />
+          <TrustedDevicesSection enabled={!!mfaStatus?.enabled} />
           <ActiveSessionsSection />
           <ApprovedAppsSection />
         </SectionContainer>

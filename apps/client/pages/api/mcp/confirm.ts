@@ -150,8 +150,12 @@ const handler = baseApi().post(async (req, res) => {
     // For GitHub tools: verify the repo is in the user's configured repos
     if (mcpName === 'github' && selectedRepositories?.length && toolParams.owner && toolParams.repo) {
       const aiExtractedRepo = `${toolParams.owner}/${toolParams.repo}`;
+      // GitHub full names are case-insensitive, and the server guard matches them that way.
+      const isSelected = selectedRepositories.some(
+        (repo: string) => repo.toLowerCase() === aiExtractedRepo.toLowerCase()
+      );
 
-      if (!selectedRepositories.includes(aiExtractedRepo)) {
+      if (!isSelected) {
         logger.warn('[Web MCP Confirm] Repository not in configured repos', {
           aiExtractedRepo,
           availableRepos: selectedRepositories,
@@ -264,6 +268,7 @@ const handler = baseApi().post(async (req, res) => {
       toolArgs: { ...toolParams, _executeFromButton: true },
       action: 'callTool',
       selectedRepositories,
+      userId: user.id,
     });
 
     let resultData: any = result;

@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
+const browserSigner = vi.hoisted(() => vi.fn(async () => 'https://objects.example.invalid/file'));
 import type { NextApiResponse } from 'next';
 import { ApiKeyScope } from '@bike4mind/common';
 
@@ -47,7 +48,7 @@ vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({
 }));
 
 vi.mock('@server/utils/storage', () => ({
-  getFilesStorage: () => ({ getSignedUrl: vi.fn(async () => 'signed-url') }),
+  getFilesStorage: () => ({ getSignedUrl: browserSigner }),
 }));
 
 import handlerImpl from '../byIds';
@@ -83,6 +84,27 @@ const makeReq = (ids: string[], apiKeyInfo?: { scopes: ApiKeyScope[] }) => ({
 });
 
 describe('GET /api/files/byIds', () => {
+  it.each([undefined, '', '   ', 'https://objects.example.invalid'])(
+    'uses request-local browser signing for collection responses',
+    async endpoint => {
+      vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
+      const { res } = makeRes();
+      await handler(makeReq([OWNED_ID]), res);
+      const adapter = listFabFiles.mock.calls[0][2] as {
+        storage: {
+          signedUrlCache?: string;
+          generateSignedUrl: (path: string, expiry: number) => Promise<string | null>;
+        };
+      };
+      expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
+      await adapter.storage.generateSignedUrl('owned/report.txt', 600);
+      expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', {
+        expiresIn: 600,
+        audience: 'browser',
+      });
+    }
+  );
+
   beforeEach(() => {
     vi.clearAllMocks();
     listFabFiles.mockResolvedValue([{ id: OWNED_ID }]);
@@ -247,3 +269,5 @@ describe('GET /api/files/byIds', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:read'] });
   });
 });
+
+afterEach(() => vi.unstubAllEnvs());

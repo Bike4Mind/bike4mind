@@ -85,6 +85,26 @@ describe('saveGeneratedAsset', () => {
     expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata).toEqual({ generation: music });
   });
 
+  it('records the inline-playback copy key so a delete can remove that copy too', async () => {
+    await saveGeneratedAsset(params({ sessionId: 's1', generatedCopyKey: 'abc.mp3' }), deps);
+
+    expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata).toEqual({
+      sessionId: 's1',
+      generatedCopyKey: 'abc.mp3',
+      generation: music,
+    });
+  });
+
+  it.each([
+    ['audio/L16', 'pcm'],
+    ['audio/basic', 'ulaw'],
+  ])('saves raw %s audio as .%s instead of refusing it', async (contentType, extension) => {
+    const result = await saveGeneratedAsset(params({ contentType }), deps);
+
+    expect(result.saved).toBe(true);
+    expect(createFabFile.mock.calls[0][1].fileName).toMatch(new RegExp(`\\.${extension}$`));
+  });
+
   it('stores video as VIDEO under its own prefix, tagged with the job', async () => {
     const generation: GeneratedAssetMetadata = { generator: 'video', provider: 'veo', jobId: 'j1', prompt: 'waves' };
     await saveGeneratedAsset(params({ contentType: 'video/mp4', generation }), deps);

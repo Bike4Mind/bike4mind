@@ -12,6 +12,7 @@ import { LOG_URL_TRUNCATE_LENGTH } from '@server/auth/oktaConstants';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
+import { getClientIp } from '@server/utils/ip';
 
 const handleSamlCallback = async (req: any, res: any) => {
   try {
@@ -72,7 +73,7 @@ const handleSamlCallback = async (req: any, res: any) => {
     });
 
     passport.authenticate(strategyName, async (err: Error | null, user: any, info: any) => {
-      const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+      const ip = getClientIp(req);
       const userAgent = req.headers['user-agent'] || 'unknown';
       const email = (info && (info.email as string)) || undefined;
 
@@ -152,7 +153,7 @@ const handleSamlCallback = async (req: any, res: any) => {
         type: AuthEvents.LOGIN,
         metadata: {
           strategy: AuthStrategy.SAML,
-          ip: req.ip || req.connection.remoteAddress || (req.headers['x-forwarded-for'] as string) || 'unknown',
+          ip: getClientIp(req),
           userAgent: req.headers['user-agent'] || 'unknown',
         },
       });

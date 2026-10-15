@@ -15,11 +15,11 @@ import {
   creditLotRepository,
   pendingOtcTokenRepository,
   authSessionRepository,
-  passkeyCredentialRepository,
   oauthClientRepository,
 } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
+import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
@@ -30,19 +30,20 @@ import {
   reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
+import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { setRefreshCookie } from '@server/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { Config } from '@server/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
-import { logAuthAudit } from '@server/utils/authAudit';
+import { getClientIp } from '@server/utils/ip';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
-import { mfaService } from '@bike4mind/services';
-import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
+import * as z from 'zod';
+import { selfUserResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 
 interface PendingTokenPayload {
   email: string;
@@ -57,6 +58,10 @@ const MAX_PENDING_OTC_ATTEMPTS = 5;
 function parseSourceClientId(value: unknown): string | undefined {
   return isOAuthClientIdShape(value) ? value : undefined;
 }
+
+// Existing-user login spreads the self-view user at the top level next to the access token.
+const otcLoginResponseSchema = selfUserResponseSchema.extend({ accessToken: z.string() });
+const otcRegistrationResponseSchema = z.object({ user: selfUserResponseSchema, accessToken: z.string() });
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
@@ -174,70 +179,55 @@ const handler = baseApi({ auth: false })
         existingUser.emailVerified = true;
         existingUser.emailVerifiedAt = new Date();
         try {
-          // A tagged account was registered with credits deferred until email ownership is
-          // proven; the code just proved it. Never throws. A failed grant keeps the tag, but
-          // emailVerified is persisted in this same write, so later logins skip this branch:
-          // the only retry is the backfillPendingFreeCredits script.
-          const release = await userService.releasePendingFreeCredits(existingUser, {
-            db: {
-              adminSettings: adminSettingsRepository,
-              creditTransactions: creditTransactionRepository,
-              creditLots: creditLotRepository,
-              users: userRepository,
-            },
-            reason: 'OTC login (email verified)',
-            logger: req.logger,
-          });
           // Write only the fields set here: a later loginRecords update below writes the same doc,
-          // and a whole-doc write on either would clobber the other's change. The release patch
-          // rides this same write so there is no extra round trip.
+          // and a whole-doc write on either would clobber the other's change. The verification-link
+          // fields are cleared in the same write: this code just proved the email, so any link still
+          // pending on the account is stale, and a later click would re-run the verified-email grants.
           await userRepository.update({
             id: existingUser.id,
             emailVerified: existingUser.emailVerified,
             emailVerifiedAt: existingUser.emailVerifiedAt,
-            ...release.patch,
+            emailVerificationToken: null,
+            emailVerificationExpires: null,
+            emailVerificationSentAt: null,
           });
-          if (release.released) {
-            existingUser.tags = release.patch.tags ?? existingUser.tags;
+          // The code just proved email ownership, and later logins skip this branch, so this is
+          // the account's one chance at what /api/email/verify would have granted. A failed write
+          // above skips it, and the next login retries both.
+          const grants = await applyEmailVerifiedGrants({
+            user: existingUser,
+            verifiedEmail: normalizedEmail,
+            trigger: 'otc-login-verification',
+            releaseReason: 'OTC login (email verified)',
+            logger: req.logger,
+          });
+          if (grants.tags) {
+            existingUser.tags = grants.tags;
             existingUser.pendingCreditGrant = null;
-            if (release.currentCredits !== null) existingUser.currentCredits = release.currentCredits;
           }
+          if (grants.currentCredits !== null) existingUser.currentCredits = grants.currentCredits;
+          if (grants.joinedOrganizationId) existingUser.organizationId = grants.joinedOrganizationId;
         } catch (err) {
           req.logger.error('OTC login emailVerified update failed', err);
         }
       }
 
-      // --- MFA LOGIC (same as password login) ---
-      const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-      const enforceMFA = getSettingsValue('enforceMFA', settings) || false;
-      const userHasMFA = mfaService.userHasMFAConfigured(existingUser);
-
-      // "Remember this device": a live trust for THIS account skips the TOTP re-challenge
-      // for the rest of its window. It only ever suppresses the SECOND factor - the emailed
-      // code above is still required, so the cookie alone is not a credential. It cannot
-      // stand in for MFA *enrollment* either: the enforceMFA/!userHasMFA branch below is
-      // deliberately outside this check.
-      const trustedDevice =
-        userHasMFA && (await trustedDevicesAllowed()) ? await consumeTrustedDevice(req, existingUser.id) : null;
-
-      if ((userHasMFA && !trustedDevice) || (enforceMFA && !userHasMFA)) {
-        // Only issue the short-lived mfaPending access token (no refresh token).
-        // /api/auth/mfa/verify mints the full token pair on success. Without this
-        // omission, a client could POST the mfaPending refresh token directly to
-        // /api/auth/refreshToken (which has no mfaPending check) and get a full
-        // session without passing the second factor.
-        const mfaAccessToken = jwt.sign(
-          { id: existingUser.id, mfaPending: true, tokenVersion: existingUser.tokenVersion ?? 0 },
-          Config.JWT_SECRET,
-          { algorithm: 'HS256', expiresIn: '10m' }
-        );
-        // Lets the challenge UI offer "use a passkey" up front instead of failing after a tap.
-        const passkeyAvailable = userHasMFA && (await passkeyCredentialRepository.countByUser(existingUser.id)) > 0;
+      // --- SECOND FACTOR --- (a remembered device skips the challenge, never enrollment)
+      const secondFactor = await resolveSecondFactor(req, existingUser, {
+        origin: { strategy: 'otc', createdVia: 'otc' },
+      });
+      if (secondFactor.kind === 'challenge') {
         return res.status(200).json({
-          ...(userHasMFA ? { mfaRequired: true, passkeyAvailable } : { mfaSetupRequired: true }),
+          mfaRequired: true,
+          passkeyAvailable: secondFactor.passkeyAvailable,
           userId: existingUser.id,
-          accessToken: mfaAccessToken,
+          accessToken: secondFactor.mfaToken,
         });
+      }
+      if (secondFactor.kind === 'enroll') {
+        return res
+          .status(200)
+          .json({ mfaSetupRequired: true, userId: existingUser.id, accessToken: secondFactor.mfaToken });
       }
 
       // --- DIRECT LOGIN ---
@@ -252,34 +242,21 @@ const handler = baseApi({ auth: false })
       );
       setRefreshCookie(res, refreshToken);
       const tokens = { accessToken };
-      const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+      const ip = getClientIp(req);
 
       // Analytics + device history are best-effort for the same post-rotation reason as
       // above: the login is already proven, so none of these writes may fail the response.
-      // (logAuthAudit already swallows internally by design.)
+      // (logSignInSuccess -> logAuthAudit already swallows internally by design.)
       await logEvent({
         userId: existingUser.id,
         type: AuthEvents.LOGIN,
         metadata: { strategy: 'otc', ip, userAgent: req.headers['user-agent'] || 'unknown' },
       }).catch(err => req.logger.error('OTC login analytics log failed', err));
-      await logAuthAudit(req, {
+      await logSignInSuccess(req, {
         userId: existingUser.id,
-        event: 'login_success',
         strategy: 'otc',
-        metadata: trustedDevice ? { trustedDeviceId: trustedDevice.id } : undefined,
+        trustedDevice: secondFactor.trustedDevice,
       });
-      if (trustedDevice) {
-        await logAuthAudit(req, {
-          userId: existingUser.id,
-          event: 'trusted_device_used',
-          strategy: 'otc',
-          metadata: {
-            deviceId: trustedDevice.id,
-            label: trustedDevice.label,
-            expiresAt: trustedDevice.expiresAt.toISOString(),
-          },
-        });
-      }
 
       // Update login records
       const clientData = req.body.clientData;
@@ -296,7 +273,7 @@ const handler = baseApi({ auth: false })
           colorDepth: clientData.colorDepth || 0,
           pixelDepth: clientData.pixelDepth || 0,
           devicePixelRatio: clientData.devicePixelRatio || 1,
-          ip: req.ip || '',
+          ip: getClientIp(req),
         });
         existingUser.loginRecords = existingUser.loginRecords.slice(0, 15);
         try {
@@ -311,7 +288,7 @@ const handler = baseApi({ auth: false })
       // response carries the same redacted shape as GET /users/[id]. `select:false` alone
       // does not cover every secret field, so serialize at the boundary here too.
       const safeUser = redactUserSecretsForSelf(existingUser);
-      return res.status(200).json({ ...safeUser, ...tokens });
+      return respond(res, otcLoginResponseSchema, { ...safeUser, ...tokens });
     }
 
     // --- NEW USER REGISTRATION ---
@@ -367,7 +344,7 @@ const handler = baseApi({ auth: false })
                 colorDepth: req.body.clientData.colorDepth || 0,
                 pixelDepth: req.body.clientData.pixelDepth || 0,
                 devicePixelRatio: req.body.clientData.devicePixelRatio || 1,
-                ip: req.ip || '',
+                ip: getClientIp(req),
               }
             : undefined,
         },
@@ -475,7 +452,7 @@ const handler = baseApi({ auth: false })
       }
     );
     setRefreshCookie(res, registrationSession.refreshToken);
-    return res.status(200).json({
+    return respond(res, otcRegistrationResponseSchema, {
       user: redactUserSecretsForSelf(newUser),
       accessToken: registrationSession.accessToken,
     });

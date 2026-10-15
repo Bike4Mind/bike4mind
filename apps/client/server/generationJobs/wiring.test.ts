@@ -1,10 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { IGenerationJobDocument, VideoProviderId } from '@bike4mind/common';
+import {
+  StorageLimitError,
+  type IGenerationJobDocument,
+  type MusicProviderId,
+  type StorageLimitErrorInfo,
+  type VideoProviderId,
+} from '@bike4mind/common';
 
-const { queueLink, getSourceQueueUrl, sendToQueue } = vi.hoisted(() => ({
+const { queueLink, getSourceQueueUrl, sendToQueue, userFindById, checkStorageLimit } = vi.hoisted(() => ({
   queueLink: { mode: 'direct' as 'direct' | 'throws' },
   getSourceQueueUrl: vi.fn(),
   sendToQueue: vi.fn(),
+  userFindById: vi.fn(),
+  checkStorageLimit: vi.fn(),
 }));
 
 // A getter mirrors sst's Resource proxy, which throws when a key is not linked to the Lambda.
@@ -27,16 +35,33 @@ vi.mock('@bike4mind/auth', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/auth')>();
   return {
     ...actual,
-    apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
+    apiKeyService: {
+      ...actual.apiKeyService,
+      getEffectiveLLMApiKeys: vi.fn(async () => ({})),
+      getEffectiveApiKey: vi.fn(async () => 'e-key'),
+    },
   };
 });
 vi.mock('@server/utils/sqs', () => ({ sendToQueue }));
+vi.mock('@bike4mind/database', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/database')>();
+  return { ...actual, userRepository: { ...actual.userRepository, findById: userFindById } };
+});
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
+  return { ...actual, checkStorageLimit };
+});
 
+import { createMusicProviderRegistry } from '@bike4mind/utils/musicProviders';
 import { createVideoProviderRegistry } from '@bike4mind/utils/videoProviders';
 import {
+  buildMusicProviders,
   buildProviders,
+  checkStorageFor,
   enqueueGenerationJob,
+  getMusicJobDeps,
   getVideoJobDeps,
+  selectMusicProviderKey,
   selectProviderKey,
   toJobUpdate,
   usableApiKey,
@@ -106,6 +131,73 @@ describe('provider key selection', () => {
   });
 });
 
+describe('music provider key selection', () => {
+  it('gives the test provider a fixed key', () => {
+    expect(selectMusicProviderKey('test', {} as never)).toBe('test-key');
+  });
+
+  it('maps gemini-lyria to the Gemini key, so placeholder and expiry checks apply unchanged', () => {
+    expect(selectMusicProviderKey('gemini-lyria', { gemini: 'g-key' } as never)).toBe('g-key');
+    expect(usableApiKey(selectMusicProviderKey('gemini-lyria', { gemini: null } as never))).toBeNull();
+    expect(usableApiKey(selectMusicProviderKey('gemini-lyria', { gemini: 'expired' } as never))).toBeNull();
+  });
+
+  it('maps elevenlabs to the ElevenLabs key, never the Gemini one', () => {
+    expect(selectMusicProviderKey('elevenlabs', { gemini: 'g-key', elevenlabs: 'e-key' } as never)).toBe('e-key');
+    expect(usableApiKey(selectMusicProviderKey('elevenlabs', { gemini: 'g-key' } as never))).toBeNull();
+  });
+
+  it('throws for a provider id with no mapping', () => {
+    expect(() => selectMusicProviderKey('unmapped' as MusicProviderId, {} as never)).toThrow(/no API key mapping/);
+  });
+
+  it('resolves the test provider key through the deps', async () => {
+    expect(await getMusicJobDeps().resolveApiKey('test', 'user1')).toBe('test-key');
+  });
+
+  it('resolves the ElevenLabs key through the deps', async () => {
+    expect(await getMusicJobDeps().resolveApiKey('elevenlabs', 'user1')).toBe('e-key');
+  });
+});
+
+describe('checkStorageFor', () => {
+  const info: StorageLimitErrorInfo = {
+    errorCode: 'storage_limit_exceeded',
+    used_bytes: 900,
+    limit_bytes: 1_000,
+    requested_bytes: 2_000,
+    owner: 'user',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    userFindById.mockResolvedValue({ id: 'u1' });
+  });
+
+  it('answers undefined when the quota has room', async () => {
+    checkStorageLimit.mockResolvedValue(undefined);
+    await expect(checkStorageFor('u1', 2_000)).resolves.toBeUndefined();
+    expect(userFindById).toHaveBeenCalledWith('u1');
+    expect(checkStorageLimit).toHaveBeenCalledWith({ id: 'u1' }, 2_000);
+  });
+
+  it('returns the quota detail for a storage refusal', async () => {
+    checkStorageLimit.mockRejectedValue(new StorageLimitError('full', info));
+    await expect(checkStorageFor('u1', 2_000)).resolves.toEqual(info);
+  });
+
+  it('rethrows any other failure rather than reporting room', async () => {
+    checkStorageLimit.mockRejectedValue(new Error('db down'));
+    await expect(checkStorageFor('u1', 2_000)).rejects.toThrow('db down');
+  });
+
+  it('throws for a missing user', async () => {
+    userFindById.mockResolvedValue(null);
+    await expect(checkStorageFor('u1', 2_000)).rejects.toThrow('user u1 not found');
+    expect(checkStorageLimit).not.toHaveBeenCalled();
+  });
+});
+
 describe('toJobUpdate', () => {
   it('never exposes internal fields', () => {
     const update = toJobUpdate(baseJob);
@@ -131,6 +223,21 @@ describe('toJobUpdate', () => {
       payload: { ...baseJob.payload, output: { contentType: 'video/mp4', durationSeconds: 4 } },
     } as IGenerationJobDocument);
     expect(withoutFile.job.output).toEqual({ contentType: 'video/mp4', durationSeconds: 4 });
+  });
+
+  it('maps a music job output without its lyrics', () => {
+    const update = toJobUpdate({
+      ...baseJob,
+      kind: 'music',
+      state: 'succeeded',
+      payload: {
+        providerId: 'test',
+        request: { model: 'test-music' },
+        output: { contentType: 'audio/mpeg', durationSeconds: 5, fileId: 'f1', lyrics: 'la la' },
+      },
+    } as IGenerationJobDocument);
+    expect(update.job).toMatchObject({ kind: 'music', output: { fileId: 'f1', contentType: 'audio/mpeg' } });
+    expect(JSON.stringify(update)).not.toContain('la la');
   });
 
   it('carries progress and the error code and message', () => {
@@ -190,5 +297,25 @@ describe('buildProviders', () => {
   it('builds a registry the catalog-owner check accepts', () => {
     process.env.ENABLE_TEST_VIDEO_PROVIDER = 'true';
     expect(() => createVideoProviderRegistry(buildProviders())).not.toThrow();
+  });
+});
+
+describe('buildMusicProviders', () => {
+  afterEach(() => {
+    delete process.env.ENABLE_TEST_MUSIC_PROVIDER;
+  });
+
+  it('registers Lyria and ElevenLabs unconditionally', () => {
+    expect(buildMusicProviders().map(provider => provider.id)).toEqual(['gemini-lyria', 'elevenlabs']);
+  });
+
+  it('adds the test provider only when enabled', () => {
+    process.env.ENABLE_TEST_MUSIC_PROVIDER = 'true';
+    expect(buildMusicProviders().map(provider => provider.id)).toEqual(['gemini-lyria', 'elevenlabs', 'test']);
+  });
+
+  it('builds a registry the catalog-owner check accepts', () => {
+    process.env.ENABLE_TEST_MUSIC_PROVIDER = 'true';
+    expect(() => createMusicProviderRegistry(buildMusicProviders())).not.toThrow();
   });
 });

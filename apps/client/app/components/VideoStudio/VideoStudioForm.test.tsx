@@ -42,7 +42,7 @@ import VideoStudioForm from './VideoStudioForm';
 const appTheme = extendTheme({ ...getThemeConfig() });
 const onSubmit = vi.fn();
 
-const tree = (models: VideoModel[]) => (
+const tree = (models: readonly [VideoModel, ...VideoModel[]]) => (
   <CssVarsProvider theme={appTheme}>
     <VideoStudioForm models={models} isSubmitting={false} onSubmit={onSubmit} />
   </CssVarsProvider>
@@ -74,22 +74,22 @@ describe('VideoStudioForm duration control', () => {
     const slider = screen.getByTestId('video-form-duration-slider');
     expect(slider).toHaveAttribute('min', '1');
     expect(slider).toHaveAttribute('max', '15');
-    expect(screen.queryByTestId('video-form-duration-option-4')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('video-form-duration-4-btn')).not.toBeInTheDocument();
   });
 
   it('renders one choice per value for a discrete model', () => {
     render(tree([discreteModel]));
     expect(screen.queryByTestId('video-form-duration-slider')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('video-form-duration-option-8'));
-    expect(screen.getByTestId('video-form-duration-option-8')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('video-form-duration-option-4')).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByTestId('video-form-duration-8-btn'));
+    expect(screen.getByTestId('video-form-duration-8-btn')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('video-form-duration-4-btn')).toHaveAttribute('aria-pressed', 'false');
   });
 });
 
 describe('VideoStudioForm model switch', () => {
   it('clamps the duration and says what changed', () => {
     render(tree([discreteModel, optionalAudioModel]));
-    fireEvent.click(screen.getByTestId('video-form-duration-option-8'));
+    fireEvent.click(screen.getByTestId('video-form-duration-8-btn'));
     pickModel('Synthetic Optional Audio');
     expect(screen.getByTestId('video-form-changes')).toHaveTextContent('Duration changed from 8s to 6s.');
     expect(screen.getByTestId('video-form-duration-slider')).toHaveValue('6');

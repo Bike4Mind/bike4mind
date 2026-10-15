@@ -1,10 +1,16 @@
 import {
   toPublicVideoJobErrorCode,
   type IGenerationJobDocument,
+  type IGenerationJobDocumentOf,
   type VideoGeneration,
   type VideoJobPublicErrorCode,
 } from '@bike4mind/common';
-import { OUTPUT_URL_TTL_SECONDS, type JobMapperDeps } from '@server/generations/signedOutput';
+import {
+  OUTPUT_URL_TTL_SECONDS,
+  outputUrlExpiresAt,
+  toIso,
+  type JobMapperDeps,
+} from '@server/generations/signedOutput';
 
 // Fixed text per public code: a stored job.error.message can carry provider wording, which never leaves the server.
 const PUBLIC_ERROR_MESSAGES: Record<VideoJobPublicErrorCode, string> = {
@@ -17,11 +23,6 @@ const PUBLIC_ERROR_MESSAGES: Record<VideoJobPublicErrorCode, string> = {
   cancelled: 'The generation was cancelled.',
 };
 
-const toIso = (date: Date | undefined): string => {
-  if (!date) throw new Error('generation job has no timestamps');
-  return new Date(date).toISOString();
-};
-
 const toPublicError = (error: IGenerationJobDocument['error']): VideoGeneration['error'] => {
   if (!error) return null;
   const code = toPublicVideoJobErrorCode(error.code);
@@ -30,7 +31,7 @@ const toPublicError = (error: IGenerationJobDocument['error']): VideoGeneration[
 
 /** The one job -> public resource mapping, shared by every video-generations endpoint. */
 export async function toPublicVideoGeneration(
-  job: IGenerationJobDocument,
+  job: IGenerationJobDocumentOf<'video'>,
   deps: JobMapperDeps
 ): Promise<VideoGeneration> {
   const { request, output } = job.payload;
@@ -53,10 +54,7 @@ export async function toPublicVideoGeneration(
         ? {
             availability: signed.availability,
             url: signed.availability === 'ready' ? signed.url : null,
-            expires_at:
-              signed.availability === 'ready'
-                ? new Date(deps.now().getTime() + OUTPUT_URL_TTL_SECONDS * 1000).toISOString()
-                : null,
+            expires_at: signed.availability === 'ready' ? outputUrlExpiresAt(deps.now()) : null,
             content_type: output.contentType,
             duration_seconds: output.durationSeconds,
             file_id: output.fileId ?? null,

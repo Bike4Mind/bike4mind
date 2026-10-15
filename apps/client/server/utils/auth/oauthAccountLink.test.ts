@@ -262,6 +262,9 @@ describe('applyAccountLink', () => {
       expect(authProviders).toEqual([oauthCredentials]);
       expect(update.$set).toMatchObject({ oauthCredentials, authProviders });
       expect((update.$set as Record<string, unknown>).emailVerified).toBeUndefined();
+      expect((update.$set as Record<string, unknown>).emailVerificationToken).toBeUndefined();
+      expect((update.$set as Record<string, unknown>).emailVerificationExpires).toBeUndefined();
+      expect((update.$set as Record<string, unknown>).emailVerificationSentAt).toBeUndefined();
       expect(update.$inc).toEqual({ tokenVersion: 1 });
       expect(reflect).toEqual({ tokenVersion: 4 });
     });
@@ -289,6 +292,9 @@ describe('applyAccountLink', () => {
       const set = update.$set as Record<string, unknown>;
       expect(set.emailVerified).toBe(true);
       expect(set.emailVerifiedAt).toBeInstanceOf(Date);
+      expect(set.emailVerificationToken).toBeNull();
+      expect(set.emailVerificationExpires).toBeNull();
+      expect(set.emailVerificationSentAt).toBeNull();
       expect(update.$inc).toEqual({ tokenVersion: 1 });
       expect(reflect.tokenVersion).toBe(1);
       expect(reflect.emailVerified).toBe(true);
@@ -312,6 +318,9 @@ describe('applyAccountLink', () => {
       expect(authProviders).toEqual([oauthCredentials]);
       expect(update.$set).toBeUndefined();
       expect(update.$inc).toBeUndefined();
+      expect(update.emailVerificationToken).toBeUndefined();
+      expect(update.emailVerificationExpires).toBeUndefined();
+      expect(update.emailVerificationSentAt).toBeUndefined();
       expect(update).toMatchObject({ oauthCredentials, authProviders });
       expect(reflect).toEqual({});
     });
@@ -348,6 +357,9 @@ describe('applyAccountLink', () => {
 
       expect(update.emailVerified).toBe(true);
       expect(update.emailVerifiedAt).toBeInstanceOf(Date);
+      expect(update.emailVerificationToken).toBeNull();
+      expect(update.emailVerificationExpires).toBeNull();
+      expect(update.emailVerificationSentAt).toBeNull();
       expect(update.$inc).toBeUndefined();
       expect(reflect.tokenVersion).toBeUndefined();
       expect(reflect.emailVerified).toBe(true);

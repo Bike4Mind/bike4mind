@@ -1,6 +1,5 @@
-import { ModelInfo, MusicGenerationVendor, SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
+import { ModelInfo, SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { estimateImageCredits } from '../imageCost';
-import { estimateMusicCredits } from '../musicCost';
 import { AudioCostInput, estimateAudioCredits } from '../audioCost';
 import { CostInput } from './imageCostCalculator/types';
 
@@ -20,8 +19,9 @@ import { CostInput } from './imageCostCalculator/types';
  * this and logs rather than letting a cost-estimate edge crash the agent run.
  *
  * Timing mirrors the classic host: image cost is known up front (from n/size/quality) so it
- * is read from the `onToolStart` payload; music/audio settle from the `onToolFinish` payload
- * so only a delivered clip is billed.
+ * is read from the `onToolStart` payload; audio settles from the `onToolFinish` payload
+ * so only a delivered clip is billed. video_generation and music_generation are not here:
+ * their jobs hold and settle credits themselves.
  */
 export function estimateGeneratedMediaUsd(toolName: string, data: unknown, models: ModelInfo[]): number {
   switch (toolName) {
@@ -40,11 +40,6 @@ export function estimateGeneratedMediaUsd(toolName: string, data: unknown, model
         inputImageCount: toolName === 'edit_image' ? 1 : 0,
       } as CostInput;
       return estimateImageCredits(modelInfo, d.n || 1, input).usdCost;
-    }
-    case 'music_generation': {
-      const d = data as { provider?: MusicGenerationVendor; lengthMs?: number };
-      if (!d?.provider || typeof d.lengthMs !== 'number') return 0;
-      return estimateMusicCredits(d.provider, { lengthMs: d.lengthMs }).usdCost;
     }
     case 'audio_generation': {
       const d = data as {

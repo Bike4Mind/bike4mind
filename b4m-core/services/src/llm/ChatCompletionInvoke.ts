@@ -110,6 +110,7 @@ export class ChatCompletionInvoke {
       enableLattice,
       promptMode,
       skipAutoOffers,
+      disableUserIntegrations,
       skipReplyChoices,
       deniedTools,
       systemPrompt,
@@ -129,6 +130,7 @@ export class ChatCompletionInvoke {
       correctsQuestId,
       allowedAgents,
       enableSlackTools,
+      toolMode,
     } = ChatCompletionInvokeParamsSchema.parse(body);
 
     // Parallelize independent operations: API keys, session, organization, and the correction
@@ -292,6 +294,7 @@ export class ChatCompletionInvoke {
           : []),
         { status: 'Received by backend', timestamp: now },
       ],
+      ...(toolMode ? { toolMode } : {}),
     };
 
     // Correct-and-retry: bind the claimed correction target to the caller's session before it is
@@ -471,6 +474,7 @@ export class ChatCompletionInvoke {
         // dispatchQuest ships to the async worker, so a field omitted here is silently dropped on
         // every path except `wait: true`.
         skipAutoOffers,
+        disableUserIntegrations,
         skipReplyChoices,
         deniedTools,
         authOrigin,

@@ -275,6 +275,7 @@ describe('audio_generation tool', () => {
         modelId: expect.any(String),
         prompt: 'hello world',
       },
+      generatedCopyKey: 'stored-key.mp3',
     });
     expect(result).toBe('Successfully generated speech');
   });
@@ -286,6 +287,7 @@ describe('audio_generation tool', () => {
       bytes: Buffer.from('fake-sfx'),
       contentType: 'audio/mpeg',
       generation: { generator: 'sound_effect', provider: 'elevenlabs', prompt: 'dog barking', durationSeconds: 5 },
+      generatedCopyKey: 'stored-key.mp3',
     });
   });
 });

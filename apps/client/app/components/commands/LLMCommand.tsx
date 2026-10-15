@@ -56,9 +56,16 @@ export type LLMCommandArgs = {
   skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
   /**
    * Suppresses the instant ack for this turn. Set for tool-directed launches: the ack model
-   * runs with no tools, so given a prompt that orders a tool call it fakes one as text.
+   * runs with no tools, so given a prompt that orders a tool call it fakes one as text. Also
+   * set when `systemContext` is present, which the ack model never sees.
    */
   skipRapidReply?: boolean;
+  /**
+   * Extra system context for this request only, sent as one more system message in
+   * `extraContextMessages`. Not part of the prompt, so it is not shown in the bubble,
+   * and the server does not persist extraContextMessages content on the quest.
+   */
+  systemContext?: string;
   imageConfig?: GenerateImageToolCall;
   audioConfig?: AudioGenerationToolCall;
   deepResearchConfig?: {
@@ -137,6 +144,7 @@ export async function handleLLMCommand(
       researchMode,
       skipAutoOffers,
       skipRapidReply,
+      systemContext,
       imageConfig,
       audioConfig,
       deepResearchConfig,
@@ -192,6 +200,7 @@ export async function handleLLMCommand(
       researchMode: _omitResearchMode,
       skipAutoOffers: _omitSkipAutoOffers,
       skipRapidReply: _omitSkipRapidReply,
+      systemContext: _omitSystemContext,
       imageConfig: _omitImageConfig,
       audioConfig: _omitAudioConfig,
       agentMode: _omitAgentMode,
@@ -229,6 +238,8 @@ export async function handleLLMCommand(
         // chat actually uses - pushChatMessage is REST-only.
         const briefContext = surfaceCtx.briefContext ?? null;
         if (briefContext) messages.push({ role: 'system' as const, content: briefContext });
+        // Per-send context from the caller (e.g. a programmatic launch), for this request only.
+        if (systemContext) messages.push({ role: 'system' as const, content: systemContext });
         return messages.length > 0 ? messages : undefined;
       })();
 

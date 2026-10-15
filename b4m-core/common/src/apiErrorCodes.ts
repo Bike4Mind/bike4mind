@@ -54,6 +54,12 @@ export const API_ERROR_CODES = [
   'cancelled',
   'idempotency_key_reused',
   'invalid_idempotency_key',
+  // Music generation (POST /api/v1/music-generations). Must stay in sync with MUSIC_GENERATION_API_ERROR_CODES;
+  // the codes it shares with video are listed above.
+  'unsupported_lyrics',
+  'unsupported_vocals',
+  'lyrics_with_instrumental',
+  'lyrics_too_long',
   // Decisions (POST /api/v1/decisions); see DECISIONS_ERROR_CODES.
   /** The provider stayed overloaded or timed out through our one retry; the response carries Retry-After. */
   'provider_overloaded',

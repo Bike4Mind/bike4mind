@@ -1,5 +1,6 @@
 import { InviteType } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
+import { escapeHtml } from './emailHelpers';
 
 /** Human-readable noun for an invite type, as used in invite email copy. */
 export const getInviteTypeName = (type: InviteType): string => {
@@ -18,10 +19,6 @@ export const getInviteTypeName = (type: InviteType): string => {
       return 'content';
   }
 };
-
-// Escape HTML to prevent XSS/injection attacks in email templates
-const escapeHtml = (str: string): string =>
-  str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 /**
  * Emails each pending recipient a link to the invite. Shared by the generic invite route
@@ -139,11 +136,12 @@ export const sendInviteNotificationEmails = async (
     </html>
   `;
 
-  // Email subjects don't render HTML, but escaping prevents header injection.
+  // A subject is plain text, so it is not HTML-escaped; line breaks are dropped so the name
+  // cannot spill into further header lines.
   const emailPromises = recipients.map(recipient =>
     EmailEvents.Send.publish({
       to: recipient,
-      subject: `${escapeHtml(sharerName)} shared a ${typeName} with you${brand ? ` on ${brand}` : ''}`,
+      subject: `${sharerName.replace(/[\r\n]+/g, ' ')} shared a ${typeName} with you${brand ? ` on ${brand}` : ''}`,
       body: emailBody,
     }).catch(error => {
       console.error(`Failed to send invite notification to ${recipient}:`, error);

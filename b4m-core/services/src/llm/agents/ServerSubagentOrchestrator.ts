@@ -1,6 +1,12 @@
 import { ReActAgent, selectSubagentTools, humanizeToolName } from '@bike4mind/agents';
 import type { AgentResult, AgentStep, ThoroughnessLevel, ServerAgentDefinition } from '@bike4mind/agents';
-import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import {
+  DELEGATION_TOOLS,
+  classifyToolPermission,
+  getTextModelCost,
+  getTurnsCost,
+  type ModelInfo,
+} from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
@@ -12,6 +18,48 @@ export const MAX_SUBAGENT_DEPTH = 3;
 
 /** Tools denied only when a subagent has reached the depth cap. */
 const DEPTH_CAP_DENIED = ['delegate_to_agent'];
+
+/**
+ * Tools that pass the child permission gate. The delegation tools pass it exactly as they pass
+ * the parent's; they are not ungated, since each builds its own orchestrator carrying the same
+ * `toolPermissions`, so the grandchild's calls are classified in turn. `decompose_task` is
+ * coordinate_task's in-memory capture tool (coordinateTask.ts) and touches nothing.
+ */
+const CHILD_GATE_EXEMPT_TOOLS: ReadonlySet<string> = new Set([...DELEGATION_TOOLS, 'decompose_task']);
+
+/** The parent run's tool-permission lists, as loaded at the start of its invocation. */
+export type SubagentToolPermissions = {
+  approvedTools: readonly string[];
+  deniedTools: readonly string[];
+};
+
+/**
+ * Wrap each tool so a call the parent's permission gate would not let through is refused
+ * instead of run. A child has no approver to pause for, so `needs_approval` is a refusal
+ * that tells the model to hand the step back to the parent, whose gate can ask the user.
+ */
+export function gateSubagentTools(
+  tools: ICompletionOptionTools[],
+  permissions: SubagentToolPermissions,
+  logger: Logger
+): ICompletionOptionTools[] {
+  return tools.map(tool => {
+    const toolName = tool.toolSchema.name;
+    if (CHILD_GATE_EXEMPT_TOOLS.has(toolName)) return tool;
+
+    const toolFn: ICompletionOptionTools['toolFn'] = async (parameters, apiKey) => {
+      const verdict = classifyToolPermission(toolName, permissions.approvedTools, permissions.deniedTools);
+      if (verdict === 'allowed') return tool.toolFn(parameters, apiKey);
+
+      logger.warn(`[SubagentOrchestrator] Refused subagent call to "${toolName}" (${verdict})`);
+      return verdict === 'denied'
+        ? `Error: ${toolName} was not run because the user denied it for this session. Do not retry it.`
+        : `Error: ${toolName} was not run because it needs the user's approval, which a subagent cannot ask for. ` +
+            `Do not retry it; finish what you can and report that this step needs ${toolName} so the parent agent can run it.`;
+    };
+    return { ...tool, toolFn };
+  });
+}
 
 /** Timeout per thoroughness level - very_thorough gets more time for multi-page enumeration */
 export const SUBAGENT_TIMEOUT_BY_THOROUGHNESS: Record<ThoroughnessLevel, number> = {
@@ -289,6 +337,13 @@ export interface ServerOrchestratorDeps {
    * needs to read it at call time, not just close over one fetched earlier.
    */
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
+  /**
+   * Set when the parent runs under the agent executor's permission gate: every child tool
+   * call is then classified against these lists and refused unless `allowed` (see
+   * `gateSubagentTools`). Omitted by ungated parents (ChatCompletionProcess), whose
+   * children stay ungated like the parent itself.
+   */
+  toolPermissions?: SubagentToolPermissions;
 }
 
 /**
@@ -455,12 +510,15 @@ export class ServerSubagentOrchestrator {
     // `allowedTools` match — they're never granted by the allow-all default — and
     // are deduped against the parent set. The save tool's lake companions are not paired here:
     // `allowedTools` is an explicit whitelist, which the agent paths never pair past (pairDataLakeTools).
-    const filteredTools = selectSubagentTools(
+    const selectedTools = selectSubagentTools(
       this.deps.parentTools,
       this.deps.optInTools ?? [],
       agentDef.allowedTools,
       deniedTools
     );
+    const filteredTools = this.deps.toolPermissions
+      ? gateSubagentTools(selectedTools, this.deps.toolPermissions, this.deps.logger)
+      : selectedTools;
 
     // Substitute variables in system prompt
     let systemPrompt = agentDef.systemPrompt;
@@ -612,7 +670,7 @@ export class ServerSubagentOrchestrator {
       if (!result.completionInfo.totalCredits && this.deps.availableModels) {
         const modelInfo = this.deps.availableModels.find(m => m.id === effectiveModel);
         if (modelInfo) {
-          const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens } =
+          const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, turnUsage } =
             result.completionInfo;
           // Cache-aware so this fallback stays on the same basis as the cache-aware
           // costUsd recorded by delegateToAgent's onCredits (see #151) - otherwise a
@@ -622,13 +680,16 @@ export class ServerSubagentOrchestrator {
           // That shape is shared with the main cliCompletions credit path, so credits
           // stay consistent across the two paths rather than diverging - matching the
           // primary path is deliberate; do not "fix" it here in isolation.
-          const usdCost = getTextModelCost(
-            modelInfo,
-            totalInputTokens,
-            totalOutputTokens,
-            totalCacheReadTokens ?? 0,
-            totalCacheWriteTokens ?? 0
-          );
+          // Per request when the agent reports it: long-context tiers are chosen per request.
+          const usdCost = turnUsage?.length
+            ? getTurnsCost(modelInfo, turnUsage)
+            : getTextModelCost(
+                modelInfo,
+                totalInputTokens,
+                totalOutputTokens,
+                totalCacheReadTokens ?? 0,
+                totalCacheWriteTokens ?? 0
+              );
           result.completionInfo.totalCredits = usdToCredits(usdCost);
         } else {
           // Model absent from availableModels: credits stay unset and the delegation's

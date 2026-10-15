@@ -27,7 +27,7 @@ import { BaseBedrockBackend } from './base';
 import { capCacheControlMarkers, getCachingAdapter } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
-import { buildThinkingParams, planReasoningEffort } from '../thinkingParams';
+import { buildThinkingParams, planReasoningEffort, resolveAnthropicEffort } from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
 import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
 
@@ -426,7 +426,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 0.015 / 1000, output: 0.075 / 1000 }, // Placeholder pricing - update with public rates
+          200000: { input: 0.015 / 1000, output: 0.075 / 1000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -449,7 +449,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 0.015 / 1000, output: 0.075 / 1000 }, // Placeholder pricing - update with public rates
+          200000: { input: 0.015 / 1000, output: 0.075 / 1000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -472,7 +472,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 0.003 / 1000, output: 0.015 / 1000 }, // Placeholder pricing - update with public rates
+          200000: { input: 0.003 / 1000, output: 0.015 / 1000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -518,7 +518,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 1 / 1_000_000, output: 5 / 1_000_000 }, // Placeholder pricing - update with public rates
+          200000: { input: 1 / 1_000_000, output: 5 / 1_000_000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -985,7 +985,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         const budgetTokens = isQuestMaster
           ? Math.min(Math.floor(maxTokens * 0.25), 4096)
           : (options.thinking?.budget_tokens ?? 16000);
-        const effort = isQuestMaster ? ('medium' as const) : ('high' as const);
+        const effort = resolveAnthropicEffort({
+          questMaster: isQuestMaster,
+          anthropicEffort: options.anthropicEffort,
+          reasoningEffort: options.reasoningEffort,
+        });
 
         const result = buildThinkingParams(model, currentModelInfo, budgetTokens, maxTokens, effort);
 

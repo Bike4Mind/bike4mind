@@ -4,6 +4,7 @@ import { ApiKeyScope, IModalDocument } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { assertDateInRange } from '@server/utils/dateParam';
+import { escapeHtml } from '@server/utils/mailer/emailHelpers';
 import { renderAndSanitize } from '@server/utils/marketingReportRenderer';
 import { MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
 
@@ -129,17 +130,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
     })),
   });
 });
-
-function escapeHtml(text: string): string {
-  const map: Record<string, string> = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#039;',
-  };
-  return text.replace(/[&<>"']/g, m => map[m]);
-}
 
 export const config = {
   api: {

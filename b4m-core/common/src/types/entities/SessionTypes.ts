@@ -10,6 +10,7 @@ import type { IUserDocument } from './UserTypes';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
 import type { ApiErrorCode } from '../../apiErrorCodes';
+import type { GenerationJobRef } from './GenerationJobTypes';
 import type { IQuestCallback } from '../../schemas/generationCallback';
 import type { SuggestedChoices } from '../../utils/replyChoices';
 
@@ -194,8 +195,11 @@ export interface IChatHistoryItem {
   /** Path to the video in the storage bucket */
   videos?: string[];
 
-  /** Ids of the video generation jobs this quest started */
+  /** Legacy: video jobs started before `generationJobs`; read through questGenerationJobs, never written. */
   videoJobIds?: string[];
+
+  /** Generation jobs (video, music) this quest started, one live card each. Read through questGenerationJobs. */
+  generationJobs?: GenerationJobRef[];
 
   /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentVideoClip). */
   agentVideoClipsClaimed?: number;

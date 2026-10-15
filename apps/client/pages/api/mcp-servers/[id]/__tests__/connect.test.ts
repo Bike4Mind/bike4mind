@@ -66,6 +66,12 @@ describe('POST /api/mcp-servers/[id]/connect', () => {
     );
   });
 
+  it("fetches the tools under the requesting user's tenant", async () => {
+    await run();
+
+    expect(mockInvoke).toHaveBeenCalledWith(expect.objectContaining({ action: 'getTools', userId: 'u1' }));
+  });
+
   it('still clears the marker when the reconnect fetch fails, so the next turn retries', async () => {
     mockInvoke.mockRejectedValue(new Error('lambda cold start'));
 

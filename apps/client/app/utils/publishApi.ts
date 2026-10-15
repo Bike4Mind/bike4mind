@@ -165,6 +165,32 @@ export async function findPublishedByArtifact(artifactId: string): Promise<Manag
 }
 
 /**
+ * Look up the caller's OWN publication of a chat reply, as the share result the dialog renders,
+ * so reopening Publish & Share on an answer lands on the live page. Owner-scoped server-side.
+ * Returns null on no match or on failure - publishing must never block on this lookup.
+ */
+export async function findPublishedByReply(messageId: string): Promise<PublishResult | null> {
+  try {
+    const { data } = await api.get<{ artifacts: ManagedArtifact[] }>(
+      `/api/publish/artifacts?sourceMessageId=${encodeURIComponent(messageId)}&limit=1`
+    );
+    const a = data.artifacts?.[0];
+    if (!a) return null;
+    return {
+      publicId: a.publicId,
+      url: `/p/r/${a.publicId}`,
+      tier: a.tier,
+      scopeId: a.scopeId,
+      slug: a.slug,
+      visibility: a.visibility,
+      publishedAt: a.publishedAt ?? '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fetch a published artifact's content in an export format (issue #1142).
  *
  * Goes through the authenticated `api` client rather than a plain `<a download>`: a

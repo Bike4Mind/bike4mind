@@ -27,6 +27,11 @@ import {
 import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
+  AI_EDIT_VERSION_RETENTION_DEFAULT,
+  AI_EDIT_VERSION_RETENTION_MAX,
+  AI_EDIT_VERSION_RETENTION_MIN,
+} from '../constants/aiEditVersionRetention';
+import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
@@ -353,6 +358,7 @@ export const SettingKeySchema = z.enum([
   'EnableUserDeletionSlackNotification',
   'AdminEmail',
   'MaxFileSize',
+  'AiEditVersionRetention',
   'DefaultContext',
   'FeedbackSendEmailUsername',
   'FeedbackSendEmailPassword',
@@ -602,7 +608,7 @@ export const IntentClassifierConfigSchema = z.object({
   enabled: z.boolean().default(true),
   shadowMode: z.boolean().default(true),
   primaryModel: z.string().default('claude-haiku-4-5-20251001'),
-  fallbackModels: z.array(z.string()).default(['gemini-2.5-flash-lite', 'gpt-5.4-nano']),
+  fallbackModels: z.array(z.string()).default(['gemini-3.1-flash-lite', 'gpt-5.4-nano']),
 });
 
 export type IntentClassifierConfig = z.infer<typeof IntentClassifierConfigSchema>;
@@ -1964,6 +1970,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'MaxFileSize', order: 1 },
       { key: 'VectorThreshold', order: 2 },
       { key: 'MaxContentLength', order: 3 },
+      { key: 'AiEditVersionRetention', order: 4 },
     ],
   },
   SLACK: {
@@ -3090,6 +3097,19 @@ export const settingsMap = {
     category: 'Knowledge',
     group: API_SERVICE_GROUPS.KNOWLEDGE.id,
     order: 1,
+  }),
+  AiEditVersionRetention: makeNumberSetting({
+    key: 'AiEditVersionRetention',
+    name: 'AI Edit Versions Kept',
+    defaultValue: AI_EDIT_VERSION_RETENTION_DEFAULT,
+    min: AI_EDIT_VERSION_RETENTION_MIN, // a blank field coerces to 0, which would trim every edited version
+    max: AI_EDIT_VERSION_RETENTION_MAX,
+    description:
+      'How many AI-edited versions are kept per file. Older edited versions are deleted from storage ' +
+      'on the next edit. The original upload is always kept in addition.',
+    category: 'Knowledge',
+    group: API_SERVICE_GROUPS.KNOWLEDGE.id,
+    order: 4,
   }),
   DefaultContext: makeNumberSetting({
     key: 'DefaultContext',

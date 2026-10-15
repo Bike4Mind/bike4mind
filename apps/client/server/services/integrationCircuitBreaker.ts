@@ -17,8 +17,6 @@ interface CacheEntry {
   autoTripped: boolean;
   /** True when there aren't enough real API checks to evaluate (below threshold) */
   noData?: boolean;
-  /** True when all recorded checks are configMissing (no integration connection exists) */
-  allConfigMissing?: boolean;
   cachedAt: number;
 }
 
@@ -83,11 +81,9 @@ async function checkAvailability(integration: IntegrationName): Promise<CacheEnt
   const threshold = INTEGRATION_HEALTH_THRESHOLDS.FAILURE_ALERT_THRESHOLD;
   const checks = await integrationHealthCheckRepository.getLastNChecks(integration, threshold);
 
-  // Ignore config-missing records - they indicate the integration isn't set up,
-  // not that the API is actually down. Let those calls through so the user gets
-  // the normal "please connect this integration" flow instead of a circuit breaker error.
+  // Probes no longer write configMissing, but rows from the old credentialed probes (no connected
+  // account) remain; counting them as outages would trip the circuit for everyone on deploy.
   const apiChecks = checks.filter(c => !c.configMissing);
-  const allConfigMissing = checks.length > 0 && checks.every(c => c.configMissing);
 
   // Not enough real API data yet - don't block
   if (apiChecks.length < threshold) {
@@ -97,7 +93,6 @@ async function checkAvailability(integration: IntegrationName): Promise<CacheEnt
       mode: 'auto',
       autoTripped: false,
       noData: true,
-      allConfigMissing,
       cachedAt: now,
     };
     cache.set(integration, entry);
@@ -149,7 +144,6 @@ export async function getStatus(integration: IntegrationName): Promise<{
   mode: CircuitBreakerMode;
   autoTripped: boolean;
   noData?: boolean;
-  allConfigMissing?: boolean;
 }> {
   const result = await checkAvailability(integration);
   return {
@@ -158,7 +152,6 @@ export async function getStatus(integration: IntegrationName): Promise<{
     mode: result.mode,
     autoTripped: result.autoTripped,
     noData: result.noData,
-    allConfigMissing: result.allConfigMissing,
   };
 }
 

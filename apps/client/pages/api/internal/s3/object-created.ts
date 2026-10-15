@@ -18,7 +18,7 @@ import crypto from 'crypto';
 /**
  * Self-host S3 ObjectCreated webhook.
  *
- * In AWS, an S3 ObjectCreated event invokes objectCreated.ts (server/s3) to mark the
+ * In AWS, an S3 ObjectCreated event invokes apps/workers/src/s3/objectCreated.ts to mark the
  * FabFile complete and kick off RAG ingestion. Self-host has no S3 events: MinIO instead
  * POSTs an S3-compatible notification here (configured via MINIO_NOTIFY_WEBHOOK_* in
  * compose.selfhost.yaml + an `mc event add` on the fab-file bucket). This mirrors the

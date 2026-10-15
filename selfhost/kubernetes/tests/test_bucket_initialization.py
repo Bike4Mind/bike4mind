@@ -83,7 +83,7 @@ class BucketInitializationTests(unittest.TestCase):
             return result, json.loads(state.read_text())
 
     def assert_required(self, state):
-        for bucket, prefix, days in [('published','drafts/',7), ('history','',7), ('fab','exports/',1), ('fab','generated-audio-offload/',1)]:
+        for bucket, prefix, days in [('published','drafts/',7), ('history','',7), ('fab','exports/',1), ('fab','generated-audio-offload/',1), ('fab','text-edit-backups/',30)]:
             policies = state['rules'].get('local/' + bucket, [])
             matches = [entry for entry in policies if entry['Status'] == 'Enabled' and entry['Filter'] == {'Prefix':prefix} and entry['Expiration'] == {'Days':days}]
             self.assertEqual(len(matches), 1, (bucket, prefix, policies))
@@ -98,13 +98,13 @@ class BucketInitializationTests(unittest.TestCase):
                 self.assertIn(entry, state['rules'][bucket])
 
     def test_exact_existing_rules_are_not_duplicated(self):
-        policies = {'local/fab':[rule('audio','generated-audio-offload/',1), rule('exports','exports/',1)], 'local/published':[rule('drafts','drafts/',7)], 'local/history':[rule('history','',7)]}
+        policies = {'local/fab':[rule('audio','generated-audio-offload/',1), rule('exports','exports/',1), rule('backups','text-edit-backups/',30)], 'local/published':[rule('drafts','drafts/',7)], 'local/history':[rule('history','',7)]}
         result, state = self.run_initializer(policies, count=2)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(state['rules'], policies)
 
     def test_wrong_expiry_and_disabled_required_rules_are_reconciled(self):
-        policies = {'local/fab':[rule('audio','generated-audio-offload/',90), rule('exports','exports/',20, Status='Disabled')], 'local/published':[rule('drafts','drafts/',30)], 'local/history':[rule('history','',20)]}
+        policies = {'local/fab':[rule('audio','generated-audio-offload/',90), rule('exports','exports/',20, Status='Disabled'), rule('backups','text-edit-backups/',5)], 'local/published':[rule('drafts','drafts/',30)], 'local/history':[rule('history','',20)]}
         result, state = self.run_initializer(policies, count=2)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_required(state)

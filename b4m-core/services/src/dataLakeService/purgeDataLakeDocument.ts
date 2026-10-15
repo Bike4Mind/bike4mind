@@ -1,3 +1,4 @@
+import { chargedBytes } from '@bike4mind/common';
 import type {
   DataLakeDocumentPurgeReceipt,
   IAdminSettingsRepository,
@@ -307,14 +308,15 @@ export const purgeDataLakeDocument = async (
     // through to the read-back instead, same as the storage-delete failure above - chunksRemaining
     // and verified report the gap truthfully, and onPurged still runs off `deletedByThisCall`.
     // Guard: if the legal-hold catch fired, the row was NOT deleted; skip chunk sweep entirely.
-    if (deletedByThisCall) try {
-      await db.fabFileChunks.deleteManyByFabFileId(file.id);
-    } catch (error) {
-      logger?.error('[dataLake] permanent deletion removed the row but could not delete its chunks', {
-        fabFileId: file.id,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
+    if (deletedByThisCall)
+      try {
+        await db.fabFileChunks.deleteManyByFabFileId(file.id);
+      } catch (error) {
+        logger?.error('[dataLake] permanent deletion removed the row but could not delete its chunks', {
+          fabFileId: file.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
 
     // Detected findings quote their sources, so a row citing this document would keep a 240-char
     // excerpt of text this call was paid to destroy - and nothing else would ever sweep it, since a
@@ -438,7 +440,8 @@ export const purgeDataLakeDocument = async (
     // Gated on this call having removed the row, not merely on the object delete succeeding:
     // deleting an already-absent key succeeds, so a concurrent second purge would otherwise refund
     // the same bytes twice and ratchet the owner's quota down with only an admin recalculate to undo it.
-    fileSize: deletedByThisCall && typeof file.fileSize === 'number' ? file.fileSize : 0,
+    // Charged bytes, not the raw size: a never-charged row refunds nothing (see chargedBytes).
+    fileSize: deletedByThisCall ? chargedBytes(file) : 0,
     tagNames,
   });
 

@@ -6,6 +6,15 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import GeneralSettingsTab from './GeneralSettingsTab';
 
 const mutation = { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false };
+const setupMutation = { mutate: vi.fn(), isPending: false };
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+vi.mock('sonner', () => ({ toast: { info: vi.fn(), error: toastError, success: vi.fn() } }));
+
+// The interceptor tags a dismissed verification prompt with a private symbol; stand in a marker.
+const CANCELLED = 'verification-dismissed';
+vi.mock('@client/app/utils/stepUpInterceptor', () => ({
+  isStepUpCancelled: (error: unknown) => error instanceof Error && error.message === CANCELLED,
+}));
 // Separate handles so a test can tell which delete fired; a shared mock cannot.
 const deleteSessionsMutation = { mutate: vi.fn(), isPending: false };
 const deleteFilesMutation = { mutate: vi.fn(), isPending: false };
@@ -21,9 +30,11 @@ vi.mock('@client/app/hooks/data/settings', () => ({
   useSettingsFromServer: () => ({ isLoading: true }),
   useExperimentalFeatureSettings: () => ({ data: undefined }),
 }));
+let mfaEnabled = false;
+
 vi.mock('@client/app/hooks/data/mfa', () => ({
-  useMFAStatus: () => ({ data: undefined }),
-  useSetupMFA: () => mutation,
+  useMFAStatus: () => ({ data: mfaEnabled ? { enabled: true } : undefined }),
+  useSetupMFA: () => setupMutation,
   useVerifyMFASetup: () => mutation,
   useCancelMFASetup: () => mutation,
 }));
@@ -42,7 +53,17 @@ vi.mock('@client/app/hooks/data/sessions', () => ({
   useOwnSessionCount: () => ({ data: undefined }),
 }));
 vi.mock('@client/app/hooks/useDownload', () => ({ useDownload: () => mutation }));
-vi.mock('@client/app/components/common/MFAModal', () => ({ default: () => null }));
+const mfaModalProps: { onVerify?: (token: string) => void } = {};
+vi.mock('@client/app/components/common/MFAModal', () => ({
+  default: (props: { onVerify: (token: string) => void }) => {
+    mfaModalProps.onVerify = props.onVerify;
+    return null;
+  },
+}));
+const invalidateQueries = vi.fn();
+const refreshUser = vi.fn();
+vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries }) }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ refreshUser }) }));
 vi.mock('@client/app/components/LanguageSelector', () => ({ default: () => null }));
 vi.mock('@client/app/components/help', () => ({ ContextHelpButton: () => null }));
 vi.mock('@/app/components/ProfileModal/UploadImportHistoryModal', () => ({ default: () => null }));
@@ -52,6 +73,16 @@ vi.mock('@/app/components/ProfileModal/NotebookCurationModal', () => ({ default:
 vi.mock('@/app/components/ProfileModal/ImportHistoryJobsList', () => ({ default: () => null }));
 vi.mock('./VoicePreferenceSection', () => ({ default: () => null }));
 vi.mock('./ActiveSessionsSection', () => ({ default: () => null }));
+vi.mock('./PasskeysSection', () => ({
+  default: ({ enabled }: { enabled: boolean }) => (
+    <div data-testid="passkeys-section-stub" data-enabled={`${enabled}`} />
+  ),
+}));
+vi.mock('./TrustedDevicesSection', () => ({
+  default: ({ enabled }: { enabled: boolean }) => (
+    <div data-testid="trusted-devices-section-stub" data-enabled={`${enabled}`} />
+  ),
+}));
 vi.mock('./ApprovedAppsSection', () => ({ default: () => null }));
 vi.mock('./DocxTemplateSection', () => ({ default: () => null }));
 vi.mock('../ExperimentalFeatureToggle', () => ({ default: () => null }));
@@ -63,6 +94,64 @@ const renderTab = () =>
       <GeneralSettingsTab />
     </CssVarsProvider>
   );
+
+describe('GeneralSettingsTab MFA sections', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mfaEnabled = false;
+  });
+
+  it.each(['passkeys-section-stub', 'trusted-devices-section-stub'])('mounts %s, disabled while MFA is off', testId => {
+    renderTab();
+    expect(screen.getByTestId(testId).getAttribute('data-enabled')).toBe('false');
+  });
+
+  it.each(['passkeys-section-stub', 'trusted-devices-section-stub'])('enables %s once MFA is on', testId => {
+    mfaEnabled = true;
+    renderTab();
+    expect(screen.getByTestId(testId).getAttribute('data-enabled')).toBe('true');
+  });
+
+  it('refreshes MFA status after enabling MFA so the sections appear without reopening', () => {
+    // Fire onSuccess for the setup call (opens the modal) and then the verify call.
+    const succeed = (_vars: unknown, opts?: { onSuccess?: (data: object) => void }) => opts?.onSuccess?.({});
+    setupMutation.mutate.mockImplementationOnce(succeed);
+    mutation.mutate.mockImplementationOnce(succeed);
+    renderTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
+    act(() => mfaModalProps.onVerify?.('123456'));
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['mfa', 'status'] });
+    expect(refreshUser).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GeneralSettingsTab - enable MFA with a dismissed verification prompt', () => {
+  // Fail the mocked setup mutation so the component's real onError runs.
+  const failSetupWith = (error: Error) =>
+    setupMutation.mutate.mockImplementation((_variables: unknown, options: { onError: (e: Error) => void }) =>
+      options.onError(error)
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupMutation.mutate.mockReset();
+  });
+
+  it('does not toast an error when the prompt was dismissed', () => {
+    failSetupWith(new Error(CANCELLED));
+    renderTab();
+    fireEvent.click(screen.getByTestId('settings-enable-mfa-btn'));
+    expect(setupMutation.mutate).toHaveBeenCalledTimes(1);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it('toasts the error for any other failure', () => {
+    failSetupWith(new Error('setup failed'));
+    renderTab();
+    fireEvent.click(screen.getByTestId('settings-enable-mfa-btn'));
+    expect(toastError).toHaveBeenCalledWith('setup failed');
+  });
+});
 
 describe('GeneralSettingsTab danger zone', () => {
   beforeEach(() => {

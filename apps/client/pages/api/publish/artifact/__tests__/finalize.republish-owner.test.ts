@@ -4,7 +4,9 @@ import { createMocks } from 'node-mocks-http';
 // Republishing an existing slug is limited to the artifact owner (or an admin); other callers get 403
 // before any storage or database write - at upload-url, and again at finalize.
 
-const { mockFindOne, mockFindOneAndUpdate, mockDownload, mockUpload } = vi.hoisted(() => ({
+const { mockFindOne, mockFindOneAndUpdate, mockDownload, mockUpload, mockInvalidate, mockSelect } = vi.hoisted(() => ({
+  mockSelect: vi.fn(),
+  mockInvalidate: vi.fn(),
   mockFindOne: vi.fn(),
   mockFindOneAndUpdate: vi.fn(),
   mockDownload: vi.fn(),
@@ -35,7 +37,12 @@ vi.mock('@server/utils/storage', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: {
-    findOne: () => ({ select: () => ({ lean: () => Promise.resolve(mockFindOne()) }) }),
+    findOne: () => ({
+      select: (proj: string) => {
+        mockSelect(proj);
+        return { lean: () => Promise.resolve(mockFindOne()) };
+      },
+    }),
     findOneAndUpdate: (...a: unknown[]) => Promise.resolve(mockFindOneAndUpdate(...a)),
   },
 }));
@@ -49,8 +56,8 @@ vi.mock('@server/services/publish', async importOriginal => {
     resolveVisibility: (_tier: string, visibility: string) => ({ ok: true, visibility }),
     buildPublishS3KeyPrefix: () => 'user/owner1/art/',
     buildPublishUrlPath: () => '/p/u/owner1/art',
-    invalidatePublishCdn: () => undefined,
-    toCacheTarget: () => ({}),
+    invalidatePublishCdn: mockInvalidate,
+    toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
     mintDraftUploadUrl: () => Promise.resolve('https://example.invalid/put'),
   };
 });
@@ -96,6 +103,7 @@ beforeEach(() => {
   mockFindOneAndUpdate.mockReset().mockResolvedValue({ visibility: 'public', publicId: 'pub1' });
   mockDownload.mockReset();
   mockUpload.mockReset().mockResolvedValue(undefined);
+  mockInvalidate.mockReset().mockResolvedValue(undefined);
 });
 
 const existing = {
@@ -183,6 +191,31 @@ describe('finalize - republish ownership', () => {
 
     await expect(promise).rejects.toThrow('boom');
     expect(res._getStatusCode()).not.toBe(409);
+  });
+});
+
+describe('finalize - CDN purge on re-publish', () => {
+  it('purges the page when a public page is re-published private, so the cached public copy stops serving', async () => {
+    mockFindOne.mockResolvedValue({ ...existing, visibility: 'public' });
+    mockFindOneAndUpdate.mockResolvedValue({ visibility: 'private', publicId: 'pub1' });
+    setDraft(manifest({ visibility: 'private' }), '<h1>x</h1>');
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockInvalidate).toHaveBeenCalledWith({ publicId: 'pub1' }, expect.anything());
+    expect(mockSelect).toHaveBeenCalledWith(expect.stringContaining('visibility'));
+  });
+
+  it('does not purge when the page was and stays private', async () => {
+    mockFindOne.mockResolvedValue({ ...existing, visibility: 'private' });
+    mockFindOneAndUpdate.mockResolvedValue({ visibility: 'private', publicId: 'pub1' });
+    setDraft(manifest({ visibility: 'private' }), '<h1>x</h1>');
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockInvalidate).not.toHaveBeenCalled();
   });
 });
 

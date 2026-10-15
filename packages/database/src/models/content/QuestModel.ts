@@ -10,6 +10,9 @@ import {
   MessageContentObject,
   QuestCallbackState,
   QuestCallbackStateSchema,
+  ChatToolModeSchema,
+  type GenerationJobRef,
+  GENERATION_JOB_KINDS,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
@@ -446,6 +449,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       },
     ],
     offeredTools: [{ type: String, required: false }],
+    toolMode: { type: String, enum: ChatToolModeSchema.options, required: false },
     performance: {
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },
@@ -582,7 +586,18 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     },
     images: { type: [String], required: false },
     videos: { type: [String], required: false },
+    // Legacy: read only (see questGenerationJobs); new jobs go to generationJobs.
     videoJobIds: { type: [String], default: undefined },
+    generationJobs: {
+      type: [
+        {
+          _id: false,
+          id: { type: String, required: true },
+          kind: { type: String, enum: GENERATION_JOB_KINDS, required: true },
+        },
+      ],
+      default: undefined,
+    },
     // Agent-mode video clips claimed by this run; the per-run cap's counter (see claimAgentVideoClip).
     agentVideoClipsClaimed: { type: Number, required: false },
     oob: { type: String, required: false },
@@ -1124,6 +1139,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           images: 1,
           videos: 1,
           videoJobIds: 1,
+          generationJobs: 1,
           structuredReplies: 1,
           toolResults: 1,
         }
@@ -1221,14 +1237,16 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
-   * Append video job ids to a chat Quest the moment each job is created. `$addToSet` makes a
+   * Append generation jobs to a chat Quest the moment each job is created. `$addToSet` makes a
    * replayed tool call a no-op. Whole-quest saves keep the id because the caller merges it into the
    * in-memory quest first (see ToolBuilder's onStatusUpdate); only a save already in flight can
    * briefly drop a second id, and the next save restores it. No-op if no Quest matches.
    */
-  async addVideoJobIds(questId: string, jobIds: string[]): Promise<void> {
-    if (!jobIds.length) return;
-    await this.model.updateOne({ _id: convertId(questId) }, { $addToSet: { videoJobIds: { $each: jobIds } } });
+  async addGenerationJobs(questId: string, jobs: GenerationJobRef[]): Promise<void> {
+    if (!jobs.length) return;
+    // $addToSet matches a subdocument on its fields in order, so rebuild each ref as { id, kind }.
+    const refs = jobs.map(({ id, kind }) => ({ id, kind }));
+    await this.model.updateOne({ _id: convertId(questId) }, { $addToSet: { generationJobs: { $each: refs } } });
   }
 
   /**
@@ -1310,6 +1328,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           images: 1,
           videos: 1,
           videoJobIds: 1,
+          generationJobs: 1,
           structuredReplies: 1,
           toolResults: 1,
         }
@@ -1644,7 +1663,15 @@ export const questRepository = new QuestRepository(Quest);
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
-  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'structuredReplies' | 'toolResults'
+  | 'agentExecutionId'
+  | 'reply'
+  | 'replies'
+  | 'images'
+  | 'videos'
+  | 'videoJobIds'
+  | 'generationJobs'
+  | 'structuredReplies'
+  | 'toolResults'
 >;
 
 /**
@@ -1658,5 +1685,13 @@ export type UnfinishedQuestView = { id: string } & Pick<
  */
 export type StaleRunningQuestView = { id: string; updatedAt: Date } & Pick<
   IChatHistoryItem,
-  'status' | 'reply' | 'replies' | 'images' | 'videos' | 'videoJobIds' | 'structuredReplies' | 'toolResults'
+  | 'status'
+  | 'reply'
+  | 'replies'
+  | 'images'
+  | 'videos'
+  | 'videoJobIds'
+  | 'generationJobs'
+  | 'structuredReplies'
+  | 'toolResults'
 >;

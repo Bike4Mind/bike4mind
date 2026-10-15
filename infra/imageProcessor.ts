@@ -17,7 +17,7 @@ import { lambdaVpc } from './vpc';
  */
 export const imageProcessor = new sst.aws.Function('ImageProcessor', {
   vpc: lambdaVpc,
-  handler: 'apps/client/server/utils/imageProcessor.handler',
+  handler: 'apps/workers/src/media/imageProcessor.handler',
   runtime: 'nodejs24.x',
   timeout: '5 minutes',
   memory: '2048 MB',

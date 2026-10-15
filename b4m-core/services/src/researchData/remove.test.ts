@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { NotFoundError } from '@bike4mind/utils';
 import { remove } from './remove';
-import { IResearchAgentRepository, IResearchDataRepository, IUserRepository } from '@bike4mind/common';
+import {
+  IResearchAgentRepository,
+  IResearchDataRepository,
+  IUserRepository,
+  STORAGE_CHARGE_STAMP_CUTOFF,
+} from '@bike4mind/common';
 
 vi.mock('../fabFileService/delete', () => ({
   deleteFabFile: vi.fn(),
@@ -101,6 +106,7 @@ describe('researchDataService - remove', () => {
       userId: mockUserId,
       organizationId: 'org-123',
       fileSize: 1024,
+      storageChargedAt: new Date('2026-10-10T00:00:00Z'),
     };
 
     mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce(mockResearchAgent);
@@ -174,6 +180,7 @@ describe('researchDataService - remove', () => {
       userId: mockUserId,
       organizationId: null,
       fileSize: 2048,
+      storageChargedAt: new Date('2026-10-10T00:00:00Z'),
     };
 
     mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce(mockResearchAgent);
@@ -189,6 +196,71 @@ describe('researchDataService - remove', () => {
     expect(mockResearchDataRepo.delete).toHaveBeenCalledWith(mockResearchDataId);
     expect(deleteFabFile).toHaveBeenCalledWith(mockUserId, { id: mockFabFileId }, adapters);
     expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(mockUserId, -2048);
+  });
+
+  it('does not refund a file that was never charged', async () => {
+    const params = { id: mockResearchDataId, researchAgentId: mockResearchAgentId };
+    const mockFabFile = { id: mockFabFileId, userId: mockUserId, fileSize: 2048, status: 'pending' };
+
+    mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce({ id: mockResearchAgentId });
+    mockResearchDataRepo.findByIdAndResearchAgentId.mockResolvedValueOnce({
+      id: mockResearchDataId,
+      fabFileId: mockFabFileId,
+    });
+    mockResearchDataRepo.delete.mockResolvedValueOnce(undefined);
+    (deleteFabFile as Mock).mockResolvedValueOnce({ action: 'deleted', fabFile: mockFabFile });
+
+    await remove(mockUserId, params, adapters);
+
+    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+
+  // A `complete` row from before the stamping release was charged by the upload event; a stamp-only
+  // rule would silently drop these refunds.
+  it('refunds a legacy pre-stamp complete row in full', async () => {
+    const params = { id: mockResearchDataId, researchAgentId: mockResearchAgentId };
+    const legacy = {
+      id: mockFabFileId,
+      userId: mockUserId,
+      fileSize: 2048,
+      status: 'complete',
+      createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000),
+    };
+
+    mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce({ id: mockResearchAgentId });
+    mockResearchDataRepo.findByIdAndResearchAgentId.mockResolvedValueOnce({
+      id: mockResearchDataId,
+      fabFileId: mockFabFileId,
+    });
+    mockResearchDataRepo.delete.mockResolvedValueOnce(undefined);
+    (deleteFabFile as Mock).mockResolvedValueOnce({ action: 'deleted', fabFile: legacy });
+
+    await remove(mockUserId, params, adapters);
+
+    expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(mockUserId, -2048);
+  });
+
+  it('does not refund a post-stamp complete row that was never charged', async () => {
+    const params = { id: mockResearchDataId, researchAgentId: mockResearchAgentId };
+    const uncharged = {
+      id: mockFabFileId,
+      userId: mockUserId,
+      fileSize: 2048,
+      status: 'complete',
+      createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() + 1000),
+    };
+
+    mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce({ id: mockResearchAgentId });
+    mockResearchDataRepo.findByIdAndResearchAgentId.mockResolvedValueOnce({
+      id: mockResearchDataId,
+      fabFileId: mockFabFileId,
+    });
+    mockResearchDataRepo.delete.mockResolvedValueOnce(undefined);
+    (deleteFabFile as Mock).mockResolvedValueOnce({ action: 'deleted', fabFile: uncharged });
+
+    await remove(mockUserId, params, adapters);
+
+    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('should remove research data even when fabFile is not found', async () => {
@@ -241,6 +313,7 @@ describe('researchDataService - remove', () => {
       userId: mockUserId,
       organizationId: undefined,
       fileSize: 512,
+      storageChargedAt: new Date('2026-10-10T00:00:00Z'),
     };
 
     mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce(mockResearchAgent);
@@ -266,6 +339,7 @@ describe('researchDataService - remove', () => {
       userId: mockUserId,
       organizationId: 'org-123',
       fileSize: 1024,
+      storageChargedAt: new Date('2026-10-10T00:00:00Z'),
     };
 
     mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce(mockResearchAgent);
@@ -293,6 +367,7 @@ describe('researchDataService - remove', () => {
       userId: mockUserId,
       organizationId: null,
       fileSize: 1024,
+      storageChargedAt: new Date('2026-10-10T00:00:00Z'),
     };
 
     mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce(mockResearchAgent);

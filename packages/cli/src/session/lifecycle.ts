@@ -211,6 +211,16 @@ export async function compactSession(
   ctx: SessionLifecycleContext,
   options: { userInstructions?: string } = {}
 ): Promise<void> {
+  // Held throughout: the compacted session is built from the snapshot read below.
+  const releaseSession = useCliStore.getState().holdSession();
+  try {
+    await compactHeldSession(ctx, options);
+  } finally {
+    releaseSession();
+  }
+}
+
+async function compactHeldSession(ctx: SessionLifecycleContext, options: { userInstructions?: string }): Promise<void> {
   const session = useCliStore.getState().session;
   if (!session || !ctx.agent) {
     console.log('No active session');
@@ -238,7 +248,7 @@ export async function compactSession(
 
   try {
     // Single iteration, no tools - just summarise.
-    const result = await ctx.agent.run(compactionPrompt, { maxIterations: 1 });
+    const result = await ctx.agent.run(compactionPrompt, { maxIterations: 1, streamText: false });
     const summary = result.finalAnswer;
 
     // Save old session first so it is preserved before we swap in the new one.

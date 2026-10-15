@@ -67,6 +67,8 @@ export enum FabFileSourceType {
    * through saveGeneratedAsset carries `sourceMetadata.generation` (GeneratedAssetMetadata).
    * `sourceMetadata.sessionId`, when set, links it to the notebook it was made in - see
    * persistGeneratedFileAsFabFile for why that link is not the top-level `sessionId`.
+   * `sourceMetadata.generatedCopyKey` names a second, generated-bucket copy that deletes also
+   * remove (see generatedCopyKeyOf).
    */
   TOOL_GENERATED = 'tool_generated',
 }
@@ -468,7 +470,8 @@ export interface IFabFile {
    * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated
    * handler or a notebook import charges it (apps/client/server/s3/storageCharge.ts). Imported rows
    * store the import's stamp time, not the upload time, so do not read it as one. Absent on rows that
-   * predate it.
+   * predate it or were never charged - whether a row counts as charged is `isStorageCharged`
+   * (common/src/storageCharge.ts), which also covers the pre-stamp legacy rows.
    */
   storageChargedAt?: Date;
 
@@ -972,6 +975,7 @@ export type DataLakeMembershipScope =
 export interface DataLakeSweptFile {
   id: string;
   userId: string;
+  /** Charged bytes (`chargedBytes`), not the raw `fileSize`: 0 for a row that was never charged. */
   fileSize: number;
 }
 
@@ -1255,6 +1259,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
+      /** Only files saved by a generation tool (tagged GENERATED_ASSET_TAG); ANDed with `tags`. */
+      generated?: boolean;
       fileIds?: string[]; // EXCLUDE these ids ($nin)
       restrictToFileIds?: string[]; // ALLOW-list ($in); present (incl. []) = hard restriction, [] matches nothing
     },

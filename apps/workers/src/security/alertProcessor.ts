@@ -5,6 +5,7 @@ import { contextToLogs } from '@server/utils/logger';
 import { Context } from 'aws-lambda';
 import { Resource } from 'sst';
 import { EmailEvents } from '@server/utils/eventBus';
+import { escapeHtml } from '@server/utils/mailer/emailHelpers';
 
 interface IUserData {
   username: string;
@@ -14,7 +15,7 @@ interface IUserData {
 /**
  * Format security alert message for email (HTML format)
  */
-const formatSecurityAlert = (pattern: ISuspiciousPattern, username: string, userEmail: string): string => {
+export const formatSecurityAlert = (pattern: ISuspiciousPattern, username: string, userEmail: string): string => {
   // Extract IP address - handle both possible _id formats
   const ipAddress = pattern.ip || (typeof pattern._id === 'object' ? pattern._id.ip : pattern._id) || 'Unknown IP';
   const alertType = pattern.attempts >= 5 ? 'Multiple Failed Attempts' : 'Username Enumeration';
@@ -46,7 +47,7 @@ const formatSecurityAlert = (pattern: ISuspiciousPattern, username: string, user
       <h1 style="margin: 0; font-size: 24px;">🚨 SECURITY ALERT 🚨</h1>
     </div>
     <div class="content">
-      <p>Dear ${username},</p>
+      <p>Dear ${escapeHtml(username)},</p>
       <p>We have detected suspicious login activity targeting your account.</p>
       
       <div class="alert-box">
@@ -58,7 +59,7 @@ const formatSecurityAlert = (pattern: ISuspiciousPattern, username: string, user
           <span class="label">Severity:</span> <span class="value" style="color: ${severityColor}; font-weight: 600;">${pattern.riskLevel.toUpperCase()}</span>
         </div>
         <div class="detail-row">
-          <span class="label">IP Address:</span> <span class="value">${ipAddress}</span>
+          <span class="label">IP Address:</span> <span class="value">${escapeHtml(ipAddress)}</span>
         </div>
         <div class="detail-row">
           <span class="label">Attempts:</span> <span class="value">${pattern.attempts}</span>
@@ -80,7 +81,7 @@ const formatSecurityAlert = (pattern: ISuspiciousPattern, username: string, user
           <span class="label">Usernames Targeted:</span> <span class="value">${pattern.usernames.length}</span>
         </div>
         <div class="detail-row">
-          <span class="label">Strategies Used:</span> <span class="value">${pattern.strategies.join(', ')}</span>
+          <span class="label">Strategies Used:</span> <span class="value">${escapeHtml(pattern.strategies.join(', '))}</span>
         </div>
         <div class="detail-row">
           <span class="label">Time Range:</span> <span class="value">${new Date(pattern.firstAttempt).toLocaleString()} to ${new Date(pattern.lastAttempt).toLocaleString()}</span>

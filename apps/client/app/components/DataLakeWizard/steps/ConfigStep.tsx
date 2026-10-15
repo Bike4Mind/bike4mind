@@ -26,6 +26,7 @@ import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
 import { useWizardIdentityPreview } from '@client/app/hooks/data/useWizardIdentityPreview';
 import { useWizardLakeSlug } from '@client/app/components/DataLakeWizard/useWizardLakeSlug';
 import { EmbeddingBudgetEstimate } from '@client/app/components/DataLakeWizard/EmbeddingBudgetEstimate';
+import DriveFolderEstimateSummary from './DriveFolderEstimateSummary';
 
 export default function ConfigStep() {
   const theme = useTheme();
@@ -35,6 +36,7 @@ export default function ConfigStep() {
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
   const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
+  const pendingDriveFolder = useDataLakeWizardStore(s => s.pendingDriveFolder);
   const duplicateCheckResults = useDataLakeWizardStore(s => s.duplicateCheckResults);
   // Append mode inherits the target lake's prefix, which by definition already coexists with it.
   // The overlap lookup needs the submitted form: normalizeTagPrefix drops a colon-less value,
@@ -273,6 +275,7 @@ export default function ConfigStep() {
                 </Typography>
               )}
             </Typography>
+            {pendingDriveFolder && <DriveFolderEstimateSummary driveFolderId={pendingDriveFolder.driveFolderId} />}
             {optionalSteps.taxonomy && !targetLake && (
               <Typography level="body-sm" color="neutral">
                 AI tag suggestions will run in the background after upload - review them from the Data Lakes list.

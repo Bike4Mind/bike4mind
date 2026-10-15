@@ -199,7 +199,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     const logger = new Logger();
 
     if (integration) {
-      const result = await runProbe(integration as IntegrationName, logger);
+      const result = await runProbe(integration as IntegrationName);
       return res.json({
         integration: result.integration,
         status: result.status,

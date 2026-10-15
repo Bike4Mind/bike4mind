@@ -6,6 +6,8 @@ import {
   type ModelInfo,
   CompletionInfo,
   getTextModelCost,
+  getTurnsCost,
+  type TurnUsage,
   pricingTierForTokens,
   CreditHolderType,
   ICreditHolder,
@@ -72,9 +74,12 @@ export interface CompletionParams {
     /**
      * Forwarded to the adapter, which the OpenAI (reasoning models), Kimi (K3 only),
      * DeepSeek and Anthropic (direct and Bedrock) backends read. Gemini, xAI and
-     * Ollama drop it, so it is a silent no-op there.
+     * Ollama drop it, so it is a silent no-op there. With `thinking.enabled`, Claude
+     * keeps thinking on and uses this as its effort.
      */
     reasoningEffort?: import('@bike4mind/common').ReasoningEffort;
+    /** See the `thinking` field of CompletionRequestSchema. */
+    thinking?: { enabled: boolean; budget_tokens?: number };
   };
   /**
    * Server-side executable tools (each carries a live toolFn). When present, the backend
@@ -452,6 +457,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
     ...(responseFormatEnabled && options?.response_format ? { responseFormat: options.response_format } : {}),
+    // Gated on can_think as ChatCompletionProcess gates it: Ollama 400s a non-thinking model
+    // asked to think. budget_tokens only sizes legacy thinking; adaptive models take an effort.
+    ...(options?.thinking?.enabled && modelInfo?.can_think
+      ? { thinking: { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 } }
+      : {}),
   };
 
   if (options?.response_format) {
@@ -560,16 +570,31 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Same assign-not-add contract as input/output tokens.
   let finalCacheReadTokens = 0;
   let finalCacheCreationTokens = 0;
+  // Per-request breakdown of the same totals, from adapters that report it; prices each request on
+  // its own long-context tier. Same assign-not-add contract.
+  let finalTurnUsage: TurnUsage[] | undefined;
   // Latched from whichever chunk carries it (backends emit it on their terminal chunk)
   // and re-emitted on the final settlement event below, so a client that only inspects
   // the last event still learns the reply was truncated.
   let finalStopReason: string | undefined;
+
+  const settledUsdCost = (pricedModel: ModelInfo): number =>
+    finalTurnUsage?.length
+      ? getTurnsCost(pricedModel, finalTurnUsage)
+      : getTextModelCost(
+          pricedModel,
+          finalInputTokens,
+          finalOutputTokens,
+          finalCacheReadTokens,
+          finalCacheCreationTokens
+        );
 
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
     if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
     if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
+    if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
     if (info?.stopReason) finalStopReason = info.stopReason;
 
     if (info?.inputTokens || info?.outputTokens) {
@@ -628,13 +653,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           outputTokens: finalOutputTokens,
           cachedInputTokens: finalCacheReadTokens,
           cacheWriteTokens: finalCacheCreationTokens,
-          costUsd: getTextModelCost(
-            modelInfo,
-            finalInputTokens,
-            finalOutputTokens,
-            finalCacheReadTokens,
-            finalCacheCreationTokens
-          ),
+          costUsd: settledUsdCost(modelInfo),
           creditsCharged: 0,
           status: isRefusal ? 'refusal' : 'error',
           latencyMs: Date.now() - completionStartTime,
@@ -655,13 +674,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   let finalCredits = 0;
 
   if (modelInfo) {
-    finalUsdCost = getTextModelCost(
-      modelInfo,
-      finalInputTokens,
-      finalOutputTokens,
-      finalCacheReadTokens,
-      finalCacheCreationTokens
-    );
+    finalUsdCost = settledUsdCost(modelInfo);
     finalCredits = usdToCreditsStochastic(finalUsdCost);
 
     logger?.info?.(

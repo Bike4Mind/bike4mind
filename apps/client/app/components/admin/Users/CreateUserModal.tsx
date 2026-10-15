@@ -26,6 +26,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { PREDEFINED_USER_TAGS } from '@bike4mind/common';
 import { useGetUserTags } from '@client/app/hooks/data/user';
+import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 
 interface CreateUserModalStore {
   open: boolean;
@@ -84,6 +85,7 @@ const CreateUserModal: React.FC = () => {
       handleClose();
     },
     onError: (error: any) => {
+      if (isStepUpCancelled(error)) return;
       console.error('Error creating user:', error);
       console.error('Error response:', error.response?.data);
     },
@@ -153,7 +155,7 @@ const CreateUserModal: React.FC = () => {
           Create New User
         </Typography>
 
-        {createUserMutation.isError && (
+        {createUserMutation.isError && !isStepUpCancelled(createUserMutation.error) && (
           <Alert
             color="danger"
             variant="soft"

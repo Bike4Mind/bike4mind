@@ -8,7 +8,6 @@ import { verifyCallback } from '@server/utils/auth/verifyCallback';
 import { Config } from '@server/utils/config';
 
 import { Request, RequestHandler, Response } from 'express';
-import { Strategy as GitHubStrategy } from 'passport-github';
 import GoogleStrategy from 'passport-google-oauth20';
 import { ExtractJwt, Strategy as JwtStrategy } from 'passport-jwt';
 import {
@@ -25,6 +24,7 @@ import { authTokenGenerator } from './tokenGenerator';
 import { isRotatedSecretWithinGraceWindow } from './secretRotationGrace';
 import { verifyJwtPayload } from './verifyJwtPayload';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
+import { createGitHubStrategy } from './githubStrategy';
 import { isPolicyConsentRequired, type ConsentGateUser } from './consentGate';
 import { samlRequestCache } from './samlRequestCache';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
@@ -68,6 +68,21 @@ passport.use(
   )
 );
 
+// The only routes an mfaPending (pre-second-factor) token may reach. Exact pathnames: a prefix
+// would also admit siblings such as the passkey/[id] DELETE route.
+const MFA_PENDING_ALLOWED_PATHS = new Set([
+  '/api/auth/mfa/setup',
+  '/api/auth/mfa/verify-setup',
+  '/api/auth/mfa/verify',
+  '/api/auth/mfa/cancel-setup',
+  '/api/auth/mfa/status', // MFAEnforcementWrapper reads the user's MFA status
+  '/api/auth/mfa/passkey/authenticate-options',
+  '/api/auth/mfa/passkey/authenticate',
+  '/api/logout', // lets an mfaPending user abandon and revoke
+  '/api/identify', // read-only whoami
+  '/api/settings/fetch', // MFAEnforcementWrapper reads enforceMFA
+]);
+
 const handler = nc<Request, Response>();
 
 export const auth = handler
@@ -93,22 +108,7 @@ export const auth = handler
   .use((req, res, next) => {
     // Block access if mfaPending is true and not an allowed endpoint
     if (req.user && (req.user as any).mfaPending) {
-      const allowed = [
-        '/api/auth/mfa/setup',
-        '/api/auth/mfa/verify-setup',
-        '/api/auth/mfa/verify',
-        '/api/auth/mfa/cancel-setup',
-        '/api/logout', // real logout route; lets an mfaPending user abandon and revoke
-        '/api/identify', // Allow identify for user data
-        '/api/settings/fetch', // Needed by MFAEnforcementWrapper to check enforceMFA setting
-        '/api/auth/mfa/status', // Needed by MFAEnforcementWrapper to check user MFA status
-      ];
-
-      // Exact match: a prefix here would also admit the sibling passkey/[id] DELETE route.
-      const allowedExact = ['/api/auth/mfa/passkey/authenticate-options', '/api/auth/mfa/passkey/authenticate'];
-      const pathname = req.url.split('?')[0];
-
-      if (!allowed.some(path => req.url.startsWith(path)) && !allowedExact.includes(pathname)) {
+      if (!MFA_PENDING_ALLOWED_PATHS.has(req.url.split('?')[0])) {
         req.logger?.info(`[AUTH] Blocked request to ${req.url} for user ${req.user.id} due to mfaPending.`);
         return res.status(401).json({
           error: 'MFA setup or verification required.',
@@ -130,7 +130,15 @@ export const auth = handler
     // would trigger the client's token-refresh cascade in ApiContext; 403 is ignored by it, and
     // browser users are routed to /accept-policies by the router beforeLoad guard before any
     // background query hits this.
-    if (isPolicyConsentRequired(req.user as ConsentGateUser | undefined, req.url, req.method)) {
+    //
+    // An mfaPending token is exempt: the allowlist above already confines it to the MFA routes,
+    // and a new SSO account that must enroll before its first session could otherwise neither
+    // enroll (403 here) nor accept the policies (401 above). Consent is enforced on the full
+    // session that enrollment mints.
+    if (
+      !(req.user as { mfaPending?: boolean } | undefined)?.mfaPending &&
+      isPolicyConsentRequired(req.user as ConsentGateUser | undefined, req.url, req.method)
+    ) {
       req.logger?.info(`[AUTH] Blocked ${req.url} for user ${req.user!.id} — AUP/ToS acceptance required.`);
       return res.status(403).json({
         error: 'Policy acceptance required.',
@@ -190,19 +198,7 @@ new FacebookStrategy(
 if (Config.GITHUB_CLIENT_ID && Config.GITHUB_CLIENT_ID !== 'not-configured') {
   passport.use(
     AuthStrategy.Github,
-    // tsgo (TypeScript 7.0 RC) only resolves the FINAL constructor overload of
-    // passport-github's Strategy - a known divergence for `export =` classes that
-    // extend another class - so it wrongly demands the passReqToCallback:true
-    // signature and rejects this valid StrategyOptions call. Classic tsc resolves
-    // the overloads correctly. Cast around the RC's faulty overload resolution;
-    // runtime is unchanged (passReqToCallback defaults to false, so verify receives
-    // (accessToken, refreshToken, profile, done)). See typecheck-report.md.
-    new (
-      GitHubStrategy as unknown as new (
-        options: Record<string, unknown>,
-        verify: (...args: any[]) => void
-      ) => GitHubStrategy
-    )(
+    createGitHubStrategy(
       {
         clientID: Config.GITHUB_CLIENT_ID,
         clientSecret: Config.GITHUB_CLIENT_SECRET,
@@ -210,9 +206,10 @@ if (Config.GITHUB_CLIENT_ID && Config.GITHUB_CLIENT_ID !== 'not-configured') {
         store: githubOAuthStateStore,
         // Request the user's email. GitHub omits the email from the basic
         // profile when it is private; with this scope passport-github fetches
-        // /user/emails and populates the verified primary. Without it, SSO
-        // logins resolve with email=null and fall into the account-create path
-        // instead of matching the user's existing account by email.
+        // /user/emails and populates the verified primary (which only works
+        // because createGitHubStrategy sends the token in a header). Without
+        // it, SSO logins resolve with email=null and fall into the
+        // account-create path instead of matching the existing account by email.
         scope: ['user:email'],
       },
       verifyCallback(AuthStrategy.Github)

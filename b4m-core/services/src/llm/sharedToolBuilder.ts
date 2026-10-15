@@ -22,7 +22,11 @@ import {
 } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { ServerAgentStore } from './agents/ServerAgentStore';
-import type { ServerSubagentTracker, SubagentHandoffSignal } from './agents/ServerSubagentOrchestrator';
+import type {
+  ServerSubagentTracker,
+  SubagentHandoffSignal,
+  SubagentToolPermissions,
+} from './agents/ServerSubagentOrchestrator';
 import { b4mTools, generateTools, type LlmTools } from './tools/index';
 import type { ToolContext } from './tools/base/types';
 import type { ToolDefinition } from './tools/base/types';
@@ -31,6 +35,7 @@ import { createCoordinateTaskTool } from './tools/implementation/coordinateTask'
 import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coordinateTask';
 import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { isVideoToolConfig } from './tools/implementation/videoGeneration';
+import { isMusicToolConfig } from './tools/implementation/musicGeneration';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
@@ -157,6 +162,14 @@ export interface ToolBuilderDeps {
    * (see `ServerOrchestratorDeps.checkMemberCreditCap`).
    */
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
+
+  /**
+   * The run's tool-permission lists, set only by the agent executor (whose parent gate
+   * uses the same lists). Forwarded to `delegate_to_agent` and `coordinate_task` so a
+   * child's tool calls are classified like the parent's; see
+   * `ServerOrchestratorDeps.toolPermissions`. Omitted by ungated callers.
+   */
+  toolPermissions?: SubagentToolPermissions;
 }
 
 /**
@@ -388,6 +401,7 @@ export function buildSharedTools(
       audio_generation: config.audio_generation,
       web_search: config.web_search,
       video_generation: config.video_generation,
+      music_generation: config.music_generation,
     },
     model,
     imageProcessorLambdaName,
@@ -404,6 +418,7 @@ export function buildSharedTools(
   const effectiveAvailability: ToolAvailability = {
     ...toolAvailability,
     video_generation: isVideoToolConfig(config.video_generation),
+    music_generation: isMusicToolConfig(config.music_generation),
   };
 
   // Filter to enabled tools only
@@ -580,6 +595,7 @@ export function buildSharedTools(
     depth: deps.depth,
     optInTools: deps.optInTools,
     checkMemberCreditCap: deps.checkMemberCreditCap,
+    toolPermissions: deps.toolPermissions,
   });
   tools.push(delegateTool);
 
@@ -608,6 +624,7 @@ export function buildSharedTools(
       dagHandoffSignal: deps.dagHandoffSignal,
       optInTools: deps.optInTools,
       checkMemberCreditCap: deps.checkMemberCreditCap,
+      toolPermissions: deps.toolPermissions,
     });
     tools.push(coordinateTool);
   }

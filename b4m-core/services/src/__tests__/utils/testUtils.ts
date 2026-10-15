@@ -235,6 +235,12 @@ export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepo
     rotateHash: vi.fn(),
     recoverRotateHash: vi.fn(),
     registerReplayUse: vi.fn(),
+    markStepUp: vi.fn(),
+    setStepUpEmailChallenge: vi.fn(),
+    findStepUpEmailChallenge: vi.fn(),
+    recordStepUpEmailChallengeFailure: vi.fn(),
+    recordStepUpPasswordFailure: vi.fn(),
+    consumeStepUpEmailChallenge: vi.fn(),
     revokeBySid: vi.fn(),
     revokeAllByUserId: vi.fn(),
   });
@@ -243,6 +249,8 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
   vi.mocked({
     ...createMockRepository<IUserDocument>(),
     findByEmail: vi.fn(),
+    existsOtherUserWithEmail: vi.fn().mockResolvedValue(false),
+    existsOtherUserWithUsername: vi.fn().mockResolvedValue(false),
     removeGroupsFromAllUsers: vi.fn(),
     clearOrganizationPointer: vi.fn(),
     addGroupToUser: vi.fn(),

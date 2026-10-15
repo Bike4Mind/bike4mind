@@ -17,6 +17,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { ErrorResponse } from '@client/app/utils/error';
 import { updateAllQueryData } from '@client/app/utils/react-query';
 import { revokeSharingOnServer } from '@client/app/utils/sharingApi';
+import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import {
   fetchUsers,
   IGetUsersParams,
@@ -145,6 +146,7 @@ export function useUpdateUser(options: { onSuccess?: () => void; onSettled?: () 
       }
     },
     onError(error: unknown) {
+      if (isStepUpCancelled(error)) return;
       let errorMessage = 'Failed to update Profile.';
 
       if (isAxiosError(error) && error.response) {
