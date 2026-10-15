@@ -211,7 +211,9 @@ export const downloadRelevantLinks = async (
           );
         } catch (error) {
           logger?.error(`❌ [DOWNLOAD_ERROR] Failed to download file from ${link.url}: ${(error as Error).message}`);
-          await sendStatusUpdate(`❌ Download failed: ${link.text} - ${(error as Error).message}`, progressPerDownload);
+          // Generic on purpose: the guard's message can name the private address a hostname resolved
+          // to, which is logged above, not surfaced to the task owner.
+          await sendStatusUpdate(`❌ Download failed: ${link.text}`, progressPerDownload);
         }
       })
     )
