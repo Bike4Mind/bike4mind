@@ -261,6 +261,57 @@ describe('AnthropicBackend - stream ending before message_stop', () => {
     ]);
   });
 
+  it('does not estimate the output of a second call stopped before any content delta', async () => {
+    const controller = new AbortController();
+    const firstTurn = [
+      { type: 'message_start', message: { usage: { input_tokens: 80, output_tokens: 1 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 't1', name: 'probe' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{}' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 15 } },
+      { type: 'message_stop' },
+    ];
+    const stoppedTurn = {
+      [Symbol.asyncIterator]: async function* () {
+        yield { type: 'message_start', message: { usage: { input_tokens: 120, output_tokens: 1 } } };
+        controller.abort();
+      },
+      controller: { abort: () => {} },
+    };
+    const backend = new AnthropicBackend('test-key');
+    const streams = [asyncIterable(firstTurn), stoppedTurn];
+    (backend as unknown as { _api: { messages: { create: () => unknown } } })._api = {
+      messages: { create: async () => streams.shift() },
+    };
+    const { infos, cb } = collect();
+
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'hi' }],
+      {
+        stream: true,
+        abortSignal: controller.signal,
+        executeTools: true,
+        tools: [
+          {
+            toolSchema: { name: 'probe', description: 'probe', parameters: { type: 'object', properties: {} } },
+            toolFn: async () => 'ok',
+          },
+        ],
+      },
+      cb
+    );
+
+    const last = infos.at(-1)!;
+    expect(last.stopReason).toBe('aborted');
+    expect(last.inputTokens).toBe(200);
+    expect(last.outputTokens).toBe(15);
+    expect(last.turnUsage).toEqual([
+      { inputTokens: 80, outputTokens: 15 },
+      { inputTokens: 120, outputTokens: 0 },
+    ]);
+  });
+
   it('does not execute a tool call collected from a stream that ended early', async () => {
     let toolRan = false;
     const backend = buildBackend([
