@@ -165,9 +165,12 @@ export const func = withContext(async (event, context, logger) => {
       // The charge below uses the object's measured size, and the counter's truth (every refund and
       // the storage reconciliation) is derived from `fileSize`. Record the measured size so the two
       // agree: leaving the client-declared presign value lets a repair move the counter off the bytes
-      // actually stored.
-      metadata.fileSize = object.size;
-      await chargeUploadedObject(metadata._id, user, object.size, uploadedAt, session);
+      // actually stored. Only when the charge claim is won: a late event for an earlier write of the
+      // same path loses the claim to a newer write, and that newer write already recorded its own
+      // size - overwriting it from this stale event would make the truth disagree with the charge.
+      if (await chargeUploadedObject(metadata._id, user, object.size, uploadedAt, session)) {
+        metadata.fileSize = object.size;
+      }
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
       return user;

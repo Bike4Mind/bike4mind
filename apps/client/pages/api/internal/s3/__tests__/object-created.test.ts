@@ -340,12 +340,15 @@ describe('POST /api/internal/s3/object-created', () => {
       expect(chargeMock).not.toHaveBeenCalled();
     });
 
-    it('does not save the owner when a redelivery loses the claim', async () => {
+    it('does not save the owner or rewrite the row size when a redelivery loses the claim', async () => {
       chargeMock.mockResolvedValue(false);
       await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 10, eventTime: EVENT_TIME }), makeRes());
 
       expect(chargeMock).toHaveBeenCalledTimes(1);
       expect(userDoc.save).not.toHaveBeenCalled();
+      // The newer write already recorded its own size; rewriting it from this stale event would
+      // make the counter's truth disagree with the bytes charged.
+      expect(updateOneMock).not.toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { fileSize: 10 } }, expect.anything());
     });
 
     it('still answers 200 and enqueues chunking when the charge throws', async () => {
