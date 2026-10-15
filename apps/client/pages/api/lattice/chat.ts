@@ -26,9 +26,8 @@ import {
 import { ChatModels, type IMessage, type ModelInfo } from '@bike4mind/common';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
-import { getSettingsByNames } from '@bike4mind/utils';
+import { ForbiddenError, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
-import { ForbiddenError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import type { ICompletionOptionTools, CompletionInfo } from '@bike4mind/llm-adapters/backend';
 
