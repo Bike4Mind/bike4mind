@@ -143,7 +143,7 @@ Local `pnpm package:*` commands use the highest stable desktop tag reachable fro
 the checkout, with `-local.<commit>` appended so an unreleased build does not
 impersonate a published installer. Fetch tags with `git fetch origin --tags` first.
 Missing tags fail with instructions instead of silently producing version 0.1.0.
-Set `DESKTOP_VERSION=1.0.1-test.1` for an explicit local test version. Local builds
+Set `DESKTOP_VERSION=0.6.0-test.1` for an explicit local test version. Local builds
 never publish. CI continues to select its own version and call the builder directly.
 Local macOS packaging explicitly uses ad-hoc signing, not Developer ID or
 notarization. Set `DESKTOP_MAC_IDENTITY` to an explicit Developer ID identity when
@@ -151,7 +151,12 @@ needed. A valid ad-hoc signature does not guarantee fresh-download Gatekeeper ac
 
 - `feat: ...` bumps minor; `fix: ...`, dependency updates, builds, refactors, and
   other relevant changes bump patch.
-- `type!: ...` or a `BREAKING CHANGE:` footer bumps major, including before `1.0`.
+- During beta, `type!: ...` or a `BREAKING CHANGE:` footer bumps minor, not major.
+  Moving to 1.x requires a deliberate policy change reviewed before release.
+- The accidental `desktop-v1.0.0` release is excluded from baseline selection in
+  CI and local packaging, but its source tag is retained. The beta line resumes
+  from 0.5.0 with 0.6.0. Other stable major baselines fail closed, not silently ignored.
+  Existing 1.0.0 installations need a manual 0.x installation, not an updater downgrade.
 - `docs`, `test`, `ci`, and `style` alone do not publish a new stable release.
 - The highest bump across unreleased, desktop-relevant first-parent commits wins.
   Unrelated web-only commits do not affect the desktop version. Squash merges use the

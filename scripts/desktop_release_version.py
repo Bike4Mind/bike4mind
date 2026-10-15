@@ -9,6 +9,8 @@ from desktop_affected import affected, commit_affected
 
 
 VERSION = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)')
+# Retain the accidental release tag, but resume the beta line from its last 0.x release.
+WITHDRAWN_BASELINES = {'desktop-v1.0.0'}
 
 
 def git(*args):
@@ -35,6 +37,8 @@ def release_notes(version, previous, repository):
             message = git('show', '-s', '--format=%B', sha)
             changes.append((sha, message.splitlines()[0], bump_level(message)))
     reason = ['no semantic bump', 'patch', 'minor', 'major'][max((c[2] for c in changes), default=0)]
+    if version.startswith('0.') and reason == 'major':
+        reason = 'minor (breaking beta change)'
     if not previous:
         reason = 'initial package baseline'
     lines = [f'# Desktop {version}', '', f'Version selection: {reason}.', '', '## Changes', '']
@@ -48,13 +52,15 @@ def release_notes(version, previous, repository):
 
 
 def select_version(releases, baseline, preview='', title='', run=''):
-    if not VERSION.fullmatch(baseline):
-        raise ValueError('Desktop baseline must be major.minor.patch')
+    if not VERSION.fullmatch(baseline) or not baseline.startswith('0.'):
+        raise ValueError('Desktop baseline must be beta SemVer (0.minor.patch)')
     candidates = []
     for release in releases:
         tag = release['tag_name']
         match = re.fullmatch(r'desktop-v(' + VERSION.pattern + r')', tag)
-        if match and not release['prerelease']:
+        if match and not release['prerelease'] and tag not in WITHDRAWN_BASELINES:
+            if not match[1].startswith('0.'):
+                raise ValueError('Major desktop releases require an explicit beta policy change')
             candidates.append((tuple(map(int, match[1].split('.'))), tag, release))
     head = git('rev-parse', 'HEAD')
     previous = ''
@@ -83,9 +89,7 @@ def select_version(releases, baseline, preview='', title='', run=''):
                 message = title if preview and sha == head else git('show', '-s', '--format=%B', sha)
                 level = max(level, bump_level(message))
         major, minor, patch = parts
-        if level == 3:
-            parts = (major + 1, 0, 0)
-        elif level == 2:
+        if level >= 2:
             parts = (major, minor + 1, 0)
         elif level == 1:
             parts = (major, minor, patch + 1)

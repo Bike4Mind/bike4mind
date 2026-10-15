@@ -11,7 +11,11 @@ function resolveVersion(override, tags, revision) {
     return override;
   }
   const versions = tags.split(/\s+/).filter(tag => tag.startsWith('desktop-v'))
+    .filter(tag => tag !== 'desktop-v1.0.0')
     .map(tag => tag.slice(9)).filter(version => stable.test(version));
+  if (versions.some(version => !version.startsWith('0.'))) {
+    throw new Error('Major desktop releases require an explicit beta policy change');
+  }
   versions.sort((a, b) => {
     const left = a.split('.').map(BigInt);
     const right = b.split('.').map(BigInt);

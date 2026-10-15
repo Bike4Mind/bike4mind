@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const { resolveVersion, builderArgs } = require('./package-local.cjs');
 
 test('uses highest numeric desktop tag, not package baseline or web tags', () => {
-  assert.equal(resolveVersion(undefined, 'desktop-v0.5.0\ndesktop-v1.9.0\ndesktop-v1.10.0\nv2026.10.15.4\ndesktop-v2.0.0-pr.1', 'abcdef'), '1.10.0-local.abcdef');
+  assert.equal(resolveVersion(undefined, 'desktop-v0.5.0\ndesktop-v0.9.0\ndesktop-v0.10.0\ndesktop-v1.0.0\nv2026.10.15.4\ndesktop-v2.0.0-pr.1', 'abcdef'), '0.10.0-local.abcdef');
+  assert.throws(() => resolveVersion(undefined, 'desktop-v2.0.0', 'abcdef'), /beta policy/);
 });
 test('requires tags or explicit version', () => {
   assert.throws(() => resolveVersion(undefined, '', 'abcdef'), /git fetch/);
