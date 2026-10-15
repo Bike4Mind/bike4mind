@@ -844,6 +844,18 @@ describe('B4mApiClient publish', () => {
     expect(mockPost).toHaveBeenNthCalledWith(2, '/api/publish/artifact/finalize', { draftId: 'd1' });
   });
 
+  it('looks up an existing publication by the caller of an artifact', async () => {
+    const page = { publicId: 'p1', tier: 'user', scopeId: 'u1', slug: 'chart-1', visibility: 'public' };
+    mockGet.mockResolvedValueOnce({ artifacts: [page] }).mockResolvedValueOnce({ artifacts: [] });
+
+    await expect(client.findPublishedArtifact('artifact_1')).resolves.toEqual(page);
+    await expect(client.findPublishedArtifact('artifact_2')).resolves.toBeNull();
+
+    expect(mockGet).toHaveBeenNthCalledWith(1, '/api/publish/artifacts', {
+      params: { sourceArtifactId: 'artifact_1', limit: 1 },
+    });
+  });
+
   it('PUTs draft bytes with plain fetch so no auth header breaks a presigned signature', async () => {
     globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
 

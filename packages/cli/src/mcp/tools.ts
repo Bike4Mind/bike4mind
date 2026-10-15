@@ -12,6 +12,7 @@ import {
   PROMPT_TEXT_MAX,
   PublishVisibilitySchema,
   questReplyText,
+  SLUG_OWNED_BY_OTHER,
   ttsRequestSchema,
   type GeneratedAudioResponse,
   type TTSRequest,
@@ -29,7 +30,6 @@ import {
   type RawNotebook,
   type RawProject,
   NOTEBOOK_ID_PATTERN,
-  SLUG_OWNED_BY_OTHER,
 } from './b4mApiClient.js';
 import { logger } from '../utils/Logger.js';
 
@@ -152,7 +152,7 @@ export const TOOL_META: ToolMeta[] = [
     name: 'publish_artifact',
     title: 'Publish artifact',
     description:
-      'Publish an artifact you own to a shareable /p/... link and return its absolute URL. Republishing the same artifact updates the same link. Visibility defaults to public.',
+      "Publish an artifact you own to a shareable /p/... link and return its absolute URL. Republishing an artifact updates its existing page and keeps that page's visibility unless you pass one; a first publish defaults to public.",
     // The publish routes declare no required scope; this is only the hint a 403 names.
     scope: 'files:write',
   },
@@ -281,14 +281,18 @@ const generateImageShape = {
   ),
 };
 
-// A user-tier page cannot be project-visible (SCOPE_POLICY.user in @bike4mind/common).
-const userPublishVisibilitySchema = PublishVisibilitySchema.exclude(['project']);
+// A new page publishes at the user tier, where 'project' is not allowed (SCOPE_POLICY.user)
+// and 'organization' would 403 every member but the owner (checkVisibility matches the org
+// against the user-tier scopeId), so only the two that work there are offered.
+const publishVisibilitySchema = PublishVisibilitySchema.extract(['public', 'private']);
 
 const publishArtifactShape = {
   artifactId: z.string().min(1).describe('The artifact id'),
-  visibility: userPublishVisibilitySchema
-    .default('public')
-    .describe("Who can open the link: 'public' (anyone), 'organization', or 'private' (only you)"),
+  visibility: publishVisibilitySchema
+    .optional()
+    .describe(
+      "Who can open the link: 'public' (anyone) or 'private' (only you); omit to keep an existing page's visibility (a first publish is public)"
+    ),
   title: z.string().min(1).max(200).optional().describe("Page title; defaults to the artifact's title"),
 };
 
@@ -634,6 +638,7 @@ const PUBLISH_INDEX_PATH = 'index.html';
 const PUBLISH_INDEX_MIME = 'text/html';
 const PUBLISH_TITLE_MAX = 200;
 const PUBLISH_FALLBACK_TITLE = 'Shared artifact';
+const PUBLISH_DEFAULT_VISIBILITY = 'public';
 const SLUG_TITLE_MAX = 48;
 const SLUG_ARTIFACT_HASH_LENGTH = 8;
 const SLUG_DISCRIMINATOR_LENGTH = 6;
@@ -679,13 +684,15 @@ async function openPublishDraft(client: B4mApiClient, request: UploadUrlRequest)
 }
 
 /**
- * Publish an artifact as a user-tier page: upload its RAW content and let
- * finalize render it (source.artifactType), so the page matches an in-app
- * publish byte for byte with no CLI-side renderer.
+ * Publish an artifact: upload its RAW content and let finalize render it
+ * (source.artifactType), so the page matches an in-app publish byte for byte with
+ * no CLI-side renderer. An artifact the caller already published (from the app or
+ * here) is republished in place at its existing tier/scope/slug, as the in-app
+ * update flow does; otherwise it becomes a new user-tier page.
  */
 export async function publishArtifact(
   client: B4mApiClient,
-  args: { artifactId: string; visibility: z.infer<typeof userPublishVisibilitySchema>; title?: string }
+  args: { artifactId: string; visibility?: z.infer<typeof publishVisibilitySchema>; title?: string }
 ) {
   const { artifact, content } = await client.getArtifact(args.artifactId);
   const body = artifactContentText(content);
@@ -697,15 +704,18 @@ export async function publishArtifact(
 
   const storedTitle = typeof artifact.title === 'string' ? artifact.title : '';
   const title = (args.title ?? storedTitle).trim().slice(0, PUBLISH_TITLE_MAX) || PUBLISH_FALLBACK_TITLE;
-  const draft = await openPublishDraft(client, {
-    tier: 'user',
-    scopeId: artifact.userId,
-    slug: artifactSlug(title, artifact.id),
+  const existing = await client.findPublishedArtifact(artifact.id);
+  const request: UploadUrlRequest = {
+    tier: existing?.tier ?? 'user',
+    scopeId: existing?.scopeId ?? artifact.userId,
+    slug: existing?.slug ?? artifactSlug(title, artifact.id),
     title,
-    visibility: args.visibility,
+    visibility: args.visibility ?? existing?.visibility ?? PUBLISH_DEFAULT_VISIBILITY,
     source: { kind: 'bundle', artifactId: artifact.id, artifactType: artifactType.data },
     files: [{ path: PUBLISH_INDEX_PATH, size: Buffer.byteLength(body), mimeType: PUBLISH_INDEX_MIME }],
-  });
+  };
+  // The existing slug is the caller's own, so a collision there is a real error, not a retry.
+  const draft = existing ? await client.requestPublishUpload(request) : await openPublishDraft(client, request);
 
   const upload = draft.uploadUrls.find(u => u.path === PUBLISH_INDEX_PATH);
   if (!upload) throw new Error(`publish draft ${draft.draftId} returned no upload URL for ${PUBLISH_INDEX_PATH}`);

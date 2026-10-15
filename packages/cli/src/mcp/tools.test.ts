@@ -1573,14 +1573,23 @@ describe('registerTools', () => {
 
 describe('publishArtifact', () => {
   const ARTIFACT_ID = 'artifact_html_generated_chart_1700000000000_1';
+  const BODY = '<h1>caf\u00e9</h1>';
   const record = {
     artifact: { id: ARTIFACT_ID, type: 'html', title: 'Sales Chart', userId: 'user1' },
-    content: { content: '<h1>café</h1>' },
+    content: { content: BODY },
+  };
+  const existingPage = {
+    publicId: 'pub0',
+    tier: 'organization',
+    scopeId: 'org1',
+    slug: 'sales-chart-artifa',
+    visibility: 'private',
   };
 
   const publishClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>> = {}) => {
     const fns = {
       getArtifact: vi.fn().mockResolvedValue(record),
+      findPublishedArtifact: vi.fn().mockResolvedValue(null),
       requestPublishUpload: vi.fn().mockResolvedValue({
         draftId: 'draft1',
         uploadUrls: [{ path: 'index.html', url: 'https://s3/put', expiresAt: '2026-10-15T00:10:00Z' }],
@@ -1615,7 +1624,7 @@ describe('publishArtifact', () => {
       // UTF-8 byte length, not string length: the e-acute is two bytes.
       files: [{ path: 'index.html', size: 14, mimeType: 'text/html' }],
     });
-    expect(fns.uploadPublishDraftFile).toHaveBeenCalledWith('https://s3/put', '<h1>café</h1>', 'text/html');
+    expect(fns.uploadPublishDraftFile).toHaveBeenCalledWith('https://s3/put', BODY, 'text/html');
     expect(fns.finalizePublish).toHaveBeenCalledWith('draft1');
     expect(result).toEqual({
       publicId: 'pub1',
@@ -1624,7 +1633,7 @@ describe('publishArtifact', () => {
     });
   });
 
-  it('derives the same slug on republish and a different one for another artifact', async () => {
+  it('derives a stable per-artifact slug for a first publish', async () => {
     const otherId = `${ARTIFACT_ID}2`;
     const { client, fns } = publishClient();
     await publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'public' });
@@ -1635,6 +1644,50 @@ describe('publishArtifact', () => {
     const [first, second, other] = fns.requestPublishUpload.mock.calls.map(([request]) => request.slug);
     expect(second).toBe(first);
     expect(other).not.toBe(first);
+  });
+
+  it('defaults a first publish to public when no visibility is passed', async () => {
+    const { client, fns } = publishClient();
+
+    await publishArtifact(client, { artifactId: ARTIFACT_ID });
+
+    expect(fns.findPublishedArtifact).toHaveBeenCalledWith(ARTIFACT_ID);
+    expect(fns.requestPublishUpload.mock.calls[0][0].visibility).toBe('public');
+  });
+
+  it('republishes an existing page in place and keeps its visibility', async () => {
+    const { client, fns } = publishClient();
+    fns.findPublishedArtifact.mockResolvedValue(existingPage);
+
+    await publishArtifact(client, { artifactId: ARTIFACT_ID, title: 'Renamed' });
+
+    const [request] = fns.requestPublishUpload.mock.calls[0];
+    expect(request).toMatchObject({
+      tier: 'organization',
+      scopeId: 'org1',
+      slug: 'sales-chart-artifa',
+      title: 'Renamed',
+      visibility: 'private',
+    });
+  });
+
+  it('lets an explicit visibility change an existing page', async () => {
+    const { client, fns } = publishClient();
+    fns.findPublishedArtifact.mockResolvedValue(existingPage);
+
+    await publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'public' });
+
+    expect(fns.requestPublishUpload.mock.calls[0][0].visibility).toBe('public');
+  });
+
+  it('does not re-slug a collision on an existing page', async () => {
+    const collision = new B4mApiError(403, { error: 'taken', code: 'slug_owned_by_other' }, new Headers());
+    const { client, fns } = publishClient();
+    fns.findPublishedArtifact.mockResolvedValue(existingPage);
+    fns.requestPublishUpload.mockRejectedValueOnce(collision);
+
+    await expect(publishArtifact(client, { artifactId: ARTIFACT_ID })).rejects.toBe(collision);
+    expect(fns.requestPublishUpload).toHaveBeenCalledTimes(1);
   });
 
   it('applies a title override to both the page title and the slug', async () => {
@@ -1705,6 +1758,24 @@ describe('publishArtifact', () => {
       'publish upload failed (403)'
     );
     expect(fns.finalizePublish).not.toHaveBeenCalled();
+  });
+
+  it('input schema leaves visibility unset and offers only public or private', () => {
+    const tools = new Map<string, unknown>();
+    let shape: z.ZodRawShape | undefined;
+    const server = {
+      registerTool: (name: string, config: { inputSchema: z.ZodRawShape }, cb: unknown) => {
+        tools.set(name, cb);
+        if (name === 'publish_artifact') shape = config.inputSchema;
+      },
+    } as unknown as McpServer;
+    registerTools(server, mockClient({}));
+    const schema = z.object(shape!);
+
+    expect(schema.parse({ artifactId: ARTIFACT_ID }).visibility).toBeUndefined();
+    expect(schema.parse({ artifactId: ARTIFACT_ID, visibility: 'private' }).visibility).toBe('private');
+    expect(schema.safeParse({ artifactId: ARTIFACT_ID, visibility: 'organization' }).success).toBe(false);
+    expect(schema.safeParse({ artifactId: ARTIFACT_ID, visibility: 'project' }).success).toBe(false);
   });
 
   it('maps a finalize failure to an error tool result through registerTools', async () => {

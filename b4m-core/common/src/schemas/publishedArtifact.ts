@@ -132,6 +132,9 @@ export const RESERVED_SLUGS: readonly string[] = [
   'health',
 ];
 
+/** Error `code` the publish routes put on a 403/409 when a slug belongs to another publisher. */
+export const SLUG_OWNED_BY_OTHER = 'slug_owned_by_other';
+
 export const SlugSchema = z
   .string()
   .min(3)

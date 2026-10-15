@@ -12,12 +12,15 @@ import {
   type CitableSourceSchema,
   ttsResponseTooLargeSchema,
   supportedVoiceGenerationVendor,
+  SLUG_OWNED_BY_OTHER,
   type ChatHistoryItemType,
   type GeneratedFile,
   type GenerateImageResponse,
   type ImagePromptResolution,
   type PromptBatchQueryType,
   type PublishResult,
+  type PublishScopeTier,
+  type PublishVisibility,
   type QuestErrorCode,
   type SessionDeleteResponse,
   type TTSRequest,
@@ -180,6 +183,15 @@ interface ArtifactListEnvelope {
 export interface ArtifactWithContent {
   artifact: RawArtifact;
   content?: unknown;
+}
+
+/** Where an artifact is already published, from GET /api/publish/artifacts?sourceArtifactId. */
+export interface ExistingPublication {
+  publicId: string;
+  tier: PublishScopeTier;
+  scopeId: string;
+  slug: string;
+  visibility: PublishVisibility;
 }
 
 /**
@@ -449,6 +461,17 @@ export class B4mApiClient {
     });
   }
 
+  /**
+   * The caller's own most recent publication of an artifact, or null. The route is
+   * owner-scoped for `sourceArtifactId`, so another user's page never matches.
+   */
+  async findPublishedArtifact(artifactId: string): Promise<ExistingPublication | null> {
+    const result = await this.client.get<{ artifacts?: ExistingPublication[] }>('/api/publish/artifacts', {
+      params: { sourceArtifactId: artifactId, limit: 1 },
+    });
+    return result.artifacts?.[0] ?? null;
+  }
+
   /** POST /api/publish/artifact/upload-url: opens a publish draft and mints one upload URL per file. */
   async requestPublishUpload(request: UploadUrlRequest): Promise<UploadUrlResponse> {
     return this.client.post<UploadUrlResponse>('/api/publish/artifact/upload-url', request);
@@ -500,9 +523,6 @@ export class B4mApiClient {
   }
 }
 
-/** Error code the publish routes put on a slug-collision 403/409. */
-export const SLUG_OWNED_BY_OTHER = 'slug_owned_by_other';
-
 /**
  * Turn an API failure into an actionable, transport-agnostic message. `scope` is
  * the recommended API-key scope for the failing tool. A 403 can come from a
@@ -530,17 +550,16 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     if ((data as { code?: unknown } | undefined)?.code === 'FEATURE_DISABLED') {
       return 'feature disabled on this Bike4Mind instance (ask an admin to enable it)';
     }
+    // The publish routes answer 403 when the slug belongs to another publisher; no key
+    // scope fixes that.
+    if (apiErrorCode(error) === SLUG_OWNED_BY_OTHER) {
+      return extractServerMessage(data) ?? 'this publish slug belongs to another publisher';
+    }
     // csrfProtection answers 403 when no Origin matches the deployment's APP_URL and
     // names the expected origin in the body - the actual fix for a login (JWT) caller,
     // where the key-scope fallback below would misdirect. Other 403s keep that fallback.
     // The match is wording-based: must stay in sync with the ForbiddenError messages in
     // apps/client/server/middlewares/csrfProtection.ts.
-    // The publish routes answer 403 when the slug belongs to another publisher; no key
-    // scope fixes that. Must stay in sync with SLUG_OWNED_BY_OTHER in
-    // apps/client/server/services/publish/slugOwnership.ts.
-    if (apiErrorCode(error) === SLUG_OWNED_BY_OTHER) {
-      return extractServerMessage(data) ?? 'this publish slug belongs to another publisher';
-    }
     const csrfMessage = extractServerMessage(data);
     if (csrfMessage && /CSRF|request origin/i.test(csrfMessage)) return csrfMessage;
     const base = "API key forbidden: check the key's scopes and account access";
@@ -585,7 +604,6 @@ function httpFailure(error: unknown): { status?: number; data?: unknown } | unde
   return undefined;
 }
 
-/** The HTTP status of a failed API call from either transport. */
 /** The machine-readable `code` a route put on its error body, when it set one. */
 export function apiErrorCode(error: unknown): string | undefined {
   const data = httpFailure(error)?.data;
@@ -594,6 +612,7 @@ export function apiErrorCode(error: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined;
 }
 
+/** The HTTP status of a failed API call from either transport. */
 export function apiErrorStatus(error: unknown): number | undefined {
   return httpFailure(error)?.status;
 }
