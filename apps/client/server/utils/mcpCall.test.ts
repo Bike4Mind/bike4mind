@@ -53,8 +53,10 @@ describe('mcpCall rate-limit ingest', () => {
     expect(postedBody()).toEqual({ events: [JSON.parse(h.rateLimitLine)], tenantKey: 'user-1' });
   });
 
-  it('hands the events back on the result when the ingest route rejects them (old route during a deploy)', async () => {
-    h.fetch.mockResolvedValue(new Response('tenantKey unexpected', { status: 400 }));
+  it('hands the events back on the result when the ingest route rejects them', async () => {
+    h.fetch.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'events array and tenantKey required' }), { status: 400 })
+    );
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const result = await handler({
