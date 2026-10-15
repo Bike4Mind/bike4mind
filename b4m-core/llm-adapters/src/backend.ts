@@ -466,7 +466,8 @@ export interface ICompletionBackend {
    * prefers `dispatchProfile` over its hardcoded id tables, which is what lets a
    * model this build has no id knowledge of get a correctly shaped request
    * instead of a 400. Optional: a backend whose request shape is id-independent
-   * has nothing to read.
+   * has nothing to read. Gemini and xAI also gate cache-read forwarding on this
+   * record, so for them it must be the record settlement prices with.
    */
   setDispatchModel?(info: ModelInfo): void;
 }

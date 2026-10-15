@@ -758,7 +758,7 @@ const alarmIfUnpriced = (model: ModelInfo, cost: number, usage: number): number 
  * Anthropic's discount, not theirs. A tier without cache_read on one of these backends bills
  * forwarded reads at its input rate (costAtTier). The gates in geminiBackend.ts and xaiBackend.ts
  * (@bike4mind/llm-adapters) apply publishesCacheReadRate to the same priced record settlement uses.
- * @internal Exported for pricing.ts only.
+ * @internal Exported for pricing.ts and cliCompletions.ts; not a stable public API.
  */
 export const PUBLISHED_CACHE_READ_BACKENDS: ReadonlySet<string> = new Set([ModelBackend.Gemini, ModelBackend.XAI]);
 
