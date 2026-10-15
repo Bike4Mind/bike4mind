@@ -610,7 +610,7 @@ export class PrMonitor {
    * Binding (b): the Code session's branch already has an open PR. Asked once per conversation
    * per launch (and again after a quiet spell), only when it is opened, never at startup.
    */
-  private async lookUpBranch(sessionId: string): Promise<void> {
+  protected async lookUpBranch(sessionId: string): Promise<void> {
     const last = this.branchLookups.get(sessionId);
     if (last !== undefined && this.now() - last < BRANCH_LOOKUP_TTL_MS) return;
     if (this.gh !== 'ok') return;
@@ -751,7 +751,7 @@ export class PrMonitor {
    * decision at a time per conversation: a read and a turn ending can both ask at once, and
    * the second must see what the first recorded.
    */
-  private evaluateAutoFix(sessionId: string, snapshot: PrSnapshot): Promise<void> {
+  protected evaluateAutoFix(sessionId: string, snapshot: PrSnapshot): Promise<void> {
     const live = this.entry(sessionId);
     const next = (live.autoFixing ?? Promise.resolve()).then(() => this.decideAutoFix(sessionId, snapshot));
     const settled = next.catch(err => this.deps.logger.warn(`PR: auto-fix failed: ${err}`));

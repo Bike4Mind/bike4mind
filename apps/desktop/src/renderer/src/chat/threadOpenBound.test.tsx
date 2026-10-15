@@ -51,6 +51,15 @@ class ScriptedObserver {
 const respond = () => undefined;
 const resume = () => undefined;
 
+const SPARSE_STRESS_SHAPE = {
+  ...STRESS_SHAPE,
+  previewChars: 100,
+  diffEvery: 0,
+  proseChars: 40,
+  codeEvery: 0,
+  mermaid: false,
+};
+
 describe('opening a long conversation', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -135,15 +144,18 @@ describe('opening a long conversation', () => {
     expect(host.scrollHeight - host.scrollTop).toBe(fromBottom);
   });
 
+  // The stress fixture's turns and boundary, with almost none of its text: walking to the
+  // boundary mounts every turn after it, and drawing all of that markdown is what used to run
+  // this past its timeout on a loaded runner. The bound on what one window draws is pinned above.
   it('reaches the compaction boundary by scrolling, and only then offers the earlier messages', () => {
-    render(buildThread(STRESS_SHAPE));
+    render(buildThread(SPARSE_STRESS_SHAPE));
     for (let step = 0; step < 100 && count('chat-thread-older-sentinel') > 0; step++)
       act(() => ScriptedObserver.reveal());
 
     expect(count('chat-thread-older-sentinel')).toBe(0);
     expect(count('chat-boundary')).toBe(1);
     expect(count('chat-earlier-messages')).toBe(1);
-    const turnsAfterBoundary = STRESS_SHAPE.turns - (STRESS_SHAPE.boundaryAt ?? 0) / 2;
+    const turnsAfterBoundary = SPARSE_STRESS_SHAPE.turns - (SPARSE_STRESS_SHAPE.boundaryAt ?? 0) / 2;
     expect(count('chat-message-assistant')).toBe(turnsAfterBoundary);
   }, 60_000);
 
