@@ -185,8 +185,8 @@ describe('SidenavNav Studio row', () => {
   it('is one Studio row, shown when a video model is usable', () => {
     useVideoModelsMock.mockReturnValue(usable);
     renderNav();
+    expect(screen.getAllByTestId('sidenav-nav-studio')).toHaveLength(1);
     expect(studioRow()).toHaveTextContent('Studio');
-    expect(screen.queryByTestId('sidenav-nav-video-studio')).not.toBeInTheDocument();
   });
 
   it('hides when no modality has a usable model or the models have not loaded', () => {
@@ -218,6 +218,15 @@ describe('SidenavNav Studio row', () => {
     useMusicModelsMock.mockReturnValue(usable);
     renderNav();
     expect(studioRow()).not.toBeInTheDocument();
+  });
+
+  it('stays reachable through the other modality when one model list errors', () => {
+    useVideoModelsMock.mockReturnValue({ data: undefined, isPending: false, isError: true });
+    useMusicModelsMock.mockReturnValue(usable);
+    renderNav();
+    expect(studioRow()).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('sidenav-nav-studio'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/studio/$modality', params: { modality: 'music' } });
   });
 
   it('is active on any Studio tab', () => {

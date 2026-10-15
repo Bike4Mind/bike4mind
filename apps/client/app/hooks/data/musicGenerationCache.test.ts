@@ -1,6 +1,6 @@
 import { QueryClient } from '@tanstack/react-query';
 import type { MusicGeneration } from '@bike4mind/common';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { musicJob } from './__test__/musicGenerationFixtures';
 import {
   patchMusicGeneration,
@@ -90,6 +90,13 @@ describe('music gallery list', () => {
     prependMusicGeneration(queryClient, musicJob({ id: 'new' }));
     expect(listed()?.map(job => job.id)).toEqual(['new', 'old']);
     expect(detail('new')?.id).toBe('new');
+  });
+
+  it('refetches, rather than writes, a list that has not loaded', () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    prependMusicGeneration(queryClient, musicJob({ id: 'new' }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: musicGenerationKeys.list });
+    expect(queryClient.getQueryData(musicGenerationKeys.list)).toBeUndefined();
   });
 
   it('seeds a listed job into its detail entry unless the cache holds a newer one', () => {

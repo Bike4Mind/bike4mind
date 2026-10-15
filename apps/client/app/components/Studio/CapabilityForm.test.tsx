@@ -142,6 +142,25 @@ describe('CapabilityForm', () => {
     expect(onLyrics).toHaveBeenCalledWith('la la\n[Chorus]\n');
   });
 
+  it('inserts a snippet at a caret in the middle of the text', () => {
+    const onLyrics = vi.fn();
+    renderForm([
+      {
+        kind: 'text',
+        id: 'lyrics',
+        label: 'Lyrics',
+        value: 'aa\nbb',
+        maxLength: 100,
+        snippets: ['[Verse]'],
+        onChange: onLyrics,
+      },
+    ]);
+    const textarea = screen.getByTestId<HTMLTextAreaElement>('demo-form-lyrics-input');
+    textarea.setSelectionRange(2, 2);
+    fireEvent.click(screen.getByTestId('demo-form-lyrics-verse-snippet-btn'));
+    expect(onLyrics).toHaveBeenCalledWith('aa\n[Verse]\nbb');
+  });
+
   it('disables the snippets with their field, and skips one that would pass the limit', () => {
     const onLyrics = vi.fn();
     renderForm([
