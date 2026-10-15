@@ -425,6 +425,11 @@ describe('downloadRelevantLinks', () => {
     // Assert
     expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('Failed to download file from'));
     expect(mockedFabFilesService.createFabFile).not.toHaveBeenCalled();
+    // The status update names the link but not the failure detail: a guard message can carry the
+    // private address a hostname resolved to, which belongs in the log, not in the task owner's UI.
+    const statusTexts = mockSendStatusUpdate.mock.calls.map((call: unknown[]) => call[0] as string);
+    expect(statusTexts).toContain('❌ Download failed: Important Document 1');
+    expect(statusTexts.some(text => text.includes(downloadError.message))).toBe(false);
     expect(mockDb.researchTasks.update).toHaveBeenCalledWith(
       expect.objectContaining({
         status: ResearchTaskStatus.COMPLETED,
