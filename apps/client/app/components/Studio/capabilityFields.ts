@@ -19,6 +19,8 @@ export type TextField = FieldBase & {
   placeholder?: string;
   maxLength: number;
   minRows?: number;
+  // Shown as buttons that insert their text at the cursor on a line of its own (e.g. lyric section tags).
+  snippets?: readonly string[];
   onChange: (value: string) => void;
 };
 

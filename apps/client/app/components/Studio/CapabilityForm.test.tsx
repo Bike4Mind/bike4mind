@@ -122,4 +122,43 @@ describe('CapabilityForm', () => {
     expect(screen.getByTestId('demo-form-estimate')).toHaveTextContent('Cost estimate unavailable');
     expect(screen.getByTestId('demo-form-submit-btn')).toBeDisabled();
   });
+
+  it('inserts a snippet at the cursor on its own line', () => {
+    const onLyrics = vi.fn();
+    renderForm([
+      {
+        kind: 'text',
+        id: 'lyrics',
+        label: 'Lyrics',
+        value: 'la la',
+        maxLength: 100,
+        snippets: ['[Verse]', '[Chorus]'],
+        onChange: onLyrics,
+      },
+    ]);
+    const textarea = screen.getByTestId<HTMLTextAreaElement>('demo-form-lyrics-input');
+    textarea.setSelectionRange(5, 5);
+    fireEvent.click(screen.getByTestId('demo-form-lyrics-chorus-snippet-btn'));
+    expect(onLyrics).toHaveBeenCalledWith('la la\n[Chorus]\n');
+  });
+
+  it('disables the snippets with their field, and skips one that would pass the limit', () => {
+    const onLyrics = vi.fn();
+    renderForm([
+      {
+        kind: 'text',
+        id: 'a',
+        label: 'A',
+        value: '',
+        maxLength: 100,
+        snippets: ['[Verse]'],
+        disabled: true,
+        onChange: vi.fn(),
+      },
+      { kind: 'text', id: 'b', label: 'B', value: 'abc', maxLength: 6, snippets: ['[Verse]'], onChange: onLyrics },
+    ]);
+    expect(screen.getByTestId('demo-form-a-verse-snippet-btn')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('demo-form-b-verse-snippet-btn'));
+    expect(onLyrics).not.toHaveBeenCalled();
+  });
 });

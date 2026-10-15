@@ -85,3 +85,16 @@ export function generationJobPollInterval(
   }
   return false;
 }
+
+/** When a gallery list must refetch to re-sign the earliest-expiring URL on its pages, or false when none expires. */
+export function generationListRefreshInterval(
+  list: { pages: { data: Pick<PollableGenerationJob, 'output'>[] }[] } | undefined,
+  now: number
+): number | false {
+  const expiries = (list?.pages ?? [])
+    .flatMap(page => page.data)
+    .flatMap(job => (job.output?.availability === 'ready' && job.output.expires_at ? [job.output.expires_at] : []));
+  if (expiries.length === 0) return false;
+  const earliest = expiries.reduce((a, b) => (Date.parse(a) <= Date.parse(b) ? a : b));
+  return msUntil(earliest, LIST_URL_REFRESH_LEAD_MS, now);
+}

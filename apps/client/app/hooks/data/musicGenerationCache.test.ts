@@ -2,7 +2,13 @@ import { QueryClient } from '@tanstack/react-query';
 import type { MusicGeneration } from '@bike4mind/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { musicJob } from './__test__/musicGenerationFixtures';
-import { patchMusicGeneration, upsertMusicGeneration } from './musicGenerationCache';
+import {
+  patchMusicGeneration,
+  prependMusicGeneration,
+  seedMusicGeneration,
+  upsertMusicGeneration,
+  type MusicGenerationList,
+} from './musicGenerationCache';
 import { musicGenerationKeys } from './musicGenerationKeys';
 
 const LATER = '2026-10-07T00:01:00.000Z';
@@ -62,5 +68,33 @@ describe('upsertMusicGeneration', () => {
     queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'cancelled' }));
     upsertMusicGeneration(queryClient, musicJob({ state: 'running', updated_at: LATER }));
     expect(detail()?.state).toBe('cancelled');
+  });
+});
+
+describe('music gallery list', () => {
+  const listOf = (...jobs: MusicGeneration[]): MusicGenerationList => ({
+    pages: [{ data: jobs, next_cursor: null }],
+    pageParams: [undefined],
+  });
+  const listed = () => queryClient.getQueryData<MusicGenerationList>(musicGenerationKeys.list)?.pages[0].data;
+
+  it('patches a listed job that has no detail entry, and reports it as cached', () => {
+    queryClient.setQueryData(musicGenerationKeys.list, listOf(musicJob({ state: 'pending' })));
+    expect(patchMusicGeneration(queryClient, { id: 'music-1', state: 'running' })).toBe(true);
+    expect(listed()?.[0].state).toBe('running');
+  });
+
+  it('prepends a created job once, even when the create is replayed', () => {
+    queryClient.setQueryData(musicGenerationKeys.list, listOf(musicJob({ id: 'old' })));
+    prependMusicGeneration(queryClient, musicJob({ id: 'new' }));
+    prependMusicGeneration(queryClient, musicJob({ id: 'new' }));
+    expect(listed()?.map(job => job.id)).toEqual(['new', 'old']);
+    expect(detail('new')?.id).toBe('new');
+  });
+
+  it('seeds a listed job into its detail entry unless the cache holds a newer one', () => {
+    seedMusicGeneration(queryClient, musicJob({ state: 'succeeded', updated_at: LATER }));
+    seedMusicGeneration(queryClient, musicJob({ state: 'running' }));
+    expect(detail()?.state).toBe('succeeded');
   });
 });

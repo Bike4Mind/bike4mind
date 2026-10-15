@@ -15,6 +15,17 @@ vi.mock('@client/app/hooks/data/musicGenerations', () => ({
   useMusicGeneration: () => h.query,
   useCancelMusicGeneration: () => h.cancel,
 }));
+vi.mock('@client/app/components/Media/MediaPlayer', () => ({
+  MediaPlayer: ({ file }: { file: { id: string; mimeType: string; fileUrl?: string; fileUrlExpireAt?: Date } }) => (
+    <div
+      data-testid="media-player-stub"
+      data-file-id={file.id}
+      data-mime-type={file.mimeType}
+      data-src={file.fileUrl}
+      data-expires-at={file.fileUrlExpireAt?.toISOString()}
+    />
+  ),
+}));
 vi.mock('@client/app/components/Files/fileBrowserStore', () => ({
   useFileBrowser: (selector: (state: { setOpen: (open: boolean) => void }) => unknown) =>
     selector({ setOpen: h.setOpen }),
@@ -67,18 +78,30 @@ describe('MusicJobCard states', () => {
     expect(screen.getByTestId('music-job-card-status')).toHaveTextContent(label);
   });
 
-  it('shows duration and the instrumental flag, with a prompt', () => {
+  it('shows duration, the instrumental flag and the credit hold, with a prompt', () => {
     showJob(musicJob({ instrumental: true, duration_seconds: 45 }));
     render(card());
-    expect(screen.getByText('45s, Instrumental')).toBeInTheDocument();
+    expect(screen.getByTestId('music-job-card-meta')).toHaveTextContent('45s, Instrumental, up to 10 credits');
     expect(screen.getByTestId('music-job-card-prompt')).toHaveTextContent('a calm piano piece');
   });
 
   it('shows the duration the song really has when it differs from the requested one', () => {
     showJob(succeeded(musicOutput({ duration_seconds: 28 }), { duration_seconds: 30 }));
     render(card());
-    expect(screen.getByText('28s')).toBeInTheDocument();
-    expect(screen.queryByText('30s')).not.toBeInTheDocument();
+    expect(screen.getByTestId('music-job-card-meta')).toHaveTextContent('28s');
+    expect(screen.getByTestId('music-job-card-meta')).not.toHaveTextContent('30s');
+  });
+
+  it('shows the settled cost once the song is billed', () => {
+    showJob(succeeded(musicOutput(), { credits: { reserved: 10, settled: 7 } }));
+    render(card());
+    expect(screen.getByTestId('music-job-card-meta')).toHaveTextContent('30s, 7 credits');
+  });
+
+  it('leaves the cost out when nothing was held', () => {
+    showJob(musicJob({ state: 'failed', credits: { reserved: null, settled: null } }));
+    render(card());
+    expect(screen.getByTestId('music-job-card-meta')).toHaveTextContent(/^30s$/);
   });
 
   it('shows Finishing while a succeeded frame has no output yet', () => {
@@ -112,8 +135,19 @@ describe('MusicJobCard states', () => {
 });
 
 describe('MusicJobCard player', () => {
-  it('plays a ready song through a native audio element', () => {
+  it('plays a song saved to Files through the shared media player, from the file', () => {
     showJob(succeeded(musicOutput()));
+    render(card());
+    const player = screen.getByTestId('media-player-stub');
+    expect(player).toHaveAttribute('data-file-id', 'file-1');
+    expect(player).toHaveAttribute('data-mime-type', 'audio/mpeg');
+    expect(player).toHaveAttribute('data-src', 'https://files.example/song-1.mp3?sig=a');
+    expect(player).toHaveAttribute('data-expires-at', '2026-10-07T00:15:00.000Z');
+    expect(screen.getByTestId('music-job-card-player')).toContainElement(player);
+  });
+
+  it('plays a song that could not be saved to Files through a native audio element', () => {
+    showJob(succeeded(musicOutput({ file_id: null })));
     render(card());
     const player = screen.getByTestId('music-job-card-player');
     expect(player.tagName).toBe('AUDIO');
@@ -123,7 +157,7 @@ describe('MusicJobCard player', () => {
   });
 
   it('refetches the job when the audio fails to load', () => {
-    showJob(succeeded(musicOutput()));
+    showJob(succeeded(musicOutput({ file_id: null })));
     render(card());
     expect(h.query.refetch).not.toHaveBeenCalled();
     fireEvent.error(screen.getByTestId('music-job-card-player'));
@@ -131,9 +165,9 @@ describe('MusicJobCard player', () => {
   });
 
   it('keeps the first src when the job re-signs mid-play', () => {
-    showJob(succeeded(musicOutput()));
+    showJob(succeeded(musicOutput({ file_id: null })));
     const { rerender } = render(card());
-    showJob(succeeded(musicOutput({ url: 'https://files.example/song-1.mp3?sig=b' })));
+    showJob(succeeded(musicOutput({ file_id: null, url: 'https://files.example/song-1.mp3?sig=b' })));
     rerender(card());
     expect(screen.getByTestId('music-job-card-player')).toHaveAttribute(
       'src',
