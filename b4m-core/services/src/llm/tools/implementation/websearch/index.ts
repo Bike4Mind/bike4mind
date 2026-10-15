@@ -232,7 +232,7 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
 
 function logHedgedProviderFailure(provider: WebSearchProvider, error: unknown): void {
   if (error instanceof EmptySearchAnswer) return;
-  Logger.globalInstance.error('❌ WebSearch Tool: provider failed while the other answered empty', {
+  Logger.globalInstance.error('WebSearch Tool: provider failed while the other answered empty', {
     provider: provider.name,
     error: errorMessage(error),
   });
@@ -297,7 +297,7 @@ export async function searchWithHedge(
   } catch (error) {
     const [leadError, backupError] = error instanceof AggregateError ? error.errors : [error, error];
     // One provider answered empty and the other failed: the caller sees "no results", not a throw,
-    // so this is the only error-level record of the failure (the providers log attempts at warn).
+    // so this is the only error-level record of the failure (transient attempt failures log at warn).
     if (leadError instanceof EmptySearchAnswer) {
       logHedgedProviderFailure(backup, backupError);
       return { results: [], servedBy: lead };
