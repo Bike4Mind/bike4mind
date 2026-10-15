@@ -32,6 +32,7 @@ vi.mock('@client/app/stores/useAudioGenSettings', () => ({
   useAudioGenSettings: { getState: () => mocks.getState() },
 }));
 
+import type { AudioGenMode } from '@client/app/stores/useAudioGenSettings';
 import { useGenerateAudio } from './useGenerateAudio';
 
 // A 4xx from the route arrives as an axios error carrying the JSON error body.
@@ -44,8 +45,8 @@ const axiosFailure = (status: number, data: unknown) =>
     config: { headers: new AxiosHeaders() },
   });
 
-const generate = async (text = 'hello') => {
-  const { result } = renderHook(() => useGenerateAudio());
+const generate = async (text = 'hello', mode: AudioGenMode = 'tts') => {
+  const { result } = renderHook(() => useGenerateAudio(mode));
   await act(async () => {
     await result.current.generate(text);
   });
@@ -54,7 +55,7 @@ const generate = async (text = 'hello') => {
 
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
-  mocks.getState.mockReturnValue({ mode: 'tts', ttsProvider: 'openai', voice: '', format: 'mp3' });
+  mocks.getState.mockReturnValue({ ttsProvider: 'openai', voice: '', format: 'mp3' });
   URL.createObjectURL = vi.fn(() => 'blob:audio');
   URL.revokeObjectURL = vi.fn();
 });
@@ -181,7 +182,7 @@ describe('useGenerateAudio credit exhaustion', () => {
 
 describe('useGenerateAudio sound effects', () => {
   beforeEach(() => {
-    mocks.getState.mockReturnValue({ mode: 'sound-effects', durationSeconds: 3, promptInfluence: 0.5 });
+    mocks.getState.mockReturnValue({ durationSeconds: 3, promptInfluence: 0.5 });
   });
 
   it('requests base64 JSON and plays the inline audio from a blob URL', async () => {
@@ -189,7 +190,7 @@ describe('useGenerateAudio sound effects', () => {
       data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: true, fabFileId: 'fab-2' },
     });
 
-    const result = await generate();
+    const result = await generate('hello', 'sound-effects');
 
     expect(mocks.post).toHaveBeenCalledWith(
       '/api/ai/sound-effects',
@@ -211,7 +212,7 @@ describe('useGenerateAudio sound effects', () => {
       data: { delivery: 'url', url: 'https://s3/sfx.mp3', bytes: 9_000_000, contentType: 'audio/mpeg' },
     });
 
-    const result = await generate();
+    const result = await generate('hello', 'sound-effects');
 
     expect(result.current.result).toMatchObject({ url: 'https://s3/sfx.mp3', isObjectUrl: false, saved: false });
     expect(URL.createObjectURL).not.toHaveBeenCalled();
@@ -223,7 +224,7 @@ describe('useGenerateAudio sound effects', () => {
       data: { audio: 'AAA=', contentType: 'audio/mpeg', saved: false, saveSkippedReason: 'storage_limit' },
     });
 
-    await generate();
+    await generate('hello', 'sound-effects');
 
     expect(mocks.toastInfo).toHaveBeenCalledWith(
       'Sound effect generated, but your storage is full so it was not saved to Files.'
@@ -233,7 +234,7 @@ describe('useGenerateAudio sound effects', () => {
   it('shows the generic too-large message on a 413', async () => {
     mocks.post.mockRejectedValue(axiosFailure(413, { error: 'too big' }));
 
-    await generate();
+    await generate('hello', 'sound-effects');
 
     expect(mocks.toastError).toHaveBeenCalledWith(
       'The generated audio was too large to return. Try again, or use shorter text.'

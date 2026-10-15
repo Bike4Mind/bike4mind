@@ -11,6 +11,18 @@ export type GeneratedAssetGenerator = (typeof GENERATED_ASSET_GENERATORS)[number
 export const GENERATED_ASSET_TAG = 'generated';
 
 /**
+ * The second tag saveGeneratedAsset applies, naming the generator; it also labels the file name. Hyphenated like the
+ * other user-facing tags. Studio's recent-generations lists filter on it.
+ */
+export const GENERATED_ASSET_GENERATOR_TAG: Record<GeneratedAssetGenerator, string> = {
+  music: 'music',
+  speech: 'speech',
+  sound_effect: 'sound-effect',
+  video: 'video',
+  image: 'image',
+};
+
+/**
  * What produced a generated file, stamped as `sourceMetadata.generation` on its FabFile. The notebook link
  * (`sessionId`, `questId`) stays at the top of `sourceMetadata`, where listBySession and the session-delete
  * cascade already read it.
@@ -25,6 +37,15 @@ export const GeneratedAssetMetadataSchema = z.object({
   prompt: z.string(),
   lyrics: z.string().optional(),
   durationSeconds: z.number().positive().optional(),
+  // The audio settings the caller picked, so Studio's "use these settings again" can restore them.
+  /** Speech: the requested voice; absent when the provider default was used or another provider stood in. */
+  voice: z.string().optional(),
+  /** Speech: the output format. */
+  format: z.string().optional(),
+  /** Speech: the requested language; absent when the provider auto-detected it. */
+  languageCode: z.string().optional(),
+  /** Sound effects: how closely the provider followed the prompt, 0-1. */
+  promptInfluence: z.number().min(0).max(1).optional(),
 });
 
 export type GeneratedAssetMetadata = z.infer<typeof GeneratedAssetMetadataSchema>;
