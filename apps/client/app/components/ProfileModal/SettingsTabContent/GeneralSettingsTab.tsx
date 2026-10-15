@@ -77,9 +77,10 @@ const GeneralSettingsTab = () => {
 
   const { refreshUser } = useUser();
   const queryClient = useQueryClient();
-  // MFA enforcement is a settings-map value; while it resolves we do not know whether the
-  // user may disable, so the Disable action stays hidden rather than appearing and vanishing.
-  const { settings: adminSettings, isLoading: adminSettingsLoading } = useAdminSettings();
+  // MFA enforcement is a settings-map value; until the authenticated fetch lands we do not know
+  // whether the user may disable, so Disable stays hidden (and stays hidden if that fetch fails)
+  // rather than appearing and vanishing, or showing for an enforced org.
+  const { settings: adminSettings, authedSettingsLoaded } = useAdminSettings();
   const mfaEnforced = adminSettings?.enforceMFA === 'true';
   const { data: mfaStatus } = useMFAStatus();
   const setupMFA = useSetupMFA();
@@ -281,13 +282,18 @@ const GeneralSettingsTab = () => {
     setShowRegenerateConfirm(false);
     regenerateBackupCodes.mutate(undefined, {
       onSuccess: (data: { backupCodes?: string[] }) => {
-        if (data.backupCodes) setShowBackupCodes(data.backupCodes);
-        toast.success('New backup codes generated successfully. Save them now!');
         // Regenerating leaves totpEnabled alone, so only the code count and the auth
         // cache change - the admin Users badge does not need invalidating here.
         queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] });
         refreshUser();
         queryClient.invalidateQueries({ queryKey: ['identify'] });
+        // The old codes are already invalid by now, so a response with no codes must not read as success.
+        if (!data.backupCodes?.length) {
+          toast.error('New backup codes were created but could not be shown. Generate them again.');
+          return;
+        }
+        setShowBackupCodes(data.backupCodes);
+        toast.success('New backup codes generated successfully. Save them now!');
       },
       onError: (error: { response?: { data?: { error?: string } }; message?: string }) => {
         if (isStepUpCancelled(error)) return;
@@ -530,7 +536,7 @@ const GeneralSettingsTab = () => {
                       Enable
                     </StyledButton>
                   )}
-                  {mfaStatus?.enabled && !adminSettingsLoading && !mfaEnforced && (
+                  {mfaStatus?.enabled && authedSettingsLoaded && !mfaEnforced && (
                     <StyledButton
                       color="danger"
                       variant="outlined"
@@ -833,7 +839,14 @@ const GeneralSettingsTab = () => {
               variant="outlined"
               color="neutral"
               data-testid="settings-backup-codes-copy-btn"
-              onClick={() => navigator.clipboard.writeText(showBackupCodes?.join('\n') || '')}
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(showBackupCodes?.join('\n') || '');
+                  toast.success('Backup codes copied');
+                } catch {
+                  toast.error('Could not copy backup codes. Select and copy them manually.');
+                }
+              }}
               fullWidth
             >
               Copy
@@ -850,6 +863,7 @@ const GeneralSettingsTab = () => {
                 document.body.appendChild(element);
                 element.click();
                 document.body.removeChild(element);
+                URL.revokeObjectURL(element.href);
               }}
               fullWidth
             >
@@ -866,7 +880,7 @@ const GeneralSettingsTab = () => {
       <ConfirmActionModal
         open={showDisableConfirm}
         title="Disable Multi-Factor Authentication"
-        description="Are you sure you want to disable Multi-Factor Authentication? This will make your account less secure. This action cannot be undone."
+        description="Are you sure you want to disable Multi-Factor Authentication? This will make your account less secure, sign you out on all devices, and remove your passkeys and trusted devices. This action cannot be undone."
         onGoBackward={() => setShowDisableConfirm(false)}
         onGoForward={confirmDisableMFA}
         forwardButtonText="Disable MFA"

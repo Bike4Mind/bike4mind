@@ -47,9 +47,9 @@ vi.mock('@client/app/hooks/data/mfa', () => ({
 
 // Admin enforcement drives whether the card offers Disable at all.
 let enforceMFA = 'false';
-let adminSettingsLoading = false;
+let authedSettingsLoaded = true;
 vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
-  useAdminSettings: () => ({ settings: { enforceMFA }, isLoading: adminSettingsLoading }),
+  useAdminSettings: () => ({ settings: { enforceMFA }, authedSettingsLoaded }),
 }));
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
   useDeleteAllFiles: (options: { onSuccess?: () => unknown }) => {
@@ -113,7 +113,7 @@ describe('GeneralSettingsTab MFA sections', () => {
     vi.clearAllMocks();
     mfaEnabled = false;
     enforceMFA = 'false';
-    adminSettingsLoading = false;
+    authedSettingsLoaded = true;
   });
 
   it.each(['passkeys-section-stub', 'trusted-devices-section-stub'])('mounts %s, disabled while MFA is off', testId => {
@@ -158,7 +158,7 @@ describe('GeneralSettingsTab - disabled MFA actions and enforcement', () => {
     mfaEnabled = true;
     backupCodesCount = 0;
     enforceMFA = 'false';
-    adminSettingsLoading = false;
+    authedSettingsLoaded = true;
   });
 
   it('offers Disable once MFA is on and not enforced', () => {
@@ -181,10 +181,36 @@ describe('GeneralSettingsTab - disabled MFA actions and enforcement', () => {
     expect(screen.getByTestId('settings-enable-mfa-btn')).toBeTruthy();
   });
 
-  it('hides Disable until enforcement is known', () => {
-    adminSettingsLoading = true;
+  it('hides Disable until the authenticated settings have loaded', () => {
+    authedSettingsLoaded = false;
     renderTab();
     expect(screen.queryByTestId('settings-disable-mfa-btn')).toBeNull();
+  });
+
+  it('keeps Regenerate available when the administrator enforces MFA', () => {
+    enforceMFA = 'true';
+    renderTab();
+    expect(screen.getByTestId('settings-regenerate-backup-codes-btn')).toBeTruthy();
+  });
+
+  it.each([
+    ['settings-disable-mfa-btn', () => disableMutation],
+    ['settings-regenerate-backup-codes-btn', () => regenerateMutation],
+  ])('does not run the %s mutation until the confirmation is accepted', (buttonTestId, getMutation) => {
+    renderTab();
+    fireEvent.click(screen.getByTestId(buttonTestId));
+    expect(getMutation().mutate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('confirm-modal-confirm-btn'));
+    expect(getMutation().mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an error instead of success when regeneration returns no codes', () => {
+    succeedWith(regenerateMutation, {});
+    renderTab();
+    fireEvent.click(screen.getByTestId('settings-regenerate-backup-codes-btn'));
+    fireEvent.click(screen.getByTestId('confirm-modal-confirm-btn'));
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('settings-backup-codes-copy-btn')).toBeNull();
   });
 
   it('shows no MFA actions while MFA is off', () => {
