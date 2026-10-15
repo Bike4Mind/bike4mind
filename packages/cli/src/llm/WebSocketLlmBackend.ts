@@ -23,7 +23,7 @@ import { v4 as uuidv4 } from 'uuid';
  * abort - so porting onto it fixes this backend's two historical gaps for free: a
  * `cli_completion_done` with no content no longer silently produces a blank turn
  * (empty is retried, then surfaced), and a mid-stream disconnect is now retried
- * rather than rejected outright.
+ * (until reply text has streamed live) rather than rejected outright.
  */
 export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport {
   private wsManager: WebSocketConnectionManager;

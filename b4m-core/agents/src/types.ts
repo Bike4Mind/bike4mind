@@ -245,6 +245,11 @@ export interface AgentRunOptions {
    */
   previousMessages?: IMessage[];
   signal?: AbortSignal;
+  /**
+   * Request live `text_delta` output for this run. Defaults to whether anything listens to
+   * `text_delta`; pass false for a run with no live view so the backend keeps full retry.
+   */
+  streamText?: boolean;
   /** Enable parallel execution of read-only tools for performance improvement */
   parallelExecution?: boolean;
   /** Custom function to determine if a tool is read-only (defaults to built-in check) */

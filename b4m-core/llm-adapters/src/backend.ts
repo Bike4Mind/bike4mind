@@ -144,6 +144,12 @@ export interface ICompletionOptions {
   logprobs?: number;
   echo?: boolean;
   stream?: boolean;
+  /**
+   * Set when a caller renders reply text live (e.g. the CLI TUI). Backends that
+   * stream text out early must stop retrying once text has gone out, so callers
+   * with no live view leave this unset and keep full retry and fallback.
+   */
+  streamText?: boolean;
   bestOf?: number;
   logitBias?: { [key: string]: number };
   tools: ICompletionOptionTools[];

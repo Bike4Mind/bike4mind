@@ -346,7 +346,8 @@ describe('runTurn', () => {
     // The compaction call (maxIterations: 1) only happens when shouldCompact
     // fired; the main-turn call follows it.
     expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[0][1]).toMatchObject({ maxIterations: 1 });
+    // No live view renders the summary, so it must not trade away transient retries.
+    expect(run.mock.calls[0][1]).toMatchObject({ maxIterations: 1, streamText: false });
   });
 
   it('compacts a Claude session at a window where the same non-Claude session does not', async () => {
