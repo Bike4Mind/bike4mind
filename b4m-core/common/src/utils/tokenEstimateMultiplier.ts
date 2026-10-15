@@ -1,3 +1,5 @@
+import { CHARS_PER_TOKEN_SERVE_BOUND } from '../constants/chunking';
+
 /**
  * The local token estimate counts every non-OpenAI model with tiktoken's cl100k_base, because tiktoken
  * has no other vendor's encoding (see TiktokenTokenizer in @bike4mind/utils). Claude's tokenizers spend
@@ -35,4 +37,16 @@ export function tokenEstimateMultiplier(modelId: string | undefined): number {
   if (major > 4 || (major === 4 && minor >= 7)) return CLAUDE_4_7_PLUS_MULTIPLIER;
   if (major === 4 && minor >= 5) return CLAUDE_4_5_MULTIPLIER;
   return 1;
+}
+
+/**
+ * Lower-bound token count for `chars` characters of streamed model output, for a call whose stream
+ * was cut short before the provider reported its output tokens (Anthropic sends them only on the
+ * final message_delta). CHARS_PER_TOKEN_SERVE_BOUND is an upper bound on chars per cl100k token and
+ * tokenEstimateMultiplier a lower bound on the model's tokens per cl100k token, so the product stays
+ * a lower bound: it can under-bill the partial reply, never over-bill it.
+ */
+export function estimateStreamedOutputTokens(chars: number, modelId: string | undefined): number {
+  if (!(chars > 0)) return 0;
+  return Math.max(1, Math.floor((chars / CHARS_PER_TOKEN_SERVE_BOUND) * tokenEstimateMultiplier(modelId)));
 }

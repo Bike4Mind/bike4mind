@@ -25,6 +25,8 @@ import {
   HTTPError,
   type CompletionSource,
   UNKNOWN_MODEL_ERROR_CODE,
+  DEGENERATE_FINISH_REASON,
+  estimateStreamedOutputTokens,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -569,6 +571,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // and re-emitted on the final settlement event below, so a client that only inspects
   // the last event still learns the reply was truncated.
   let finalStopReason: string | undefined;
+  // Every char streamed to the caller, for pricing a first call that was cut short (see below).
+  let streamedOutputChars = 0;
 
   const settledUsdCost = (pricedModel: ModelInfo): number =>
     finalTurnUsage?.length
@@ -588,6 +592,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
     if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
     if (info?.stopReason) finalStopReason = info.stopReason;
+    for (const t of text) streamedOutputChars += t?.length ?? 0;
 
     if (info?.inputTokens || info?.outputTokens) {
       logger?.debug?.(
@@ -653,6 +658,23 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         .catch(err => logger?.warn?.('Failed to record aborted usage event', err));
     }
     throw error;
+  }
+
+  // A Stop or degeneration abort ends a Claude stream before message_delta, the only event carrying
+  // output tokens, yet the provider bills what streamed. The adapters estimate it on call 2+ only
+  // (see anthropicBackend's withAbortedOutputEstimate), so a first call arrives here with 0 output.
+  // Requiring a reported prompt keeps this to that signature: an adapter that reports no usage at
+  // all on an abort is a different gap, left as it was.
+  if (
+    finalOutputTokens === 0 &&
+    finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens > 0 &&
+    streamedOutputChars > 0 &&
+    (params.abortSignal?.aborted || finalStopReason === DEGENERATE_FINISH_REASON)
+  ) {
+    finalOutputTokens = estimateStreamedOutputTokens(streamedOutputChars, model);
+    if (finalTurnUsage?.length) {
+      finalTurnUsage = [...finalTurnUsage.slice(0, -1), { ...finalTurnUsage.at(-1)!, outputTokens: finalOutputTokens }];
+    }
   }
 
   // Send final credit info to client so it shows the accurate final count.
