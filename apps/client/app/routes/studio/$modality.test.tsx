@@ -60,7 +60,8 @@ describe('StudioPage (video)', () => {
     h.models = { isPending: true, data: undefined };
     renderPage();
     expect(h.useDocumentTitle).toHaveBeenCalledWith('Video Studio');
-    expect(screen.getByTestId('video-studio-page')).toHaveTextContent('Studio');
+    expect(screen.getByRole('heading', { level: 1, name: 'Studio' })).toBeInTheDocument();
+    expect(screen.getByTestId('video-studio-page')).toBeInTheDocument();
   });
 
   it('renders the form and the gallery when a model is usable', () => {

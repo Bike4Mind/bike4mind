@@ -25,6 +25,21 @@ const MESSAGES: Record<MusicGenerationApiErrorCode, string> = {
 // Storage is checked before the provider is paid; the route answers with the shared StorageLimitError (a 400).
 const STORAGE_FULL_MESSAGE = 'Your file storage is full. Free up space in Files, then try again.';
 
+// The cancel route's answer for a song the provider is already composing, which is billed whatever happens. Only that
+// route sends the code, so it is matched here instead of joining MUSIC_GENERATION_API_ERROR_CODES.
+const NOT_CANCELLABLE_MESSAGE = "This song is already being composed and can't be cancelled.";
+
+export const isMusicNotCancellableError = (error: unknown): boolean => {
+  if (!isAxiosError(error) || error.response?.status !== 409) return false;
+  const data: unknown = error.response.data;
+  return typeof data === 'object' && data !== null && 'errorCode' in data && data.errorCode === 'not_cancellable';
+};
+
+export function describeMusicCancelError(error: unknown): string {
+  if (isMusicNotCancellableError(error)) return NOT_CANCELLABLE_MESSAGE;
+  return describeMusicGenerationError(error, 'Could not cancel the song. Try again.');
+}
+
 export function describeMusicGenerationError(error: unknown, fallback: string): string {
   // Only music has a storage quota to report; a rate limit still wins over it.
   if (isAxiosError(error) && error.response?.status !== 429 && parseStorageLimitErrorInfo(error.response?.data)) {

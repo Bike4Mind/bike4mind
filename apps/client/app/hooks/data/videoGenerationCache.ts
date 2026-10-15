@@ -26,4 +26,5 @@ const videoCache = createGenerationJobCache<VideoGeneration, VideoJobLiveUpdate>
 export const seedVideoGeneration = videoCache.seed;
 export const prependVideoGeneration = videoCache.prepend;
 export const upsertVideoGeneration = videoCache.upsert;
+export const reconcileFetchedVideoGeneration = videoCache.reconcileFetched;
 export const patchVideoGeneration = videoCache.patch;

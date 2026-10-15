@@ -10,11 +10,16 @@ import { switcherBillingTarget } from './generationBillingTarget';
 import { generationJobPollInterval, generationListRefreshInterval } from './generationJobPolling';
 import {
   prependMusicGeneration,
+  reconcileFetchedMusicGeneration,
   seedMusicGeneration,
   upsertMusicGeneration,
   type MusicGenerationPage,
 } from './musicGenerationCache';
-import { describeMusicGenerationError } from './musicGenerationErrors';
+import {
+  describeMusicCancelError,
+  describeMusicGenerationError,
+  isMusicNotCancellableError,
+} from './musicGenerationErrors';
 import { musicGenerationKeys } from './musicGenerationKeys';
 
 export const MUSIC_GALLERY_PAGE_SIZE = 12;
@@ -64,7 +69,10 @@ export function useMusicGeneration(jobId: string) {
     queryKey: musicGenerationKeys.detail(jobId),
     queryFn: async () => {
       const previous = queryClient.getQueryData<MusicGeneration>(musicGenerationKeys.detail(jobId));
-      const job = (await api.get<MusicGeneration>(musicJobUrl(jobId))).data;
+      const job = reconcileFetchedMusicGeneration(
+        queryClient,
+        (await api.get<MusicGeneration>(musicJobUrl(jobId))).data
+      );
       // The song's file is saved after the chat turn ended, past the one-shot session-files refresh that follows
       // it (useSubscribeChatCompletion), so refresh the file lists once the file first shows up.
       if (previous && !previous.output?.file_id && job.output?.file_id) {
@@ -102,8 +110,14 @@ export function useCancelMusicGeneration() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (jobId: string) => (await api.post<MusicGeneration>(`${musicJobUrl(jobId)}/cancel`)).data,
-    // The job usually comes back still running with the cancel queued; the websocket delivers `cancelled`.
+    // The job may come back still live with the cancel queued; the websocket then delivers `cancelled`.
     onSuccess: job => upsertMusicGeneration(queryClient, job),
-    onError: error => toast.error(describeMusicGenerationError(error, 'Could not cancel the song. Try again.')),
+    onError: (error, jobId) => {
+      toast.error(describeMusicCancelError(error));
+      // The song started composing since the card last heard; refetch so it shows `running` and drops Cancel.
+      if (isMusicNotCancellableError(error)) {
+        void queryClient.invalidateQueries({ queryKey: musicGenerationKeys.detail(jobId) });
+      }
+    },
   });
 }

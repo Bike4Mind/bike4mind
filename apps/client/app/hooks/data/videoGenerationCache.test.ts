@@ -7,6 +7,7 @@ import {
   isTerminalVideoState,
   patchVideoGeneration,
   prependVideoGeneration,
+  reconcileFetchedVideoGeneration,
   seedVideoGeneration,
   upsertVideoGeneration,
   type VideoGenerationList,
@@ -56,6 +57,26 @@ describe('shouldReplaceGenerationJob (video shape)', () => {
   it('never replaces a terminal job with a non-terminal one', () => {
     const cached = videoJob({ state: 'succeeded' });
     expect(shouldReplaceGenerationJob(cached, videoJob({ state: 'running', updated_at: LATER }))).toBe(false);
+  });
+  it('never steps a live job back, even for a newer-stamped snapshot read before a frame', () => {
+    expect(
+      shouldReplaceGenerationJob(videoJob({ state: 'storing' }), videoJob({ state: 'running', updated_at: LATER }))
+    ).toBe(false);
+  });
+});
+
+describe('reconcileFetchedVideoGeneration', () => {
+  it('keeps a job a frame finished over a detail fetch read before it', () => {
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'succeeded' }));
+    const fetched = videoJob({ state: 'running', updated_at: LATER });
+    expect(reconcileFetchedVideoGeneration(queryClient, fetched).state).toBe('succeeded');
+  });
+
+  it('takes a fetch that is newer, or has nothing cached to compare with', () => {
+    const fetched = videoJob({ state: 'succeeded', updated_at: LATER });
+    expect(reconcileFetchedVideoGeneration(queryClient, fetched)).toBe(fetched);
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'running' }));
+    expect(reconcileFetchedVideoGeneration(queryClient, fetched)).toBe(fetched);
   });
 });
 

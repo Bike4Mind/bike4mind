@@ -47,19 +47,18 @@ export const movesLiveStateBackwards = (from: GenerationJobState, to: Generation
   return fromRank !== undefined && toRank !== undefined && toRank < fromRank;
 };
 
-// A terminal job is final, and a snapshot read earlier (a list request that was in flight while a detail
-// refetch landed) must not replace a later one.
+// A terminal job is final, a live one never steps back, and a snapshot read earlier (a list request that was in
+// flight while a detail refetch landed) must not replace a later one. The state checks come before the timestamps
+// because a websocket patch keeps the cached updated_at: a snapshot read before the frame, but stamped after it (the
+// cancel response, which bumps updated_at), would otherwise win.
 export const shouldReplaceGenerationJob = <T extends Pick<PollableGenerationJob, 'state' | 'updated_at'>>(
   existing: T | undefined,
   incoming: T
 ): boolean => {
   if (!existing) return true;
   if (isTerminalGenerationState(existing.state) && !isTerminalGenerationState(incoming.state)) return false;
-  const incomingAt = Date.parse(incoming.updated_at);
-  const existingAt = Date.parse(existing.updated_at);
-  // A websocket patch keeps the cached updated_at, so a list row read before the frame ties with it.
-  if (incomingAt === existingAt && movesLiveStateBackwards(existing.state, incoming.state)) return false;
-  return incomingAt >= existingAt;
+  if (movesLiveStateBackwards(existing.state, incoming.state)) return false;
+  return Date.parse(incoming.updated_at) >= Date.parse(existing.updated_at);
 };
 
 /** The fallback poll for one job; live updates normally arrive over the websocket (GenerationUpdatesListener). */

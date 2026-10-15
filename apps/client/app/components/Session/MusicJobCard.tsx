@@ -3,6 +3,7 @@ import { Box, Button, Card, Chip, LinearProgress, Stack, Typography, type ColorP
 import type { GenerationJobState, MusicGeneration } from '@bike4mind/common';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generationJobCard';
+import { formatSecondsClock, stripLyricTimestamps } from '@client/app/components/Media/generationFormat';
 import { MediaPlayer, type MediaPlayerFile } from '@client/app/components/Media/MediaPlayer';
 import { isTerminalGenerationState } from '@client/app/hooks/data/generationJobPolling';
 import { useCancelMusicGeneration, useMusicGeneration } from '@client/app/hooks/data/musicGenerations';
@@ -45,8 +46,10 @@ const creditsLabel = (job: Pick<MusicGeneration, 'credits' | 'state'>): string |
   return `up to ${formatCredits(reserved)} credits`;
 };
 
-// The server refuses to cancel a storing job: the provider has already produced, and charged for, the song.
-const CANCELLABLE_STATES: readonly GenerationJobState[] = ['pending', 'running'];
+// Only a queued song can be cancelled: once composing, the provider call is under way and billed whatever happens.
+// This relies on the server reporting a composing song as `running`; a cancel that still races the start is refused
+// with 409 not_cancellable (handled in useCancelMusicGeneration).
+const CANCELLABLE_STATES: readonly GenerationJobState[] = ['pending'];
 
 const MusicJobCard = ({ jobId }: { jobId: string }) => {
   const { data: job, isPending, refetch } = useMusicGeneration(jobId);
@@ -76,7 +79,8 @@ const MusicJobCard = ({ jobId }: { jobId: string }) => {
   const output: MusicGeneration['output'] = job.state === 'succeeded' ? job.output : null;
   const failureMessage = job.error?.message ?? FAILURE_FALLBACK[job.state];
   const isSettling = job.state === 'succeeded' && (!job.output || job.output.availability === 'pending_scan');
-  const lyrics = output?.lyrics ?? job.lyrics;
+  // Only the provider's lyrics carry line timings; the requested lyrics are shown as typed.
+  const lyrics = output?.lyrics ? stripLyricTimestamps(output.lyrics) : job.lyrics;
   const statusLabel = (() => {
     if (cancel.isSuccess && !terminal) return 'Cancelling';
     if (isSettling) return job.output ? 'Checking' : 'Finishing';
@@ -92,7 +96,7 @@ const MusicJobCard = ({ jobId }: { jobId: string }) => {
         </Chip>
         <Typography level="body-xs" data-testid="music-job-card-meta">
           {[
-            `${output?.duration_seconds ?? job.duration_seconds}s`,
+            formatSecondsClock(output?.duration_seconds ?? job.duration_seconds),
             job.instrumental && 'Instrumental',
             creditsLabel(job),
           ]

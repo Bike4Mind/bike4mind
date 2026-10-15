@@ -117,6 +117,15 @@ describe('useMusicGeneration file list refresh', () => {
     expect(h.get).toHaveBeenCalled();
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: fabFileKeys.own });
   });
+
+  it('keeps a finished job over a refetch that was read before it finished', async () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'succeeded' }));
+    h.get.mockResolvedValue({ data: musicJob({ state: 'running', updated_at: '2026-10-07T00:01:00.000Z' }) });
+    const { result } = renderHook(() => useMusicGeneration('music-1'), { wrapper });
+    await result.current.refetch();
+    expect(h.get).toHaveBeenCalled();
+    expect(queryClient.getQueryData<MusicGeneration>(musicGenerationKeys.detail('music-1'))?.state).toBe('succeeded');
+  });
 });
 
 describe('useMusicGeneration error handling', () => {
@@ -195,6 +204,26 @@ describe('useCancelMusicGeneration', () => {
 
   it('toasts a generic message on any other failure', async () => {
     h.post.mockRejectedValue(Object.assign(new AxiosError('Request failed'), { response: { status: 500, data: {} } }));
+    const { result } = renderHook(() => useCancelMusicGeneration(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('music-1').catch(() => undefined);
+    });
+    expect(h.toastError).toHaveBeenCalledWith('Could not cancel the song. Try again.');
+  });
+
+  it('explains a song already being composed and refetches it so the card catches up', async () => {
+    h.post.mockRejectedValue(axiosError(409, { errorCode: 'not_cancellable', error: 'raw' }));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useCancelMusicGeneration(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('music-1').catch(() => undefined);
+    });
+    expect(h.toastError).toHaveBeenCalledWith("This song is already being composed and can't be cancelled.");
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: musicGenerationKeys.detail('music-1') });
+  });
+
+  it('treats a 409 without that code as an ordinary failure', async () => {
+    h.post.mockRejectedValue(axiosError(409, {}));
     const { result } = renderHook(() => useCancelMusicGeneration(), { wrapper });
     await act(async () => {
       await result.current.mutateAsync('music-1').catch(() => undefined);
