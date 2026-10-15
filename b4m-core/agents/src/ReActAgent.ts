@@ -534,7 +534,7 @@ export class ReActAgent extends EventEmitter {
             messages,
             {
               stream: true,
-              streamText: this.hasTextDeltaListener(),
+              streamText: options.streamText ?? this.hasTextDeltaListener(),
               tools: this.context.tools,
               maxTokens,
               temperature,
@@ -1320,7 +1320,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         this.messages,
         {
           stream: true,
-          streamText: this.hasTextDeltaListener(),
+          streamText: options.streamText ?? this.hasTextDeltaListener(),
           tools: this.context.tools,
           maxTokens,
           temperature,

@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ReActAgent } from './ReActAgent';
-import type { AgentContext } from './types';
+import type { AgentContext, AgentRunOptions } from './types';
 import type { ICompletionBackend, CompletionInfo, ICompletionOptions } from '@bike4mind/llm-adapters';
 import type { IMessage } from '@bike4mind/common';
 
@@ -289,7 +289,7 @@ describe('ReActAgent text_delta emission (#8774)', () => {
   });
 
   describe('streamText request flag', () => {
-    const runCapturingOptions = async (listen: boolean) => {
+    const runCapturingOptions = async (listen: boolean, runOptions: AgentRunOptions = {}) => {
       const llm = createStreamingMockLlm([], 'done');
       const complete = vi.spyOn(llm, 'complete');
       const agent = new ReActAgent({
@@ -301,7 +301,7 @@ describe('ReActAgent text_delta emission (#8774)', () => {
         maxIterations: 5,
       });
       if (listen) agent.on('text_delta', () => {});
-      await agent.run('test query');
+      await agent.run('test query', runOptions);
       return complete.mock.calls[0][2];
     };
 
@@ -311,6 +311,10 @@ describe('ReActAgent text_delta emission (#8774)', () => {
 
     it('leaves live text off without a listener, so the backend keeps full retry', async () => {
       expect((await runCapturingOptions(false)).streamText).toBe(false);
+    });
+
+    it('lets a run with no live view opt out even while a listener is attached', async () => {
+      expect((await runCapturingOptions(true, { streamText: false })).streamText).toBe(false);
     });
   });
 });
