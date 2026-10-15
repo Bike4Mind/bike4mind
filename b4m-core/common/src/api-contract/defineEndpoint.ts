@@ -39,7 +39,11 @@ export function defineEndpoint<const C extends EndpointContract<z.ZodTypeAny>>(c
 }
 
 function isIsoDate(value: string): boolean {
-  return ISO_DATE.test(value) && new Date(`${value}T00:00:00Z`).toISOString().startsWith(value);
+  if (!ISO_DATE.test(value)) return false;
+  // '2027-13-01' matches the shape but is not a calendar date, and toISOString() on an invalid
+  // Date throws a bare RangeError before the tagged error below can name the operation.
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value);
 }
 
 // Both dates end up in HTTP headers and a published description; a typo there is a

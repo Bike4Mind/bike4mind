@@ -58,6 +58,8 @@ describe('defineEndpoint', () => {
     it.each([
       ['a non-ISO date', { since: '10/15/2026', sunset: '2027-01-15' }],
       ['an impossible calendar date', { since: '2026-10-15', sunset: '2027-02-30' }],
+      ['a month past December', { since: '2026-10-15', sunset: '2027-13-01' }],
+      ['a month before January', { since: '2027-00-10', sunset: '2027-01-15' }],
     ])('throws on %s', (_label, deprecated) => {
       expect(() => defineEndpoint({ ...base, deprecated })).toThrow(/getFixture.*real YYYY-MM-DD dates/);
     });
