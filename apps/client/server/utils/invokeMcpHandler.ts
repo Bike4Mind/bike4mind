@@ -54,7 +54,10 @@ async function extractAndPersistRateLimitEvents(
 
 /**
  * `userId` is required so a caller cannot drop out of the per-tenant throttle and breaker by
- * omission. Pass `null` only for a call that genuinely has no user; it then runs unthrottled and
+ * omission. Callers that go through this module are covered; the raw LambdaClient in
+ * chatCompletionDefaults.ts bypasses it and is not (see getMcpClientAdapter.ts).
+ *
+ * Pass `null` only for a call that genuinely has no user; it then runs unthrottled and
  * outside any shared breaker (see UNATTRIBUTED_MCP_TENANT).
  */
 export type InvokeMcpHandlerPayload = {
