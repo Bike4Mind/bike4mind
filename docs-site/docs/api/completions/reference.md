@@ -552,16 +552,22 @@ Credits are calculated from USD cost:
 
 ```
 USD Cost = (Input Tokens × Input Price) + (Output Tokens × Output Price)
-Credits = USD Cost × 100
+Credits = USD Cost × 2000
 ```
 
-**Example calculation (GPT-4):**
+One credit sells for $0.0006 and covers $0.0005 of provider cost (a 1.2× margin).
+
+- **Reservation and estimates** round up to whole credits, with a minimum of 1.
+- **Final settlement** charges the whole credits plus one extra credit with probability equal to the leftover fraction, so you pay the exact cost on average.
+
+**Example calculation (GPT-4.1, $2 / 1M input tokens, $8 / 1M output tokens):**
 
 ```
-Input: 150 tokens × $0.03/1K = $0.0045
-Output: 80 tokens × $0.06/1K = $0.0048
-Total USD: $0.0093
-Total Credits: 0.93 ≈ 1 credit
+Input: 1,250 tokens × $2/1M = $0.0025
+Output: 900 tokens × $8/1M = $0.0072
+Total USD: $0.0097
+Total Credits: 0.0097 × 2000 = 19.4
+Charged: 19 credits (60% of the time) or 20 credits (40%)
 ```
 
 ### Insufficient Credits Error
