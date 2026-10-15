@@ -79,6 +79,10 @@ typechecks and tests on macOS and Linux, then packages both macOS architectures 
 Linux x64. Publication waits for all three build jobs and validates all five artifacts.
 Failed uploads leave a draft release, not a partially published download page.
 
+Publication uses the existing release App with repository-scoped contents write access
+to create protected tags. The workflow token and PR build jobs remain read-only. Missing
+App credentials fail publication rather than falling back to the workflow token.
+
 Storage is deliberately short-lived: platform installers, checksums, and release notes
 expire after one day; startup evidence expires after three days. Installers are stored
 only once per platform; there is no duplicate combined installer upload.
