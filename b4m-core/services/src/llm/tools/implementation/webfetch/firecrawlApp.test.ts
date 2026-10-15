@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
 import FirecrawlDefault from '@mendable/firecrawl-js';
-import { FirecrawlApp, resolveFirecrawlApp, createFirecrawlApp } from './firecrawlApp';
+import { FirecrawlApp, resolveFirecrawlApp, createFirecrawlApp, type FirecrawlScrapeParams } from './firecrawlApp';
 import { UnsafeScrapeTargetError } from './errors';
 
 const requireCjs = createRequire(import.meta.url);
@@ -58,6 +58,31 @@ describe('createFirecrawlApp', () => {
     );
     expect(scrapeSpy).not.toHaveBeenCalled();
     scrapeSpy.mockRestore();
+  });
+
+  it('forwards scrapeUrl to the client with its params and returns its result', async () => {
+    const params: FirecrawlScrapeParams = { formats: ['markdown'], timeout: 1 };
+    const scraped = { markdown: '# hi', metadata: { title: 't' } };
+    const scrapeSpy = vi.spyOn(FirecrawlApp.prototype, 'scrapeUrl').mockResolvedValue(scraped as never);
+    const app = createFirecrawlApp({ apiUrl: 'http://firecrawl:3002' });
+
+    const result = await app?.scrapeUrl('https://93.184.216.34/page', params);
+
+    expect(scrapeSpy).toHaveBeenCalledWith('https://93.184.216.34/page', params);
+    expect(result).toBe(scraped);
+    scrapeSpy.mockRestore();
+  });
+
+  it('forwards search to the client', async () => {
+    const found = { data: [{ url: 'https://example.com', title: 'Example' }] };
+    const searchSpy = vi.spyOn(FirecrawlApp.prototype, 'search').mockResolvedValue(found as never);
+    const app = createFirecrawlApp({ apiKey: 'test-key' });
+
+    const result = await app?.search('some query');
+
+    expect(searchSpy).toHaveBeenCalledWith('some query');
+    expect(result).toBe(found);
+    searchSpy.mockRestore();
   });
 
   it('keeps a transient DNS failure retryable instead of a permanent refusal', async () => {
