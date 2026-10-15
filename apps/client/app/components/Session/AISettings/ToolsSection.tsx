@@ -66,6 +66,9 @@ import { AGENT_ONLY_MCP_SERVERS } from '@client/app/components/common/ToolIndica
  * missing on the server. Keyed by tool id; only tools that need external config
  * appear here (availability comes from serverConfig.toolAvailability).
  *
+ * Tools resolved through getEffectiveApiKey / getEffectiveLLMApiKeys (image, audio, KB) take
+ * the user's own key first, so their text names Profile > API Keys as well as the admin page.
+ *
  * LOCK-STEP: the keys here must mirror those returned by `computeToolAvailability`
  * in `apps/client/pages/api/settings/serverConfig.ts`. When you gate a new tool
  * there, add its tooltip here (a gated tool with no entry falls back to a generic
@@ -79,10 +82,10 @@ export const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
   wolfram_alpha: 'Requires a Wolfram Alpha API key, configured in Admin > API Keys.',
   fmp_financial_data: 'Requires an FMP API key, configured in Admin > API Keys.',
   image_generation:
-    'Requires an image generation API key (e.g. BFL or OpenAI) in Admin > API Keys, or a self-hosted local image server (IMAGE_GEN_BASE_URL).',
-  audio_generation: 'Requires an OpenAI or ElevenLabs API key, configured in Admin > API Keys.',
+    'Requires an image generation API key (e.g. BFL or OpenAI) in Profile > API Keys or Admin > API Keys, or a self-hosted local image server (IMAGE_GEN_BASE_URL).',
+  audio_generation: 'Requires an OpenAI or ElevenLabs API key, in Profile > API Keys or Admin > API Keys.',
   search_knowledge_base:
-    'Requires an embeddings API key (VoyageAI or OpenAI) in Admin > API Keys, or a self-hosted local Ollama embedder (OLLAMA_BASE_URL).',
+    'Requires an embeddings API key (VoyageAI or OpenAI) in Profile > API Keys or Admin > API Keys, or a self-hosted local Ollama embedder (OLLAMA_BASE_URL).',
 };
 
 type McpServerOption = Pick<IMcpServerDocument, 'id' | 'enabled' | 'tools'> & { name: string };
