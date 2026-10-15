@@ -351,28 +351,39 @@ export function SessionToolbar(props: SessionToolbarProps) {
                 currentSession={currentSession}
               />
 
-              <CreditBalanceChip compact={isMobile} />
+              {/* Trailing controls stay in one cluster: `ml: auto` pins them to the right of
+                  whichever line they land on, so wrapping can't strand Send at the left edge. */}
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: isMobile ? '12px' : '10px',
+                  flexShrink: 0,
+                  ml: 'auto',
+                }}
+              >
+                <CreditBalanceChip compact={isMobile} />
 
-              {/* Agent-mode toggle. Layer-1 gated - completely hidden
+                {/* Agent-mode toggle. Layer-1 gated - completely hidden
                   when the gate (`useFeatureEnabled('agentMode')`, resolved above)
                   is false, so non-gated users see the composer exactly as before. */}
-              {agentModeFeatureEnabled && <AgentModeToggleButton disabled={submitting} />}
+                {agentModeFeatureEnabled && <AgentModeToggleButton disabled={submitting} />}
 
-              {/* Action buttons: Rephrase, Voice Record, Stop/Send */}
-              {!isMobile && chatInputValue && chatInputValue.trim() !== '' && (
-                <RephraseButton
-                  currentText={chatInputValue}
-                  onRephrase={text => {
-                    setChatInputValue(text);
-                  }}
-                  onSuccess={() => {
-                    setRephraseGlow(true);
-                    setTimeout(() => setRephraseGlow(false), 900);
-                  }}
-                  disabled={!chatInputValue || submitting}
-                />
-              )}
-              {/* Voice record button is the default action when the composer is
+                {/* Action buttons: Rephrase, Voice Record, Stop/Send */}
+                {!isMobile && chatInputValue && chatInputValue.trim() !== '' && (
+                  <RephraseButton
+                    currentText={chatInputValue}
+                    onRephrase={text => {
+                      setChatInputValue(text);
+                    }}
+                    onSuccess={() => {
+                      setRephraseGlow(true);
+                      setTimeout(() => setRephraseGlow(false), 900);
+                    }}
+                    disabled={!chatInputValue || submitting}
+                  />
+                )}
+                {/* Voice record button is the default action when the composer is
                   empty. Once the user types, it's replaced by the send button
                   (see the send/stop block below). Also hidden when a voice
                   session is active.
@@ -382,108 +393,70 @@ export function SessionToolbar(props: SessionToolbarProps) {
                   would orphan the live MediaStream (mic stays on) and strand the
                   Confirm button with a null ref. The button disappears once
                   recording ends. */}
-              {!(isVoiceSessionEnabled && (voiceEngine.isActive || VOICE_DEBUG_STATE)) &&
-                (!chatInputValue || chatInputValue.trim() === '' || recording) && (
-                  <VoiceRecordButton
-                    ref={voiceRecordRef}
-                    onRecordingStart={() => setRecording(true)}
-                    onRecordingError={() => setRecording(false)}
-                    onRecordingEnd={async (prompt: string) => {
-                      setRecording(false);
-                      // Keep the transcript rather than drop it when a send isn't allowed yet,
-                      // after whatever is already in the composer (SyncValuePlugin mirrors the
-                      // store into the editor, as for a rephrase).
-                      const blockedLabel = sendBlockedLabelRef.current;
-                      if (blockedLabel) {
-                        const existing = useChatInput.getState().chatInputValue;
-                        setChatInputValue(appendTranscript(existing, prompt));
-                        toast.info(blockedLabel);
-                        return;
-                      }
-                      await handleSendClick(prompt);
-                    }}
-                    disabled={creditsBlocked}
-                  />
-                )}
-              {/* Voice v2 - model-agnostic conversational voice (ElevenLabs CAI).
+                {!(isVoiceSessionEnabled && (voiceEngine.isActive || VOICE_DEBUG_STATE)) &&
+                  (!chatInputValue || chatInputValue.trim() === '' || recording) && (
+                    <VoiceRecordButton
+                      ref={voiceRecordRef}
+                      onRecordingStart={() => setRecording(true)}
+                      onRecordingError={() => setRecording(false)}
+                      onRecordingEnd={async (prompt: string) => {
+                        setRecording(false);
+                        // Keep the transcript rather than drop it when a send isn't allowed yet,
+                        // after whatever is already in the composer (SyncValuePlugin mirrors the
+                        // store into the editor, as for a rephrase).
+                        const blockedLabel = sendBlockedLabelRef.current;
+                        if (blockedLabel) {
+                          const existing = useChatInput.getState().chatInputValue;
+                          setChatInputValue(appendTranscript(existing, prompt));
+                          toast.info(blockedLabel);
+                          return;
+                        }
+                        await handleSendClick(prompt);
+                      }}
+                      disabled={creditsBlocked}
+                    />
+                  )}
+                {/* Voice v2 - model-agnostic conversational voice (ElevenLabs CAI).
                   Gated by voiceV2Enabled admin setting; renders nothing otherwise.
                   Hidden once the composer has text so only the send button shows. */}
-              {(!chatInputValue || chatInputValue.trim() === '') && (
-                <ConversationalVoiceButton currentSessionId={currentSessionId} reasoningModelId={model} />
-              )}
-              {shouldShowStopButton ? (
-                <Tooltip title="Stop Generation">
-                  <Button
-                    sx={{
-                      borderRadius: '6px',
-                      height: '32px',
-                      width: '32px',
-                      padding: 0,
-                      bgcolor: 'danger.500',
-                      '&:hover': {
-                        bgcolor: 'danger.600',
-                      },
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                    variant="solid"
-                    color="danger"
-                    size="sm"
-                    disabled={stoppingMessage}
-                    onClick={handleStopMessage}
-                    data-testid="stop-generation-btn"
-                  >
-                    {stoppingMessage ? <CircularProgress size="sm" /> : <StopCircleSharp />}
-                  </Button>
-                </Tooltip>
-              ) : isVoiceSessionEnabled && (voiceEngine.isActive || VOICE_DEBUG_STATE) ? (
-                /* Voice session active: show controls strip inline where buttons were */
-                <VoiceControlsStrip engine={voiceEngine} />
-              ) : (
-                <>
-                  {/* Voice not active: show voice-chat-button or send button */}
-                  {recording ? (
-                    /* Recording active: confirm button to stop & submit transcription */
-                    <Tooltip title="Confirm recording" placement="top">
-                      <Button
-                        sx={{
-                          borderRadius: '6px',
-                          paddingBlock: '0px',
-                          ...fixedIconSize,
-                        }}
-                        variant="solid"
-                        color="primary"
-                        size="md"
-                        onClick={() => voiceRecordRef.current?.confirmRecording()}
-                        data-testid="voice-record-confirm-btn"
-                      >
-                        <Check sx={{ width: '18px', height: '18px' }} />
-                      </Button>
-                    </Tooltip>
-                  ) : isVoiceSessionEnabled && (!chatInputValue || chatInputValue.trim() === '') ? (
-                    <VoiceInlineButton
-                      engine={voiceEngine}
-                      onOpenDebugPanel={() => setDebugDrawerOpen(true)}
-                      fixedIconSize={fixedIconSize}
-                      creditsBlocked={creditsBlocked}
-                    />
-                  ) : !chatInputValue ||
-                    chatInputValue.trim() === '' /* Empty composer: no send button - the voice record button
-                       above serves as the default action. */ ? null : (
-                    <Tooltip
-                      title={
-                        sendBlockedLabel ??
-                        (pendingAutoSubmitGoal ? t('session.preparingQuest') : t('session.sendMessage'))
-                      }
-                      placement="top"
+                {(!chatInputValue || chatInputValue.trim() === '') && (
+                  <ConversationalVoiceButton currentSessionId={currentSessionId} reasoningModelId={model} />
+                )}
+                {shouldShowStopButton ? (
+                  <Tooltip title="Stop Generation">
+                    <Button
+                      sx={{
+                        borderRadius: '6px',
+                        height: '32px',
+                        width: '32px',
+                        padding: 0,
+                        bgcolor: 'danger.500',
+                        '&:hover': {
+                          bgcolor: 'danger.600',
+                        },
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                      variant="solid"
+                      color="danger"
+                      size="sm"
+                      disabled={stoppingMessage}
+                      onClick={handleStopMessage}
+                      data-testid="stop-generation-btn"
                     >
-                      {/* A disabled button fires no pointer events, so the tooltip hangs off this wrapper. */}
-                      <span
-                        data-testid="send-message-btn-wrapper"
-                        data-blocked-reason={sendBlockedReason ?? undefined}
-                        style={{ display: 'inline-flex' }}
-                      >
+                      {stoppingMessage ? <CircularProgress size="sm" /> : <StopCircleSharp />}
+                    </Button>
+                  </Tooltip>
+                ) : isVoiceSessionEnabled && (voiceEngine.isActive || VOICE_DEBUG_STATE) ? (
+                  /* Voice session active: show controls strip inline where buttons were */
+                  <VoiceControlsStrip engine={voiceEngine} />
+                ) : (
+                  <>
+                    {/* Voice not active: show voice-chat-button or send button */}
+                    {recording ? (
+                      /* Recording active: confirm button to stop & submit transcription */
+                      <Tooltip title="Confirm recording" placement="top">
                         <Button
                           sx={{
                             borderRadius: '6px',
@@ -492,27 +465,66 @@ export function SessionToolbar(props: SessionToolbarProps) {
                           }}
                           variant="solid"
                           color="primary"
-                          disabled={!!sendBlockedReason || !chatInputValue || chatInputValue.trim() === ''}
                           size="md"
-                          onClick={async () => await handleSendClick()}
-                          data-testid="send-message-btn"
+                          onClick={() => voiceRecordRef.current?.confirmRecording()}
+                          data-testid="voice-record-confirm-btn"
                         >
-                          {submitting || pendingAutoSubmitGoal || isModelsLoading ? (
-                            <CircularProgress data-testid="session-send-progress" />
-                          ) : (
-                            <Box
-                              sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                              data-testid="session-send-icon-wrapper"
-                            >
-                              <SendIcon sx={{ width: '13px', height: '13px' }} />
-                            </Box>
-                          )}
+                          <Check sx={{ width: '18px', height: '18px' }} />
                         </Button>
-                      </span>
-                    </Tooltip>
-                  )}
-                </>
-              )}
+                      </Tooltip>
+                    ) : isVoiceSessionEnabled && (!chatInputValue || chatInputValue.trim() === '') ? (
+                      <VoiceInlineButton
+                        engine={voiceEngine}
+                        onOpenDebugPanel={() => setDebugDrawerOpen(true)}
+                        fixedIconSize={fixedIconSize}
+                        creditsBlocked={creditsBlocked}
+                      />
+                    ) : !chatInputValue ||
+                      chatInputValue.trim() === '' /* Empty composer: no send button - the voice record button
+                       above serves as the default action. */ ? null : (
+                      <Tooltip
+                        title={
+                          sendBlockedLabel ??
+                          (pendingAutoSubmitGoal ? t('session.preparingQuest') : t('session.sendMessage'))
+                        }
+                        placement="top"
+                      >
+                        {/* A disabled button fires no pointer events, so the tooltip hangs off this wrapper. */}
+                        <span
+                          data-testid="send-message-btn-wrapper"
+                          data-blocked-reason={sendBlockedReason ?? undefined}
+                          style={{ display: 'inline-flex' }}
+                        >
+                          <Button
+                            sx={{
+                              borderRadius: '6px',
+                              paddingBlock: '0px',
+                              ...fixedIconSize,
+                            }}
+                            variant="solid"
+                            color="primary"
+                            disabled={!!sendBlockedReason || !chatInputValue || chatInputValue.trim() === ''}
+                            size="md"
+                            onClick={async () => await handleSendClick()}
+                            data-testid="send-message-btn"
+                          >
+                            {submitting || pendingAutoSubmitGoal || isModelsLoading ? (
+                              <CircularProgress data-testid="session-send-progress" />
+                            ) : (
+                              <Box
+                                sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                data-testid="session-send-icon-wrapper"
+                              >
+                                <SendIcon sx={{ width: '13px', height: '13px' }} />
+                              </Box>
+                            )}
+                          </Button>
+                        </span>
+                      </Tooltip>
+                    )}
+                  </>
+                )}
+              </Box>
             </Box>
           </Box>
         </Box>
