@@ -48,6 +48,7 @@ export * from './ModelPriceTypes';
 export * from './ModelCatalogTypes';
 export * from './ProviderInvoiceTypes';
 export * from './SpendReconciliationTypes';
+export * from './StorageDriftTypes';
 export * from './CreditHolderTypes';
 export * from './CreditLotTypes';
 export * from './EmbeddingCacheTypes';
