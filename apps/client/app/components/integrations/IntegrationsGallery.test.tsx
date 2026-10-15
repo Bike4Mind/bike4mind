@@ -4,7 +4,8 @@ import { act, fireEvent, render, screen, within, waitFor } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { IntegrationsEvents, type IntegrationsPageSource, type SettingKey } from '@bike4mind/common';
+import { AuthStrategy, IntegrationsEvents, type IntegrationsPageSource, type SettingKey } from '@bike4mind/common';
+import { api } from '@client/app/contexts/ApiContext';
 import type { Connections } from './galleryModel';
 
 const h = vi.hoisted(() => ({
@@ -12,6 +13,7 @@ const h = vi.hoisted(() => ({
   connect: vi.fn(),
   navigate: vi.fn(),
   logEvent: vi.fn(),
+  refreshUser: vi.fn(),
   stub: (testId: string) => ({ default: () => React.createElement('div', { 'data-testid': testId }) }),
 }));
 
@@ -24,7 +26,7 @@ let pendingToggles: Set<string>;
 let compact: boolean;
 
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (selector: (s: Record<string, unknown>) => unknown) => selector({ ...state, refreshUser: vi.fn() }),
+  useUser: (selector: (s: Record<string, unknown>) => unknown) => selector({ ...state, refreshUser: h.refreshUser }),
 }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({ isFeatureEnabled: (key: SettingKey) => flags.has(key), ...settingsLoad }),
@@ -301,6 +303,51 @@ describe('IntegrationsGallery', () => {
     );
     await userEvent.click(within(drawer).getByTestId('integrations-drawer-more-settings-link'));
     expect(h.navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'integrations' } });
+  });
+
+  describe('unlinking Okta from the drawer', () => {
+    const openOktaDrawer = async () => {
+      connections = { okta: { connected: true } };
+      renderGallery();
+      await userEvent.click(screen.getByTestId('integrations-open-btn-okta'));
+      const drawer = await screen.findByTestId('integrations-drawer');
+      return within(drawer).getByTestId('integrations-drawer-disconnect-btn');
+    };
+
+    it('posts once however often the button is hit, and holds it disabled and loading until the call settles', async () => {
+      let finish!: () => void;
+      vi.mocked(api.post).mockReturnValue(
+        new Promise(resolve => {
+          finish = () => resolve({ data: {} });
+        }) as never
+      );
+      const button = await openOktaDrawer();
+
+      await userEvent.click(button);
+      expect(button).toBeDisabled();
+      expect(within(button).getByRole('progressbar')).toBeInTheDocument();
+      fireEvent.click(button);
+      fireEvent.click(button);
+      expect(api.post).toHaveBeenCalledTimes(1);
+      expect(api.post).toHaveBeenCalledWith('/api/auth/unlink', { strategy: AuthStrategy.Okta });
+
+      await act(async () => finish());
+      await waitFor(() => expect(h.refreshUser).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(button).toBeEnabled());
+    });
+
+    it('lets the user try again after a failure', async () => {
+      vi.mocked(api.post).mockRejectedValueOnce(new Error('boom'));
+      const button = await openOktaDrawer();
+
+      await userEvent.click(button);
+
+      await waitFor(() => expect(button).toBeEnabled());
+      expect(h.refreshUser).not.toHaveBeenCalled();
+      vi.mocked(api.post).mockResolvedValueOnce({ data: {} });
+      await userEvent.click(button);
+      expect(api.post).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('lists model providers on the Models tab', async () => {

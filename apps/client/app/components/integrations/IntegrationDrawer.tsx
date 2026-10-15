@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { Box, Button, Divider, Drawer, IconButton, Stack, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
@@ -77,20 +77,25 @@ const AccountConnectionPanel = ({
   const disconnectAtlassian = useDisconnectAtlassian();
   const disconnectNotion = useDisconnectNotion();
   const name = ACCOUNT_NAMES[id];
+  const [unlinkingOkta, setUnlinkingOkta] = useState(false);
 
-  const disconnecting = disconnectDrive.isPending || disconnectAtlassian.isPending || disconnectNotion.isPending;
+  const disconnecting =
+    disconnectDrive.isPending || disconnectAtlassian.isPending || disconnectNotion.isPending || unlinkingOkta;
 
   const disconnect = () => {
     if (id === 'atlassian') return disconnectAtlassian.mutate();
     if (id === 'notion') return disconnectNotion.mutate();
     if (id === 'okta') {
+      if (unlinkingOkta) return;
+      setUnlinkingOkta(true);
       void api
         .post('/api/auth/unlink', { strategy: AuthStrategy.Okta })
         .then(() => {
           toast.success('Your account has been unlinked from Okta.');
           void refreshUser();
         })
-        .catch(error => toast.error(unlinkError(error, 'An error occurred while unlinking your account from Okta.')));
+        .catch(error => toast.error(unlinkError(error, 'An error occurred while unlinking your account from Okta.')))
+        .finally(() => setUnlinkingOkta(false));
       return;
     }
     // Unlinking revokes the grant at Google and stops Drive folder syncs, so it is confirmed,

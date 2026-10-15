@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
@@ -8,7 +8,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useConnectGoogleDrive } from '@client/app/hooks/data/googleDrive';
 import { useConnectAtlassian, useConnectNotion, useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useGitHubConnectionStatus } from '@client/app/hooks/data/useGitHubConnectionStatus';
-import { getStoredJupyterConfig } from '@client/app/utils/jupyterBrowserClient';
+import { getStoredJupyterConfig, subscribeStoredJupyterConfig } from '@client/app/utils/jupyterBrowserClient';
 import type { Connections } from './galleryModel';
 
 /**
@@ -30,6 +30,14 @@ export function useIntegrationConnections(): Connections {
     enabled: isAdmin,
   });
 
+  // Local to this browser: the Jupyter settings live in localStorage, not on the account, and the
+  // drawer's Jupyter form can change them while the gallery is open behind it.
+  const jupyterConfigured = useSyncExternalStore(
+    subscribeStoredJupyterConfig,
+    () => getStoredJupyterConfig() !== null,
+    () => false
+  );
+
   const atlassian = currentUser?.atlassianConnect;
   const notion = currentUser?.notionConnect;
 
@@ -49,8 +57,7 @@ export function useIntegrationConnections(): Connections {
     email: { connected: !!currentUser?.platformEmailAddress },
     blog: { connected: !!blog?.connected },
     okta: { connected: currentUser?.authProviders?.some(p => p.strategy === AuthStrategy.Okta) ?? false },
-    // Local to this browser: the Jupyter settings live in localStorage, not on the account.
-    jupyter: { connected: getStoredJupyterConfig() !== null },
+    jupyter: { connected: jupyterConfigured },
   };
 }
 
