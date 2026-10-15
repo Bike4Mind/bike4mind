@@ -81,6 +81,7 @@ import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
+import { RecentFolderStore } from './project/RecentFolderStore';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
@@ -283,6 +284,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     REASONING_EFFORT
   );
   const access = new AccessStore(join(userData, 'tool-access.json'));
+  const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
   // The trust file is its own file beside tool-access.json, and for the same reason: both record
   // a consent the user gave once and should not be asked for again on every launch.
   const skills = new SkillCatalog(
@@ -449,15 +451,34 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
   ipcMain.handle(IPC_CHANNELS.chatCreateSession, () => service.createSession());
-  ipcMain.handle(IPC_CHANNELS.chatCreateCodeSession, (_event, request: CreateCodeSessionRequest) =>
-    service.createCodeSession(request)
-  );
+  // Recorded from the session main settled on rather than the request, so the entry is the
+  // resolved project root. Only a renderer-driven bind counts: a spawned session inheriting its
+  // parent's folder is the app choosing, not the user.
+  const rememberFolder = (session: ChatSessionSummary): void => {
+    const directory = session.project?.directory;
+    if (!directory) return;
+    recentFolders
+      .record(directory)
+      .catch(error => logger.warn(`CHAT: could not remember recent folder: ${String(error)}`));
+  };
+  ipcMain.handle(IPC_CHANNELS.chatCreateCodeSession, async (_event, request: CreateCodeSessionRequest) => {
+    const result = await service.createCodeSession(request);
+    if (result.ok && request?.directory) rememberFolder(result.session);
+    return result;
+  });
 
-  ipcMain.handle(IPC_CHANNELS.chatUpdateProject, (_event, request: UpdateProjectRequest) =>
-    service.updateProject(request)
-  );
+  ipcMain.handle(IPC_CHANNELS.chatUpdateProject, async (_event, request: UpdateProjectRequest) => {
+    const result = await service.updateProject(request);
+    if (result.ok && request?.directory) rememberFolder(result.session);
+    return result;
+  });
 
   ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));
+  ipcMain.handle(IPC_CHANNELS.chatListRecentFolders, () => recentFolders.list());
+  ipcMain.handle(IPC_CHANNELS.chatRemoveRecentFolder, async (_event, directory: unknown) => {
+    if (typeof directory === 'string') await recentFolders.remove(directory);
+    return recentFolders.list();
+  });
 
   // Reading branches is a git call on a path the user just chose in a native dialog, so it is
   // not gated: nothing here writes, and the alternative is a branch field the user must type

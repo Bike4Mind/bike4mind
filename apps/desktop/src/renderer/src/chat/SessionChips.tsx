@@ -7,6 +7,8 @@ import Chip from '@mui/joy/Chip';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
+import ListDivider from '@mui/joy/ListDivider';
+import ListItemDecorator from '@mui/joy/ListItemDecorator';
 import Menu from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
@@ -14,12 +16,19 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { SxProps } from '@mui/joy/styles/types';
-import { branchHolder, type BranchCheckout, type BranchElsewhere, type ChatProject } from '@shared/chat';
+import {
+  branchHolder,
+  type BranchCheckout,
+  type BranchElsewhere,
+  type ChatProject,
+  type RecentFolder,
+} from '@shared/chat';
 import { describeChipRow, displayPath, type ChipRowState } from './chipState';
 import { useHomeDirectory } from './homeDirectory';
-import { BranchIcon, CloseIcon, FolderIcon, FolderPlusIcon } from './icons';
+import { BranchIcon, CheckIcon, CloseIcon, FolderIcon, FolderPlusIcon } from './icons';
 import { contentColumnSx } from './layout';
 import type { ProjectBindingController } from './useChat';
+import { useRecentFolders } from './useRecentFolders';
 
 /** Above this the branch list is long enough that filtering it beats scrolling it. */
 const FILTER_THRESHOLD = 8;
@@ -130,33 +139,143 @@ function checkoutFolderName(path: string): string {
  */
 const BRANCH_MENU_WIDTH = 380;
 
+/** Wide enough for a long folder name beside its remove button; the full path is in each tooltip. */
+const FOLDER_MENU_WIDTH = 280;
+
+/**
+ * One Recent entry: picking it binds the folder with no dialog, and its own button forgets it.
+ * The remove button stops the click so forgetting an entry does not also choose it.
+ */
+function RecentFolderItem({
+  folder,
+  current,
+  onChoose,
+  onRemove,
+}: {
+  folder: RecentFolder;
+  current: boolean;
+  onChoose: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <Tooltip title={folder.path} size="sm" variant="soft" placement="right" sx={chipTooltipSx}>
+      <MenuItem
+        selected={current}
+        onClick={onChoose}
+        sx={{
+          '& .recent-folder-remove': { opacity: 0 },
+          '&:hover .recent-folder-remove, &:focus-visible .recent-folder-remove': { opacity: 1 },
+        }}
+        data-testid="session-chip-project-recent"
+        data-path={folder.path}
+      >
+        <ListItemDecorator>{current && <CheckIcon />}</ListItemDecorator>
+        <Typography level="body-sm" noWrap sx={{ flex: 1, minWidth: 0 }}>
+          {folder.name}
+        </Typography>
+        <IconButton
+          className="recent-folder-remove"
+          size="sm"
+          variant="plain"
+          color="neutral"
+          aria-label={`Remove ${folder.name} from recent folders`}
+          onClick={event => {
+            event.stopPropagation();
+            onRemove();
+          }}
+          sx={{ '--IconButton-size': '22px' }}
+          data-testid="session-chip-project-recent-remove-btn"
+        >
+          <CloseIcon />
+        </IconButton>
+      </MenuItem>
+    </Tooltip>
+  );
+}
+
 /**
  * The project directory, as its folder name - and, before one is chosen, the way to choose it.
  *
  * Drawn in primary rather than neutral while unset, because on a new Code session this is the
  * one control that has to be found: nothing else the session can do works until it is answered.
+ *
+ * With recent folders on record it opens a menu of them above "Open folder..."; with none it
+ * goes straight to the OS picker, since a menu holding only that entry is a click for nothing.
  */
-function ProjectChip({ binding }: { binding: ChipBinding }) {
+function ProjectChip({ binding, current }: { binding: ChipBinding; current: string | null }) {
   const { folder, unset } = binding.chips;
+  const recent = useRecentFolders();
+  const [open, setOpen] = useState(false);
+
+  const onOpenChange = (_event: unknown, wantsOpen: boolean): void => {
+    if (wantsOpen && recent.folders.length === 0) {
+      void binding.pickDirectory();
+      return;
+    }
+    if (wantsOpen) recent.refresh();
+    setOpen(wantsOpen);
+  };
+
+  const choose = (path: string): void => {
+    setOpen(false);
+    if (path !== current) void binding.chooseDirectory(path);
+  };
+
   return (
-    <Tooltip title={folder.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
-      {/* Wrapped for the same reason as the worktree toggle below: a disabled Chip takes no
-          pointer events, so the reason it is locked would be unreadable on the chip it is about. */}
-      <Box sx={{ display: 'flex' }}>
-        <Chip
-          size="sm"
-          variant={unset ? 'soft' : 'outlined'}
-          color={unset ? 'primary' : 'neutral'}
-          disabled={binding.busy || !folder.enabled}
-          startDecorator={<FolderIcon />}
-          onClick={() => void binding.pickDirectory()}
-          sx={chipSx}
-          data-testid="session-chip-project"
+    <Dropdown open={open} onOpenChange={onOpenChange}>
+      <Tooltip title={folder.tooltip} size="sm" variant="soft" placement="top-start" sx={chipTooltipSx}>
+        {/* Wrapped for the same reason as the worktree toggle below: a disabled button takes no
+            pointer events, so the reason it is locked would be unreadable on the chip it is about. */}
+        <Box sx={{ display: 'flex' }}>
+          <MenuButton
+            size="sm"
+            variant={unset ? 'soft' : 'outlined'}
+            color={unset ? 'primary' : 'neutral'}
+            disabled={binding.busy || !folder.enabled}
+            startDecorator={<FolderIcon />}
+            sx={{ ...pillButtonSx, minHeight: ROW_HEIGHT }}
+            slotProps={{ root: { 'data-testid': 'session-chip-project' } }}
+          >
+            <Typography level="body-xs" textColor="inherit" noWrap>
+              {folder.label}
+            </Typography>
+          </MenuButton>
+        </Box>
+      </Tooltip>
+
+      <Menu
+        size="sm"
+        placement="top-start"
+        sx={{ maxHeight: 360, overflow: 'auto', width: FOLDER_MENU_WIDTH, maxWidth: 'calc(100vw - 32px)' }}
+        data-testid="session-chip-project-menu"
+      >
+        <Typography level="body-xs" sx={{ px: 1.5, py: 0.5 }} data-testid="session-chip-project-recent-heading">
+          Recent
+        </Typography>
+        {recent.folders.map(entry => (
+          <RecentFolderItem
+            key={entry.path}
+            folder={entry}
+            current={entry.path === current}
+            onChoose={() => choose(entry.path)}
+            onRemove={() => void recent.remove(entry.path)}
+          />
+        ))}
+        <ListDivider />
+        <MenuItem
+          onClick={() => {
+            setOpen(false);
+            void binding.pickDirectory();
+          }}
+          data-testid="session-chip-project-open-folder"
         >
-          {folder.label}
-        </Chip>
-      </Box>
-    </Tooltip>
+          <ListItemDecorator>
+            <FolderPlusIcon />
+          </ListItemDecorator>
+          Open folder...
+        </MenuItem>
+      </Menu>
+    </Dropdown>
   );
 }
 
@@ -706,7 +825,7 @@ export function SessionChips({
       )}
 
       <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 0.75 }}>
-        <ProjectChip binding={bound} />
+        <ProjectChip binding={bound} current={project?.directory ?? null} />
         <BranchChip project={project} binding={bound} branches={branches} elsewhere={elsewhere} home={home} />
         <ContextChips project={project} granted={grantedDirectories} binding={bound} />
       </Stack>

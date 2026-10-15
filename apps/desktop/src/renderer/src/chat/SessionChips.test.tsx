@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatProject, ProjectInspection } from '@shared/chat';
+import type { ChatProject, ProjectInspection, RecentFolder } from '@shared/chat';
 import type { AppInfo } from '@shared/ipc';
 import { SessionChips } from './SessionChips';
 import type { ProjectBindingController } from './useChat';
@@ -37,12 +37,14 @@ function inspection(over: Partial<ProjectInspection> = {}): ProjectInspection {
 }
 
 const getAppInfo = async (): Promise<Partial<AppInfo>> => ({ homeDirectory: '' });
+const listRecentFolders = async (): Promise<RecentFolder[]> => [];
 
 const binding: ProjectBindingController = {
   busy: false,
   error: null,
   dismissError: vi.fn(),
   pickDirectory: vi.fn(),
+  chooseDirectory: vi.fn(),
   setBranch: vi.fn(),
   setWorkspace: vi.fn(),
   moveToCheckout: vi.fn(),
@@ -66,7 +68,7 @@ describe('the branch chip against what git answers', () => {
 
   beforeEach(() => {
     inspectProject.mockReset();
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject }, getAppInfo };
+    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -304,7 +306,7 @@ describe('the chip row once the session has run here', () => {
   beforeEach(() => {
     inspectProject.mockReset();
     inspectProject.mockResolvedValue(inspection());
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject }, getAppInfo };
+    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -411,7 +413,7 @@ describe('a branch another worktree has checked out', () => {
         checkedOutElsewhere: { 'feat/held': { path: HELD } },
       })
     );
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject }, getAppInfo };
+    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -536,5 +538,132 @@ describe('a branch another worktree has checked out', () => {
 
     expect(host.querySelector('[data-testid="session-chip-error"]')?.textContent).toBe('Could not switch: nope');
     expect(host.querySelector('[data-testid="session-chip-elsewhere"]')).toBeNull();
+  });
+});
+
+describe("the folder chip's recent folders", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const inspectProject = vi.fn();
+  const listRecent = vi.fn();
+  const removeRecentFolder = vi.fn();
+  const pickDirectory = vi.fn();
+  const chooseDirectory = vi.fn();
+  const OTHER = '/Users/someone/elsewhere/thing';
+
+  const recent: RecentFolder[] = [
+    { path: CHECKOUT, name: 'main' },
+    { path: OTHER, name: 'thing' },
+  ];
+
+  const inMenu = (testid: string): HTMLElement[] =>
+    Array.from(document.body.querySelectorAll<HTMLElement>(`[data-testid="${testid}"]`));
+
+  async function show(bound: ChatProject | null): Promise<void> {
+    await act(async () =>
+      root.render(
+        <SessionChips project={bound} binding={{ ...binding, pickDirectory, chooseDirectory }} settledTurns={0} />
+      )
+    );
+    await act(async () => undefined);
+  }
+
+  async function openMenu(): Promise<void> {
+    await act(async () => (host.querySelector('[data-testid="session-chip-project"]') as HTMLElement).click());
+    await act(async () => undefined);
+  }
+
+  beforeEach(() => {
+    for (const mock of [inspectProject, listRecent, removeRecentFolder, pickDirectory, chooseDirectory])
+      mock.mockReset();
+    inspectProject.mockResolvedValue(inspection());
+    listRecent.mockResolvedValue(recent);
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { inspectProject, listRecentFolders: listRecent, removeRecentFolder },
+      getAppInfo,
+    };
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('lists recent folders by name, ticks the current one, and ends with Open folder', async () => {
+    await show(project());
+    await openMenu();
+
+    const items = inMenu('session-chip-project-recent');
+    expect(items.map(item => item.textContent)).toEqual(['main', 'thing']);
+    expect(
+      items.map(item => item.getAttribute('aria-selected') === 'true' || item.classList.contains('Mui-selected'))
+    ).toEqual([true, false]);
+    expect(inMenu('session-chip-project-recent-heading')[0]?.textContent).toBe('Recent');
+    expect(inMenu('session-chip-project-open-folder')[0]?.textContent).toBe('Open folder...');
+  });
+
+  it('binds a recent folder directly, without the picker', async () => {
+    await show(project());
+    await openMenu();
+
+    await act(async () => inMenu('session-chip-project-recent')[1].click());
+
+    expect(chooseDirectory).toHaveBeenCalledWith(OTHER);
+    expect(pickDirectory).not.toHaveBeenCalled();
+  });
+
+  it('does not re-bind the folder the session is already in', async () => {
+    await show(project());
+    await openMenu();
+
+    await act(async () => inMenu('session-chip-project-recent')[0].click());
+
+    expect(chooseDirectory).not.toHaveBeenCalled();
+  });
+
+  it('opens the OS picker from Open folder', async () => {
+    await show(project());
+    await openMenu();
+
+    await act(async () => inMenu('session-chip-project-open-folder')[0].click());
+
+    expect(pickDirectory).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets an entry without choosing it', async () => {
+    removeRecentFolder.mockResolvedValue([recent[0]]);
+    await show(project());
+    await openMenu();
+
+    await act(async () => inMenu('session-chip-project-recent-remove-btn')[1].click());
+
+    expect(removeRecentFolder).toHaveBeenCalledWith(OTHER);
+    expect(chooseDirectory).not.toHaveBeenCalled();
+    expect(inMenu('session-chip-project-recent').map(item => item.textContent)).toEqual(['main']);
+  });
+
+  it('shows the full path on hover, so folders with the same name can be told apart', async () => {
+    await show(project());
+    await openMenu();
+
+    await act(async () => {
+      inMenu('session-chip-project-recent')[1].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 150));
+    });
+
+    const tooltips = Array.from(document.body.querySelectorAll('[role="tooltip"]')).map(node => node.textContent);
+    expect(tooltips).toContain(OTHER);
+  });
+
+  it('goes straight to the picker when there are no recent folders', async () => {
+    listRecent.mockResolvedValue([]);
+    await show(null);
+    await openMenu();
+
+    expect(pickDirectory).toHaveBeenCalledTimes(1);
+    expect(inMenu('session-chip-project-menu').some(menu => menu.checkVisibility?.() ?? true)).toBe(false);
   });
 });
