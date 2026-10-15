@@ -57,7 +57,7 @@ let ownedFiles: Record<string, unknown>[] = [];
 const project = (doc: Record<string, unknown>, projection: string): Record<string, unknown> => {
   const out: Record<string, unknown> = {};
   for (const path of projection.split(' ').filter(Boolean)) {
-    const value = path.split('.').reduce<unknown>((v, k) => (v == null ? undefined : (v as any)[k]), doc);
+    const value = path.split('.').reduce<unknown>((v, k) => (v == null ? undefined : (v as Record<string, unknown>)[k]), doc);
     if (value === undefined) continue;
     const keys = path.split('.');
     let node = out;
