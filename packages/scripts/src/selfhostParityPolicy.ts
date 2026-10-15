@@ -351,7 +351,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:generationCallbackQueue',
-    'cae0d3968043db54d14aca073fba5752d2e8ed8c0435e509652c7d1e82637494',
+    'ae237051ce20715e8fb67ecc582b289287c4d90d7c94344344f2f9fedbef8ba7',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationCallbackQueue',
