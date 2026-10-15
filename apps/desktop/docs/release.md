@@ -284,6 +284,11 @@ pnpm --filter @bike4mind/desktop exec electron-builder --mac --arm64 --publish n
 # (release.mjs manifest + releases/v<version>/) and serve it on 127.0.0.1:8765.
 ```
 
-Run build A with `B4M_DESKTOP_VERBOSE=1`: it finds B, downloads the zip and reaches 'ready'. Restart
-fails on an unsigned build, by design: Squirrel.Mac refuses a payload without a valid Developer ID
-signature, so the install half can only be proven with a signed pair of builds.
+`-c.extraMetadata.version=0.1.1` on the second `electron-builder` run produces B without touching
+`package.json`. Run build A with `B4M_DESKTOP_VERBOSE=1` and `--user-data-dir=<scratch dir>` (so it
+does not share a profile with your other builds). About 15s after the window is up it fetches
+`latest-mac.yml`, resolves the `releases/v0.1.1/` URLs, downloads and sha512-checks the zip, hands it
+to the Squirrel.Mac proxy and reaches `ready` with the release notes. **Restart then fails on an
+unsigned build, by design**: Squirrel.Mac downloads the zip and rejects it with
+`Code signature ... did not pass validation`, and the app keeps running the old version. The install
+half can only be proven with a signed pair of builds, which is the first dry run's job.
