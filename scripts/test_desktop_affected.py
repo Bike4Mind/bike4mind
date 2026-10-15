@@ -19,7 +19,8 @@ class DesktopAffectedTest(unittest.TestCase):
         self.manifest('b4m-core/shared', '@example/shared', {'@example/leaf': 'workspace:*'})
         self.manifest('b4m-core/leaf', '@example/leaf', {})
         self.manifest('b4m-core/unrelated', '@example/unrelated', {})
-        self.lock = {'importers': {
+        self.lock = {'lockfileVersion': '9.0', 'importers': {
+            '.': {}, 'b4m-core/shared': {}, 'b4m-core/leaf': {},
             'apps/desktop': {'dependencies': {'axios': {'specifier': '1.0.0', 'version': '1.0.0'}}},
             'apps/client': {'dependencies': {'web-only': {'specifier': '1.0.0', 'version': '1.0.0'}}},
         }, 'snapshots': {'axios@1.0.0': {'dependencies': {'follow-redirects': '1.0.0'}},
@@ -77,6 +78,69 @@ class DesktopAffectedTest(unittest.TestCase):
     def test_invalid_lock_fails_safe(self):
         Path('pnpm-lock.yaml').write_text('invalid: [')
         self.assertTrue(self.changed())
+
+    def test_missing_lock_fails_safe(self):
+        Path('pnpm-lock.yaml').unlink()
+        self.assertTrue(self.changed())
+
+    def test_missing_root_manifest_fails_safe(self):
+        Path('package.json').unlink()
+        self.assertTrue(self.changed())
+
+    def test_missing_importer_fails_safe(self):
+        del self.lock['importers']['b4m-core/leaf']
+        self.write_lock()
+        self.assertTrue(self.changed())
+
+    def test_missing_snapshot_fails_safe(self):
+        del self.lock['snapshots']['follow-redirects@1.0.0']
+        self.write_lock()
+        self.assertTrue(self.changed())
+
+    def test_malformed_section_fails_safe(self):
+        self.lock['snapshots'] = []
+        self.write_lock()
+        self.assertTrue(self.changed())
+
+    def test_unavailable_push_base_fails_safe(self):
+        self.assertTrue(affected('0' * 40, 'HEAD'))
+        self.assertTrue(affected('1' * 40, 'HEAD'))
+
+    def test_dev_workspace_runs(self):
+        Path('apps/desktop/package.json').write_text(json.dumps({
+            'name': '@bike4mind/desktop', 'devDependencies': {'@example/shared': 'workspace:*'}}))
+        self.assertTrue(self.changed())
+
+    def test_removed_workspace_still_runs(self):
+        self.manifest('apps/desktop', '@bike4mind/desktop', {})
+        self.git('add', '.')
+        self.git('commit', '-qm', 'refactor: remove dependency')
+        self.commit('fix: formerly reachable', 'b4m-core/leaf/src/index.ts')
+        self.assertTrue(affected(self.base, 'HEAD'))
+
+    def test_root_tool_resolution_runs(self):
+        self.lock['importers']['.'] = {'devDependencies': {
+            'husky': {'specifier': '^9.0.0', 'version': '9.0.0'}}}
+        self.lock['snapshots']['husky@9.0.0'] = {}
+        self.lock['packages']['husky@9.0.0'] = {}
+        self.write_lock()
+        self.assertTrue(self.changed())
+
+    def test_shared_test_config_runs(self):
+        self.commit('test: shared configuration', 'vitest.shared.ts')
+        self.assertTrue(affected(self.base, 'HEAD'))
+
+    def test_gate_test_runs(self):
+        self.commit('test: dependency gate', 'scripts/test_desktop_affected.py')
+        self.assertTrue(affected(self.base, 'HEAD'))
+
+    def test_unrelated_changes_do_not_bump_or_enter_notes(self):
+        self.git('tag', 'desktop-v0.1.1')
+        releases = [{'tag_name': 'desktop-v0.1.1', 'prerelease': False}]
+        self.commit('feat(shared)!: unrelated', 'b4m-core/unrelated/src/index.ts')
+        self.assertEqual(version_tests.select_version(releases, '0.1.0')[:2], ('0.1.1', False))
+        notes = version_tests.release_notes('0.1.1', 'desktop-v0.1.1', 'example/repo')
+        self.assertNotIn('feat(shared)!', notes)
 
 
 if __name__ == '__main__':

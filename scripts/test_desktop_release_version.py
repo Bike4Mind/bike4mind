@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -17,6 +18,9 @@ class DesktopVersionTest(unittest.TestCase):
         self.git('config', 'user.name', 'Test')
         Path('apps/desktop').mkdir(parents=True)
         Path('apps/desktop/package.json').write_text('{"name":"@bike4mind/desktop"}')
+        Path('package.json').write_text('{}')
+        Path('pnpm-lock.yaml').write_text(json.dumps({'lockfileVersion': '9.0',
+            'importers': {'.': {}, 'apps/desktop': {}}, 'snapshots': {}, 'packages': {}}))
         self.commit('feat(desktop): initial app')
         self.git('tag', 'desktop-v0.1.0')
         self.releases = [{'tag_name': 'desktop-v0.1.0', 'prerelease': False}]
