@@ -127,7 +127,8 @@ incident from `pending_review`/absent straight to `'reported'` in one atomic wri
 `reportChannel: 'manual'` and the admin's user id in `reportedBy`, and needs no NCMEC
 credentials. The report id must be letters, digits and dashes only. It does not act on a
 `confirmed_csam` claim; resolve that through the recovery verdicts first: `retry_finish` when
-an unfinished report id is stored, otherwise (once the claim is stale) `mark_reported` if NCMEC
+an unfinished report id is stored (once NCMEC's 24-hour window has passed, file by hand and
+use `mark_reported` with the new report id instead), otherwise (once the claim is stale) `mark_reported` if NCMEC
 holds a tip, or `requeue` followed by `record_manual_report` if it does not. A refused
 `record_manual_report` still logs the supplied report id.
 

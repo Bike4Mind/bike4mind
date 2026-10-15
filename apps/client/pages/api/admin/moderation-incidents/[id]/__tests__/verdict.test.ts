@@ -498,7 +498,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(res.status).toHaveBeenCalledWith(409);
       const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { error: string };
       expect(body.error).toContain('retry_finish');
-      expect(body.error).not.toContain('mark_reported');
+      expect(body.error).toContain('after it, file by hand on the web form and use mark_reported');
     });
 
     it('logs the admin-supplied reportId when the verdict is refused', async () => {

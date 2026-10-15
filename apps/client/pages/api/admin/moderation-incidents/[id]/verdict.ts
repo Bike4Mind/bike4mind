@@ -186,7 +186,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       if (incident.reviewStatus === 'confirmed_csam') {
         return res.status(409).json({
           error: incident.ncmecReportId
-            ? `Incident has an unfinished API report (reportId=${incident.ncmecReportId}) -- use retry_finish within NCMEC's 24-hour window`
+            ? `Incident has an unfinished API report (reportId=${incident.ncmecReportId}) -- use retry_finish within NCMEC's 24-hour window; after it, file by hand on the web form and use mark_reported with the new report id`
             : 'Incident has an API submission in flight or with an unknown outcome -- once it is stale, use mark_reported if NCMEC has a tip, or requeue then record_manual_report if it does not',
         });
       }
