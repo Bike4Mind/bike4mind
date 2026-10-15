@@ -351,6 +351,25 @@ describe('Project Tools', () => {
       });
     });
 
+    it('previews a pull request content node by number, title and repository', async () => {
+      vi.mocked(octokit.graphql).mockResolvedValueOnce({
+        ...resolvedAddPreview,
+        content: { ...resolvedAddPreview.content, __typename: 'PullRequest', number: 9, title: 'Real PR title' },
+      } as never);
+
+      const result = await registeredTools.get(TOOL_ADD_ISSUE_TO_PROJECT)!.handler({
+        project_id: 'PVT_kwDO1',
+        issue_node_id: 'PR_kwDO9',
+        display_issue_title: '#1 - Model label',
+        _executeFromButton: false,
+      });
+
+      const text = result.content[0].text;
+      expect(text).toContain('#9 - Real PR title (PR_kwDO9)');
+      expect(text).not.toContain('Model label');
+      expect(decodeToken(parseResponse(result)._confirmToken).params.display_issue_title).toBe('#9 - Real PR title');
+    });
+
     it('refuses to preview (no token) when the project id does not resolve to a project', async () => {
       vi.mocked(octokit.graphql).mockResolvedValueOnce({
         ...resolvedAddPreview,
@@ -440,6 +459,7 @@ describe('Project Tools', () => {
             },
             { id: 'PVTF_estimate', name: 'Estimate', dataType: 'NUMBER' },
             { id: 'PVTF_target', name: 'Target date', dataType: 'DATE' },
+            { id: 'PVTF_notes', name: 'Notes', dataType: 'TEXT' },
           ],
         },
       },
@@ -508,6 +528,71 @@ describe('Project Tools', () => {
           },
         ],
       });
+    });
+
+    it('previews a text update with the resolved field name and the written text', async () => {
+      mockPreviewLookups();
+
+      const result = await previewUpdate([
+        { field_id: 'PVTF_notes', value: 'Needs design review', new_value: 'Other' },
+      ]);
+
+      const text = result.content[0].text;
+      const parsed = parseResponse(result);
+      expect(parsed.action).toBe('preview');
+      expect(text).toContain('Notes (PVTF_notes)');
+      expect(text).toContain('Needs design review');
+      expect(text).not.toContain('Other');
+      expect(decodeToken(parsed._confirmToken).params.updates).toEqual([
+        {
+          field_id: 'PVTF_notes',
+          value: 'Needs design review',
+          display_field_name: 'Notes',
+          display_value: 'Needs design review',
+        },
+      ]);
+    });
+
+    it('previews a draft issue as "Draft: <title>" with no repository', async () => {
+      mockPreviewLookups({
+        item: { node: { ...itemPreview.node, content: { __typename: 'DraftIssue', title: 'Spike the importer' } } },
+      });
+
+      const result = await previewUpdate([{ field_id: 'PVTSSF_status', value: 'opt_progress' }]);
+
+      const text = result.content[0].text;
+      const parsed = parseResponse(result);
+      expect(parsed.action).toBe('preview');
+      expect(text).toContain('Sprint Board - Draft: Spike the importer');
+      expect(text).not.toContain('Repository');
+      const params = decodeToken(parsed._confirmToken).params;
+      expect(params.display_issue_title).toBe('Draft: Spike the importer');
+      expect(params.display_repository).toBeUndefined();
+    });
+
+    it('previews a pull request item by number, title and repository', async () => {
+      mockPreviewLookups({
+        item: {
+          node: {
+            ...itemPreview.node,
+            content: {
+              __typename: 'PullRequest',
+              number: 42,
+              title: 'Real PR title',
+              repository: { nameWithOwner: 'acme/gadgets' },
+            },
+          },
+        },
+      });
+
+      const result = await previewUpdate([{ field_id: 'PVTSSF_status', value: 'opt_progress' }]);
+
+      const text = result.content[0].text;
+      const params = decodeToken(parseResponse(result)._confirmToken).params;
+      expect(text).toContain('Sprint Board - #42 - Real PR title');
+      expect(text).toContain('acme/gadgets');
+      expect(params.display_issue_title).toBe('#42 - Real PR title');
+      expect(params.display_repository).toBe('acme/gadgets');
     });
 
     it.each([

@@ -175,6 +175,38 @@ describe('executePendingAction', () => {
       });
     });
 
+    it('falls back to the Slack URL, never uploading held bytes, when the stored file is not serveable', async () => {
+      storePendingAction({
+        tool: JIRA_UPLOAD_ATTACHMENT,
+        params: {
+          issueKey: 'K-1',
+          filename: 'a.txt',
+          fabFileId: FAB_FILE_ID,
+          slackFileUrl: 'https://files.example.test/a.txt',
+        },
+        ts,
+      });
+      vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue({
+        filePath: 'files/a.txt',
+        mimeType: 'text/plain',
+        moderationStatus: 'pending',
+      } as never);
+      const slackBytes = Buffer.from('slack-bytes');
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array(slackBytes).buffer })
+      );
+
+      const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+      expect(result.success).toBe(true);
+      expect(getFilesStorage().download).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledWith('https://files.example.test/a.txt');
+      expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
+        content: slackBytes.toString('base64'),
+      });
+    });
+
     it('refuses a file the confirming user cannot access, without claiming or invoking', async () => {
       vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue(null);
 

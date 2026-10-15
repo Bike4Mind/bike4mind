@@ -69,9 +69,6 @@ function buildPreviewMessage(
 }
 
 /**
- * "Label (id)" for a tool-resolved label next to the id that executes; the bare id when no label was resolved.
- */
-/**
  * Renders a value on one card line. Values reach the card from tool params, so a newline in one
  * must not start a new quoted row that reads like another field of the action.
  */
@@ -79,6 +76,9 @@ function toSlackInline(text: string): string {
   return escapeSlackMrkdwn(text.replace(/\s+/g, ' '));
 }
 
+/**
+ * "Label (id)" for a tool-resolved label next to the id that executes; the bare id when no label was resolved.
+ */
 function labelWithId(label: unknown, id: unknown): string {
   const idText = id === undefined || id === null || id === '' ? 'Unknown' : String(id);
   const text = label ? `${String(label)} (${idText})` : idText;

@@ -41,7 +41,8 @@ export type FabFileAttachment =
 /**
  * Loads a stored file for an attachment upload, scoped to what `user` may read. `forbidden` means the
  * id does not resolve to a file the user can access (missing and not-shared look the same on
- * purpose) and the upload must be refused. `unavailable` means the file is the user's but has no
+ * purpose) and the upload must be refused, even when a `slackFileUrl` fallback exists: a stale or
+ * malformed id fails closed rather than silently swapping the source. `unavailable` means the file is the user's but has no
  * serveable bytes (held/blocked image, no stored path, download failure); the caller may fall back
  * to another source.
  */
