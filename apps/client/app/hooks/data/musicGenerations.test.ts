@@ -132,6 +132,15 @@ describe('useMusicGeneration error handling', () => {
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(h.get).toHaveBeenCalledTimes(1);
   });
+
+  it('retries a server error (500)', async () => {
+    // retryDelay: 0 keeps the retry immediate so the assertion does not depend on the backoff wall clock.
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
+    h.get.mockRejectedValueOnce(httpError(500)).mockResolvedValue({ data: musicJob({ id: 'music-1' }) });
+    const { result } = renderHook(() => useMusicGeneration('music-1'), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(h.get).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('useCancelMusicGeneration', () => {
