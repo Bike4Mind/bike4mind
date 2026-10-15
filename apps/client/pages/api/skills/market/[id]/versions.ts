@@ -3,7 +3,13 @@ import { z } from 'zod';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { SkillListing, skillRepository } from '@bike4mind/database';
 import { ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/common';
-import { findListing, serializeListing, submitRateLimits, validateListingTags } from '@server/skillMarket/market';
+import {
+  findListing,
+  memberOrgIdsFor,
+  serializeListing,
+  submitRateLimits,
+  validateListingTags,
+} from '@server/skillMarket/market';
 import { submitListingVersion } from '@server/skillMarket/submitVersion';
 import { getOperationsClassifierLlm } from '@server/skillMarket/classifySkill';
 
@@ -23,6 +29,14 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (listing.authorUserId !== user.id) throw new ForbiddenError('Only the author can submit a new version');
     if (listing.status === 'withdrawn' || listing.status === 'delisted') {
       throw new ConflictError('This listing no longer accepts new versions');
+    }
+    // Membership is checked at publish time but can lapse afterwards. An Organization listing must
+    // not keep auto-publishing into an org its author has been removed from.
+    if (
+      listing.visibility === 'organization' &&
+      !(await memberOrgIdsFor(user.id)).includes(listing.organizationId ?? '')
+    ) {
+      throw new ForbiddenError('You can only publish to organizations you belong to');
     }
 
     const skill = await skillRepository.findById(listing.sourceSkillId);

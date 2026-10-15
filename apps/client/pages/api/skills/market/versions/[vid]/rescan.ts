@@ -2,7 +2,7 @@
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { SkillListingVersion } from '@bike4mind/database';
 import { ForbiddenError, NotFoundError } from '@bike4mind/common';
-import { findListing, submitRateLimits } from '@server/skillMarket/market';
+import { findListing, memberOrgIdsFor, submitRateLimits } from '@server/skillMarket/market';
 import { rescanVersion } from '@server/skillMarket/submitVersion';
 import { getOperationsClassifierLlm } from '@server/skillMarket/classifySkill';
 
@@ -15,6 +15,14 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (!version) throw new NotFoundError('Version not found');
     const listing = await findListing(version.listingId);
     if (!listing || listing.authorUserId !== user.id) throw new ForbiddenError('Only the author can rescan');
+    // A rescan can turn an unpublished Organization version live, so the author's membership must
+    // still hold at this point too.
+    if (
+      listing.visibility === 'organization' &&
+      !(await memberOrgIdsFor(user.id)).includes(listing.organizationId ?? '')
+    ) {
+      throw new ForbiddenError('You can only publish to organizations you belong to');
+    }
 
     res.json({
       version: await rescanVersion(listing, String(version._id), {
