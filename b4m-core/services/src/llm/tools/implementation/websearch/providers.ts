@@ -773,25 +773,29 @@ function parseSearxngPlaces(data: unknown, limit: number): WebSearchPlace[] {
 }
 
 /**
+ * Under throwOnError a hedge owns the outcome (the other provider may still answer) and alerts on
+ * the final failure itself, so a transient attempt logs at warn: a network/abort error (no status)
+ * or a retryable HTTP 429/5xx. A permanent client error (any other 4xx) cannot be recovered by the
+ * backup, so it stays at error. Fail-soft returns [] and this log is the only record, so it stays
+ * at error there too.
+ */
+function logSearxngFailure(
+  options: WebSearchOptions | undefined,
+  message: string,
+  details: Record<string, unknown>,
+  status?: number
+): void {
+  const transient = status === undefined || status === 429 || status >= 500;
+  if (options?.throwOnError && transient) Logger.globalInstance.warn(message, details);
+  else Logger.globalInstance.error(message, details);
+}
+
+/**
  * SearXNG provider. Calls the admin-configured JSON search endpoint (trusted config, so NOT subject
  * to the SSRF guard). Any transport/parse failure (including the abort timeout) resolves to [] so a
  * flaky local instance degrades to "no results" instead of throwing, matching how search is best-
  * effort in the agent loop.
  */
-/**
- * Under throwOnError a hedge owns the outcome (the other provider may still answer) and alerts on
- * the final failure itself, so the attempt logs at warn. Fail-soft returns [] and this log is the
- * only record, so it stays at error.
- */
-function logSearxngFailure(
-  options: WebSearchOptions | undefined,
-  message: string,
-  details: Record<string, unknown>
-): void {
-  if (options?.throwOnError) Logger.globalInstance.warn(message, details);
-  else Logger.globalInstance.error(message, details);
-}
-
 export function createSearxngProvider(baseUrl: string): WebSearchProvider {
   return {
     name: 'searxng',
@@ -839,11 +843,16 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
       try {
         const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
         if (!response.ok) {
-          logSearxngFailure(options, '❌ WebSearch Tool: SearXNG error', {
-            request,
-            status: response.status,
-            statusText: response.statusText,
-          });
+          logSearxngFailure(
+            options,
+            '❌ WebSearch Tool: SearXNG error',
+            {
+              request,
+              status: response.status,
+              statusText: response.statusText,
+            },
+            response.status
+          );
           if (options?.throwOnError) throw new Error(`SearXNG error: HTTP ${response.status}`);
           return [];
         }
