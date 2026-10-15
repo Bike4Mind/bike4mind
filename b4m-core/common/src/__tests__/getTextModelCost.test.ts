@@ -96,7 +96,7 @@ describe('pricingTierForTokens', () => {
 
 const perM = (usd: number) => usd / 1_000_000;
 
-// Two-tier ladders shaped like gpt-5.4 (272K) and gemini-3.1-pro-preview (200K).
+// Two-tier ladders: gpt-5.4 (272K) and a synthetic Gemini-style 200K ladder.
 const gpt54 = {
   ...baseModel,
   pricing: {
@@ -146,7 +146,7 @@ describe('getTurnsCost', () => {
     const rates = expected === 'base' ? geminiPro.pricing[200_000] : geminiPro.pricing[1_048_576];
     const cached = 50_000;
     const turn = { inputTokens: prompt - cached, cacheReadInputTokens: cached, outputTokens: 0 };
-    // No published cache_read on a Gemini tier: the read bills at that tier's input rate.
+    // This fixture carries no cache_read, so the read bills at that tier's input rate.
     expect(getTurnsCost(geminiPro, [turn])).toBeCloseTo((prompt - cached) * rates.input + cached * rates.input, 12);
   });
 

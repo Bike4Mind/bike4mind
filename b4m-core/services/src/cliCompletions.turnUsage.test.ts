@@ -3,7 +3,7 @@ import type { CompletionInfo } from '@bike4mind/common';
 
 const perM = (usd: number) => usd / 1_000_000;
 
-// Two-tier ladder shaped like gemini-3.1-pro-preview: the long rate applies above 200K per request.
+// Synthetic two-tier Gemini-style ladder: the long rate applies above 200K per request.
 const tieredModel = {
   id: 'tiered-model',
   type: 'text',
