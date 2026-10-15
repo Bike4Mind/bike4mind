@@ -9,6 +9,8 @@ import {
   getTurnsCost,
   type TurnUsage,
   pricingTierForTokens,
+  publishesCacheReadRate,
+  PUBLISHED_CACHE_READ_BACKENDS,
   CreditHolderType,
   ICreditHolder,
   ICreditHolderMethods,
@@ -241,7 +243,12 @@ function estimateReservationUsd(
     writeEnd = lastFlagged;
     hoistsSystem = true;
   } else {
-    const publishesCacheRead = tier !== null && modelInfo.pricing[tier]?.cache_read !== undefined;
+    // Mirror the adapter gate exactly: for a backend that forwards cache reads only for a model
+    // publishing cache_read on every tier, a single tier carrying one must not discount the hold,
+    // or settlement bills full-rate input against a discounted reservation.
+    const publishesCacheRead = PUBLISHED_CACHE_READ_BACKENDS.has(modelInfo.backend)
+      ? publishesCacheReadRate(modelInfo)
+      : tier !== null && modelInfo.pricing[tier]?.cache_read !== undefined;
     if (!AUTO_CACHING_BACKENDS.has(modelInfo.backend) || !publishesCacheRead) return uncachedUsd;
     readEnd = lastAssistantIndex - 1;
     hoistsSystem = false;

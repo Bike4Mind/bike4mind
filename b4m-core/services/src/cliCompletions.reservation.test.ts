@@ -78,6 +78,18 @@ const XAI_MODEL_INFO = {
   pricing: CACHE_READ_PRICING,
 } as unknown as ModelInfo;
 
+// cache_read on the lower bracket only: the adapters forward nothing (their gate needs it on every
+// tier), so the hold must stay uncached even though the request's tier carries a cache rate.
+const MIXED_LADDER_MODEL_ID = 'reservation-test-gemini-mixed-ladder';
+const MIXED_LADDER_MODEL_INFO = {
+  ...GEMINI_MODEL_INFO,
+  id: MIXED_LADDER_MODEL_ID,
+  pricing: {
+    200_000: { input: 5 / 1_000_000, output: 25 / 1_000_000, cache_read: 0.5 / 1_000_000 },
+    2_097_152: { input: 10 / 1_000_000, output: 50 / 1_000_000 },
+  },
+} as unknown as ModelInfo;
+
 // Literal rates (per token) so the tier test asserts a figure not derived from getTextModelCost.
 const TIERED_MODEL_ID = 'reservation-test-tiered';
 const TIERED_MODEL_INFO = {
@@ -117,6 +129,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
     BEDROCK_MODEL_INFO,
     GEMINI_MODEL_INFO,
     XAI_MODEL_INFO,
+    MIXED_LADDER_MODEL_INFO,
     TIERED_MODEL_INFO,
   ]),
   getLlmByModel: vi.fn(() => ({
@@ -358,6 +371,17 @@ describe('executeCompletion - pre-flight reservation size', () => {
       const expected = usdToCredits(getTextModelCost(info, 38_000, OUTPUT, 30_000, 0));
       const uncached = usdToCredits(getTextModelCost(info, 68_000, OUTPUT));
       expect(expected).toBeLessThan(uncached);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('holds the uncached amount when only one tier of a cache-forwarding backend publishes cache_read', async () => {
+      const { db, users } = buildDb();
+      await executeCompletion({ ...roundParams, model: MIXED_LADDER_MODEL_ID, db, messages: toolLoop(false) });
+
+      const expected = usdToCredits(getTextModelCost(MIXED_LADDER_MODEL_INFO, 68_000, OUTPUT));
+      // The discounted figure the reservation held before the adapter gate was mirrored.
+      const discounted = usdToCredits(getTextModelCost(MIXED_LADDER_MODEL_INFO, 38_000, OUTPUT, 30_000, 0));
+      expect(discounted).toBeLessThan(expected);
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
