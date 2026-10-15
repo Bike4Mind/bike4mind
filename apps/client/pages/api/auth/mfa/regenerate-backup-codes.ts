@@ -3,8 +3,10 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
+import { stepUpGate } from '@server/auth/stepUp';
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
+  .use(stepUpGate())
   .use(rateLimit({ limit: 2, windowMs: 24 * 60 * 60 * 1000 })) // 2 regenerations per 24 hours (more secure)
   .post(
     asyncHandler(async (req, res) => {

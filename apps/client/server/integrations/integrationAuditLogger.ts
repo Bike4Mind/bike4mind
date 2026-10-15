@@ -207,19 +207,12 @@ function redactSensitiveData(data: Record<string, unknown>): Record<string, unkn
 }
 
 /**
- * Extract client IP address from request.
- * Delegates to the shared getClientIp resolver, which walks the canonical CDN
- * headers in priority order and filters private/reserved ranges. This avoids
- * trusting the raw, spoofable leftmost x-forwarded-for value in audit records.
- * Cast is required because getClientIp is typed for express Request, while
- * audit logging takes any IncomingMessage (NextApiRequest and express Request
- * both extend it). The resolver reads headers and socket; its express-only
- * req.ip fallback is simply undefined on a plain IncomingMessage.
+ * Extract client IP address from request via the shared getClientIp resolver, so audit records
+ * never hold the raw, spoofable leftmost x-forwarded-for value. Its express-only req.ip fallback
+ * is simply undefined on a plain IncomingMessage.
  */
 function extractIp(req: IncomingMessage): string {
-  // any: getClientIp is typed for express Request; IncomingMessage carries the headers and
-  // socket it reads but is not assignable (no ip field).
-  return getClientIp(req as any);
+  return getClientIp(req);
 }
 
 /**

@@ -189,6 +189,16 @@ describe('translateStreamChunk', () => {
     expect(r.chunk?.choices[0].usage?.input_tokens).toBe(10);
   });
 
+  it('message_start does not forward the placeholder output_tokens', () => {
+    // base.ts keys its stopped-call estimate on a 0 output count, so forwarding the
+    // placeholder here would silently disable it - see the seed comment in anthropic.ts.
+    const r = backend.translateStreamChunk('claude', {
+      type: 'message_start',
+      message: { usage: { input_tokens: 10, output_tokens: 1 } },
+    });
+    expect(r.chunk?.choices[0].usage?.output_tokens).toBeUndefined();
+  });
+
   it('content_block_start tool_use surfaces the tool name + id', () => {
     const c = first({
       type: 'content_block_start',

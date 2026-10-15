@@ -33,6 +33,7 @@ import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import { useExperimentalFeatureSettings, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup, useCancelMFASetup } from '@client/app/hooks/data/mfa';
 import MFAModal from '@client/app/components/common/MFAModal';
+import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import { useEffect, useRef, useState } from 'react';
 import { useSearch } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -190,6 +191,7 @@ const GeneralSettingsTab = () => {
         toast.success('MFA setup initiated');
       },
       onError: (error: { response?: { data?: { error?: string } }; message?: string }) => {
+        if (isStepUpCancelled(error)) return;
         const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
         toast.error(errorMessage);
       },
@@ -458,6 +460,7 @@ const GeneralSettingsTab = () => {
                     <StyledButton
                       color="primary"
                       variant="solid"
+                      data-testid="settings-enable-mfa-btn"
                       onClick={handleEnableMFA}
                       loading={setupMFA.isPending}
                       sx={{ fontSize: '13px' }}

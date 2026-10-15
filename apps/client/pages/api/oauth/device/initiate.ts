@@ -10,6 +10,7 @@ import {
 import { z } from 'zod';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
+import { getClientIp } from '@server/utils/ip';
 
 const InitiateRequestSchema = z.object({
   client_id: z.enum(OAUTH_DEVICE_CLIENT_IDS),
@@ -75,7 +76,7 @@ const handler = baseApi({ auth: false })
       expiresAt: new Date(Date.now() + 600000), // 10 minutes
       approvedAt: null,
       lastPolledAt: null,
-      ipAddress: req.socket.remoteAddress || 'unknown',
+      ipAddress: getClientIp(req),
       userAgent: req.headers['user-agent'] || 'unknown',
       pollCount: 0,
       verificationAttempts: 0,

@@ -47,6 +47,7 @@ import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/
 import { isLocalAppUrl } from '@server/utils/validators';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
+import { getClientIp } from '@server/utils/ip';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -76,7 +77,7 @@ function sanitizeOAuthError(error: string): string {
 }
 
 const handleOktaCallback = async (req: Request, res: Response) => {
-  const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+  const ip = getClientIp(req);
   const userAgent = req.headers['user-agent'] || 'unknown';
 
   try {

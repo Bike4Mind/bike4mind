@@ -1,4 +1,5 @@
 import { ChatModels } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
 import { OpenAIBackend, toProviderEndUserId, type CompletionInfo } from '@bike4mind/llm-adapters';
@@ -428,6 +429,13 @@ export async function performDeepResearch(
             depth: state.depth,
           });
           log(`🔬 Deep Research: ${searcher.name} search failed:`, error);
+          // The provider attempts log transient failures at warn, and a search that throws has no
+          // caller here to alert on it, so this catch is deep research's only error-level record.
+          Logger.globalInstance.error('Deep Research: search failed', {
+            searcher: searcher.name,
+            query: currentQuery,
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
 

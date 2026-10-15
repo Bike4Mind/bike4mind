@@ -24,7 +24,6 @@ import {
   SCHEDULE_MESSAGE_CALLBACK_ID,
   parseScheduleMessageSubmission,
   SlackAuditLogger,
-  getClientIp,
   handleGlobalShortcut,
   handleCreateNotebookSubmission,
   handleQuickAskSubmission,
@@ -57,6 +56,7 @@ import timezone from 'dayjs/plugin/timezone';
 import { McpServer } from '@bike4mind/database/ai';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { ImageModels, IUserDocument, McpServerName } from '@bike4mind/common';
+import { getClientIp } from '@server/utils/ip';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);

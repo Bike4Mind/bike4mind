@@ -138,6 +138,128 @@ describe('AuthSessionModel repository', () => {
     expect((await authSessionRepository.findBySid('reset'))?.replayUses).toBe(0);
   });
 
+  it('markStepUp stamps only a live session owned by the given user', async () => {
+    const at = new Date();
+    await authSessionRepository.create(base({ sid: 'su', userId: 'owner' }));
+    expect((await authSessionRepository.markStepUp('su', 'owner', at))?.stepUpAt?.getTime()).toBe(at.getTime());
+
+    expect(await authSessionRepository.markStepUp('su', 'someone-else', at)).toBeNull();
+    await authSessionRepository.create(base({ sid: 'su-revoked', userId: 'owner', revokedAt: new Date() }));
+    expect(await authSessionRepository.markStepUp('su-revoked', 'owner', at)).toBeNull();
+    await authSessionRepository.create(
+      base({ sid: 'su-expired', userId: 'owner', expiresAt: new Date(Date.now() - 1000) })
+    );
+    expect(await authSessionRepository.markStepUp('su-expired', 'owner', at)).toBeNull();
+    expect(await authSessionRepository.markStepUp('missing', 'owner', at)).toBeNull();
+  });
+
+  it('counts wrong step-up passwords on a live owned session and clears them on a successful step-up', async () => {
+    await authSessionRepository.create(base({ sid: 'pw', userId: 'owner' }));
+    expect(await authSessionRepository.recordStepUpPasswordFailure('pw', 'owner')).toBe(1);
+    expect(await authSessionRepository.recordStepUpPasswordFailure('pw', 'owner')).toBe(2);
+    expect(await authSessionRepository.recordStepUpPasswordFailure('pw', 'someone-else')).toBeNull();
+
+    await authSessionRepository.markStepUp('pw', 'owner', new Date());
+    expect(await authSessionRepository.recordStepUpPasswordFailure('pw', 'owner')).toBe(1);
+
+    await authSessionRepository.create(base({ sid: 'pw-revoked', userId: 'owner', revokedAt: new Date() }));
+    expect(await authSessionRepository.recordStepUpPasswordFailure('pw-revoked', 'owner')).toBeNull();
+    expect(await authSessionRepository.recordStepUpPasswordFailure('missing', 'owner')).toBeNull();
+  });
+
+  describe('emailed step-up challenge', () => {
+    const challenge = (o: Record<string, unknown> = {}) => ({
+      tokenHash: 'tok',
+      codeHash: 'code',
+      expiresAt: new Date(Date.now() + 60_000),
+      ...o,
+    });
+
+    it('is stored hidden, readable only by its owner, and replaced by a new send', async () => {
+      await authSessionRepository.create(base({ sid: 'ch', userId: 'owner' }));
+      expect(await authSessionRepository.setStepUpEmailChallenge('ch', 'owner', challenge())).toBe(true);
+      expect(await authSessionRepository.setStepUpEmailChallenge('ch', 'other', challenge())).toBe(false);
+
+      const plain = await AuthSessionModel.findOne({ sid: 'ch' }).lean();
+      expect(plain?.stepUpEmailChallenge).toBeUndefined();
+      expect((await authSessionRepository.findStepUpEmailChallenge('ch', 'owner'))?.tokenHash).toBe('tok');
+      expect(await authSessionRepository.findStepUpEmailChallenge('ch', 'other')).toBeNull();
+
+      await authSessionRepository.recordStepUpEmailChallengeFailure('ch', 'tok');
+      await authSessionRepository.setStepUpEmailChallenge('ch', 'owner', challenge({ tokenHash: 'tok2' }));
+      const replaced = await authSessionRepository.findStepUpEmailChallenge('ch', 'owner');
+      expect(replaced).toMatchObject({ tokenHash: 'tok2', attempts: 0 });
+    });
+
+    it('hides an expired challenge', async () => {
+      await authSessionRepository.create(base({ sid: 'ch-exp', userId: 'owner' }));
+      await authSessionRepository.setStepUpEmailChallenge(
+        'ch-exp',
+        'owner',
+        challenge({ expiresAt: new Date(Date.now() - 1000) })
+      );
+      expect(await authSessionRepository.findStepUpEmailChallenge('ch-exp', 'owner')).toBeNull();
+    });
+
+    it('counts failures only against the matching challenge', async () => {
+      await authSessionRepository.create(base({ sid: 'ch-f', userId: 'owner' }));
+      await authSessionRepository.setStepUpEmailChallenge('ch-f', 'owner', challenge());
+      expect(await authSessionRepository.recordStepUpEmailChallengeFailure('ch-f', 'tok')).toBe(1);
+      expect(await authSessionRepository.recordStepUpEmailChallengeFailure('ch-f', 'tok')).toBe(2);
+      expect(await authSessionRepository.recordStepUpEmailChallengeFailure('ch-f', 'stale')).toBeNull();
+    });
+
+    it('consume stamps stepUpAt and succeeds exactly once', async () => {
+      await authSessionRepository.create(base({ sid: 'ch-c', userId: 'owner' }));
+      await authSessionRepository.setStepUpEmailChallenge('ch-c', 'owner', challenge());
+      const at = new Date();
+      expect(await authSessionRepository.consumeStepUpEmailChallenge('ch-c', 'other', 'tok', at, 5)).toBeNull();
+      const consumed = await authSessionRepository.consumeStepUpEmailChallenge('ch-c', 'owner', 'tok', at, 5);
+      expect(consumed?.stepUpAt?.getTime()).toBe(at.getTime());
+      expect(await authSessionRepository.consumeStepUpEmailChallenge('ch-c', 'owner', 'tok', at, 5)).toBeNull();
+      expect(await authSessionRepository.findStepUpEmailChallenge('ch-c', 'owner')).toBeNull();
+    });
+
+    it('consume refuses a challenge that has used up its attempts', async () => {
+      await authSessionRepository.create(base({ sid: 'ch-max', userId: 'owner' }));
+      await authSessionRepository.setStepUpEmailChallenge('ch-max', 'owner', challenge());
+      await authSessionRepository.recordStepUpEmailChallengeFailure('ch-max', 'tok');
+      await authSessionRepository.recordStepUpEmailChallengeFailure('ch-max', 'tok');
+
+      expect(
+        await authSessionRepository.consumeStepUpEmailChallenge('ch-max', 'owner', 'tok', new Date(), 2)
+      ).toBeNull();
+      const stillOutstanding = await authSessionRepository.findStepUpEmailChallenge('ch-max', 'owner');
+      expect(stillOutstanding).toMatchObject({ tokenHash: 'tok', attempts: 2 });
+      expect(
+        await authSessionRepository.consumeStepUpEmailChallenge('ch-max', 'owner', 'tok', new Date(), 3)
+      ).not.toBeNull();
+    });
+
+    it('consume refuses a challenge that expired before the write', async () => {
+      await authSessionRepository.create(base({ sid: 'ch-late', userId: 'owner' }));
+      const expiresAt = new Date(Date.now() + 60_000);
+      await authSessionRepository.setStepUpEmailChallenge('ch-late', 'owner', challenge({ expiresAt }));
+
+      const afterExpiry = new Date(expiresAt.getTime() + 1);
+      expect(
+        await authSessionRepository.consumeStepUpEmailChallenge('ch-late', 'owner', 'tok', afterExpiry, 5)
+      ).toBeNull();
+      expect((await AuthSessionModel.findOne({ sid: 'ch-late' }).lean())?.stepUpAt ?? null).toBeNull();
+    });
+
+    it('consume and failure counting refuse a revoked session', async () => {
+      await authSessionRepository.create(base({ sid: 'ch-rev', userId: 'owner' }));
+      await authSessionRepository.setStepUpEmailChallenge('ch-rev', 'owner', challenge());
+      await authSessionRepository.revokeBySid('ch-rev');
+
+      expect(await authSessionRepository.recordStepUpEmailChallengeFailure('ch-rev', 'tok')).toBeNull();
+      expect(
+        await authSessionRepository.consumeStepUpEmailChallenge('ch-rev', 'owner', 'tok', new Date(), 5)
+      ).toBeNull();
+    });
+  });
+
   it('revokeBySid sets revokedAt exactly once', async () => {
     await authSessionRepository.create(base({ sid: 'rev' }));
     expect((await authSessionRepository.revokeBySid('rev'))?.revokedAt).toBeTruthy();
@@ -164,6 +286,36 @@ describe('AuthSessionModel repository', () => {
     expect(updated?.expiresAt.getTime()).toBe(slid.getTime());
     // Possession of the CURRENT secret is the only thing that refills the recovery allowance.
     expect(updated?.recoveries).toBe(0);
+  });
+
+  it('stepUpAt survives refresh rotation and recovery rotation', async () => {
+    const stepUpAt = new Date(Date.now() - 60_000);
+    await authSessionRepository.create(base({ sid: 'keep-rot', refreshTokenHash: 'h0', stepUpAt }));
+    const rotated = await authSessionRepository.rotateHash('keep-rot', {
+      expectedCurrentHash: 'h0',
+      nextHash: 'h1',
+      replayExpiresAt: new Date(Date.now() + 5000),
+      newExpiresAt: FAR_FUTURE(),
+    });
+    expect(rotated?.stepUpAt?.getTime()).toBe(stepUpAt.getTime());
+
+    await authSessionRepository.create(
+      base({
+        sid: 'keep-rec',
+        refreshTokenHash: 'orphaned',
+        previousRefreshTokenHash: 'held',
+        graceExpiresAt: new Date(Date.now() - 1000),
+        stepUpAt,
+      })
+    );
+    const recovered = await authSessionRepository.recoverRotateHash('keep-rec', {
+      expectedPreviousHash: 'held',
+      nextHash: 'recovered',
+      replayExpiresAt: new Date(Date.now() + 5000),
+      maxRecoveries: 3,
+    });
+    expect(recovered?.refreshTokenHash).toBe('recovered');
+    expect(recovered?.stepUpAt?.getTime()).toBe(stepUpAt.getTime());
   });
 
   it('recoverRotateHash rotates from the previous hash once its grace window has closed', async () => {
