@@ -32,7 +32,7 @@ import {
   PERMANENT_FAILURE_CODES,
   RetryableError,
   WEBHOOK_HTTP_TIMEOUT_MS,
-} from '@server/webhooks/signedWebhook';
+} from '@workers/webhooks/signedWebhook';
 import {
   recordWebhookDeliverySuccess,
   recordWebhookDeliveryFailure,

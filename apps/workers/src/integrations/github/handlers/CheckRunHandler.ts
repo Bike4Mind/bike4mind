@@ -1,13 +1,13 @@
 /**
- * GitHub Webhook - Check Suite Event Handler
+ * GitHub Webhook - Check Run Event Handler
  *
- * Handles `check_suite` events by logging them for observability.
+ * Handles `check_run` events by logging them for observability.
  *
  * NOTE: Notifications are intentionally NOT sent from this handler to avoid
  * duplicate notifications. CI failures are notified via WorkflowRunHandler
  * which provides a single, comprehensive notification per workflow failure.
- * Both check_suite and workflow_run events fire for CI failures, so notifying
- * from both would cause duplicate notifications.
+ * Check runs fire for each individual check (could be many per workflow),
+ * leading to notification spam if we notify here.
  */
 
 import { IMcpServerDocument } from '@bike4mind/common';
@@ -16,13 +16,13 @@ import {
   GitHubEventHandler,
   GitHubHandlerContext,
   GitHubHandlerResult,
-  GitHubCheckSuitePayload,
+  GitHubCheckRunPayload,
   GitHubWebhookPayload,
-} from '../types';
+} from '@server/integrations/github/types';
 import { GitHubSlackNotifier } from '@bike4mind/slack';
 
-export class CheckSuiteHandler implements GitHubEventHandler {
-  eventType = 'check_suite' as const;
+export class CheckRunHandler implements GitHubEventHandler {
+  eventType = 'check_run' as const;
   private logger?: Logger;
   // Notifier kept for potential future use with deduplication
   private _notifier: GitHubSlackNotifier;
@@ -37,28 +37,28 @@ export class CheckSuiteHandler implements GitHubEventHandler {
     mcpServer?: IMcpServerDocument,
     _context?: GitHubHandlerContext
   ): Promise<GitHubHandlerResult> {
-    const checkSuite = payload as GitHubCheckSuitePayload;
-    const repo = checkSuite.repository?.full_name || 'unknown';
+    const checkRun = payload as GitHubCheckRunPayload;
+    const repo = checkRun.repository?.full_name || 'unknown';
     const notifiedUserIds: string[] = [];
 
-    this.logger?.info('[GITHUB-CHECK-SUITE] Processing check_suite event', {
-      action: checkSuite.action,
-      status: checkSuite.check_suite.status,
-      conclusion: checkSuite.check_suite.conclusion,
-      branch: checkSuite.check_suite.head_branch,
+    this.logger?.info('[GITHUB-CHECK-RUN] Processing check_run event', {
+      action: checkRun.action,
+      checkName: checkRun.check_run.name,
+      status: checkRun.check_run.status,
+      conclusion: checkRun.check_run.conclusion,
       repo,
       mcpServerId: mcpServer?.id,
     });
 
     // Log failures for observability but don't notify
     // (WorkflowRunHandler handles CI failure notifications to avoid spam)
-    if (checkSuite.action === 'completed') {
-      const conclusion = checkSuite.check_suite.conclusion;
+    if (checkRun.action === 'completed') {
+      const conclusion = checkRun.check_run.conclusion;
       if (conclusion === 'failure' || conclusion === 'timed_out') {
-        this.logger?.info('[GITHUB-CHECK-SUITE] Check suite failed (notification via workflow_run)', {
+        this.logger?.info('[GITHUB-CHECK-RUN] Check failed (notification via workflow_run)', {
+          checkName: checkRun.check_run.name,
           conclusion,
-          commitSha: checkSuite.check_suite.head_sha,
-          branch: checkSuite.check_suite.head_branch,
+          commitSha: checkRun.check_run.head_sha,
           repo,
         });
       }

@@ -18,7 +18,7 @@ import {
   GitHubHandlerResult,
   GitHubPushPayload,
   GitHubWebhookPayload,
-} from '../types';
+} from '@server/integrations/github/types';
 import { GitHubSlackNotifier, buildPushBlocks } from '@bike4mind/slack';
 import { webhookSubscriptionRepository, User } from '@bike4mind/database';
 import { emptyNotifyResult, toHandlerResult } from './notifyResultUtils';

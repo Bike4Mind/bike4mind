@@ -1,4 +1,4 @@
-import type { GitHubLakeCandidate } from './lakeFileFilter';
+import type { GitHubLakeCandidate } from '@server/integrations/github/dataLake/lakeFileFilter';
 
 export type GitHubLakeStoredCopy = {
   id: string;

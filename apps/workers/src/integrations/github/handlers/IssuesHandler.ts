@@ -18,7 +18,7 @@ import {
   GitHubHandlerResult,
   GitHubIssuesPayload,
   GitHubWebhookPayload,
-} from '../types';
+} from '@server/integrations/github/types';
 import {
   GitHubSlackNotifier,
   NotifyResult,
@@ -27,7 +27,7 @@ import {
   buildIssueAssignedBlocks,
 } from '@bike4mind/slack';
 import { webhookSubscriptionRepository, User } from '@bike4mind/database';
-import { dispatchIssueToSre, syncSreIssueStateFromWebhook } from '../sreWebhookDispatch';
+import { dispatchIssueToSre, syncSreIssueStateFromWebhook } from '@server/integrations/github/sreWebhookDispatch';
 import { emptyNotifyResult, mergeNotifyResults, toHandlerResult } from './notifyResultUtils';
 
 export class IssuesHandler implements GitHubEventHandler {

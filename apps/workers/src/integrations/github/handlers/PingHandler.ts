@@ -13,7 +13,7 @@ import {
   GitHubHandlerResult,
   GitHubPingPayload,
   GitHubWebhookPayload,
-} from '../types';
+} from '@server/integrations/github/types';
 
 export class PingHandler implements GitHubEventHandler {
   eventType = 'ping' as const;

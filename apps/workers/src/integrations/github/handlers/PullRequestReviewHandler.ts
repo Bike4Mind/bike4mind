@@ -15,7 +15,7 @@ import {
   GitHubHandlerResult,
   GitHubPullRequestReviewPayload,
   GitHubWebhookPayload,
-} from '../types';
+} from '@server/integrations/github/types';
 import {
   GitHubSlackNotifier,
   NotifyResult,

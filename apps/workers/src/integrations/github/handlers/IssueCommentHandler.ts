@@ -13,7 +13,7 @@ import {
   GitHubHandlerResult,
   GitHubIssueCommentPayload,
   GitHubWebhookPayload,
-} from '../types';
+} from '@server/integrations/github/types';
 import { GitHubSlackNotifier, buildMentionBlocks } from '@bike4mind/slack';
 import { toHandlerResult } from './notifyResultUtils';
 

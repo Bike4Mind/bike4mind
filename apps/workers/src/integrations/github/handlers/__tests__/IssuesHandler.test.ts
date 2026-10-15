@@ -34,7 +34,7 @@ vi.mock('@server/integrations/github/sreWebhookDispatch', () => ({
   syncSreIssueStateFromWebhook: mockSyncSreIssueState,
 }));
 
-import { IssuesHandler } from '@server/integrations/github/handlers/IssuesHandler';
+import { IssuesHandler } from '@workers/integrations/github/handlers/IssuesHandler';
 import { GitHubSlackNotifier } from '@bike4mind/slack';
 import type { GitHubIssuesPayload } from '@server/integrations/github/types';
 import type { IMcpServerDocument } from '@bike4mind/common';

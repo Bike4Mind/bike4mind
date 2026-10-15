@@ -12,7 +12,7 @@ import {
 import { GenerationCallbackMessageSchema } from '@server/generationCallback/messages';
 import { toQuestPollBody } from '@server/utils/questPollBody';
 import { assertUrlAllowed, SsrfError } from '@server/utils/ssrfProtection';
-import { buildSignedWebhookHeaders, RetryableError, WEBHOOK_HTTP_TIMEOUT_MS } from '@server/webhooks/signedWebhook';
+import { buildSignedWebhookHeaders, RetryableError, WEBHOOK_HTTP_TIMEOUT_MS } from '@workers/webhooks/signedWebhook';
 
 /**
  * The only 4xx worth another attempt. Every other 4xx is permanent, as GENERATION_CALLBACK_DESCRIPTION

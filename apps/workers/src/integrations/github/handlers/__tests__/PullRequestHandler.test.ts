@@ -33,7 +33,7 @@ vi.mock('@bike4mind/database', () => ({
 
 import { PullRequestHandler } from '../PullRequestHandler';
 import { GitHubSlackNotifier } from '@bike4mind/slack';
-import type { GitHubPullRequestPayload } from '../../types';
+import type { GitHubPullRequestPayload } from '@server/integrations/github/types';
 
 function createLabeledPayload(
   overrides: Partial<{

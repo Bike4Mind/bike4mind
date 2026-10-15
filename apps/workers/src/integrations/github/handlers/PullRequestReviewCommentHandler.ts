@@ -14,7 +14,7 @@ import {
   GitHubHandlerResult,
   GitHubPullRequestReviewCommentPayload,
   GitHubWebhookPayload,
-} from '../types';
+} from '@server/integrations/github/types';
 import { GitHubSlackNotifier, NotifyResult, buildPRReviewCommentBlocks } from '@bike4mind/slack';
 import { mergeNotifyResults, toHandlerResult } from './notifyResultUtils';
 

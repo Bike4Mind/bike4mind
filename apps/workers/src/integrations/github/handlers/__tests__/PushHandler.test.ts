@@ -22,7 +22,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-import { PushHandler } from '@server/integrations/github/handlers/PushHandler';
+import { PushHandler } from '@workers/integrations/github/handlers/PushHandler';
 import { GitHubSlackNotifier } from '@bike4mind/slack';
 import type { GitHubPushPayload } from '@server/integrations/github/types';
 

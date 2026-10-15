@@ -9,7 +9,7 @@ vi.mock('@bike4mind/slack', () => ({
   buildMentionBlocks: vi.fn().mockReturnValue({ text: 'mention', blocks: [] }),
 }));
 
-import { IssueCommentHandler } from '@server/integrations/github/handlers/IssueCommentHandler';
+import { IssueCommentHandler } from '@workers/integrations/github/handlers/IssueCommentHandler';
 import { GitHubSlackNotifier } from '@bike4mind/slack';
 import type { GitHubIssueCommentPayload } from '@server/integrations/github/types';
 import type { IMcpServerDocument } from '@bike4mind/common';

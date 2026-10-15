@@ -14,7 +14,7 @@ import {
   GitHubHandlerResult,
   GitHubWorkflowRunPayload,
   GitHubWebhookPayload,
-} from '../types';
+} from '@server/integrations/github/types';
 import { GitHubSlackNotifier, NotifyResult, buildCIFailedBlocks, buildCIPassedBlocks } from '@bike4mind/slack';
 import { toHandlerResult } from './notifyResultUtils';
 
