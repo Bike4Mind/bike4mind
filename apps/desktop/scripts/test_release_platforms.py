@@ -46,6 +46,12 @@ class ReleasePlatformsTest(unittest.TestCase):
         self.assertNotIn('macos-15-intel', matrix)
         self.assertNotIn('max-parallel: 1', WORKFLOW)
 
+    def test_pr_mac_packages_are_explicitly_signed_and_verified(self):
+        packaging = WORKFLOW.split('- name: Package installers', 1)[1].split('- name: Sign and notarize', 1)[0]
+        self.assertIn('-c.mac.identity=-', packaging)
+        self.assertIn('codesign --verify --deep --strict', packaging)
+        self.assertNotIn('-c.forceCodeSigning=false', WORKFLOW)
+
     def test_macos_runner_is_configurable(self):
         matrix = WORKFLOW.split('        include:\n', 1)[1].split('    runs-on:', 1)[0]
         self.assertIn("- os: ${{ vars.OSX_RUNNER_LABEL || 'macos-26-runner' }}", matrix)

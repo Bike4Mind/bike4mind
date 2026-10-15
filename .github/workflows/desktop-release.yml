@@ -131,7 +131,10 @@ jobs:
         run: |
           pnpm build
           if [ "$PLATFORM" = mac ]; then
-            pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
+            pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.mac.identity=- -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
+            app_dir=release/mac
+            if [ "$ARCH" = arm64 ]; then app_dir=release/mac-arm64; fi
+            codesign --verify --deep --strict "$app_dir/Bike4Mind.app"
           else
             pnpm exec electron-builder --linux --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
           fi

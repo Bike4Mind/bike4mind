@@ -139,6 +139,16 @@ Installer versions follow SemVer, selected automatically by
 (`0.1.0`). After that, desktop release tags are the version source of truth; there is
 no version-bump commit or separate package release PR.
 
+Local `pnpm package:*` commands use the highest stable desktop tag reachable from
+the checkout, with `-local.<commit>` appended so an unreleased build does not
+impersonate a published installer. Fetch tags with `git fetch origin --tags` first.
+Missing tags fail with instructions instead of silently producing version 0.1.0.
+Set `DESKTOP_VERSION=1.0.1-test.1` for an explicit local test version. Local builds
+never publish. CI continues to select its own version and call the builder directly.
+Local macOS packaging explicitly uses ad-hoc signing, not Developer ID or
+notarization. Set `DESKTOP_MAC_IDENTITY` to an explicit Developer ID identity when
+needed. A valid ad-hoc signature does not guarantee fresh-download Gatekeeper acceptance.
+
 - `feat: ...` bumps minor; `fix: ...`, dependency updates, builds, refactors, and
   other relevant changes bump patch.
 - `type!: ...` or a `BREAKING CHANGE:` footer bumps major, including before `1.0`.
@@ -267,14 +277,16 @@ state for an unbranded fork: Local Dev and a self-hosted URL still work.
 
 ### Signing
 
-Nothing in `electron-builder.yml` names a certificate, and an unsigned build is the
-supported default - it produces a working dmg on a machine with no credentials at all.
-electron-builder logs `skipped macOS application code signing` and ad-hoc signs instead,
-which is the minimum macOS needs to run an arm64 build locally. An unsigned app is still
-quarantined on another machine: Gatekeeper needs a right-click -> Open, or
-`xattr -d com.apple.quarantine`.
+Nothing in `electron-builder.yml` names a certificate. Local package scripts explicitly
+request ad-hoc signing; skipping signing can leave an invalid linker signature after
+Electron is repackaged. Verify bundle integrity with `codesign --verify --deep --strict`.
+Ad-hoc signing is not notarization and does not establish the publisher's identity.
+Fresh-download Gatekeeper approval must be tested separately. Do not bypass an invalid
+signature by removing quarantine attributes.
 
-Signing turns itself on once credentials are in the environment:
+Direct electron-builder invocations (including the trusted CI signing job) can use
+credentials from the environment. Local package scripts additionally require
+`DESKTOP_MAC_IDENTITY` to opt into a Developer ID identity:
 
 | Variable | Effect |
 | --- | --- |
