@@ -115,6 +115,24 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       expect.objectContaining({ skipAutoOffers: true, promptMode: 'raw' })
     );
   });
+  // Same boundary: a workflow-style caller's integration isolation would silently lapse on the
+  // async path, handing a prompt the user did not write their MCP servers, agents and skills.
+  it('carries disableUserIntegrations onto questStartParams', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    const invoke = makeInvoke();
+    await invoke.invoke({
+      body: { ...body, disableUserIntegrations: true },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+
+    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ disableUserIntegrations: true }));
+  });
   // Same boundary: a route's server-set deniedTools (e.g. an API key's missing datalake:write)
   // would silently stop being enforced on the async path if the literal dropped it.
   it('carries deniedTools onto questStartParams', async () => {
