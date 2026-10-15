@@ -81,8 +81,7 @@ export const RequestButton = ({
       disabled={isPending}
       startDecorator={requested ? <CheckIcon sx={{ fontSize: '16px' }} /> : undefined}
       data-testid={testId}
-      onClick={event => {
-        event.stopPropagation();
+      onClick={() => {
         onToggle?.(integrationId, requested);
         toggle({ requested });
       }}

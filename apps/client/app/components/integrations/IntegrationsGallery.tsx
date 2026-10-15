@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { Box, Button, Input, Option, Select, Skeleton, Stack, TabList, Tabs, Typography } from '@mui/joy';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Box, Button, Input, Link, Option, Select, Skeleton, Stack, TabList, Tabs, Typography } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
 import {
   INTEGRATION_CATEGORY_LABELS,
@@ -79,6 +79,7 @@ function FilterSelect<T extends string>({
   total,
   onChange,
   testId,
+  ariaLabel,
   disabled,
 }: {
   name: string;
@@ -88,6 +89,8 @@ function FilterSelect<T extends string>({
   total: number;
   onChange: (value: T | 'all') => void;
   testId: string;
+  /** Names the select for assistive tech; its visible text is only the current value. */
+  ariaLabel: string;
   disabled?: boolean;
 }) {
   const active = value !== 'all';
@@ -112,7 +115,7 @@ function FilterSelect<T extends string>({
       }}
       renderValue={() => (active ? `${name}: ${activeLabel}` : allLabel)}
       slotProps={{
-        button: { 'data-testid': `${testId}-filter-btn` },
+        button: { 'data-testid': `${testId}-filter-btn`, 'aria-label': ariaLabel },
         listbox: { placement: 'bottom-end', sx: { minWidth: '200px' } },
       }}
       sx={{ '--Select-minHeight': '36px', flex: { xs: '1 1 0', sm: '0 0 auto' }, minWidth: { sm: '150px' } }}
@@ -167,20 +170,70 @@ const rowSx = {
   borderColor: 'divider',
 } as const;
 
-const RowText = ({ name, description, muted }: { name: string; description: string; muted: boolean }) => (
-  <Stack direction="row" alignItems="baseline" gap="10px" sx={{ minWidth: 0 }}>
-    <Typography
-      level="body-sm"
-      noWrap
-      sx={{ fontWeight: 600, fontSize: '13.5px', flexShrink: 0, color: muted ? 'text.secondary' : 'text.primary' }}
-    >
-      {name}
-    </Typography>
-    <Typography level="body-sm" noWrap sx={{ minWidth: 0, fontSize: '13px', color: 'text.secondary' }}>
-      {description}
-    </Typography>
-  </Stack>
+/** What opens an entry's drawer: a real button on the name, stretched over its whole row or card by its overlay. */
+interface Opener {
+  onOpen: () => void;
+  testId: string;
+}
+
+const OpenerName = ({
+  name,
+  opener,
+  sx,
+}: {
+  name: string;
+  opener: Opener;
+  sx: Record<string, string | number | undefined>;
+}) => (
+  <Link
+    component="button"
+    type="button"
+    overlay
+    underline="none"
+    aria-label={`${name} details`}
+    onClick={opener.onOpen}
+    data-testid={opener.testId}
+    sx={{ textAlign: 'left', cursor: 'pointer', ...sx }}
+  >
+    {name}
+  </Link>
 );
+
+// Above the opener's overlay, so the controls inside a row or card stay clickable.
+const aboveOverlaySx = { position: 'relative', zIndex: 1 } as const;
+
+const RowText = ({
+  name,
+  description,
+  muted,
+  opener,
+}: {
+  name: string;
+  description: string;
+  muted: boolean;
+  opener?: Opener;
+}) => {
+  const nameSx = {
+    fontWeight: 600,
+    fontSize: '13.5px',
+    flexShrink: 0,
+    color: muted ? 'text.secondary' : 'text.primary',
+  };
+  return (
+    <Stack direction="row" alignItems="baseline" gap="10px" sx={{ minWidth: 0 }}>
+      {opener ? (
+        <OpenerName name={name} opener={opener} sx={{ ...nameSx, whiteSpace: 'nowrap' }} />
+      ) : (
+        <Typography level="body-sm" noWrap sx={nameSx}>
+          {name}
+        </Typography>
+      )}
+      <Typography level="body-sm" noWrap sx={{ minWidth: 0, fontSize: '13px', color: 'text.secondary' }}>
+        {description}
+      </Typography>
+    </Stack>
+  );
+};
 
 const cardGridSx = {
   display: 'grid',
@@ -201,25 +254,45 @@ const cardSx = (soon: boolean) =>
     borderStyle: soon ? 'dashed' : 'solid',
     borderColor: 'divider',
     backgroundColor: soon ? 'transparent' : 'background.surface',
+    position: 'relative',
   }) as const;
 
-const CardHead = ({ logo, name, sub, muted }: { logo: ReactNode; name: string; sub: string; muted: boolean }) => (
-  <Stack direction="row" alignItems="center" gap="12px" sx={{ minWidth: 0 }}>
-    {logo}
-    <Box sx={{ minWidth: 0 }}>
-      <Typography
-        level="title-sm"
-        noWrap
-        sx={{ fontSize: '15px', fontWeight: 600, color: muted ? 'text.secondary' : 'text.primary' }}
-      >
-        {name}
-      </Typography>
-      <Typography level="body-xs" noWrap sx={{ color: 'text.tertiary' }}>
-        {sub}
-      </Typography>
-    </Box>
-  </Stack>
-);
+const CardHead = ({
+  logo,
+  name,
+  sub,
+  muted,
+  opener,
+}: {
+  logo: ReactNode;
+  name: string;
+  sub: string;
+  muted: boolean;
+  opener?: Opener;
+}) => {
+  const nameSx = { fontSize: '15px', fontWeight: 600, color: muted ? 'text.secondary' : 'text.primary' };
+  return (
+    <Stack direction="row" alignItems="center" gap="12px" sx={{ minWidth: 0 }}>
+      {logo}
+      <Box sx={{ minWidth: 0 }}>
+        {opener ? (
+          <OpenerName
+            name={name}
+            opener={opener}
+            sx={{ ...nameSx, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          />
+        ) : (
+          <Typography level="title-sm" noWrap sx={nameSx}>
+            {name}
+          </Typography>
+        )}
+        <Typography level="body-xs" noWrap sx={{ color: 'text.tertiary' }}>
+          {sub}
+        </Typography>
+      </Box>
+    </Stack>
+  );
+};
 
 const CardText = ({ children }: { children: ReactNode }) => (
   <Typography level="body-sm" sx={{ flex: 1, fontSize: '13.5px', color: 'text.secondary' }}>
@@ -381,10 +454,7 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
         color={primary ? 'primary' : 'neutral'}
         loading={isPending(id)}
         data-testid={testId}
-        onClick={event => {
-          event.stopPropagation();
-          onClick();
-        }}
+        onClick={onClick}
         sx={{ '--Button-minHeight': '28px', whiteSpace: 'nowrap' }}
       >
         {label}
@@ -397,20 +467,7 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
     return button(SET_UP_IDS.includes(id) ? 'Set up' : 'Details', open);
   };
 
-  // Rows and cards open the drawer on click, Enter or Space; the buttons inside stop propagation.
-  const openerProps = (id: IntegrationId, testId: string) => ({
-    role: 'button',
-    tabIndex: 0,
-    'data-testid': testId,
-    onClick: () => openDrawer(id),
-    onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
-      if (event.target !== event.currentTarget) return;
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        openDrawer(id);
-      }
-    },
-  });
+  const openerFor = (id: IntegrationId, testId: string): Opener => ({ onOpen: () => openDrawer(id), testId });
 
   const requestCount = (row: DerivedIntegration): string => {
     const count = countOf(row.integration.id);
@@ -423,20 +480,24 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
     return (
       <Box
         key={integration.id}
-        {...openerProps(integration.id, `integrations-row-${integration.id}`)}
+        data-testid={`integrations-row-${integration.id}`}
         sx={theme => ({
           ...rowSx,
-          cursor: 'pointer',
+          position: 'relative',
           '&:hover': { backgroundColor: theme.palette.background.level1 },
-          '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '-2px' },
         })}
       >
         <IntegrationLogo logo={integration.logo} muted={soon} />
-        <RowText name={integration.name} description={integration.description} muted={soon} />
+        <RowText
+          name={integration.name}
+          description={integration.description}
+          muted={soon}
+          opener={openerFor(integration.id, `integrations-open-btn-${integration.id}`)}
+        />
         <Typography level="body-xs" noWrap sx={{ color: 'text.tertiary' }}>
           {INTEGRATION_CATEGORY_LABELS[integration.category]}
         </Typography>
-        <Box sx={{ minWidth: 0 }}>
+        <Box sx={{ minWidth: 0, ...(row.adminOnly ? aboveOverlaySx : {}) }}>
           <IntegrationStatusLabel derived={row} testId={`integrations-status-${integration.id}`} />
         </Box>
         <Typography
@@ -447,7 +508,9 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
         >
           {requestCount(row)}
         </Typography>
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>{action(row, connections[integration.id])}</Box>
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', ...aboveOverlaySx }}>
+          {action(row, connections[integration.id])}
+        </Box>
       </Box>
     );
   };
@@ -457,24 +520,19 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
     const soon = row.status === 'coming-soon';
     const count = requestCount(row);
     return (
-      <Box
-        key={integration.id}
-        {...openerProps(integration.id, `integrations-card-${integration.id}`)}
-        sx={theme => ({
-          ...cardSx(soon),
-          cursor: 'pointer',
-          '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '2px' },
-        })}
-      >
+      <Box key={integration.id} data-testid={`integrations-card-${integration.id}`} sx={cardSx(soon)}>
         <CardHead
           logo={<IntegrationLogo logo={integration.logo} size={44} muted={soon} />}
           name={integration.name}
           sub={INTEGRATION_CATEGORY_LABELS[integration.category]}
           muted={soon}
+          opener={openerFor(integration.id, `integrations-open-btn-${integration.id}`)}
         />
         <CardText>{integration.description}</CardText>
         <Stack direction="row" alignItems="center" justifyContent="space-between" gap="8px">
-          <IntegrationStatusLabel derived={row} testId={`integrations-status-${integration.id}`} />
+          <Box sx={{ minWidth: 0, ...(row.adminOnly ? aboveOverlaySx : {}) }}>
+            <IntegrationStatusLabel derived={row} testId={`integrations-status-${integration.id}`} />
+          </Box>
           <Stack direction="row" alignItems="center" gap="10px">
             {count && (
               <Typography
@@ -486,7 +544,7 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
                 {count}
               </Typography>
             )}
-            {action(row, connections[integration.id])}
+            <Box sx={aboveOverlaySx}>{action(row, connections[integration.id])}</Box>
           </Stack>
         </Stack>
       </Box>
@@ -611,6 +669,7 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
           total={rows.length}
           onChange={changeFilter<IntegrationCategory | 'all'>('category', setCategory)}
           testId="integrations-category"
+          ariaLabel="Filter by category"
           disabled={!flagsReady}
         />
         <FilterSelect<Exclude<StatusFilter, 'all'>>
@@ -625,6 +684,7 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
           total={rows.length}
           onChange={changeFilter<StatusFilter>('status', setStatus)}
           testId="integrations-status"
+          ariaLabel="Filter by status"
           disabled={!flagsReady}
         />
       </>
@@ -641,6 +701,7 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
         total={MODEL_PROVIDERS.length}
         onChange={changeFilter<ModelProviderKind | 'all'>('kind', setModelKind)}
         testId="integrations-kind"
+        ariaLabel="Filter by model kind"
       />
     );
 

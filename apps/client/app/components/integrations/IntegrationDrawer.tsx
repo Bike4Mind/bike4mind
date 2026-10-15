@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { Box, Button, Divider, Drawer, IconButton, Stack, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
@@ -208,6 +208,7 @@ const IntegrationDrawer = ({
 }: IntegrationDrawerProps) => {
   const navigate = useNavigate();
   const currentUser = useUser(s => s.currentUser);
+  const titleId = useId();
 
   const manage = (id: IntegrationId): ReactNode => {
     const state = connection ?? { connected: false };
@@ -302,7 +303,7 @@ const IntegrationDrawer = ({
       anchor="right"
       open={!!derived}
       onClose={onClose}
-      slotProps={{ content: { sx: { width: { xs: '100%', sm: '560px' }, p: 0 } } }}
+      slotProps={{ content: { 'aria-labelledby': titleId, sx: { width: { xs: '100%', sm: '560px' }, p: 0 } } }}
     >
       {derived && integration && (
         <Box
@@ -312,7 +313,7 @@ const IntegrationDrawer = ({
           <Stack direction="row" alignItems="flex-start" gap="12px">
             <IntegrationLogo logo={integration.logo} size={40} muted={planned} />
             <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography level="title-lg" data-testid="integrations-drawer-title">
+              <Typography id={titleId} level="title-lg" data-testid="integrations-drawer-title">
                 {integration.name}
               </Typography>
               <Stack direction="row" alignItems="center" gap="10px" sx={{ mt: '2px' }}>

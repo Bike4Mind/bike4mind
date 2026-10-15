@@ -270,7 +270,7 @@ describe('IntegrationsGallery', () => {
 
   it('opens the drawer with capabilities and the existing management UI', async () => {
     renderGallery();
-    await userEvent.click(screen.getByTestId('integrations-row-github'));
+    await userEvent.click(screen.getByTestId('integrations-open-btn-github'));
 
     const drawer = await screen.findByTestId('integrations-drawer');
     expect(within(drawer).getByTestId('integrations-drawer-title')).toHaveTextContent('GitHub');
@@ -285,7 +285,7 @@ describe('IntegrationsGallery', () => {
 
   it('offers a request, not management, in a roadmap drawer', async () => {
     renderGallery();
-    await userEvent.click(screen.getByTestId('integrations-row-salesforce'));
+    await userEvent.click(screen.getByTestId('integrations-open-btn-salesforce'));
     const drawer = await screen.findByTestId('integrations-drawer');
     expect(within(drawer).getByText('Be the first to ask for it.')).toBeInTheDocument();
     await userEvent.click(within(drawer).getByTestId('integrations-drawer-request-btn-salesforce'));
@@ -294,7 +294,7 @@ describe('IntegrationsGallery', () => {
 
   it('links account integrations to their full settings', async () => {
     renderGallery();
-    await userEvent.click(screen.getByTestId('integrations-row-google-drive'));
+    await userEvent.click(screen.getByTestId('integrations-open-btn-google-drive'));
     const drawer = await screen.findByTestId('integrations-drawer');
     expect(within(drawer).getByTestId('integrations-drawer-disconnect-btn')).toHaveTextContent(
       'Disconnect Google Drive'
@@ -326,7 +326,7 @@ describe('IntegrationsGallery', () => {
 
     await userEvent.click(screen.getByTestId('integrations-request-btn-hubspot'));
     expect(h.toggleRequest).toHaveBeenCalledWith({ integrationId: 'hubspot', requested: false });
-    await userEvent.click(screen.getByTestId('integrations-card-notion'));
+    await userEvent.click(screen.getByTestId('integrations-open-btn-notion'));
     expect(await screen.findByTestId('integrations-drawer')).toBeInTheDocument();
   });
 
@@ -336,6 +336,73 @@ describe('IntegrationsGallery', () => {
     await userEvent.click(screen.getByTestId('integrations-tab-models'));
     expect(screen.getByTestId('integrations-model-card-anthropic')).toBeInTheDocument();
     expect(screen.queryAllByTestId(/^integrations-model-row-/)).toHaveLength(0);
+  });
+});
+
+describe('IntegrationsGallery accessibility', () => {
+  const nestedInteractive = (container: HTMLElement) =>
+    [...container.querySelectorAll('[role="button"], button, a[href]')].filter(el =>
+      el.parentElement?.closest('[role="button"], button, a[href]')
+    );
+
+  it.each([
+    ['rows', false],
+    ['cards', true],
+  ])('has no interactive element inside another, in %s', (_label, cards) => {
+    compact = cards;
+    renderGallery();
+    expect(nestedInteractive(screen.getByTestId('integrations-page-body'))).toEqual([]);
+    expect(document.querySelectorAll('[role="button"]')).toHaveLength(0);
+  });
+
+  it.each([
+    ['rows', false, 'integrations-row-github'],
+    ['cards', true, 'integrations-card-github'],
+  ])('opens a drawer from a real, named button on the name in %s, beside the action button', async (_l, cards, id) => {
+    compact = cards;
+    renderGallery();
+    const container = screen.getByTestId(id);
+    const opener = within(container).getByRole('button', { name: 'GitHub details' });
+    expect(opener).toHaveTextContent('GitHub');
+    expect(opener.tagName).toBe('BUTTON');
+    expect(opener).toHaveAttribute('type', 'button');
+    // The Connect action is a sibling control, not a descendant of the opener.
+    expect(opener.contains(within(container).getByTestId('integrations-action-btn-github'))).toBe(false);
+
+    opener.focus();
+    await userEvent.keyboard('{Enter}');
+    expect(await screen.findByTestId('integrations-drawer')).toBeInTheDocument();
+  });
+
+  it('opens the drawer from the keyboard with Space as well', async () => {
+    renderGallery();
+    screen.getByTestId('integrations-open-btn-notion').focus();
+    await userEvent.keyboard(' ');
+    expect(await screen.findByTestId('integrations-drawer')).toBeInTheDocument();
+  });
+
+  it('keeps the action buttons above the opener overlay', () => {
+    renderGallery();
+    const action = screen.getByTestId('integrations-action-btn-github');
+    expect(getComputedStyle(action.parentElement as HTMLElement).zIndex).toBe('1');
+    expect(getComputedStyle(action.parentElement as HTMLElement).position).toBe('relative');
+    expect(getComputedStyle(screen.getByTestId('integrations-row-github')).position).toBe('relative');
+  });
+
+  it('names the filter selects, whose visible text is only their value', async () => {
+    renderGallery();
+    expect(screen.getByRole('combobox', { name: 'Filter by category' })).toHaveTextContent('All categories');
+    expect(screen.getByRole('combobox', { name: 'Filter by status' })).toHaveTextContent('All statuses');
+
+    await userEvent.click(screen.getByTestId('integrations-tab-models'));
+    expect(screen.getByRole('combobox', { name: 'Filter by model kind' })).toHaveTextContent('All kinds');
+  });
+
+  it('labels the drawer dialog by its heading', async () => {
+    renderGallery();
+    await userEvent.click(screen.getByTestId('integrations-open-btn-github'));
+    const dialog = await screen.findByRole('dialog', { name: 'GitHub' });
+    expect(dialog).toContainElement(screen.getByTestId('integrations-drawer-title'));
   });
 });
 
@@ -439,12 +506,12 @@ describe('IntegrationsGallery analytics', () => {
     await userEvent.click(screen.getByTestId('integrations-action-btn-github'));
     expect(h.connect).toHaveBeenCalledWith('github');
 
-    await userEvent.click(screen.getByTestId('integrations-row-notion'));
+    await userEvent.click(screen.getByTestId('integrations-open-btn-notion'));
     const drawer = await screen.findByTestId('integrations-drawer');
     await userEvent.click(within(drawer).getByTestId('integrations-drawer-connect-btn'));
     expect(h.connect).toHaveBeenCalledWith('notion');
 
-    // The row's Connect button stops propagation, so it never also counts as opening the drawer.
+    // The row's Connect button sits beside the opener, so it never also counts as opening the drawer.
     expect(logged(IntegrationsEvents.INTEGRATIONS_CARD_OPENED).map(event => event.metadata)).toEqual([
       { integrationId: 'notion' },
     ]);
