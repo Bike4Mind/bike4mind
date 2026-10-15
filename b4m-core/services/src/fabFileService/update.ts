@@ -150,7 +150,11 @@ export const updateFabFile = async (
     }
     contentChanges.fileSize = fileSize;
     if (!fabFile.filePath) contentChanges.filePath = filePath;
-    await commitContentRewrite({ fabFileId: fabFile.id, newSize: fileSize }, db);
+    const committed = await commitContentRewrite({ fabFileId: fabFile.id, newSize: fileSize }, db);
+    if (!committed) {
+      // The row vanished (soft-deleted) after it was read: the bytes are uploaded but nothing was charged.
+      Logger.globalInstance.warn(`Content rewrite of FabFile ${fabFile.id} matched no live row; storage not charged`);
+    }
 
     contentChanges.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
     contentChanges.fileUrlExpireAt = new Date(Date.now() + EXPIRE_IN_SECONDS * 1000);

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
 import { FAB_FILE_CONTENT_REWRITE_PATCH, IFabFileDocument, IUserDocument } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { updateFabFile } from './update';
 
 describe('updateFabFile (upload moderation gate)', () => {
@@ -560,6 +561,18 @@ describe('updateFabFile (narrowed write pins)', () => {
 
       expect(dbUpdate.mock.calls[0][0]).toMatchObject({ fileSize: 8 });
       expect(mockAdapters.db.fabFiles.commitContentRewrite).toHaveBeenCalledWith('file-1', { fileSize: 8 }, undefined);
+    });
+
+    it('warns and charges nothing when the row is gone by the time the rewrite commits', async () => {
+      const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+      mockAdapters.db.fabFiles.commitContentRewrite.mockResolvedValue(null);
+      findUpdateAccessById.mockResolvedValue(textFile({ fileSize: 3, storageChargedAt: NOW }));
+
+      await run();
+
+      expect(mockAdapters.db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('matched no live row'));
+      warn.mockRestore();
     });
 
     it('persists a newly minted filePath on the first content write', async () => {
