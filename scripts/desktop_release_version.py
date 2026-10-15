@@ -9,6 +9,9 @@ from desktop_affected import affected, commit_affected
 
 
 VERSION = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)')
+# Retain the accidental release tag, but resume the beta line from its last 0.x release.
+WITHDRAWN_BASELINES = {'desktop-v1.0.0'}
+WITHDRAWN_SOURCE_RELEASES = {'desktop-v0.4.0', 'desktop-v0.5.0'}
 
 
 def git(*args):
@@ -35,6 +38,8 @@ def release_notes(version, previous, repository):
             message = git('show', '-s', '--format=%B', sha)
             changes.append((sha, message.splitlines()[0], bump_level(message)))
     reason = ['no semantic bump', 'patch', 'minor', 'major'][max((c[2] for c in changes), default=0)]
+    if version.startswith('0.') and reason == 'major':
+        reason = 'minor (breaking beta change)'
     if not previous:
         reason = 'initial package baseline'
     lines = [f'# Desktop {version}', '', f'Version selection: {reason}.', '', '## Changes', '']
@@ -48,13 +53,15 @@ def release_notes(version, previous, repository):
 
 
 def select_version(releases, baseline, preview='', title='', run=''):
-    if not VERSION.fullmatch(baseline):
-        raise ValueError('Desktop baseline must be major.minor.patch')
+    if not VERSION.fullmatch(baseline) or not baseline.startswith('0.'):
+        raise ValueError('Desktop baseline must be beta SemVer (0.minor.patch)')
     candidates = []
     for release in releases:
         tag = release['tag_name']
         match = re.fullmatch(r'desktop-v(' + VERSION.pattern + r')', tag)
-        if match and not release['prerelease']:
+        if match and not release['prerelease'] and tag not in WITHDRAWN_BASELINES:
+            if not match[1].startswith('0.'):
+                raise ValueError('Major desktop releases require an explicit beta policy change')
             candidates.append((tuple(map(int, match[1].split('.'))), tag, release))
     head = git('rev-parse', 'HEAD')
     previous = ''
@@ -68,7 +75,7 @@ def select_version(releases, baseline, preview='', title='', run=''):
         # Never reuse a version for a different commit or release an older checkout.
         subprocess.run(['git', 'merge-base', '--is-ancestor', released_sha, head], check=True)
         if released_sha == head and not preview:
-            return '.'.join(map(str, parts)), True, previous
+            return '.'.join(map(str, parts)), not release.get('withdrawn', False), previous
         if release.get('draft') and not preview:
             raise ValueError('Finish or remove the pending desktop draft release before publishing another commit')
         revision_range = f'{released_sha}..HEAD'
@@ -83,9 +90,7 @@ def select_version(releases, baseline, preview='', title='', run=''):
                 message = title if preview and sha == head else git('show', '-s', '--format=%B', sha)
                 level = max(level, bump_level(message))
         major, minor, patch = parts
-        if level == 3:
-            parts = (major + 1, 0, 0)
-        elif level == 2:
+        if level >= 2:
             parts = (major, minor + 1, 0)
         elif level == 1:
             parts = (major, minor, patch + 1)
@@ -106,7 +111,9 @@ def with_reservations(releases, source_tags):
     known = {release['tag_name'] for release in releases}
     for tag in source_tags:
         if tag not in known and re.fullmatch(r'desktop-v(' + VERSION.pattern + r')', tag):
-            releases.append({'tag_name': tag, 'prerelease': False, 'draft': True,
+            withdrawn = tag in WITHDRAWN_SOURCE_RELEASES
+            releases.append({'tag_name': tag, 'prerelease': False, 'draft': not withdrawn,
+                             'withdrawn': withdrawn,
                              'target_commitish': git('rev-parse', f'{tag}^{{commit}}')})
     return releases
 
