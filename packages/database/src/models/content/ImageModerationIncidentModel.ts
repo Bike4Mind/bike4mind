@@ -46,6 +46,9 @@ const ImageModerationIncidentSchema = new Schema(
     reportChannel: { type: String, enum: INCIDENT_REPORT_CHANNELS, required: false },
     reportedBy: { type: String, required: false },
     reportedAt: { type: Date, required: false },
+    previousReviewStatus: { type: String, enum: ['false_positive'], required: false },
+    falsePositiveBy: { type: String, required: false },
+    falsePositiveAt: { type: Date, required: false },
   },
   {
     timestamps: true,
@@ -142,29 +145,41 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    * Record a CyberTip an admin filed by hand on the NCMEC web form. Transitions directly from
    * absent/pending_review to 'reported' in one atomic write, so it races cleanly with
    * claimForNcmecSubmission: whichever lands first wins and the other gets null.
+   *
+   * Also overrides a 'false_positive' verdict: the tip already exists at NCMEC, so the record
+   * must say so, and previousReviewStatus keeps the earlier verdict visible. Never acts on
+   * 'confirmed_csam' (an API submission owns it) or 'reported'.
    */
   async recordManualReport(
     id: string,
     report: { ncmecReportId: string; reportedBy: string }
   ): Promise<IImageModerationIncidentDocument | null> {
-    return this.model.findOneAndUpdate(
+    const reported = {
+      reviewStatus: 'reported',
+      ncmecReportId: report.ncmecReportId,
+      reportChannel: 'manual',
+      reportedBy: report.reportedBy,
+      reportedAt: new Date(),
+    };
+    const fromUnreviewed = await this.model.findOneAndUpdate(
       { _id: id, reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } },
-      {
-        $set: {
-          reviewStatus: 'reported',
-          ncmecReportId: report.ncmecReportId,
-          reportChannel: 'manual',
-          reportedBy: report.reportedBy,
-          reportedAt: new Date(),
-        },
-      },
+      { $set: reported },
+      { new: true }
+    );
+    if (fromUnreviewed) return fromUnreviewed;
+    // Each write is atomic on its own filter; a row can only match one of the two.
+    return this.model.findOneAndUpdate(
+      { _id: id, reviewStatus: 'false_positive' },
+      { $set: { ...reported, previousReviewStatus: 'false_positive' } },
       { new: true }
     );
   }
 
   /**
-   * Transition an incident to a terminal reviewStatus. `ncmecReportId` and `reportedBy` are set
-   * when `status === 'reported'`. Returns null if the transition is disallowed:
+   * Transition an incident to a terminal reviewStatus. `ncmecReportId` and the acting admin
+   * (`reportedBy`, with `reportedAt`) are set when `status === 'reported'`; for 'false_positive'
+   * the acting admin and time go to `falsePositiveBy`/`falsePositiveAt`. Returns null if the
+   * transition is disallowed:
    * - always blocked when already 'reported' (idempotency)
    * - also blocked from 'confirmed_csam' when targeting 'false_positive', to prevent a
    *   concurrent false_positive verdict from overriding an in-flight NCMEC submission.
@@ -173,13 +188,17 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
     id: string,
     status: IncidentReviewStatus,
     ncmecReportId?: string,
-    reportedBy?: string
+    actorId?: string
   ): Promise<IImageModerationIncidentDocument | null> {
     const update: Record<string, unknown> = { reviewStatus: status };
     if (ncmecReportId) update.ncmecReportId = ncmecReportId;
     if (status === 'reported') {
       update.reportedAt = new Date();
-      if (reportedBy) update.reportedBy = reportedBy;
+      if (actorId) update.reportedBy = actorId;
+    }
+    if (status === 'false_positive') {
+      update.falsePositiveAt = new Date();
+      if (actorId) update.falsePositiveBy = actorId;
     }
     const excluded = status === 'false_positive' ? ['reported', 'confirmed_csam'] : ['reported'];
     return this.model.findOneAndUpdate({ _id: id, reviewStatus: { $nin: excluded } }, { $set: update }, { new: true });

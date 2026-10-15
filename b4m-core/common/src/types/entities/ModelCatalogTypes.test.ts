@@ -3,12 +3,16 @@ import {
   CATALOG_SCHEMA_VERSION,
   FIELD_GROUPS,
   FIELD_GROUP_OF,
+  LIFECYCLE_DATE_KEYS,
+  LIFECYCLE_STATUSES,
+  LIFECYCLE_SUNSET_STATUSES,
   MODEL_INFO_FIELDS_NOT_IN_CATALOG,
   MODEL_INFO_FIELD_GROUP_OF,
   ModelCatalogRowInput,
   ModelCatalogRowRead,
   ModelRecordWrite,
   groupsTouchedByPatch,
+  lifecycleStatusRank,
 } from './ModelCatalogTypes';
 import { ModelBackend } from '../../models';
 
@@ -181,5 +185,35 @@ describe('ModelCatalogRowRead', () => {
     expect(
       ModelCatalogRowRead.safeParse({ ...storedRow, patch: { ...minimalRecord, contextWindow: 'lots' } }).success
     ).toBe(false);
+  });
+});
+
+describe('lifecycle status order', () => {
+  it('ranks the statuses toward retirement', () => {
+    const ranks = ['discovered', 'active', 'legacy', 'deprecated', 'retired'].map(lifecycleStatusRank);
+    expect(ranks).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('leaves unlisted, unknown and missing statuses unranked', () => {
+    expect(lifecycleStatusRank('unlisted')).toBeUndefined();
+    expect(lifecycleStatusRank('some-future-status')).toBeUndefined();
+    expect(lifecycleStatusRank(undefined)).toBeUndefined();
+    expect(lifecycleStatusRank(3)).toBeUndefined();
+  });
+
+  it('accepts exactly the statuses LIFECYCLE_STATUSES lists, and every sunset status is among them', () => {
+    const accepts = (status: string) => ModelRecordWrite.safeParse({ ...minimalRecord, lifecycle: { status } }).success;
+    expect(LIFECYCLE_STATUSES.every(accepts)).toBe(true);
+    expect(accepts('some-future-status')).toBe(false);
+    expect(
+      [...LIFECYCLE_SUNSET_STATUSES].every(status => (LIFECYCLE_STATUSES as readonly string[]).includes(status))
+    ).toBe(true);
+  });
+
+  it('lists the lifecycle date keys the write schema accepts', () => {
+    for (const key of LIFECYCLE_DATE_KEYS) {
+      const lifecycle = { status: 'deprecated', [key]: '2026-09-02' };
+      expect(ModelRecordWrite.safeParse({ ...minimalRecord, lifecycle }).success).toBe(true);
+    }
   });
 });

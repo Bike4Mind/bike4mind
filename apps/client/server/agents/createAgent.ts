@@ -1,17 +1,21 @@
-import { agentRepository, userRepository, withTransaction } from '@bike4mind/database';
+import { agentRepository, creditTransactionRepository, userRepository, withTransaction } from '@bike4mind/database';
 import {
   AGENT_LIMIT_REACHED_ERROR_CODE,
+  CreditHolderType,
   IAgent,
   IAgentCapabilities,
   IAgentDocument,
   UserLevelType,
 } from '@bike4mind/common';
+import { creditService } from '@bike4mind/services';
 import { BadRequestError } from '@bike4mind/utils';
 import { AgentValidationError, validateAgentUpdate } from '@server/utils/agentValidation';
 
 /**
  * Validates and creates an agent owned by `userId`, enforcing the per-tier agent cap and, when
- * `useOwnCredits` is set, debiting the allocation from the owner in the same transaction.
+ * `useOwnCredits` is set, funding it from the owner through a ledgered transfer (the same
+ * `creditTransaction` rows as POST /api/agents/[id]/transfer-credits) in the same transaction.
+ * Without `useOwnCredits` the agent always starts at 0, so a request can't create an unpaid balance.
  * Shared by POST /api/agents and POST /api/v1/agents. Throws BadRequestError on any rejection: an
  * AgentValidationError for an invalid body field, and the tier cap carries `errorCode: agent_limit_reached`.
  * `label` renames a field in an error message (see validateAgentUpdate).
@@ -48,6 +52,12 @@ export async function createAgent(agentData: Partial<IAgent>, userId: string, la
     }
   }
 
+  const fundOwnCredits = agentData.useOwnCredits === true;
+  const seedCredits = fundOwnCredits ? (agentData.currentCredits ?? 0) : 0;
+  if (typeof seedCredits !== 'number' || !Number.isFinite(seedCredits) || seedCredits < 0) {
+    throw new AgentValidationError('currentCredits must be a non-negative number');
+  }
+
   // Use a transaction to handle credit deduction if using own credits
   // to ensure atomicity between deducting user credits and creating the agent
   return withTransaction(async () => {
@@ -75,24 +85,11 @@ export async function createAgent(agentData: Partial<IAgent>, userId: string, la
 
     let updatedUserCredits = user.currentCredits || 0;
 
-    // Check if we need to deduct credits from the user
-    if (agentData.useOwnCredits && agentData.currentCredits && agentData.currentCredits > 0) {
-      // Check if user has enough credits
-      if ((user.currentCredits || 0) < agentData.currentCredits) {
-        throw new BadRequestError(
-          `Insufficient credits. You have ${user.currentCredits || 0} credits, but tried to allocate ${agentData.currentCredits}.`
-        );
-      }
-
-      // Deduct credits from user
-      const updatedUser = await userRepository.incrementCredits(user.id, -agentData.currentCredits);
-      if (!updatedUser) {
-        throw new BadRequestError('User not found');
-      }
-      updatedUserCredits = updatedUser.currentCredits ?? 0;
-
-      console.log(
-        `Deducted ${agentData.currentCredits} credits from user ${userId}. New balance: ${updatedUserCredits}`
+    // The read and the debit run in this transaction's session, so a concurrent write to the user
+    // raises a WriteConflict and withTransaction retries against the fresh balance.
+    if (seedCredits > 0 && (user.currentCredits || 0) < seedCredits) {
+      throw new BadRequestError(
+        `Insufficient credits. You have ${user.currentCredits || 0} credits, but tried to allocate ${seedCredits}.`
       );
     }
 
@@ -172,17 +169,53 @@ export async function createAgent(agentData: Partial<IAgent>, userId: string, la
         },
         customPronouns: agentData.identity?.customPronouns || '',
       },
-      useOwnCredits: agentData.useOwnCredits || false,
-      currentCredits: agentData.currentCredits || 0,
+      useOwnCredits: fundOwnCredits,
+      currentCredits: 0,
       isGlobalRead: false,
       isGlobalWrite: false,
       users: [],
       groups: [],
     } as Omit<IAgentDocument, 'id' | 'createdAt' | 'updatedAt'>;
 
-    // Now create the agent with the specified credits
     const agent = await agentRepository.create(agentCreateData);
+    if (seedCredits === 0) {
+      return { agent, userCredits: updatedUserCredits };
+    }
 
-    return { agent, userCredits: updatedUserCredits };
+    // Mirrors POST /api/agents/[id]/transfer-credits; keep the two ledger entries in sync.
+    const updatedUser = await creditService.subtractCredits(
+      {
+        type: 'transfer_credit',
+        ownerId: userId,
+        ownerType: CreditHolderType.User,
+        credits: seedCredits,
+        description: `Transfer credits to agent "${agent.name}"`,
+        recipientId: agent.id,
+        recipientType: CreditHolderType.Agent,
+      },
+      { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
+    );
+    if (!updatedUser) {
+      throw new BadRequestError('User not found');
+    }
+    updatedUserCredits = updatedUser.currentCredits ?? 0;
+
+    const fundedAgent = await creditService.addCredits(
+      {
+        type: 'received_credit',
+        ownerId: agent.id,
+        ownerType: CreditHolderType.Agent,
+        credits: seedCredits,
+        description: 'Received credits from user',
+        senderId: userId,
+        senderType: CreditHolderType.User,
+      },
+      { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: agentRepository }
+    );
+    if (!fundedAgent) {
+      throw new Error('Failed to fund agent credits');
+    }
+
+    return { agent: { ...agent, currentCredits: fundedAgent.currentCredits }, userCredits: updatedUserCredits };
   });
 }

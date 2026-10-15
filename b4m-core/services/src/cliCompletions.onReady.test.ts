@@ -39,6 +39,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 
 import { BadRequestError } from '@bike4mind/common';
+import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { executeCompletion } from './cliCompletions';
 
@@ -96,6 +97,35 @@ describe('executeCompletion onReady', () => {
       BadRequestError
     );
     expect(onReady).not.toHaveBeenCalled();
+  });
+
+  it('refuses a disabled model with a 400 unknown_model before any hold, onReady or provider call', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([
+      { ...CATALOGUED_MODEL, disabled: true, disabledReason: 'gated upstream' } as never,
+    ]);
+    const { db, users } = buildDb();
+    const onReady = vi.fn();
+
+    await expect(executeCompletion({ ...baseParams, db, onReady })).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('gated upstream'),
+      additionalInfo: { errorCode: 'unknown_model' },
+    });
+    expect(users.incrementCredits).not.toHaveBeenCalled();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(mockComplete).not.toHaveBeenCalled();
+  });
+
+  it('words a disabled model without a reason as plainly unavailable', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([{ ...CATALOGUED_MODEL, disabled: true } as never]);
+    const { db } = buildDb();
+
+    const error = await executeCompletion({ ...baseParams, db, onReady: vi.fn() }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect(error).toMatchObject({ additionalInfo: { errorCode: 'unknown_model' } });
+    expect((error as Error).message).toContain('is currently unavailable.');
+    expect((error as Error).message).not.toContain('undefined');
   });
 
   it('does not call onReady when the credit hold is refused', async () => {

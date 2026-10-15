@@ -1297,7 +1297,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/sessions/[id]/tool-approvals` | GET, DELETE | jwt+key | - | no | - | 0 |
 | `/api/sessions/bulk` | DELETE | jwt+key | - | no | - | 1: `utils/sessionsAPICalls.ts` |
 | `/api/sessions/count` | GET | jwt+key | - | no | - | 1: `hooks/data/sessions.ts` |
-| `/api/sessions/create` | POST | jwt+key | `notebooks:write` | yes | `/api/v1/sessions` | 5: `components/admin/AdminPage.tsx`, `components/questmaster-v5/QuestGraphView.tsx`, `hooks/useCreateDataLakeSession.ts` +2 more |
+| `/api/sessions/create` | POST | jwt+key | `ai:generate`, `notebooks:write` | yes | `/api/v1/sessions` | 5: `components/admin/AdminPage.tsx`, `components/questmaster-v5/QuestGraphView.tsx`, `hooks/useCreateDataLakeSession.ts` +2 more |
 | `/api/sessions/download` | GET | jwt+key | - | no | - | 0 |
 | `/api/sessions/favorites` | GET | jwt+key | - | no | - | 1: `utils/sessionsAPICalls.ts` |
 | `/api/sessions/recent-proactive-messages` | GET | jwt+key | - | no | - | 1: `hooks/useUnreadProactiveMessages.ts` |
@@ -1527,7 +1527,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/projects/[id]` | GET, PATCH, DELETE | jwt+key | GET: `projects:read`, `projects:write`; PATCH, DELETE: `projects:write` | yes | - | 0 |
 | `/api/v1/quests/[id]` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | yes | - | 0 |
 | `/api/v1/quests/[id]/files` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | yes | - | 0 |
-| `/api/v1/sessions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `notebooks:write` | yes | - | 0 |
+| `/api/v1/sessions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `ai:generate`, `notebooks:write` | yes | - | 0 |
 | `/api/v1/sessions/[id]/clone` | POST | jwt+key | `notebooks:write` | yes | - | 0 |
 | `/api/v1/transcriptions` | POST | jwt+key | `ai:generate` | yes | - | 0 |
 | `/api/v1/transcriptions/uploads` | POST | jwt+key | `ai:generate` | yes | - | 0 |

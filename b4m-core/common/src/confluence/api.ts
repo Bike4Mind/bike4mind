@@ -1428,6 +1428,19 @@ export class ConfluenceApi {
   }
 
   /**
+   * Get an attachment's metadata (not its content) by ID.
+   */
+  async getAttachment(params: { attachmentId: string }): Promise<Pick<RawConfluenceAttachment, 'id' | 'title'>> {
+    const { attachmentId } = params;
+
+    if (!attachmentId) {
+      throw new Error('attachmentId is required to get an attachment.');
+    }
+
+    return this.get<RawConfluenceAttachment>(apiPath`/attachments/${attachmentId}`);
+  }
+
+  /**
    * Delete an attachment by ID.
    * Uses v2 API which works with granular OAuth scopes (write:attachment:confluence)
    */

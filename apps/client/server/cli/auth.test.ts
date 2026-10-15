@@ -153,17 +153,17 @@ describe('checkRateLimit (JWT per-user rate limiter)', () => {
     // awaits to reach it cost more than they prove.
     const seedDesktop = (value: number) => cacheStore.set(desktopKey, { value, expiresAt: Date.now() + 3_600_000 });
 
-    it('carries the desktop app to 6000, where source api alone would stop at 100', async () => {
+    it('carries the desktop app to 6000, where source desktop alone would stop at 100', async () => {
       seedDesktop(5999);
-      await expect(checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' })).resolves.toBeUndefined();
-      await expect(checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' })).rejects.toThrow(
+      await expect(checkRateLimit(userId, 'desktop', { client: 'b4m-desktop/0.1.0' })).resolves.toBeUndefined();
+      await expect(checkRateLimit(userId, 'desktop', { client: 'b4m-desktop/0.1.0' })).rejects.toThrow(
         /Rate limit exceeded/
       );
     });
 
     it('counts the desktop app on its own bucket, so a busy desktop cannot lock the CLI out', async () => {
       seedDesktop(5999);
-      await checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' });
+      await checkRateLimit(userId, 'desktop', { client: 'b4m-desktop/0.1.0' });
 
       // The raised ceiling must not be spent on the counter the CLI and every other JWT surface
       // read, or a desktop session past 1000 would exhaust that user's CLI budget.

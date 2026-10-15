@@ -8,7 +8,10 @@ import { generatedAudioResponseSchema, generatedAudioTooLargeSchema } from '../.
 import { GENERATED_AUDIO_CONTENT_TYPES, GENERATED_AUDIO_DESCRIPTION, generatedAudioResponses } from './audioResponses';
 
 /**
- * Contract for POST /api/ai/music - background-music generation.
+ * Contract for POST /api/ai/music - synchronous background-music generation.
+ *
+ * Deprecated in favour of the async job resource (musicGeneration.contract.ts);
+ * served until the sunset, then replaced by a 410 tombstone.
  *
  * Responses (raw bytes, base64 JSON, oversized-audio 303/URL) are the shared
  * generated-audio ones; see audioResponses.ts.
@@ -24,6 +27,7 @@ export const generateMusicContract = defineEndpoint({
     'billed length; credits are reserved before generation and refunded if it fails. ' +
     GENERATED_AUDIO_DESCRIPTION,
   tags: ['Audio'],
+  deprecated: { since: '2026-10-15', sunset: '2027-01-15', successor: '/api/v1/music-generations' },
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
   request: musicRequestSchema,

@@ -1787,9 +1787,8 @@ async function processExecution(
         // toolCreditsMap drain never runs here. Fold the media USD into the same
         // per-iteration bucket (`pendingToolUsage.costUsd`) that `onToolLlmUsage` feeds, so
         // `billIteration` charges it on the existing agent rail - otherwise agent-mode
-        // generation is free. Image cost is known up front (n/size/quality), so it is read
-        // at start (mirrors classic reserve-on-start); music/audio settle at finish (see
-        // onToolFinish). The phase->tool routing + `usd > 0` guard live in the billing
+        // generation is free. Image and audio settle at finish (see onToolFinish), so a failed
+        // call is never billed. The phase->tool routing + `usd > 0` guard live in the billing
         // module so they are covered by agentExecutor.billing.test.ts.
         // processSubagentDispatch folds the same way but settles once per run.
         foldGeneratedMediaUsd({
@@ -1806,9 +1805,9 @@ async function processExecution(
         });
       },
       onToolFinish: async (toolName, data) => {
-        // Settle music/audio media cost on delivery (see onToolStart for the rail rationale):
-        // the tools' failure paths return before onFinish, so an undelivered clip is never
-        // billed. Charged into the current iteration's pendingToolUsage.
+        // Settle image/audio media cost on delivery (see onToolStart for the rail rationale):
+        // the tools' failure paths return before onFinish, so an undelivered image or clip is
+        // never billed. Charged into the current iteration's pendingToolUsage.
         foldGeneratedMediaUsd({
           phase: 'finish',
           toolName,
@@ -1896,6 +1895,7 @@ async function processExecution(
       musicConfig: await buildAgentMusicToolConfig(
         {
           userId: execution.userId,
+          organizationId: execution.organizationId,
           apiKeyId: execution.apiKeyId,
           questId: runQuestId,
           toolEnabled: profileEnabledTools.includes('music_generation'),
@@ -3643,8 +3643,8 @@ async function processSubagentDispatch(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
-      // No videoConfig: this path offers no native tools (see the buildSharedTools call below), and
-      // the per-run cap lives in agentExecutor.videoToolConfig.ts for when it does.
+      // No videoConfig or musicConfig: this path offers no native tools (see the buildSharedTools call
+      // below), and the per-run caps live in agentExecutor.generationJobCap.ts for when it does.
       imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 

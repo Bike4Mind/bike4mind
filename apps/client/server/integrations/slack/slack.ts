@@ -88,7 +88,13 @@ export function resolveFeedbackSlackRoute(
     : { kind: 'skip', stageClass, reason: 'nonprod_unconfigured' };
 }
 
-export async function postMessageToSlack(message: string): Promise<void> {
+/**
+ * Posts to the LiveOps channel, swallowing errors as before, but reports whether a message was
+ * actually delivered (true) or the post was unconfigured/failed (false). A caller that must not lose
+ * the signal - e.g. deduping an alert as "sent" - needs to tell the two apart; everyone else ignores
+ * the result.
+ */
+export async function postMessageToSlack(message: string): Promise<boolean> {
   try {
     // Generic / operational notifications route to the LiveOps channel.
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
@@ -98,7 +104,7 @@ export async function postMessageToSlack(message: string): Promise<void> {
       Logger.error(
         'Error posting message to Slack: no SlackLiveopsWebhookUrl / SlackDefaultWebhookUrl set in admin settings or config'
       );
-      return;
+      return false;
     }
 
     await axios.post(
@@ -108,8 +114,10 @@ export async function postMessageToSlack(message: string): Promise<void> {
         headers: { 'Content-Type': 'application/json' },
       }
     );
+    return true;
   } catch (error) {
     Logger.error('Error posting message to Slack:', error);
+    return false;
   }
 }
 
