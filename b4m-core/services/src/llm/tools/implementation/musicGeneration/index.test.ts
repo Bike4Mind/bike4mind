@@ -87,6 +87,15 @@ describe('music_generation tool', () => {
     expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'music' }] });
   });
 
+  // The dead-job guard only applies to a replay: a job created now must show its card even if it is already terminal.
+  it('still reports a freshly created job that is already terminal', async () => {
+    const createJob = vi.fn().mockResolvedValue({ ok: true, created: true, job: { id: 'job1', state: 'blocked' } });
+    const { tool, statusUpdate } = build(createJob);
+    const result = JSON.parse(await tool.toolFn({ model: 'test-music', prompt: 'p' }));
+    expect(result).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
+    expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'music' }] });
+  });
+
   it('rejects a model the caller cannot use before starting a job', async () => {
     const createJob = vi.fn().mockResolvedValue(okJob);
     const { tool } = build(createJob);
