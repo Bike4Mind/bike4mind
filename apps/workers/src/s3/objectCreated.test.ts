@@ -314,6 +314,15 @@ describe('objectCreated - moderation claim identity', () => {
 describe('objectCreated - storage charge', () => {
   const isStorageClaim = (filter: Record<string, unknown>) => '$or' in filter;
 
+  it('records the measured object size on the row, matching the bytes charged', async () => {
+    const file = metadata() as ReturnType<typeof metadata> & { fileSize?: number };
+    h.findOne.mockResolvedValue(file);
+
+    await run();
+
+    expect(file.fileSize).toBe(10);
+  });
+
   it('charges the owner once it wins the storage-charge claim on the row', async () => {
     h.findOne.mockResolvedValue(metadata());
 

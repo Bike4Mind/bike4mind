@@ -162,6 +162,11 @@ export const func = withContext(async (event, context, logger) => {
         moderationStatus = (await writeVerdict(verdictPatch, session)) ? result.moderationStatus : 'pending';
       }
 
+      // The charge below uses the object's measured size, and the counter's truth (every refund and
+      // the storage reconciliation) is derived from `fileSize`. Record the measured size so the two
+      // agree: leaving the client-declared presign value lets a repair move the counter off the bytes
+      // actually stored.
+      metadata.fileSize = object.size;
       await chargeUploadedObject(metadata._id, user, object.size, uploadedAt, session);
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
