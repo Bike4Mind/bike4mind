@@ -7,6 +7,7 @@ import type { ChatModelOption, ChatSessionSummary } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import type { ModelCatalog } from './ModelCatalog';
+import { SessionActivity } from './SessionActivity';
 import { deriveTitle, SessionStore } from './SessionStore';
 import { TITLE_INSTRUCTION, TITLE_MAX_TOKENS, TITLE_MODELS } from './sessionTitle';
 import type { AccessStore } from './tools/AccessStore';
@@ -40,6 +41,7 @@ describe('ChatService session titles', () => {
   let streams: PassThrough[];
   let post: ReturnType<typeof vi.fn>;
   let applied: ReturnType<typeof vi.fn<(summary: ChatSessionSummary | null) => void>>;
+  let activity: SessionActivity;
 
   const titleCall = (): [string, WireRequest] | undefined =>
     post.mock.calls.find(call => (call[1] as WireRequest).model === TITLE_MODEL) as [string, WireRequest] | undefined;
@@ -72,6 +74,7 @@ describe('ChatService session titles', () => {
       return result;
     });
     available = CATALOG;
+    activity = new SessionActivity(() => undefined);
     // The service closes over these consts, not the reassigned lets: an earlier test's reply
     // that only reaches the wire after its test ended would otherwise land in this test's mocks.
     const ownSummaries: ChatSessionSummary[] = (summaries = []);
@@ -84,6 +87,7 @@ describe('ChatService session titles', () => {
 
     service = new ChatService({
       store,
+      activity,
       access: { list: async () => [] } as unknown as AccessStore,
       models: { list: async () => ({ models: available }), cached: () => available } as unknown as ModelCatalog,
       preferredModel: SESSION_MODEL,
@@ -162,16 +166,16 @@ describe('ChatService session titles', () => {
     await answerTitle('The first thing');
     await vi.waitUntil(() => summaries.length > 0, { timeout: 5000, interval: 5 });
 
+    // The turn's end, not its persisted reply: the reply is written a few awaits before the
+    // session stops being busy, and a send in that gap is refused as still replying.
+    const ended = vi.spyOn(activity, 'replyEnded');
     const reply = await replyStream();
     reply.write(frame({ type: 'content', text: 'ok' }));
     reply.write(frame('[DONE]'));
-    await vi.waitUntil(async () => (await service.getSession(id))?.messages[1]?.content === 'ok', {
-      timeout: 5000,
-      interval: 5,
-    });
+    await vi.waitUntil(() => ended.mock.calls.length > 0, { timeout: 5000, interval: 5 });
 
     const before = post.mock.calls.length;
-    await service.send(id, 'second');
+    expect(await service.send(id, 'second')).toMatchObject({ ok: true });
     await vi.waitUntil(() => post.mock.calls.length > before, { timeout: 5000, interval: 5 });
 
     expect(post.mock.calls.slice(before).some(call => (call[1] as WireRequest).model === TITLE_MODEL)).toBe(false);
