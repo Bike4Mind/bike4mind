@@ -68,6 +68,11 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
+// The real resolver pulls in @bike4mind/fab-pipeline, which needs far more of @bike4mind/common.
+vi.mock('@server/utils/ip', () => ({
+  getClientIp: (req: { headers: Record<string, string | undefined> }) => req.headers['x-forwarded-for'],
+}));
+
 const mockVerifyIdToken = vi.fn();
 vi.mock('@server/auth/verifyFederatedIdToken', () => ({
   verifyFederatedIdToken: (...a: any[]) => mockVerifyIdToken(...a),
