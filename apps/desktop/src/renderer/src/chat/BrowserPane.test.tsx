@@ -518,8 +518,8 @@ describe('the browser pane under overlays', () => {
   /** Past the still's delay, with the capture's promise settled. */
   const waitForStill = () => act(() => vi.advanceTimersByTimeAsync(80));
 
-  // The still's delay is a real 50ms timer, and the awaited acts between a layer's coming and
-  // going can take that long on a loaded runner. Only timeouts are faked: frames are scripted above.
+  // In production the still's delay is a 50ms timer, and the awaited acts between a layer's coming
+  // and going can take that long on a loaded runner. Only timeouts are faked: frames are scripted above.
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   });
