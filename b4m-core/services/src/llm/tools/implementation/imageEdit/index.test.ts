@@ -328,7 +328,7 @@ describe('imageEditTool - OpenAI branch', () => {
 // independently of the configured generation model and falls back to a hardcoded
 // default when imageConfig.editModel is unset, so the two routinely diverge - and the
 // provider invoice follows `editModel`. Same invariant as the queue path (ImageEdit.ts).
-describe('imageEditTool - credit reservation names the rendered model', () => {
+describe('imageEditTool - credit gate names the rendered model', () => {
   beforeEach(() => {
     mockEditSpy.mockReset();
     mockBflEditSpy.mockReset();
@@ -428,17 +428,18 @@ describe('imageEditTool - credit reservation names the rendered model', () => {
   });
 });
 
-describe('imageEditTool - credit reservation counts the image that renders', () => {
+describe('imageEditTool - credit gate counts the image that renders', () => {
   beforeEach(() => {
     mockEditSpy.mockReset();
     // Same stop-after-dispatch trick as the block above: onStart fires before the provider call.
     mockEditSpy.mockRejectedValue(new Error('stop-after-dispatch'));
   });
 
-  // onStart is the single payload both credit rails bill from - ToolBuilder.reserveImageCredits
-  // for classic chat and estimateGeneratedMediaUsd for agent mode - so an n above 1 reaching it
-  // overcharged on both, for images edit() has never been able to return.
-  it('reserves one image however many the model asks for', async () => {
+  // onStart and onFinish carry the one cost input both credit rails bill from -
+  // ToolBuilder.settleImageCredits for classic chat and estimateGeneratedMediaUsd for agent
+  // mode - so an n above 1 reaching it overcharged on both, for images edit() has never been
+  // able to return.
+  it('bills one image however many the model asks for', async () => {
     const context = createFakeContext();
     context.onStart = vi.fn();
 
@@ -451,7 +452,7 @@ describe('imageEditTool - credit reservation counts the image that renders', () 
     expect(context.onStart).toHaveBeenCalledWith('edit_image', expect.objectContaining({ n: IMAGES_PER_EDIT_REQUEST }));
   });
 
-  it('reserves one image however many the image settings ask for', async () => {
+  it('bills one image however many the image settings ask for', async () => {
     const context = createFakeContext();
     context.onStart = vi.fn();
 
@@ -500,6 +501,55 @@ function createFakeContextWithGeneratedImageOwner(ownerUserId: string): ToolCont
   context.imageGenerateStorage.getSignedUrl = vi.fn().mockResolvedValue('https://signed.example/generated.png');
   return context;
 }
+
+// onFinish is the payload both credit rails bill from, so a call that never reaches it is free
+// and one that does must carry the full cost input.
+describe('imageEditTool - billing follows delivery', () => {
+  beforeEach(() => {
+    mockCheckImage.mockReset().mockResolvedValue(undefined);
+    mockBflEditSpy.mockReset();
+  });
+
+  it('bills a delivered edit from onFinish with the rendered cost input', async () => {
+    mockBflEditSpy.mockResolvedValue({ type: 'success', dataUrl: PNG_DATA_URL });
+    const context = createFakeContext();
+    context.onFinish = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.FLUX_PRO_1_1,
+    } as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, mask: PNG_DATA_URL, prompt: 'make it warmer' });
+
+    expect(context.onFinish).toHaveBeenCalledWith('edit_image', {
+      model: ImageModels.FLUX_PRO_FILL,
+      n: IMAGES_PER_EDIT_REQUEST,
+      size: undefined,
+      quality: undefined,
+      paths: ['generated/stored-key.png'],
+    });
+  });
+
+  it.each([
+    ['rejects', () => mockBflEditSpy.mockRejectedValue(new Error('Invalid API key'))],
+    ['asks for clarification', () => mockBflEditSpy.mockResolvedValue({ type: 'clarification', question: 'Which?' })],
+  ])('never reaches onFinish when the provider %s', async (_label, arrange) => {
+    arrange();
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+    context.onFinish = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.FLUX_PRO_1_1,
+    } as GenerateImageToolCall);
+
+    await expect(toolFn({ image: PNG_DATA_URL, mask: PNG_DATA_URL, prompt: 'make it warmer' })).resolves.toMatch(
+      /^Error: /
+    );
+    expect(context.onStart).toHaveBeenCalledTimes(1);
+    expect(context.onFinish).not.toHaveBeenCalled();
+  });
+});
 
 describe('imageEditTool - generated-image key ownership', () => {
   beforeEach(() => {

@@ -32,16 +32,25 @@ magick "$WORK/icon.svg.png" \
      -draw "circle $((RENDER / 2)),$((RENDER / 2)) $((RENDER / 2)),2" \) \
   -alpha off -compose CopyOpacity -composite "$WORK/master.png"
 
-# Inset the disc rather than letting it bleed. 824/1024 is Apple's icon grid, which every
-# other macOS icon is drawn to; Windows and Linux have no such grid and only want the mark
-# to stop short of the edge.
+# Extend the SVG's own gradient behind the full-size wheel so its circular edge disappears.
+# Keep the white backing inside the solid blue rim to avoid a white antialiasing halo.
+gradient=$(sed -n 's/.*<linearGradient id="\([^"]*\)".*/\1/p' "$SRC" | head -n 1)
+sed "s|<circle cx=\"190\" cy=\"190\" r=\"190\" fill=\"white\"/>|<rect width=\"380\" height=\"380\" fill=\"url(#$gradient)\"/><circle cx=\"190\" cy=\"190\" r=\"180\" fill=\"white\"/>|" \
+  "$SRC" > "$WORK/macos.svg"
+qlmanage -t -s "$RENDER" -o "$WORK" "$WORK/macos.svg" >/dev/null 2>&1
+radius=$(printf '%.0f' "$(echo "$RENDER * 0.22" | bc -l)")
+magick "$WORK/macos.svg.png" \
+  \( -size "${RENDER}x${RENDER}" xc:black -fill white \
+     -draw "roundrectangle 0,0,$((RENDER - 1)),$((RENDER - 1)),$radius,$radius" \) \
+  -alpha off -compose CopyOpacity -composite "$WORK/macos.png"
+
 MACOS_INSET=0.8047
 OTHER_INSET=0.92
 
-emit() { # emit <size> <inset> <dest>
-  local size="$1" inset="$2" dest="$3" inner
+emit() { # emit <size> <inset> <dest> [source]
+  local size="$1" inset="$2" dest="$3" source="${4:-$WORK/master.png}" inner
   inner=$(printf '%.0f' "$(echo "$size * $inset" | bc -l)")
-  magick "$WORK/master.png" -resize "${inner}x${inner}" \
+  magick "$source" -resize "${inner}x${inner}" \
     -background none -gravity center -extent "${size}x${size}" \
     -strip "$dest"
 }
@@ -58,9 +67,10 @@ for pair in 16:1 16:2 32:1 32:2 128:1 128:2 256:1 256:2 512:1 512:2; do
   else
     name="icon_${base}x${base}@2x.png"
   fi
-  emit "$px" "$MACOS_INSET" "$ICONSET/$name"
+  emit "$px" "$MACOS_INSET" "$ICONSET/$name" "$WORK/macos.png"
 done
 iconutil --convert icns --output icon.icns "$ICONSET"
+emit 1024 "$MACOS_INSET" icon-mac.png "$WORK/macos.png"
 
 # Windows .ico
 ICO_LAYERS=()
@@ -77,4 +87,4 @@ emit 512 "$OTHER_INSET" icon.png
 # shows anywhere it is opened as a page (devtools, electron-vite preview).
 emit 256 "$OTHER_INSET" ../src/renderer/favicon.png
 
-echo "wrote icon.icns, icon.ico, icon.png, ../src/renderer/favicon.png"
+echo "wrote icon.icns, icon-mac.png, icon.ico, icon.png, ../src/renderer/favicon.png"

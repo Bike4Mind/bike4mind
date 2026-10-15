@@ -96,6 +96,14 @@ interface CliStore {
   dequeueAllMessages: () => string[];
   clearMessageQueue: () => void;
 
+  // Operations that read the session, await, then write it back from that snapshot (agent turns,
+  // custom commands, background completion, compaction; handoff holds across its LLM call). Anything else that appends to the session waits for
+  // this to reach zero (see session/whenTurnIdle.ts). Unlike isThinking, which is UI state that
+  // ESC clears early, a hold lasts until the operation's own `finally`.
+  sessionHolds: number;
+  /** Takes a hold; the returned release is idempotent. */
+  holdSession: () => () => void;
+
   // UI state
   isThinking: boolean;
   setIsThinking: (thinking: boolean) => void;
@@ -264,6 +272,17 @@ export const useCliStore = create<CliStore>(set => ({
         },
       };
     }),
+
+  sessionHolds: 0,
+  holdSession: () => {
+    set(state => ({ sessionHolds: state.sessionHolds + 1 }));
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      set(state => ({ sessionHolds: state.sessionHolds - 1 }));
+    };
+  },
 
   // User-message queue
   messageQueue: [],

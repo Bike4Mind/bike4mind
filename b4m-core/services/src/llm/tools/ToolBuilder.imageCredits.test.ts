@@ -5,8 +5,8 @@ import { resolveAggregateToolModel } from '../settleToolCredits';
 import { estimateImageCredits } from '../../imageCost';
 import { estimateGeneratedMediaUsd } from '../agentToolMediaCost';
 
-// Drives the REAL reserveImageCredits -> validateUserCredits -> computeImageUsdCostPerImage
-// chain that onToolStart delegates to. The edit_image tool's own tests mock context.onStart,
+// Drives the REAL settleImageCredits -> estimateImageCredits -> computeImageUsdCostPerImage
+// chain that onToolFinish delegates to (and gateImageCredits -> validateUserCredits at onToolStart). The edit_image tool's own tests mock context.onStart,
 // so they pin the billed model id but never price it - that gap let an id with no cost-table
 // entry (FLUX_PRO_FILL) reach production as a thrown "Model not supported".
 // Mirrors ToolBuilder.audioCredits.test.ts.
@@ -27,7 +27,6 @@ const makeBuilder = ({ credits = 1_000_000 }: { credits?: number } = {}) => {
 };
 
 const quest = () => ({ id: 'q1', sessionId: 's1', creditsUsed: 0, images: [] as string[] }) as never;
-const saveQuest = vi.fn().mockResolvedValue(null);
 
 const imageModel = (id: ImageModels, backend: ModelBackend): ModelInfo =>
   ({ id, type: 'image', name: id, backend }) as ModelInfo;
@@ -38,21 +37,20 @@ const AVAILABLE_MODELS = [
   imageModel(ImageModels.GPT_IMAGE_1_5, ModelBackend.OpenAI),
 ];
 
-describe('ToolBuilder.reserveImageCredits - edit_image billing targets', () => {
+describe('ToolBuilder.settleImageCredits - edit_image billing targets', () => {
   // FLUX_PRO_FILL is the only BFL model EDIT_SUPPORTED_IMAGE_MODELS allows, and the
   // edit_image fallback picks it for ANY BFL generation model with no explicit editModel.
   // Billing the model that renders is only correct if that model is actually priceable.
-  it('reserves credits for a BFL edit billed as FLUX_PRO_FILL', async () => {
+  it('reserves credits for a BFL edit billed as FLUX_PRO_FILL', () => {
     const { builder, toolCreditsMap } = makeBuilder();
     const q = quest();
 
-    await builder.reserveImageCredits(
+    builder.settleImageCredits(
       'edit_image',
-      { model: ImageModels.FLUX_PRO_FILL, n: 1 },
+      q,
+      { model: ImageModels.FLUX_PRO_FILL, n: 1, paths: [] },
       true,
       null,
-      q,
-      saveQuest,
       AVAILABLE_MODELS
     );
 
@@ -60,16 +58,15 @@ describe('ToolBuilder.reserveImageCredits - edit_image billing targets', () => {
     expect((q as unknown as { creditsUsed: number }).creditsUsed).toBe(usdToCredits(0.05));
   });
 
-  it('records the usage event against the rendering model, not the generation model', async () => {
+  it('records the usage event against the rendering model, not the generation model', () => {
     const { builder, record } = makeBuilder();
 
-    await builder.reserveImageCredits(
+    builder.settleImageCredits(
       'edit_image',
-      { model: ImageModels.FLUX_PRO_FILL, n: 1 },
+      quest(),
+      { model: ImageModels.FLUX_PRO_FILL, n: 1, paths: [] },
       true,
       null,
-      quest(),
-      saveQuest,
       AVAILABLE_MODELS
     );
 
@@ -78,19 +75,18 @@ describe('ToolBuilder.reserveImageCredits - edit_image billing targets', () => {
   });
 
   // Named image_generation deliberately: this estimator is shared, and n only means something
-  // on the generation side. The edit_image tool now reserves IMAGES_PER_EDIT_REQUEST whatever
+  // on the generation side. The edit_image tool now bills IMAGES_PER_EDIT_REQUEST whatever
   // was asked for (see its own tests), because edit() returns a single image - so clamping n
   // HERE would silently stop generation billing for images it really does render.
-  it('scales the reservation by n, which only generation can honor', async () => {
+  it('scales the reservation by n, which only generation can honor', () => {
     const { builder, toolCreditsMap } = makeBuilder();
 
-    await builder.reserveImageCredits(
+    builder.settleImageCredits(
       'image_generation',
-      { model: ImageModels.FLUX_PRO_FILL, n: 3 },
+      quest(),
+      { model: ImageModels.FLUX_PRO_FILL, n: 3, paths: [] },
       true,
       null,
-      quest(),
-      saveQuest,
       AVAILABLE_MODELS
     );
 
@@ -100,16 +96,15 @@ describe('ToolBuilder.reserveImageCredits - edit_image billing targets', () => {
     expect(toolCreditsMap.get('image_generation')).toEqual([usdToCredits(0.05 * 3)]);
   });
 
-  it('prices the OpenAI edit fallback too, so neither fallback branch can throw', async () => {
+  it('prices the OpenAI edit fallback too, so neither fallback branch can throw', () => {
     const { builder, toolCreditsMap } = makeBuilder();
 
-    await builder.reserveImageCredits(
+    builder.settleImageCredits(
       'edit_image',
-      { model: ImageModels.GPT_IMAGE_1_5, n: 1, quality: 'high', size: '1024x1024' },
+      quest(),
+      { model: ImageModels.GPT_IMAGE_1_5, n: 1, quality: 'high', size: '1024x1024', paths: [] },
       true,
       null,
-      quest(),
-      saveQuest,
       AVAILABLE_MODELS
     );
 
@@ -121,11 +116,11 @@ describe('ToolBuilder.reserveImageCredits - edit_image billing targets', () => {
   it.each([
     ['edit_image', 1],
     ['image_generation', 0],
-  ] as const)('%s holds %i input image(s)', async (toolName, inputImageCount) => {
+  ] as const)('%s holds %i input image(s)', (toolName, inputImageCount) => {
     const { builder, toolCreditsMap } = makeBuilder();
     const data = { model: ImageModels.GPT_IMAGE_1_5, n: 1, quality: 'high', size: '1024x1024' };
 
-    await builder.reserveImageCredits(toolName, data, true, null, quest(), saveQuest, AVAILABLE_MODELS);
+    builder.settleImageCredits(toolName, quest(), { ...data, paths: [] }, true, null, AVAILABLE_MODELS);
 
     const expected = estimateImageCredits(AVAILABLE_MODELS[2], 1, { ...data, inputImageCount } as never);
     expect(toolCreditsMap.get(toolName)).toEqual([expected.requiredCredits]);
@@ -133,61 +128,78 @@ describe('ToolBuilder.reserveImageCredits - edit_image billing targets', () => {
   });
 });
 
-describe('ToolBuilder.reserveImageCredits - ledger model attribution', () => {
+// The gate prices the call too (validateUserCredits), so an unpriceable edit target would
+// throw "Model not supported" at onToolStart before the provider is ever reached.
+describe('ToolBuilder.gateImageCredits - edit_image fallbacks are priceable', () => {
+  it.each([
+    { model: ImageModels.FLUX_PRO_FILL, n: 1 },
+    { model: ImageModels.GPT_IMAGE_1_5, n: 1, quality: 'high', size: '1024x1024' },
+  ])('admits an edit billed as $model', async data => {
+    const { builder } = makeBuilder();
+
+    await expect(builder.gateImageCredits('edit_image', data, true, null, AVAILABLE_MODELS)).resolves.toBeUndefined();
+  });
+
+  it('refuses an edit the wallet cannot cover', async () => {
+    const { builder } = makeBuilder({ credits: 0 });
+
+    await expect(
+      builder.gateImageCredits('edit_image', { model: ImageModels.FLUX_PRO_FILL, n: 1 }, true, null, AVAILABLE_MODELS)
+    ).rejects.toThrow(/enough personal credits/);
+  });
+});
+
+describe('ToolBuilder.settleImageCredits - ledger model attribution', () => {
   // The quest's single aggregate tool_usage ledger row used to carry the CHAT model.
   // These lock the raw material that lets it carry the model that actually charged.
-  it('records the billed image model as a charging model', async () => {
+  it('records the billed image model as a charging model', () => {
     const { builder, toolCreditModels } = makeBuilder();
 
-    await builder.reserveImageCredits(
+    builder.settleImageCredits(
       'image_generation',
-      { model: ImageModels.FLUX_PRO_1_1, n: 1 },
+      quest(),
+      { model: ImageModels.FLUX_PRO_1_1, n: 1, paths: [] },
       true,
       null,
-      quest(),
-      saveQuest,
       AVAILABLE_MODELS
     );
 
     expect(Array.from(toolCreditModels)).toEqual([ImageModels.FLUX_PRO_1_1]);
   });
 
-  it('keeps both models when two image models charge in one turn', async () => {
+  it('keeps both models when two image models charge in one turn', () => {
     const { builder, toolCreditModels } = makeBuilder();
     const q = quest();
 
-    await builder.reserveImageCredits(
+    builder.settleImageCredits(
       'image_generation',
-      { model: ImageModels.FLUX_PRO_1_1, n: 1 },
+      q,
+      { model: ImageModels.FLUX_PRO_1_1, n: 1, paths: [] },
       true,
       null,
-      q,
-      saveQuest,
       AVAILABLE_MODELS
     );
-    await builder.reserveImageCredits(
+    builder.settleImageCredits(
       'edit_image',
-      { model: ImageModels.FLUX_PRO_FILL, n: 1 },
+      q,
+      { model: ImageModels.FLUX_PRO_FILL, n: 1, paths: [] },
       true,
       null,
-      q,
-      saveQuest,
       AVAILABLE_MODELS
     );
 
     expect(Array.from(toolCreditModels).sort()).toEqual([ImageModels.FLUX_PRO_1_1, ImageModels.FLUX_PRO_FILL].sort());
   });
 
-  it('records nothing when credit enforcement is off, since no ledger row is written', async () => {
+  it('records nothing when credit enforcement is off, since no ledger row is written', () => {
     const { builder, toolCreditModels } = makeBuilder();
 
-    await builder.reserveImageCredits(
+    builder.settleImageCredits(
       'image_generation',
-      { model: ImageModels.FLUX_PRO_1_1, n: 1 },
+      quest(),
+      { model: ImageModels.FLUX_PRO_1_1, n: 1, paths: [] },
       false,
       null,
-      quest(),
-      saveQuest,
       AVAILABLE_MODELS
     );
 
@@ -201,33 +213,31 @@ describe('ToolBuilder.reserveImageCredits - ledger model attribution', () => {
 // call) and has no test harness of its own, so this covers the data contract between the
 // two, not that call site.
 describe('charging models -> aggregate ledger model', () => {
-  it('names the image model when it is the only tool that charged', async () => {
+  it('names the image model when it is the only tool that charged', () => {
     const { builder, toolCreditModels } = makeBuilder();
 
-    await builder.reserveImageCredits(
+    builder.settleImageCredits(
       'image_generation',
-      { model: ImageModels.FLUX_PRO_1_1, n: 1 },
+      quest(),
+      { model: ImageModels.FLUX_PRO_1_1, n: 1, paths: [] },
       true,
       null,
-      quest(),
-      saveQuest,
       AVAILABLE_MODELS
     );
 
     expect(resolveAggregateToolModel(toolCreditModels)).toBe(ImageModels.FLUX_PRO_1_1);
   });
 
-  it('names nothing once a second tool charges on a different model', async () => {
+  it('names nothing once a second tool charges on a different model', () => {
     const { builder, toolCreditModels } = makeBuilder();
     const q = quest();
 
-    await builder.reserveImageCredits(
+    builder.settleImageCredits(
       'image_generation',
-      { model: ImageModels.FLUX_PRO_1_1, n: 1 },
+      q,
+      { model: ImageModels.FLUX_PRO_1_1, n: 1, paths: [] },
       true,
       null,
-      q,
-      saveQuest,
       AVAILABLE_MODELS
     );
     builder.settleAudioCredits(

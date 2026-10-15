@@ -307,6 +307,13 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    */
   skipAutoOffers: z.boolean().optional(),
   /**
+   * Per-request twin of `session.disableUserIntegrations`, ORed with it: no user MCP servers, no
+   * agents or agent delegation, and no user skills (catalog or `/skill` expansion). For a server
+   * caller running a prompt the user did not author (e.g. a Slack workflow step), where the user's
+   * own integrations must not be reachable from that prompt.
+   */
+  disableUserIntegrations: z.boolean().optional(),
+  /**
    * Withhold only the reply-choices guidance, for a caller with no button UI (voice speaks the
    * raw reply stream, so a choices block would be read aloud). Narrower than `skipAutoOffers`,
    * which also withholds knowledge and MCP offers such a caller may still need.

@@ -1,21 +1,13 @@
-"""Select desktop SemVer from release tags and desktop-relevant first-parent commits."""
+"""Select desktop SemVer from release tags and first-parent commits that affect desktop inputs."""
 
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+from desktop_affected import affected, commit_affected
 
 
-PATHS = (
-    'apps/desktop/', 'b4m-core/', 'packages/cli/', 'packages/database/',
-    'packages/sdk/', 'packages/typescript-config/', 'patches/',
-)
-FILES = {
-    'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'turbo.json', '.npmrc',
-    '.github/workflows/desktop-release.yml', 'scripts/desktop_release_version.py',
-    'scripts/test_desktop_release_version.py',
-}
 VERSION = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)')
 
 
@@ -35,18 +27,11 @@ def bump_level(message):
     return 1
 
 
-def relevant(path):
-    return path in FILES or path.startswith(PATHS)
-
-
 def release_notes(version, previous, repository):
     changes = []
     revisions = git('rev-list', '--first-parent', f'{previous}..HEAD') if previous else git('rev-list', '-n', '1', 'HEAD')
     for sha in revisions.splitlines():
-        parents = git('rev-list', '--parents', '-n', '1', sha).split()
-        paths = (git('diff', '--name-only', parents[1], sha) if len(parents) > 1 else
-                 git('diff-tree', '--root', '--no-commit-id', '--name-only', '-r', sha)).splitlines()
-        if any(relevant(path) for path in paths):
+        if commit_affected(sha):
             message = git('show', '-s', '--format=%B', sha)
             changes.append((sha, message.splitlines()[0], bump_level(message)))
     reason = ['no semantic bump', 'patch', 'minor', 'major'][max((c[2] for c in changes), default=0)]
@@ -56,7 +41,7 @@ def release_notes(version, previous, repository):
     lines.extend(f'- {subject} ([commit](https://github.com/{repository}/commit/{sha}))'
                  for sha, subject, _ in changes)
     lines.extend(['', '## Installation', '',
-                  'Choose arm64.dmg for Apple Silicon, x64.dmg for Intel, or x64.AppImage for Linux.',
+                  'Choose arm64.dmg for Apple Silicon or x64.AppImage for Linux. Intel Mac builds are temporarily paused.',
                   'SHA256SUMS.txt contains installer checksums. Updates are installed manually.',
                   'Unsigned builds may need approval in macOS Privacy & Security. Only approve downloads you trust.', ''])
     return '\n'.join(lines)
@@ -94,12 +79,7 @@ def select_version(releases, baseline, preview='', title='', run=''):
     level = 0
     if candidates:
         for sha in git('rev-list', '--first-parent', revision_range).splitlines():
-            parents = git('rev-list', '--parents', '-n', '1', sha).split()
-            if len(parents) > 1:
-                paths = git('diff', '--name-only', parents[1], sha).splitlines()
-            else:
-                paths = git('diff-tree', '--root', '--no-commit-id', '--name-only', '-r', sha).splitlines()
-            if any(relevant(path) for path in paths):
+            if commit_affected(sha):
                 message = title if preview and sha == head else git('show', '-s', '--format=%B', sha)
                 level = max(level, bump_level(message))
         major, minor, patch = parts
@@ -119,6 +99,12 @@ def select_version(releases, baseline, preview='', title='', run=''):
 
 
 def main():
+    base = os.environ.get('CHANGE_BASE', '')
+    if base and not affected(base, 'HEAD'):
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write('release=false\n')
+        print('No desktop dependency inputs changed; skipping packaging and publication.')
+        return
     pages = json.loads(subprocess.check_output([
         'gh', 'api', '--paginate', '--slurp',
         f'repos/{os.environ["GITHUB_REPOSITORY"]}/releases?per_page=100',
