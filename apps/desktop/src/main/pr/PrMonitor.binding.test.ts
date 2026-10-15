@@ -31,6 +31,8 @@ function setup(project: { workingDirectory: string; branch: string | null } | nu
   return { store, fake, out, monitor };
 }
 
+// Work the monitor starts in the background (batched reads, store writes) has no promise to await. Wait for the
+// expected effect with vi.waitFor; `settle` is only for proving something did NOT happen (or happened only once).
 const settle = () => new Promise(resolve => setTimeout(resolve, 20));
 
 describe('PrMonitor binding', () => {
@@ -62,7 +64,7 @@ describe('PrMonitor binding', () => {
   it('lets a manual bind replace a detected one, and refuses a bad URL', async () => {
     const { store, monitor } = setup();
     monitor.observeToolEnd(SESSION, shellCall('gh pr create', REF.url));
-    await settle();
+    await vi.waitFor(async () => expect(await store.get(SESSION)).toMatchObject({ number: 611, source: 'shell' }));
     expect(await monitor.bindManual(SESSION, 'not a url')).toEqual({ ok: false, error: expect.any(String) });
     expect(await monitor.bindManual(SESSION, 'https://github.com/example-org/widgets/pull/700')).toEqual({ ok: true });
     expect(await store.get(SESSION)).toMatchObject({ number: 700, source: 'manual' });
