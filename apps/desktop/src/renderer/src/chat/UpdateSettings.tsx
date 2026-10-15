@@ -71,6 +71,18 @@ export function UpdateSettings({ controller }: { controller: AppUpdateController
 
       <div data-testid="update-body">{body}</div>
 
+      {state.notes && (state.status === 'available' || state.status === 'downloading' || state.status === 'ready') && (
+        // Plain text, never markdown or HTML: the notes come off the network.
+        <Typography
+          level="body-xs"
+          textColor="text.secondary"
+          data-testid="update-notes"
+          sx={{ whiteSpace: 'pre-wrap', maxHeight: 200, overflowY: 'auto', overflowWrap: 'anywhere' }}
+        >
+          {state.notes}
+        </Typography>
+      )}
+
       {blockedBy && (
         <Alert color="warning" variant="soft" data-testid="update-busy-alert">
           <Stack spacing={0.5}>
@@ -107,7 +119,7 @@ export function UpdateSettings({ controller }: { controller: AppUpdateController
 
         {state.status === 'ready' && !blockedBy && (
           <Button size="sm" variant="solid" onClick={() => void install(false)} data-testid="update-install-btn">
-            Restart and install
+            Restart to update
           </Button>
         )}
 

@@ -3,8 +3,11 @@ import {
   describeBusy,
   initialUpdateState,
   isBusy,
+  MAX_RELEASE_NOTES_LENGTH,
+  normalizeReleaseNotes,
   reduceUpdate,
   updateAttention,
+  updateBannerVisible,
   updateSummary,
   type UpdateEvent,
   type UpdateState,
@@ -232,5 +235,111 @@ describe('isBusy / describeBusy', () => {
     expect(describeBusy({ replying: 2, awaitingApproval: 1, background: 3 })).toBe(
       '2 sessions are still working, 1 session is waiting for you and 3 background processes are running.'
     );
+  });
+});
+
+describe('reduceUpdate: release notes', () => {
+  it('carries the notes from the offer through the download', () => {
+    const ready = drive(
+      supported(),
+      { type: 'check-started' },
+      { type: 'available', version: '1.1.0', at: AT, notes: '- a restart banner' },
+      { type: 'download-started' },
+      { type: 'downloaded', version: '1.1.0' }
+    );
+    expect(ready).toMatchObject({ status: 'ready', version: '1.1.0', notes: '- a restart banner' });
+  });
+
+  it('prefers the notes the download reports, which are the ones for the staged bytes', () => {
+    const ready = drive(
+      supported(),
+      { type: 'available', version: '1.1.0', at: AT, notes: 'offered' },
+      { type: 'download-started' },
+      { type: 'downloaded', version: '1.1.0', notes: 'downloaded' }
+    );
+    expect(ready.notes).toBe('downloaded');
+  });
+
+  it("never pins one version's notes on another", () => {
+    const ready = drive(
+      supported(),
+      { type: 'available', version: '1.1.0', at: AT, notes: 'for 1.1.0' },
+      { type: 'download-started' },
+      { type: 'downloaded', version: '1.2.0' }
+    );
+    expect(ready).toMatchObject({ version: '1.2.0', notes: null });
+  });
+
+  it('drops the notes when the feed says there is nothing newer', () => {
+    const state = drive(
+      supported(),
+      { type: 'available', version: '1.1.0', at: AT, notes: 'old offer' },
+      { type: 'up-to-date', at: AT + 1 }
+    );
+    expect(state).toMatchObject({ status: 'up-to-date', version: null, notes: null });
+  });
+
+  it('starts with no notes, and an offer without notes has none', () => {
+    expect(supported().notes).toBeNull();
+    expect(reduceUpdate(supported(), { type: 'available', version: '1.1.0', at: AT }).notes).toBeNull();
+  });
+});
+
+describe('normalizeReleaseNotes', () => {
+  it('passes plain text through, trimmed', () => {
+    expect(normalizeReleaseNotes('  - one\n- two  ')).toBe('- one\n- two');
+  });
+
+  it('is null for nothing, blanks and non-text', () => {
+    expect(normalizeReleaseNotes(null)).toBeNull();
+    expect(normalizeReleaseNotes(undefined)).toBeNull();
+    expect(normalizeReleaseNotes('   ')).toBeNull();
+    expect(normalizeReleaseNotes(42)).toBeNull();
+    expect(normalizeReleaseNotes({ note: 'x' })).toBeNull();
+  });
+
+  it('joins the per-version form electron-updater uses when it collects several', () => {
+    expect(
+      normalizeReleaseNotes([
+        { version: '1.2.0', note: 'second' },
+        { version: '1.1.0', note: null },
+        { version: '1.0.1', note: 'first' },
+      ])
+    ).toBe('second\n\nfirst');
+  });
+
+  it('strips markup instead of rendering it', () => {
+    expect(normalizeReleaseNotes('<p>Fixed <b>it</b><br>now</p><script>alert(1)</script>')).toBe(
+      'Fixed it\nnowalert(1)'
+    );
+  });
+
+  it('caps what a manifest can push into the UI', () => {
+    const long = 'x'.repeat(MAX_RELEASE_NOTES_LENGTH + 50);
+    const capped = normalizeReleaseNotes(long);
+    expect(capped).toHaveLength(MAX_RELEASE_NOTES_LENGTH + 3);
+    expect(capped?.endsWith('...')).toBe(true);
+  });
+});
+
+describe('updateBannerVisible', () => {
+  const ready = drive(
+    supported(),
+    { type: 'available', version: '1.1.0', at: AT },
+    { type: 'download-started' },
+    { type: 'downloaded', version: '1.1.0' }
+  );
+
+  it('shows only once the update is staged', () => {
+    expect(updateBannerVisible(ready, null)).toBe(true);
+    expect(updateBannerVisible(reduceUpdate(supported(), { type: 'available', version: '1.1.0', at: AT }), null)).toBe(
+      false
+    );
+    expect(updateBannerVisible(initialUpdateState('1.0.0', false), null)).toBe(false);
+  });
+
+  it('stays hidden for the dismissed version and comes back for the next one', () => {
+    expect(updateBannerVisible(ready, '1.1.0')).toBe(false);
+    expect(updateBannerVisible({ ...ready, version: '1.2.0' }, '1.1.0')).toBe(true);
   });
 });

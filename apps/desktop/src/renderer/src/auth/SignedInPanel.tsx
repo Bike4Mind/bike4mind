@@ -10,9 +10,12 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import type { AuthState } from '@shared/auth';
+import { updateBannerVisible } from '@shared/update';
 import { ChevronIcon, GearIcon, SignOutIcon, UserIcon } from '../chat/icons';
 import { NavItem } from '../chat/SessionList';
 import { useSettingsAttention } from '../chat/settingsAttention';
+import { UpdateBanner } from '../chat/UpdateBanner';
+import { useAppUpdate } from '../chat/useAppUpdate';
 import { RuntimeInfo } from '../components/RuntimeInfo';
 
 /** Two letters for the avatar. Falls back to one, then to nothing, rather than to a stray '?'. */
@@ -50,11 +53,18 @@ export function SignedInPanel({
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const settingsAttention = useSettingsAttention();
+  const update = useAppUpdate();
+  const [dismissedUpdate, setDismissedUpdate] = useState<string | null>(null);
+  const showUpdateBanner = updateBannerVisible(update.state, dismissedUpdate);
   const user = state.user;
   const displayName = user?.nickname || user?.username || user?.email || user?.id || 'Signed in';
 
   return (
     <Stack spacing={1} sx={{ p: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
+      {showUpdateBanner && (
+        <UpdateBanner controller={update} onDismiss={() => setDismissedUpdate(update.state.version)} />
+      )}
+
       {state.storage === 'unavailable' && (
         <Alert color="warning" variant="soft" size="sm" data-testid="auth-storage-alert">
           No OS keychain is available here, so this sign-in lasts only until you quit.
@@ -106,9 +116,9 @@ export function SignedInPanel({
           </Stack>
         </Stack>
         {/* Primary, not danger: an update waiting is not a fault. Hidden while the menu is
-            open, because the Settings row it points at is then two rows below and the chip
-            would be saying the same thing twice. */}
-        {settingsAttention && !open && (
+            open, or while the update banner above is up, because either already says the same
+            thing. */}
+        {settingsAttention && !open && !showUpdateBanner && (
           <Chip size="sm" variant="soft" color="primary" data-testid="account-attention-chip">
             {settingsAttention}
           </Chip>

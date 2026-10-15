@@ -4,7 +4,7 @@ import { UpdateService, type UpdaterPort } from './UpdateService';
 
 const QUIET: UpdateBusyReport = { replying: 0, awaitingApproval: 0, background: 0 };
 
-function harness(options: { updater?: UpdaterPort | null; busy?: UpdateBusyReport } = {}) {
+function harness(options: { updater?: UpdaterPort | null; busy?: UpdateBusyReport; autoDownload?: boolean } = {}) {
   const port: UpdaterPort = options.updater ?? {
     check: vi.fn(async () => undefined),
     download: vi.fn(async () => undefined),
@@ -20,6 +20,7 @@ function harness(options: { updater?: UpdaterPort | null; busy?: UpdateBusyRepor
     busy,
     prepareQuit,
     onChanged: state => pushed.push(state),
+    autoDownload: options.autoDownload,
   });
 
   return { service, port, busy, prepareQuit, pushed };
@@ -164,5 +165,70 @@ describe('UpdateService.install', () => {
 
     await expect(failing.install(true)).resolves.toEqual({ ok: true });
     expect(port.install).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('UpdateService with autoDownload', () => {
+  /** An updater whose check reports an offer the way electron-updater does: as an event, mid-check. */
+  function offering(download: UpdaterPort['download'] = vi.fn(async () => undefined)) {
+    const ref: { service: UpdateService | null } = { service: null };
+    const updater: UpdaterPort = {
+      check: vi.fn(async () => {
+        ref.service?.apply({ type: 'available', version: '1.1.0', at: 1, notes: '- new' });
+      }),
+      download,
+      install: vi.fn(),
+    };
+    return { ref, updater };
+  }
+
+  function wired(autoDownload: boolean, download?: UpdaterPort['download']) {
+    const { ref, updater } = offering(download);
+    const { service } = harness({ updater, autoDownload });
+    ref.service = service;
+    return { service, updater };
+  }
+
+  it('starts the download as soon as a check finds a newer version', async () => {
+    const { service, updater } = wired(true);
+    await service.check();
+    expect(updater.download).toHaveBeenCalledTimes(1);
+    expect(service.snapshot()).toMatchObject({ status: 'downloading', version: '1.1.0', notes: '- new' });
+  });
+
+  it('leaves the offer alone when it is off', async () => {
+    const { service, updater } = wired(false);
+    await service.check();
+    expect(updater.download).not.toHaveBeenCalled();
+    expect(service.snapshot().status).toBe('available');
+  });
+
+  it('does not download when the check finds nothing', async () => {
+    const { service, port } = harness({ autoDownload: true });
+    await service.check();
+    expect(port.download).not.toHaveBeenCalled();
+  });
+
+  it('retries a failed download on the next check, not in a loop', async () => {
+    const download = vi.fn(async () => {
+      throw new Error('socket hang up');
+    });
+    const { service } = wired(true, download);
+
+    await service.check();
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(service.snapshot().status).toBe('available');
+
+    await service.check();
+    expect(download).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not start a second download while one is staged', async () => {
+    const { service, updater } = wired(true);
+    stage(service);
+
+    await service.check();
+    expect(updater.check).not.toHaveBeenCalled();
+    expect(updater.download).not.toHaveBeenCalled();
   });
 });

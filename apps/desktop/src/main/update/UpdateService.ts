@@ -24,6 +24,11 @@ export interface UpdateServiceDeps {
   busy: () => UpdateBusyReport;
   /** Graceful teardown of background processes and MCP children, before the app is handed over. */
   prepareQuit: () => Promise<void>;
+  /**
+   * Start the download as soon as a check finds a newer version, so the user's one action is the
+   * restart. A download that fails is not retried until the next check, never in a loop.
+   */
+  autoDownload?: boolean;
   onChanged: (state: UpdateState) => void;
 }
 
@@ -76,6 +81,9 @@ export class UpdateService {
     } finally {
       this.inFlight = false;
     }
+    // After the guard is released: the offer arrives as an event while the check is still in
+    // flight, and download() refuses to start inside it.
+    if (this.deps.autoDownload && this.state.status === 'available') await this.download();
   }
 
   async download(): Promise<void> {

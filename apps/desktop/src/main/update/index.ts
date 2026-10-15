@@ -1,7 +1,7 @@
 import { app, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { IPC_CHANNELS } from '@shared/ipc';
-import type { UpdateBusyReport, UpdateState } from '@shared/update';
+import { normalizeReleaseNotes, type UpdateBusyReport, type UpdateState } from '@shared/update';
 import { resolveFeedUrl } from './feed';
 import { UpdateService, type UpdaterPort } from './UpdateService';
 import { appWindows } from '../windows';
@@ -66,9 +66,10 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
 
   let port: UpdaterPort | null = null;
   if (enabled && feedUrl) {
-    // Downloading is the user's choice, not a side effect of launching: it is their bandwidth
-    // and their disk. And nothing installs itself on quit - an update applied because the user
-    // closed the window is an update they never agreed to.
+    // The service starts the download itself once a check finds something (autoDownload below),
+    // so the one thing the user does is restart. electron-updater's own autoDownload stays off so
+    // that there is one place deciding when bytes move. Nothing installs itself on quit - an
+    // update applied because the user closed the window is an update they never agreed to.
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.logger = VERBOSE ? console : null;
@@ -91,11 +92,17 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
     busy: deps.busy,
     prepareQuit: deps.prepareQuit,
     onChanged: send,
+    autoDownload: true,
   });
 
   if (enabled) {
     autoUpdater.on('update-available', info => {
-      service.apply({ type: 'available', version: info.version, at: Date.now() });
+      service.apply({
+        type: 'available',
+        version: info.version,
+        at: Date.now(),
+        notes: normalizeReleaseNotes(info.releaseNotes),
+      });
     });
     autoUpdater.on('update-not-available', () => {
       service.apply({ type: 'up-to-date', at: Date.now() });
@@ -104,7 +111,7 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
       service.apply({ type: 'progress', percent: progress.percent });
     });
     autoUpdater.on('update-downloaded', info => {
-      service.apply({ type: 'downloaded', version: info.version });
+      service.apply({ type: 'downloaded', version: info.version, notes: normalizeReleaseNotes(info.releaseNotes) });
     });
     // No network, a feed that 404s, a manifest that does not parse, and a signature that does
     // not verify all arrive here. None of them is shown: the user did not ask about updates,

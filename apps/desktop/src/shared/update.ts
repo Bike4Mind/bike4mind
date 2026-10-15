@@ -32,15 +32,17 @@ export interface UpdateState {
   percent: number;
   /** When a check last REACHED the feed, epoch ms. A failed check leaves it alone. */
   checkedAt: number | null;
+  /** Plain-text notes for `version`, when the manifest carries them. Never rendered as HTML. */
+  notes: string | null;
 }
 
 export type UpdateEvent =
   | { type: 'check-started' }
-  | { type: 'available'; version: string; at: number }
+  | { type: 'available'; version: string; at: number; notes?: string | null }
   | { type: 'up-to-date'; at: number }
   | { type: 'download-started' }
   | { type: 'progress'; percent: number }
-  | { type: 'downloaded'; version: string }
+  | { type: 'downloaded'; version: string; notes?: string | null }
   /**
    * The download died partway. Distinct from 'unreachable' because the outcome is different:
    * the update is still on offer and the user can press Download again, whereas a failed CHECK
@@ -57,7 +59,43 @@ export function initialUpdateState(currentVersion: string, supported: boolean): 
     version: null,
     percent: 0,
     checkedAt: null,
+    notes: null,
   };
+}
+
+/** Long enough for a real changelog section; a manifest is not a place for an essay. */
+export const MAX_RELEASE_NOTES_LENGTH = 4000;
+
+/**
+ * electron-updater's `releaseNotes` as one plain string, or null.
+ *
+ * It is a string from a generic feed, but an array of per-version notes when the provider
+ * collects them, and HTML from some providers. Tags are dropped rather than rendered: the notes
+ * come off the network, and the renderer shows them as text.
+ */
+export function normalizeReleaseNotes(raw: unknown): string | null {
+  let text: string;
+  if (typeof raw === 'string') {
+    text = raw;
+  } else if (Array.isArray(raw)) {
+    text = raw
+      .map(entry =>
+        entry && typeof entry === 'object' && typeof (entry as { note?: unknown }).note === 'string'
+          ? (entry as { note: string }).note
+          : ''
+      )
+      .filter(note => note.trim().length > 0)
+      .join('\n\n');
+  } else {
+    return null;
+  }
+  const plain = text
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/\r\n/g, '\n')
+    .trim();
+  if (plain.length === 0) return null;
+  return plain.length > MAX_RELEASE_NOTES_LENGTH ? `${plain.slice(0, MAX_RELEASE_NOTES_LENGTH).trimEnd()}...` : plain;
 }
 
 /** Statuses that hold something a failed or negative check must not discard. */
@@ -95,13 +133,20 @@ export function reduceUpdate(state: UpdateState, event: UpdateEvent): UpdateStat
 
     case 'available':
       if (state.status === 'downloading' || state.status === 'ready') return state;
-      return { ...state, status: 'available', version: event.version, percent: 0, checkedAt: event.at };
+      return {
+        ...state,
+        status: 'available',
+        version: event.version,
+        percent: 0,
+        checkedAt: event.at,
+        notes: event.notes ?? null,
+      };
 
     case 'up-to-date':
       // Rule 1: a staged download outranks the feed changing its mind.
       if (state.status === 'ready') return { ...state, checkedAt: event.at };
       if (state.status === 'downloading') return { ...state, checkedAt: event.at };
-      return { ...state, status: 'up-to-date', version: null, percent: 0, checkedAt: event.at };
+      return { ...state, status: 'up-to-date', version: null, percent: 0, checkedAt: event.at, notes: null };
 
     case 'download-started':
       return state.status === 'available' ? { ...state, status: 'downloading', percent: 0 } : state;
@@ -110,7 +155,13 @@ export function reduceUpdate(state: UpdateState, event: UpdateEvent): UpdateStat
       return state.status === 'downloading' ? { ...state, percent: clampPercent(event.percent) } : state;
 
     case 'downloaded':
-      return { ...state, status: 'ready', version: event.version, percent: 100 };
+      return {
+        ...state,
+        status: 'ready',
+        version: event.version,
+        percent: 100,
+        notes: event.notes ?? (event.version === state.version ? state.notes : null),
+      };
 
     // Back to the offer, not to a failure: the version is still there to be had, and a state
     // that kept saying "Downloading... 40%" with nothing moving would strand the user with a
@@ -161,6 +212,14 @@ export function updateAttention(state: UpdateState): string | undefined {
   if (state.status === 'available') return 'Update';
   if (state.status === 'ready') return 'Restart';
   return undefined;
+}
+
+/**
+ * Whether the sidebar's restart banner shows: only for a staged update, and not for the version
+ * the user already dismissed it for. A newer version brings it back.
+ */
+export function updateBannerVisible(state: UpdateState, dismissedVersion: string | null): boolean {
+  return state.status === 'ready' && state.version !== dismissedVersion;
 }
 
 /** What the app is in the middle of, counted across every conversation. */
