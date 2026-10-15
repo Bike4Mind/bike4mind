@@ -1,6 +1,7 @@
 import { Box, Button, Chip, Stack, Tooltip, Typography } from '@mui/joy';
 import CheckIcon from '@mui/icons-material/Check';
 import type { DerivedIntegrationStatus, IntegrationId } from '@bike4mind/common';
+import { useToggleIntegrationRequest } from '@client/app/hooks/data/integrationRequests';
 import { STATUS_LABELS } from './galleryModel';
 
 export const ADMIN_ONLY_NOTE = 'Only admins can see this';
@@ -54,36 +55,42 @@ export const IntegrationStatusLabel = ({ derived, testId }: { derived: DerivedIn
   );
 };
 
-/** File or withdraw the viewer's request for a roadmap entry. */
+/**
+ * File or withdraw the viewer's request for a roadmap entry. Disabled while a toggle for the
+ * same entry is in flight, from this button or any other for that entry. `onToggle` hears the
+ * click with the state before it, for analytics; the request itself is made here.
+ */
 export const RequestButton = ({
   integrationId,
   requested,
-  disabled,
   onToggle,
   testId,
 }: {
   integrationId: IntegrationId;
   requested: boolean;
-  disabled?: boolean;
-  onToggle: (integrationId: IntegrationId, requested: boolean) => void;
+  onToggle?: (integrationId: IntegrationId, requested: boolean) => void;
   testId: string;
-}) => (
-  <Button
-    size="sm"
-    variant="outlined"
-    color="neutral"
-    aria-pressed={requested}
-    disabled={disabled}
-    startDecorator={requested ? <CheckIcon sx={{ fontSize: '16px' }} /> : undefined}
-    data-testid={testId}
-    onClick={event => {
-      event.stopPropagation();
-      onToggle(integrationId, requested);
-    }}
-    sx={{ '--Button-minHeight': '28px', fontWeight: 500, whiteSpace: 'nowrap' }}
-  >
-    {requested ? 'Requested' : 'Request'}
-  </Button>
-);
+}) => {
+  const { toggle, isPending } = useToggleIntegrationRequest(integrationId);
+  return (
+    <Button
+      size="sm"
+      variant="outlined"
+      color="neutral"
+      aria-pressed={requested}
+      disabled={isPending}
+      startDecorator={requested ? <CheckIcon sx={{ fontSize: '16px' }} /> : undefined}
+      data-testid={testId}
+      onClick={event => {
+        event.stopPropagation();
+        onToggle?.(integrationId, requested);
+        toggle({ requested });
+      }}
+      sx={{ '--Button-minHeight': '28px', fontWeight: 500, whiteSpace: 'nowrap' }}
+    >
+      {requested ? 'Requested' : 'Request'}
+    </Button>
+  );
+};
 
 export const requestCountText = (count: number): string => `${count} ${count === 1 ? 'request' : 'requests'}`;

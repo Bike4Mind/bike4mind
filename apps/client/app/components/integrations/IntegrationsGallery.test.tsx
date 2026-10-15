@@ -19,6 +19,7 @@ let state: { currentUser: Record<string, unknown> | null; isAdmin: boolean };
 let flags: Set<SettingKey>;
 let connections: Connections;
 let requests: { counts: Record<string, number>; mine: string[] } | undefined;
+let pendingToggles: Set<string>;
 let compact: boolean;
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -29,7 +30,10 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
 }));
 vi.mock('@client/app/hooks/data/integrationRequests', () => ({
   useIntegrationRequests: () => ({ data: requests }),
-  useToggleIntegrationRequest: () => ({ mutate: h.toggleRequest }),
+  useToggleIntegrationRequest: (integrationId: string) => ({
+    toggle: (variables: { requested: boolean }) => h.toggleRequest({ integrationId, ...variables }),
+    isPending: pendingToggles.has(integrationId),
+  }),
 }));
 vi.mock('./useIntegrationConnections', async importOriginal => ({
   ...(await importOriginal<typeof import('./useIntegrationConnections')>()),
@@ -93,6 +97,7 @@ beforeEach(() => {
   flags = new Set<SettingKey>(['EnableMCPServer', 'EnableDataLakes']);
   connections = { 'google-drive': { connected: true } };
   requests = { counts: { hubspot: 41, gmail: 3 }, mine: ['gmail'] };
+  pendingToggles = new Set();
   compact = false;
 });
 
@@ -187,6 +192,16 @@ describe('IntegrationsGallery', () => {
     expect(h.toggleRequest).toHaveBeenCalledWith({ integrationId: 'gmail', requested: true });
     // The button acts on its own; it never also opens the row's drawer.
     expect(screen.queryByTestId('integrations-drawer')).toBeNull();
+  });
+
+  it("disables an entry's request button while a toggle for it is in flight, and no other", async () => {
+    pendingToggles = new Set(['hubspot']);
+    renderGallery();
+    expect(screen.getByTestId('integrations-request-btn-hubspot')).toBeDisabled();
+    expect(screen.getByTestId('integrations-request-btn-gmail')).toBeEnabled();
+
+    fireEvent.click(screen.getByTestId('integrations-request-btn-hubspot'));
+    expect(h.toggleRequest).not.toHaveBeenCalled();
   });
 
   it('starts the existing connect flow from the row', async () => {

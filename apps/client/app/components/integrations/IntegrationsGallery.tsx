@@ -20,7 +20,7 @@ import {
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useIsTablet } from '@client/app/hooks/useIsMobile';
-import { useIntegrationRequests, useToggleIntegrationRequest } from '@client/app/hooks/data/integrationRequests';
+import { useIntegrationRequests } from '@client/app/hooks/data/integrationRequests';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
@@ -246,7 +246,6 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
   const connections = useIntegrationConnections();
   const { connect, isPending } = useIntegrationConnect();
   const { data: requests } = useIntegrationRequests();
-  const toggleRequest = useToggleIntegrationRequest();
   const { mutate: logEvent } = useLogEvent();
 
   const [tab, setTab] = useState<GalleryTab>('integrations');
@@ -307,7 +306,6 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
       type: IntegrationsEvents.INTEGRATIONS_REQUEST_TOGGLED,
       metadata: { integrationId, requested: !requested },
     });
-    toggleRequest.mutate({ integrationId, requested });
   };
   const changeFilter =
     <T extends string>(filter: IntegrationsGalleryFilter, set: (value: T) => void) =>
