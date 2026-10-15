@@ -29,6 +29,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 
 import {
+  applyOAuthLinkVerificationGrants,
   applyOAuthSignupDomainGrant,
   isEligibleForOAuthFreeCredits,
   releaseOAuthPendingFreeCredits,
@@ -110,6 +111,46 @@ describe('oauthSignupGrants', () => {
 
       await expect(applyOAuthSignupDomainGrant('user-1', 'dee@partner.example')).resolves.toBeUndefined();
       expect(mockLoggerError).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
+    });
+  });
+
+  describe('applyOAuthLinkVerificationGrants', () => {
+    const linkedUser = { id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG] };
+
+    it('releases the pending credits and applies the domain grant with the email-verification trigger', async () => {
+      mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+
+      await applyOAuthLinkVerificationGrants(linkedUser, 'dee@partner.example', 'link test');
+
+      expect(mockReleasePending).toHaveBeenCalledWith(
+        { id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG], pendingCreditGrant: null },
+        expect.objectContaining({ reason: 'link test' })
+      );
+      expect(mockApplySignupDomainGrant).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', email: 'dee@partner.example', trigger: 'email-verification' })
+      );
+    });
+
+    it('logs with the user id and never throws when the domain grant fails', async () => {
+      mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+      mockApplySignupDomainGrant.mockRejectedValue(new Error('boom'));
+
+      await expect(
+        applyOAuthLinkVerificationGrants(linkedUser, 'dee@partner.example', 'link test')
+      ).resolves.toBeUndefined();
+      expect(mockLoggerError).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
+    });
+
+    it('still applies the domain grant when the pending-credit release fails', async () => {
+      mockReleasePending.mockRejectedValue(new Error('release down'));
+
+      await expect(
+        applyOAuthLinkVerificationGrants(linkedUser, 'dee@partner.example', 'link test')
+      ).resolves.toBeUndefined();
+      expect(mockLoggerError).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
+      expect(mockApplySignupDomainGrant).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', trigger: 'email-verification' })
+      );
     });
   });
 });

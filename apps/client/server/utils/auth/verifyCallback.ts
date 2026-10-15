@@ -10,6 +10,7 @@ import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
 import { OAuthFailureReason } from './oauthFailureReason';
 import { isOpenRegistrationAllowed } from './openRegistration';
 import {
+  applyOAuthLinkVerificationGrants,
   applyOAuthSignupDomainGrant,
   isEligibleForOAuthFreeCredits,
   releaseOAuthPendingFreeCredits,
@@ -146,11 +147,13 @@ const authenticateUser = async (
         currentTokenVersion: user.tokenVersion,
       });
       await User.updateOne({ _id: user._id }, update);
-      // Promotion is this account's email verification, so a deferred grant is released here: once
-      // emailVerified is set, OTC login no longer releases it and Resend is refused.
-      if (promoteEmailVerified) {
-        await releaseOAuthPendingFreeCredits(
+      // Promotion is this account's email verification, so its grants are applied here: once
+      // emailVerified is set, OTC login no longer releases them and Resend is refused. Promotion
+      // implies the provider email matched the local one, so `email` is set; the check narrows it.
+      if (promoteEmailVerified && email) {
+        await applyOAuthLinkVerificationGrants(
           { id: String(user._id), tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
+          email,
           'OAuth account link (email verified)'
         );
       }

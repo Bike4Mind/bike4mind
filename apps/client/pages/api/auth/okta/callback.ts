@@ -41,7 +41,7 @@ import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from '@server/utils/auth/createOAuthUser';
-import { applyOAuthSignupDomainGrant, releaseOAuthPendingFreeCredits } from '@server/utils/auth/oauthSignupGrants';
+import { applyOAuthLinkVerificationGrants, applyOAuthSignupDomainGrant } from '@server/utils/auth/oauthSignupGrants';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
@@ -417,11 +417,12 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         }
       }
       Object.assign(user, reflect);
-      // Mirrors verifyCallback.ts: promotion is this account's email verification, so release any
-      // deferred flat grant (OTC login and Resend no longer will once emailVerified is set).
+      // Mirrors verifyCallback.ts: promotion is this account's email verification, so apply its
+      // grants here (OTC login and Resend no longer will once emailVerified is set).
       if (promoteEmailVerified) {
-        await releaseOAuthPendingFreeCredits(
+        await applyOAuthLinkVerificationGrants(
           { id: user.id, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
+          email,
           'Okta account link (email verified)'
         );
       }

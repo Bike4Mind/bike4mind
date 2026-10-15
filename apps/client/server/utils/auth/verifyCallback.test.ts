@@ -1214,6 +1214,59 @@ describe('verifyCallback - pending free credits on account link', () => {
     expect(mockReleasePending).not.toHaveBeenCalled();
   });
 
+  it('applies the verified domain grant when the link promotes emailVerified on a partner domain', async () => {
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      entitlements: new Set(['optihashi:pro']),
+      signupCredits: 1000,
+      organizationId: 'org-1',
+    });
+    stage2Hit({
+      _id: 'u-pending',
+      email: 'dee@partner.example',
+      emailVerified: false,
+      hasUsablePassword: false,
+      tags: ['Customer'],
+      authProviders: [],
+    });
+
+    const { err } = await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-partner',
+      emails: [{ value: 'dee@partner.example', verified: true }],
+    });
+
+    expect(err).toBeNull();
+    expect(mockPartnerGrant).toHaveBeenCalledWith('dee@partner.example', true);
+    expect(mockAddCredits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerId: 'u-pending',
+        credits: 1000,
+        transactionId: 'domain-grant-credits:u-pending',
+      }),
+      expect.anything()
+    );
+    expect(mockApplyPartnerRuleMembership).toHaveBeenCalledWith(
+      { userId: 'u-pending', organizationId: 'org-1' },
+      expect.anything()
+    );
+  });
+
+  it('does not apply the domain grant on a plain link of an already-verified account', async () => {
+    stage2Hit({
+      _id: 'u-verified',
+      email: 'owner@example.com',
+      emailVerified: true,
+      hasUsablePassword: true,
+      authProviders: [],
+    });
+
+    const { err } = await runStandard(AuthStrategy.Google, linkProfile);
+
+    expect(err).toBeNull();
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
   it('completes the link when the release throws', async () => {
     mockReleasePending.mockRejectedValue(new Error('credit service down'));
     stage2Hit({

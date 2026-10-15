@@ -79,6 +79,7 @@ vi.mock('@bike4mind/database', () => ({
     tryAddWithinLimitFixedWindow: (...a: [string, number, number, number]) => mockTryAdd(...a),
   },
   adminSettingsRepository: { findBySettingName: vi.fn() },
+  organizationRepository: {},
   registrationInviteRepository: {},
   subscriberRepository: {},
   creditTransactionRepository: {},
@@ -99,6 +100,7 @@ vi.mock('@bike4mind/database', () => ({
 const mockVerifyPendingOTC = vi.fn();
 const mockRegisterViaOTC = vi.fn();
 const mockAddCredits = vi.fn();
+const mockApplyPartnerRuleMembership = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   userService: {
     verifyPendingOTC: (...a: any[]) => mockVerifyPendingOTC(...a),
@@ -106,6 +108,7 @@ vi.mock('@bike4mind/services', () => ({
     releasePendingFreeCredits: (...a: unknown[]) => mockReleasePending(...a),
   },
   creditService: { addCredits: (...a: any[]) => mockAddCredits(...a) },
+  organizationService: { applyPartnerRuleMembership: (...a: unknown[]) => mockApplyPartnerRuleMembership(...a) },
   mfaService: { userHasMFAConfigured: () => false },
   authSessionService: {
     issueSession: vi.fn().mockResolvedValue({ accessToken: 'a', refreshToken: 'r', sid: 'sid' }),
@@ -688,7 +691,17 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockUserUpdate.mockResolvedValue(undefined);
     mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
+    mockAddCredits.mockResolvedValue({ currentCredits: 15_000 });
+    mockApplyPartnerRuleMembership.mockResolvedValue({ added: true, reason: 'added' });
   });
+
+  const partnerRuleGrant = () =>
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      entitlements: new Set(['partner:pro']),
+      signupCredits: 15_000,
+      organizationId: 'org-partner',
+    });
 
   it('releases pending credits and strips the tag in the same write that stamps emailVerified', async () => {
     mockFindByEmail.mockResolvedValue(pendingUser());
@@ -737,5 +750,56 @@ describe('/api/otc/verify - existing user verification and pending free credits'
       emailVerified: true,
       emailVerifiedAt: expect.any(Date),
     });
+  });
+
+  it('applies the verified domain grant (credits and partner org) to an unverified existing user', async () => {
+    partnerRuleGrant();
+    mockFindByEmail.mockResolvedValue(pendingUser());
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+    const { req, res } = makeReqRes(DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAddCredits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerId: 'u-existing',
+        credits: 15_000,
+        transactionId: 'domain-grant-credits:u-existing',
+      }),
+      expect.anything()
+    );
+    expect(mockApplyPartnerRuleMembership).toHaveBeenCalledWith(
+      { userId: 'u-existing', organizationId: 'org-partner' },
+      expect.anything()
+    );
+  });
+
+  it('does not apply the domain grant to an already-verified existing user', async () => {
+    partnerRuleGrant();
+    mockFindByEmail.mockResolvedValue(pendingUser({ emailVerified: true }));
+    const { req, res } = makeReqRes(DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the domain grant when persisting emailVerified fails (next login retries)', async () => {
+    partnerRuleGrant();
+    mockFindByEmail.mockResolvedValue(pendingUser());
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+    mockUserUpdate.mockRejectedValue(new Error('db down'));
+    const { req, res } = makeReqRes(DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPartnerGrant).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
   });
 });

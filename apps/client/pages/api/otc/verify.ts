@@ -205,6 +205,16 @@ const handler = baseApi({ auth: false })
             existingUser.pendingCreditGrant = null;
             if (release.currentCredits !== null) existingUser.currentCredits = release.currentCredits;
           }
+          // Mirrors /api/email/verify, which this account will never reach now that emailVerified is
+          // persisted: the verified domain's grant (credits, partner org). Never throws; idempotent.
+          const domainGrant = await applySignupDomainGrant({
+            userId: existingUser.id,
+            email: normalizedEmail,
+            trigger: 'email-verification',
+            logger: req.logger,
+          });
+          if (domainGrant.currentCredits !== null) existingUser.currentCredits = domainGrant.currentCredits;
+          if (domainGrant.joinedOrganizationId) existingUser.organizationId = domainGrant.joinedOrganizationId;
         } catch (err) {
           req.logger.error('OTC login emailVerified update failed', err);
         }
