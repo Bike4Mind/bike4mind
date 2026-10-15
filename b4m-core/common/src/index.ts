@@ -143,6 +143,7 @@ export * from './utils/skillArguments';
 export * from './utils/sessionTitle';
 export * from './utils/skillSafety';
 export * from './utils/isImageServeable';
+export * from './utils/isModerationEvidenceHold';
 export * from './utils/multimodalContent';
 export * from './utils/attachmentScope';
 export * from './utils/dataLakeTaxonomy';

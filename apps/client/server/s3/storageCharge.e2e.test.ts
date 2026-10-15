@@ -7,7 +7,16 @@ import {
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { isStorageCharged, STORAGE_CHARGE_STAMP_CUTOFF, STORAGE_CHARGED_FILTER } from '@bike4mind/common';
-import { FabFile, Session, User, fabFileRepository, userRepository, withTransaction } from '@bike4mind/database';
+import {
+  FabFile,
+  fabFileChunkRepository,
+  fabFileRepository,
+  Session,
+  sessionRepository,
+  User,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { fabFilesService, notebookImportService } from '@bike4mind/services';
 import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
 import {
@@ -160,19 +169,13 @@ const firstUpload = async (fileSize: number) => {
   return String(row._id);
 };
 
-/**
- * A file the S3 handler charged before rows were stamped: complete (or, older still, with no status
- * at all), unstamped, created pre-cutoff.
- */
-const legacyFile = async (fileSize: number, { noStatus = false } = {}) => {
+/** A file the S3 handler charged before rows were stamped: complete, unstamped, created pre-cutoff. */
+const legacyFile = async (fileSize: number) => {
   const [row] = await FabFile.create([
     { userId: USER, fileName: 'x', mimeType: 'text/plain', fileSize, filePath: 'files/x', type: 'FILE' },
   ]);
   const createdAt = new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000);
-  await FabFile.collection.updateOne(
-    { _id: row._id },
-    noStatus ? { $set: { createdAt }, $unset: { status: 1 } } : { $set: { status: 'complete', createdAt } }
-  );
+  await FabFile.collection.updateOne({ _id: row._id }, { $set: { status: 'complete', createdAt } });
   await userRepository.incrementCurrentStorage(USER, fileSize);
   return String(row._id);
 };
@@ -202,7 +205,7 @@ describe('STORAGE_CHARGED_FILTER', () => {
         .map(r => String(r._id))
         .sort()
     );
-    expect(matched).toHaveLength(4);
+    expect(matched).toHaveLength(2);
   });
 });
 
@@ -245,7 +248,6 @@ describe('content rewrite storage charge', () => {
   const shapes = {
     stamped: () => firstUpload(5000),
     'legacy complete': () => legacyFile(5000),
-    'legacy no-status': () => legacyFile(5000, { noStatus: true }),
   };
   it.each(
     (Object.keys(shapes) as (keyof typeof shapes)[]).flatMap(shape =>
@@ -271,15 +273,10 @@ describe('content rewrite storage charge', () => {
     expect(await storedSize()).toBe(await truth());
   });
 
-  it.each([
-    ['complete', false, 'complete'],
-    ['no-status', true, 'pending'],
-  ])('never refuses a shrink of a legacy %s unstamped file near the quota', async (_label, noStatus, readStatus) => {
+  it('never refuses a shrink of a legacy unstamped file near the quota', async () => {
     await seedUser();
-    const id = await legacyFile(850_000, { noStatus });
-    // Rewrite sites pass a hydrated row, which reports a missing status as its 'pending' default.
+    const id = await legacyFile(850_000);
     const row = await FabFile.findById(id);
-    expect(row?.status).toBe(readStatus);
     const owner = await User.findById(USER_ID);
 
     await expect(
@@ -404,6 +401,45 @@ describe('notebook import storage charge', () => {
     ]);
 
     expect(await chargeStampedKnowledgeStorage(USER, ['knowledge/x'], new Date())).toBe(0);
+  });
+});
+
+// A presigned upload's row exists `pending` with its claimed size before ObjectCreated charges it;
+// deleting it in that window used to refund bytes never charged, leaving the counter below recalc.
+describe('delete before the ObjectCreated event', () => {
+  const deleteAndRefund = (id: string) =>
+    fabFilesService.deleteFabFile(USER, { id }, {
+      db: {
+        fabFiles: fabFileRepository,
+        users: userRepository,
+        sessions: sessionRepository,
+        fabFileChunks: fabFileChunkRepository,
+      },
+      storage: { delete: async () => {} },
+      onDeleteComplete: async (_fabFile, size) => {
+        if (size > 0) await userRepository.incrementCurrentStorage(USER, -size);
+      },
+    } as never);
+
+  it('keeps the counter equal to the recalc truth', async () => {
+    const charged = { fileName: 'c', mimeType: 'text/plain', fileSize: 5, filePath: 'knowledge/c', type: 'FILE' };
+    const [stamped, pending] = await FabFile.create([
+      { ...charged, userId: USER, status: 'complete', storageChargedAt: new Date() },
+      { ...charged, userId: USER, fileName: 'p', filePath: 'knowledge/p', fileSize: 400, status: 'pending' },
+    ]);
+    await User.collection.insertOne({ _id: USER_ID, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: 5 });
+    expect(await fabFileRepository.sumFileSizeByUserId(USER)).toBe(5);
+
+    await deleteAndRefund(pending._id.toString());
+    expect(await storedSize()).toBe(5);
+    expect(await fabFileRepository.sumFileSizeByUserId(USER)).toBe(5);
+    // The event arriving after the delete must not charge the tombstone, since nothing refunded it.
+    expect(await claimStorageCharge(pending._id, new Date(), 400)).toBeNull();
+    expect(await storedSize()).toBe(5);
+
+    await deleteAndRefund(stamped._id.toString());
+    expect(await storedSize()).toBe(0);
+    expect(await fabFileRepository.sumFileSizeByUserId(USER)).toBe(0);
   });
 });
 

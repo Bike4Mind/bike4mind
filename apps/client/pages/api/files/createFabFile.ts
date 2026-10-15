@@ -1,3 +1,4 @@
+import { signBrowserFileResponse } from '@server/files/signBrowserFileResponse';
 import { CreateFabFileRequestInputType, FabFileSourceType, FileEvents, Permission } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -116,8 +117,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               });
               return filepath;
             },
-            generateSignedUrl: (filepath: string, expireInSeconds: number) =>
-              getFilesStorage().getSignedUrl(filepath, 'put', {
+            generateSignedUrl: (filepath: string, expireInSeconds: number, mode?: 'get' | 'put') =>
+              getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
                 expiresIn: expireInSeconds,
               }),
           },
@@ -144,7 +145,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
         result.presignedUrl = resolveBrowserUploadUrl(result.id, result.presignedUrl);
       }
 
-      return res.json(result);
+      return res.json(await signBrowserFileResponse(result));
     })
   );
 

@@ -53,6 +53,9 @@ describe('verifyEmailChange', () => {
       pendingEmailExpires: null,
       emailVerified: true,
       emailVerifiedAt: expect.any(Date),
+      emailVerificationToken: null,
+      emailVerificationExpires: null,
+      emailVerificationSentAt: null,
     });
 
     // Check that verifiedAt timestamp is recent

@@ -19,9 +19,11 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockProcessIngestedEmail = vi.fn();
+const mockReadSenderAuthenticationHeaders = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   emailIngestionService: {
     processIngestedEmail: (...args: unknown[]) => mockProcessIngestedEmail(...args),
+    readSenderAuthenticationHeaders: (...args: unknown[]) => mockReadSenderAuthenticationHeaders(...args),
   },
 }));
 
@@ -78,7 +80,10 @@ const parsedMail = {
   text: 'hello',
   html: false,
   attachments: [],
+  headerLines: [{ key: 'authentication-results', line: 'Authentication-Results: amazonses.com; dmarc=pass' }],
 };
+
+const senderAuthentication = { authenticationResults: 'amazonses.com;\r\n dmarc=pass', fromHeaderCount: 1 };
 
 const ingestResult = {
   emailId: 'email-1',
@@ -93,6 +98,22 @@ describe('emailParser dispatch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSimpleParser.mockResolvedValue(parsedMail);
+    mockReadSenderAuthenticationHeaders.mockReturnValue(senderAuthentication);
+  });
+
+  it('hands the sender authentication headers read from the parsed message to the ingestion service', async () => {
+    mockS3Send.mockResolvedValue({ Body: s3Body('raw email bytes') });
+    mockProcessIngestedEmail.mockResolvedValue(ingestResult);
+
+    await dispatch({ Records: [makeSqsRecord('msg-1', 'key-1')] } as never, {} as never, undefined as never);
+
+    expect(mockReadSenderAuthenticationHeaders).toHaveBeenCalledWith(parsedMail.headerLines);
+    expect(mockProcessIngestedEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ senderAuthentication }),
+      'key-1',
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('reports only the failing record in batchItemFailures, still processing the rest', async () => {

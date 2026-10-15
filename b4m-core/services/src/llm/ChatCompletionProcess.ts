@@ -46,6 +46,7 @@ import {
   tokenEstimateMultiplier,
   pairDataLakeTools,
   isClaudeModelId,
+  questGenerationJobs,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -151,8 +152,9 @@ import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { resolveToolAvailability } from './toolAvailability';
-import { resolveVideoToolConfigSafely } from './resolveVideoToolConfigSafely';
+import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
+import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
@@ -1725,6 +1727,7 @@ export class ChatCompletionProcess {
     prefetchedOrganization,
     externalTools,
     videoToolConfigResolver,
+    musicToolConfigResolver,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
     logger: Logger;
@@ -1739,6 +1742,8 @@ export class ChatCompletionProcess {
     externalTools?: Record<string, ToolDefinition>;
     /** Resolves the video tool's capability; only invoked when video_generation is enabled. */
     videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
+    /** Resolves the music tool's capability; only invoked when music_generation is enabled. */
+    musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
   }) {
     const processStartTime = Date.now();
     const timer = new PipelineTimer();
@@ -3084,7 +3089,10 @@ export class ChatCompletionProcess {
       }
 
       const videoToolConfig = enabledTools.includes('video_generation')
-        ? await resolveVideoToolConfigSafely(videoToolConfigResolver, logger)
+        ? await resolveToolConfigSafely('video_generation', videoToolConfigResolver, logger)
+        : null;
+      const musicToolConfig = enabledTools.includes('music_generation')
+        ? await resolveToolConfigSafely('music_generation', musicToolConfigResolver, logger)
         : null;
 
       let allTools = toolBuilder.buildTools({
@@ -3113,6 +3121,7 @@ export class ChatCompletionProcess {
           audio_generation: audioConfig,
           web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
           video_generation: videoToolConfig ?? undefined,
+          music_generation: musicToolConfig ?? undefined,
         },
         model,
         organization,
@@ -4492,9 +4501,11 @@ export class ChatCompletionProcess {
       // themselves can't say this: every iteration appends into the same indices.
       let toolCallsSeen = 0;
       let visibleCharsAtLastToolCall = 0;
-      // Generating tools deliver through statusUpdate({ images }), which applyQuestStatusChanges
-      // (tools/ToolBuilder.ts) merges into quest.images with dedup, so growth means a new file.
-      const imageCountAtTurnStart = quest.images?.length ?? 0;
+      // Generating tools deliver through statusUpdate({ images }) or, for a background job (video, music),
+      // statusUpdate({ generationJobs }); applyQuestStatusChanges (tools/ToolBuilder.ts) merges both with
+      // dedup, so growth means a new file or a new job card.
+      const countDeliverables = () => (quest.images?.length ?? 0) + questGenerationJobs(quest).length;
+      const deliverableCountAtTurnStart = countDeliverables();
       // Tools set pendingAction to a fresh object (imageGeneration's model picker, MCP confirm
       // tokens via ToolBuilder onPendingAction), so a changed reference means this turn set one.
       const pendingActionAtTurnStart = quest.pendingAction;
@@ -4505,15 +4516,15 @@ export class ChatCompletionProcess {
           .trim().length;
 
       const producedNonTextDeliverable = () =>
-        (quest.images?.length ?? 0) > imageCountAtTurnStart ||
+        countDeliverables() > deliverableCountAtTurnStart ||
         (quest.pendingAction != null && quest.pendingAction !== pendingActionAtTurnStart);
 
       // Re-snapshotted at each fallback hop: a deliverable the failed primary produced must not
       // count as the fallback's answer.
-      let imageCountAtFallbackHop = imageCountAtTurnStart;
+      let deliverableCountAtFallbackHop = deliverableCountAtTurnStart;
       let pendingActionAtFallbackHop = pendingActionAtTurnStart;
       const producedDeliverableSinceFallbackHop = () =>
-        (quest.images?.length ?? 0) > imageCountAtFallbackHop ||
+        countDeliverables() > deliverableCountAtFallbackHop ||
         (quest.pendingAction != null && quest.pendingAction !== pendingActionAtFallbackHop);
 
       // A fallback hop can be selected (fallbackInfo set) and then end with nothing to show
@@ -5084,7 +5095,7 @@ export class ChatCompletionProcess {
 
               // Clear previous replies for retry
               resetStreamStateForRetry();
-              imageCountAtFallbackHop = quest.images?.length ?? 0;
+              deliverableCountAtFallbackHop = countDeliverables();
               pendingActionAtFallbackHop = quest.pendingAction;
               // Continue the loop with the new model
               continue;

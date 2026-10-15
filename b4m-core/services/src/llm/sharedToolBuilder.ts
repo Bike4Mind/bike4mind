@@ -35,6 +35,7 @@ import { createCoordinateTaskTool } from './tools/implementation/coordinateTask'
 import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coordinateTask';
 import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { isVideoToolConfig } from './tools/implementation/videoGeneration';
+import { isMusicToolConfig } from './tools/implementation/musicGeneration';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 import { notifyToolFinish } from './toolFinishObserver';
@@ -400,6 +401,7 @@ export function buildSharedTools(
       audio_generation: config.audio_generation,
       web_search: config.web_search,
       video_generation: config.video_generation,
+      music_generation: config.music_generation,
     },
     model,
     imageProcessorLambdaName,
@@ -416,6 +418,7 @@ export function buildSharedTools(
   const effectiveAvailability: ToolAvailability = {
     ...toolAvailability,
     video_generation: isVideoToolConfig(config.video_generation),
+    music_generation: isMusicToolConfig(config.music_generation),
   };
 
   // Filter to enabled tools only

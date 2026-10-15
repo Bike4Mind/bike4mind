@@ -1,3 +1,4 @@
+import { chargedBytes } from '@bike4mind/common';
 import type {
   DataLakeMembershipScope,
   DataLakeSweptFile,
@@ -31,7 +32,16 @@ import {
  */
 export type PurgeableConnectionFile = Pick<
   IFabFileDocument,
-  'id' | 'userId' | 'fileSize' | 'filePath' | 'versions' | 'tags' | 'deletedAt'
+  | 'id'
+  | 'userId'
+  | 'fileSize'
+  | 'storageChargedAt'
+  | 'status'
+  | 'createdAt'
+  | 'filePath'
+  | 'versions'
+  | 'tags'
+  | 'deletedAt'
 >;
 
 export interface PurgeDataLakeConnectionFilesAdapters {
@@ -198,7 +208,9 @@ export const purgeDataLakeConnectionFiles = async (
             // Recorded (and shredded/unlinked) BEFORE the chunk delete: the row has no retry door
             // once hard-deleted, so a chunk-delete throw below must not cost this file its refund,
             // shred or session unlink too.
-            deletedFiles.push({ id: file.id, userId: file.userId, fileSize: file.deletedAt ? 0 : file.fileSize });
+            // Both guards: chargedBytes ignores deletedAt, so a stamped or legacy-complete tombstone
+            // would still read as charged and be refunded a second time.
+            deletedFiles.push({ id: file.id, userId: file.userId, fileSize: file.deletedAt ? 0 : chargedBytes(file) });
             const tagNames = (file.tags ?? [])
               .map(tag => tag?.name)
               .filter((name): name is string => typeof name === 'string');

@@ -117,19 +117,19 @@ afterEach(() => {
 describe('MessageItem live trace', () => {
   it('keeps a long trace within the row budget', () => {
     expect(
-      renderedHeight(<MessageItem message={pendingMessage(manyThoughts)} liveTraceRows={12} />, 100)
+      renderedHeight(<MessageItem message={pendingMessage(manyThoughts)} liveRows={12} />, 100)
     ).toBeLessThanOrEqual(12);
   });
 
   it('shows the newest steps, not the oldest', () => {
-    const text = frameText(<MessageItem message={pendingMessage(manyThoughts)} liveTraceRows={12} />, 100);
+    const text = frameText(<MessageItem message={pendingMessage(manyThoughts)} liveRows={12} />, 100);
 
     expect(text).toContain('option 59');
     expect(text).not.toContain('option 0 ');
   });
 
   it('says how many steps are hidden', () => {
-    const text = frameText(<MessageItem message={pendingMessage(manyThoughts)} liveTraceRows={12} />, 100);
+    const text = frameText(<MessageItem message={pendingMessage(manyThoughts)} liveRows={12} />, 100);
 
     expect(text).toMatch(/\.\.\. \d+ earlier steps hidden/);
   });
@@ -211,14 +211,54 @@ describe('MessageItem live trace height bound', () => {
     for (const columns of [40, 80, 120]) {
       it(`renders within the budget: ${name} at ${columns} cols`, () => {
         for (const budget of [0, 1, 2, 3, 5, 8, 12, 20]) {
-          const height = renderedHeight(
-            <MessageItem message={pendingMessage(steps)} liveTraceRows={budget} />,
-            columns
-          );
+          const height = renderedHeight(<MessageItem message={pendingMessage(steps)} liveRows={budget} />, columns);
           // An empty render still reports one (blank) line.
           expect(height, `${name} at ${columns} cols with budget ${budget}`).toBeLessThanOrEqual(Math.max(1, budget));
         }
       });
     }
   }
+});
+
+describe('MessageItem live streaming reply', () => {
+  const streaming = (content: string, steps: AgentStep[] = []): Message => ({
+    ...pendingMessage(steps),
+    content,
+  });
+
+  const replies: Record<string, string> = {
+    'one long paragraph': 'The quick brown fox jumps over the lazy dog. '.repeat(40),
+    'many short lines': Array.from({ length: 80 }, (_, i) => `- item ${i}`).join('\n'),
+    'markdown with blank lines':
+      '# Heading\n\nSome **bold** text.\n\n```ts\nconst x = 1;\n\tindented();\n```\n\n'.repeat(6),
+    'wide characters': '日本語の文章です。 '.repeat(60),
+  };
+  const traces: Record<string, AgentStep[]> = { 'no trace': [], 'long trace': manyThoughts };
+
+  for (const [replyName, reply] of Object.entries(replies)) {
+    for (const [traceName, steps] of Object.entries(traces)) {
+      for (const columns of [40, 80, 120]) {
+        it(`renders within the budget: ${replyName}, ${traceName} at ${columns} cols`, () => {
+          for (const budget of [0, 1, 2, 3, 5, 8, 12, 20]) {
+            const height = renderedHeight(<MessageItem message={streaming(reply, steps)} liveRows={budget} />, columns);
+            expect(height, `budget ${budget}`).toBeLessThanOrEqual(Math.max(1, budget));
+          }
+        });
+      }
+    }
+  }
+
+  it('shows the newest text of a long reply', () => {
+    const reply = Array.from({ length: 50 }, (_, i) => `line ${i}`).join('\n');
+    const text = frameText(<MessageItem message={streaming(reply)} liveRows={10} />, 80);
+    expect(text).toContain('line 49');
+    expect(text).not.toContain('line 0\n');
+  });
+
+  it('keeps half the budget for the reply when the trace would fill it', () => {
+    const reply = Array.from({ length: 50 }, (_, i) => `line ${i}`).join('\n');
+    const text = frameText(<MessageItem message={streaming(reply, manyThoughts)} liveRows={12} />, 80);
+    expect(text).toContain('considering option 59');
+    expect(text.match(/line \d+/g)).toHaveLength(5); // 6 rows minus the reply margin
+  });
 });

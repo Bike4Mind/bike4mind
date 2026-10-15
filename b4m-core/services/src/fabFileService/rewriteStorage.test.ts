@@ -53,10 +53,10 @@ describe('commitContentRewrite', () => {
     expect(db.users.incrementCurrentStorage).toHaveBeenCalledWith('owner', 100);
   });
 
-  it('moves a legacy row with no status by the delta, not the full new size', async () => {
+  it('charges a legacy row with no status the full new size, since it reads as never charged', async () => {
     const db = makeDb({ userId: 'owner', fileSize: 1000, ...legacyNoStatus });
     await commitContentRewrite({ fabFileId: 'f1', newSize: 1000 }, db);
-    expect(db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+    expect(db.users.incrementCurrentStorage).toHaveBeenCalledWith('owner', 1000);
   });
 
   it('charges nothing more when the S3 event already claimed this upload', async () => {
@@ -122,15 +122,15 @@ describe('assertRewriteFits', () => {
     await expect(assertRewriteFits(row, 0.1 * MB, makeDb(null, stored), owner(5 * MB))).resolves.toBeUndefined();
   });
 
-  it.each([
-    ['complete', legacy],
-    ['no-status', legacyNoStatus],
-  ])('never refuses a shrink of a legacy %s unstamped row near the quota', async (_label, fields) => {
-    const db = makeDb(null, { userId: 'owner', fileSize: 5 * MB, ...fields });
-    const ownerAt = { id: 'owner', storageLimit: 10, currentStorageSize: 9.9 * MB } as unknown as IUserDocument;
-    await expect(assertRewriteFits(row, 4 * MB, db, ownerAt)).resolves.toBeUndefined();
-    expect(db.fabFiles.findChargeState).toHaveBeenCalledWith('f1');
-  });
+  it.each([['complete', legacy]])(
+    'never refuses a shrink of a legacy %s unstamped row near the quota',
+    async (_label, fields) => {
+      const db = makeDb(null, { userId: 'owner', fileSize: 5 * MB, ...fields });
+      const ownerAt = { id: 'owner', storageLimit: 10, currentStorageSize: 9.9 * MB } as unknown as IUserDocument;
+      await expect(assertRewriteFits(row, 4 * MB, db, ownerAt)).resolves.toBeUndefined();
+      expect(db.fabFiles.findChargeState).toHaveBeenCalledWith('f1');
+    }
+  );
 
   it('throws NotFoundError when the owner of a growing file is gone', async () => {
     const db = makeDb(null, stored);

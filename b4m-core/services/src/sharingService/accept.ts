@@ -52,6 +52,15 @@ interface AcceptInviteAdapters {
   };
 }
 
+// Invite types a non-owner can mint, so their accept re-checks the inviter's current access.
+const RESHAREABLE_INVITE_TYPES: ReadonlySet<InviteType> = new Set([
+  InviteType.Session,
+  InviteType.FabFile,
+  InviteType.Project,
+]);
+
+type Inviter = Pick<IUserDocument, 'id' | 'groups'> | null;
+
 /**
  * Accepts an invite from a user.
  *
@@ -119,17 +128,13 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   invite.accepted += 1;
   invite.remaining -= 1;
 
-  await db.invites.update({
-    id: invite.id,
-    recipients: invite.recipients,
-    accepted: invite.accepted,
-    remaining: invite.remaining,
-  });
-
   // Assumes the invite carries permissions.
   const inviteWithPermissions = invite as IInvite & { permissions: Permission[] };
 
-  const update = { userId, permissions: inviteWithPermissions.permissions };
+  const invitePermissions = inviteWithPermissions.permissions;
+
+  const inviter =
+    invite.inviterId && RESHAREABLE_INVITE_TYPES.has(invite.type) ? await db.users.findById(invite.inviterId) : null;
 
   switch (invite.type) {
     case InviteType.Group: {
@@ -168,6 +173,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
     case InviteType.Session: {
       const session = await db.sessions.findById(invite.documentId);
       if (!session) throw new NotFoundError('Session not found');
+      const granted = permissionsInviterCanStillGrant(session, invite, invitePermissions, inviter);
 
       // A session's knowledgeIds can point at files the inviter neither owns nor holds
       // share on (e.g. attached from someone else's shared session), so accepting must
@@ -175,8 +181,6 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
       // what the INVITER actually holds on it, not the invite's face-value permissions.
       // A legacy invite with no inviterId falls back to the conservative case: only
       // propagate to files the session owner themselves owns.
-      const inviter = invite.inviterId ? await db.users.findById(invite.inviterId) : null;
-
       if (session.knowledgeIds && session.knowledgeIds.length > 0) {
         await Promise.all(
           session.knowledgeIds.map(async knowledgeId => {
@@ -188,26 +192,24 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
               // Gate THEN cap. Propagating a file grant is a re-share of that file, so the inviter
               // must hold share on it, not merely hold the permission being passed on; without the
               // gate a read-only sharee could launder read onto everyone they invite to a session.
-              const held = grantablePermissions(fabfile as ShareableAccessShape, inviter.id, inviter.groups ?? []);
-              if (!held.has(Permission.share)) return;
-              grantPermissions = update.permissions.filter(permission => held.has(permission));
+              grantPermissions = reshareableBy(fabfile, inviter, granted).granted;
               if (grantPermissions.length === 0) return;
             } else if (fabfile.userId === session.userId) {
               // Legacy path: invites minted before `inviterId` existed. Strictly narrower than the
               // gated branch above, so it fails closed. The backfill-invite-inviter-id migration populates
               // inviterId from the username every invite already carries; once that has run
               // everywhere this arm has no remaining input and should be deleted.
-              grantPermissions = update.permissions;
+              grantPermissions = granted;
             } else {
               return;
             }
 
-            pushShareable(fabfile, { ...update, permissions: grantPermissions, sessionId: session.id });
+            pushShareable(fabfile, { userId, permissions: grantPermissions, sessionId: session.id });
             await db.fabFiles.update({ id: fabfile.id, users: fabfile.users });
           })
         );
       }
-      pushShareable(session, update);
+      pushShareable(session, { userId, permissions: granted });
       await db.sessions.update({ id: session.id, users: session.users });
       break;
     }
@@ -217,7 +219,8 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
         throw new NotFoundError('Fabfile not found');
       }
 
-      pushShareable(fabfile, update);
+      const granted = permissionsInviterCanStillGrant(fabfile, invite, invitePermissions, inviter);
+      pushShareable(fabfile, { userId, permissions: granted });
       await db.fabFiles.update({ id: fabfile.id, users: fabfile.users });
       break;
     }
@@ -232,16 +235,20 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
       );
       break;
     case InviteType.Project:
-      await acceptProject(
-        user,
-        { projectId: invite.documentId, permissions: inviteWithPermissions.permissions },
-        { db }
-      );
-
+      await acceptProject(user, inviteWithPermissions, inviter, { db });
       break;
     default:
       throw new Error('Invalid invite type');
   }
+
+  // Written after the grant so a refused accept (e.g. the inviter lost share) leaves the slot unspent
+  // even without the route's transaction.
+  await db.invites.update({
+    id: invite.id,
+    recipients: invite.recipients,
+    accepted: invite.accepted,
+    remaining: invite.remaining,
+  });
 
   return invite;
 };
@@ -293,17 +300,13 @@ const acceptOrganization = async (
   await db.users.update({ id: user.id, organizationId: user.organizationId });
 };
 
-interface AcceptProjectParameters {
-  projectId: string;
-  permissions: Permission[];
-}
-
 const acceptProject = async (
   user: IUserDocument,
-  parameters: AcceptProjectParameters,
+  invite: IInvite & { permissions: Permission[] },
+  inviter: Inviter,
   adapters: AcceptInviteAdapters
 ) => {
-  const { projectId, permissions } = parameters;
+  const projectId = invite.documentId;
   const { db } = adapters;
 
   const project = await db.projects.findById(projectId);
@@ -311,6 +314,8 @@ const acceptProject = async (
   if (!project) {
     throw new NotFoundError('Project not found');
   }
+
+  const permissions = permissionsInviterCanStillGrant(project, invite, invite.permissions, inviter);
 
   pushShareable(project, { userId: user.id, permissions });
 
@@ -330,6 +335,43 @@ const acceptProject = async (
     pushShareable(session, { userId: user.id, permissions, projectId });
     await db.sessions.update({ id: session.id, users: session.users });
   }
+};
+
+/**
+ * What an invite may still grant on `doc`. An invite minted by a non-owner is a re-share, so it is only
+ * as good as the minter's CURRENT access: revoking their share kills the links they handed out, and
+ * narrowing it narrows them. Owner-minted and legacy (no inviterId) invites pass through unchanged.
+ * A deleted inviter (null) holds nothing, so their links are refused.
+ */
+const permissionsInviterCanStillGrant = (
+  doc: IShareableDocument & { userId: string },
+  invite: IInvite,
+  permissions: Permission[],
+  inviter: Inviter
+): Permission[] => {
+  if (!invite.inviterId || invite.inviterId === doc.userId) return permissions;
+
+  const { holdsShare, granted } = reshareableBy(doc, inviter, permissions);
+  // An empty invite from an inviter who still holds share is a no-op grant, as when owner-minted.
+  if (!holdsShare || (granted.length === 0 && permissions.length > 0)) {
+    throw new ForbiddenError('The person who shared this can no longer share it');
+  }
+  return granted;
+};
+
+/**
+ * What `inviter` can currently pass on for `doc`: `granted` is the subset of `permissions` they may
+ * re-share (empty unless they hold share there), and `holdsShare` is whether they hold share at all.
+ * Both are resolved here once so the gate-then-cap rule has a single home.
+ */
+const reshareableBy = (
+  doc: IShareableDocument & { userId: string },
+  inviter: Inviter,
+  permissions: Permission[]
+): { holdsShare: boolean; granted: Permission[] } => {
+  const held = grantablePermissions(doc as ShareableAccessShape, inviter?.id, inviter?.groups ?? []);
+  const holdsShare = held.has(Permission.share);
+  return { holdsShare, granted: holdsShare ? permissions.filter(permission => held.has(permission)) : [] };
 };
 
 export const pushShareable = (

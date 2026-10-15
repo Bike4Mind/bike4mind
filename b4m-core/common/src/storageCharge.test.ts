@@ -20,15 +20,14 @@ describe('isStorageCharged / chargedBytes', () => {
     expect(chargedBytes({ status: 'complete', createdAt: before.toISOString(), fileSize: 10 })).toBe(10);
   });
 
-  it('counts a legacy row with no status (it predates the field) from before the cutoff', () => {
-    expect(chargedBytes({ createdAt: before, fileSize: 10 })).toBe(10);
-    expect(chargedBytes({ status: null, createdAt: before, fileSize: 10 })).toBe(10);
-    expect(chargedBytes({ createdAt: after, fileSize: 10 })).toBe(0);
-  });
-
   it('does not count an unstamped complete row from after the cutoff', () => {
     expect(chargedBytes({ status: 'complete', createdAt: after, fileSize: 10 })).toBe(0);
     expect(chargedBytes({ status: 'complete', createdAt: STORAGE_CHARGE_STAMP_CUTOFF, fileSize: 10 })).toBe(0);
+  });
+
+  it('does not count a legacy row with no status (a hydrated read reports it as pending)', () => {
+    expect(chargedBytes({ createdAt: before, fileSize: 10 })).toBe(0);
+    expect(chargedBytes({ status: null, createdAt: before, fileSize: 10 })).toBe(0);
   });
 
   it('treats a missing createdAt as not legacy and a missing fileSize as 0', () => {
