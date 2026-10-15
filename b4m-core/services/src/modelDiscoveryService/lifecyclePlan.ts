@@ -1,4 +1,5 @@
 import {
+  LIFECYCLE_SUNSET_STATUSES,
   ModelRecordWrite,
   normalizeAggregatorKey,
   type FieldGroup,
@@ -52,9 +53,6 @@ export const HEURISTIC_SOURCE = 'heuristic';
 
 /** Suggestion `source` for everything the K-miss protocol raised, successor included. */
 export const ABSENCE_SOURCE = 'absence';
-
-/** Statuses a model is out of the pickers in. Entering one is what the report calls a transition. */
-const SUNSET_STATUSES: ReadonlySet<string> = new Set(['deprecated', 'legacy', 'retired']);
 
 /**
  * The end of the road. Three uses, all the same idea: a docs row may only
@@ -114,7 +112,8 @@ export function planLifecycleSignals({ contributions, droppedDocsSources }: Life
   for (const contribution of ordered) {
     for (const record of contribution.records) {
       const status = record.patch?.lifecycle?.status;
-      if (evidenceOf(record) === 'typed' && status && SUNSET_STATUSES.has(status)) typedSunsets.add(record.modelId);
+      if (evidenceOf(record) === 'typed' && status && LIFECYCLE_SUNSET_STATUSES.has(status))
+        typedSunsets.add(record.modelId);
     }
   }
 
@@ -462,7 +461,7 @@ function typedSignals(
     const held = lifecycleOf(base.get(row.modelId));
     const from = held?.status;
 
-    if (SUNSET_STATUSES.has(lifecycle.status) && from !== lifecycle.status) {
+    if (LIFECYCLE_SUNSET_STATUSES.has(lifecycle.status) && from !== lifecycle.status) {
       transitions.push({ modelId: row.modelId, from, to: lifecycle.status, signal: 'typed', lifecycle });
       continue;
     }
@@ -654,7 +653,7 @@ function docsSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): L
     if (signal.corroborated || sunsetting.has(signal.modelId)) continue;
     // Every sunset status, 'legacy' included: a docs row nothing corroborates is
     // a queue item, and a legacy one that raised nothing simply vanished.
-    if (!SUNSET_STATUSES.has(signal.lifecycle.status)) continue;
+    if (!LIFECYCLE_SUNSET_STATUSES.has(signal.lifecycle.status)) continue;
     const existing = input.resolvedInForce.get(signal.modelId);
     // A model the catalog does not hold has no lifecycle to move, and one the
     // catalog already agrees with would re-queue the same item every run.

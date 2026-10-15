@@ -674,3 +674,264 @@ describe('mergeCatalog: lenient reads', () => {
     expect(merged[0].max_tokens).toBe(seed.max_tokens);
   });
 });
+
+describe('mergeCatalog: a non-operator lifecycle only moves toward sunset', () => {
+  const earlier = { status: 'deprecated', deprecationDate: '2026-09-02' };
+  const lifecycleRow = (
+    modelId: string,
+    source: string,
+    lifecycle: Record<string, unknown>,
+    effectiveFrom = new Date('2026-01-01T00:00:00Z')
+  ) => row({ modelId, source, ownedGroups: ['lifecycle'], patch: { lifecycle }, effectiveFrom });
+  const lifecycleOf = (rows: IModelCatalogRow[]) => resolveCatalogRecords(rows).get(rows[0].modelId)?.record.lifecycle;
+
+  afterEach(() => {
+    setModelCatalogProvider(null);
+    setModelPriceRowsProvider(null);
+  });
+
+  it('keeps a past adapter-literal deprecation hidden when discovery reports it active with a later date', async () => {
+    setModelPriceRowsProvider(null);
+    setModelCatalogProvider(async () => []);
+    const baseline = await getAvailableModels(null);
+
+    setModelCatalogProvider(async () => [
+      lifecycleRow(ChatModels.CLAUDE_3_5_SONNET_BEDROCK, 'discovery', {
+        status: 'active',
+        deprecationDate: '2099-01-01',
+      }),
+    ]);
+    const models = await getAvailableModels(null);
+    expect(models.some(m => m.id === ChatModels.CLAUDE_3_5_SONNET_BEDROCK)).toBe(false);
+    // Positive control: the filter dropped nothing else and let nothing in, so the absence above is the fold's doing.
+    expect(baseline.length).toBeGreaterThan(0);
+    expect(models.map(m => m.id)).toEqual(baseline.map(m => m.id));
+  });
+
+  it('keeps the adapter-literal date over a later discovery date', () => {
+    const seed = seedModel({ deprecationDate: '2020-01-01' });
+    const [merged] = mergeCatalog(
+      [seed],
+      [lifecycleRow(seed.id, 'discovery', { status: 'active', deprecationDate: '2099-01-01' })],
+      NO_KEYS
+    );
+    expect(merged.deprecationDate).toBe('2020-01-01');
+  });
+
+  it.each([
+    {
+      name: 'keeps the seed date and status over a discovery active with a later date',
+      seed: earlier,
+      discovery: { status: 'active', deprecationDate: '2026-10-20' },
+      expected: earlier,
+    },
+    {
+      name: 'lets an earlier discovery date beat a later seed date',
+      seed: { status: 'deprecated', deprecationDate: '2026-12-01' },
+      discovery: { status: 'deprecated', deprecationDate: '2026-09-02' },
+      expected: earlier,
+    },
+    {
+      name: 'folds retirementDate to the earliest as well',
+      seed: { status: 'deprecated', retirementDate: '2026-11-01' },
+      discovery: { status: 'deprecated', retirementDate: '2026-12-01' },
+      expected: { status: 'deprecated', retirementDate: '2026-11-01' },
+    },
+    {
+      name: 'keeps a seeded retired status over a discovery active',
+      seed: { status: 'retired' },
+      discovery: { status: 'active' },
+      expected: { status: 'retired' },
+    },
+    {
+      name: 'never lets an unranked status displace a ranked winner',
+      seed: { status: 'unlisted' },
+      discovery: { status: 'active' },
+      expected: { status: 'active' },
+    },
+    {
+      name: 'keeps an unranked winner against an active seed',
+      seed: { status: 'active' },
+      discovery: { status: 'unlisted' },
+      expected: { status: 'unlisted' },
+    },
+    {
+      name: 'lets a sunset seed displace an unranked winner',
+      seed: { status: 'legacy' },
+      discovery: { status: 'unlisted' },
+      expected: { status: 'legacy' },
+    },
+    {
+      name: 'keeps an unknown winner status the same way',
+      seed: { status: 'active' },
+      discovery: { status: 'some-future-status' },
+      expected: { status: 'some-future-status' },
+    },
+    {
+      name: 'fills a status the winner left out from the other sources, and keeps its dates',
+      seed: { status: 'active' },
+      discovery: { deprecationDate: '2026-09-02' },
+      expected: { status: 'active', deprecationDate: '2026-09-02' },
+    },
+    {
+      name: 'keeps the winning row replacedBy',
+      seed: { status: 'deprecated', replacedBy: 'old-successor' },
+      discovery: { status: 'deprecated', replacedBy: 'new-successor' },
+      expected: { status: 'deprecated', replacedBy: 'new-successor' },
+    },
+  ])('$name', ({ seed, discovery, expected }) => {
+    const rows = [lifecycleRow('gpt-6-sol', 'seed', seed), lifecycleRow('gpt-6-sol', 'discovery', discovery)];
+    expect(lifecycleOf(rows)).toEqual(expected);
+  });
+
+  it('still folds the lifecycle when an operator row owns only {availability}', () => {
+    const rows = [
+      lifecycleRow('gpt-6-sol', 'seed', earlier),
+      lifecycleRow('gpt-6-sol', 'discovery', { status: 'active', deprecationDate: '2026-10-20' }),
+      row({
+        modelId: 'gpt-6-sol',
+        source: 'operator',
+        ownedGroups: ['availability'],
+        patch: { disabled: false },
+        effectiveFrom: new Date('2026-06-01T00:00:00Z'),
+      }),
+    ];
+    expect(lifecycleOf(rows)).toEqual(earlier);
+  });
+
+  it('applies an operator lifecycle as-is: marking a deprecated model active with no date un-deprecates it', () => {
+    const seed = seedModel({ deprecationDate: '2020-01-01' });
+    const rows = [
+      lifecycleRow(seed.id, 'seed', earlier),
+      lifecycleRow(seed.id, 'operator', { status: 'active' }, new Date('2026-06-01T00:00:00Z')),
+    ];
+    expect(lifecycleOf(rows)).toEqual({ status: 'active' });
+    expect(mergeCatalog([seed], rows, NO_KEYS)[0].deprecationDate).toBeUndefined();
+  });
+
+  it('still promotes a catalog-only record: seed discovered, discovery active', () => {
+    const invocable = {
+      id: 'grok-9',
+      vendor: 'xai',
+      backend: ModelBackend.XAI,
+      type: 'text',
+      name: 'Grok 9',
+      contextWindow: 2_000_000,
+      adapterFamily: 'xai',
+      dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'chat' },
+    };
+    const rows = [
+      row({
+        modelId: 'grok-9',
+        source: 'seed',
+        ownedGroups: ['identity', 'limits', 'dispatch', 'lifecycle'],
+        patch: { ...invocable, lifecycle: { status: 'discovered' } },
+      }),
+      lifecycleRow('grok-9', 'discovery', { status: 'active' }),
+    ];
+    const { models, dropped } = mergeCatalogWithDrops([], rows, {
+      apiKeys: { xai: 'xai-key' },
+      isSelfHost: false,
+      bedrockReachable: true,
+    });
+    expect(dropped).toEqual([]);
+    expect(models.map(m => m.id)).toEqual(['grok-9']);
+  });
+
+  it('leaves a record no row gives a lifecycle untouched', () => {
+    const rows = [row({ modelId: 'gpt-6-sol', ownedGroups: ['limits'], patch: { contextWindow: 9 } })];
+    expect(lifecycleOf(rows)).toBeUndefined();
+  });
+});
+
+describe('mergeCatalog: a non-operator availability row cannot clear a disable', () => {
+  const availabilityRow = (
+    modelId: string,
+    source: string,
+    patch: Record<string, unknown>,
+    effectiveFrom = new Date('2026-01-01T00:00:00Z')
+  ) => row({ modelId, source, ownedGroups: ['availability'], patch, effectiveFrom });
+
+  it('keeps an adapter-literal disable under a seed row that says disabled false', () => {
+    const seed = seedModel({ disabled: true, disabledReason: 'literal reason' });
+    const [merged] = mergeCatalog([seed], [availabilityRow(seed.id, 'seed', { disabled: false })], NO_KEYS);
+    expect(merged).toMatchObject({ disabled: true, disabledReason: 'literal reason' });
+  });
+
+  it('lets an operator row with disabled false clear it', () => {
+    const seed = seedModel({ disabled: true, disabledReason: 'literal reason' });
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        availabilityRow(seed.id, 'seed', { disabled: false }),
+        availabilityRow(seed.id, 'operator', { disabled: false }, new Date('2026-06-01T00:00:00Z')),
+      ],
+      NO_KEYS
+    );
+    expect(merged.disabled).toBe(false);
+  });
+
+  it('takes the reason from the highest-precedence disabling row, whatever the bucket order', () => {
+    const seed = seedModel();
+    const rows = [
+      availabilityRow(seed.id, 'seed', { disabled: true, disabledReason: 'seed reason' }),
+      availabilityRow(seed.id, 'import', { disabled: true, disabledReason: 'import reason' }),
+      availabilityRow(seed.id, 'discovery', { disabled: false }),
+    ];
+    for (const ordered of [rows, [...rows].reverse()]) {
+      const [merged] = mergeCatalog([seed], ordered, NO_KEYS);
+      expect(merged).toMatchObject({ disabled: true, disabledReason: 'seed reason' });
+    }
+  });
+
+  it('does not leave the winner reason next to a disable another row put there', () => {
+    const seed = seedModel();
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        availabilityRow(seed.id, 'seed', { disabled: true }),
+        availabilityRow(seed.id, 'discovery', { disabled: false, disabledReason: 'stale winner reason' }),
+      ],
+      NO_KEYS
+    );
+    expect(merged.disabled).toBe(true);
+    expect(merged.disabledReason).toBeUndefined();
+  });
+
+  it('does not leave the winner reason next to an adapter-literal disable either', () => {
+    const seed = seedModel({ disabled: true });
+    const [merged] = mergeCatalog(
+      [seed],
+      [availabilityRow(seed.id, 'seed', { disabled: false, disabledReason: 'stale winner reason' })],
+      NO_KEYS
+    );
+    expect(merged.disabled).toBe(true);
+    expect(merged.disabledReason).toBeUndefined();
+  });
+
+  it('keeps a lower-ranked seed disable, with its reason, under a discovery row that says disabled false', () => {
+    const seed = seedModel();
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        availabilityRow(seed.id, 'seed', { disabled: true, disabledReason: 'seed reason' }),
+        availabilityRow(seed.id, 'discovery', { disabled: false }),
+      ],
+      NO_KEYS
+    );
+    expect(merged).toMatchObject({ disabled: true, disabledReason: 'seed reason' });
+  });
+
+  it('does not touch autoDisabled: a discovery promotion still clears it', () => {
+    const seed = seedModel();
+    const [merged] = mergeCatalog(
+      [seed],
+      [
+        availabilityRow(seed.id, 'seed', { autoDisabled: true }),
+        availabilityRow(seed.id, 'discovery', { autoDisabled: false }),
+      ],
+      NO_KEYS
+    );
+    expect(merged.disabled).toBe(false);
+  });
+});
