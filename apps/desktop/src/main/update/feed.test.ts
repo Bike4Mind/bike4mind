@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveFeedUrl } from './feed';
+import { resolveFeedUrl, resolveInstallerUrl } from './feed';
 
 describe('resolveFeedUrl', () => {
   it('treats nothing configured as "this build does not update"', () => {
@@ -28,5 +28,21 @@ describe('resolveFeedUrl', () => {
     expect(resolveFeedUrl('/releases')).toBeNull();
     expect(resolveFeedUrl('file:///tmp/releases')).toBeNull();
     expect(resolveFeedUrl('javascript:alert(1)')).toBeNull();
+  });
+});
+
+describe('resolveInstallerUrl', () => {
+  const installers = { arm64: 'https://example.test/a-arm64.dmg', x64: 'http://example.test/a-x64.dmg' };
+
+  it('picks the https installer for this arch', () => {
+    expect(resolveInstallerUrl(installers, 'arm64')).toBe('https://example.test/a-arm64.dmg');
+  });
+
+  it('refuses anything else the feed could hand the browser', () => {
+    expect(resolveInstallerUrl(installers, 'x64')).toBeNull();
+    expect(resolveInstallerUrl(installers, 'ia32')).toBeNull();
+    expect(resolveInstallerUrl({ arm64: 'not a url' }, 'arm64')).toBeNull();
+    expect(resolveInstallerUrl(undefined, 'arm64')).toBeNull();
+    expect(resolveInstallerUrl('https://example.test/a.dmg', 'arm64')).toBeNull();
   });
 });

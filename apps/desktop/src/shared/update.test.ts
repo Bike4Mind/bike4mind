@@ -322,6 +322,35 @@ describe('normalizeReleaseNotes', () => {
   });
 });
 
+describe('an update this build cannot install', () => {
+  it('carries the installer link with the offer, and defaults to installable', () => {
+    const manual = reduceUpdate(supported(), {
+      type: 'available',
+      version: '1.1.0',
+      at: AT,
+      installable: false,
+      downloadUrl: 'https://example.test/a.dmg',
+    });
+    expect(manual).toMatchObject({
+      status: 'available',
+      installable: false,
+      downloadUrl: 'https://example.test/a.dmg',
+    });
+
+    const plain = reduceUpdate(supported(), { type: 'available', version: '1.1.0', at: AT });
+    expect(plain).toMatchObject({ installable: true, downloadUrl: null });
+  });
+
+  it('is cleared once the feed says the app is current', () => {
+    const state = drive(
+      supported(),
+      { type: 'available', version: '1.1.0', at: AT, installable: false, downloadUrl: 'https://example.test/a.dmg' },
+      { type: 'up-to-date', at: AT + 1 }
+    );
+    expect(state).toMatchObject({ installable: true, downloadUrl: null });
+  });
+});
+
 describe('updateBannerVisible', () => {
   const ready = drive(
     supported(),
@@ -336,6 +365,12 @@ describe('updateBannerVisible', () => {
       false
     );
     expect(updateBannerVisible(initialUpdateState('1.0.0', false), null)).toBe(false);
+  });
+
+  it('shows for an offer this build cannot install, since nothing will ever stage it', () => {
+    const manual = reduceUpdate(supported(), { type: 'available', version: '1.1.0', at: AT, installable: false });
+    expect(updateBannerVisible(manual, null)).toBe(true);
+    expect(updateBannerVisible(manual, '1.1.0')).toBe(false);
   });
 
   it('stays hidden for the dismissed version and comes back for the next one', () => {

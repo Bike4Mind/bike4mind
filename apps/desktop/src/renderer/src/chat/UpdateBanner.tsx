@@ -4,12 +4,13 @@ import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { describeBusy } from '@shared/update';
+import { describeBusy, UNSIGNED_UPDATE_NOTE } from '@shared/update';
 import { CloseIcon } from './icons';
 import type { AppUpdateController } from './useAppUpdate';
 
 /**
- * The sidebar's "Restart to update", shown once a downloaded update is staged.
+ * The sidebar's "Restart to update", shown once a downloaded update is staged - or, in a build
+ * that cannot install updates itself, the installer download for a newer version.
  *
  * Non-blocking on purpose: it sits above the account strip and never takes focus, so a user in
  * the middle of a turn can ignore it until they are done. Dismissing hides it for this version
@@ -18,17 +19,18 @@ import type { AppUpdateController } from './useAppUpdate';
  * a click should be answered where it was made.
  */
 export function UpdateBanner({ controller, onDismiss }: { controller: AppUpdateController; onDismiss: () => void }) {
-  const { state, blockedBy, install, dismissBlock } = controller;
+  const { state, blockedBy, install, dismissBlock, openInstaller } = controller;
   const [notesOpen, setNotesOpen] = useState(false);
 
-  if (state.status !== 'ready') return null;
+  const manual = state.status === 'available' && !state.installable;
+  if (state.status !== 'ready' && !manual) return null;
 
   return (
     <Alert color="primary" variant="soft" size="sm" data-testid="update-banner" sx={{ alignItems: 'flex-start' }}>
       <Stack spacing={1} sx={{ flex: 1, minWidth: 0 }}>
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
           <Typography level="body-sm" sx={{ flex: 1, fontWeight: 'md' }} data-testid="update-banner-title">
-            Version {state.version} is ready
+            Version {state.version} is {manual ? 'available' : 'ready'}
           </Typography>
           <IconButton
             size="sm"
@@ -65,7 +67,25 @@ export function UpdateBanner({ controller, onDismiss }: { controller: AppUpdateC
             </Button>
           ))}
 
-        {blockedBy ? (
+        {manual ? (
+          <Stack spacing={1}>
+            <Typography level="body-xs" data-testid="update-banner-unsigned">
+              {UNSIGNED_UPDATE_NOTE}
+            </Typography>
+            {state.downloadUrl && (
+              <Button
+                size="sm"
+                variant="solid"
+                color="primary"
+                onClick={openInstaller}
+                data-testid="update-banner-download-btn"
+                sx={{ alignSelf: 'flex-start' }}
+              >
+                Download installer
+              </Button>
+            )}
+          </Stack>
+        ) : blockedBy ? (
           <Stack spacing={1} data-testid="update-banner-busy">
             <Typography level="body-xs">{describeBusy(blockedBy)} Restarting stops all of it.</Typography>
             <Stack direction="row" spacing={1}>

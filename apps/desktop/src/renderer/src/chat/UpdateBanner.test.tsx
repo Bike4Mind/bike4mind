@@ -24,8 +24,17 @@ function controller(state: UpdateState, blockedBy: UpdateBusyReport | null = nul
     download: vi.fn(),
     install: vi.fn(async () => true),
     dismissBlock: vi.fn(),
+    openInstaller: vi.fn(),
   };
 }
+
+const UNSIGNED: UpdateState = {
+  ...READY,
+  status: 'available',
+  percent: 0,
+  installable: false,
+  downloadUrl: 'https://example.test/Bike4Mind-1.1.0-arm64.dmg',
+};
 
 describe('UpdateBanner', () => {
   it('renders nothing until an update is staged', () => {
@@ -61,6 +70,42 @@ describe('UpdateBanner', () => {
     expect(html).toContain('data-testid="update-banner-force-restart-btn"');
     expect(html).toContain('data-testid="update-banner-keep-btn"');
     expect(html).not.toContain('data-testid="update-banner-restart-btn"');
+  });
+});
+
+describe('UpdateBanner in a build that cannot install updates', () => {
+  it('offers the installer download instead of a restart', () => {
+    const html = markup(<UpdateBanner controller={controller(UNSIGNED)} onDismiss={() => {}} />);
+    expect(html).toContain('Version 1.1.0 is available');
+    expect(html).toContain('data-testid="update-banner-unsigned"');
+    expect(html).toContain('code-signed build');
+    expect(html).toContain('data-testid="update-banner-download-btn"');
+    expect(html).not.toContain('data-testid="update-banner-restart-btn"');
+  });
+
+  it('still explains itself when the feed named no installer for this machine', () => {
+    const html = markup(
+      <UpdateBanner controller={controller({ ...UNSIGNED, downloadUrl: null })} onDismiss={() => {}} />
+    );
+    expect(html).toContain('data-testid="update-banner-unsigned"');
+    expect(html).not.toContain('data-testid="update-banner-download-btn"');
+  });
+});
+
+describe('UpdateSettings in a build that cannot install updates', () => {
+  it('replaces Download with the installer download and says why', () => {
+    const html = markup(<UpdateSettings controller={controller(UNSIGNED)} />);
+    expect(html).toContain('data-testid="update-unsigned-note"');
+    expect(html).toContain('data-testid="update-installer-btn"');
+    expect(html).not.toContain('data-testid="update-download-btn"');
+  });
+
+  it('keeps Download for an installable offer', () => {
+    const html = markup(
+      <UpdateSettings controller={controller({ ...UNSIGNED, installable: true, downloadUrl: null })} />
+    );
+    expect(html).toContain('data-testid="update-download-btn"');
+    expect(html).not.toContain('data-testid="update-unsigned-note"');
   });
 });
 

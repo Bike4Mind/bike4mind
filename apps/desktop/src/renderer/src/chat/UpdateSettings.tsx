@@ -3,7 +3,7 @@ import Button from '@mui/joy/Button';
 import LinearProgress from '@mui/joy/LinearProgress';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { describeBusy } from '@shared/update';
+import { describeBusy, UNSIGNED_UPDATE_NOTE } from '@shared/update';
 import type { AppUpdateController } from './useAppUpdate';
 
 function lastChecked(at: number | null): string {
@@ -25,7 +25,7 @@ function lastChecked(at: number | null): string {
  * could do about it anyway.
  */
 export function UpdateSettings({ controller }: { controller: AppUpdateController }) {
-  const { state, blockedBy, check, download, install, dismissBlock } = controller;
+  const { state, blockedBy, check, download, install, dismissBlock, openInstaller } = controller;
 
   const body = (() => {
     switch (state.status) {
@@ -36,7 +36,16 @@ export function UpdateSettings({ controller }: { controller: AppUpdateController
       case 'checking':
         return <Typography level="body-sm">Checking for updates...</Typography>;
       case 'available':
-        return <Typography level="body-sm">Version {state.version} is available.</Typography>;
+        return (
+          <Stack spacing={0.5}>
+            <Typography level="body-sm">Version {state.version} is available.</Typography>
+            {!state.installable && (
+              <Typography level="body-xs" textColor="text.secondary" data-testid="update-unsigned-note">
+                {UNSIGNED_UPDATE_NOTE}
+              </Typography>
+            )}
+          </Stack>
+        );
       case 'downloading':
         return (
           <Stack spacing={1}>
@@ -111,9 +120,15 @@ export function UpdateSettings({ controller }: { controller: AppUpdateController
           </Button>
         )}
 
-        {state.status === 'available' && (
+        {state.status === 'available' && state.installable && (
           <Button size="sm" variant="solid" onClick={download} data-testid="update-download-btn">
             Download
+          </Button>
+        )}
+
+        {state.status === 'available' && !state.installable && state.downloadUrl && (
+          <Button size="sm" variant="solid" onClick={openInstaller} data-testid="update-installer-btn">
+            Download installer
           </Button>
         )}
 

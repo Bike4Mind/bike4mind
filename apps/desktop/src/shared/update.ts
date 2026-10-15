@@ -34,11 +34,25 @@ export interface UpdateState {
   checkedAt: number | null;
   /** Plain-text notes for `version`, when the manifest carries them. Never rendered as HTML. */
   notes: string | null;
+  /**
+   * False when `version` cannot be installed from inside the app: this build or that release is
+   * not code-signed, and Squirrel.Mac refuses either. Nothing downloads; `downloadUrl` is offered.
+   */
+  installable: boolean;
+  /** The installer for this machine, offered when the update is not installable. */
+  downloadUrl: string | null;
 }
 
 export type UpdateEvent =
   | { type: 'check-started' }
-  | { type: 'available'; version: string; at: number; notes?: string | null }
+  | {
+      type: 'available';
+      version: string;
+      at: number;
+      notes?: string | null;
+      installable?: boolean;
+      downloadUrl?: string | null;
+    }
   | { type: 'up-to-date'; at: number }
   | { type: 'download-started' }
   | { type: 'progress'; percent: number }
@@ -60,8 +74,14 @@ export function initialUpdateState(currentVersion: string, supported: boolean): 
     percent: 0,
     checkedAt: null,
     notes: null,
+    installable: true,
+    downloadUrl: null,
   };
 }
+
+/** Said wherever an update that cannot install itself is offered. */
+export const UNSIGNED_UPDATE_NOTE =
+  'Updating from inside the app needs a code-signed build. Download the new installer and open it to update.';
 
 /** Long enough for a real changelog section; a manifest is not a place for an essay. */
 export const MAX_RELEASE_NOTES_LENGTH = 4000;
@@ -140,13 +160,24 @@ export function reduceUpdate(state: UpdateState, event: UpdateEvent): UpdateStat
         percent: 0,
         checkedAt: event.at,
         notes: event.notes ?? null,
+        installable: event.installable ?? true,
+        downloadUrl: event.downloadUrl ?? null,
       };
 
     case 'up-to-date':
       // Rule 1: a staged download outranks the feed changing its mind.
       if (state.status === 'ready') return { ...state, checkedAt: event.at };
       if (state.status === 'downloading') return { ...state, checkedAt: event.at };
-      return { ...state, status: 'up-to-date', version: null, percent: 0, checkedAt: event.at, notes: null };
+      return {
+        ...state,
+        status: 'up-to-date',
+        version: null,
+        percent: 0,
+        checkedAt: event.at,
+        notes: null,
+        installable: true,
+        downloadUrl: null,
+      };
 
     case 'download-started':
       return state.status === 'available' ? { ...state, status: 'downloading', percent: 0 } : state;
@@ -215,11 +246,13 @@ export function updateAttention(state: UpdateState): string | undefined {
 }
 
 /**
- * Whether the sidebar's restart banner shows: only for a staged update, and not for the version
- * the user already dismissed it for. A newer version brings it back.
+ * Whether the sidebar's update banner shows: for a staged update, or for one the app cannot
+ * install itself, and not for the version the user already dismissed it for. A newer version
+ * brings it back.
  */
 export function updateBannerVisible(state: UpdateState, dismissedVersion: string | null): boolean {
-  return state.status === 'ready' && state.version !== dismissedVersion;
+  const actionable = state.status === 'ready' || (state.status === 'available' && !state.installable);
+  return actionable && state.version !== dismissedVersion;
 }
 
 /** What the app is in the middle of, counted across every conversation. */

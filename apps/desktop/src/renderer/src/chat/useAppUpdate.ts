@@ -10,6 +10,8 @@ export interface AppUpdateController {
   /** Asks main to restart. Returns true when the app is going; false means `blockedBy` is set. */
   install: (force: boolean) => Promise<boolean>;
   dismissBlock: () => void;
+  /** Opens the installer download in the browser, for an update this build cannot install. */
+  openInstaller: () => void;
 }
 
 /**
@@ -41,5 +43,10 @@ export function useAppUpdate(): AppUpdateController {
 
   const dismissBlock = useCallback(() => setBlockedBy(null), []);
 
-  return { state, blockedBy, check, download, install, dismissBlock };
+  const { downloadUrl } = state;
+  const openInstaller = useCallback(() => {
+    if (downloadUrl) void window.b4m.shell.openExternal(downloadUrl);
+  }, [downloadUrl]);
+
+  return { state, blockedBy, check, download, install, dismissBlock, openInstaller };
 }

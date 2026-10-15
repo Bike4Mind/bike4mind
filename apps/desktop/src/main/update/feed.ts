@@ -39,3 +39,20 @@ export function resolveFeedUrl(raw: string | undefined | null): string | null {
   if (parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname)) return parsed.href;
   return null;
 }
+
+/**
+ * The feed's installer for `arch`, from the `installers` map the release workflow adds beside
+ * electron-updater's own fields (apps/desktop/scripts/update_feed.py). https only: it is handed
+ * to the browser, and it came off the network.
+ */
+export function resolveInstallerUrl(installers: unknown, arch: string): string | null {
+  if (!installers || typeof installers !== 'object') return null;
+  const raw = (installers as Record<string, unknown>)[arch];
+  if (typeof raw !== 'string') return null;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === 'https:' ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}

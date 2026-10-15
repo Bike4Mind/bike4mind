@@ -2,7 +2,7 @@ import { app, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { normalizeReleaseNotes, type UpdateBusyReport, type UpdateState } from '@shared/update';
-import { resolveFeedUrl } from './feed';
+import { resolveFeedUrl, resolveInstallerUrl } from './feed';
 import { UpdateService, type UpdaterPort } from './UpdateService';
 import { appWindows } from '../windows';
 
@@ -12,6 +12,9 @@ import { appWindows } from '../windows';
  * environment - still has it.
  */
 const CONFIGURED_FEED = process.env.B4M_UPDATE_FEED_URL;
+
+/** Baked in the same way, and 'true' only from the release workflow's signing step. */
+const SIGNED_BUILD = process.env.B4M_DESKTOP_SIGNED === 'true';
 
 /**
  * How long after launch the first check waits.
@@ -73,6 +76,8 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.logger = VERBOSE ? console : null;
+    // The release workflow publishes no blockmaps, so a differential attempt is only a 404.
+    autoUpdater.disableDifferentialDownload = true;
     autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
 
     port = {
@@ -97,11 +102,17 @@ export function registerUpdates(deps: UpdateDeps): RegisteredUpdates {
 
   if (enabled) {
     autoUpdater.on('update-available', info => {
+      // `signed` and `installers` are the release workflow's own additions to the feed. A feed
+      // without `signed` is taken as signed, so another publisher's feed keeps working.
+      const extra = info as { signed?: unknown; installers?: unknown };
+      const installable = (process.platform !== 'darwin' || SIGNED_BUILD) && extra.signed !== false;
       service.apply({
         type: 'available',
         version: info.version,
         at: Date.now(),
         notes: normalizeReleaseNotes(info.releaseNotes),
+        installable,
+        downloadUrl: installable ? null : resolveInstallerUrl(extra.installers, process.arch),
       });
     });
     autoUpdater.on('update-not-available', () => {

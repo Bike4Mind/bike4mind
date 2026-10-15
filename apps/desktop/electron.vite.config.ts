@@ -37,7 +37,7 @@ function copyTreeSitterWasm(): Plugin {
  * directory, which only exists so a local packaging run is one command rather than a long
  * prefix. Absent both, the value is empty and the feature it gates is off.
  */
-function baked(mode: string, name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL'): string {
+function baked(mode: string, name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL' | 'B4M_DESKTOP_SIGNED'): string {
   return process.env[name] ?? loadEnv(mode, __dirname, 'B4M_')[name] ?? '';
 }
 
@@ -58,6 +58,9 @@ export default defineConfig(({ mode }) => {
       define: {
         'process.env.B4M_DEFAULT_API_URL': JSON.stringify(baked(mode, 'B4M_DEFAULT_API_URL')),
         'process.env.B4M_UPDATE_FEED_URL': JSON.stringify(baked(mode, 'B4M_UPDATE_FEED_URL')),
+        // Set by the release workflow's signing step only. Squirrel.Mac refuses to install into an
+        // unsigned app, so an unsigned build offers the installer download instead.
+        'process.env.B4M_DESKTOP_SIGNED': JSON.stringify(baked(mode, 'B4M_DESKTOP_SIGNED')),
       },
       // `@bike4mind/utils` is bundled rather than left external, and only main does this.
       // Main uses one subpath of it, `/artifactParser` - 20 kB that imports nothing but

@@ -223,6 +223,24 @@ describe('UpdateService with autoDownload', () => {
     expect(download).toHaveBeenCalledTimes(2);
   });
 
+  it('never downloads an update this build cannot install', async () => {
+    const ref: { service: UpdateService | null } = { service: null };
+    const updater: UpdaterPort = {
+      check: vi.fn(async () => {
+        ref.service?.apply({ type: 'available', version: '1.1.0', at: 1, installable: false });
+      }),
+      download: vi.fn(async () => undefined),
+      install: vi.fn(),
+    };
+    const { service } = harness({ updater, autoDownload: true });
+    ref.service = service;
+
+    await service.check();
+    await service.download();
+    expect(updater.download).not.toHaveBeenCalled();
+    expect(service.snapshot()).toMatchObject({ status: 'available', installable: false });
+  });
+
   it('does not start a second download while one is staged', async () => {
     const { service, updater } = wired(true);
     stage(service);

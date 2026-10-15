@@ -88,7 +88,7 @@ export class UpdateService {
 
   async download(): Promise<void> {
     if (!this.deps.updater || this.inFlight) return;
-    if (this.state.status !== 'available') return;
+    if (this.state.status !== 'available' || !this.state.installable) return;
 
     this.inFlight = true;
     this.apply({ type: 'download-started' });
