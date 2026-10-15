@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/common';
 import type { ICompletionOptionTools, CompletionInfo } from '@bike4mind/llm-adapters';
 import { isContextLimitError } from './errors';
+import { isJsonObjectString, isPlainObject, isRepaired, repairTranscript } from './transcript';
 import type {
   AgentCheckpoint,
   AgentContext,
@@ -157,6 +158,15 @@ const TOOL_RESULTS_NUDGE =
  */
 function buildToolResultsNudge(feedback: string | null): string {
   return feedback ? `${TOOL_RESULTS_NUDGE}\n\n${feedback}` : TOOL_RESULTS_NUDGE;
+}
+
+/**
+ * Identifies a tool call re-delivered across streaming frames so it runs once. Keyed by the provider
+ * id when there is one, so two identical calls in one response both run and both get recorded;
+ * `getToolId` (name + arguments) covers backends that send no id.
+ */
+function toolCallKey(toolUse: ToolUseInfo): string {
+  return toolUse.id || getToolId(toolUse);
 }
 
 /** Calls the host's feedback drain. A failing drain is logged and treated as empty - it must never fail the run. */
@@ -528,6 +538,7 @@ export class ReActAgent extends EventEmitter {
         }
 
         appendWorkflowReminder(messages, options.workflowReminder);
+        this.repairTranscriptBeforeRequest(messages);
 
         // Build cache strategy for prompt caching (system prompt + tools are static
         // across iterations; conversation history uses a moving breakpoint - see
@@ -657,7 +668,7 @@ export class ReActAgent extends EventEmitter {
                   // Filter to unprocessed tools only
                   const unprocessedTools: ToolUseInfo[] = [];
                   for (const toolUse of completionInfo.toolsUsed) {
-                    const toolCallIdStr = getToolId(toolUse);
+                    const toolCallIdStr = toolCallKey(toolUse);
                     if (!processedToolIds.has(toolCallIdStr)) {
                       processedToolIds.add(toolCallIdStr);
                       unprocessedTools.push(toolUse);
@@ -1375,6 +1386,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       }
 
       appendWorkflowReminder(this.messages, options.workflowReminder);
+      this.repairTranscriptBeforeRequest(this.messages);
 
       let iterationComplete = false;
       let currentText = '';
@@ -1494,7 +1506,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
 
               const unprocessedTools: ToolUseInfo[] = [];
               for (const toolUse of completionInfo.toolsUsed) {
-                const toolCallIdStr = getToolId(toolUse);
+                const toolCallIdStr = toolCallKey(toolUse);
                 if (!processedToolIds.has(toolCallIdStr)) {
                   processedToolIds.add(toolCallIdStr);
                   unprocessedTools.push(toolUse);
@@ -2072,16 +2084,48 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     observation: string,
     thinkingBlocks: unknown[]
   ): void {
-    const params = this.parseToolArguments(toolUse.arguments);
     const toolId = toolUse.id || `${toolUse.name}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const parameters = typeof toolUse.arguments === 'string' ? toolUse.arguments : JSON.stringify(params);
 
     this.context.llm.pushToolMessages(
       messages as Parameters<typeof this.context.llm.pushToolMessages>[0],
-      { id: toolId, name: toolUse.name, parameters },
+      { id: toolId, name: toolUse.name, parameters: this.serializeToolArguments(toolUse) },
       observation,
       thinkingBlocks
     );
+  }
+
+  /**
+   * The call's arguments as a JSON object string, raw bytes kept when they already are one. Malformed
+   * arguments are recorded as `{}`: the tool has already run (and reported the parse error as its
+   * observation), and throwing here would abort the turn with earlier calls left unanswered.
+   */
+  private serializeToolArguments(toolUse: ToolUseInfo): string {
+    const args = toolUse.arguments;
+    if (typeof args === 'string' && isJsonObjectString(args)) return args;
+    try {
+      const parsed = this.parseToolArguments(args);
+      if (isPlainObject(parsed)) return JSON.stringify(parsed);
+    } catch {
+      // Unrecoverable JSON; recorded as {} below.
+    }
+    this.context.logger.warn(`[ReActAgent] Recording malformed arguments for tool "${toolUse.name}" as {}`);
+    return '{}';
+  }
+
+  /**
+   * The transcript owner's check before every model request: see `repairTranscript`. Missing results
+   * are synthesized through the backend's own `pushToolMessages`, so their shape matches what that
+   * backend appends for a real result.
+   */
+  private repairTranscriptBeforeRequest(messages: IMessage[]): void {
+    const report = repairTranscript(messages, (call, observation) => {
+      const pair: IMessage[] = [];
+      this.context.llm.pushToolMessages(pair, { id: call.id, name: call.name, parameters: '{}' }, observation);
+      return pair.slice(1);
+    });
+    if (isRepaired(report)) {
+      this.context.logger.warn(`[ReActAgent] Repaired transcript before model request: ${JSON.stringify(report)}`);
+    }
   }
 }
 

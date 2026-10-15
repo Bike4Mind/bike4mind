@@ -1,0 +1,188 @@
+import type { IMessage } from '@bike4mind/common';
+
+/**
+ * Observation recorded for a tool call that has no result in the transcript (the run threw or was
+ * cut between the call and its result). Providers reject a tool call left unanswered.
+ */
+export const MISSING_TOOL_RESULT = 'Tool call did not return a result.';
+
+/** A tool call as the transcript records it. */
+export type TranscriptToolCall = { id: string; name: string };
+
+/**
+ * Builds the backend's own message(s) carrying `observation` as the result of `call`. ReActAgent
+ * derives it from `pushToolMessages`, so the result shape stays owned by the backend.
+ */
+export type ToolResultBuilder = (call: TranscriptToolCall, observation: string) => IMessage[];
+
+export type TranscriptRepairReport = {
+  synthesizedResults: number;
+  movedResults: number;
+  droppedOrphanResults: number;
+  replacedArguments: number;
+};
+
+/**
+ * Wire shapes, by backend:
+ * - Anthropic-style blocks: assistant `content[]` with `tool_use{id}`, results as `tool_result{tool_use_id}`
+ *   blocks in a following user (or Gemini: `tool`) message.
+ * - OpenAI-style: assistant `tool_calls[{id, function:{name, arguments}}]`, results as `role:'tool'`
+ *   messages with `tool_call_id`.
+ * Calls without an id (Ollama) cannot be paired and are left alone.
+ */
+type OpenAiToolCall = { id?: unknown; function?: { name?: unknown; arguments?: unknown } };
+type LooseMessage = IMessage & { tool_calls?: OpenAiToolCall[]; tool_call_id?: unknown };
+type ContentBlock = { type?: unknown; id?: unknown; name?: unknown; input?: unknown; tool_use_id?: unknown };
+
+const blocksOf = (message: IMessage): ContentBlock[] =>
+  Array.isArray(message.content) ? (message.content as ContentBlock[]) : [];
+
+export const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+function toolCallsOf(message: IMessage): TranscriptToolCall[] {
+  if (message.role !== 'assistant') return [];
+  const calls: TranscriptToolCall[] = [];
+  for (const block of blocksOf(message)) {
+    if (block.type === 'tool_use' && typeof block.id === 'string' && block.id) {
+      calls.push({ id: block.id, name: String(block.name ?? '') });
+    }
+  }
+  for (const call of (message as LooseMessage).tool_calls ?? []) {
+    if (typeof call?.id === 'string' && call.id) {
+      calls.push({ id: call.id, name: String(call.function?.name ?? '') });
+    }
+  }
+  return calls;
+}
+
+/**
+ * The result ids a message carries, when it carries nothing else. Only these pure carriers are moved
+ * or dropped; a message mixing results with other content is left where it is.
+ */
+function resultIdsOf(message: IMessage): string[] | null {
+  const loose = message as LooseMessage;
+  if (message.role === 'tool' && typeof loose.tool_call_id === 'string') return [loose.tool_call_id];
+  const blocks = blocksOf(message);
+  if (blocks.length === 0 || !blocks.every(block => block.type === 'tool_result')) return null;
+  const ids = blocks.map(block => block.tool_use_id);
+  return ids.every((id): id is string => typeof id === 'string') ? ids : null;
+}
+
+export function isJsonObjectString(value: string): boolean {
+  try {
+    return isPlainObject(JSON.parse(value));
+  } catch {
+    return false;
+  }
+}
+
+/** Returns a copy with malformed tool-call arguments replaced by `{}`, or null if none were malformed. */
+function withValidArguments(message: IMessage): { message: IMessage; replaced: number } | null {
+  if (message.role !== 'assistant') return null;
+  let replaced = 0;
+
+  const blocks = blocksOf(message);
+  const fixedBlocks = blocks.map(block => {
+    if (block.type !== 'tool_use' || isPlainObject(block.input)) return block;
+    replaced++;
+    return { ...block, input: {} };
+  });
+
+  const toolCalls = (message as LooseMessage).tool_calls;
+  const fixedToolCalls = toolCalls?.map(call => {
+    const args = call?.function?.arguments;
+    // Ollama sends arguments as an object; only a string that is not a JSON object is malformed.
+    if (typeof args !== 'string' || isJsonObjectString(args)) return call;
+    replaced++;
+    return { ...call, function: { ...call.function, arguments: '{}' } };
+  });
+
+  if (replaced === 0) return null;
+  const fixed: LooseMessage = { ...message };
+  if (blocks.length > 0) fixed.content = fixedBlocks as IMessage['content'];
+  if (fixedToolCalls) fixed.tool_calls = fixedToolCalls;
+  return { message: fixed, replaced };
+}
+
+/**
+ * Makes the transcript valid to send, in place, before every model request:
+ * - each tool call is followed by its result: a result found elsewhere is moved up behind its call, a
+ *   missing one is synthesized (`MISSING_TOOL_RESULT`) through `buildResult`;
+ * - a result whose call is nowhere in the transcript is dropped;
+ * - tool-call arguments that are not a JSON object are replaced by `{}`.
+ *
+ * A valid transcript is left untouched (same array contents, same message objects), so on the normal
+ * path, where backends append each call and its result as a pair, repair changes no request bytes.
+ */
+export function repairTranscript(messages: IMessage[], buildResult: ToolResultBuilder): TranscriptRepairReport {
+  const report: TranscriptRepairReport = {
+    synthesizedResults: 0,
+    movedResults: 0,
+    droppedOrphanResults: 0,
+    replacedArguments: 0,
+  };
+
+  const callIds = new Set(messages.flatMap(message => toolCallsOf(message).map(call => call.id)));
+  const carrierIdsByIndex = new Map<number, string[]>();
+  const carrierIndexByResultId = new Map<string, number>();
+  // A result inside a message that also carries other content is never moved, so it answers its call
+  // wherever it sits.
+  const answered = new Set<string>();
+  messages.forEach((message, index) => {
+    const resultIds = resultIdsOf(message);
+    if (!resultIds) {
+      for (const block of blocksOf(message)) {
+        if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') answered.add(block.tool_use_id);
+      }
+      return;
+    }
+    carrierIdsByIndex.set(index, resultIds);
+    for (const id of resultIds) {
+      if (!carrierIndexByResultId.has(id)) carrierIndexByResultId.set(id, index);
+    }
+  });
+
+  const repaired: IMessage[] = [];
+  const placedCarriers = new Set<number>();
+
+  messages.forEach((message, index) => {
+    const resultIds = carrierIdsByIndex.get(index);
+    if (resultIds) {
+      // Already placed behind its call, or waiting for a call later in the transcript.
+      if (placedCarriers.has(index) || resultIds.some(id => callIds.has(id))) return;
+      report.droppedOrphanResults++;
+      return;
+    }
+
+    const argumentFix = withValidArguments(message);
+    if (argumentFix) report.replacedArguments += argumentFix.replaced;
+    repaired.push(argumentFix?.message ?? message);
+
+    let expectedCarrierIndex = index + 1;
+    for (const call of toolCallsOf(message)) {
+      if (answered.has(call.id)) continue;
+      const carrierIndex = carrierIndexByResultId.get(call.id);
+      if (carrierIndex !== undefined && !placedCarriers.has(carrierIndex)) {
+        if (carrierIndex === expectedCarrierIndex) expectedCarrierIndex++;
+        else report.movedResults++;
+        placedCarriers.add(carrierIndex);
+        for (const id of carrierIdsByIndex.get(carrierIndex) ?? []) answered.add(id);
+        repaired.push(messages[carrierIndex]);
+        continue;
+      }
+      const synthesized = buildResult(call, MISSING_TOOL_RESULT);
+      if (synthesized.length === 0) continue;
+      report.synthesizedResults++;
+      answered.add(call.id);
+      repaired.push(...synthesized);
+    }
+  });
+
+  if (isRepaired(report)) messages.splice(0, messages.length, ...repaired);
+  return report;
+}
+
+export function isRepaired(report: TranscriptRepairReport): boolean {
+  return report.synthesizedResults + report.movedResults + report.droppedOrphanResults + report.replacedArguments > 0;
+}
