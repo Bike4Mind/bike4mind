@@ -192,6 +192,7 @@ describe('DEPRECATED_MODEL_MAP invariants', () => {
     return {
       ids: new Set(models.map(m => String(m.id))),
       deprecated: new Set(models.filter(m => m.deprecationDate).map(m => String(m.id))),
+      disabled: new Set(models.filter(m => m.disabled).map(m => String(m.id))),
     };
   };
 
@@ -223,6 +224,16 @@ describe('DEPRECATED_MODEL_MAP invariants', () => {
       .map(([from, target]) => `${from} -> ${target}`);
 
     expect(badTargets, `mappings pointing at a deprecated model: ${badTargets.join(', ')}`).toEqual([]);
+  });
+
+  it('never maps a model to a disabled one, which no caller can run', async () => {
+    const { disabled } = await staticCatalog();
+
+    const unreachable = Object.entries(DEPRECATED_MODEL_MAP)
+      .filter(([, target]) => disabled.has(target))
+      .map(([from, target]) => `${from} -> ${target}`);
+
+    expect(unreachable, `mappings pointing at a disabled model: ${unreachable.join(', ')}`).toEqual([]);
   });
 
   it('maps only to models that exist in the catalog', async () => {
@@ -261,6 +272,35 @@ describe('Gemini 2.5 Flash retirement', () => {
     expect(resolved).not.toBe('gemini-2.5-flash');
     expect(replacement).toBeDefined();
     expect(isModelDeprecated(replacement as ModelInfo)).toBe(false);
+  });
+});
+
+describe('Bedrock Claude retirements', () => {
+  const bedrockModels = () => new UndifferentiatedBedrockBackend().getModelInfo();
+  const now = new Date('2026-10-15T00:00:00Z');
+
+  it.each([
+    ['us.anthropic.claude-opus-4-20250514-v1:0', 'global.anthropic.claude-opus-4-8'],
+    ['us.anthropic.claude-sonnet-4-20250514-v1:0', 'global.anthropic.claude-sonnet-4-6'],
+    ['anthropic.claude-3-haiku-20240307-v1:0', 'us.anthropic.claude-haiku-4-5-20251001-v1:0'],
+  ])('hides %s by date and resolves a pin to %s, a live successor', async (retired, successor) => {
+    const models = await bedrockModels();
+
+    expect(isModelDeprecated(models.find(m => m.id === retired) as ModelInfo, now)).toBe(true);
+    expect(resolveDeprecatedModelId(retired)).toBe(successor);
+    const resolved = models.find(m => m.id === successor) as ModelInfo;
+    expect(isModelDeprecated(resolved, now)).toBe(false);
+    expect(resolved.disabled).toBeFalsy();
+  });
+
+  it('hides Opus 4.1 via disabled (Legacy lapse) and maps a pin to a live successor', async () => {
+    const models = await bedrockModels();
+    const opus41 = models.find(m => m.id === 'us.anthropic.claude-opus-4-1-20250805-v1:0') as ModelInfo;
+
+    expect(opus41.disabled).toBe(true);
+    expect(opus41.disabledReason).toBe('Legacy on Bedrock; account access lapsed after inactivity');
+    expect(opus41.deprecationDate).toBe('2027-01-08');
+    expect(resolveDeprecatedModelId(opus41.id)).toBe('global.anthropic.claude-opus-4-8');
   });
 });
 

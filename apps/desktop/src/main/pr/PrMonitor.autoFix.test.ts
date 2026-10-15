@@ -5,7 +5,14 @@ import { MAX_AUTO_FIX_ATTEMPTS } from './autoFix';
 import { REF, TrackedMonitor, check, collector, fakeGithub, quietLogger, snapshot, tempStore } from './prTestSupport';
 
 const SESSION = 'session-1';
-const bound: PrBinding = { ...REF, source: 'shell', boundAt: '', lastState: 'OPEN', autoFix: true };
+const bound: PrBinding = {
+  ...REF,
+  source: 'shell',
+  boundAt: '',
+  lastState: 'OPEN',
+  autoFix: true,
+  autoFixMax: MAX_AUTO_FIX_ATTEMPTS,
+};
 const failing = snapshot({ headSha: 'sha-bad', checks: [check('Build', 'fail')] });
 
 function setup({ busy = false, accept = true } = {}) {
@@ -120,6 +127,52 @@ describe('PrMonitor auto-fix', () => {
     expect(started).toHaveLength(0);
     expect(out.last().autoFix).toMatchObject({ status: 'exhausted', attempts: MAX_AUTO_FIX_ATTEMPTS });
     expect(out.last().autoFix.note).toContain('gave up');
+  });
+
+  it('leaves a PR that gave up at the old limit stopped until the box is re-checked', async () => {
+    const { store, monitor, started, out } = setup();
+    const { autoFixMax: _, ...legacy } = bound;
+    await store.set(SESSION, { ...legacy, autoFixAttempts: 3 });
+    await monitor.refresh(SESSION);
+    expect(started).toHaveLength(0);
+    expect(out.last().autoFix).toMatchObject({ status: 'exhausted', attempts: 3, max: 3 });
+    expect(out.last().autoFix.note).toContain('gave up after 3 attempts');
+
+    await monitor.setOption(SESSION, 'autoFix', true);
+    await settle();
+    expect(started).toHaveLength(1);
+    expect(started[0].prompt).toContain(`Attempt 1 of ${MAX_AUTO_FIX_ATTEMPTS}`);
+    expect(await store.get(SESSION)).toMatchObject({ autoFixAttempts: 1, autoFixMax: MAX_AUTO_FIX_ATTEMPTS });
+    expect(out.last().autoFix.max).toBe(MAX_AUTO_FIX_ATTEMPTS);
+  });
+
+  it('keeps a binding part-way through the old budget at three attempts', async () => {
+    const { store, monitor, started, out } = setup();
+    const { autoFixMax: _, ...legacy } = bound;
+    await store.set(SESSION, { ...legacy, autoFixAttempts: 2 });
+    await monitor.refresh(SESSION);
+    expect(started).toHaveLength(1);
+    expect(out.last().autoFix).toMatchObject({ status: 'started', attempts: 3, max: 3 });
+    expect(out.last().autoFix.note).toContain('attempt 3 of 3');
+  });
+
+  it('keeps a legacy binding that ran out at three stopped while checks run again', async () => {
+    const { store, monitor, out, fake } = setup();
+    const { autoFixMax: _, ...legacy } = bound;
+    await store.set(SESSION, { ...legacy, autoFixAttempts: 3 });
+    await monitor.refresh(SESSION);
+    fake.answer(snapshot({ headSha: 'sha-next', checks: [check('Build', 'pending')] }));
+    await monitor.refresh(SESSION);
+    expect(out.last().autoFix.status).toBe('exhausted');
+  });
+
+  it('grants five attempts when the box is ticked', async () => {
+    const { store, monitor, out } = setup();
+    await store.set(SESSION, { ...bound, autoFix: false, autoFixAttempts: 0 });
+    await monitor.setOption(SESSION, 'autoFix', true);
+    await settle();
+    expect((await store.get(SESSION))?.autoFixMax).toBe(5);
+    expect(out.last().autoFix.max).toBe(5);
   });
 
   it('stops when the box is unchecked, and re-checking refills the attempts', async () => {

@@ -820,3 +820,54 @@ describe('getHttpStatus', () => {
     expect(getHttpStatus(new Error('boom'))).toBeUndefined();
   });
 });
+
+describe('fallback candidates must be able to serve the chat', () => {
+  // A failing Grok chat with only a Gemini key used to land on the first keyed Gemini entry,
+  // the image model, and surface "Function calling is not enabled for this model".
+  const grok = createModelInfo({ id: 'grok-4.5', backend: ModelBackend.XAI, supportsTools: true });
+  const geminiImage = createModelInfo({ id: 'gemini-2.5-flash-image', backend: ModelBackend.Gemini, type: 'image' });
+  const geminiNoTools = createModelInfo({ id: 'gemini-no-tools', backend: ModelBackend.Gemini });
+  const geminiText = createModelInfo({ id: 'gemini-3.5-flash', backend: ModelBackend.Gemini, supportsTools: true });
+  const apiKeyTable = { xai: 'expired', gemini: 'valid-key' } as Record<string, string>;
+
+  it.each([false, true])('skips image models on the last-resort hop (preferUntriedBackend: %s)', async prefer => {
+    const result = await getLlmWithFallback(grok, undefined, [grok, geminiImage, geminiText], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      preferUntriedBackend: prefer,
+    });
+    expect(result?.model.id).toBe('gemini-3.5-flash');
+  });
+
+  it('skips a text model without tool support when the request carries tools', async () => {
+    const models = [grok, geminiImage, geminiNoTools, geminiText];
+    const withTools = await getLlmWithFallback(grok, undefined, models, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      requireTools: true,
+    });
+    expect(withTools?.model.id).toBe('gemini-3.5-flash');
+
+    const withoutTools = await getLlmWithFallback(grok, undefined, models, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+    });
+    expect(withoutTools?.model.id).toBe('gemini-no-tools');
+  });
+
+  it('returns null rather than an unusable model when nothing qualifies', async () => {
+    const result = await getLlmWithFallback(grok, undefined, [grok, geminiImage], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('rejects a frontend-provided fallback that cannot serve the chat', () => {
+    const models = [grok, geminiImage, geminiNoTools];
+    expect(validateFallbackModel('gemini-2.5-flash-image', models, apiKeyTable, mockLogger)).toBeNull();
+    expect(validateFallbackModel('gemini-no-tools', models, apiKeyTable, mockLogger, true)).toBeNull();
+    expect(validateFallbackModel('gemini-no-tools', models, apiKeyTable, mockLogger)?.id).toBe('gemini-no-tools');
+  });
+
+  it('skips image models when substituting a missing model', () => {
+    const result = findFallbackForMissingModel('retired-model', [geminiImage, geminiText], apiKeyTable, mockLogger);
+    expect(result?.model.id).toBe('gemini-3.5-flash');
+  });
+});

@@ -43,6 +43,11 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'us.anthropic.claude-3-5-sonnet-20241022-v2:0': 'global.anthropic.claude-sonnet-4-6',
   'us.anthropic.claude-3-7-sonnet-20250219-v1:0': 'global.anthropic.claude-sonnet-4-6',
   'anthropic.claude-3-haiku-20240307-v1:0': 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+  // Superseded within the Bedrock Claude family by the current Sonnet 4.6 / Opus 4.8;
+  // successors are no more expensive.
+  'us.anthropic.claude-opus-4-20250514-v1:0': 'global.anthropic.claude-opus-4-8',
+  'us.anthropic.claude-opus-4-1-20250805-v1:0': 'global.anthropic.claude-opus-4-8',
+  'us.anthropic.claude-sonnet-4-20250514-v1:0': 'global.anthropic.claude-sonnet-4-6',
   // Anthropic-hosted models
   'claude-3-5-sonnet-20241022': 'claude-sonnet-4-6',
   'claude-3-7-sonnet-20250219': 'claude-sonnet-4-6',

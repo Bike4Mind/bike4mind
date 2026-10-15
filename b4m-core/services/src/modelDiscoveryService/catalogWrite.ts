@@ -118,6 +118,8 @@ export interface CatalogWriteInput {
   priorDiscoveryGroups?: ReadonlyMap<string, readonly FieldGroup[]>;
   /** Contributors on that same superseded row, so a re-claim keeps its provenance. */
   priorContributors?: ReadonlyMap<string, readonly ICatalogContributor[]>;
+  /** planLifecycleSignals' providerUndated: the provider that reports each model undated this run. */
+  providerUndated?: ReadonlyMap<string, string>;
   operatorOwnedModelIds: ReadonlySet<string>;
   /** Models a seed row, operator row or adapter literal presents; discovery leaves those alone. */
   presentationOwnedElsewhere?: ReadonlySet<string>;
@@ -432,6 +434,10 @@ function planOne(
       claimsLifecycle = false;
     }
   }
+  const undatedBy = input.providerUndated?.get(candidate.modelId);
+  if (undatedBy && dropsFutureDeprecation(draft, base, contributed, candidate, input, undatedBy, dropped)) {
+    claimsLifecycle = true;
+  }
 
   const derivedGroups = new Set<FieldGroup>();
   const outputClaim = starvedByOutputClaim(draft, contributed, base.maxOutputTokens);
@@ -711,6 +717,60 @@ function mergeLifecycle(
     return undefined;
   }
   return merged;
+}
+
+/**
+ * A provider reporting the model in a non-sunset status with no deprecation date outranks a
+ * FUTURE date an aggregator reports or an earlier discovery row holds, which mergeLifecycle
+ * would otherwise carry forward forever. Removes the date from `draft` and credits the lifecycle
+ * group to the provider; returns whether it did.
+ *
+ * Left alone: a date already reached (the model is hidden, and un-hiding is operator work), a
+ * date under a sunset status, a date a provider supplied, and a held date the discovery row does
+ * not own (a seed's; operator rows never reach `base`).
+ */
+function dropsFutureDeprecation(
+  draft: Record<string, unknown>,
+  base: Record<string, unknown>,
+  contributed: Map<string, unknown>,
+  candidate: Candidate,
+  input: CatalogWriteInput,
+  provider: string,
+  dropped: DroppedSourceRecord[]
+): boolean {
+  const lifecycle = draft.lifecycle;
+  if (!isPlainObject(lifecycle)) return false;
+  const { deprecationDate: date, status } = lifecycle;
+  // isModelDeprecated hides a model from the day its date arrives, so a date of today has passed.
+  const today = input.runStartedAt.toISOString().slice(0, 10);
+  if (typeof date !== 'string' || date <= today) return false;
+  if (typeof status !== 'string' || SUNSET_STATUSES.has(status)) return false;
+
+  const held = isPlainObject(base.lifecycle) ? base.lifecycle : {};
+  const heldDate = typeof held.deprecationDate === 'string' ? held.deprecationDate : undefined;
+  if (heldDate !== undefined) {
+    if (heldDate <= today) return false;
+    if (!input.priorDiscoveryGroups?.get(candidate.modelId)?.includes('lifecycle')) return false;
+  }
+
+  const incoming = contributed.get('lifecycle');
+  const incomingSource =
+    isPlainObject(incoming) && incoming.deprecationDate === date ? candidate.sourceOfField.get('lifecycle') : undefined;
+  if (incomingSource && input.contributions.some(c => c.name === incomingSource && c.kind === 'provider')) {
+    return false;
+  }
+
+  draft.lifecycle = omit(lifecycle, 'deprecationDate');
+  contributed.set('lifecycle', draft.lifecycle);
+  candidate.sourceOfField.set('lifecycle', provider);
+  const why = `${provider} reports the model "${status}" with no deprecation date`;
+  dropped.push({
+    source: incomingSource ?? provider,
+    modelId: candidate.modelId,
+    reason:
+      heldDate === date ? `held deprecationDate ${date} cleared: ${why}` : `deprecationDate ${date} refused: ${why}`,
+  });
+  return true;
 }
 
 /**

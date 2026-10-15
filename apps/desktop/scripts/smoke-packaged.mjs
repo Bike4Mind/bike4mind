@@ -15,7 +15,8 @@ if (process.platform === 'linux') {
   const images = (await readdir(release)).filter(name => name.endsWith('.AppImage'));
   assert.equal(images.length, 1, 'Expected exactly one packaged AppImage');
   executable = join(release, images[0]);
-  platformArgs.push('--appimage-extract-and-run', '--no-sandbox', '--disable-dev-shm-usage');
+  // Xvfb has no hardware GPU; use software rendering for the startup screenshot.
+  platformArgs.push('--appimage-extract-and-run', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu');
 }
 if (process.platform === 'darwin') {
   // A temporary HOME has no login keychain; startup tests must not prompt or touch the real one.
