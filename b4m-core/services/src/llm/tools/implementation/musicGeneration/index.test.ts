@@ -67,6 +67,26 @@ describe('music_generation tool', () => {
     expect(statusUpdate).not.toHaveBeenCalled();
   });
 
+  it('refuses to report an idempotent replay of a job that already ended without a song', async () => {
+    const createJob = vi.fn().mockResolvedValue({
+      ok: true,
+      created: false,
+      job: { id: 'job1', state: 'failed', error: { code: 'provider_error', message: 'boom' } },
+    });
+    const { tool, statusUpdate } = build(createJob);
+    const result = await tool.toolFn({ model: 'test-music', prompt: 'p' });
+    expect(result).toBe('Music generation failed (provider_error): an identical request already ended without a song.');
+    expect(statusUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still reports an idempotent replay of a job that already succeeded', async () => {
+    const createJob = vi.fn().mockResolvedValue({ ok: true, created: false, job: { id: 'job1', state: 'succeeded' } });
+    const { tool, statusUpdate } = build(createJob);
+    const result = JSON.parse(await tool.toolFn({ model: 'test-music', prompt: 'p' }));
+    expect(result).toEqual({ jobId: 'job1', estimatedSeconds: 2 });
+    expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'music' }] });
+  });
+
   it('rejects a model the caller cannot use before starting a job', async () => {
     const createJob = vi.fn().mockResolvedValue(okJob);
     const { tool } = build(createJob);
@@ -93,6 +113,23 @@ describe('music_generation tool', () => {
     await tool.toolFn({ model: 'test-music', prompt: 'p' });
     expect(onStart).not.toHaveBeenCalled();
     expect(onFinish).not.toHaveBeenCalled();
+  });
+
+  it('propagates a createJob failure without emitting a card', async () => {
+    const createJob = vi.fn().mockRejectedValue(new Error('db down'));
+    const { tool, statusUpdate } = build(createJob);
+    await expect(tool.toolFn({ model: 'test-music', prompt: 'p' })).rejects.toThrow('db down');
+    expect(statusUpdate).not.toHaveBeenCalled();
+  });
+
+  // The job is created and billed before the card is announced, so a statusUpdate failure must not be swallowed:
+  // the caller sees the error and the running job is left for the websocket/reload to pick up.
+  it('propagates a statusUpdate failure after the job was created', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool, statusUpdate } = build(createJob);
+    statusUpdate.mockRejectedValue(new Error('socket closed'));
+    await expect(tool.toolFn({ model: 'test-music', prompt: 'p' })).rejects.toThrow('socket closed');
+    expect(createJob).toHaveBeenCalledTimes(1);
   });
 
   it('offers only the usable models in a plain JSON Schema', () => {

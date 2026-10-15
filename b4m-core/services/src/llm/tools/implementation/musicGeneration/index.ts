@@ -1,7 +1,12 @@
 import { MUSIC_MODEL_CATALOG, type MusicGenerationRequest, type MusicModelId } from '@bike4mind/common';
 import type { CreateMusicJobInput, CreateMusicJobResult } from '../../../../musicJobs/types';
 import type { ToolContext, ToolDefinition } from '../../base/types';
-import { buildJobIdempotencyKey, buildUnavailableTool, toToolParameters } from '../generationJobTool';
+import {
+  buildJobIdempotencyKey,
+  buildUnavailableTool,
+  isReplayOfDeadJob,
+  toToolParameters,
+} from '../generationJobTool';
 import { buildMusicToolSchema, type MusicToolArgs } from './buildSchema';
 
 export type MusicToolConfig = {
@@ -48,6 +53,10 @@ export const musicGenerationTool: ToolDefinition = {
           idempotencyKey: buildJobIdempotencyKey(context.userId, context.questId, request),
         });
         if (!result.ok) return `Music generation failed (${result.code}): ${result.message}`;
+        if (isReplayOfDeadJob(result.created, result.job.state)) {
+          const reason = result.job.error?.code ?? result.job.state;
+          return `Music generation failed (${reason}): an identical request already ended without a song.`;
+        }
         await context.statusUpdate({ generationJobs: [{ id: result.job.id, kind: 'music' }] });
         return JSON.stringify({
           jobId: result.job.id,

@@ -1,7 +1,12 @@
 import { VIDEO_MODEL_CATALOG, type VideoModelId } from '@bike4mind/common';
 import type { CreateVideoJobInput, CreateVideoJobResult } from '../../../../videoJobs/types';
 import type { ToolContext, ToolDefinition } from '../../base/types';
-import { buildJobIdempotencyKey, buildUnavailableTool, toToolParameters } from '../generationJobTool';
+import {
+  buildJobIdempotencyKey,
+  buildUnavailableTool,
+  isReplayOfDeadJob,
+  toToolParameters,
+} from '../generationJobTool';
 import { buildVideoToolSchema, type VideoToolArgs } from './buildSchema';
 
 export type VideoToolConfig = {
@@ -56,6 +61,10 @@ export const videoGenerationTool: ToolDefinition = {
           idempotencyKey: buildJobIdempotencyKey(context.userId, context.questId, request),
         });
         if (!result.ok) return `Video generation failed (${result.code}): ${result.message}`;
+        if (isReplayOfDeadJob(result.created, result.job.state)) {
+          const reason = result.job.error?.code ?? result.job.state;
+          return `Video generation failed (${reason}): an identical request already ended without a video.`;
+        }
         await context.statusUpdate({ generationJobs: [{ id: result.job.id, kind: 'video' }] });
         return JSON.stringify({
           jobId: result.job.id,

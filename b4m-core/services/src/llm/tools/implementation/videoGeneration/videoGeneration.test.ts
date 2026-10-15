@@ -64,6 +64,26 @@ describe('video_generation tool', () => {
     expect(statusUpdate).not.toHaveBeenCalled();
   });
 
+  it('refuses to report an idempotent replay of a job that already ended without a video', async () => {
+    const createJob = vi.fn().mockResolvedValue({
+      ok: true,
+      created: false,
+      job: { id: 'job1', state: 'cancelled' },
+    });
+    const { tool, statusUpdate } = build(createJob);
+    const text = await tool.toolFn({ model: 'test-video', prompt: 'x' });
+    expect(text).toBe('Video generation failed (cancelled): an identical request already ended without a video.');
+    expect(statusUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still reports an idempotent replay of a job that already succeeded', async () => {
+    const createJob = vi.fn().mockResolvedValue({ ok: true, created: false, job: { id: 'job1', state: 'succeeded' } });
+    const { tool, statusUpdate } = build(createJob);
+    const result = JSON.parse(await tool.toolFn({ model: 'test-video', prompt: 'x' }));
+    expect(result).toEqual({ jobId: 'job1', estimatedSeconds: 8 });
+    expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'video' }] });
+  });
+
   it('derives a stable idempotency key per quest and request', async () => {
     const createJob = vi.fn().mockResolvedValue(okJob);
     const { tool } = build(createJob);

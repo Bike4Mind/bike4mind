@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { TERMINAL_GENERATION_JOB_STATES, type GenerationJobState } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
 // Shared by the tools that start a generation job (video_generation, music_generation).
@@ -14,6 +15,14 @@ export const buildJobIdempotencyKey = (
   const digest = createHash('sha256').update(JSON.stringify(request)).digest('hex').slice(0, 32);
   return `agent:${userId}:${questId}:${digest}`;
 };
+
+/**
+ * An idempotency replay that hands back a job which already ended without output must not be reported as a fresh
+ * job: the model would tell the user a render is under way while the card shows the earlier failure. A replay of a
+ * succeeded job is fine - the card shows the finished asset.
+ */
+export const isReplayOfDeadJob = (created: boolean, state: GenerationJobState): boolean =>
+  !created && state !== 'succeeded' && TERMINAL_GENERATION_JOB_STATES.includes(state);
 
 export const toToolParameters = (schema: z.ZodType): ICompletionOptionTools['toolSchema']['parameters'] => {
   const { $schema: _draft, ...jsonSchema } = z.toJSONSchema(schema);
