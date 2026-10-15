@@ -1,13 +1,13 @@
 import { QueryClient } from '@tanstack/react-query';
 import type { VideoGeneration } from '@bike4mind/common';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { listOf, videoJob } from './__test__/videoGenerationFixtures';
+import { shouldReplaceGenerationJob } from './generationJobPolling';
 import {
   isTerminalVideoState,
   patchVideoGeneration,
   prependVideoGeneration,
   seedVideoGeneration,
-  shouldReplaceVideoGeneration,
   upsertVideoGeneration,
   type VideoGenerationList,
 } from './videoGenerationCache';
@@ -38,24 +38,24 @@ describe('isTerminalVideoState', () => {
   });
 });
 
-describe('shouldReplaceVideoGeneration', () => {
+describe('shouldReplaceGenerationJob (video shape)', () => {
   it('replaces when nothing is cached', () => {
-    expect(shouldReplaceVideoGeneration(undefined, videoJob())).toBe(true);
+    expect(shouldReplaceGenerationJob(undefined, videoJob())).toBe(true);
   });
   it('replaces with a newer or equally new snapshot', () => {
-    expect(shouldReplaceVideoGeneration(videoJob(), videoJob({ updated_at: LATER }))).toBe(true);
-    expect(shouldReplaceVideoGeneration(videoJob(), videoJob())).toBe(true);
+    expect(shouldReplaceGenerationJob(videoJob(), videoJob({ updated_at: LATER }))).toBe(true);
+    expect(shouldReplaceGenerationJob(videoJob(), videoJob())).toBe(true);
   });
   it('keeps the cached job when the incoming one is older', () => {
-    expect(shouldReplaceVideoGeneration(videoJob({ updated_at: LATER }), videoJob())).toBe(false);
+    expect(shouldReplaceGenerationJob(videoJob({ updated_at: LATER }), videoJob())).toBe(false);
   });
   it('keeps a storing job when a same-timestamp row says running, and takes a forward one', () => {
-    expect(shouldReplaceVideoGeneration(videoJob({ state: 'storing' }), videoJob({ state: 'running' }))).toBe(false);
-    expect(shouldReplaceVideoGeneration(videoJob({ state: 'running' }), videoJob({ state: 'storing' }))).toBe(true);
+    expect(shouldReplaceGenerationJob(videoJob({ state: 'storing' }), videoJob({ state: 'running' }))).toBe(false);
+    expect(shouldReplaceGenerationJob(videoJob({ state: 'running' }), videoJob({ state: 'storing' }))).toBe(true);
   });
   it('never replaces a terminal job with a non-terminal one', () => {
     const cached = videoJob({ state: 'succeeded' });
-    expect(shouldReplaceVideoGeneration(cached, videoJob({ state: 'running', updated_at: LATER }))).toBe(false);
+    expect(shouldReplaceGenerationJob(cached, videoJob({ state: 'running', updated_at: LATER }))).toBe(false);
   });
 });
 
@@ -95,8 +95,10 @@ describe('prependVideoGeneration', () => {
     expect(detail('new')?.state).toBe('running');
   });
 
-  it('leaves an unloaded list alone', () => {
+  it('refetches, rather than writes, a list that has not loaded', () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     prependVideoGeneration(queryClient, videoJob({ id: 'new' }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
     expect(queryClient.getQueryData(videoGenerationKeys.list)).toBeUndefined();
   });
 });

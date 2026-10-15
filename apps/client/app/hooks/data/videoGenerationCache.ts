@@ -9,11 +9,7 @@ import {
   type GenerationJobLiveUpdate,
   type GenerationJobPage,
 } from './generationJobCache';
-import {
-  isAwaitingGenerationOutput,
-  isTerminalGenerationState,
-  shouldReplaceGenerationJob,
-} from './generationJobPolling';
+import { isTerminalGenerationState } from './generationJobPolling';
 import { videoGenerationKeys } from './videoGenerationKeys';
 
 export type VideoGenerationPage = GenerationJobPage<VideoGeneration>;
@@ -21,11 +17,6 @@ export type VideoGenerationList = GenerationJobList<VideoGeneration>;
 export type VideoJobLiveUpdate = GenerationJobLiveUpdate & { progress?: number };
 
 export const isTerminalVideoState = isTerminalGenerationState;
-export const isAwaitingVideoOutput = isAwaitingGenerationOutput;
-export const shouldReplaceVideoGeneration = (
-  existing: VideoGeneration | undefined,
-  incoming: VideoGeneration
-): boolean => shouldReplaceGenerationJob(existing, incoming);
 
 const videoCache = createGenerationJobCache<VideoGeneration, VideoJobLiveUpdate>(
   videoGenerationKeys,
