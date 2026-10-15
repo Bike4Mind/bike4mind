@@ -5,6 +5,7 @@ import { CitableSource } from '@bike4mind/common';
 import { FirecrawlError } from '@mendable/firecrawl-js';
 import { createFirecrawlApp } from './firecrawlApp';
 import { plainFetchScrape } from './plainFetch';
+import { UnsafeScrapeTargetError } from './errors';
 import { unsafeFetchUrlReason } from './ssrfGuard';
 
 // Re-exported so external construction sites (e.g. apps/workers researchEngineQueue)
@@ -181,10 +182,11 @@ export async function firecrawlFetch(
   }
 
   // Checked before choosing a backend: a self-hosted Firecrawl (`apiUrl`) fetches from inside our
-  // network, so handing it a private address is the same SSRF as fetching it ourselves.
+  // network, so handing it a private address is the same SSRF as fetching it ourselves. Same error
+  // type as the guard inside the Firecrawl wrapper, so a retry wrapper treats both the same way.
   const unsafeReason = await unsafeFetchUrlReason(new URL(url));
   if (unsafeReason) {
-    throw new Error(`Refusing to fetch ${url}: ${unsafeReason}`);
+    throw new UnsafeScrapeTargetError(`Refusing to fetch ${url}: ${unsafeReason}`);
   }
 
   // Use longer timeout for PDF URLs - large PDFs need more server-side processing time.
