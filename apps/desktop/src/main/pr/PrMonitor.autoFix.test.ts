@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChatAutomaticOrigin } from '@shared/chat';
 import type { PrBinding } from '@shared/pullRequest';
 import { MAX_AUTO_FIX_ATTEMPTS } from './autoFix';
@@ -43,6 +43,8 @@ function setup({ busy = false, accept = true } = {}) {
   return { store, fake, out, monitor, started, state };
 }
 
+// Work the monitor starts in the background (batched reads, store writes) has no promise to await. Wait for the
+// expected effect with vi.waitFor; `settle` is only for proving something did NOT happen (or happened only once).
 const settle = () => new Promise(resolve => setTimeout(resolve, 20));
 
 describe('PrMonitor auto-fix', () => {
@@ -77,9 +79,10 @@ describe('PrMonitor auto-fix', () => {
 
     state.busy = false;
     monitor.turnSettled(SESSION);
-    await settle();
-    expect(started).toHaveLength(1);
-    expect(out.last().autoFix.status).toBe('started');
+    await vi.waitFor(() => {
+      expect(started).toHaveLength(1);
+      expect(out.last().autoFix.status).toBe('started');
+    });
   });
 
   it('spends nothing when the start is refused', async () => {
@@ -109,6 +112,7 @@ describe('PrMonitor auto-fix', () => {
     await monitor.refresh(SESSION);
     state.busy = false;
     await Promise.all([monitor.refresh(SESSION), Promise.resolve(monitor.turnSettled(SESSION))]);
+    await vi.waitFor(() => expect(started).toHaveLength(1));
     await settle();
     expect(started).toHaveLength(1);
     expect((await store.get(SESSION))?.autoFixAttempts).toBe(1);
@@ -142,11 +146,12 @@ describe('PrMonitor auto-fix', () => {
     expect(out.last().autoFix.note).toContain('gave up after 3 attempts');
 
     await monitor.setOption(SESSION, 'autoFix', true);
-    await settle();
-    expect(started).toHaveLength(1);
-    expect(started[0].prompt).toContain(`Attempt 1 of ${MAX_AUTO_FIX_ATTEMPTS}`);
-    expect(await store.get(SESSION)).toMatchObject({ autoFixAttempts: 1, autoFixMax: MAX_AUTO_FIX_ATTEMPTS });
-    expect(out.last().autoFix.max).toBe(MAX_AUTO_FIX_ATTEMPTS);
+    await vi.waitFor(async () => {
+      expect(started).toHaveLength(1);
+      expect(started[0].prompt).toContain(`Attempt 1 of ${MAX_AUTO_FIX_ATTEMPTS}`);
+      expect(await store.get(SESSION)).toMatchObject({ autoFixAttempts: 1, autoFixMax: MAX_AUTO_FIX_ATTEMPTS });
+      expect(out.last().autoFix.max).toBe(MAX_AUTO_FIX_ATTEMPTS);
+    });
   });
 
   it('keeps a binding part-way through the old budget at three attempts', async () => {
@@ -173,9 +178,10 @@ describe('PrMonitor auto-fix', () => {
     const { store, monitor, out } = setup();
     await store.set(SESSION, { ...bound, autoFix: false, autoFixAttempts: 0 });
     await monitor.setOption(SESSION, 'autoFix', true);
-    await settle();
-    expect((await store.get(SESSION))?.autoFixMax).toBe(5);
-    expect(out.last().autoFix.max).toBe(5);
+    await vi.waitFor(async () => {
+      expect((await store.get(SESSION))?.autoFixMax).toBe(5);
+      expect(out.last().autoFix.max).toBe(5);
+    });
   });
 
   it('stops when the box is unchecked, and re-checking refills the attempts', async () => {
@@ -186,9 +192,10 @@ describe('PrMonitor auto-fix', () => {
     expect(started).toHaveLength(0);
 
     await monitor.setOption(SESSION, 'autoFix', true);
-    await settle();
-    expect(started).toHaveLength(1);
-    expect((await store.get(SESSION))?.autoFixAttempts).toBe(1);
+    await vi.waitFor(async () => {
+      expect(started).toHaveLength(1);
+      expect((await store.get(SESSION))?.autoFixAttempts).toBe(1);
+    });
 
     await monitor.setOption(SESSION, 'autoFix', false);
     fake.answer(snapshot({ headSha: 'sha-other', checks: [check('Build', 'fail')] }));
@@ -211,7 +218,6 @@ describe('PrMonitor auto-fix', () => {
     expect(started).toHaveLength(1);
 
     monitor.turnSettled(SESSION);
-    await settle();
-    expect(out.last().autoFix.conflicts).toBeUndefined();
+    await vi.waitFor(() => expect(out.last().autoFix.conflicts).toBeUndefined());
   });
 });

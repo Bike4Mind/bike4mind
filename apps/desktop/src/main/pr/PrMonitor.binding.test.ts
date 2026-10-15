@@ -113,6 +113,7 @@ describe('PrMonitor binding', () => {
     const onFeature = setup({ workingDirectory: '/work', branch: 'feat/widget-ladder' });
     await onFeature.monitor.watch(1, SESSION);
     await onFeature.monitor.watch(1, SESSION);
+    await vi.waitFor(() => expect(onFeature.fake.calls).toEqual(['branch:feat/widget-ladder']));
     await settle();
     expect(onFeature.fake.calls).toEqual(['branch:feat/widget-ladder']);
   });
@@ -122,8 +123,7 @@ describe('PrMonitor binding', () => {
     await store.set(SESSION, { ...REF, source: 'shell', boundAt: '' });
     fake.answer(new GhError('missing', 'gh is not installed'));
     await monitor.watch(1, SESSION);
-    await settle();
-    expect(out.last()).toMatchObject({ gh: 'missing', binding: { number: 611 } });
+    await vi.waitFor(() => expect(out.last()).toMatchObject({ gh: 'missing', binding: { number: 611 } }));
     fake.answer(snapshot());
     await monitor.refresh(SESSION);
     expect(out.last()).toMatchObject({ gh: 'ok', snapshot: { number: 611 } });
