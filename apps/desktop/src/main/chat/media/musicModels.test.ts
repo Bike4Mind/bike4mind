@@ -1,4 +1,4 @@
-import type { PublicMusicModel } from '@bike4mind/common';
+import { estimateMusicCostCredits, MUSIC_MODEL_CATALOG, type PublicMusicModel } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import { parseMusicModels, planMusicRequest } from './musicModels';
 
@@ -36,6 +36,22 @@ describe('planMusicRequest', () => {
       effectiveSeconds: 45,
       estimatedCredits: 23,
     });
+  });
+
+  it('prices a catalog model with the shared estimate the server holds credits with', () => {
+    const model: PublicMusicModel = {
+      ...base,
+      id: 'music_v2_5',
+      pricing: { unit: 'per_second', credits: 5 },
+      duration: { control: 'exact', min: 3, max: 300, default: 60 },
+    };
+    const plan = planMusicRequest(model, { durationSeconds: 35 });
+
+    // Multiplying the advertised per-second credits rounds differently from the USD estimate the
+    // server holds credits with (175 against 176 here), so the shared one is the one to show.
+    expect(plan.estimatedCredits).toBe(
+      estimateMusicCostCredits(MUSIC_MODEL_CATALOG.music_v2_5, { durationSeconds: 35 })
+    );
   });
 
   it('refuses a length outside the range', () => {

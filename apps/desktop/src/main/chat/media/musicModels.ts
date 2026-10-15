@@ -1,4 +1,11 @@
-import { PublicMusicModelSchema, type PublicMusicModel } from '@bike4mind/common';
+import {
+  estimateMusicCostCredits,
+  MUSIC_MODEL_CATALOG,
+  MUSIC_MODEL_IDS,
+  PublicMusicModelSchema,
+  type MusicModelId,
+  type PublicMusicModel,
+} from '@bike4mind/common';
 
 /** `/api/v1/music-models`, read model by model so one this build cannot parse does not hide the rest. */
 export function parseMusicModels(body: unknown): PublicMusicModel[] {
@@ -51,10 +58,21 @@ export function planMusicRequest(model: PublicMusicModel, settings: MusicSetting
   }
 
   const effectiveSeconds = requested ?? (duration.control === 'fixed' ? duration.seconds : duration.default);
+  return { model, effectiveSeconds, estimatedCredits: estimateMusicCredits(model, effectiveSeconds) };
+}
+
+/**
+ * Credits the job is expected to reserve.
+ *
+ * A model this build knows is priced with the shared estimate the server holds credits with, so
+ * the two agree; the per-second math used to round on its own and could land a credit under the
+ * hold. A model the server added after this build was cut is priced from the credits it advertises.
+ */
+function estimateMusicCredits(model: PublicMusicModel, seconds: number): number {
+  const caps = (MUSIC_MODEL_IDS as readonly string[]).includes(model.id)
+    ? MUSIC_MODEL_CATALOG[model.id as MusicModelId]
+    : undefined;
+  if (caps) return estimateMusicCostCredits(caps, { durationSeconds: seconds });
   const { unit, credits } = model.pricing;
-  return {
-    model,
-    effectiveSeconds,
-    estimatedCredits: unit === 'per_song' ? credits : Math.ceil(credits * effectiveSeconds),
-  };
+  return unit === 'per_song' ? credits : Math.ceil(credits * seconds);
 }
