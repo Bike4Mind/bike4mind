@@ -528,8 +528,15 @@ describe('MISSING_KEY_TOOLTIPS lock-step wording', () => {
     for (const tool of ['image_generation', 'audio_generation', 'search_knowledge_base'] as const) {
       expect(MISSING_KEY_TOOLTIPS[tool]).toContain('Profile > API Keys');
     }
-    expect(MISSING_KEY_TOOLTIPS.wolfram_alpha).not.toContain('Profile > API Keys');
-    expect(MISSING_KEY_TOOLTIPS.web_search).not.toContain('Profile > API Keys');
+    for (const tool of [
+      'web_search',
+      'deep_research',
+      'weather_info',
+      'wolfram_alpha',
+      'fmp_financial_data',
+    ] as const) {
+      expect(MISSING_KEY_TOOLTIPS[tool]).not.toContain('Profile > API Keys');
+    }
   });
 
   // A personal key is saved inactive and availability only resolves the active one, so the
