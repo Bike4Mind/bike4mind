@@ -334,7 +334,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
         // Mid-loop recovery if a provider context-window error interrupts this
         // turn: compact the in-flight history once and retry, instead of
         // failing the turn and losing the user's work.
-        onContextLimit: createReactiveCompactionHandler(agent, activeSession, 1 + previousMessages.length + 1),
+        onContextLimit: createReactiveCompactionHandler(agent, activeSession),
       });
     } finally {
       diagnostics?.endTurn();
