@@ -675,7 +675,7 @@ export interface paths {
     put?: never;
     /**
      * Cancel a music generation
-     * @description Requests cancellation and returns the job. A job still waiting to start (or to retry) moves to `cancelled` shortly after and its reserved credits are returned. The provider renders a song in one call that cannot be interrupted, so a cancel that arrives while the song is rendering does not stop it: the job finishes and is charged. A finished job is returned unchanged.
+     * @description Requests cancellation and returns the job. A job still `pending` (waiting to start, or to retry) moves to `cancelled` shortly after and its reserved credits are returned. The provider renders a song in one call that cannot be interrupted and is billed once it starts, so a `running` job cannot be cancelled: the request is refused with a 409 (`not_cancellable`), and the job finishes and is charged. A finished job is returned unchanged.
      */
     post: operations['cancelMusicGeneration'];
     delete?: never;
@@ -3903,6 +3903,29 @@ export interface components {
       created_at: string;
       updated_at: string;
     };
+    cancelMusicGenerationResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'unsupported_duration'
+        | 'unsupported_lyrics'
+        | 'unsupported_vocals'
+        | 'lyrics_with_instrumental'
+        | 'lyrics_too_long'
+        | 'invalid_request'
+        | 'model_disabled'
+        | 'model_unavailable'
+        | 'insufficient_credits'
+        | 'idempotency_key_reused'
+        | 'invalid_idempotency_key'
+        | 'not_cancellable';
+    };
     /**
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
@@ -4020,7 +4043,8 @@ export interface components {
         | 'model_unavailable'
         | 'insufficient_credits'
         | 'idempotency_key_reused'
-        | 'invalid_idempotency_key';
+        | 'invalid_idempotency_key'
+        | 'not_cancellable';
     };
     /**
      * @example {
@@ -11281,6 +11305,29 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The song is already rendering (`running`); `errorCode` is `not_cancellable`. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['cancelMusicGenerationResponse409'];
         };
       };
       /** @description Request failed validation. */

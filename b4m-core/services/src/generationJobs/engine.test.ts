@@ -20,7 +20,7 @@ const payload = {
 
 const LEASE_MS = 330_000;
 
-const setup = () => {
+const setup = ({ submitMode = 'async' }: { submitMode?: GenerationJobHandler['submitMode'] } = {}) => {
   let clock = new Date('2026-10-06T00:00:00Z');
   const now = () => clock;
   const repository = createInMemoryGenerationJobRepository({ now });
@@ -35,6 +35,7 @@ const setup = () => {
   };
   const handler: GenerationJobHandler = {
     kind: 'video',
+    submitMode,
     submit: vi.fn(take('submit')),
     poll: vi.fn(take('poll')),
     store: vi.fn(take('store')),
@@ -392,7 +393,7 @@ describe('GenerationJobEngine', () => {
   it.each(['pending', 'running'] as const)('cancel requested while %s cancels', async state => {
     const t = setup();
     const job = await t.create({ state });
-    await t.engine.requestCancel(job.id);
+    expect(await t.engine.requestCancel(job)).toMatchObject({ status: 'requested' });
     expect(t.enqueue).toHaveBeenLastCalledWith(job.id, 0);
     expect(await t.engine.step(job.id)).toBe('terminal');
     expect(t.repository.jobs.get(job.id)!.state).toBe('cancelled');
@@ -400,15 +401,100 @@ describe('GenerationJobEngine', () => {
   });
 
   it.each(['storing', 'succeeded'] as const)(
-    'requestCancel on a %s job returns null and enqueues nothing',
+    'requestCancel on a %s job reports it unchanged and enqueues nothing',
     async state => {
       const t = setup();
       const job = await t.create({ state });
-      expect(await t.engine.requestCancel(job.id)).toBeNull();
+      expect(await t.engine.requestCancel(job)).toMatchObject({ status: 'unchanged', job: { state } });
       expect(t.repository.jobs.get(job.id)!.cancelRequested).toBe(false);
       expect(t.enqueue).not.toHaveBeenCalled();
     }
   );
+
+  describe('a sync submit (the whole provider call runs inside submit)', () => {
+    it('reports the job running, and notifies it, while the provider call is in flight', async () => {
+      const t = setup({ submitMode: 'sync' });
+      const job = await t.create();
+      let observedState: string | undefined;
+      vi.mocked(t.handler.submit).mockImplementationOnce(async () => {
+        observedState = t.repository.jobs.get(job.id)!.state;
+        return { next: 'succeeded', payload } satisfies StepResult;
+      });
+      expect(await t.engine.step(job.id)).toBe('terminal');
+      expect(observedState).toBe('running');
+      expect(t.notify).toHaveBeenCalledWith(expect.objectContaining({ id: job.id, state: 'running' }));
+      expect(t.repository.jobs.get(job.id)!.state).toBe('succeeded');
+    });
+
+    it('refuses a cancel once the provider call has started, and the job completes', async () => {
+      const t = setup({ submitMode: 'sync' });
+      const job = await t.create();
+      let outcome: Awaited<ReturnType<typeof t.engine.requestCancel>> | undefined;
+      vi.mocked(t.handler.submit).mockImplementationOnce(async () => {
+        outcome = await t.engine.requestCancel(job);
+        return { next: 'succeeded', payload } satisfies StepResult;
+      });
+      expect(await t.engine.step(job.id)).toBe('terminal');
+      expect(outcome).toMatchObject({ status: 'not_cancellable', job: { state: 'running' } });
+      expect(t.repository.jobs.get(job.id)).toMatchObject({ state: 'succeeded', cancelRequested: false });
+    });
+
+    it('cancels a job not yet submitted', async () => {
+      const t = setup({ submitMode: 'sync' });
+      const job = await t.create();
+      expect(await t.engine.requestCancel(job)).toMatchObject({ status: 'requested' });
+      expect(await t.engine.step(job.id)).toBe('terminal');
+      expect(t.handler.submit).not.toHaveBeenCalled();
+      expect(t.repository.jobs.get(job.id)!.state).toBe('cancelled');
+    });
+
+    it('a crash mid-call leaves it running, which the next step fails as orphaned_submit without resubmitting', async () => {
+      const t = setup({ submitMode: 'sync' });
+      const job = await t.create({ state: 'running', submitAttemptedAt: new Date('2026-10-05T23:59:00Z') });
+      expect(await t.engine.step(job.id)).toBe('terminal');
+      expect(t.handler.submit).not.toHaveBeenCalled();
+      expect(t.handler.poll).not.toHaveBeenCalled();
+      expect(t.repository.jobs.get(job.id)!.error?.code).toBe('orphaned_submit');
+    });
+
+    it('a definitive rejection returns the job to pending for the resubmit', async () => {
+      const t = setup({ submitMode: 'sync' });
+      const job = await t.create();
+      t.results.submit.push({ next: 'retry', reason: 'HTTP 429' });
+      expect(await t.engine.step(job.id)).toBe('advanced');
+      expect(t.repository.jobs.get(job.id)).toMatchObject({ state: 'pending', submitAttemptedAt: null });
+    });
+  });
+
+  // The cancel lands after the step's own cancelRequested check but before the provider call.
+  it.each(['sync', 'async'] as const)(
+    'a %s submit that loses the race to a cancel ends cancelled without calling the provider',
+    async submitMode => {
+      const t = setup({ submitMode });
+      const job = await t.create();
+      const markSubmitAttempted = t.repository.markSubmitAttempted.bind(t.repository);
+      vi.spyOn(t.repository, 'markSubmitAttempted').mockImplementationOnce(async (...args) => {
+        await t.repository.requestCancel(job.id, { beforeSubmitOnly: submitMode === 'sync' });
+        return markSubmitAttempted(...args);
+      });
+      expect(await t.engine.step(job.id)).toBe('terminal');
+      expect(t.handler.submit).not.toHaveBeenCalled();
+      expect(t.repository.jobs.get(job.id)).toMatchObject({ state: 'cancelled', submitAttemptedAt: null });
+      expect(t.handler.onTerminal).toHaveBeenCalledWith(expect.objectContaining({ state: 'cancelled' }));
+    }
+  );
+
+  it('an async job stays cancellable while running, and the cancel reaches the provider', async () => {
+    const t = setup();
+    const job = await t.create();
+    t.results.submit.push({ next: 'running', payload });
+    await t.engine.step(job.id);
+    expect(await t.engine.requestCancel(job)).toMatchObject({ status: 'requested', job: { state: 'running' } });
+    t.advance(60_000);
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.handler.cancelAtProvider).toHaveBeenCalledTimes(1);
+    expect(t.repository.jobs.get(job.id)!.state).toBe('cancelled');
+  });
 
   it('cancel requested while storing is ignored: the result is already paid for', async () => {
     const t = setup();
