@@ -177,73 +177,82 @@ export async function runStorageReconciliation(
     prev.truth === check.truth &&
     startedAt - new Date(prev.checkedAt).getTime() >= MIN_STABLE_AGE_MS;
 
-  pages: while (now() < deadline) {
-    const page = await userRepository.listUserIdsAfter(state.afterId, BATCH_SIZE);
-    const previous = options.repair
-      ? await storageDriftRecordRepository.latestByUserIds(page)
-      : new Map<string, IStorageDriftRecord>();
-    for (let i = 0; i < page.length; i += CONCURRENCY) {
-      if (now() >= deadline) break pages;
-      const chunk = page.slice(i, i + CONCURRENCY);
-      const settled = await Promise.allSettled(
-        chunk.map(userId =>
-          userService.reconcileUserStorage(
-            { userId, repair: options.repair && (check => isStable(previous.get(userId), check)) },
-            { db: { users: userRepository, fabFiles: fabFileRepository } }
+  try {
+    pages: while (now() < deadline) {
+      const page = await userRepository.listUserIdsAfter(state.afterId, BATCH_SIZE);
+      const previous = options.repair
+        ? await storageDriftRecordRepository.latestByUserIds(page)
+        : new Map<string, IStorageDriftRecord>();
+      for (let i = 0; i < page.length; i += CONCURRENCY) {
+        if (now() >= deadline) break pages;
+        const chunk = page.slice(i, i + CONCURRENCY);
+        const settled = await Promise.allSettled(
+          chunk.map(userId =>
+            userService.reconcileUserStorage(
+              { userId, repair: options.repair && (check => isStable(previous.get(userId), check)) },
+              { db: { users: userRepository, fabFiles: fabFileRepository } }
+            )
           )
-        )
-      );
-      const records: IStorageDriftRecord[] = [];
-      let chunkFailures = 0;
-      for (const [j, outcome] of settled.entries()) {
-        if (outcome.status === 'rejected') {
-          chunkFailures++;
-          result.failed++;
-          logger.error(`[StorageReconciliation] Check failed for user ${chunk[j]}`, outcome.reason);
-        } else if (outcome.value) {
-          records.push({ ...outcome.value, checkedAt: new Date(now()) });
+        );
+        const records: IStorageDriftRecord[] = [];
+        let chunkFailures = 0;
+        for (const [j, outcome] of settled.entries()) {
+          if (outcome.status === 'rejected') {
+            chunkFailures++;
+            result.failed++;
+            logger.error(`[StorageReconciliation] Check failed for user ${chunk[j]}`, outcome.reason);
+          } else if (outcome.value) {
+            records.push({ ...outcome.value, checkedAt: new Date(now()) });
+          }
         }
+        // Every check failing at once is an outage, not bad users: keep the cursor so the next run retries.
+        if (chunkFailures === chunk.length) break pages;
+
+        for (const record of records) {
+          result.checked++;
+          state.checked++;
+          if (record.drift !== 0) result.drifted++;
+          if (Math.abs(record.drift) >= options.ceilingMinDriftBytes) state.drifted++;
+          if (record.repaired) result.repaired++;
+          if (record.conflict) result.conflicts++;
+          if (Math.abs(record.drift) > options.driftAlertBytes) result.overThreshold.push(record);
+        }
+        await storageDriftRecordRepository.appendMany(records);
+        state.afterId = chunk[chunk.length - 1];
+        await saveState(state, now());
       }
-      // Every check failing at once is an outage, not bad users: keep the cursor so the next run retries.
-      if (chunkFailures === chunk.length) break pages;
 
-      for (const record of records) {
-        result.checked++;
-        state.checked++;
-        if (record.drift !== 0) result.drifted++;
-        if (Math.abs(record.drift) >= options.ceilingMinDriftBytes) state.drifted++;
-        if (record.repaired) result.repaired++;
-        if (record.conflict) result.conflicts++;
-        if (Math.abs(record.drift) > options.driftAlertBytes) result.overThreshold.push(record);
+      if (page.length < BATCH_SIZE) {
+        state.passCompletedAt = new Date(now()).toISOString();
+        result.passCompleted = true;
+        await saveState(state, now());
+        break;
       }
-      await storageDriftRecordRepository.appendMany(records);
-      state.afterId = chunk[chunk.length - 1];
-      await saveState(state, now());
     }
-
-    if (page.length < BATCH_SIZE) {
-      state.passCompletedAt = new Date(now()).toISOString();
-      result.passCompleted = true;
-      await saveState(state, now());
-      break;
+  } finally {
+    // Flush the threshold alert here, not after the loop: a later page can throw once the cursor has
+    // already advanced past these users, and overThreshold only lives in memory, so the retry would
+    // resume after them and never tell anyone.
+    for (const record of result.overThreshold) {
+      logger.warn('[StorageReconciliation] Storage drift over threshold', record);
     }
-  }
-
-  for (const record of result.overThreshold) {
-    logger.warn('[StorageReconciliation] Storage drift over threshold', record);
-  }
-  if (result.overThreshold.length > 0) {
-    await postMessageToSlack(formatThresholdAlert(stage, result.overThreshold, options));
+    if (result.overThreshold.length > 0) {
+      await postMessageToSlack(formatThresholdAlert(stage, result.overThreshold, options));
+    }
   }
   if (!state.ceilingAlerted && state.drifted > options.driftedUserCeiling) {
-    await postMessageToSlack(
+    // Mark the ceiling alert sent only on a successful post: a Slack outage must not silence the one
+    // signal that a charge path is losing adjustments for the rest of the pass.
+    const posted = await postMessageToSlack(
       `:warning: *Storage counter drift is widespread* (${stage}): ${state.drifted} of ${state.checked} users ` +
         `checked so far in the pass started ${state.passStartedAt} have a counter off by at least ` +
         `${(options.ceilingMinDriftBytes / MB).toFixed(1)} MB from their files ` +
         `(ceiling ${options.driftedUserCeiling}). A charge or refund path is likely losing adjustments.`
     );
-    state.ceilingAlerted = true;
-    await saveState(state, now());
+    if (posted) {
+      state.ceilingAlerted = true;
+      await saveState(state, now());
+    }
   }
 
   const dimensions = { Stage: stage };

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Context } from 'aws-lambda';
 
 const mockListUserIdsAfter = vi.fn();
 const mockFindCurrentStorageSize = vi.fn();
@@ -41,12 +42,14 @@ vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
 import {
   BATCH_SIZE,
+  handler,
   optionsFromEnv,
   PASS_INTERVAL_MS,
   runStorageReconciliation,
   STATE_KEY,
   StorageReconciliationOptions,
 } from './storageReconciliation';
+import { connectDB } from '@bike4mind/database';
 
 const MB = 1024 * 1024;
 const NOW = Date.parse('2026-10-15T06:00:00Z');
@@ -72,6 +75,7 @@ beforeEach(() => {
   mockSetCurrentStorageIfUnchanged.mockResolvedValue(true);
   mockFindCurrentStorageSize.mockResolvedValue(1000);
   mockLatestByUserIds.mockResolvedValue(new Map());
+  mockPostMessageToSlack.mockResolvedValue(true);
 });
 
 const stablePrevious = (userId: string, counter: number, truth: number, ageMs = 24 * 60 * 60 * 1000) =>
@@ -173,6 +177,27 @@ describe('runStorageReconciliation', () => {
     await runStorageReconciliation(options({ driftedUserCeiling: 2 }));
 
     expect(mockPostMessageToSlack).not.toHaveBeenCalled();
+  });
+
+  it('still posts the over-threshold alert when a later page throws after the cursor advanced', async () => {
+    mockListUserIdsAfter.mockResolvedValueOnce(users(BATCH_SIZE)).mockRejectedValueOnce(new Error('mongo down'));
+    mockSumFileSizeByUserId.mockResolvedValueOnce(1000 + 200 * MB);
+
+    await expect(runStorageReconciliation(options())).rejects.toThrow('mongo down');
+
+    expect(mockPostMessageToSlack).toHaveBeenCalledTimes(1);
+    expect(mockPostMessageToSlack.mock.calls[0][0]).toContain('user u0000');
+  });
+
+  it('leaves the ceiling alert unmarked when the Slack post fails, so a later run can retry it', async () => {
+    mockListUserIdsAfter.mockResolvedValueOnce(users(3));
+    mockSumFileSizeByUserId.mockResolvedValue(900);
+    mockPostMessageToSlack.mockResolvedValue(false);
+
+    await runStorageReconciliation(options({ driftedUserCeiling: 2 }));
+
+    expect(mockPostMessageToSlack).toHaveBeenCalledTimes(1);
+    expect(savedState().ceilingAlerted).toBe(false);
   });
 
   it('resumes from the persisted cursor and stops at the time budget without completing', async () => {
@@ -328,5 +353,20 @@ describe('optionsFromEnv', () => {
         STORAGE_DRIFTED_USER_CEILING: 'abc',
       })
     ).toEqual({ repair: true, driftAlertBytes: 5000, driftedUserCeiling: 50, ceilingMinDriftBytes: MB });
+  });
+});
+
+describe('handler', () => {
+  it('substitutes the stage into the Mongo URI and reports over-threshold users as a count', async () => {
+    mockListUserIdsAfter.mockResolvedValueOnce(users(1));
+    mockSumFileSizeByUserId.mockResolvedValueOnce(1000 + 200 * MB);
+
+    const response = await handler({}, { awsRequestId: 'req-1' } as Context);
+
+    expect(connectDB).toHaveBeenCalledWith('mongodb://test/test', expect.anything());
+    const body = JSON.parse((response as { body: string }).body);
+    expect(typeof body.overThreshold).toBe('number');
+    expect(body.overThreshold).toBe(1);
+    expect(body).toMatchObject({ checked: 1, drifted: 1, passCompleted: true });
   });
 });

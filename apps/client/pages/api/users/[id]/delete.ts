@@ -44,7 +44,10 @@ const handler = baseApi().delete(
             adminSettings: adminSettingsRepository,
           },
           notify: {
-            send: postMessageToSlack,
+            // postMessageToSlack reports whether it delivered; the adapter contract returns void.
+            send: async (message: string) => {
+              await postMessageToSlack(message);
+            },
           },
           mailer: {
             sendDeleteUserEmail: async (sendTo: string[], user: IUserDocument, admin: IUserDocument) => {
