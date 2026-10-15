@@ -48,6 +48,8 @@ export interface PrBinding extends PrRef {
   autoArchive?: boolean;
   /** Auto-fix turns started for this PR, persisted so a relaunch does not refill the budget. */
   autoFixAttempts?: number;
+  /** The attempt budget granted when the auto-fix box was last ticked. See autoFixBudget. */
+  autoFixMax?: number;
   /** Fingerprints of failures, conflicts and comments auto-fix has already acted on. See autoFix.ts. */
   autoFixHandled?: string[];
   /** The state at the last successful read; what an auto-archive transition is measured from. */
