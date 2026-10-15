@@ -1,4 +1,5 @@
 import FirecrawlDefault from '@mendable/firecrawl-js';
+import { unsafeFetchUrlReason } from './ssrfGuard';
 
 type FirecrawlAppCtor = new (config: FirecrawlAppConfig) => FirecrawlClient;
 
@@ -50,6 +51,11 @@ export interface FirecrawlClient {
   search: (query: string) => Promise<{ data: { url?: string; title?: string; description?: string }[] }>;
 }
 
+/** A scrape refused by the SSRF pre-flight; never worth retrying. */
+export class UnsafeScrapeTargetError extends Error {
+  name = 'UnsafeScrapeTargetError';
+}
+
 /**
  * Build a FirecrawlApp from resolved config, or null when neither an API key nor a custom API URL
  * is set - the caller then falls back to plain fetch (self-host without Firecrawl). firecrawl-js
@@ -57,5 +63,18 @@ export interface FirecrawlClient {
  */
 export function createFirecrawlApp(config: FirecrawlAppConfig): FirecrawlClient | null {
   if (!config.apiKey && !config.apiUrl) return null;
-  return new FirecrawlApp({ apiKey: config.apiKey, apiUrl: config.apiUrl });
+  const app = new FirecrawlApp({ apiKey: config.apiKey, apiUrl: config.apiUrl });
+  return {
+    // Guarded here so every Firecrawl caller (web_fetch, deep research, the research engine)
+    // inherits it: a self-hosted instance fetches from inside our network, so a private target is
+    // an SSRF. Pre-flight only - Firecrawl re-resolves DNS itself, which we cannot pin.
+    scrapeUrl: async (url, params) => {
+      const unsafeReason = await unsafeFetchUrlReason(new URL(url));
+      if (unsafeReason) {
+        throw new UnsafeScrapeTargetError(`Refusing to fetch ${url}: ${unsafeReason}`);
+      }
+      return app.scrapeUrl(url, params);
+    },
+    search: query => app.search(query),
+  };
 }

@@ -1,7 +1,6 @@
 import { ssrfSafeDownload } from '@bike4mind/fab-pipeline';
+import { SLACK_MAX_FILE_SIZE_BYTES } from '@bike4mind/slack';
 
-// Same 50MB ceiling as Slack attachments; the Atlassian upload enforces its own limit downstream.
-const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const ATTACHMENT_FETCH_TIMEOUT_MS = 30_000;
 
 /**
@@ -11,7 +10,7 @@ const ATTACHMENT_FETCH_TIMEOUT_MS = 30_000;
  */
 export async function downloadAttachmentUrl(url: string): Promise<Buffer> {
   const { data } = await ssrfSafeDownload(url, {
-    maxBytes: MAX_ATTACHMENT_BYTES,
+    maxBytes: SLACK_MAX_FILE_SIZE_BYTES,
     timeoutMs: ATTACHMENT_FETCH_TIMEOUT_MS,
   });
   return data;

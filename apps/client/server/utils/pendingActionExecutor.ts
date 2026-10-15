@@ -173,7 +173,9 @@ export async function executePendingAction(
         });
         return {
           success: false,
-          message: `Failed to download file: ${fileError instanceof Error ? fileError.message : 'Unknown error'}`,
+          // Generic on purpose: the guard's detail (e.g. what a hostname resolved to) is logged above,
+          // not echoed into Slack.
+          message: 'Failed to download file',
         };
       }
     }

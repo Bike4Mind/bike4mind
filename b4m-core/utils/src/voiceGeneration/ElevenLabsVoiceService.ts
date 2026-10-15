@@ -4,7 +4,8 @@ import { AIVoiceService, CONTENT_TYPE_BY_FORMAT, VoiceSynthesisOptions, VoiceSyn
 
 const BASE_URL = 'https://api.elevenlabs.io/v1/text-to-speech/';
 const VOICE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-const NON_AUDIO_CONTENT_TYPE = /^(application\/json|text\/)/;
+// Error-shaped bodies only; an allow-list would risk refusing a format whose audio type we have not seen.
+const NON_AUDIO_CONTENT_TYPE = /^text\/|json|xml|html/;
 const DEFAULT_FORMAT: VoiceOutputFormat = 'mp3';
 const MAX_INPUT_CHARS = TTS_MAX_INPUT_CHARS.elevenlabs;
 // ElevenLabs premade "Rachel" voice - available on every account, used when the

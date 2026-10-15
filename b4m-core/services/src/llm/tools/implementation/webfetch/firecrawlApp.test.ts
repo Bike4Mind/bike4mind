@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import FirecrawlDefault from '@mendable/firecrawl-js';
-import { FirecrawlApp, resolveFirecrawlApp, createFirecrawlApp } from './firecrawlApp';
+import { FirecrawlApp, resolveFirecrawlApp, createFirecrawlApp, UnsafeScrapeTargetError } from './firecrawlApp';
 
 const requireCjs = createRequire(import.meta.url);
 
@@ -42,6 +42,17 @@ describe('createFirecrawlApp', () => {
     const app = createFirecrawlApp({ apiKey: 'test-key' });
     expect(app).not.toBeNull();
     expect(typeof app?.scrapeUrl).toBe('function');
+  });
+
+  it('refuses a private scrape target before the Firecrawl client is called', async () => {
+    const scrapeSpy = vi.spyOn(FirecrawlApp.prototype, 'scrapeUrl');
+    const app = createFirecrawlApp({ apiUrl: 'http://firecrawl:3002' });
+
+    await expect(app?.scrapeUrl('http://169.254.169.254/latest/meta-data/')).rejects.toBeInstanceOf(
+      UnsafeScrapeTargetError
+    );
+    expect(scrapeSpy).not.toHaveBeenCalled();
+    scrapeSpy.mockRestore();
   });
 
   it('constructs a keyless app from a self-hosted apiUrl', () => {

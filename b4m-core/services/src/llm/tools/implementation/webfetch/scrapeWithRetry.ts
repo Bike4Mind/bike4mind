@@ -1,3 +1,4 @@
+import { UnsafeScrapeTargetError } from './firecrawlApp';
 import type { FirecrawlClient, FirecrawlScrapeParams, FirecrawlScrapeResult } from './firecrawlApp';
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -54,6 +55,7 @@ export const scrapeWithRetry = async (
       result = await app.scrapeUrl(url, buildScrapeParams(options));
       break;
     } catch (e) {
+      if (e instanceof UnsafeScrapeTargetError) throw e;
       const errorMessage = (e as Error).message ?? '';
 
       if (isActionsNotSupportedError(errorMessage)) {

@@ -189,7 +189,9 @@ const handler = baseApi().post(async (req, res) => {
       }
     }
 
-    // Fallback: download from slackFileUrl (S3 presigned URL) if content is still empty
+    // Fallback: download slackFileUrl (an LLM-supplied tool arg) if content is still empty. It goes
+    // through the SSRF guard, so a private-address URL (e.g. self-host object storage) is refused;
+    // fabFileId above is the path for files already in our storage.
     const slackFileUrl = toolParams.slackFileUrl as string | undefined;
     const hasContentAfterFab =
       toolParams.content && typeof toolParams.content === 'string' && (toolParams.content as string).length > 100;

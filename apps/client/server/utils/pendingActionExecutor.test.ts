@@ -118,14 +118,34 @@ describe('executePendingAction', () => {
       params: { issueKey: 'K-1', filename: 'a.txt', slackFileUrl: 'https://files.example.test/a.txt' },
       ts,
     });
-    vi.mocked(downloadAttachmentUrl).mockRejectedValueOnce(new Error('URL blocked for security reasons'));
+    vi.mocked(downloadAttachmentUrl).mockRejectedValueOnce(new Error('URL blocked for security reasons: private'));
 
     const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
 
+    expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://files.example.test/a.txt');
     expect(result.success).toBe(false);
     expect(result.message).toContain('Failed to download file');
+    expect(result.message).not.toContain('blocked');
     expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
     expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it('downloads the slack file through the SSRF-guarded helper and passes its bytes as base64 content', async () => {
+    const fileBuffer = Buffer.from('x'.repeat(200));
+    vi.mocked(downloadAttachmentUrl).mockResolvedValueOnce(fileBuffer);
+    storePendingAction({
+      tool: JIRA_UPLOAD_ATTACHMENT,
+      params: { issueKey: 'K-1', filename: 'a.txt', slackFileUrl: 'https://h.example.com/a' },
+      ts,
+    });
+
+    await executePendingAction(QUEST_ID, dbUser, logger, ts);
+
+    expect(downloadAttachmentUrl).toHaveBeenCalledTimes(1);
+    expect(downloadAttachmentUrl).toHaveBeenCalledWith('https://h.example.com/a');
+    expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
+      content: fileBuffer.toString('base64'),
+    });
   });
 
   it('rejects a button whose action was replaced, without claiming or invoking', async () => {

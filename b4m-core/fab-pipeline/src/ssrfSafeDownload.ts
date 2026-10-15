@@ -9,7 +9,6 @@ export type SsrfSafeDownloadOptions = {
   /** ONE budget (ms) for the whole redirect chain, not a fresh allowance per hop. */
   timeoutMs: number;
   maxRedirects?: number;
-  headers?: Record<string, string>;
 };
 
 export type SsrfSafeDownloadResult = {
@@ -46,7 +45,6 @@ export async function ssrfSafeDownload(url: string, options: SsrfSafeDownloadOpt
     }
 
     const response = await axios.get<Buffer>(currentUrl, {
-      headers: options.headers,
       // BOTH agents: an https URL can 302 to http, and axios picks the agent per request.
       httpAgent: ssrfSafeHttpAgent,
       httpsAgent: ssrfSafeHttpsAgent,
@@ -54,6 +52,8 @@ export async function ssrfSafeDownload(url: string, options: SsrfSafeDownloadOpt
       proxy: false,
       responseType: 'arraybuffer',
       timeout: remainingMs,
+      // axios's `timeout` stops once headers arrive; the signal keeps a trickled body inside the deadline.
+      signal: AbortSignal.timeout(remainingMs),
       maxRedirects: 0,
       maxContentLength: options.maxBytes,
       maxBodyLength: options.maxBytes,

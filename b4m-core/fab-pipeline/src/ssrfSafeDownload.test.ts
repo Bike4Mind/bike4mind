@@ -37,7 +37,7 @@ describe('ssrfSafeDownload', () => {
   it('pins every request through the safe agents with no proxy, no auto-redirects and the byte cap', async () => {
     axiosGet.mockResolvedValueOnce(ok('x'));
 
-    await ssrfSafeDownload(PUBLIC_URL, { ...OPTIONS, headers: { Authorization: 'Bearer t' } });
+    await ssrfSafeDownload(PUBLIC_URL, OPTIONS);
 
     expect(axiosGet).toHaveBeenCalledWith(
       PUBLIC_URL,
@@ -48,7 +48,7 @@ describe('ssrfSafeDownload', () => {
         maxRedirects: 0,
         maxContentLength: 1024,
         maxBodyLength: 1024,
-        headers: { Authorization: 'Bearer t' },
+        signal: expect.any(AbortSignal),
       })
     );
   });
