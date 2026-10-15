@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
@@ -182,6 +182,8 @@ describe('POST /api/mcp/confirm', () => {
       } as never);
     });
 
+    afterEach(() => vi.unstubAllGlobals());
+
     it('looks the file up scoped to the confirming user', async () => {
       vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue({
         filePath: 'files/a.txt',
@@ -202,15 +204,65 @@ describe('POST /api/mcp/confirm', () => {
       });
     });
 
-    it('refuses a file the confirming user cannot access, without claiming or invoking', async () => {
+    it('refuses a file the confirming user cannot access, even with a Slack URL fallback, without fetching, claiming or invoking', async () => {
+      vi.mocked(Quest.findById).mockResolvedValue({
+        sessionId: SESSION_ID,
+        pendingAction: {
+          tool: 'jira_upload_attachment',
+          params: {
+            issueKey: 'P-1',
+            filename: 'a.txt',
+            fabFileId: FAB_FILE_ID,
+            slackFileUrl: 'https://files.example.test/a.txt',
+          },
+          ts: pendingActionTs,
+        },
+      } as never);
       vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue(null);
+      vi.stubGlobal('fetch', vi.fn());
 
       const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
 
       expect(res._getStatusCode()).toBe(403);
       expect(getFilesStorage().download).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
       expect(claimPendingAction).not.toHaveBeenCalled();
       expect(invokeMcpHandler).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the Slack URL, never uploading held bytes, when the stored file is not serveable', async () => {
+      vi.mocked(Quest.findById).mockResolvedValue({
+        sessionId: SESSION_ID,
+        pendingAction: {
+          tool: 'jira_upload_attachment',
+          params: {
+            issueKey: 'P-1',
+            filename: 'a.txt',
+            fabFileId: FAB_FILE_ID,
+            slackFileUrl: 'https://files.example.test/a.txt',
+          },
+          ts: pendingActionTs,
+        },
+      } as never);
+      vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue({
+        filePath: 'files/a.txt',
+        mimeType: 'text/plain',
+        moderationStatus: 'pending',
+      } as never);
+      const slackBytes = Buffer.from('slack-bytes');
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array(slackBytes).buffer })
+      );
+
+      const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(getFilesStorage().download).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledWith('https://files.example.test/a.txt');
+      expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({
+        content: slackBytes.toString('base64'),
+      });
     });
   });
 

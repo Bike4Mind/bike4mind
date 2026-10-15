@@ -207,13 +207,25 @@ describe('executePendingAction', () => {
       });
     });
 
-    it('refuses a file the confirming user cannot access, without claiming or invoking', async () => {
+    it('refuses a file the confirming user cannot access, even with a Slack URL fallback, without fetching, claiming or invoking', async () => {
+      storePendingAction({
+        tool: JIRA_UPLOAD_ATTACHMENT,
+        params: {
+          issueKey: 'K-1',
+          filename: 'a.txt',
+          fabFileId: FAB_FILE_ID,
+          slackFileUrl: 'https://files.example.test/a.txt',
+        },
+        ts,
+      });
       vi.mocked(fabFileRepository.shareable.findAccessibleById).mockResolvedValue(null);
+      vi.stubGlobal('fetch', vi.fn());
 
       const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
 
       expect(result.success).toBe(false);
       expect(getFilesStorage().download).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
       expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
       expect(invokeMcpHandler).not.toHaveBeenCalled();
     });
