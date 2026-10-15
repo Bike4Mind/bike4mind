@@ -113,6 +113,24 @@ describe('ServerLlmBackend SSE transport (open)', () => {
   });
 });
 
+describe('ServerLlmBackend.getModelInfo', () => {
+  const backendListing = (models: unknown[]) =>
+    new ServerLlmBackend({
+      apiClient: { baseURL: 'http://localhost:3000', get: async () => ({ models }) } as unknown as ApiClient,
+      model: 'test-model',
+    });
+
+  it('drops disabled models from the CLI picker', async () => {
+    const models = await backendListing([
+      { id: 'live', type: 'text', supportsTools: true },
+      { id: 'disabled', type: 'text', supportsTools: true, disabled: true },
+      { id: 'no-tools', type: 'text', supportsTools: false },
+    ]).getModelInfo();
+
+    expect(models.map(m => m.id)).toEqual(['live']);
+  });
+});
+
 describe('ServerLlmBackend completions endpoint resolution', () => {
   afterEach(() => {
     delete process.env.B4M_COMPLETIONS_URL;

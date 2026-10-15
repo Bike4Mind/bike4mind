@@ -154,3 +154,24 @@ describe('WebSocketLlmBackend transport (open)', () => {
     expect(isTransientNetworkError(new Error('WebSocket is not connected'))).toBe(true);
   });
 });
+
+describe('WebSocketLlmBackend.getModelInfo', () => {
+  it('drops disabled models from the CLI picker', async () => {
+    const backend = new WebSocketLlmBackend({
+      wsManager: new FakeWsManager() as unknown as WebSocketConnectionManager,
+      apiClient: {
+        get: async () => ({
+          models: [
+            { id: 'live', type: 'text', supportsTools: true },
+            { id: 'disabled', type: 'text', supportsTools: true, disabled: true },
+          ],
+        }),
+      } as unknown as ApiClient,
+      model: 'test-model',
+      tokenGetter: async () => 'token',
+      wsCompletionUrl: '/ws-completions',
+    });
+
+    expect((await backend.getModelInfo()).map(m => m.id)).toEqual(['live']);
+  });
+});
