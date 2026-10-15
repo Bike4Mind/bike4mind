@@ -293,8 +293,10 @@ function unbilledTurns(
 /**
  * Rebuild `counters` on resume from the persisted per-iteration token deltas. `cumulativeCost`
  * is re-priced iteration by iteration with this invocation's `modelInfo` (the rate and tiering
- * `billIteration` uses), never carried over. Billing reads only the token counters; the cost is
- * the reference the negative-delta warning reports against.
+ * `billIteration` uses), never carried over. Unlike the live running total, the reseeded figure
+ * prices each persisted iteration record as one request, so the two can differ when one bill
+ * covered several requests. Billing reads only the token counters; the cost is the reference
+ * the negative-delta warning reports against.
  */
 export function reseedCounters(
   iterationBilling: readonly IterationTokenRecord[],
