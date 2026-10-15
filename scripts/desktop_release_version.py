@@ -11,6 +11,7 @@ from desktop_affected import affected, commit_affected
 VERSION = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)')
 # Retain the accidental release tag, but resume the beta line from its last 0.x release.
 WITHDRAWN_BASELINES = {'desktop-v1.0.0'}
+WITHDRAWN_SOURCE_RELEASES = {'desktop-v0.4.0', 'desktop-v0.5.0'}
 
 
 def git(*args):
@@ -74,7 +75,7 @@ def select_version(releases, baseline, preview='', title='', run=''):
         # Never reuse a version for a different commit or release an older checkout.
         subprocess.run(['git', 'merge-base', '--is-ancestor', released_sha, head], check=True)
         if released_sha == head and not preview:
-            return '.'.join(map(str, parts)), True, previous
+            return '.'.join(map(str, parts)), not release.get('withdrawn', False), previous
         if release.get('draft') and not preview:
             raise ValueError('Finish or remove the pending desktop draft release before publishing another commit')
         revision_range = f'{released_sha}..HEAD'
@@ -110,7 +111,9 @@ def with_reservations(releases, source_tags):
     known = {release['tag_name'] for release in releases}
     for tag in source_tags:
         if tag not in known and re.fullmatch(r'desktop-v(' + VERSION.pattern + r')', tag):
-            releases.append({'tag_name': tag, 'prerelease': False, 'draft': True,
+            withdrawn = tag in WITHDRAWN_SOURCE_RELEASES
+            releases.append({'tag_name': tag, 'prerelease': False, 'draft': not withdrawn,
+                             'withdrawn': withdrawn,
                              'target_commitish': git('rev-parse', f'{tag}^{{commit}}')})
     return releases
 
