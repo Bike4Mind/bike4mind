@@ -18,7 +18,7 @@ import { NotFoundError, secureParameters, UnprocessableEntityError, FunctionQueu
 import { createSendStatusUpdate } from './utils';
 import { z } from 'zod';
 import plimit from 'p-limit';
-import axios from 'axios';
+import { ssrfSafeDownload } from '@bike4mind/fab-pipeline';
 import { fileTypeFromBuffer } from 'file-type';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { findOrUpdateExistingResearchData, prepareTagsForResearchTask } from './utils';
@@ -66,6 +66,9 @@ interface IResearchTaskDownloadRelevantLinksAdapters {
 
 // TODO: have this as an admin settings
 const BATCH_SIZE = 3;
+// Safety net only; createFabFile still enforces the MaxFileSize admin setting afterwards.
+const MAX_LINK_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+const LINK_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 export const downloadRelevantLinks = async (
   parameters: IResearchTaskDownloadRelevantLinks,
@@ -119,10 +122,11 @@ export const downloadRelevantLinks = async (
       limit(async () => {
         try {
           logger?.info(`📥 [DOWNLOAD] Starting download: ${link.url}`);
-          const response = await axios.get(link.url, {
-            responseType: 'arraybuffer',
+          // Scraped page links are attacker-influenced: fetch through the full SSRF guard.
+          const { data: buffer } = await ssrfSafeDownload(link.url, {
+            maxBytes: MAX_LINK_DOWNLOAD_BYTES,
+            timeoutMs: LINK_DOWNLOAD_TIMEOUT_MS,
           });
-          const buffer = Buffer.from(response.data);
           const fileType = await fileTypeFromBuffer(buffer);
           const index = getIndex(link.url) + 1;
 

@@ -16,6 +16,7 @@ vi.mock('@server/utils/storage', () => {
 });
 
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
+vi.mock('@server/utils/downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
 vi.mock('@server/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
 vi.mock('@server/integrations/github/github-repo-helper', () => ({ getSelectedRepositoriesForMcp: vi.fn() }));
 
@@ -34,6 +35,7 @@ vi.mock('@bike4mind/slack', () => {
 import { fabFileRepository, Quest, Session } from '@bike4mind/database';
 import { getFilesStorage } from '@server/utils/storage';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
 import { isFeatureEnabled } from '@server/middlewares/featureFlag';
 import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
 import {
@@ -116,7 +118,7 @@ describe('executePendingAction', () => {
       params: { issueKey: 'K-1', filename: 'a.txt', slackFileUrl: 'https://files.example.test/a.txt' },
       ts,
     });
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403, statusText: 'Forbidden' }));
+    vi.mocked(downloadAttachmentUrl).mockRejectedValueOnce(new Error('URL blocked for security reasons'));
 
     const result = await executePendingAction(QUEST_ID, dbUser, logger, ts);
 

@@ -11,6 +11,7 @@ import { isValidObjectId } from '@server/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@server/utils/pendingActionTarget';
+import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
 import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 
@@ -203,12 +204,7 @@ const handler = baseApi().post(async (req, res) => {
       });
 
       try {
-        const response = await fetch(slackFileUrl);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const arrayBuffer = await response.arrayBuffer();
-        const fileBuffer = Buffer.from(arrayBuffer);
+        const fileBuffer = await downloadAttachmentUrl(slackFileUrl);
         toolParams.content = fileBuffer.toString('base64');
         logger.info('[Web MCP Confirm] Downloaded file from URL', {
           filename: toolParams.filename,

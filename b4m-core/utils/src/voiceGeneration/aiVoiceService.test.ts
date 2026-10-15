@@ -103,6 +103,24 @@ describe('ElevenLabsVoiceService', () => {
     expect(mockedPost).not.toHaveBeenCalled();
   });
 
+  it.each(['../../user', 'v1/history', 'v1?x=1', ''])(
+    'rejects a voice id that could retarget the request path (%j) before posting',
+    async voice => {
+      await expect(aiVoiceService('elevenlabs', 'key', logger).synthesize('hi', { voice })).rejects.toThrow(
+        /Invalid ElevenLabs voice id/
+      );
+      expect(mockedPost).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects a non-audio success body so it is never returned (and billed) as audio', async () => {
+    mockedPost.mockResolvedValue({ data: Buffer.from('{"ok":true}'), headers: { 'content-type': 'application/json' } });
+
+    await expect(aiVoiceService('elevenlabs', 'key', logger).synthesize('hi', { voice: 'v1' })).rejects.toThrow(
+      /non-audio content/
+    );
+  });
+
   it('rejects an output format ElevenLabs cannot produce', async () => {
     await expect(
       aiVoiceService('elevenlabs', 'key', logger).synthesize('hi', { voice: 'v1', format: 'flac' })

@@ -3,6 +3,8 @@ import { VoiceOutputFormat, TTS_DEFAULT_MODEL, TTS_MAX_INPUT_CHARS } from '@bike
 import { AIVoiceService, CONTENT_TYPE_BY_FORMAT, VoiceSynthesisOptions, VoiceSynthesisResult } from './AIVoiceService';
 
 const BASE_URL = 'https://api.elevenlabs.io/v1/text-to-speech/';
+const VOICE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const NON_AUDIO_CONTENT_TYPE = /^(application\/json|text\/)/;
 const DEFAULT_FORMAT: VoiceOutputFormat = 'mp3';
 const MAX_INPUT_CHARS = TTS_MAX_INPUT_CHARS.elevenlabs;
 // ElevenLabs premade "Rachel" voice - available on every account, used when the
@@ -33,6 +35,11 @@ export class ElevenLabsVoiceService extends AIVoiceService {
     }
 
     const voiceId = options.voice ?? DEFAULT_VOICE;
+    // The id is interpolated into the request path, so a caller-supplied `/` or `..` would retarget
+    // the call to another endpoint on the account's key.
+    if (!VOICE_ID_PATTERN.test(voiceId)) {
+      throw new Error(`Invalid ElevenLabs voice id: ${JSON.stringify(voiceId.slice(0, 64))}`);
+    }
     const format = options.format ?? DEFAULT_FORMAT;
     const outputFormat = ELEVENLABS_OUTPUT_FORMAT[format];
     if (!outputFormat) {
@@ -66,6 +73,12 @@ export class ElevenLabsVoiceService extends AIVoiceService {
       params: { output_format: outputFormat },
       responseType: 'arraybuffer',
     });
+
+    // Checked before returning, since callers bill on a successful result.
+    const responseType = String(response.headers?.['content-type'] ?? '').toLowerCase();
+    if (NON_AUDIO_CONTENT_TYPE.test(responseType)) {
+      throw new Error(`ElevenLabs returned non-audio content (${responseType})`);
+    }
 
     const audio = Buffer.from(response.data, 'binary');
     return {

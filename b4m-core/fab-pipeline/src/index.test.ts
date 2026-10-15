@@ -19,6 +19,7 @@ describe('@bike4mind/fab-pipeline public exports', () => {
     'ssrfSafeHttpAgent',
     'ssrfSafeHttpsAgent',
     'SSRF_BLOCKED_CODE',
+    'ssrfSafeDownload',
     'EmbeddingFactory',
     'EmbeddingService',
     'EmbeddingModelProvider',

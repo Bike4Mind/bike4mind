@@ -313,21 +313,40 @@ describe('firecrawlFetch llms.txt probe', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('does not probe (SSRF guard) when the origin is a literal private host', async () => {
+  it('refuses, without probing, when the origin is a literal private host', async () => {
     bigDoc();
     fetchMock.mockImplementation(async () => fetchRes(200));
-    const res = await firecrawlFetch(adapters, 'http://169.254.169.254/latest/meta-data/');
-    expect(res.llmsTxtUrl).toBeUndefined();
+    await expect(firecrawlFetch(adapters, 'http://169.254.169.254/latest/meta-data/')).rejects.toThrow(
+      /Refusing to fetch/
+    );
     expect(fetchMock).not.toHaveBeenCalled(); // rejected before any network call
   });
 
-  it('does not probe (SSRF guard) when the origin resolves to a private address', async () => {
+  it('refuses, without probing, when the origin resolves to a private address', async () => {
     bigDoc();
     dnsLookup.mockImplementation(async () => [{ address: '10.1.2.3', family: 4 }]);
     fetchMock.mockImplementation(async () => fetchRes(200));
-    const res = await firecrawlFetch(adapters, 'https://rebind.example.com/docs/page');
-    expect(res.llmsTxtUrl).toBeUndefined();
+    await expect(firecrawlFetch(adapters, 'https://rebind.example.com/docs/page')).rejects.toThrow(/Refusing to fetch/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('firecrawlFetch SSRF guard', () => {
+  it('never hands a private address to Firecrawl (a self-hosted instance would fetch it internally)', async () => {
+    await expect(firecrawlFetch(adapters, 'http://10.0.0.5/admin')).rejects.toThrow(/Refusing to fetch/);
+    expect(scrapeUrl).not.toHaveBeenCalled();
+  });
+
+  it('never hands a hostname resolving to a private address to Firecrawl', async () => {
+    dnsLookup.mockImplementation(async () => [{ address: '169.254.169.254', family: 4 }]);
+    await expect(firecrawlFetch(adapters, 'https://metadata.example.com/')).rejects.toThrow(/Refusing to fetch/);
+    expect(scrapeUrl).not.toHaveBeenCalled();
+  });
+
+  it('refuses before choosing a backend, so neither Firecrawl nor the plain-fetch fallback is reached', async () => {
+    await expect(firecrawlFetch(adapters, 'http://127.0.0.1:8080/')).rejects.toThrow(/Refusing to fetch/);
+    expect(mockCreateApp).not.toHaveBeenCalled();
+    expect(mockPlainFetch).not.toHaveBeenCalled();
   });
 });
 

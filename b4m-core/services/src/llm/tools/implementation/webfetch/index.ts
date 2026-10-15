@@ -180,6 +180,13 @@ export async function firecrawlFetch(
     throw new Error(`Invalid URL format: ${url}. URL must start with http:// or https://`);
   }
 
+  // Checked before choosing a backend: a self-hosted Firecrawl (`apiUrl`) fetches from inside our
+  // network, so handing it a private address is the same SSRF as fetching it ourselves.
+  const unsafeReason = await unsafeFetchUrlReason(new URL(url));
+  if (unsafeReason) {
+    throw new Error(`Refusing to fetch ${url}: ${unsafeReason}`);
+  }
+
   // Use longer timeout for PDF URLs - large PDFs need more server-side processing time.
   // Callers with shorter Lambda lifetimes can cap via maxTimeoutMs.
   const isPdf = isPdfUrl(url);
