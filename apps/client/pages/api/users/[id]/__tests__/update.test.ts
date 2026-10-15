@@ -102,6 +102,7 @@ vi.mock('@bike4mind/services', async orig => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   User: {
     findById: (...a: unknown[]) => {
       const result = mockUserFindById(...a);

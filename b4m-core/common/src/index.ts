@@ -127,6 +127,7 @@ export * from './utils/answerDiagnosis';
 export * from './utils/requestId';
 export * from './apiKeyRateLimitHeaders';
 export * from './utils/inviteToken';
+export * from './utils/artifactPublishSlug';
 export * from './utils/anonymousSessionId';
 export * from './utils/signedImageUrl';
 export * from './utils/sanitizeTelemetryError';

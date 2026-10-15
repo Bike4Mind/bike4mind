@@ -81,7 +81,7 @@ describe('streaming completion (real ServerLlmBackend + real ReActAgent)', () =>
       // Attempt 1: partial content, then a transient socket error mid-stream.
       stream => {
         stream.write(sse({ type: 'content', text: 'partial' }));
-        stream.emit('error', new Error('socket hang up'));
+        stream.emit('error', Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }));
       },
       // Attempt 2 (retry): the full turn.
       stream => {

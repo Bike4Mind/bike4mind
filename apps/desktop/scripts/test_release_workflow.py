@@ -27,10 +27,22 @@ class ReleaseWorkflowTest(unittest.TestCase):
         token = steps.split('- name: Generate release App token', 1)[1].split('- name:', 1)[0]
         self.assertIn('id: release-token', token)
         self.assertIn('uses: actions/create-github-app-token@v3', token)
-        self.assertIn('GH_TOKEN: ${{ steps.release-token.outputs.token }}', publish)
+        self.assertIn('GH_TOKEN: ${{ steps.distribution-token.outputs.token }}', publish)
+        self.assertIn('repositories: ${{ needs.version.outputs.repository-name }}', publish)
+        self.assertIn('private-key: ${{ secrets.DESKTOP_RELEASE_APP_PRIVATE_KEY }}', publish)
         self.assertNotIn('GH_TOKEN: ${{ github.token }}', publish)
         self.assertLess(publish.index('if [ -z "$GH_TOKEN" ]; then'), publish.index('publish-release.sh'))
         self.assertNotIn('create-github-app-token', WORKFLOW.split('\n  publish:\n', 1)[0])
+
+    def test_signing_default_denies_distribution(self):
+        guard = next(line.strip().removeprefix('run: ') for line in WORKFLOW.splitlines()
+                     if 'test "$SIGNING" = true' in line)
+        for value in ('', 'false', 'TRUE', 'true'):
+            result = subprocess.run(['bash', '-ec', guard], env={**os.environ, 'SIGNING': value}, capture_output=True)
+            self.assertEqual(result.returncode == 0, value == 'true')
+        self.assertIn("if: matrix.platform != 'mac' || github.event_name == 'pull_request'", WORKFLOW)
+        self.assertIn('grep -q \'^Authority=Developer ID Application:\'', WORKFLOW)
+        self.assertIn('B4M_UPDATE_FEED_URL: ${{ needs.version.outputs.feed }}', WORKFLOW)
 
     def test_token_guard_fails_closed(self):
         guard = next(line.strip() for line in WORKFLOW.splitlines()

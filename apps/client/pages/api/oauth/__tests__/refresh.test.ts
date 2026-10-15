@@ -48,6 +48,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
   };
 });
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   User: { findById: h.findById },
   userRepository: {},
   authSessionRepository: {},

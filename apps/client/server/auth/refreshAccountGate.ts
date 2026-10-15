@@ -1,5 +1,5 @@
 import type { Logger } from '@bike4mind/observability';
-import { authSessionRepository } from '@bike4mind/database';
+import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
 import { assertAccountStateUsable } from './assertAccountStateUsable';
 
@@ -23,7 +23,10 @@ export async function refuseBlockedRotatedSession(
     assertAccountStateUsable(rotated.user);
   } catch (error) {
     try {
-      await authSessionService.revokeSession(rotated.sid, { db: { authSessions: authSessionRepository }, logger });
+      await authSessionService.revokeSession(rotated.sid, {
+        db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository },
+        logger,
+      });
     } catch (revokeError) {
       // Keep the refusal: it carries the reason the client needs to see. A failed revoke leaves
       // only a session the client never received, so it must not replace the typed refusal.

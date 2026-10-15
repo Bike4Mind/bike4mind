@@ -409,3 +409,37 @@ describe('rotateUserApiKey - embed:chat re-ownership binding guard', () => {
     expect(adapters.db.userApiKeys.update).toHaveBeenCalled();
   });
 });
+
+describe('rotateUserApiKey - realtime connections', () => {
+  const setup = async (endConnections: ReturnType<typeof vi.fn>) => {
+    const { repo } = makeSyncedRepo();
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+        realtimeConnections: { endConnections },
+      },
+    };
+    await createUserApiKey('sys-1', mintParams, { ...adapters, systemUserId: 'sys-1' });
+    return { repo, adapters };
+  };
+
+  it("ends the key's realtime connections after the secret is rotated", async () => {
+    const endConnections = vi.fn().mockResolvedValue({ connectionIds: ['conn-1'] });
+    const { repo, adapters } = await setup(endConnections);
+
+    await rotateUserApiKey('sys-1', { keyId: 'key-1' }, adapters);
+
+    expect(endConnections).toHaveBeenCalledWith({ apiKeyId: 'key-1' });
+    expect(repo.update.mock.invocationCallOrder[0]).toBeLessThan(endConnections.mock.invocationCallOrder[0]);
+  });
+
+  it('still returns the new key when ending connections fails', async () => {
+    const endConnections = vi.fn().mockRejectedValue(new Error('db down'));
+    const { adapters } = await setup(endConnections);
+
+    const result = await rotateUserApiKey('sys-1', { keyId: 'key-1' }, adapters);
+
+    expect(result.key).toMatch(/^b4m_live_/);
+  });
+});

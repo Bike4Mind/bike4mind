@@ -4,6 +4,7 @@ import { func as connectFunc } from '@server/websocket/connect';
 import { func as disconnectFunc } from '@server/websocket/disconnect';
 import { func as subscribeFunc } from '@server/websocket/dataSubscribeRequest';
 import { func as unsubscribeFunc } from '@server/websocket/dataUnsubscribeRequest';
+import { func as reauthFunc } from '@server/websocket/reauthConnection';
 import type { Context } from 'aws-lambda';
 import { Resource } from 'sst';
 import crypto from 'crypto';
@@ -106,8 +107,12 @@ const handler = baseApi({ auth: false }).post(
         const result = await unsubscribeFunc(event as never, lambdaContext('selfhost_ws_unsubscribe'));
         return res.status(result.statusCode).json(result);
       }
+      if (parsedAction === 'reauth_connection') {
+        const result = await reauthFunc(event as never, lambdaContext('selfhost_ws_reauth'));
+        return res.status(result.statusCode).json(result);
+      }
       // Self-host bridges the realtime subset only: subscribe_query /
-      // unsubscribe_query here, heartbeat in the gateway. Other hosted WS actions
+      // unsubscribe_query / reauth_connection here, heartbeat in the gateway. Other hosted WS actions
       // (voice, cli, cc_agent, jupyter, keep) are not wired up. Ack-and-ignore so
       // the gateway does not treat them as errors; extend here to add more.
       return res.status(200).json({ statusCode: 200, ignored: parsedAction ?? null });

@@ -122,6 +122,16 @@ beforeEach(() => {
   useConversationalVoiceStore.setState({ phase: 'idle' });
 });
 
+describe('SessionToolbar - narrow pane layout', () => {
+  // jsdom has no layout engine, so this pins the CSS. A narrow pane folds the model, Tools and
+  // Agents to icons (useOverflowCompact); a wrapping row would never overflow, so they would not fold.
+  it('keeps the actions row on one line', () => {
+    render(<SessionToolbar {...baseProps} />, { wrapper: Wrapper });
+    const row = screen.getByTestId('session-bottom-actions');
+    expect(getComputedStyle(row).flexWrap).not.toBe('wrap');
+  });
+});
+
 describe('SessionToolbar - Send button blocked reason', () => {
   it('disables Send and exposes why when the socket is reconnecting', () => {
     render(<SessionToolbar {...baseProps} chatInputValue="hello" sendBlockedReason="reconnecting" />, {

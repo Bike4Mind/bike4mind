@@ -34,7 +34,7 @@ import { buildWorkflowState, withFlushedWorkflowState, type WorkflowStores } fro
 import { formatStep, extractCompactInstructions } from '../utils';
 import { renderWorkflowReminder } from '../utils/workflowReminder.js';
 import { logger } from '../utils/Logger';
-import { isTransientNetworkError } from '../llm/retryPolicy';
+import { isConnectionDrop } from '../llm/modelCallError';
 import { isReadOnlyTool } from '../config/toolSafety.js';
 import type { TodoStore } from '../tools/writeTodosTool.js';
 import type { DecisionStore } from '../tools/decisionLogTool.js';
@@ -334,7 +334,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
         // Mid-loop recovery if a provider context-window error interrupts this
         // turn: compact the in-flight history once and retry, instead of
         // failing the turn and losing the user's work.
-        onContextLimit: createReactiveCompactionHandler(agent, activeSession, 1 + previousMessages.length + 1),
+        onContextLimit: createReactiveCompactionHandler(agent, activeSession),
       });
     } finally {
       diagnostics?.endTurn();
@@ -465,11 +465,9 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
     // rewrites the message either way, but if a
     // bare one ever reaches here from another path (other backends, etc.),
     // surface something the user can act on rather than a one-word error.
-    // Reuse the shared retry-policy classifier so this stays in lockstep with
-    // the full set of transient patterns both transports retry (ETIMEDOUT,
-    // terminated, fetch failed, UND_ERR_SOCKET, ...) - not a hand-maintained subset.
+    // Same classifier the retry decision uses, so the two cannot drift.
     const rawMessage = error instanceof Error ? error.message : String(error);
-    if (error instanceof Error && isTransientNetworkError(error)) {
+    if (isConnectionDrop(error)) {
       console.error('\n❌ The connection to the server dropped mid-response. Type "continue" to resume.\n');
       logger.debug(`Full error details: ${error.stack || error.message}`);
       return;

@@ -25,7 +25,10 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@bike4mind/database', () => ({ authSessionRepository: {} }));
+vi.mock('@bike4mind/database', () => ({
+  authSessionRepository: {},
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
+}));
 vi.mock('@bike4mind/services', () => {
   mockRefs.revokeAllUserSessions = vi.fn().mockResolvedValue(2);
   return { authSessionService: { revokeAllUserSessions: mockRefs.revokeAllUserSessions } };

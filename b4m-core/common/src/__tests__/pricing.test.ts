@@ -292,6 +292,37 @@ describe('pricing utils', () => {
       expect(pricing.usdPerTokenToCreditsPer1M(0.00001 / 1_000_000)).toBe(0.02);
     });
 
+    it('quotes a Gemini or xAI cache rate only where the model publishes cache_read', () => {
+      const withRate = { 1_048_576: { input: 0.3 / 1_000_000, output: 2.5 / 1_000_000, cache_read: 0.03 / 1_000_000 } };
+      const withoutRate = { 1_048_576: { input: 0.3 / 1_000_000, output: 2.5 / 1_000_000 } };
+      for (const backend of [models.ModelBackend.Gemini, models.ModelBackend.XAI]) {
+        expect(pricing.getTextModelCreditsPer1M({ ...nano(), backend, pricing: withRate })?.cachedInput).toBe(
+          pricing.usdPerTokenToCreditsPer1M(0.03 / 1_000_000)
+        );
+        // Their adapters leave cached tokens in inputTokens here, so no cache rate settles.
+        expect(pricing.getTextModelCreditsPer1M({ ...nano(), backend, pricing: withoutRate })?.cachedInput).toBeNull();
+      }
+      // A Bedrock non-Claude family still reports no cache reads, published rate or not.
+      expect(
+        pricing.getTextModelCreditsPer1M({ ...nano(), backend: models.ModelBackend.Bedrock, pricing: withRate })
+          ?.cachedInput
+      ).toBeNull();
+    });
+
+    it('treats a pricing map as publishing a cache rate only when every tier carries one', () => {
+      const tier = { input: 2 / 1_000_000, output: 6 / 1_000_000 };
+      expect(pricing.publishesCacheReadRate({ pricing: { 200_000: { ...tier, cache_read: 0.3 / 1_000_000 } } })).toBe(
+        true
+      );
+      expect(
+        pricing.publishesCacheReadRate({
+          pricing: { 200_000: { ...tier, cache_read: 0.3 / 1_000_000 }, 500_000: tier },
+        })
+      ).toBe(false);
+      expect(pricing.publishesCacheReadRate({ pricing: {} })).toBe(false);
+      expect(pricing.publishesCacheReadRate(undefined)).toBe(false);
+    });
+
     it('is null for an unpriced or non-text model', () => {
       expect(pricing.getTextModelCreditsPer1M({ ...nano(), pricing: {} })).toBeNull();
       expect(pricing.getTextModelCreditsPer1M({ ...nano(), pricing: { 0: { input: 0, output: 0 } } })).toBeNull();

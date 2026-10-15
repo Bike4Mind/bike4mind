@@ -54,6 +54,7 @@ vi.mock('@server/utils/cloudwatch', () => ({
 import {
   resolveSlackWebhookUrl,
   resolveFeedbackSlackRoute,
+  postMessageToSlack,
   postFeedbackToSlack,
   postEmailMirrorToSlack,
   EMAIL_MIRROR_TIMEOUT_MS,
@@ -200,6 +201,45 @@ describe('resolveFeedbackSlackRoute', () => {
       stageClass: 'nonprod',
       reason: 'nonprod_unconfigured',
     });
+  });
+});
+
+describe('postMessageToSlack', () => {
+  const liveopsUrl = 'https://hooks.slack.com/services/liveops';
+
+  beforeEach(() => {
+    // No secret fallback, so an empty settings map is genuinely unconfigured.
+    mocks.config.SLACK_WEBHOOK_URL = '';
+    mocks.post.mockReset();
+    vi.mocked(Logger.error).mockClear();
+  });
+
+  it('returns false when no webhook is configured', async () => {
+    mocks.getSettingsMap.mockResolvedValue({});
+
+    await expect(postMessageToSlack('ops alert')).resolves.toBe(false);
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(Logger.error).toHaveBeenCalled();
+  });
+
+  it('returns false when the post rejects, so a caller does not mark the alert sent', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ SlackLiveopsWebhookUrl: liveopsUrl });
+    mocks.post.mockRejectedValue(new Error('slack down'));
+
+    await expect(postMessageToSlack('ops alert')).resolves.toBe(false);
+    expect(Logger.error).toHaveBeenCalled();
+  });
+
+  it('returns true once the post succeeds', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ SlackLiveopsWebhookUrl: liveopsUrl });
+    mocks.post.mockResolvedValue({ status: 200 });
+
+    await expect(postMessageToSlack('ops alert')).resolves.toBe(true);
+    expect(mocks.post).toHaveBeenCalledWith(
+      liveopsUrl,
+      { text: 'ops alert' },
+      { headers: { 'Content-Type': 'application/json' } }
+    );
   });
 });
 

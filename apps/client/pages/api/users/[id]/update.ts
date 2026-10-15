@@ -7,6 +7,7 @@ import {
   friendshipRepository,
   creditTransactionRepository,
   TelemetryAuditLogModel,
+  realtimeConnectionRepository,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
@@ -232,6 +233,7 @@ const handler = baseApi().put(
               organizations: Organization,
               friendship: friendshipRepository,
               userApiKeys: userApiKeyRepository,
+              realtimeConnections: realtimeConnectionRepository,
               // Audits admin `currentCredits` changes as CreditTransactions.
               creditTransactions: creditTransactionRepository,
             },

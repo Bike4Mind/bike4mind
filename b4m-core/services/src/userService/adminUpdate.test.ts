@@ -46,6 +46,7 @@ function makeAdapters(startingCredits: number, { withCreditTransactions = true }
     organizations: { findById: vi.fn(), update: vi.fn() },
     friendship: {},
     userApiKeys: { deactivateAllByUserId: vi.fn().mockResolvedValue(undefined) },
+    realtimeConnections: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   };
   if (withCreditTransactions) {
     db.creditTransactions = { createTransaction };
@@ -57,6 +58,7 @@ function makeAdapters(startingCredits: number, { withCreditTransactions = true }
     update,
     target,
     deactivateAllByUserId: db.userApiKeys.deactivateAllByUserId,
+    endConnections: db.realtimeConnections.endConnections,
   };
 }
 
@@ -450,13 +452,16 @@ describe('adminUpdateUser - API key deactivation on entering a blocked state', (
     ['suspension', { moderation: { status: 'active' } }, { moderationStatus: 'suspended' as const }],
     ['ban and suspension in one save', {}, { isBanned: true, moderationStatus: 'suspended' as const }],
   ])('deactivates once on %s', async (_label, seed, patch) => {
-    const { adapters, target, deactivateAllByUserId } = makeAdapters(100);
+    const { adapters, target, deactivateAllByUserId, endConnections } = makeAdapters(100);
     Object.assign(target, seed);
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...patch }, adapters);
 
     expect(deactivateAllByUserId).toHaveBeenCalledTimes(1);
     expect(deactivateAllByUserId).toHaveBeenCalledWith(TARGET_ID);
+    // Every realtime connection ends with the account, API-key ones included.
+    expect(endConnections).toHaveBeenCalledTimes(1);
+    expect(endConnections).toHaveBeenCalledWith({ userId: TARGET_ID });
   });
 
   it.each([
@@ -473,12 +478,13 @@ describe('adminUpdateUser - API key deactivation on entering a blocked state', (
     ['active', { moderation: { status: 'suspended' } }, { moderationStatus: 'active' as const }],
     ['unban', { isBanned: true }, { isBanned: false }],
   ])('does not touch keys on %s', async (_label, seed, patch) => {
-    const { adapters, target, deactivateAllByUserId } = makeAdapters(100);
+    const { adapters, target, deactivateAllByUserId, endConnections } = makeAdapters(100);
     Object.assign(target, seed);
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...patch }, adapters);
 
     expect(deactivateAllByUserId).not.toHaveBeenCalled();
+    expect(endConnections).not.toHaveBeenCalled();
   });
 
   it('does not deactivate when the user write fails', async () => {

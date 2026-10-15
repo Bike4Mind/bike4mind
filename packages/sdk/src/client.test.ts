@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import pkg from '../package.json';
 import { createClient } from './client';
-import { B4mApiError, B4mQuestError } from './errors';
+import { B4mApiError, B4mQuestError, B4mStreamEndedError } from './errors';
 
 const BASE = 'https://b4m.example.com/';
 
@@ -219,7 +219,7 @@ describe('completions', () => {
     const iterate = async () => {
       for await (const event of client.completions({} as never)) events.push(event);
     };
-    await expect(iterate()).rejects.toThrow('completion stream ended before [DONE]');
+    await expect(iterate()).rejects.toBeInstanceOf(B4mStreamEndedError);
     expect(events).toEqual([{ type: 'content', text: 'hi' }]);
   });
 
