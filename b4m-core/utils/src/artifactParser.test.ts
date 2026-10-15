@@ -2081,8 +2081,20 @@ describe('convertCodeBlocksToArtifacts - tool-output JSON and code fences', () =
   });
 
   it('scans fences in linear time when no closer is long enough, or with many short fences', () => {
-    assertLinearGrowth(n => `mermaid\n~~~~~\n${'~~~ x\n`a `b\n'.repeat(n)}`, 20000);
-    assertLinearGrowth(n => `mermaid\n${'```\n`a`\n```\n`b\n'.repeat(n)}`, 20000);
+    assertLinearGrowth(
+      n => `mermaid\n~~~~~\n${'~~~ x\n`a `b\n'.repeat(n)}`,
+      20000,
+      undefined,
+      convertCodeBlocksToArtifacts,
+      150
+    );
+    assertLinearGrowth(
+      n => `mermaid\n${'```\n`a`\n```\n`b\n'.repeat(n)}`,
+      20000,
+      undefined,
+      convertCodeBlocksToArtifacts,
+      150
+    );
   });
 
   describe('echoed tool output', () => {
