@@ -24,6 +24,12 @@ type ContractResponse = {
  */
 const BINARY_SCHEMA = { type: 'string', contentEncoding: 'binary' } as const;
 
+/** A documented response header's OpenAPI object, the same shape everywhere headers are merged. */
+const headerObjects = (headers: Record<string, string>): NonNullable<ContractResponse['headers']> =>
+  Object.fromEntries(
+    Object.entries(headers).map(([name, description]) => [name, { description, schema: { type: 'string' as const } }])
+  );
+
 /**
  * Re-apply the deprecation to a `name` a bespoke error schema inherited from
  * `ApiErrorSchema` (see CONVENTIONS.md section 1: those extend the envelope rather than
@@ -185,14 +191,7 @@ export function registerContract(contract: EndpointContract): void {
     responses[status] = {
       description: spec.description,
       ...(!spec.noBody && { content }),
-      ...(Object.keys(headers).length > 0 && {
-        headers: Object.fromEntries(
-          Object.entries(headers).map(([name, description]) => [
-            name,
-            { description, schema: { type: 'string' as const } },
-          ])
-        ),
-      }),
+      ...(Object.keys(headers).length > 0 && { headers: headerObjects(headers) }),
     };
   }
 
@@ -204,6 +203,10 @@ export function registerContract(contract: EndpointContract): void {
     responses[String(validationStatus)] = {
       description: 'Request failed validation.',
       content: { 'application/json': { schema: ErrorResponse } },
+      // The adapter sets these headers at the start of its prelude, which runs ahead of
+      // validation, so an injected 422 carries them too - unlike the 401/403/405 answered
+      // before the prelude.
+      ...(Object.keys(deprecationHeaderDocs).length > 0 && { headers: headerObjects(deprecationHeaderDocs) }),
     };
   }
 

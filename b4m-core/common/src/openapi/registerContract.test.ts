@@ -241,6 +241,28 @@ describe('registerContract - deprecated contracts', () => {
     expect(responses['405'].headers).not.toHaveProperty('Sunset');
   });
 
+  it('documents the deprecation headers on the validation response it injects', () => {
+    const deprecatedWithBody: EndpointContract = {
+      ...deprecatedContract,
+      path: '/api/v1/fixture-deprecated-body',
+      operationId: 'createFixtureDeprecatedBody',
+      request: z.object({ value: z.string() }),
+    };
+    registerContract(deprecatedWithBody);
+    const generated = new OpenApiGeneratorV31(registry.definitions).generateDocument({
+      openapi: '3.1.0',
+      info: { title: 'fixture', version: '0.0.0' },
+    });
+    const responses = getOperation(generated, deprecatedWithBody.path, 'post').responses as Record<
+      string,
+      { headers?: Record<string, unknown> }
+    >;
+
+    // The adapter sets them ahead of validation, so a 422 it injects for a contract that
+    // declares none of its own is documented exactly like a declared 422.
+    expect(Object.keys(responses['422']?.headers ?? {}).sort()).toEqual(['Deprecation', 'Link', 'Sunset']);
+  });
+
   it('leaves a non-deprecated operation unflagged', () => {
     expect(operation).not.toHaveProperty('deprecated');
   });
