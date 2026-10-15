@@ -157,7 +157,7 @@ describe('opening a long conversation', () => {
     expect(count('chat-earlier-messages')).toBe(1);
     const turnsAfterBoundary = SPARSE_STRESS_SHAPE.turns - (SPARSE_STRESS_SHAPE.boundaryAt ?? 0) / 2;
     expect(count('chat-message-assistant')).toBe(turnsAfterBoundary);
-  }, 60_000);
+  });
 
   it('re-renders only the reply that is streaming, not the turns above it', () => {
     const messages = buildThread({ ...STRESS_SHAPE, turns: 4, boundaryAt: undefined, roundsPerTurn: 3 });

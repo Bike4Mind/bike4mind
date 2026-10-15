@@ -560,19 +560,12 @@ describe('the browser pane under overlays', () => {
   });
 
   it('asks for no still when the page is back within the delay', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    try {
-      mount();
-      const menu = await portal('menu', '<li role="menuitem" tabindex="-1">GPT-5</li>');
-      await remove(menu);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(80);
-      });
-      expect(freezeFrame).not.toHaveBeenCalled();
-      expect(still()).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
+    mount();
+    const menu = await portal('menu', '<li role="menuitem" tabindex="-1">GPT-5</li>');
+    await remove(menu);
+    await waitForStill();
+    expect(freezeFrame).not.toHaveBeenCalled();
+    expect(still()).toBeNull();
   });
 
   it('drops the still when the active tab changes underneath it', async () => {
