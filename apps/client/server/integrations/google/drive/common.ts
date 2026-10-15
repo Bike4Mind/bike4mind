@@ -8,6 +8,10 @@ import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 import { BadRequestError } from '@server/utils/errors';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { DRIVE_RECONNECT_REQUIRED_MESSAGE } from '@server/integrations/google/drive/driveClient';
+import { isInvalidGrantError, isTerminalDriveGrantError } from '@server/integrations/google/drive/driveGrantErrors';
+
+export { isInvalidGrantError, isTerminalDriveGrantError };
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.readonly'];
 
@@ -256,11 +260,18 @@ export async function enableDriveConnectionForLake(dataLakeId: string): Promise<
  * credential, refreshing + persisting it if expired. Throws if the user has no connection or the
  * refresh fails - the caller decides whether to surface a re-auth prompt.
  *
+ * `forceRefresh` skips a still-unexpired cached token. Pass it after Drive rejected that token
+ * (isDriveAuthError): a grant revoked at Google kills the token before its stored expiresAt,
+ * and only a refresh reaches the invalid_grant verdict that says "reconnect".
+ *
  * NOTE: `pages/api/google-drive/token.ts` has parallel inline logic tuned to return an authUrl on
  * failure for the browser attach flow; this helper is the throw-on-failure form for server jobs.
  * Keep the two in sync if the refresh/persist shape changes.
  */
-export async function getValidUserDriveAccessToken(userId: string): Promise<string> {
+export async function getValidUserDriveAccessToken(
+  userId: string,
+  { forceRefresh = false }: { forceRefresh?: boolean } = {}
+): Promise<string> {
   const user = await User.findById(userId, 'googleDrive');
   // Expected user states (not connected / needs reconnect) are BadRequestError, not bare Error:
   // errorHandler only maps status-bearing errors, so a bare Error here becomes a 500 logged at
@@ -277,7 +288,7 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
     accessToken = null;
   }
   const isExpired = !expiresAt || dayjs().isAfter(dayjs(expiresAt));
-  if (!isExpired && accessToken) return accessToken;
+  if (!forceRefresh && !isExpired && accessToken) return accessToken;
 
   // Same corrupt-credential shape as the cached access token: an undecryptable refresh token
   // (post key-rotation / partial restore) must be a reconnect (400), not a bare Error -> 500.
@@ -289,10 +300,16 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
   }
   if (!refreshToken) throw new BadRequestError('Google Drive refresh token unreadable - reconnect required');
 
-  const credentials = await refreshAccessToken(refreshToken).catch((e: unknown) => {
+  const credentials = await refreshAccessToken(refreshToken).catch(async (e: unknown) => {
+    if (!isInvalidGrantError(e)) throw e;
+    // The cached access token died with the grant. Left in date, pages/api/google-drive/token.ts keeps
+    // handing it to the browser, whose grant check then never sends the user to consent. Best-effort:
+    // a write failure must not mask the reconnect verdict below.
+    await User.updateOne({ _id: userId }, { 'googleDrive.expiresAt': new Date(0) }).catch((writeError: unknown) =>
+      console.warn('[googleDrive] could not expire a revoked access token', writeError)
+    );
     // A revoked/expired grant is a reconnect (400), not a server fault: left raw, drive-sync 500s on it.
-    if (isInvalidGrantError(e)) throw new BadRequestError('Google Drive access was revoked - reconnect required');
-    throw e;
+    throw new BadRequestError(DRIVE_RECONNECT_REQUIRED_MESSAGE);
   });
   if (!credentials.access_token) throw new BadRequestError('Google Drive token refresh returned no access token');
 
@@ -313,26 +330,6 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
 }
 
 /**
- * Whether a token-resolution failure needs the user to reconnect, as opposed to a blip (Google 5xx,
- * network, Mongo) that the next poll can retry. Only the former may mark a connection
- * `credential_error`: nothing but a manual reconnect clears that state, and the poll skips it.
- */
-function isTerminalDriveGrantError(e: unknown): boolean {
-  // getValidUserDriveAccessToken's expected states (unlinked, unreadable, revoked) are all reconnects.
-  return e instanceof BadRequestError || isInvalidGrantError(e);
-}
-
-/** A revoked/expired Google grant: only a fresh consent fixes it. */
-export function isInvalidGrantError(e: unknown): boolean {
-  if (!(e instanceof Error)) return false;
-  // google-auth-library surfaces a revoked/expired grant as a GaxiosError whose body is the OAuth error.
-  const response: unknown = 'response' in e ? e.response : undefined;
-  const data: unknown = response && typeof response === 'object' && 'data' in response ? response.data : undefined;
-  const oauthError: unknown = data && typeof data === 'object' && 'error' in data ? data.error : undefined;
-  return oauthError === 'invalid_grant' || e.message === 'invalid_grant';
-}
-
-/**
  * Resolve a valid Drive access token for a connection (the ingest job's credential).
  *
  * An org connection uses its own org-owned refresh token. A connection without one - every personal
@@ -341,10 +338,12 @@ export function isInvalidGrantError(e: unknown): boolean {
  * `credential_error` so it is observable rather than silent; a transient one is rethrown untouched so
  * the ingest handler releases the claim and the next poll retries. Loads the encrypted token via
  * the owner-scoped credential accessor (the caller passes the connection's owner), never a default read.
+ * `forceRefresh` reaches only the user-grant path: the org copy is refreshed on every call already.
  */
 export async function getValidConnectionDriveAccessToken(
   connectionId: string,
-  owner: DriveConnectionOwner
+  owner: DriveConnectionOwner,
+  options: { forceRefresh?: boolean } = {}
 ): Promise<string> {
   const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, owner);
   if (!connection) throw new Error('Google Drive connection not found');
@@ -357,7 +356,7 @@ export async function getValidConnectionDriveAccessToken(
         if (credentials.access_token) return credentials.access_token;
       }
     }
-    return await getValidUserDriveAccessToken(connection.connectedBy);
+    return await getValidUserDriveAccessToken(connection.connectedBy, options);
   } catch (e) {
     if (isTerminalDriveGrantError(e)) {
       await orgGoogleDriveConnectionRepository.updateHealth(connection.id, {

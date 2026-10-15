@@ -1257,6 +1257,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
+      /** Only files saved by a generation tool (tagged GENERATED_ASSET_TAG); ANDed with `tags`. */
+      generated?: boolean;
       fileIds?: string[]; // EXCLUDE these ids ($nin)
       restrictToFileIds?: string[]; // ALLOW-list ($in); present (incl. []) = hard restriction, [] matches nothing
     },

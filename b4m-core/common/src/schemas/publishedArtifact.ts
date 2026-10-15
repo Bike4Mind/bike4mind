@@ -41,16 +41,18 @@ export type PublishVisibility = z.infer<typeof VisibilitySchema>;
  *  reason about "is this rung at least as open as X". */
 export const VISIBILITY_ORDER: readonly PublishVisibility[] = ['private', 'project', 'organization', 'public'] as const;
 
-/** Per-tier publish policy: default visibility + the overrides a publisher may pick. */
+/** Per-tier publish policy: default visibility + the overrides a publisher may pick.
+ *  'private' (owner/admin only, see checkVisibility) is valid at every tier, so an owner can
+ *  always take any page they published - Team and project pages included - back to Private. */
 export const SCOPE_POLICY: Record<
   PublishScopeTier,
   { defaultVisibility: PublishVisibility; allowedOverrides: readonly PublishVisibility[] }
 > = {
   user: { defaultVisibility: 'private', allowedOverrides: ['private', 'organization', 'public'] },
-  project: { defaultVisibility: 'project', allowedOverrides: ['project', 'organization', 'public'] },
+  project: { defaultVisibility: 'project', allowedOverrides: ['private', 'project', 'organization', 'public'] },
   organization: {
     defaultVisibility: 'organization',
-    allowedOverrides: ['organization', 'public'],
+    allowedOverrides: ['private', 'organization', 'public'],
   },
 };
 

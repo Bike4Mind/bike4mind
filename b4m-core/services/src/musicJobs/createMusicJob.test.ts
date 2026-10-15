@@ -61,7 +61,7 @@ const makeDeps = (overrides: Partial<CreateMusicJobDeps> = {}) => {
     providers: createMusicProviderRegistry([new TestMusicProvider(), elevenLabsStub, lyriaStub]),
     getSettings: async () => ({ enforceCredits: true, musicGeneration: undefined }),
     resolveApiKey: async () => 'key',
-    hasStorageFor: vi.fn(async () => true),
+    checkStorageFor: vi.fn(async () => undefined),
     saveToFiles: vi.fn(),
     saveToGeneratedBucket: vi.fn(),
     credits: unusedCredits,
@@ -175,26 +175,34 @@ describe('createMusicJob', () => {
   });
 
   it('refuses a full Files quota before holding, sized for an exact model at the requested length', async () => {
-    const { deps } = makeDeps({ hasStorageFor: vi.fn(async () => false) });
+    const storage = {
+      errorCode: 'storage_limit_exceeded',
+      used_bytes: 900,
+      limit_bytes: 1000,
+      requested_bytes: 200_000,
+      owner: 'user',
+    } as const;
+    const { deps } = makeDeps({ checkStorageFor: vi.fn(async () => storage) });
     expect(await createMusicJob({ user, request: validRequest, source: 'api' }, deps)).toMatchObject({
       ok: false,
-      status: 422,
+      status: 400,
       code: 'storage_quota_exceeded',
+      storage,
     });
-    expect(deps.hasStorageFor).toHaveBeenCalledWith('u1', 5 * MAX_MUSIC_BYTES_PER_SECOND);
+    expect(deps.checkStorageFor).toHaveBeenCalledWith('u1', 5 * MAX_MUSIC_BYTES_PER_SECOND);
     expect(holdCredits).not.toHaveBeenCalled();
   });
 
   it('sizes the storage check for an approximate model at its maximum, since length is only steered', async () => {
     const { deps } = makeDeps();
     await createMusicJob({ user, request: { model: 'lyria-3.5', prompt: 'x' }, source: 'api' }, deps);
-    expect(deps.hasStorageFor).toHaveBeenCalledWith('u1', 180 * MAX_MUSIC_BYTES_PER_SECOND);
+    expect(deps.checkStorageFor).toHaveBeenCalledWith('u1', 180 * MAX_MUSIC_BYTES_PER_SECOND);
   });
 
   it('sizes the storage check for a fixed-length model at its fixed seconds', async () => {
     const { deps } = makeDeps();
     await createMusicJob({ user, request: { model: 'lyria-3-clip-preview', prompt: 'x' }, source: 'api' }, deps);
-    expect(deps.hasStorageFor).toHaveBeenCalledWith('u1', 30 * MAX_MUSIC_BYTES_PER_SECOND);
+    expect(deps.checkStorageFor).toHaveBeenCalledWith('u1', 30 * MAX_MUSIC_BYTES_PER_SECOND);
   });
 
   it('maps insufficient credits to 402', async () => {

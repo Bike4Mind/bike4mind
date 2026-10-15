@@ -6,7 +6,7 @@ import type { ValidatedVideoRequest } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { describeVideoProviderConformance, type ConformanceScenario } from '../conformance';
 import { ProviderOutputUnavailableError, ProviderSubmitError } from '../types';
-import { VeoVideoProvider } from './VeoVideoProvider';
+import { veoTerminalIsBlocked, VeoVideoProvider } from './VeoVideoProvider';
 
 type Exchange = {
   name: string;
@@ -104,6 +104,13 @@ const doneWith = (generateVideoResponse: unknown) => ({
   done: true,
   response: { generateVideoResponse },
 });
+// The recorded likeness-filter reason, for tests that replay the live shape.
+const blockedReasons = (): string[] =>
+  (
+    exchange(FIXTURES.blocked, 'poll_terminal').response.body as {
+      response: { generateVideoResponse: { raiMediaFilteredReasons: string[] } };
+    }
+  ).response.generateVideoResponse.raiMediaFilteredReasons;
 
 describeVideoProviderConformance('VeoVideoProvider', {
   provider: () => new VeoVideoProvider(),
@@ -328,16 +335,24 @@ describe('VeoVideoProvider specifics', () => {
     );
   });
 
-  it('reads the fixture RAI filter as blocked without marking it billed', async () => {
+  it('reads the live likeness filter (done, no video, RAI count) as blocked without marking it billed', async () => {
     active = FIXTURES.blocked;
     settled = true;
     const result = await new VeoVideoProvider().poll(handleFor(OPERATION), ctx());
     expect(result).toMatchObject({ status: 'blocked', reason: 'veo_safety' });
     expect(result).not.toHaveProperty('billed');
+    const terminal = exchange(FIXTURES.blocked, 'poll_terminal').response.body;
+    expect(result.status === 'blocked' && result.raw).toEqual(terminal);
+    // The fixture under test is the live recording, not a hand-built stand-in: its reason carries provider text,
+    // not the redaction placeholder the synthetic one used.
+    expect(FIXTURES.blocked.synthetic).toBeUndefined();
+    expect(blockedReasons()[0]).not.toMatch(/^<redacted/);
   });
 
   it('reads filter reasons without a count as blocked', async () => {
-    expect(await pollWith(doneWith({ raiMediaFilteredReasons: ['reason'] }))).toMatchObject({ status: 'blocked' });
+    expect(await pollWith(doneWith({ raiMediaFilteredReasons: blockedReasons() }))).toMatchObject({
+      status: 'blocked',
+    });
   });
 
   it('prefers a video over a filter count', async () => {
@@ -381,6 +396,18 @@ describe('VeoVideoProvider specifics', () => {
       retryable: false,
       message: 'veo_no_video',
     });
+  });
+
+  // The fixture recorder gates its writes on this predicate, so the terminals the adapter reads as blocked must
+  // pass it and every other terminal must not.
+  it.each<[string, unknown, boolean]>([
+    ['an RAI count', doneWith({ raiMediaFilteredCount: 1 }), true],
+    ['RAI reasons only', doneWith({ raiMediaFilteredReasons: blockedReasons() }), true],
+    ['a safety error', { name: OPERATION, done: true, error: { code: 3, message: 'x', status: 'SAFETY' } }, true],
+    ['a non-safety error', { name: OPERATION, done: true, error: { code: 13, message: 'internal' } }, false],
+    ['no verdict', doneWith({ generatedSamples: [] }), false],
+  ])('tells the recorder that %s is blocked=%s', (_label, body, expected) => {
+    expect(veoTerminalIsBlocked(body)).toBe(expected);
   });
 
   it('maps the unknown-operation 403 and a 404 to a non-retryable failure', async () => {

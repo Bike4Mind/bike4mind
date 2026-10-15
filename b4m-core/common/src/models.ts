@@ -474,7 +474,8 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_5_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_5_OPUS,
   ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
-  // Haiku 5.5 accepts only temperature=1 and top_p=0.99 and rejects top_k; omitting all three is the documented path
+  // Haiku 5.5 (probed on Bedrock): temperature 0.2 and top_k return 400 ("deprecated"), temperature and top_p
+  // cannot be sent together; omitting all three returns 200
   ChatModels.CLAUDE_5_5_HAIKU,
   ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
   // Moonshot pins temperature and top_p on every current Kimi and documents them
@@ -509,7 +510,9 @@ const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|[./])claude-(?:opus-5-5|sonnet-5-5|fa
  * return 400 for `tool_choice` `{type:'any'}` and `{type:'tool'}` (Messages, count_tokens and Batches
  * alike); `auto` and `none` still work. Adapters route json_schema through `output_config.format` and
  * downgrade a caller's required/named choice to `auto` + `strict` for these models. Haiku 5.5 is
- * deliberately absent: it accepts forced `any`/`tool` (its response just carries no thinking block).
+ * deliberately absent: it accepts forced `any`/`tool` (raw Bedrock API probe, adaptive thinking on;
+ * native API: forced `tool` observed via json_schema, forced `any` not probed) and its response
+ * just carries no thinking block.
  */
 export function supportsForcedToolChoice(modelId: string): boolean {
   return !NO_FORCED_TOOL_CHOICE_FAMILY.test(modelId);
@@ -809,11 +812,11 @@ export const getTextModelCost = (
  */
 export const getTurnsCost = (model: ModelInfo, turns: readonly TurnUsage[]): number => {
   let cost = 0;
-  let usage = 0;
+  let unpricedUsage = 0;
   for (const turn of turns) {
     const cacheRead = turn.cacheReadInputTokens ?? 0;
     const cacheCreation = turn.cacheCreationInputTokens ?? 0;
-    cost += costAtTier(
+    const turnCost = costAtTier(
       model,
       turn.inputTokens + cacheRead + cacheCreation,
       turn.inputTokens,
@@ -821,9 +824,11 @@ export const getTurnsCost = (model: ModelInfo, turns: readonly TurnUsage[]): num
       cacheRead,
       cacheCreation
     );
-    usage += turn.inputTokens + turn.outputTokens + cacheRead + cacheCreation;
+    if (turnCost === 0) unpricedUsage += turn.inputTokens + turn.outputTokens + cacheRead + cacheCreation;
+    cost += turnCost;
   }
-  return alarmIfUnpriced(model, cost, usage);
+  alarmIfUnpriced(model, 0, unpricedUsage);
+  return cost;
 };
 
 /**

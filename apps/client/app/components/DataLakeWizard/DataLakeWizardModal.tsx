@@ -7,7 +7,7 @@ import type { WizardStep } from '@client/app/stores/useDataLakeWizardStore';
 import { useBatchUpload, useCreateLakeFromDrive, OFFLINE_MESSAGE } from '@client/app/hooks/data/dataLakeWizard';
 import { plannedUploadBytes } from '@client/app/hooks/data/dataLakeUploadPipeline';
 import { useUser } from '@client/app/contexts/UserContext';
-import { checkStorageForUpload, getStorageQuota } from '@client/app/utils/storageQuota';
+import { getStorageQuota } from '@client/app/utils/storageQuota';
 import StorageLimitNotice from '@client/app/components/common/StorageLimitNotice';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import {
@@ -26,6 +26,7 @@ import UploadStep from './steps/UploadStep';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
 import { useWizardIdentityPreview } from '@client/app/hooks/data/useWizardIdentityPreview';
+import { driveCommitGate, useDriveFolderEstimate } from '@client/app/hooks/data/useDriveFolderEstimate';
 
 /**
  * The wizard's step order. Preview is opt-in (default off), so the minimal create path is
@@ -71,7 +72,17 @@ export default function DataLakeWizardModal() {
   const currentUser = useUser(s => s.currentUser);
   const setFileBrowserOpen = useFileBrowser(s => s.setOpen);
   const uploadBytes = plannedUploadBytes(allFiles, config.conflictResolution);
-  const exceedsStorage = checkStorageForUpload(getStorageQuota(currentUser), uploadBytes).status === 'exceeds';
+  const { data: driveEstimate, isLoading: driveEstimateLoading } = useDriveFolderEstimate(
+    pendingDriveFolder?.driveFolderId
+  );
+  // Drive bytes are debited to the connecting user, not the org: must stay in sync with the
+  // checkStorageLimit call in the Drive lake worker (driveLakeIngest).
+  const {
+    driveKnownBytes,
+    commitBytes,
+    exceedsStorage,
+    overCandidateCap: driveOverCandidateCap,
+  } = driveCommitGate(getStorageQuota(currentUser), uploadBytes, driveEstimate);
   // The cached usage is not refreshed when files are deleted, so re-read it before holding the
   // user to a block - e.g. on returning from "Manage files".
   useEffect(() => {
@@ -124,9 +135,9 @@ export default function DataLakeWizardModal() {
         // bare "a" is the legal "a:" (accepted). Sizing the field got both of those wrong.
         return (
           hasSource &&
-          // Nothing is uploaded on the Drive-only path (uploadBytes is 0 there), so a user
-          // already over quota must not be blocked from a commit that sends no bytes.
-          (isDriveOnlyCommit || !exceedsStorage) &&
+          !exceedsStorage &&
+          !driveOverCandidateCap &&
+          !driveEstimateLoading &&
           (!!targetLake || isValidDataLakeSlug(config.name)) &&
           effectivePrefix.length >= MIN_TAG_PREFIX_LENGTH &&
           !isReservedTagPrefix(effectivePrefix) &&
@@ -244,9 +255,13 @@ export default function DataLakeWizardModal() {
         {/* Step indicator */}
         <WizardStepIndicator currentStep={step} stepKeys={STEP_ORDER} />
 
-        {hasIncludedFiles && step !== 'upload' && (
+        {(hasIncludedFiles || driveKnownBytes > 0) && step !== 'upload' && (
           <Box sx={{ px: 3, pt: 1 }}>
-            <StorageLimitNotice uploadBytes={uploadBytes} onManageFiles={handleManageFiles} />
+            <StorageLimitNotice
+              uploadBytes={commitBytes}
+              driveFolderBytes={driveKnownBytes}
+              onManageFiles={handleManageFiles}
+            />
           </Box>
         )}
 

@@ -5,7 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { userService } from '@bike4mind/services';
 import { EmailEvents } from '@server/utils/eventBus';
-import { generateVerificationLink, getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
+import { generateVerificationLink, getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
@@ -84,7 +84,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
             <div class="content">
               ${buildEmailLogoImg(brand, logoUrl)}
               <h2>Verify Your Email Address</h2>
-              <p>Hello ${user.username},</p>
+              <p>Hello ${escapeHtml(user.username)},</p>
               <div class="admin-note">
                 <strong>Note:</strong> An administrator has resent your email verification link.
               </div>
