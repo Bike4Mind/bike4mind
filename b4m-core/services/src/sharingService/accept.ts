@@ -192,7 +192,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
               // Gate THEN cap. Propagating a file grant is a re-share of that file, so the inviter
               // must hold share on it, not merely hold the permission being passed on; without the
               // gate a read-only sharee could launder read onto everyone they invite to a session.
-              grantPermissions = reshareableBy(fabfile, inviter, granted);
+              grantPermissions = reshareableBy(fabfile, inviter, granted).granted;
               if (grantPermissions.length === 0) return;
             } else if (fabfile.userId === session.userId) {
               // Legacy path: invites minted before `inviterId` existed. Strictly narrower than the
@@ -351,23 +351,27 @@ const permissionsInviterCanStillGrant = (
 ): Permission[] => {
   if (!invite.inviterId || invite.inviterId === doc.userId) return permissions;
 
-  const held = grantablePermissions(doc as ShareableAccessShape, inviter?.id, inviter?.groups ?? []);
-  const granted = held.has(Permission.share) ? permissions.filter(permission => held.has(permission)) : [];
+  const { holdsShare, granted } = reshareableBy(doc, inviter, permissions);
   // An empty invite from an inviter who still holds share is a no-op grant, as when owner-minted.
-  if (!held.has(Permission.share) || (granted.length === 0 && permissions.length > 0)) {
+  if (!holdsShare || (granted.length === 0 && permissions.length > 0)) {
     throw new ForbiddenError('The person who shared this can no longer share it');
   }
   return granted;
 };
 
-/** The subset of `permissions` `inviter` can pass on for `doc`: empty unless they hold share on it. */
+/**
+ * What `inviter` can currently pass on for `doc`: `granted` is the subset of `permissions` they may
+ * re-share (empty unless they hold share there), and `holdsShare` is whether they hold share at all.
+ * Both are resolved here once so the gate-then-cap rule has a single home.
+ */
 const reshareableBy = (
   doc: IShareableDocument & { userId: string },
   inviter: Inviter,
   permissions: Permission[]
-): Permission[] => {
+): { holdsShare: boolean; granted: Permission[] } => {
   const held = grantablePermissions(doc as ShareableAccessShape, inviter?.id, inviter?.groups ?? []);
-  return held.has(Permission.share) ? permissions.filter(permission => held.has(permission)) : [];
+  const holdsShare = held.has(Permission.share);
+  return { holdsShare, granted: holdsShare ? permissions.filter(permission => held.has(permission)) : [] };
 };
 
 export const pushShareable = (
