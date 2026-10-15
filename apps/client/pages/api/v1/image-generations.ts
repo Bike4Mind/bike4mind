@@ -13,7 +13,7 @@ import { getImageGeneration } from '@server/imageGenerations/imageGeneration';
 import { generateImageContract, GenerateImageIvokeParams, redactSessionForClient } from '@bike4mind/common';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
-import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { questRepository } from '@bike4mind/database';
 import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@server/utils/resolveImagePrompt';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
@@ -64,9 +64,8 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
   });
 
   try {
-    // Resolve the billing org from the client-supplied value, rejecting any org the caller is
-    // not a member of. null = personal account, undefined = fall back to the caller's own org.
-    const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
+    // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
+    const effectiveOrgId = await resolveMediaBillingOrgId(req, invokeParams.organizationId);
 
     const originalPrompt = body.prompt;
     // 'literal' callers own their prompt (agents, pipelines): skip the resolver entirely so the

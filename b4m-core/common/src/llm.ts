@@ -6,6 +6,7 @@ import { BFLSafetyToleranceSchema } from './schemas/bfl';
 import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 import { GenerationCallbackUrlSchema } from './schemas/generationCallback';
+import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
 import { ChatToolModeSchema } from './schemas/promptMeta';
 
 // Re-export LLM tools for external use
@@ -108,6 +109,7 @@ export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omi
 }).extend({
   sessionId: z.string().optional(),
   sessionName: z.string().optional(),
+  organizationId: BillingOrganizationIdSchema,
   callbackUrl: GenerationCallbackUrlSchema.optional(),
   projectId: z.string().optional(),
   prompt_resolution: ImagePromptResolutionSchema.optional().describe(
@@ -165,7 +167,7 @@ export type AudioGenerationToolCall = z.infer<typeof AudioGenerationToolCallSche
 export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
   questId: z.string().optional(),
-  organizationId: z.string().nullable().optional(),
+  organizationId: BillingOrganizationIdSchema,
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   /**
