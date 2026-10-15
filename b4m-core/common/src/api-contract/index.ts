@@ -1,5 +1,6 @@
 export * from './types';
 export * from './defineEndpoint';
+export * from './deprecation';
 export { chatContract } from './contracts/chat.contract';
 export { startAgentExecutionContract, getAgentExecutionContract } from './contracts/agentExecutions.contract';
 export { sessionUpdateContract } from './contracts/sessionUpdate.contract';

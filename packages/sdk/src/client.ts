@@ -316,6 +316,10 @@ export function createClient(options: ClientOptions) {
       }
     },
 
+    /**
+     * @deprecated `POST /api/ai/music` sunsets 2027-01-15. Queue a job with
+     * `call('createMusicGeneration', ...)` and poll `getMusicGeneration` instead.
+     */
     music(body: Omit<JsonBody<'generateMusic'>, 'encoding'>, opts: { signal?: AbortSignal } = {}) {
       return audio('generateMusic', body, opts.signal);
     },
