@@ -24,19 +24,26 @@ type GenerationModelSettings = { enabledModels: Record<string, boolean> };
 
 type CatalogEntry = { displayName: string; provider: string; defaultEnabled: boolean; preview?: boolean };
 
-type GenerationModality<Id extends string> = {
-  modality: 'video' | 'music';
-  settingKey: 'videoGeneration' | 'musicGeneration';
+// Ties each modality to its own model ids, setting key and schema so a section cannot mix them.
+type ModalityTypes = {
+  video: { id: VideoModelId; settingKey: 'videoGeneration'; schema: typeof VideoGenerationSettingsSchema };
+  music: { id: MusicModelId; settingKey: 'musicGeneration'; schema: typeof MusicGenerationSettingsSchema };
+};
+type Modality = keyof ModalityTypes;
+
+type GenerationModality<M extends Modality> = {
+  modality: M;
+  settingKey: ModalityTypes[M]['settingKey'];
   title: string;
   icon: React.ReactNode;
-  ids: readonly Id[];
-  catalog: Record<Id, CatalogEntry>;
-  schema: typeof VideoGenerationSettingsSchema | typeof MusicGenerationSettingsSchema;
+  ids: readonly ModalityTypes[M]['id'][];
+  catalog: Record<ModalityTypes[M]['id'], CatalogEntry>;
+  schema: ModalityTypes[M]['schema'];
   // Must be the same helper the server uses, so the switch shows what the server will accept.
-  isEnabled: (id: Id, settings: GenerationModelSettings) => boolean;
+  isEnabled: (id: ModalityTypes[M]['id'], settings: GenerationModelSettings) => boolean;
 };
 
-const VIDEO_MODALITY: GenerationModality<VideoModelId> = {
+const VIDEO_MODALITY: GenerationModality<'video'> = {
   modality: 'video',
   settingKey: 'videoGeneration',
   title: 'Video',
@@ -47,7 +54,7 @@ const VIDEO_MODALITY: GenerationModality<VideoModelId> = {
   isEnabled: isVideoModelEnabled,
 };
 
-const MUSIC_MODALITY: GenerationModality<MusicModelId> = {
+const MUSIC_MODALITY: GenerationModality<'music'> = {
   modality: 'music',
   settingKey: 'musicGeneration',
   title: 'Music',
@@ -60,18 +67,18 @@ const MUSIC_MODALITY: GenerationModality<MusicModelId> = {
 
 const EMPTY_SETTINGS: GenerationModelSettings = { enabledModels: {} };
 
-function GenerationModelsSection<Id extends string>({ section }: { section: GenerationModality<Id> }) {
+function GenerationModelsSection<M extends Modality>({ section }: { section: GenerationModality<M> }) {
   const { modality, settingKey, title, icon, ids, catalog, schema, isEnabled } = section;
   // One mutation per section: a save in flight locks only its own switches, since each section owns its own key.
   const updateSettings = useUpdateSettings();
-  const { getSettingObject } = useAdminSettings();
+  const { getSettingObject, authedSettingsLoaded } = useAdminSettings();
   // getSettingObject does not validate; malformed stored data falls back to catalog defaults.
   const settings = useMemo(() => {
     const parsed = schema.safeParse(getSettingObject(settingKey, EMPTY_SETTINGS));
     return parsed.success ? parsed.data : EMPTY_SETTINGS;
   }, [getSettingObject, schema, settingKey]);
 
-  const handleToggle = (id: Id, enabled: boolean) => {
+  const handleToggle = (id: ModalityTypes[M]['id'], enabled: boolean) => {
     updateSettings.mutate(
       { key: settingKey, value: { enabledModels: { ...settings.enabledModels, [id]: enabled } } },
       {
@@ -118,7 +125,8 @@ function GenerationModelsSection<Id extends string>({ section }: { section: Gene
               </Box>
               <Switch
                 checked={isEnabled(id, settings)}
-                disabled={updateSettings.isPending}
+                // Until the stored value loads, a toggle would save over every other override with defaults.
+                disabled={!authedSettingsLoaded || updateSettings.isPending}
                 onChange={event => handleToggle(id, event.target.checked)}
                 slotProps={{ input: { 'aria-label': `Enable ${displayName}` } }}
                 data-testid={`${testId}-${id}-switch`}

@@ -10,9 +10,11 @@ vi.mock('@client/app/hooks/data/settings', () => ({
   useUpdateSettings: () => ({ mutate, isPending: updatePending }),
 }));
 let storedSettings: Record<string, unknown> = {};
+let authedSettingsLoaded = true;
 vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
   useAdminSettings: () => ({
     getSettingObject: (key: string, fallback: unknown) => storedSettings[key] ?? fallback,
+    authedSettingsLoaded,
   }),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
@@ -44,6 +46,7 @@ const MODALITIES: {
 beforeEach(() => {
   vi.clearAllMocks();
   updatePending = false;
+  authedSettingsLoaded = true;
 });
 
 describe.each(MODALITIES)(
@@ -102,6 +105,12 @@ describe.each(MODALITIES)(
       expect(toast.error).toHaveBeenCalledWith(expect.stringContaining(`${modality} generation models: boom`));
     });
 
+    it('disables the switches until the stored settings have loaded', () => {
+      authedSettingsLoaded = false;
+      renderSetting({});
+      expect(switchFor(firstId).disabled).toBe(true);
+    });
+
     it('disables the switches while a save is in flight', () => {
       updatePending = true;
       renderSetting({});
@@ -128,6 +137,21 @@ describe.each(MODALITIES)(
 );
 
 describe('AdminGenerationModelsSetting', () => {
+  // Every first catalog entry is on by default, so this pins the off-by-default path of the shared helper.
+  const offByDefault = MUSIC_MODEL_IDS.find(id => !MUSIC_MODEL_CATALOG[id].defaultEnabled);
+  const musicSwitch = (id: string) =>
+    screen.getByTestId(`admin-generation-models-music-${id}-switch`).querySelector('input') as HTMLInputElement;
+
+  it('shows an off-by-default model as off, without the default note, and saves true when toggled', () => {
+    expect(offByDefault).toBeDefined();
+    const id = offByDefault!;
+    renderSetting({});
+    expect(musicSwitch(id).checked).toBe(false);
+    expect(screen.queryByTestId(`admin-generation-models-music-${id}-default-note`)).toBeNull();
+    fireEvent.click(musicSwitch(id));
+    expect(mutate.mock.calls[0][0]).toEqual({ key: 'musicGeneration', value: { enabledModels: { [id]: true } } });
+  });
+
   it('keeps the two settings independent', () => {
     const [videoId] = VIDEO_MODEL_IDS;
     const [musicId] = MUSIC_MODEL_IDS;
