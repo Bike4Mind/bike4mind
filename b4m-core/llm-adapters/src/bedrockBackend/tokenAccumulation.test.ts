@@ -539,6 +539,28 @@ describe('BaseBedrockBackend output of a stopped call', () => {
     expect(last!.turnUsage!.reduce((n, t) => n + t.outputTokens, 0)).toBe(last!.outputTokens);
   });
 
+  it('keeps a provider output count reported before the stop', async () => {
+    const last = await runStopped(
+      [
+        markTerminal(turnWithToolCall('add', 'tool_t1', { a: 1, b: 1 }, { input: 100, output: 20 })),
+        [
+          promptOnly(200, 5000),
+          partialText,
+          // A non-terminal chunk carrying the provider's real output count; the stop lands after it.
+          { choices: [{ index: 0, status: ChoiceStatus.STREAM, usage: { output_tokens: 40 } }] },
+        ],
+      ],
+      [ADD_TOOL]
+    );
+
+    // The provider's own count, not a lower-bound estimate of what streamed.
+    expect(last!.outputTokens).toBe(20 + 40);
+    expect(last!.turnUsage).toEqual([
+      { inputTokens: 100, outputTokens: 20 },
+      { inputTokens: 200, outputTokens: 40, cacheReadInputTokens: 5000 },
+    ]);
+  });
+
   it('leaves a stopped first call at 0 output for the caller to estimate', async () => {
     const last = await runStopped([[promptOnly(200), partialText]]);
 
