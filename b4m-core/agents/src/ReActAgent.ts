@@ -2122,6 +2122,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         this.context.logger.debug(`[ReActAgent] Cannot synthesize a tool result: ${String(error)}`);
         return [];
       }
+      // slice(1) relies on the backend pushing exactly one assistant message first. Some (Bedrock-Anthropic)
+      // also consume pending reasoning state here, harmless since repair only runs before a request.
       return pair.slice(1);
     });
     if (isRepaired(report)) {
