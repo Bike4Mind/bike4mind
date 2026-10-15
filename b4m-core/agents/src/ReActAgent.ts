@@ -1,5 +1,11 @@
 import { EventEmitter } from 'events';
-import { PermissionDeniedError, type IMessage, type MessageContent, type ICacheStrategy } from '@bike4mind/common';
+import {
+  PermissionDeniedError,
+  type IMessage,
+  type MessageContent,
+  type ICacheStrategy,
+  type TurnUsage,
+} from '@bike4mind/common';
 import type { ICompletionOptionTools, CompletionInfo } from '@bike4mind/llm-adapters';
 import { isContextLimitError } from './errors';
 import type {
@@ -64,25 +70,35 @@ export type CompletionFoldBaselines = {
  * field is `baseline + latest-cumulative`, NEVER `+=` - the prior `+=` re-added
  * the whole prompt-token count on every chunk and multiplied a single
  * iteration's input tokens by the chunk count. Every field guards on VALUE
- * presence (not object presence) so a trailing token-less frame - or a
- * cacheStats object with a zero sub-field - can't zero a running total; absent
- * fields return `current` unchanged.
+ * presence (not object presence) so a trailing token-less frame - or a zero
+ * cache field - can't zero a running total; absent fields return `current` unchanged.
+ *
+ * Cache tokens come only from the top-level cacheReadInputTokens/cacheCreationInputTokens, the
+ * billing convention (disjoint from inputTokens) that settlement and turnUsage use. `cacheStats`
+ * is never folded: every adapter whose inputTokens excludes cache (Anthropic, Bedrock, OpenAI,
+ * Kimi, DeepSeek) also sets the top-level fields on the same frame, while the ones that set
+ * cacheStats alone (Gemini and xAI, and after their per-request split only for models without a
+ * published cache-read rate) keep the cached tokens INSIDE inputTokens, so adding cacheStats
+ * there would count them twice. Ollama sets neither.
  *
  * Extracted so the two identical fold sites (`run()` and `runIteration()`) -
  * which carried the original `+=` bug in both places - share one implementation.
  */
 export function foldCompletionInfo(
-  info: Pick<CompletionInfo, 'inputTokens' | 'outputTokens' | 'creditsUsed' | 'cacheStats'>,
+  info: Pick<
+    CompletionInfo,
+    'inputTokens' | 'outputTokens' | 'creditsUsed' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'
+  >,
   baselines: CompletionFoldBaselines,
   current: CompletionFoldBaselines
 ): CompletionFoldBaselines & { totalTokens: number } {
   const inputTokens = info.inputTokens ? baselines.inputTokens + info.inputTokens : current.inputTokens;
   const outputTokens = info.outputTokens ? baselines.outputTokens + info.outputTokens : current.outputTokens;
-  const cacheReadTokens = info.cacheStats?.cacheReadTokens
-    ? baselines.cacheReadTokens + info.cacheStats.cacheReadTokens
+  const cacheReadTokens = info.cacheReadInputTokens
+    ? baselines.cacheReadTokens + info.cacheReadInputTokens
     : current.cacheReadTokens;
-  const cacheWriteTokens = info.cacheStats?.cacheWriteTokens
-    ? baselines.cacheWriteTokens + info.cacheStats.cacheWriteTokens
+  const cacheWriteTokens = info.cacheCreationInputTokens
+    ? baselines.cacheWriteTokens + info.cacheCreationInputTokens
     : current.cacheWriteTokens;
   const credits = info.creditsUsed ? baselines.credits + info.creditsUsed : current.credits;
   return {
@@ -240,6 +256,12 @@ export class ReActAgent extends EventEmitter {
   private totalCredits = 0;
   private totalCacheReadTokens = 0;
   private totalCacheWriteTokens = 0;
+  /**
+   * One entry per provider request (see CompletionInfo.turnUsage), so cost callers can price
+   * each request on its own long-context tier. Every iteration calls the model with
+   * executeTools: false, i.e. exactly one request.
+   */
+  private turnUsage: TurnUsage[] = [];
   private toolCallCount = 0;
   /**
    * Provider stop reason of the last LLM completion, preserve-last-non-null.
@@ -398,6 +420,7 @@ export class ReActAgent extends EventEmitter {
     this.totalCredits = 0;
     this.totalCacheReadTokens = 0;
     this.totalCacheWriteTokens = 0;
+    this.turnUsage = [];
     this.toolCallCount = 0;
     this.confidenceLog = [];
     this.iterationConfidences = [];
@@ -463,6 +486,7 @@ export class ReActAgent extends EventEmitter {
               totalCredits: this.totalCredits > 0 ? this.totalCredits : undefined,
               totalCacheReadTokens: this.totalCacheReadTokens > 0 ? this.totalCacheReadTokens : undefined,
               totalCacheWriteTokens: this.totalCacheWriteTokens > 0 ? this.totalCacheWriteTokens : undefined,
+              turnUsage: this.turnUsage.length > 0 ? [...this.turnUsage] : undefined,
               iterations,
               toolCalls: this.toolCallCount,
               reachedMaxIterations: false,
@@ -526,6 +550,8 @@ export class ReActAgent extends EventEmitter {
         const preCallTotalCredits = this.totalCredits;
         const preCallCacheReadTokens = this.totalCacheReadTokens;
         const preCallCacheWriteTokens = this.totalCacheWriteTokens;
+        const preCallTurnCount = this.turnUsage.length;
+        let reportedTurns: TurnUsage[] | undefined;
         const preCallStepsLength = this.steps.length;
 
         try {
@@ -582,6 +608,13 @@ export class ReActAgent extends EventEmitter {
                 this.totalCacheReadTokens = folded.cacheReadTokens;
                 this.totalCacheWriteTokens = folded.cacheWriteTokens;
                 this.totalCredits = folded.credits;
+                if (completionInfo.turnUsage?.length) reportedTurns = completionInfo.turnUsage;
+                this.setIterationTurns(preCallTurnCount, reportedTurns, {
+                  inputTokens: preCallTotalInputTokens,
+                  outputTokens: preCallTotalOutputTokens,
+                  cacheReadTokens: preCallCacheReadTokens,
+                  cacheWriteTokens: preCallCacheWriteTokens,
+                });
 
                 // Preserve the last non-null stop reason (see lastStopReason).
                 // Early streaming frames carry none; the final frame does.
@@ -708,6 +741,7 @@ export class ReActAgent extends EventEmitter {
               this.totalCredits = preCallTotalCredits;
               this.totalCacheReadTokens = preCallCacheReadTokens;
               this.totalCacheWriteTokens = preCallCacheWriteTokens;
+              this.turnUsage.length = preCallTurnCount;
               this.steps.length = preCallStepsLength;
 
               messages.length = 0;
@@ -870,6 +904,7 @@ export class ReActAgent extends EventEmitter {
           totalCredits: this.totalCredits > 0 ? this.totalCredits : undefined,
           totalCacheReadTokens: this.totalCacheReadTokens > 0 ? this.totalCacheReadTokens : undefined,
           totalCacheWriteTokens: this.totalCacheWriteTokens > 0 ? this.totalCacheWriteTokens : undefined,
+          turnUsage: this.turnUsage.length > 0 ? [...this.turnUsage] : undefined,
           iterations,
           toolCalls: this.toolCallCount,
           reachedMaxIterations,
@@ -898,6 +933,9 @@ export class ReActAgent extends EventEmitter {
             totalInputTokens: this.totalInputTokens,
             totalOutputTokens: this.totalOutputTokens,
             totalCredits: this.totalCredits > 0 ? this.totalCredits : undefined,
+            totalCacheReadTokens: this.totalCacheReadTokens > 0 ? this.totalCacheReadTokens : undefined,
+            totalCacheWriteTokens: this.totalCacheWriteTokens > 0 ? this.totalCacheWriteTokens : undefined,
+            turnUsage: this.turnUsage.length > 0 ? [...this.turnUsage] : undefined,
             iterations,
             toolCalls: this.toolCallCount,
             reachedMaxIterations: false,
@@ -1096,6 +1134,41 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     return this.context.llm.getLatestToolCallId(this.messages, toolName);
   }
 
+  /** The totals accrued since `base`, as one turn; empty when nothing accrued. */
+  private totalsAsTurn(base: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  }): TurnUsage[] {
+    const inputTokens = this.totalInputTokens - base.inputTokens;
+    const outputTokens = this.totalOutputTokens - base.outputTokens;
+    const cacheRead = this.totalCacheReadTokens - base.cacheReadTokens;
+    const cacheWrite = this.totalCacheWriteTokens - base.cacheWriteTokens;
+    if (inputTokens + outputTokens + cacheRead + cacheWrite <= 0) return [];
+    return [
+      {
+        inputTokens,
+        outputTokens,
+        ...(cacheRead > 0 ? { cacheReadInputTokens: cacheRead } : {}),
+        ...(cacheWrite > 0 ? { cacheCreationInputTokens: cacheWrite } : {}),
+      },
+    ];
+  }
+
+  /**
+   * Replace the current iteration's entries (from `start`) with the adapter's per-request
+   * breakdown, or with the iteration's totals as one turn when the adapter reports none.
+   */
+  private setIterationTurns(
+    start: number,
+    reported: TurnUsage[] | undefined,
+    base: Parameters<ReActAgent['totalsAsTurn']>[0]
+  ): void {
+    this.turnUsage.length = start;
+    this.turnUsage.push(...(reported?.length ? reported : this.totalsAsTurn(base)));
+  }
+
   /**
    * Serialize the agent's current execution state for persistence.
    *
@@ -1113,6 +1186,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       totalOutputTokens: this.totalOutputTokens,
       totalCacheReadTokens: this.totalCacheReadTokens,
       totalCacheWriteTokens: this.totalCacheWriteTokens,
+      turnUsage: [...this.turnUsage],
       totalCredits: this.totalCredits,
       toolCallCount: this.toolCallCount,
       confidenceLog: structuredClone(this.confidenceLog),
@@ -1140,6 +1214,11 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     this.totalOutputTokens = checkpoint.totalOutputTokens;
     this.totalCacheReadTokens = checkpoint.totalCacheReadTokens;
     this.totalCacheWriteTokens = checkpoint.totalCacheWriteTokens;
+    // A checkpoint saved before turns were tracked carries only totals: keep them as one turn so
+    // sum(turnUsage) still matches the totals.
+    this.turnUsage = checkpoint.turnUsage
+      ? [...checkpoint.turnUsage]
+      : this.totalsAsTurn({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
     this.totalCredits = checkpoint.totalCredits;
     this.toolCallCount = checkpoint.toolCallCount;
     this.confidenceLog = structuredClone(checkpoint.confidenceLog);
@@ -1209,6 +1288,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       this.totalCredits = 0;
       this.totalCacheReadTokens = 0;
       this.totalCacheWriteTokens = 0;
+      this.turnUsage = [];
       this.toolCallCount = 0;
       this.confidenceLog = [];
       this.iterationConfidences = [];
@@ -1309,6 +1389,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       const iterStartCacheReadTokens = this.totalCacheReadTokens;
       const iterStartCacheWriteTokens = this.totalCacheWriteTokens;
       const iterStartCredits = this.totalCredits;
+      const iterStartTurnCount = this.turnUsage.length;
+      let reportedTurns: TurnUsage[] | undefined;
 
       const cacheStrategy = buildCacheStrategy(this.messages, options.enableCaching, this.context.tools.length > 0);
 
@@ -1368,6 +1450,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
             this.totalCacheReadTokens = folded.cacheReadTokens;
             this.totalCacheWriteTokens = folded.cacheWriteTokens;
             this.totalCredits = folded.credits;
+            if (completionInfo.turnUsage?.length) reportedTurns = completionInfo.turnUsage;
+            this.setIterationTurns(iterStartTurnCount, reportedTurns, {
+              inputTokens: iterStartInputTokens,
+              outputTokens: iterStartOutputTokens,
+              cacheReadTokens: iterStartCacheReadTokens,
+              cacheWriteTokens: iterStartCacheWriteTokens,
+            });
 
             // Preserve the last non-null stop reason (see lastStopReason).
             // A prior tool_use turn is overwritten by the final completion.

@@ -21,6 +21,7 @@ import {
   type CompletionSource,
   type CompletionSseErrorCode,
   type SSEErrorEvent,
+  type TurnUsage,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
@@ -259,6 +260,9 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       // Stream the completion, tracking usage for analytics.
       let finalInputTokens = 0;
       let finalOutputTokens = 0;
+      let finalCacheReadTokens = 0;
+      let finalCacheWriteTokens = 0;
+      let finalTurnUsage: TurnUsage[] | undefined;
       let hasToolCalls = false;
 
       timing?.phase('completionStarted');
@@ -291,6 +295,9 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         onChunk: async (text, info) => {
           if (info?.inputTokens) finalInputTokens = info.inputTokens;
           if (info?.outputTokens) finalOutputTokens = info.outputTokens;
+          if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
+          if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
+          if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
           if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
           timing?.chunk(classifyChunk(text, info));
           write(serializeSSEEvent(buildSSEEvent(text, info)));
@@ -315,6 +322,9 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         method: req.method,
         finalInputTokens,
         finalOutputTokens,
+        finalCacheReadTokens,
+        finalCacheWriteTokens,
+        finalTurnUsage,
         hasToolCalls,
         db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
         logger,

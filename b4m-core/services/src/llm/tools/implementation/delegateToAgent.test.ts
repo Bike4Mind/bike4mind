@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { filterToolsByPatterns } from '@bike4mind/agents';
-import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import { getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
 import {
   MAX_SUBAGENT_DEPTH,
@@ -432,6 +432,49 @@ describe('createDelegateToAgentTool — usage-event cost basis (#151)', () => {
   function mockDelegation(result: ServerAgentExecutionResult): void {
     vi.spyOn(ServerSubagentOrchestrator.prototype, 'delegateToAgent').mockResolvedValue(result);
   }
+
+  // Long-context tiers: each request below sits under 200K, the run's totals do not.
+  const tiered: ModelInfo = {
+    id: MODEL_ID,
+    backend: 'bedrock',
+    pricing: {
+      200_000: { input: 0.000003, output: 0.000015 },
+      1_000_000: { input: 0.000006, output: 0.0000225 },
+    },
+  } as unknown as ModelInfo;
+  const turnUsage = [
+    { inputTokens: 150_000, outputTokens: 500 },
+    { inputTokens: 151_000, outputTokens: 700 },
+  ];
+
+  it('prices each subagent request on its own long-context tier when the agent reports per-request usage', async () => {
+    mockDelegation(
+      makeResult({
+        totalInputTokens: 301_000,
+        totalOutputTokens: 1_200,
+        turnUsage,
+      })
+    );
+
+    let captured: SubagentUsageMeta | undefined;
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      availableModels: [tiered],
+      onCredits: (_credits, meta) => {
+        captured = meta;
+      },
+    });
+
+    await tool.toolFn({ task: 'research', agent: 'researcher' });
+
+    expect(captured!.usdCost).toBeCloseTo(getTurnsCost(tiered, turnUsage), 12);
+    // Summed totals would cross 200K and bill every request at the long rate.
+    expect(captured!.usdCost).toBeLessThan(getTextModelCost(tiered, 301_000, 1_200));
+  });
 
   it('threads subagent cache tokens into the usage meta and computes cost on the cache-aware basis', async () => {
     const inputTokens = 12_000;
