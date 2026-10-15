@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { CssVarsProvider } from '@mui/joy/styles';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { ChatMessage } from '@shared/chat';
@@ -7,6 +8,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MessageThread } from './MessageThread';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// jsdom ships no matchMedia, and Joy's colour-scheme provider asks for one on mount.
+window.matchMedia ??= ((query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addListener: () => {},
+  removeListener: () => {},
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  dispatchEvent: () => false,
+})) as typeof window.matchMedia;
 
 /** A user turn that ran a skill: the thread draws the invocation and a chip naming its source. */
 function skillTurn(source: SkillSource): ChatMessage {
@@ -38,15 +51,19 @@ describe('a skill turn in the thread', () => {
   const render = (message: ChatMessage) =>
     act(() =>
       root.render(
-        <MessageThread
-          messages={[message]}
-          sessionId="s1"
-          streaming={false}
-          onRespond={() => undefined}
-          onContinue={() => undefined}
-        />
+        <CssVarsProvider>
+          <MessageThread
+            messages={[message]}
+            sessionId="s1"
+            streaming={false}
+            onRespond={() => undefined}
+            onContinue={() => undefined}
+          />
+        </CssVarsProvider>
       )
     );
+
+  const chip = () => container.querySelector<HTMLElement>('[data-testid="chat-message-skill-chip"]');
 
   it('names an account skill as a Bike4Mind skill beside the invocation', () => {
     render(skillTurn('account'));
@@ -54,13 +71,16 @@ describe('a skill turn in the thread', () => {
     expect(container.querySelector('[data-testid="chat-message-skill"]')?.textContent).toBe(
       '/web-summary the release notes'
     );
-    expect(container.textContent).toContain('Bike4Mind skill');
+    expect(chip()?.textContent).toBe('Bike4Mind skill');
+    // The colour is the only place the account's "yours, from the web" origin reads at a glance.
+    expect(chip()?.className).toContain('MuiChip-colorPrimary');
   });
 
-  it('keeps a project skill labelled as the repository\'s own', () => {
+  it("keeps a project skill labelled as the repository's own", () => {
     render(skillTurn('project'));
 
-    expect(container.textContent).toContain('Project skill');
+    expect(chip()?.textContent).toBe('Project skill');
+    expect(chip()?.className).toContain('MuiChip-colorWarning');
     expect(container.textContent).not.toContain('Bike4Mind');
   });
 });
