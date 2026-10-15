@@ -122,6 +122,12 @@ describe('AttachFileButton plus menu (phone)', () => {
     expect(hoisted.store.setAgentsDropdownOpen).toHaveBeenCalledWith(true);
   });
 
+  it('offers Google Drive straight from the list, with no other-apps step', () => {
+    openMenu();
+    expect(screen.getByText('Connect Google Drive')).toBeInTheDocument();
+    expect(screen.queryByText('Add from other apps')).toBeNull();
+  });
+
   it('leaves Optimize Prompt to the composer row, beside Send', () => {
     openMenu();
     expect(screen.queryByText('Optimize Prompt')).toBeNull();

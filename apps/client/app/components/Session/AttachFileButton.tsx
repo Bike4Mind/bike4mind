@@ -31,7 +31,6 @@ import {
 } from '@mui/joy';
 import axios from 'axios';
 import AddIcon from '@mui/icons-material/Add';
-import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import PostAddIcon from '@mui/icons-material/PostAddOutlined';
 import useDrivePicker from 'react-google-drive-picker';
 import { toast } from 'sonner';
@@ -239,7 +238,7 @@ const AttachFileButton = ({
   const [openPicker] = useDrivePicker();
 
   const currentUser = useUser(state => state.currentUser);
-  const [currentView, setCurrentView] = useState<'main' | 'other-apps' | Submenu>('main');
+  const [currentView, setCurrentView] = useState<'main' | Submenu>('main');
 
   const [isOpen, setIsOpen] = useState(false);
   const [isProcessingFile, setIsProcessingFile] = useState(false);
@@ -614,57 +613,36 @@ const AttachFileButton = ({
             </ListItemButton>
           </ListItem>
 
-          {/* Desktop only, google drive */}
-          {!isMobile && (
-            <ListItem sx={{ p: 0 }}>
-              <ListItemButton
-                disabled={isProcessingFile}
-                onClick={() => {
-                  if (!isProcessingFile) {
-                    setCurrentView('main');
-                    if (isGoogleDriveConnected) {
-                      handleOpenPicker();
-                    } else {
-                      connectGoogleDrive.mutate();
-                    }
+          {/* Google Drive, the only other app so far */}
+          <ListItem sx={{ p: 0 }}>
+            <ListItemButton
+              disabled={isProcessingFile}
+              onClick={() => {
+                if (!isProcessingFile) {
+                  // Closed first: Google's picker must not open underneath the phone sheet.
+                  closeMenu();
+                  if (isGoogleDriveConnected) {
+                    handleOpenPicker();
+                  } else {
+                    connectGoogleDrive.mutate();
                   }
-                }}
-                sx={{
-                  color: 'text.primary',
-                  m: 0,
-                }}
-              >
-                <ListItemDecorator>
-                  <SiGoogledrive color={SiGoogledriveHex} size={18} />
-                </ListItemDecorator>
-                {isProcessingFile
-                  ? 'Processing file...'
-                  : isGoogleDriveConnected
-                    ? 'Upload from Google Drive'
-                    : 'Connect Google Drive'}
-              </ListItemButton>
-            </ListItem>
-          )}
-
-          {/* Mobile only - add from Other Apps */}
-          {isMobile && (
-            <ListItem sx={{ p: 0 }}>
-              <ListItemButton
-                onClick={() => {
-                  setCurrentView('other-apps');
-                }}
-                sx={{
-                  color: 'text.primary',
-                  m: 0,
-                }}
-              >
-                <ListItemDecorator>
-                  <DragIndicatorIcon style={{ color: 'var(--joy-palette-text-primary50)', fontSize: '18px' }} />
-                </ListItemDecorator>
-                Add from other apps
-              </ListItemButton>
-            </ListItem>
-          )}
+                }
+              }}
+              sx={{
+                color: 'text.primary',
+                m: 0,
+              }}
+            >
+              <ListItemDecorator>
+                <SiGoogledrive color={SiGoogledriveHex} size={18} />
+              </ListItemDecorator>
+              {isProcessingFile
+                ? 'Processing file...'
+                : isGoogleDriveConnected
+                  ? 'Upload from Google Drive'
+                  : 'Connect Google Drive'}
+            </ListItemButton>
+          </ListItem>
 
           {/* Open the Knowledge Base (Knowledge Viewer) for the current session.
               Previously the only way in was the "Open in Knowledge Viewer" button on
@@ -878,64 +856,6 @@ const AttachFileButton = ({
           ) : (
             <UploadScopeOptions value={attachScopeMode} onChange={onAttachScopeModeChange} />
           )}
-        </Box>
-      ) : currentView === 'other-apps' ? (
-        <Box sx={LIST_GROUP_SX}>
-          {/* Other Apps View */}
-          {/* Back Button */}
-          <ListItem sx={{ p: 0 }}>
-            <ListItemButton
-              onClick={() => {
-                setCurrentView('main');
-              }}
-              sx={{
-                color: 'text.primary',
-                borderBottom: '1px solid',
-                borderColor: 'divider',
-                mb: 0.5,
-              }}
-            >
-              <ListItemDecorator>
-                <ArrowBack
-                  sx={{
-                    color: 'text.primary50',
-                    fontSize: '18px',
-                  }}
-                />
-              </ListItemDecorator>
-              Back
-            </ListItemButton>
-          </ListItem>
-
-          {/* Google Drive */}
-          <ListItem sx={{ p: 0 }}>
-            <ListItemButton
-              disabled={isProcessingFile}
-              onClick={() => {
-                if (!isProcessingFile) {
-                  setCurrentView('main');
-                  if (isGoogleDriveConnected) {
-                    handleOpenPicker();
-                  } else {
-                    connectGoogleDrive.mutate();
-                  }
-                }
-              }}
-              sx={{
-                color: 'text.primary',
-                m: 0,
-              }}
-            >
-              <ListItemDecorator>
-                <SiGoogledrive color={SiGoogledriveHex} size={18} />
-              </ListItemDecorator>
-              {isProcessingFile
-                ? 'Processing file...'
-                : isGoogleDriveConnected
-                  ? 'Upload from Google Drive'
-                  : 'Connect Google Drive'}
-            </ListItemButton>
-          </ListItem>
         </Box>
       ) : null}
     </List>
