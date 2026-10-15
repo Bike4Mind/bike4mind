@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-13T08:32:30.420Z",
-  "notice": "Fallback defaults last maintained on 2026-10-13. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-10-15T06:20:45.429Z",
+  "notice": "Fallback defaults last maintained on 2026-10-15. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -1578,7 +1578,8 @@
         "modalities",
         "reasoning",
         "lifecycle",
-        "presentation"
+        "presentation",
+        "availability"
       ],
       "patch": {
         "id": "global.anthropic.claude-fable-5",
@@ -1602,7 +1603,9 @@
         "description": "Anthropic's Claude Fable 5 model via AWS Bedrock for complex, long-running agentic tasks.",
         "logoFile": "Anthropic_logo.png",
         "rank": 0,
-        "isSlowModel": true
+        "isSlowModel": true,
+        "disabled": true,
+        "disabledReason": "Requires the aws_review data-retention mode on the Bedrock account"
       }
     },
     {
@@ -1613,7 +1616,8 @@
         "modalities",
         "reasoning",
         "lifecycle",
-        "presentation"
+        "presentation",
+        "availability"
       ],
       "patch": {
         "id": "global.anthropic.claude-fable-5-1",
@@ -1637,7 +1641,9 @@
         "description": "Anthropic's Claude Fable 5.1 model via AWS Bedrock for complex, long-running agentic tasks.",
         "logoFile": "Anthropic_logo.png",
         "rank": 0,
-        "isSlowModel": true
+        "isSlowModel": true,
+        "disabled": true,
+        "disabledReason": "Requires the aws_review data-retention mode on the Bedrock account"
       }
     },
     {
@@ -3910,7 +3916,8 @@
         "modalities",
         "reasoning",
         "lifecycle",
-        "presentation"
+        "presentation",
+        "availability"
       ],
       "patch": {
         "id": "us.anthropic.claude-opus-4-1-20250805-v1:0",
@@ -3928,14 +3935,17 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
-          "status": "active"
+          "status": "deprecated",
+          "deprecationDate": "2027-01-08"
         },
         "description": "Claude 4.1 Opus via AWS Bedrock. Latest iteration with improved performance and reliability. Routes across us-east-1, us-east-2, us-west-2.",
         "logoFile": "Anthropic_logo.png",
         "rank": 1,
         "isSlowModel": true,
         "trainingCutoff": "2025-08-01",
-        "releaseDate": "2025-08-06"
+        "releaseDate": "2025-08-06",
+        "disabled": true,
+        "disabledReason": "Legacy on Bedrock; account access lapsed after inactivity"
       }
     },
     {
@@ -3964,7 +3974,8 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
-          "status": "active"
+          "status": "deprecated",
+          "deprecationDate": "2026-10-15"
         },
         "description": "Claude 4 Opus via AWS Bedrock. Anthropic's most capable model with enhanced reasoning and multimodal capabilities. Routes across us-east-1, us-east-2, us-west-2.",
         "logoFile": "Anthropic_logo.png",
@@ -4000,7 +4011,8 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
-          "status": "active"
+          "status": "deprecated",
+          "deprecationDate": "2026-10-14"
         },
         "description": "Claude 4 Sonnet via AWS Bedrock. Balanced model offering excellent performance at competitive pricing. Routes across us-east-1, us-east-2, us-west-2.",
         "logoFile": "Anthropic_logo.png",

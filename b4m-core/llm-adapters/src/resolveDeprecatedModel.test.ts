@@ -264,6 +264,34 @@ describe('Gemini 2.5 Flash retirement', () => {
   });
 });
 
+describe('Bedrock Claude 4 retirement', () => {
+  const bedrockModels = () => new UndifferentiatedBedrockBackend().getModelInfo();
+  const now = new Date('2026-10-15T00:00:00Z');
+
+  it.each([
+    ['us.anthropic.claude-opus-4-20250514-v1:0', 'global.anthropic.claude-opus-4-8'],
+    ['us.anthropic.claude-sonnet-4-20250514-v1:0', 'global.anthropic.claude-sonnet-4-6'],
+  ])('hides %s by date and resolves a pin to %s, a live successor', async (retired, successor) => {
+    const models = await bedrockModels();
+
+    expect(isModelDeprecated(models.find(m => m.id === retired) as ModelInfo, now)).toBe(true);
+    expect(resolveDeprecatedModelId(retired)).toBe(successor);
+    const resolved = models.find(m => m.id === successor) as ModelInfo;
+    expect(isModelDeprecated(resolved, now)).toBe(false);
+    expect(resolved.disabled).toBeFalsy();
+  });
+
+  it('hides Opus 4.1 via disabled (Legacy lapse) and still resolves a pin to a live successor', async () => {
+    const models = await bedrockModels();
+    const opus41 = models.find(m => m.id === 'us.anthropic.claude-opus-4-1-20250805-v1:0') as ModelInfo;
+
+    expect(opus41.disabled).toBe(true);
+    expect(opus41.disabledReason).toBe('Legacy on Bedrock; account access lapsed after inactivity');
+    expect(opus41.deprecationDate).toBe('2027-01-08');
+    expect(resolveDeprecatedModelId(opus41.id)).toBe('global.anthropic.claude-opus-4-8');
+  });
+});
+
 describe('resolveDeprecatedModelId with the catalog overlay', () => {
   beforeEach(() => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
