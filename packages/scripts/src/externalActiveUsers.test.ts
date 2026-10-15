@@ -552,13 +552,17 @@ describe('selectInternal', () => {
 
   it('keeps admins and staff-domain users, and drops external, test-pattern and unknown users', () => {
     const userDays: UserDayMap = new Map(
-      ['ext', 'admin', 'staff', 'tester', 'ghost'].map((id): [string, Set<number>] => [id, daysOf('2026-10-10')])
+      ['ext', 'admin', 'staff', 'tester', 'staffTester', 'ghost'].map((id): [string, Set<number>] => [
+        id,
+        daysOf('2026-10-10'),
+      ])
     );
     const users = new Map<string, UserRecord>([
       ['ext', { email: 'a@customer.example' }],
       ['admin', { email: 'boss@customer.example', isAdmin: true }],
       ['staff', { email: 'dev@staff.example.com' }],
       ['tester', { email: 'qa+test@customer.example' }],
+      ['staffTester', { email: 'qa+test@staff.example.com' }],
     ]);
 
     const internal = selectInternal(userDays, users, rules);

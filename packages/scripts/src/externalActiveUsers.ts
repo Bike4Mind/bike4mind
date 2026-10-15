@@ -210,7 +210,10 @@ export function selectExternal(
   return { external, excluded };
 }
 
-/** The entries of `userDays` whose user is internal staff: an admin or a staff-domain account. */
+/**
+ * The entries of `userDays` whose user is internal staff: an admin or a staff-domain account. A
+ * test-pattern email is left out even on the staff domain, so e2e accounts don't inflate the column.
+ */
 export function selectInternal(
   userDays: UserDayMap,
   users: Map<string, UserRecord>,
@@ -218,8 +221,11 @@ export function selectInternal(
 ): UserDayMap {
   const internal: UserDayMap = new Map();
   for (const [userId, days] of userDays) {
-    const reason = exclusionReason(users.get(userId), rules);
-    if (reason === 'admin' || reason === 'staffDomain') internal.set(userId, days);
+    const user = users.get(userId);
+    const reason = exclusionReason(user, rules);
+    if (reason !== 'admin' && reason !== 'staffDomain') continue;
+    if (rules.testEmail.test(user?.email ?? '')) continue;
+    internal.set(userId, days);
   }
   return internal;
 }

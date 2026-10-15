@@ -369,6 +369,7 @@ export async function checkApiKeyRateLimitOrThrow(
  */
 const JWT_RATE_LIMIT_BY_SOURCE: Record<CompletionSource, number> = {
   cli: 1000,
+  // Never applies: a desktop request matches the client bucket below first and gets its cap.
   desktop: 100,
   agent: 1000,
   api: 100,
