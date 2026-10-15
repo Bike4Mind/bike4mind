@@ -70,6 +70,15 @@ describe('runBangCommand', () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
+  it('kills the command when its signal aborts (ESC)', async () => {
+    const controller = new AbortController();
+    const pending = runBangCommand('sleep 30', { cwd, signal: controller.signal });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    controller.abort();
+
+    expect(await pending).toEqual({ output: 'Command cancelled', isError: true });
+  });
+
   it('keeps the event loop running while the command runs', async () => {
     const order: string[] = [];
     const pending = runBangCommand('sleep 0.2', { cwd }).then(() => order.push('command-done'));

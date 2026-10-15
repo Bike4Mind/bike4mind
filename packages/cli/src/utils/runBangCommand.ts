@@ -39,7 +39,7 @@ export function killRunningBangCommands(): void {
  */
 export function runBangCommand(
   command: string,
-  { cwd, timeoutMs = BANG_COMMAND_TIMEOUT_MS }: { cwd: string; timeoutMs?: number }
+  { cwd, timeoutMs = BANG_COMMAND_TIMEOUT_MS, signal }: { cwd: string; timeoutMs?: number; signal?: AbortSignal }
 ): Promise<BangCommandResult> {
   return new Promise(resolve => {
     let child: ChildProcess;
@@ -53,9 +53,9 @@ export function runBangCommand(
 
     let stdout = '';
     let stderr = '';
-    let failure: 'timeout' | 'overflow' | null = null;
+    let failure: 'timeout' | 'overflow' | 'cancelled' | null = null;
 
-    const stop = (reason: 'timeout' | 'overflow') => {
+    const stop = (reason: 'timeout' | 'overflow' | 'cancelled') => {
       failure ??= reason;
       killCommand(child);
     };
@@ -79,9 +79,13 @@ export function runBangCommand(
     );
 
     const timer = setTimeout(() => stop('timeout'), timeoutMs);
+    const cancel = () => stop('cancelled');
+    if (signal?.aborted) cancel();
+    signal?.addEventListener('abort', cancel, { once: true });
 
     const finish = (result: BangCommandResult) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
       runningCommands.delete(child);
       resolve(result);
     };
@@ -91,6 +95,8 @@ export function runBangCommand(
       if (failure === 'timeout') {
         const partial = stdout ? `${stdout.trimEnd()}\n` : '';
         finish({ output: `${partial}Command timed out after ${Math.round(timeoutMs / 1000)}s`, isError: true });
+      } else if (failure === 'cancelled') {
+        finish({ output: 'Command cancelled', isError: true });
       } else if (failure === 'overflow') {
         finish({ output: `Command output exceeded ${BANG_COMMAND_MAX_OUTPUT_CHARS / 1024 / 1024} MB`, isError: true });
       } else if (code === 0) {

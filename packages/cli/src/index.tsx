@@ -1347,6 +1347,8 @@ function CliApp() {
 
     // Set thinking state to show loading indicator
     useCliStore.getState().setIsThinking(true);
+    // Released in the finally below; this finalizes "the last message" from a snapshot.
+    const releaseSession = useCliStore.getState().holdSession();
 
     // Create abort controller for this operation
     const abortController = new AbortController();
@@ -1614,6 +1616,7 @@ function CliApp() {
       setState(prev => ({ ...prev, abortController: null }));
       state.agent.off('thought', stepHandler);
       state.agent.off('action', stepHandler);
+      releaseSession();
     }
   };
 
@@ -1674,19 +1677,21 @@ function CliApp() {
    * without adding a user message to the conversation.
    */
   const handleBackgroundCompletion = async () => {
-    const session = useCliStore.getState().session;
-    if (!state.agent || !session) {
-      return;
-    }
-
     // Check authentication before allowing any AI operations
     const authTokens = await state.configStore.getAuthTokens();
     if (!authTokens || new Date(authTokens.expiresAt) <= new Date()) {
       return;
     }
 
+    // Snapshot and hold with no await in between, so nothing appends to the session unseen.
+    const session = useCliStore.getState().session;
+    if (!state.agent || !session) {
+      return;
+    }
+
     // Set thinking state
     useCliStore.getState().setIsThinking(true);
+    const releaseSession = useCliStore.getState().holdSession();
 
     // Create abort controller for this operation
     const abortController = new AbortController();
@@ -1782,6 +1787,7 @@ function CliApp() {
     } finally {
       setState(prev => ({ ...prev, abortController: null }));
       useCliStore.getState().setIsThinking(false);
+      releaseSession();
     }
   };
 
@@ -1790,7 +1796,19 @@ function CliApp() {
     async (command: string) => {
       if (!useCliStore.getState().session) return;
 
-      const { output, isError } = await runBangCommand(command, { cwd: process.cwd() });
+      // With nothing else running the command owns the spinner and ESC, and prompts submitted
+      // meanwhile queue behind it. Mid-turn both belong to the turn, so leave them alone.
+      const ownsInput = !useCliStore.getState().isThinking;
+      const abortController = new AbortController();
+      if (ownsInput) {
+        useCliStore.getState().setIsThinking(true);
+        setState(prev => ({ ...prev, abortController }));
+      }
+
+      const { output, isError } = await runBangCommand(command, {
+        cwd: process.cwd(),
+        signal: abortController.signal,
+      });
 
       // The command runs while the TUI stays live, so an agent turn may have started meanwhile:
       // append once it ends, reading the session then, and add both messages together so the
@@ -1827,6 +1845,20 @@ function CliApp() {
           logger.debug(`[BASH] Session save error: ${error instanceof Error ? error.message : String(error)}`);
         });
       });
+
+      setState(prev => (prev.abortController === abortController ? { ...prev, abortController: null } : prev));
+      // ESC already reset the UI (a new turn may have started since), and a custom command that
+      // started meanwhile owns the spinner and queue until its own finally.
+      if (ownsInput && !abortController.signal.aborted && useCliStore.getState().sessionHolds === 0) {
+        useCliStore.getState().setIsThinking(false);
+        // Same drain as the end of an agent turn (turnController.ts).
+        const queued = useCliStore.getState().dequeueAllMessages();
+        if (queued.length > 0) {
+          setImmediate(() => {
+            void handleMessageRef.current?.(queued.join('\n\n'));
+          });
+        }
+      }
     },
     // session is read fresh from the store, so it is intentionally not a dependency.
     [state.sessionStore]
@@ -2000,6 +2032,7 @@ function CliApp() {
 
     console.log('📝 Generating session handoff...');
     useCliStore.getState().setIsThinking(true);
+    const releaseSession = useCliStore.getState().holdSession();
     try {
       const result = await state.agent.run(prompt, { maxIterations: 1, streamText: false });
       const handoff = parseHandoffResponse(result.finalAnswer);
@@ -2031,6 +2064,7 @@ function CliApp() {
       return null;
     } finally {
       useCliStore.getState().setIsThinking(false);
+      releaseSession();
     }
   };
 

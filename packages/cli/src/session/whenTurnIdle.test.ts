@@ -2,47 +2,50 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useCliStore } from '../store/index.js';
 import { whenTurnIdle } from './whenTurnIdle';
 
-const nextMacrotask = () => new Promise(resolve => setImmediate(resolve));
-
 describe('whenTurnIdle', () => {
   beforeEach(() => {
-    useCliStore.getState().setIsThinking(false);
+    useCliStore.setState({ sessionHolds: 0, isThinking: false });
   });
 
-  it('runs at once when no turn is in flight', () => {
+  it('runs at once when nothing holds the session', () => {
     const callback = vi.fn();
     whenTurnIdle(callback);
 
     expect(callback).toHaveBeenCalledTimes(1);
   });
 
-  it('waits for the running turn to end', async () => {
+  it('runs as the last hold is released, not before', () => {
     const callback = vi.fn();
-    useCliStore.getState().setIsThinking(true);
+    const releaseTurn = useCliStore.getState().holdSession();
+    const releaseCompaction = useCliStore.getState().holdSession();
     whenTurnIdle(callback);
-    await nextMacrotask();
+
+    releaseCompaction();
     expect(callback).not.toHaveBeenCalled();
-
-    useCliStore.getState().setIsThinking(false);
-    await nextMacrotask();
-
+    releaseTurn();
     expect(callback).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps waiting through the gap between auto-compaction and its turn', async () => {
+  it('ignores isThinking, which ESC clears before the turn has unwound', () => {
     const callback = vi.fn();
+    const release = useCliStore.getState().holdSession();
     useCliStore.getState().setIsThinking(true);
     whenTurnIdle(callback);
 
-    // turnController drops isThinking after compaction and raises it again synchronously.
     useCliStore.getState().setIsThinking(false);
-    useCliStore.getState().setIsThinking(true);
-    await nextMacrotask();
     expect(callback).not.toHaveBeenCalled();
-
-    useCliStore.getState().setIsThinking(false);
-    await nextMacrotask();
-
+    release();
     expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a repeated release as a no-op', () => {
+    const releaseFirst = useCliStore.getState().holdSession();
+    const releaseSecond = useCliStore.getState().holdSession();
+    releaseFirst();
+    releaseFirst();
+
+    expect(useCliStore.getState().sessionHolds).toBe(1);
+    releaseSecond();
+    expect(useCliStore.getState().sessionHolds).toBe(0);
   });
 });

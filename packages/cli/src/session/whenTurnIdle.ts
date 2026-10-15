@@ -1,33 +1,21 @@
 import { useCliStore } from '../store/index.js';
 
 /**
- * Runs `callback` once no agent turn is in flight. A turn writes the session from a snapshot it
- * took at its start (and a custom command finalizes "the last message"), so anything appended to
- * the session mid-turn is clobbered or overwritten.
+ * Runs `callback` once nothing holds the session (see `holdSession` in store/index.ts). Agent
+ * turns, custom commands, compaction and handoff write the session back from a snapshot taken
+ * at their start, so anything appended to it meanwhile would be clobbered or overwritten.
  *
- * `isThinking` drops to false synchronously between an auto-compaction and the turn it precedes
- * (turnController.ts), so idleness is confirmed a macrotask later before `callback` runs.
+ * The callback runs synchronously as the last hold is released, before a queued turn can start
+ * and take its own snapshot.
  */
 export function whenTurnIdle(callback: () => void): void {
-  const runIfStillIdle = () => {
-    if (useCliStore.getState().isThinking) {
-      waitForIdle();
-      return;
-    }
+  if (useCliStore.getState().sessionHolds === 0) {
     callback();
-  };
-
-  const waitForIdle = () => {
-    const unsubscribe = useCliStore.subscribe(state => {
-      if (state.isThinking) return;
-      unsubscribe();
-      setImmediate(runIfStillIdle);
-    });
-  };
-
-  if (useCliStore.getState().isThinking) {
-    waitForIdle();
-  } else {
-    callback();
+    return;
   }
+  const unsubscribe = useCliStore.subscribe(state => {
+    if (state.sessionHolds > 0) return;
+    unsubscribe();
+    callback();
+  });
 }
