@@ -1293,6 +1293,19 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return [...new Set(docs.map(d => d.sessionId))];
   }
 
+  // The subset of `keys` that some quest in this session references as generated media (`images`
+  // or `videos`). Session-scoped twin of findSessionIdsByImage: once the caller's access to the
+  // session is established, a key is readable iff one of its turns produced it.
+  async findGeneratedMediaKeysInSession(sessionId: string, keys: string[]): Promise<string[]> {
+    if (!sessionId || keys.length === 0) return [];
+    const docs = await this.model
+      .find({ sessionId, $or: [{ images: { $in: keys } }, { videos: { $in: keys } }] }, { images: 1, videos: 1 })
+      .lean();
+    const requested = new Set(keys);
+    const referenced = docs.flatMap(doc => [...(doc.images ?? []), ...(doc.videos ?? [])]);
+    return [...new Set(referenced.filter(key => requested.has(key)))];
+  }
+
   /**
    * Quests stuck at `status: 'running'` whose `updatedAt` has gone stale, oldest first.
    * Shape is `StaleRunningQuestView`, declared below the class.
