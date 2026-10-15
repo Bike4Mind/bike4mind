@@ -38,6 +38,7 @@ import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { normalizeOpenAIFinishReason } from './stopReason';
+import { DispatchModel } from './dispatchModel';
 
 /**
  * Billed output tokens of one xAI usage object. xAI reports reasoning tokens apart from, not inside,
@@ -54,6 +55,12 @@ export class XAIBackend implements ICompletionBackend {
   private _api: OpenAI;
   private logger: Logger;
   public currentModel: string = '';
+  /** Catalog view of the model being completed; see DispatchModel. */
+  private readonly _dispatch = new DispatchModel();
+
+  setDispatchModel(info: ModelInfo): void {
+    this._dispatch.set(info);
+  }
 
   constructor(apiKey: string, logger?: Logger) {
     if (!apiKey) {
@@ -389,7 +396,10 @@ export class XAIBackend implements ICompletionBackend {
 
     // xAI's prompt_tokens include the cached prefix. Without a published cache rate the cached
     // tokens stay in inputTokens: getTextModelCost's 0.1x default is Anthropic's discount, not xAI's.
-    const forwardsCacheReads = publishesCacheReadRate((await this.getModelInfo()).find(m => m.id === model));
+    // Gated on the catalog-priced record when there is one, the record settlement prices with.
+    const forwardsCacheReads = publishesCacheReadRate(
+      this._dispatch.for(model) ?? (await this.getModelInfo()).find(m => m.id === model)
+    );
     const turnCacheReads = (usage: unknown): number =>
       forwardsCacheReads ? cachedTokensFromUsage(usage as Record<string, unknown> | undefined) : 0;
     // Running totals plus this request, and this request appended to the per-request breakdown.

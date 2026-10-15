@@ -20,7 +20,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { Stream } from 'openai/streaming';
-import type { CompletionInfo } from '@bike4mind/common';
+import type { CompletionInfo, ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from './backend';
 import { AnthropicBackend } from './anthropicBackend';
 import { OpenAIBackend } from './openaiBackend';
@@ -655,9 +655,17 @@ function latchedUsage(calls: CapturedCb[]): CompletionInfo {
   return latched;
 }
 
+type PricingTier = ModelInfo['pricing'][number];
+
 describe.each([geminiTurnUsageSpec, xaiTurnUsageSpec])('$name per-request usage', spec => {
-  const runChain = async (stream: boolean, model: string) => {
+  const runChain = async (stream: boolean, model: string, reprice?: (tier: PricingTier) => PricingTier) => {
     const { backend, setMockSequence } = spec.build(stream);
+    if (reprice) {
+      // Stand in for a price-catalog row: getLlmByModel hands the backend the overlaid record.
+      const literal = (await backend.getModelInfo()).find(m => m.id === model)!;
+      const pricing = Object.fromEntries(Object.entries(literal.pricing).map(([key, tier]) => [key, reprice(tier)]));
+      backend.setDispatchModel?.({ ...literal, pricing } as ModelInfo);
+    }
     setMockSequence([
       spec.toolTurn(stream, 'tool_t1', { a: 1, b: 1 }, { input: 80, output: 15, cached: 0 }),
       spec.toolTurn(stream, 'tool_t2', { a: 2, b: 2 }, { input: 150, output: 18, cached: 60 }),
@@ -703,6 +711,36 @@ describe.each([geminiTurnUsageSpec, xaiTurnUsageSpec])('$name per-request usage'
       expect(final.inputTokens).toBe(450);
       expect(final.cacheReadInputTokens).toBeUndefined();
       expect(final.outputTokens).toBe(41);
+    }
+  );
+
+  it.each([true, false])(
+    'gates on the catalog record: a row without cache_read keeps cached tokens in inputTokens (stream: %s)',
+    async stream => {
+      const final = await runChain(stream, spec.cachedModel, ({ cache_read: _dropped, ...tier }) => tier);
+
+      expect(final.turnUsage).toEqual([
+        { inputTokens: 80, outputTokens: 15 },
+        { inputTokens: 150, outputTokens: 18 },
+        { inputTokens: 220, outputTokens: 8 },
+      ]);
+      expect(final.inputTokens).toBe(450);
+      expect(final.cacheReadInputTokens).toBeUndefined();
+    }
+  );
+
+  it.each([true, false])(
+    'gates on the catalog record: a row that adds cache_read splits the cached part out (stream: %s)',
+    async stream => {
+      const final = await runChain(stream, spec.uncachedModel, tier => ({ ...tier, cache_read: tier.input / 4 }));
+
+      expect(final.turnUsage).toEqual([
+        { inputTokens: 80, outputTokens: 15 },
+        { inputTokens: 90, cacheReadInputTokens: 60, outputTokens: 18 },
+        { inputTokens: 80, cacheReadInputTokens: 140, outputTokens: 8 },
+      ]);
+      expect(final.inputTokens).toBe(250);
+      expect(final.cacheReadInputTokens).toBe(200);
     }
   );
 

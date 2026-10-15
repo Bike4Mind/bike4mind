@@ -601,8 +601,9 @@ export class GeminiBackend implements ICompletionBackend {
     const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
     const accumTurnUsage = options._internal?.accumTurnUsage;
     // Without a published cache rate the cached tokens stay in inputTokens: getTextModelCost's 0.1x
-    // default is Anthropic's discount, not a Gemini price.
-    const forwardsCacheReads = publishesCacheReadRate(modelInfo);
+    // default is Anthropic's discount, not a Gemini price. Gated on the catalog-priced record when
+    // there is one, since that is the record settlement and the public quote price with.
+    const forwardsCacheReads = publishesCacheReadRate(this._dispatch.for(modelName) ?? modelInfo);
 
     // Tool calls minted by an earlier round of THIS SAME completion chain - exempt from the
     // gemini-3 replayed-history drop guard below, since a live call is a different failure mode
