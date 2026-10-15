@@ -35,6 +35,7 @@ import { setRefreshCookie } from '@server/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { Config } from '@server/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
+import { getClientIp } from '@server/utils/ip';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
@@ -241,7 +242,7 @@ const handler = baseApi({ auth: false })
       );
       setRefreshCookie(res, refreshToken);
       const tokens = { accessToken };
-      const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+      const ip = getClientIp(req);
 
       // Analytics + device history are best-effort for the same post-rotation reason as
       // above: the login is already proven, so none of these writes may fail the response.

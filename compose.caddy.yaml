@@ -76,6 +76,14 @@ services:
   app:
     ports: !override
       - '127.0.0.1:${APP_HOST_PORT:-3000}:3000'
+    environment:
+      # Behind Caddy the socket address is always Caddy's container IP, so the app
+      # must read the client IP from X-Forwarded-For or every visitor shares one
+      # rate-limit bucket. Caddy (with no trusted_proxies set) discards any
+      # client-sent X-Forwarded-For and writes the peer it saw, so exactly one hop
+      # is trusted. Raise it only if you put another proxy in front of Caddy AND
+      # configure Caddy's trusted_proxies for it. See apps/client/server/utils/ip.ts.
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
 
   # Same for the realtime ws gateway. Caddy proxies the /ws path to ws:3001 over
   # the compose network (see Caddyfile); the host publish is loopback-only.

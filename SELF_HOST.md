@@ -1035,9 +1035,25 @@ It must be a `handle` block, like the `/ws` route: a bare `reverse_proxy @comple
 
 ### What the bundled Caddy proxy does and does not do
 
-It **does**: run Caddy on 80/443, obtain and renew TLS certificates automatically, proxy HTTPS to the app and (on `/ws`) to the realtime gateway, forward the original `Host` header and set `X-Forwarded-Proto=https` (which the published-artifact viewer needs to build the correct Content-Security-Policy origin), and rebind the app/ws/chatcompletion host ports to loopback so only Caddy is publicly reachable.
+It **does**: run Caddy on 80/443, obtain and renew TLS certificates automatically, proxy HTTPS to the app and (on `/ws`) to the realtime gateway, forward the original `Host` header and set `X-Forwarded-Proto=https` (which the published-artifact viewer needs to build the correct Content-Security-Policy origin), and rebind the app/ws/chatcompletion host ports to loopback so only Caddy is publicly reachable. It also sets `TRUSTED_PROXY_HOPS=1` on the app so per-IP rate limits key on the visitor's address (which Caddy writes into `X-Forwarded-For`) rather than on Caddy's own container IP.
 
 It **does not**: enable Mongo authentication, change your MinIO credentials, configure SMTP, add application-level access control beyond the app's own invite-only sign-up, or replace a firewall. Do those yourself per the checklist. If you swap in your own reverse proxy instead of the bundled one, you must forward the original `Host` header and set `X-Forwarded-Proto=https`, and proxy both the app and the ws gateway (upgrading the WebSocket), or realtime and published artifacts will break.
+
+### Client IP and trusted proxies (`TRUSTED_PROXY_HOPS`)
+
+Per-IP rate limits (sign-in codes, unauthenticated endpoints) and audit records key on the client IP. On self-host the app **ignores every forwarding header by default** - `X-Forwarded-For`, `X-Real-IP`, `True-Client-IP`, `CF-Connecting-IP`, `CloudFront-Viewer-Address` and the rest - because with nothing in front to overwrite them, any client can forge a fresh "source IP" per request and walk straight past those limits. It uses the TCP peer address instead.
+
+Behind a reverse proxy that peer is the proxy, so every visitor would share one rate-limit bucket. Tell the app how many proxies sit in front of it:
+
+| Setup | `TRUSTED_PROXY_HOPS` |
+| --- | --- |
+| No proxy (direct `:3000`) | unset (or `0`) |
+| Tailscale sidecar (Path A) | unset - tailnet members then share the sidecar's rate-limit bucket, which suits a small private tailnet; whether `tailscale serve` writes `X-Forwarded-For` is not verified, so do not raise it without checking |
+| Bundled Caddy (`compose.caddy.yaml`) | `1` - set for you |
+| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1` |
+| A CDN or load balancer in front of your proxy | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For` |
+
+With `N` hops the client IP is the `N`th `X-Forwarded-For` entry counted **from the right** - the one your outermost trusted proxy wrote - so anything a client prepends is ignored. Only `X-Forwarded-For` is read; every proxy you count must append to it. Caddy discards a client-sent `X-Forwarded-For` unless you configure its `trusted_proxies`, so a CDN in front of Caddy also needs `trusted_proxies` set in the Caddyfile. Setting the value higher than your real proxy count lets clients spoof their IP again, and a value that is not a whole number fails every request loudly rather than guessing.
 
 ## What you get (and don't)
 
