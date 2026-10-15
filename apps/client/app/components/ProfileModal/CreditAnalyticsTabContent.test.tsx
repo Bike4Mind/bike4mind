@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { CREDITS_PER_USD_COST, ModelBackend, type ModelInfo } from '@bike4mind/common';
+import { CREDITS_PER_USD_COST, CreditHolderType, ModelBackend, type ModelInfo } from '@bike4mind/common';
 import CreditAnalyticsTabContent from './CreditAnalyticsTabContent';
 import { formatCreditsPer1M } from './modelPricingRows';
 
@@ -31,18 +31,46 @@ const accessibleTextModels = [
   textModel('claude-opus-5-5', 'Claude Opus 5.5', ModelBackend.Anthropic, 5, 25),
 ];
 
+// Video rows carry their model id, so the catalog name has to reach the pie the same way text does.
+const accessibleVideoModels: ModelInfo[] = [
+  {
+    id: 'veo-3' as ModelInfo['id'],
+    type: 'video',
+    name: 'Veo 3',
+    backend: ModelBackend.Gemini,
+    contextWindow: 0,
+    max_tokens: 0,
+    pricing: {},
+  },
+];
+
 const hoisted = vi.hoisted(() => ({
   currentUser: { id: 'user_1', currentCredits: 1000 } as Record<string, unknown>,
   transactions: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('@nivo/line', () => ({ ResponsiveLine: () => null }));
+const line = vi.hoisted(() => ({ series: [] as Array<{ id: string; data: Array<{ x: string; y: number }> }> }));
+vi.mock('@nivo/line', () => ({
+  ResponsiveLine: ({ data }: { data: typeof line.series }) => {
+    line.series = data;
+    return null;
+  },
+}));
 const pie = vi.hoisted(() => ({ data: [] as unknown[] }));
 vi.mock('@nivo/pie', () => ({
   ResponsivePie: ({ data }: { data: unknown[] }) => {
     pie.data = data;
     return null;
+  },
+}));
+// Records the props the tab passes down; also keeps the real dashboard (and its react-query
+// hooks, which would need a QueryClientProvider) out of this suite.
+const dashboard = vi.hoisted(() => ({ props: null as { ownerType: unknown; ownerId?: string } | null }));
+vi.mock('@client/app/components/admin/CreditAnalysis/components/UsageDashboard', () => ({
+  UsageDashboard: (props: { ownerType: unknown; ownerId?: string }) => {
+    dashboard.props = props;
+    return <div data-testid="usage-dashboard" />;
   },
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -55,6 +83,7 @@ vi.mock('@client/app/hooks/useAccessibleModels', () => ({
   useAccessibleModels: () => ({
     accessibleTextModels,
     accessibleImageModels: [],
+    accessibleVideoModels,
     isLoading: false,
     isModelsError: false,
   }),
@@ -126,5 +155,90 @@ describe('CreditAnalyticsTabContent days remaining', () => {
     render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
 
     expect(screen.getByTestId('credit-analytics-days-remaining')).toHaveTextContent('Too early');
+  });
+});
+
+describe('CreditAnalyticsTabContent video usage', () => {
+  afterEach(() => {
+    hoisted.currentUser = { id: 'user_1', currentCredits: 1000 };
+    hoisted.transactions = [];
+    line.series = [];
+  });
+
+  it('counts video spend in the burn rate, the usage series and the model pie', () => {
+    const now = Date.now();
+    hoisted.currentUser = { id: 'user_1', currentCredits: 1000, createdAt: new Date(now - 8 * 86_400_000) };
+    hoisted.transactions = [
+      { type: 'video_generation_usage', credits: -500, createdAt: new Date(now - 3_600_000), model: 'veo-3' },
+    ];
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+
+    // A projection needs a non-zero burn rate, so this stays N/A unless the video row counts.
+    expect(screen.getByTestId('credit-analytics-days-remaining')).not.toHaveTextContent(/N\/A|Too early/);
+    expect(line.series.find(s => s.id === 'usage')?.data.reduce((sum, point) => sum + point.y, 0)).toBe(500);
+    expect(pie.data).toEqual([{ id: 'Veo 3', label: 'Veo 3', value: 500 }]);
+  });
+
+  it('adds a video generation line to the all-types chart', () => {
+    const now = Date.now();
+    hoisted.transactions = [
+      { type: 'video_generation_usage', credits: -500, createdAt: new Date(now - 3_600_000), model: 'veo-3' },
+    ];
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+
+    const [, viewModeSelect] = screen.getAllByRole('combobox');
+    fireEvent.mouseDown(viewModeSelect);
+    fireEvent.click(screen.getByText('All Types'));
+
+    expect(line.series.map(series => series.id)).toEqual(['video_generation_usage']);
+  });
+});
+
+describe('CreditAnalyticsTabContent usage by model list', () => {
+  afterEach(() => {
+    hoisted.currentUser = { id: 'user_1', currentCredits: 1000 };
+    hoisted.transactions = [];
+  });
+
+  it('sorts the pie largest-first and lists every model with its value', () => {
+    const at = new Date(Date.now() - 3_600_000);
+    hoisted.transactions = [
+      { type: 'text_generation_usage', credits: -10, createdAt: at, model: 'gpt-4.1-nano-2025-04-14' },
+      { type: 'text_generation_usage', credits: -100, createdAt: at, model: 'claude-opus-5-5' },
+    ];
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+
+    expect(pie.data).toEqual([
+      { id: 'Claude Opus 5.5', label: 'Claude Opus 5.5', value: 100 },
+      { id: 'GPT-4.1 Nano', label: 'GPT-4.1 Nano', value: 10 },
+    ]);
+    const rows = within(screen.getByTestId('credit-analytics-model-list')).getAllByRole('listitem');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent('Claude Opus 5.5');
+    expect(rows[0]).toHaveTextContent('100');
+    expect(rows[1]).toHaveTextContent('GPT-4.1 Nano');
+    expect(rows[1]).toHaveTextContent('10');
+  });
+});
+
+describe('CreditAnalyticsTabContent spend breakdown', () => {
+  afterEach(() => {
+    hoisted.currentUser = { id: 'user_1', currentCredits: 1000 };
+    hoisted.transactions = [];
+    dashboard.props = null;
+  });
+
+  it('mounts the usage-event breakdown for the signed-in user', async () => {
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+
+    expect(await screen.findByTestId('usage-dashboard')).toBeTruthy();
+    expect(dashboard.props).toEqual({ ownerType: CreditHolderType.User, ownerId: 'user_1' });
+  });
+
+  it('omits the breakdown when there is no user id', () => {
+    hoisted.currentUser = { currentCredits: 1000 };
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+
+    expect(screen.queryByTestId('usage-spend-breakdown')).toBeNull();
   });
 });
