@@ -6,6 +6,10 @@ import { UnsafeScrapeTargetError } from './errors';
 
 const requireCjs = createRequire(import.meta.url);
 
+// The guard resolves hostnames; default to a public IP so only the tests that opt in touch DNS.
+const dnsLookup = vi.hoisted(() => vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]));
+vi.mock('node:dns/promises', () => ({ lookup: (...args: unknown[]) => dnsLookup(...args) }));
+
 describe('resolveFirecrawlApp', () => {
   it('resolves the constructor from the CJS exports object (rolldown node-mode interop)', () => {
     // In the built .cjs dist, rolldown compiles `import FirecrawlApp from '@mendable/firecrawl-js'`
@@ -54,6 +58,20 @@ describe('createFirecrawlApp', () => {
     );
     expect(scrapeSpy).not.toHaveBeenCalled();
     scrapeSpy.mockRestore();
+  });
+
+  it('keeps a transient DNS failure retryable instead of a permanent refusal', async () => {
+    dnsLookup.mockRejectedValueOnce(new Error('EAI_AGAIN'));
+    const app = createFirecrawlApp({ apiUrl: 'http://firecrawl:3002' });
+
+    // scrapeWithRetry only skips on UnsafeScrapeTargetError, so a DNS hiccup must not be one.
+    const error = await app
+      ?.scrapeUrl('https://flaky.example.com/doc')
+      .then(() => undefined)
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(UnsafeScrapeTargetError);
   });
 
   it('constructs a keyless app from a self-hosted apiUrl', () => {

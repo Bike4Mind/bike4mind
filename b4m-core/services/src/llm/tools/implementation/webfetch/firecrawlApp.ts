@@ -1,6 +1,6 @@
 import FirecrawlDefault from '@mendable/firecrawl-js';
 import { UnsafeScrapeTargetError } from './errors';
-import { unsafeFetchUrlReason } from './ssrfGuard';
+import { resolveAndVetUrl } from './ssrfGuard';
 
 type FirecrawlAppCtor = new (config: FirecrawlAppConfig) => FirecrawlClient;
 
@@ -65,9 +65,13 @@ export function createFirecrawlApp(config: FirecrawlAppConfig): FirecrawlClient 
     // inherits it: a self-hosted instance fetches from inside our network, so a private target is
     // an SSRF. Pre-flight only - Firecrawl re-resolves DNS itself, which we cannot pin.
     scrapeUrl: async (url, params) => {
-      const unsafeReason = await unsafeFetchUrlReason(new URL(url));
-      if (unsafeReason) {
-        throw new UnsafeScrapeTargetError(`Refusing to fetch ${url}: ${unsafeReason}`);
+      const vetted = await resolveAndVetUrl(new URL(url));
+      if (!vetted.safe) {
+        // A private or protocol-refused target is permanent (no retry); a DNS hiccup is not, so it
+        // keeps the caller's normal retry path by staying a plain Error.
+        const message = `Refusing to fetch ${url}: ${vetted.reason}`;
+        if (vetted.retryable) throw new Error(message);
+        throw new UnsafeScrapeTargetError(message);
       }
       return app.scrapeUrl(url, params);
     },

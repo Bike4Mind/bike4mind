@@ -39,7 +39,10 @@ export function unsafeHostnameReason(hostname: string): string | null {
   return null;
 }
 
-export type VettedFetchTarget = { safe: true; address: string; family: number } | { safe: false; reason: string };
+export type VettedFetchTarget =
+  | { safe: true; address: string; family: number }
+  /** `retryable` marks a transient failure (a DNS hiccup) rather than a permanent block. */
+  | { safe: false; reason: string; retryable?: boolean };
 
 /**
  * Full guard (protocol + literal hostname + resolved-address check) that also RETURNS the vetted
@@ -58,13 +61,15 @@ export async function resolveAndVetUrl(url: URL): Promise<VettedFetchTarget> {
   try {
     addresses = await lookup(host, { all: true });
   } catch {
-    return { safe: false, reason: 'dns resolution failed' };
+    // A lookup failure is transient (EAI_AGAIN, SERVFAIL), not a verdict on the target: mark it
+    // retryable so a caller does not treat a DNS hiccup as a permanent refusal.
+    return { safe: false, reason: 'dns resolution failed', retryable: true };
   }
   for (const { address } of addresses) {
     if (isPrivateIP(address)) return { safe: false, reason: 'resolves to a private/reserved address' };
   }
   const first = addresses[0];
-  if (!first) return { safe: false, reason: 'dns resolution failed' };
+  if (!first) return { safe: false, reason: 'dns resolution failed', retryable: true };
   return { safe: true, address: first.address, family: first.family };
 }
 
