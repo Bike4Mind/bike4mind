@@ -10,7 +10,9 @@ const USE_PROCESS_GROUP = process.platform !== 'win32';
 
 export type BangCommandResult = { output: string; isError: boolean };
 
-const runningCommands = new Set<ChildProcess>();
+type StopReason = 'timeout' | 'overflow' | 'cancelled' | 'exit';
+
+const runningCommands = new Map<ChildProcess, (reason: StopReason) => void>();
 
 /** Signal the command's whole process tree, so `make && ./server` does not outlive a kill. */
 function killCommand(child: ChildProcess): void {
@@ -25,22 +27,23 @@ function killCommand(child: ChildProcess): void {
   }
 }
 
-/** Kills every `!command` still running; called on CLI exit so none is orphaned. */
+/** Kills every `!command` still running; called on CLI exit so none is orphaned. Their results resolve `null`. */
 export function killRunningBangCommands(): void {
-  for (const child of runningCommands) {
-    killCommand(child);
+  for (const stop of runningCommands.values()) {
+    stop('exit');
   }
   runningCommands.clear();
 }
 
 /**
  * Runs a `!command` typed in the TUI without blocking the event loop, through the platform shell
- * like the execSync it replaces. Never rejects: every failure comes back as `isError` output.
+ * like the execSync it replaces. Never rejects: every failure comes back as `isError` output, except
+ * a command killed because the CLI is exiting, which resolves `null` (nothing should be recorded).
  */
 export function runBangCommand(
   command: string,
   { cwd, timeoutMs = BANG_COMMAND_TIMEOUT_MS, signal }: { cwd: string; timeoutMs?: number; signal?: AbortSignal }
-): Promise<BangCommandResult> {
+): Promise<BangCommandResult | null> {
   return new Promise(resolve => {
     let child: ChildProcess;
     try {
@@ -49,16 +52,16 @@ export function runBangCommand(
       resolve({ output: error instanceof Error ? error.message : String(error), isError: true });
       return;
     }
-    runningCommands.add(child);
 
     let stdout = '';
     let stderr = '';
-    let failure: 'timeout' | 'overflow' | 'cancelled' | null = null;
+    let failure: StopReason | null = null;
 
-    const stop = (reason: 'timeout' | 'overflow' | 'cancelled') => {
+    const stop = (reason: StopReason) => {
       failure ??= reason;
       killCommand(child);
     };
+    runningCommands.set(child, stop);
     const collect = (append: (text: string) => void) => (text: string) => {
       // Past a timeout or the cap, keep draining the pipe but stop growing the buffer.
       if (failure) return;
@@ -83,7 +86,7 @@ export function runBangCommand(
     if (signal?.aborted) cancel();
     signal?.addEventListener('abort', cancel, { once: true });
 
-    const finish = (result: BangCommandResult) => {
+    const finish = (result: BangCommandResult | null) => {
       clearTimeout(timer);
       signal?.removeEventListener('abort', cancel);
       runningCommands.delete(child);
@@ -92,7 +95,9 @@ export function runBangCommand(
 
     child.on('error', error => finish({ output: error.message, isError: true }));
     child.on('close', code => {
-      if (failure === 'timeout') {
+      if (failure === 'exit') {
+        finish(null);
+      } else if (failure === 'timeout') {
         const partial = stdout ? `${stdout.trimEnd()}\n` : '';
         finish({ output: `${partial}Command timed out after ${Math.round(timeoutMs / 1000)}s`, isError: true });
       } else if (failure === 'cancelled') {

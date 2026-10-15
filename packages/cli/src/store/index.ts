@@ -97,7 +97,7 @@ interface CliStore {
   clearMessageQueue: () => void;
 
   // Operations that read the session, await, then write it back from that snapshot (agent turns,
-  // custom commands, compaction, handoff). Anything else that appends to the session waits for
+  // custom commands, background completion, compaction; handoff holds across its LLM call). Anything else that appends to the session waits for
   // this to reach zero (see session/whenTurnIdle.ts). Unlike isThinking, which is UI state that
   // ESC clears early, a hold lasts until the operation's own `finally`.
   sessionHolds: number;

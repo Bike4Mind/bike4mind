@@ -20,9 +20,9 @@ describe('runBangCommand', () => {
   });
 
   it('keeps multi-byte characters intact across pipe chunks', async () => {
-    const { output } = await runBangCommand(`node -e "process.stdout.write('\u3042'.repeat(100000))"`, { cwd });
+    const result = await runBangCommand(`node -e "process.stdout.write('\u3042'.repeat(100000))"`, { cwd });
 
-    expect(output).toBe('\u3042'.repeat(100000));
+    expect(result?.output).toBe('\u3042'.repeat(100000));
   });
 
   it('stops a command whose output passes the cap', async () => {
@@ -32,8 +32,8 @@ describe('runBangCommand', () => {
   });
 
   it('runs in the given directory', async () => {
-    const { output } = await runBangCommand('pwd', { cwd: '/' });
-    expect(output.trim()).toBe('/');
+    const result = await runBangCommand('pwd', { cwd: '/' });
+    expect(result?.output.trim()).toBe('/');
   });
 
   it('does not wait on a command that reads stdin', async () => {
@@ -47,26 +47,25 @@ describe('runBangCommand', () => {
   it('kills a command that outlives the timeout and keeps its partial output', async () => {
     const result = await runBangCommand('echo partial; sleep 5', { cwd, timeoutMs: 1_000 });
 
-    expect(result.isError).toBe(true);
-    expect(result.output).toBe('partial\nCommand timed out after 1s');
+    expect(result).toEqual({ output: 'partial\nCommand timed out after 1s', isError: true });
   });
 
   it('kills the whole process tree on timeout, not just the shell', async () => {
     const result = await runBangCommand('sleep 30 & echo $!; wait', { cwd, timeoutMs: 1_000 });
-    const grandchildPid = Number(result.output.split('\n')[0]);
+    const grandchildPid = Number(result?.output.split('\n')[0]);
     await new Promise(resolve => setTimeout(resolve, 100));
 
     expect(grandchildPid).toBeGreaterThan(0);
     expect(() => process.kill(grandchildPid, 0)).toThrow();
   });
 
-  it('kills commands still running when the CLI exits', async () => {
+  it('kills commands still running when the CLI exits and records nothing for them', async () => {
     const started = Date.now();
     const pending = runBangCommand('sleep 30', { cwd });
     await new Promise(resolve => setTimeout(resolve, 100));
     killRunningBangCommands();
 
-    expect((await pending).isError).toBe(true);
+    expect(await pending).toBeNull();
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 

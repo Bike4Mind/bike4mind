@@ -1799,23 +1799,28 @@ function CliApp() {
       // With nothing else running the command owns the spinner and ESC, and prompts submitted
       // meanwhile queue behind it. Mid-turn both belong to the turn, so leave them alone.
       const ownsInput = !useCliStore.getState().isThinking;
+      const sessionId = useCliStore.getState().session?.id;
       const abortController = new AbortController();
       if (ownsInput) {
         useCliStore.getState().setIsThinking(true);
         setState(prev => ({ ...prev, abortController }));
       }
 
-      const { output, isError } = await runBangCommand(command, {
+      const result = await runBangCommand(command, {
         cwd: process.cwd(),
         signal: abortController.signal,
       });
+      // null: killed because the CLI is exiting, so record nothing.
+      if (!result) return;
+      const { output, isError } = result;
 
       // The command runs while the TUI stays live, so an agent turn may have started meanwhile:
       // append once it ends, reading the session then, and add both messages together so the
       // history never holds an unanswered `$ command` turn.
       whenTurnIdle(() => {
         const session = useCliStore.getState().session;
-        if (!session) return;
+        // /clear, /new or /resume may have switched sessions while it ran; it belongs to the old one.
+        if (!session || session.id !== sessionId) return;
 
         const userMessage: Message = {
           id: uuidv4(),
@@ -1847,8 +1852,9 @@ function CliApp() {
       });
 
       setState(prev => (prev.abortController === abortController ? { ...prev, abortController: null } : prev));
-      // ESC already reset the UI (a new turn may have started since), and a custom command that
-      // started meanwhile owns the spinner and queue until its own finally.
+      // ESC already reset the UI (a new turn may have started since), and a custom command or
+      // compaction started meanwhile owns the spinner until its own finally. Those do not drain
+      // the queue, so prompts queued behind this command then wait for the next agent turn.
       if (ownsInput && !abortController.signal.aborted && useCliStore.getState().sessionHolds === 0) {
         useCliStore.getState().setIsThinking(false);
         // Same drain as the end of an agent turn (turnController.ts).
