@@ -74,7 +74,7 @@ import AttachFileButton from './AttachFileButton';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-const openMenu = (props: { chatInputValue?: string; onOptimizePrompt?: () => void } = {}) => {
+const openMenu = () => {
   render(
     <CssVarsProvider theme={appTheme}>
       <AttachFileButton
@@ -83,7 +83,6 @@ const openMenu = (props: { chatInputValue?: string; onOptimizePrompt?: () => voi
         onAddFromFileBrowser={vi.fn()}
         attachScopeMode="auto"
         onAttachScopeModeChange={vi.fn()}
-        {...props}
       />
     </CssVarsProvider>
   );
@@ -123,19 +122,8 @@ describe('AttachFileButton plus menu (phone)', () => {
     expect(hoisted.store.setAgentsDropdownOpen).toHaveBeenCalledWith(true);
   });
 
-  it('lists Optimize Prompt before there is a prompt, but waits for one', () => {
-    const onOptimizePrompt = vi.fn();
-    openMenu({ chatInputValue: '  ', onOptimizePrompt });
-    const row = screen.getByTestId('attach-menu-optimize-btn');
-    expect(row).toHaveTextContent('Type a prompt first');
-    fireEvent.click(row);
-    expect(onOptimizePrompt).not.toHaveBeenCalled();
-  });
-
-  it('optimizes once there is a prompt', () => {
-    const onOptimizePrompt = vi.fn();
-    openMenu({ chatInputValue: 'draft a reply', onOptimizePrompt });
-    fireEvent.click(screen.getByTestId('attach-menu-optimize-btn'));
-    expect(onOptimizePrompt).toHaveBeenCalledTimes(1);
+  it('leaves Optimize Prompt to the composer row, beside Send', () => {
+    openMenu();
+    expect(screen.queryByText('Optimize Prompt')).toBeNull();
   });
 });

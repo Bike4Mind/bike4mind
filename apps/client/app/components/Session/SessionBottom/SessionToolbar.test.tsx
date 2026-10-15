@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   rowCompact: false,
 }));
 
-// SessionToolbar imports `api` at module load (used inside onOptimizePrompt).
+// Children and hooks reach `api` at module load.
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn(), get: vi.fn() } }));
 
 // Re-mocked locally so any transitive import gets the ReadyState enum plus a benign
@@ -40,7 +40,7 @@ vi.mock('@client/app/components/Session/AdvancedAISettings', () => {
   };
   return { default: AdvancedAISettingsStub };
 });
-vi.mock('@client/app/components/Session/RephraseButton', () => ({ default: () => null }));
+vi.mock('@client/app/components/Session/RephraseButton', () => ({ default: () => <div data-testid="rephrase-btn" /> }));
 vi.mock('@client/app/components/common/VoiceRecordButton', () => {
   const VoiceRecordButtonStub = React.forwardRef<
     HTMLDivElement,
@@ -135,6 +135,20 @@ describe('SessionToolbar - Send button blocked reason', () => {
     render(<SessionToolbar {...baseProps} chatInputValue="hello" />, { wrapper: Wrapper });
     expect(screen.getByTestId('send-message-btn')).not.toBeDisabled();
     expect(screen.getByTestId('send-message-btn-wrapper')).not.toHaveAttribute('data-blocked-reason');
+  });
+});
+
+describe('SessionToolbar - optimize prompt', () => {
+  it.each([false, true])('puts Optimize beside Send instead of dictation once there is text (phone: %s)', isMobile => {
+    render(<SessionToolbar {...baseProps} isMobile={isMobile} chatInputValue="draft" />, { wrapper: Wrapper });
+    expect(screen.getByTestId('rephrase-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('voice-record-btn')).toBeNull();
+  });
+
+  it('offers dictation, not Optimize, while the composer is empty', () => {
+    render(<SessionToolbar {...baseProps} isMobile />, { wrapper: Wrapper });
+    expect(screen.queryByTestId('rephrase-btn')).toBeNull();
+    expect(screen.getByTestId('voice-record-btn')).toBeInTheDocument();
   });
 });
 

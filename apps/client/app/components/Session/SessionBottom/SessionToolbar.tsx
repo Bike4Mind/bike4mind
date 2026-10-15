@@ -10,7 +10,6 @@ import SendIcon from '@mui/icons-material/Send';
 import { useTranslation } from 'react-i18next';
 
 import { IFabFileDocument, ISessionDocument } from '@bike4mind/common';
-import { api } from '@client/app/contexts/ApiContext';
 import { fixedIconSize } from './sessionBottomConstants';
 import { getSendBlockedLabel, type SendBlockedReason } from './sendBlockedReason';
 import { useChatInput } from '@client/app/hooks/useChatInput';
@@ -189,27 +188,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
                   attachScopeMode={attachScopeMode}
                   onAttachScopeModeChange={setAttachScopeMode}
                   totalFilesCount={totalFilesCount}
-                  chatInputValue={chatInputValue}
                   agentModeDisabled={submitting}
-                  onOptimizePrompt={async () => {
-                    if (!chatInputValue?.trim()) return;
-                    try {
-                      const response = await api.post('/api/ai/optimize-input', {
-                        text: chatInputValue,
-                        style: 'optimized',
-                        maxLength: Math.min(chatInputValue.length * 2, 1000),
-                      });
-                      if (response.data?.optimizedText) {
-                        setChatInputValue(response.data.optimizedText);
-                        setRephraseGlow(true);
-                        setTimeout(() => setRephraseGlow(false), 900);
-                        toast.success('Input optimized');
-                      }
-                    } catch (error) {
-                      console.error('Failed to optimize input:', error);
-                      toast.error('Failed to optimize input');
-                    }
-                  }}
                 />
               )}
 
@@ -228,8 +207,9 @@ export function SessionToolbar(props: SessionToolbarProps) {
                 />
               </Box>
 
-              {/* Action buttons: Rephrase, Voice Record, Stop/Send */}
-              {!isMobile && !stretchVoice && chatInputValue && chatInputValue.trim() !== '' && (
+              {/* Action buttons: Rephrase, Voice Record, Stop/Send. Once there is text, Rephrase takes
+                  the dictation mic's place beside Send, on phones too. */}
+              {!stretchVoice && chatInputValue && chatInputValue.trim() !== '' && (
                 <RephraseButton
                   currentText={chatInputValue}
                   onRephrase={text => {

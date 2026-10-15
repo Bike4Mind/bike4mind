@@ -38,7 +38,6 @@ import { toast } from 'sonner';
 import ScienceIcon from '@mui/icons-material/ScienceOutlined';
 import SmartToyIcon from '@mui/icons-material/SmartToyOutlined';
 import HandymanIcon from '@mui/icons-material/HandymanOutlined';
-import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
@@ -218,8 +217,6 @@ interface IProps {
   attachScopeMode: AttachScopeMode;
   onAttachScopeModeChange: (mode: AttachScopeMode) => void;
   totalFilesCount?: number;
-  chatInputValue?: string;
-  onOptimizePrompt?: () => void;
   /** Agent mode can't change while a turn is being sent. */
   agentModeDisabled?: boolean;
 }
@@ -231,8 +228,6 @@ const AttachFileButton = ({
   attachScopeMode,
   onAttachScopeModeChange,
   totalFilesCount,
-  chatInputValue,
-  onOptimizePrompt,
   agentModeDisabled = false,
 }: IProps) => {
   const theme = useTheme();
@@ -301,8 +296,6 @@ const AttachFileButton = ({
   const openAdvancedSettings = useAdvancedAISettings(s => s.openModal);
   const setAgentsDropdownOpen = useAdvancedAISettings(s => s.setAgentsDropdownOpen);
   const setToolsDropdownOpen = useAdvancedAISettings(s => s.setToolsDropdownOpen);
-
-  const hasPrompt = !!chatInputValue?.trim();
 
   const { isFeatureEnabled } = useFeatureEnabled();
   const isAgentsEnabled = isFeatureEnabled('enableAgents');
@@ -809,36 +802,6 @@ const AttachFileButton = ({
                   <ScienceIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
                 </ListItemDecorator>
                 Research Mode
-              </ListItemButton>
-            </ListItem>
-          )}
-
-          {/* Mobile only - Optimize Prompt. Always listed so it can be found; it needs a prompt to
-              work on, so it waits until there is one. */}
-          {isMobile && onOptimizePrompt && (
-            <ListItem sx={{ p: 0 }}>
-              <ListItemButton
-                data-testid="attach-menu-optimize-btn"
-                disabled={!hasPrompt}
-                onClick={() => {
-                  setIsOpen(false);
-                  setCurrentView('main');
-                  onOptimizePrompt();
-                }}
-                sx={{
-                  color: 'text.primary',
-                  m: 0,
-                }}
-              >
-                <ListItemDecorator>
-                  <AutoAwesomeOutlinedIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
-                </ListItemDecorator>
-                Optimize Prompt
-                {!hasPrompt && (
-                  <Typography level="body-xs" sx={{ ml: 'auto', color: 'text.tertiary' }}>
-                    Type a prompt first
-                  </Typography>
-                )}
               </ListItemButton>
             </ListItem>
           )}
