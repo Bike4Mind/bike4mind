@@ -6,7 +6,7 @@ import { FirecrawlError } from '@mendable/firecrawl-js';
 import { createFirecrawlApp } from './firecrawlApp';
 import { plainFetchScrape } from './plainFetch';
 import { UnsafeScrapeTargetError } from './errors';
-import { unsafeFetchUrlReason } from './ssrfGuard';
+import { resolveAndVetUrl, unsafeFetchUrlReason } from './ssrfGuard';
 
 // Re-exported so external construction sites (e.g. apps/workers researchEngineQueue)
 // can use the interop-safe constructor instead of the raw default import.
@@ -182,11 +182,14 @@ export async function firecrawlFetch(
   }
 
   // Checked before choosing a backend: a self-hosted Firecrawl (`apiUrl`) fetches from inside our
-  // network, so handing it a private address is the same SSRF as fetching it ourselves. Same error
-  // type as the guard inside the Firecrawl wrapper, so a retry wrapper treats both the same way.
-  const unsafeReason = await unsafeFetchUrlReason(new URL(url));
-  if (unsafeReason) {
-    throw new UnsafeScrapeTargetError(`Refusing to fetch ${url}: ${unsafeReason}`);
+  // network, so handing it a private address is the same SSRF as fetching it ourselves. Same
+  // handling as the guard inside the Firecrawl wrapper: a private or protocol refusal is permanent
+  // (`UnsafeScrapeTargetError`), a DNS hiccup is a plain Error so a retry wrapper still retries it.
+  const vetted = await resolveAndVetUrl(new URL(url));
+  if (!vetted.safe) {
+    const message = `Refusing to fetch ${url}: ${vetted.reason}`;
+    if (vetted.retryable) throw new Error(message);
+    throw new UnsafeScrapeTargetError(message);
   }
 
   // Use longer timeout for PDF URLs - large PDFs need more server-side processing time.

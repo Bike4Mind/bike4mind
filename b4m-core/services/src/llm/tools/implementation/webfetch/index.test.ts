@@ -24,6 +24,7 @@ const dnsLookup = vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]);
 vi.mock('node:dns/promises', () => ({ lookup: (...args: unknown[]) => dnsLookup(...args) }));
 
 import { firecrawlFetch, truncationMarker, webFetchBody, webFetchTool } from './index';
+import { UnsafeScrapeTargetError } from './errors';
 import { createFirecrawlApp } from './firecrawlApp';
 import { plainFetchScrape } from './plainFetch';
 
@@ -347,6 +348,16 @@ describe('firecrawlFetch SSRF guard', () => {
     await expect(firecrawlFetch(adapters, 'http://127.0.0.1:8080/')).rejects.toThrow(/Refusing to fetch/);
     expect(mockCreateApp).not.toHaveBeenCalled();
     expect(mockPlainFetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps a transient DNS failure retryable, unlike a private-target refusal', async () => {
+    dnsLookup.mockImplementation(async () => {
+      throw new Error('getaddrinfo EAI_AGAIN flaky.example.com');
+    });
+    const error = await firecrawlFetch(adapters, 'https://flaky.example.com/').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(UnsafeScrapeTargetError);
+    expect(mockCreateApp).not.toHaveBeenCalled();
   });
 });
 
