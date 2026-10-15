@@ -12,6 +12,7 @@ import {
   QuestCallbackStateSchema,
   ChatToolModeSchema,
   type GenerationJobRef,
+  type GenerationJobKind,
   GENERATION_JOB_KINDS,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
@@ -598,8 +599,9 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
       ],
       default: undefined,
     },
-    // Agent-mode video clips claimed by this run; the per-run cap's counter (see claimAgentVideoClip).
+    // Agent-mode jobs claimed by this run, one per-run cap counter per kind (see claimAgentGenerationSlot).
     agentVideoClipsClaimed: { type: Number, required: false },
+    agentMusicTracksClaimed: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -883,6 +885,11 @@ function staleCallbackDispatchFilter({
     'callback.redispatchCount': { $not: { $gte: maxRedispatches } },
   };
 }
+
+const AGENT_GENERATION_SLOT_FIELDS = {
+  video: 'agentVideoClipsClaimed',
+  music: 'agentMusicTracksClaimed',
+} as const satisfies Record<GenerationJobKind, keyof IChatHistoryItem>;
 
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
@@ -1250,28 +1257,27 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
-   * Claim one of an agent run's `limit` video clip slots. The run's parent, its in-process subagents and its checkpoint continuations share
-   * this Quest and can claim concurrently, so the check and the increment must be one atomic update.
+   * Claim one of an agent run's `limit` slots for a `kind` of generation job. The run's parent, its in-process subagents and its
+   * checkpoint continuations share this Quest and can claim concurrently, so the check and the increment must be one atomic update.
    * Returns false when the cap is reached or no Quest matches.
    */
-  async claimAgentVideoClip(questId: string, limit: number): Promise<boolean> {
+  async claimAgentGenerationSlot(questId: string, kind: GenerationJobKind, limit: number): Promise<boolean> {
     if (limit <= 0) return false;
+    const field = AGENT_GENERATION_SLOT_FIELDS[kind];
     const result = await this.model.updateOne(
       {
         _id: convertId(questId),
-        $or: [{ agentVideoClipsClaimed: { $exists: false } }, { agentVideoClipsClaimed: { $lt: limit } }],
+        $or: [{ [field]: { $exists: false } }, { [field]: { $lt: limit } }],
       },
-      { $inc: { agentVideoClipsClaimed: 1 } }
+      { $inc: { [field]: 1 } }
     );
     return result.modifiedCount === 1;
   }
 
-  /** Give back a slot from claimAgentVideoClip whose call started no new clip. */
-  async releaseAgentVideoClip(questId: string): Promise<void> {
-    await this.model.updateOne(
-      { _id: convertId(questId), agentVideoClipsClaimed: { $gt: 0 } },
-      { $inc: { agentVideoClipsClaimed: -1 } }
-    );
+  /** Give back a slot from claimAgentGenerationSlot whose call started no new job. */
+  async releaseAgentGenerationSlot(questId: string, kind: GenerationJobKind): Promise<void> {
+    const field = AGENT_GENERATION_SLOT_FIELDS[kind];
+    await this.model.updateOne({ _id: convertId(questId), [field]: { $gt: 0 } }, { $inc: { [field]: -1 } });
   }
 
   // Cheap existence check (Mongo `exists` returns just the `_id` of the first

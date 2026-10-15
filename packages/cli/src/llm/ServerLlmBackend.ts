@@ -256,8 +256,11 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
         return this.getFallbackModels();
       }
 
-      // Filter for CLI-compatible models: text models with tool support
-      const filteredModels = response.models.filter(model => model.type === 'text' && model.supportsTools === true);
+      // Text, tool-capable and not disabled: the API keeps disabled rows for the SPA picker's
+      // pinned selection, but the CLI has no pin to preserve and cannot run one.
+      const filteredModels = response.models.filter(
+        model => model.type === 'text' && model.supportsTools === true && !model.disabled
+      );
 
       logger.debug(`[ServerLlmBackend] Fetched ${filteredModels.length} CLI-compatible models`);
 

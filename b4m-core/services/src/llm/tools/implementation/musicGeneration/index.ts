@@ -9,9 +9,13 @@ import {
 } from '../generationJobTool';
 import { buildMusicToolSchema, type MusicToolArgs } from './buildSchema';
 
+// The agent-mode per-run cap (agentExecutor.musicToolConfig.ts) refuses here; createMusicJob never returns this code,
+// so it stays out of CreateMusicJobErrorCode, whose codes the public music-generations route must all publish.
+type TrackLimitRefusal = { ok: false; status: 403; code: 'track_limit_reached'; message: string };
+
 export type MusicToolConfig = {
   usableModels: readonly MusicModelId[];
-  createJob: (input: CreateMusicJobInput) => Promise<CreateMusicJobResult>;
+  createJob: (input: CreateMusicJobInput) => Promise<CreateMusicJobResult | TrackLimitRefusal>;
 };
 
 type PopulatedMusicToolConfig = MusicToolConfig & { usableModels: readonly [MusicModelId, ...MusicModelId[]] };

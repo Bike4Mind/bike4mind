@@ -100,6 +100,24 @@ describe('AnthropicBedrockBackend current inference profiles', () => {
     expect(model?.pricing[1_000_000]).toMatchObject({ input: input / 1_000_000, output: output / 1_000_000 });
   });
 
+  it.each([ChatModels.CLAUDE_FABLE_5_BEDROCK, ChatModels.CLAUDE_FABLE_5_1_BEDROCK])(
+    'lists %s disabled, naming the aws_review data-retention mode it needs',
+    async id => {
+      const model = (await backend.getModelInfo()).find(candidate => candidate.id === id);
+
+      expect(model).toMatchObject({ disabled: true, disabledReason: expect.stringContaining('aws_review') });
+    }
+  );
+
+  it('lists Opus 4.1 disabled with its Legacy reason', async () => {
+    const model = (await backend.getModelInfo()).find(candidate => candidate.id === ChatModels.CLAUDE_4_1_OPUS_BEDROCK);
+
+    expect(model).toMatchObject({
+      disabled: true,
+      disabledReason: 'Legacy on Bedrock; account access lapsed after inactivity',
+    });
+  });
+
   it('prices Opus 5.5 cache hits at 0.05x input ($0.20 / 1M), not the default 0.1x', async () => {
     const model = (await backend.getModelInfo()).find(candidate => candidate.id === ChatModels.CLAUDE_5_5_OPUS_BEDROCK);
 

@@ -255,8 +255,9 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
         return this.getFallbackModels();
       }
 
+      // Text, tool-capable and not disabled: a disabled model is rejected on every turn.
       const filteredModels = response.models.filter(
-        (model: ModelInfo) => model.type === 'text' && model.supportsTools === true
+        (model: ModelInfo) => model.type === 'text' && model.supportsTools === true && !model.disabled
       );
 
       if (filteredModels.length === 0) {

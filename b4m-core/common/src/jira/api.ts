@@ -1460,6 +1460,13 @@ export class JiraApi {
   }
 
   /**
+   * Get an attachment's metadata (not its content) by ID.
+   */
+  async getAttachment(params: { attachmentId: string }): Promise<JiraAttachment> {
+    return this.request<JiraAttachment>('GET', apiPath`/attachment/${params.attachmentId}`);
+  }
+
+  /**
    * Download an attachment by ID.
    * Returns the file content as base64-encoded string.
    */
@@ -1472,7 +1479,7 @@ export class JiraApi {
     const { attachmentId } = params;
 
     // First, get attachment metadata to get the download URL
-    const metadata = await this.request<JiraAttachment>('GET', apiPath`/attachment/${attachmentId}`);
+    const metadata = await this.getAttachment({ attachmentId });
 
     if (!metadata.content) {
       throw new Error(`Attachment ${attachmentId} has no download URL`);

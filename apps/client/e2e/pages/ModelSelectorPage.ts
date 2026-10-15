@@ -4,7 +4,8 @@ import { BasePage } from './BasePage';
 
 export class ModelSelectorPage extends BasePage {
   async openModelSelector() {
-    await this.page.getByTestId('ai-settings-btn').first().click();
+    // Bounded: with no actionTimeout, a covered or missing button would wait out the whole test.
+    await this.page.getByTestId('ai-settings-btn').first().click({ timeout: TIMEOUTS.ACTION });
     // Wait for model list to finish loading (models + user data) before interacting.
     // The spinner may resolve instantly if data is cached, so also confirm at least
     // one model card is rendered as a reliable signal that the list is ready.

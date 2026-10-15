@@ -4348,6 +4348,55 @@ describe('ChatCompletionProcess', () => {
       expect(optsSeen[4].preferUntriedBackend).toBe(true);
     });
 
+    // Wiring test: a request that carries tools must ask for a tool-capable fallback, or the hop
+    // can land on a model that rejects function calling.
+    it.each([
+      { label: 'with tools', tools: [{ toolSchema: { name: 'math_evaluate' }, toolFn: vi.fn() }], expected: true },
+      { label: 'without tools', tools: [], expected: false },
+    ])('passes requireTools=$expected to getLlmWithFallback $label', async ({ tools, expected }) => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('authentication failed')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const optsSeen: Array<{ requireTools?: boolean }> = [];
+      mockedGetLlmWithFallback.mockImplementation(async (...callArgs: any[]) => {
+        optsSeen.push(callArgs[5] ?? {});
+        return null;
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 0, output: 0 } },
+          supportsImageVariation: false,
+          supportsTools: true,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+      buildToolsSpy.mockRestore();
+
+      expect(optsSeen.length).toBe(1);
+      expect(optsSeen[0].requireTools).toBe(expected);
+    });
+
     // Wiring test: with the E2E gate on and the marker present, the affordance simulates a
     // provider-wide Anthropic outage - it throws on every Bedrock/Anthropic-backed hop, so the
     // Bedrock primary never runs and the loop crosses to the non-Anthropic fallback (gpt-5),
