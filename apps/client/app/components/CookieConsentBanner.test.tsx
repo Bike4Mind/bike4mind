@@ -629,7 +629,8 @@ describe('CookieConsentBanner', () => {
     });
 
     // Pairs each loader the grant fires with the vendor the ask names. A loader added outside
-    // CONSENT_VENDORS injects a script the inventory check below does not expect, so it fails here.
+    // CONSENT_VENDORS fails here only if it injects a script in this test's env: one gated on an
+    // env var this test does not stub stays silent, so routing through the registry is the guard.
     it('names every vendor the grant then loads on the first-run ask', () => {
       vi.stubEnv('NEXT_PUBLIC_GA_MEASUREMENT_ID', 'G-TEST');
       vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
@@ -654,7 +655,8 @@ describe('CookieConsentBanner', () => {
         expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
         expect(document.getElementById('mailerlite')).not.toBeNull();
         // The pixel loaders are mocked, so MailerLite is the only real script a grant may add. A
-        // loader called outside the consent registry would add another and fail here.
+        // loader called outside the consent registry that injects a script here fails this check;
+        // one gated on an env var not stubbed above adds nothing and passes.
         const added = [...document.querySelectorAll('script')].filter(script => !scriptsBefore.has(script));
         expect(added.map(script => script.id)).toEqual(['mailerlite']);
       } finally {
