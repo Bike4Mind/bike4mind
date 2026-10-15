@@ -63,6 +63,38 @@ test.describe('File Browser Search', () => {
       page.getByTestId('file-browser-dialog').getByText('E2E-SearchUniqueFile', { exact: false })
     ).toBeVisible({ timeout: TIMEOUTS.ACTION });
   });
+
+  // The toolbar switches layout on the dialog's width; at each layout the search box must keep its floor and
+  // stay clear of the actions (see the toolbar breakpoints in Files/Browser/Content.tsx).
+  for (const width of [1024, 1280, 1440, 1920]) {
+    test(`should keep the search box usable at a ${width}px viewport`, async ({ page, basePage, fileUpload }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/');
+      await page.waitForLoadState('domcontentloaded');
+      await basePage.dismissModals();
+
+      await fileUpload.openFileBrowser();
+
+      const searchInput = page.getByTestId('file-browser-search-input');
+      const toolbarActions = page.getByTestId('file-browser-toolbar-actions');
+      await expect(searchInput).toBeVisible({ timeout: TIMEOUTS.ACTION });
+      await expect(toolbarActions).toBeVisible({ timeout: TIMEOUTS.ACTION });
+
+      const search = await searchInput.boundingBox();
+      const actions = await toolbarActions.boundingBox();
+      expect(search).not.toBeNull();
+      expect(actions).not.toBeNull();
+      if (!search || !actions) return;
+
+      expect(search.width).toBeGreaterThanOrEqual(160);
+      const overlaps =
+        search.x < actions.x + actions.width &&
+        actions.x < search.x + search.width &&
+        search.y < actions.y + actions.height &&
+        actions.y < search.y + search.height;
+      expect(overlaps).toBe(false);
+    });
+  }
 });
 
 test.describe('Notebook Search', () => {

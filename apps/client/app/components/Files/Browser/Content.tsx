@@ -756,6 +756,7 @@ const FileBrowserContent = () => {
               <Stack
                 direction="row"
                 gap="10px"
+                data-testid="file-browser-toolbar-actions"
                 sx={{
                   gridArea: 'actions',
                   [`@container (min-width: ${TOOLBAR_TWO_ROW_MIN_WIDTH_PX}px)`]: { justifySelf: 'end' },
