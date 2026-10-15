@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi, type Mock } from 'vitest';
 import { runCompletion, EmptyCompletionError, NoReplyCompletionError } from './runCompletion';
 import { InMemoryStreamTransport, type ScriptedStep } from './InMemoryStreamTransport';
 import { createTransientRetryPolicy } from './retryPolicy';
@@ -27,12 +27,46 @@ const run = (scripts: ScriptedStep[][], p: RetryPolicy, signal?: AbortSignal, co
   return { transport, callback, promise: runCompletion(transport, req, callback, p, signal) };
 };
 
+/** All text the callback received, in order: what the agent concatenates into its reply. */
+const deliveredText = (callback: Mock) => callback.mock.calls.map(([texts]) => texts.join('')).join('');
+/** Calls that carried completion info: the finalize frame, which must happen exactly once. */
+const finalFrames = (callback: Mock) => callback.mock.calls.filter(([, info]) => info !== undefined);
+
 describe('runCompletion', () => {
-  it('delivers a completed stream exactly once', async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('streams the first text immediately, then finalizes the rest exactly once', async () => {
     const { callback, promise } = run([[{ emit: content('hello ') }, { emit: content('world') }]], policy(2));
     await promise;
-    expect(callback).toHaveBeenCalledTimes(1);
-    expect(callback).toHaveBeenCalledWith(['hello world'], expect.anything());
+    // Trailing whitespace is held until more text follows; the second frame lands
+    // inside the throttle window, so it rides the final frame.
+    expect(callback.mock.calls).toEqual([[['hello']], [[' world'], expect.anything()]]);
+    expect(finalFrames(callback)).toHaveLength(1);
+  });
+
+  it('throttles deltas to one per flush interval', async () => {
+    let now = 1_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => (now += 30));
+    const { callback, promise } = run(
+      [[{ emit: content('a') }, { emit: content('b') }, { emit: content('c') }, { emit: content('d') }]],
+      policy(2)
+    );
+    await promise;
+    // 30 ms between frames: 'a' flushes at once, 'b' is 30 ms later (held), 'c' is
+    // 60 ms after the last flush and takes 'bc' with it, 'd' rides the final frame.
+    expect(callback.mock.calls.map(([texts]) => texts)).toEqual([['a'], ['bc'], ['d']]);
+    expect(deliveredText(callback)).toBe('abcd');
+  });
+
+  it('strips thinking blocks from streamed text', async () => {
+    const { callback, promise } = run(
+      [[{ emit: content('<think>plan') }, { emit: content('</think>Answer') }]],
+      policy(2)
+    );
+    await promise;
+    expect(deliveredText(callback)).toBe('Answer');
   });
 
   it('accumulates a tool-use stream and finalizes once with the tool info', async () => {
@@ -43,16 +77,37 @@ describe('runCompletion', () => {
     expect(info.toolsUsed).toEqual([{ name: 'search', arguments: '{}', id: 't1' }]);
   });
 
-  it('retries a mid-stream failure and delivers the completion exactly once (no double-append)', async () => {
+  it('retries a failure that struck before any text was delivered (no double-append)', async () => {
     const { transport, callback, promise } = run(
-      [[{ emit: content('partial') }, { fail: new Error('boom') }], [{ emit: content('full answer') }]],
+      [[{ emit: toolUse('search') }, { fail: new Error('boom') }], [{ emit: content('full answer') }]],
       policy(2)
     );
     await promise;
     expect(transport.attempts).toBe(2);
-    expect(callback).toHaveBeenCalledTimes(1);
-    // The discarded attempt's 'partial' never reaches the callback.
-    expect(callback).toHaveBeenCalledWith(['full answer'], expect.anything());
+    expect(deliveredText(callback)).toBe('full answer');
+    // The discarded attempt's tool call never reaches the callback.
+    expect(finalFrames(callback)).toHaveLength(1);
+    expect(finalFrames(callback)[0][1].toolsUsed).toBeUndefined();
+  });
+
+  it('does not retry once text was streamed, and says how to resume', async () => {
+    const { transport, callback, promise } = run(
+      [[{ emit: content('partial') }, { fail: new Error('boom') }], [{ emit: content('replayed') }]],
+      policy(2)
+    );
+    await expect(promise).rejects.toThrow(/could not be retried automatically - type "continue" to resume/);
+    expect(transport.attempts).toBe(1);
+    expect(deliveredText(callback)).toBe('partial');
+    expect(finalFrames(callback)).toHaveLength(0);
+  });
+
+  it('propagates a non-retryable error after streamed text unchanged', async () => {
+    const { callback, promise } = run(
+      [[{ emit: content('partial') }, { fail: new Error('Authentication failed') }]],
+      policy(2)
+    );
+    await expect(promise).rejects.toThrow('Authentication failed');
+    expect(finalFrames(callback)).toHaveLength(0);
   });
 
   it('retries only up to the limit, then surfaces the failure without delivering', async () => {
@@ -113,7 +168,19 @@ describe('runCompletion', () => {
     expect(callback).not.toHaveBeenCalled();
   });
 
-  it('settles a mid-stream abort without invoking the callback', async () => {
+  it('settles a mid-stream abort without invoking the callback when no text was delivered', async () => {
+    const controller = new AbortController();
+    const { callback, promise } = run(
+      [[{ emit: toolUse('search') }, { abort: true }, { emit: content('never delivered') }]],
+      policy(2),
+      controller.signal,
+      controller
+    );
+    await expect(promise).resolves.toBeUndefined();
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it('rejects with an AbortError on abort after streamed text, so the partial reply is not kept', async () => {
     const controller = new AbortController();
     const { callback, promise } = run(
       [[{ emit: content('partial') }, { abort: true }, { emit: content('never delivered') }]],
@@ -121,8 +188,9 @@ describe('runCompletion', () => {
       controller.signal,
       controller
     );
-    await expect(promise).resolves.toBeUndefined();
-    expect(callback).not.toHaveBeenCalled();
+    await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(deliveredText(callback)).toBe('partial');
+    expect(finalFrames(callback)).toHaveLength(0);
   });
 
   it('recovers under the real policy when a retry races WebSocket auto-reconnect', async () => {
@@ -135,7 +203,8 @@ describe('runCompletion', () => {
     );
     await promise;
     expect(transport.attempts).toBe(2);
-    expect(callback).toHaveBeenCalledWith(['recovered'], expect.anything());
+    expect(deliveredText(callback)).toBe('recovered');
+    expect(finalFrames(callback)).toHaveLength(1);
   });
 
   it('settles without opening the stream when already aborted', async () => {

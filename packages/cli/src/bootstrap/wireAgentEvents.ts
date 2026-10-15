@@ -2,7 +2,24 @@ import { AgentStep, ReActAgent } from '@bike4mind/agents';
 import type { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
 import { type AgentContext, formatStep } from '../utils';
 import { useCliStore } from '../store';
+import type { Message } from '../storage';
 import { bridgePresence } from '../features/bridgePresence/index.js';
+
+/**
+ * Content of a pending assistant message before any reply text arrives.
+ * Must stay in sync with the pending-message builders (turnController.ts) and
+ * MessageItem.tsx, which hides a body equal to it.
+ */
+const PENDING_CONTENT = '...';
+
+/** Apply `update` to the in-flight assistant message, if one is pending. */
+function updatePendingAssistant(update: (message: Message) => Message): void {
+  const { pendingMessages, updatePendingMessage } = useCliStore.getState();
+  const lastIdx = pendingMessages.length - 1;
+  if (lastIdx >= 0 && pendingMessages[lastIdx].role === 'assistant') {
+    updatePendingMessage(lastIdx, update(pendingMessages[lastIdx]));
+  }
+}
 
 export interface WireAgentEventsInput {
   agent: ReActAgent;
@@ -32,26 +49,42 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
   // Set up step event handlers for real-time UI updates
   // These persist for the lifetime of the agent and update pending messages in the store
   const stepHandler = (step: AgentStep) => {
-    const { pendingMessages, updatePendingMessage } = useCliStore.getState();
-    const lastIdx = pendingMessages.length - 1;
-    if (lastIdx >= 0 && pendingMessages[lastIdx].role === 'assistant') {
-      const existingSteps = pendingMessages[lastIdx].metadata?.steps || [];
-      const formattedStep = formatStep(step);
+    updatePendingAssistant(message => ({
+      ...message,
+      metadata: {
+        ...message.metadata,
+        steps: [...(message.metadata?.steps || []), formatStep(step)],
+      },
+    }));
+  };
 
-      updatePendingMessage(lastIdx, {
-        ...pendingMessages[lastIdx],
-        metadata: {
-          ...pendingMessages[lastIdx].metadata,
-          steps: [...existingSteps, formattedStep],
-        },
-      });
-    }
+  // Stream the main agent's reply into the pending message as it arrives. The
+  // agent restarts its text every iteration, so a new iteration (or a new pending
+  // message) starts fresh. Text that ends in a tool call is the preamble: it is
+  // re-shown as a thought step, so it is cleared once a thought or action fires.
+  // turnController replaces the content with the final answer when the turn ends.
+  let liveText = { messageId: '', iteration: -1, text: '' };
+  const textDeltaHandler = ({ delta, iteration }: { delta: string; iteration: number }) => {
+    updatePendingAssistant(message => {
+      const sameStream = liveText.messageId === message.id && liveText.iteration === iteration;
+      liveText = { messageId: message.id, iteration, text: (sameStream ? liveText.text : '') + delta };
+      return { ...message, content: liveText.text };
+    });
+  };
+  const clearLiveText = () => {
+    if (!liveText.text) return;
+    liveText = { ...liveText, text: '' };
+    updatePendingAssistant(message => ({ ...message, content: PENDING_CONTENT }));
   };
 
   // Subscribe to main agent events
   agent.on('thought', stepHandler);
   agent.on('observation', stepHandler);
   agent.on('action', stepHandler);
+  // Main agent only: a subagent's reply is its tool result, not this turn's text.
+  agent.on('text_delta', textDeltaHandler);
+  agent.on('thought', clearLiveText);
+  agent.on('action', clearLiveText);
 
   // Mirror ReAct events up to the tavern transcript so the modal renders
   // the same shape Observer+ does - `tool_use` -> `tool_result` pairs and
