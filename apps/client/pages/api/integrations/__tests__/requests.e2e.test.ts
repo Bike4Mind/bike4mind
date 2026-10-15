@@ -6,7 +6,8 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { IntegrationRequest } from '@bike4mind/database';
+import { PLANNED_INTEGRATION_IDS } from '@bike4mind/common';
+import { IntegrationRequest, integrationRequestRepository } from '@bike4mind/database';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -126,5 +127,12 @@ describe('/api/integrations/requests on a real mongod', () => {
   it('leaves rows for ids no longer on the roadmap out of the response', async () => {
     await IntegrationRequest.create({ userId: 'u1', integrationId: 'github' });
     expect(await call('GET', 'u1')).toEqual({ status: 200, body: { counts: {}, mine: [] } });
+  });
+
+  it('counts only the planned ids, so rows for retired ones are never scanned', async () => {
+    const counts = vi.spyOn(integrationRequestRepository, 'countsByIntegration');
+    await call('GET', 'u1');
+    expect(counts).toHaveBeenCalledWith(PLANNED_INTEGRATION_IDS);
+    counts.mockRestore();
   });
 });

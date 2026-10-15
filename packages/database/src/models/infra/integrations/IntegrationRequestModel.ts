@@ -88,9 +88,14 @@ export class IntegrationRequestRepository extends BaseRepository<IIntegrationReq
     await this.model.deleteOne({ userId, integrationId });
   }
 
-  /** Request count per integration id, across all users. */
-  async countsByIntegration(): Promise<Record<string, number>> {
+  /**
+   * Request count for each of `integrationIds`, across all users. Ids with no rows are absent.
+   * The $match keeps the scan to the ids the caller will show, so rows for ids that have left the
+   * roadmap are never read, and lets the (integrationId, ...) index serve the grouping.
+   */
+  async countsByIntegration(integrationIds: readonly string[]): Promise<Record<string, number>> {
     const rows = await this.model.aggregate<{ _id: string; count: number }>([
+      { $match: { integrationId: { $in: [...integrationIds] } } },
       { $group: { _id: '$integrationId', count: { $sum: 1 } } },
     ]);
     return Object.fromEntries(rows.map(r => [r._id, r.count]));

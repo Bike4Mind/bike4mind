@@ -30,14 +30,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
-    const [allCounts, requested] = await Promise.all([
-      integrationRequestRepository.countsByIntegration(),
+    // Rows for an id later promoted out of the roadmap stay in the collection but are never counted here.
+    const [counts, requested] = await Promise.all([
+      integrationRequestRepository.countsByIntegration(PLANNED_INTEGRATION_IDS),
       integrationRequestRepository.requestedBy(String(userId)),
     ]);
-    // Rows for an id later promoted out of the roadmap stay in the collection but leave the response.
-    const counts = Object.fromEntries(
-      PLANNED_INTEGRATION_IDS.filter(id => (allCounts[id] ?? 0) > 0).map(id => [id, allCounts[id]])
-    );
     res.setHeader('Cache-Control', 'private, no-store');
     return res.json({ counts, mine: requested.filter(isPlannedIntegrationId) });
   })

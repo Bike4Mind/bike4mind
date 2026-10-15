@@ -1,9 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
-import mongoose from 'mongoose';
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
+import mongoose, { type PipelineStage } from 'mongoose';
 import { createMongoServer } from '../../../__test__/createMongoServer';
 import { IntegrationRequest, integrationRequestRepository } from './IntegrationRequestModel';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
+
+// What the route passes: the planned ids from the catalog. Fixed here so the repository stays free of @bike4mind/common.
+const PLANNED = ['hubspot', 'gmail', 'salesforce'] as const;
 
 beforeAll(async () => {
   server = await createMongoServer();
@@ -38,7 +41,7 @@ describe('integrationRequestRepository', () => {
     await integrationRequestRepository.request('u2', 'hubspot');
     await integrationRequestRepository.request('u2', 'gmail');
 
-    expect(await integrationRequestRepository.countsByIntegration()).toEqual({ hubspot: 2, gmail: 1 });
+    expect(await integrationRequestRepository.countsByIntegration(PLANNED)).toEqual({ hubspot: 2, gmail: 1 });
     expect((await integrationRequestRepository.requestedBy('u2')).sort()).toEqual(['gmail', 'hubspot']);
     expect(await integrationRequestRepository.requestedBy('u3')).toEqual([]);
   });
@@ -50,7 +53,7 @@ describe('integrationRequestRepository', () => {
     await integrationRequestRepository.withdraw('u1', 'hubspot');
     await integrationRequestRepository.withdraw('u1', 'hubspot');
 
-    expect(await integrationRequestRepository.countsByIntegration()).toEqual({ hubspot: 1 });
+    expect(await integrationRequestRepository.countsByIntegration(PLANNED)).toEqual({ hubspot: 1 });
     expect(await integrationRequestRepository.requestedBy('u2')).toEqual(['hubspot']);
   });
 
@@ -61,7 +64,7 @@ describe('integrationRequestRepository', () => {
 
     expect(await integrationRequestRepository.deleteAllForUser('u1')).toBe(2);
     expect(await integrationRequestRepository.deleteAllForUser('u1')).toBe(0);
-    expect(await integrationRequestRepository.countsByIntegration()).toEqual({ hubspot: 1 });
+    expect(await integrationRequestRepository.countsByIntegration(PLANNED)).toEqual({ hubspot: 1 });
   });
 
   it("drops a deleted organization from its members' requests and keeps the requests", async () => {
@@ -71,7 +74,31 @@ describe('integrationRequestRepository', () => {
     expect(await integrationRequestRepository.clearOrganization('org1')).toBe(1);
     expect(await IntegrationRequest.countDocuments({ organizationId: 'org1' })).toBe(0);
     expect(await IntegrationRequest.countDocuments({ organizationId: 'org2' })).toBe(1);
-    expect(await integrationRequestRepository.countsByIntegration()).toEqual({ hubspot: 2 });
+    expect(await integrationRequestRepository.countsByIntegration(PLANNED)).toEqual({ hubspot: 2 });
+  });
+
+  it('counts only the ids it is asked about, so rows for retired ids are never read', async () => {
+    await integrationRequestRepository.request('u1', 'hubspot');
+    await integrationRequestRepository.request('u1', 'github');
+    await integrationRequestRepository.request('u2', 'github');
+    await integrationRequestRepository.request('u1', 'retired-connector');
+
+    expect(await integrationRequestRepository.countsByIntegration(['hubspot', 'linear'])).toEqual({ hubspot: 1 });
+    expect(await integrationRequestRepository.countsByIntegration([])).toEqual({});
+  });
+
+  it('serves the count from the integrationId index rather than scanning the collection', async () => {
+    await integrationRequestRepository.request('u1', 'hubspot');
+    await integrationRequestRepository.request('u1', 'github');
+
+    const aggregate = vi.spyOn(IntegrationRequest, 'aggregate');
+    await integrationRequestRepository.countsByIntegration(PLANNED);
+    const pipeline = aggregate.mock.calls[0][0] as PipelineStage[];
+    aggregate.mockRestore();
+
+    const plan = await IntegrationRequest.aggregate(pipeline).explain('queryPlanner');
+    expect(JSON.stringify(plan)).toContain('IXSCAN');
+    expect(JSON.stringify(plan)).not.toContain('COLLSCAN');
   });
 
   it('rejects a duplicate row written past the repository', async () => {
