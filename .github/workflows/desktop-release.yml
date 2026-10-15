@@ -52,6 +52,8 @@ jobs:
         run: |
           python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
           python3 -m unittest discover -s scripts -p 'test_desktop_*.py' -v
+      - name: Test release platform contract
+        run: python3 -m unittest discover -s apps/desktop/scripts -p test_release_platforms.py -v
       - name: Choose installer version
         id: version
         env:
@@ -77,9 +79,6 @@ jobs:
           - os: macos-15
             platform: mac
             arch: arm64
-          - os: macos-15-intel
-            platform: mac
-            arch: x64
           - os: ubuntu-24.04
             platform: linux
             arch: x64
@@ -204,8 +203,8 @@ jobs:
               raise SystemExit('Expected exactly one arm64 DMG')
           version = versions[0]
           expected = {
-              f'Bike4Mind-{version}-arm64.dmg', f'Bike4Mind-{version}-x64.dmg',
-              f'Bike4Mind-{version}-arm64.zip', f'Bike4Mind-{version}-x64.zip',
+              f'Bike4Mind-{version}-arm64.dmg',
+              f'Bike4Mind-{version}-arm64.zip',
               f'Bike4Mind-{version}-x64.AppImage',
           }
           if set(files) != expected:
