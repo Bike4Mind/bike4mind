@@ -161,6 +161,7 @@ re-deciding per endpoint:
 | Referenced resource does not exist | `404` | - |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
+| Cancel of a job the provider is already rendering and billing | `409` | `not_cancellable` (do not retry; the job runs to its end and is charged if it produces output) |
 
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `303`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,
@@ -410,6 +411,13 @@ Nothing published is ever silently removed while anyone is left to warn. Depreca
 anything - a field, an alias, a whole endpoint - means: mark it deprecated in the
 contract, state a sunset date in the description, keep serving it until that date, and
 announce it before the date rather than after.
+
+For a whole endpoint, that is one field on its contract:
+`deprecated: { since, sunset, successor? }` (dates `YYYY-MM-DD`, checked by
+`defineEndpoint`). It flags the operation `deprecated: true` in the spec, leads its
+description with the sunset and successor, and makes the Next adapter send RFC 9745
+`Deprecation`, RFC 8594 `Sunset` and `Link: rel="successor-version"` on every response
+the handler produces. `POST /api/ai/music` is the reference.
 
 Undocumented legacy routes still count as published if they are reachable, so they go
 through the same window unless nobody is left to warn. Check who calls one first: the

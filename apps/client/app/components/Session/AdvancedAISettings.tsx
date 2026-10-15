@@ -187,6 +187,8 @@ const AISettings: FC<AISettingsProps> = ({
         alignItems="center"
         gap={isMobile ? '12px' : '10px'}
         sx={{
+          // Keep the default `flex-basis: auto`. The parent row wraps on this group's
+          // max-content width, so the `flex: 1` shorthand (basis 0) would defeat the wrap.
           flexGrow: 1,
           overflowX: 'auto',
           overflowY: 'visible',

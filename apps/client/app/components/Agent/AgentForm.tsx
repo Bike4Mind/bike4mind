@@ -281,7 +281,7 @@ const AgentForm: React.FC<AgentFormProps> = ({
     }
 
     // If seeding the agent with the user's own credits, require sufficient balance
-    if (formState.useOwnCredits && formState.currentCredits > 0) {
+    if (mode === 'create' && formState.useOwnCredits && formState.currentCredits > 0) {
       if (userCredits < formState.currentCredits) {
         toast.error(`You don't have enough credits. Your balance: ${userCredits.toLocaleString()}`);
         return;
@@ -296,7 +296,8 @@ const AgentForm: React.FC<AgentFormProps> = ({
         triggerWords: formState.triggerWords,
         isPublic: formState.isPublic,
         useOwnCredits: formState.useOwnCredits,
-        currentCredits: formState.currentCredits,
+        // After create, the balance moves only through transfer-credits; the update route strips this field.
+        ...(mode === 'create' && { currentCredits: formState.currentCredits }),
         projectId: formState.projectId,
         systemPrompt: formState.systemPrompt,
         preferredModel: formState.preferredModel || undefined,

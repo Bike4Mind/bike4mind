@@ -91,6 +91,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatCreateCodeSession, request),
     updateProject: (request: UpdateProjectRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatUpdateProject, request),
     pickProjectDirectory: () => ipcRenderer.invoke(IPC_CHANNELS.chatPickProjectDirectory),
+    listRecentFolders: () => ipcRenderer.invoke(IPC_CHANNELS.chatListRecentFolders),
+    removeRecentFolder: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatRemoveRecentFolder, directory),
     inspectProject: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatInspectProject, directory),
     addContextDirectory: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatAddContextDirectory, sessionId),
     removeContextDirectory: (sessionId: string, directory: string) =>

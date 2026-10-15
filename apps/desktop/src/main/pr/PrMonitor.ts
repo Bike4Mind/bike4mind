@@ -24,7 +24,7 @@ import { GhError } from './gh';
 import type { PrBindingStore } from './PrBindingStore';
 import type { PrGithub } from './github';
 import { shouldAutoArchive } from './autoArchive';
-import { MAX_AUTO_FIX_ATTEMPTS, SHELL_TOOLS, planAutoFix } from './autoFix';
+import { MAX_AUTO_FIX_ATTEMPTS, SHELL_TOOLS, autoFixBudget, planAutoFix } from './autoFix';
 import { desktopMergeReadiness } from './autoMerge';
 import { MAX_BATCH, mergeMethodFor } from './github';
 import { POLL_MS, alignToTick, pollDelay } from './pollSchedule';
@@ -329,7 +329,7 @@ export class PrMonitor {
       await this.deps.store.set(sessionId, {
         ...binding,
         autoFix: enabled,
-        ...(enabled ? { autoFixAttempts: 0 } : {}),
+        ...(enabled ? { autoFixAttempts: 0, autoFixMax: MAX_AUTO_FIX_ATTEMPTS } : {}),
       });
       const live = this.entry(sessionId);
       live.autoFix = { status: enabled ? 'watching' : 'off' };
@@ -610,7 +610,7 @@ export class PrMonitor {
    * Binding (b): the Code session's branch already has an open PR. Asked once per conversation
    * per launch (and again after a quiet spell), only when it is opened, never at startup.
    */
-  private async lookUpBranch(sessionId: string): Promise<void> {
+  protected async lookUpBranch(sessionId: string): Promise<void> {
     const last = this.branchLookups.get(sessionId);
     if (last !== undefined && this.now() - last < BRANCH_LOOKUP_TTL_MS) return;
     if (this.gh !== 'ok') return;
@@ -751,7 +751,7 @@ export class PrMonitor {
    * decision at a time per conversation: a read and a turn ending can both ask at once, and
    * the second must see what the first recorded.
    */
-  private evaluateAutoFix(sessionId: string, snapshot: PrSnapshot): Promise<void> {
+  protected evaluateAutoFix(sessionId: string, snapshot: PrSnapshot): Promise<void> {
     const live = this.entry(sessionId);
     const next = (live.autoFixing ?? Promise.resolve()).then(() => this.decideAutoFix(sessionId, snapshot));
     const settled = next.catch(err => this.deps.logger.warn(`PR: auto-fix failed: ${err}`));
@@ -773,14 +773,15 @@ export class PrMonitor {
       delete live.autoFix;
       return;
     }
+    const budget = autoFixBudget(binding);
     const exhausted = {
       status: 'exhausted' as const,
-      note: `Auto-fix gave up after ${MAX_AUTO_FIX_ATTEMPTS} attempts. Re-check the box to allow more.`,
+      note: `Auto-fix gave up after ${budget} attempts. Re-check the box to allow more.`,
     };
     const plan = planAutoFix(binding, snapshot, this.deps.chat.isBusy(sessionId));
     if (plan.kind === 'none') {
       if (live.autoFix?.status === 'started') return;
-      if (live.autoFix?.status === 'exhausted' && (binding.autoFixAttempts ?? 0) >= MAX_AUTO_FIX_ATTEMPTS) return;
+      if (live.autoFix?.status === 'exhausted' && (binding.autoFixAttempts ?? 0) >= budget) return;
       // The post-push note stays only while the pushed fix's checks are still running.
       const running = snapshot.checks.some(check => check.bucket === 'pending');
       live.autoFix = {
@@ -806,7 +807,7 @@ export class PrMonitor {
     }));
     live.autoFix = {
       status: 'started',
-      note: `Fixing ${plan.summary} (attempt ${attempts} of ${MAX_AUTO_FIX_ATTEMPTS}).`,
+      note: `Fixing ${plan.summary} (attempt ${attempts} of ${budget}).`,
       ...(plan.fingerprints.some(key => key.startsWith('conflict:')) ? { conflicts: true } : {}),
     };
     const started = await this.deps.chat.startAutoFix(sessionId, plan.prompt, {
@@ -863,7 +864,7 @@ export class PrMonitor {
       autoFix: {
         status: binding?.autoFix ? (live?.autoFix?.status ?? 'watching') : 'off',
         attempts: binding?.autoFixAttempts ?? 0,
-        max: MAX_AUTO_FIX_ATTEMPTS,
+        max: binding?.autoFix ? autoFixBudget(binding) : MAX_AUTO_FIX_ATTEMPTS,
         ...(binding?.autoFix && live?.autoFix?.note ? { note: live.autoFix.note } : {}),
         ...(binding?.autoFix && live?.autoFix?.status === 'started' && live.autoFix.conflicts
           ? { conflicts: true }

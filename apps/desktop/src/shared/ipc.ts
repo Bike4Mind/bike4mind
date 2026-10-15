@@ -32,6 +32,7 @@ import type {
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
   ProjectInspection,
+  RecentFolder,
   ContextBoundaryResult,
   ReasoningEffortSetting,
   SendMessageRequest,
@@ -87,6 +88,8 @@ export const IPC_CHANNELS = {
   chatCreateCodeSession: 'chat:create-code-session',
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
+  chatListRecentFolders: 'chat:list-recent-folders',
+  chatRemoveRecentFolder: 'chat:remove-recent-folder',
   chatInspectProject: 'chat:inspect-project',
   chatAddContextDirectory: 'chat:add-context-directory',
   chatRemoveContextDirectory: 'chat:remove-context-directory',
@@ -440,6 +443,10 @@ export interface DesktopApi {
     updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult>;
     /** Open the OS folder picker for a project root. Null when the user cancels. */
     pickProjectDirectory(): Promise<string | null>;
+    /** Recently used project folders that still exist, most recent first. */
+    listRecentFolders(): Promise<RecentFolder[]>;
+    /** Forget one; the folder itself is untouched. Resolves to the list that is left. */
+    removeRecentFolder(directory: string): Promise<RecentFolder[]>;
     /** Read a directory's branches, for the branch chip. */
     inspectProject(directory: string): Promise<ProjectInspection>;
     /** Grant one more folder to a Code session. Opens the folder picker; null when cancelled. */

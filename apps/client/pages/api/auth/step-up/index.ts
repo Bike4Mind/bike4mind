@@ -2,8 +2,8 @@ import type { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import * as z from 'zod';
 import type { IUserDocument } from '@bike4mind/common';
-import { mfaService } from '@bike4mind/services';
-import { authSessionRepository, userRepository } from '@bike4mind/database';
+import { authSessionService, mfaService } from '@bike4mind/services';
+import { authSessionRepository, realtimeConnectionRepository, userRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { sendFailedMfaAttempt, sendIfLockedOut } from '@server/auth/mfaLockout';
@@ -130,6 +130,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
           const failures = await authSessionRepository.recordStepUpPasswordFailure(sid, user.id);
           if (failures !== null && failures >= STEP_UP_MAX_PASSWORD_FAILURES) {
             await authSessionRepository.revokeBySid(sid);
+            await authSessionService.endRealtimeConnections(
+              { sid },
+              { db: { realtimeConnections: realtimeConnectionRepository }, logger: req.logger }
+            );
             return sendStepUpFailed(res, {
               error: 'Too many incorrect attempts. Please sign in again.',
               attemptsRemaining: 0,

@@ -238,6 +238,43 @@ describe('image_generation effective-arg precedence (tool call vs client imageCo
     expect(mockOpenAIGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining(resolved));
   });
 
+  // onFinish is where both credit rails bill, so it carries the same resolved cost input as
+  // onStart plus what was delivered.
+  it('bills a delivered image from onFinish with the dispatched cost input', async () => {
+    const context = createFakeContext();
+    const onFinish = vi.fn().mockResolvedValue(undefined);
+    context.onFinish = onFinish;
+
+    const { toolFn } = imageGenerationTool.implementation(context, { model: ImageModels.GPT_IMAGE_2 });
+
+    await toolFn({ prompt: 'a red bike', n: 1, quality: 'high', size: '1024x1536' });
+
+    expect(onFinish).toHaveBeenCalledWith('image_generation', {
+      model: ImageModels.GPT_IMAGE_2,
+      n: 1,
+      quality: 'high',
+      size: '1024x1536',
+      paths: ['generated/stored-key.png'],
+    });
+  });
+
+  // A rejected key comes back as an "Error: ..." tool result, not a throw, so the only thing
+  // keeping it unbilled is that onFinish never fires.
+  it('never reaches onFinish when the provider rejects the call', async () => {
+    mockOpenAIGenerate.mockRejectedValue(new Error('Invalid API key'));
+    const context = createFakeContext();
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    const onFinish = vi.fn().mockResolvedValue(undefined);
+    context.onStart = onStart;
+    context.onFinish = onFinish;
+
+    const { toolFn } = imageGenerationTool.implementation(context, { model: ImageModels.GPT_IMAGE_2 });
+
+    await expect(toolFn({ prompt: 'a red bike' })).resolves.toBe('Error: Invalid API key');
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onFinish).not.toHaveBeenCalled();
+  });
+
   // #2889 taught the OpenAI layer to map standard/hd, but the schema still advertised only
   // those two, so "generate it at low quality" could not be expressed at all.
   //

@@ -314,6 +314,32 @@ describe('objectCreated - moderation claim identity', () => {
 describe('objectCreated - storage charge', () => {
   const isStorageClaim = (filter: Record<string, unknown>) => '$or' in filter;
 
+  it('records the measured object size on the row, matching the bytes charged', async () => {
+    // The row starts with the client-declared presign size; the measured size must replace it.
+    const file = metadata({ fileSize: 999 }) as ReturnType<typeof metadata> & { fileSize?: number };
+    h.findOne.mockResolvedValue(file);
+
+    await run();
+
+    expect(file.fileSize).toBe(10);
+  });
+
+  it('leaves the recorded size alone when the storage-charge claim is refused', async () => {
+    // A late event for an earlier write of the same path loses the claim to the newer write, which
+    // already recorded its own size. Overwriting it from this event's stale size would make the
+    // counter's truth disagree with the bytes actually charged.
+    const file = metadata({ fileSize: 1 }) as ReturnType<typeof metadata> & { fileSize?: number };
+    h.findOne.mockResolvedValue(file);
+    h.updateOne.mockImplementation(async (filter: Record<string, unknown>) =>
+      isStorageClaim(filter) ? { matchedCount: 0, modifiedCount: 0 } : { matchedCount: 1, modifiedCount: 1 }
+    );
+
+    await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
+
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+    expect(file.fileSize).toBe(1);
+  });
+
   it('charges the owner once it wins the storage-charge claim on the row', async () => {
     h.findOne.mockResolvedValue(metadata());
 

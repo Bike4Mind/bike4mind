@@ -5,6 +5,7 @@ import {
   creditTransactionRepository,
   organizationRepository,
   userRepository,
+  realtimeConnectionRepository,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { CreditHolderType, CreditPurchaseEvents, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
@@ -409,7 +410,11 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       if (user) {
         const { deactivatedKeys } = await userService.flagDisputePending(user, {
-          db: { users: userRepository, userApiKeys: userApiKeyRepository },
+          db: {
+            users: userRepository,
+            userApiKeys: userApiKeyRepository,
+            realtimeConnections: realtimeConnectionRepository,
+          },
         });
 
         await postMessageToSlack(

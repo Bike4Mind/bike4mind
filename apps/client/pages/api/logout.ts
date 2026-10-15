@@ -1,5 +1,5 @@
 import { AuthEvents } from '@bike4mind/common';
-import { userRepository, authSessionRepository } from '@bike4mind/database';
+import { userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
@@ -34,7 +34,7 @@ const handler = baseApi().get(async (req, res) => {
   // correct and - unlike the old tokenVersion bump - does not touch the real customer's other devices.
   if (sid && !isApiKeyAuth(req)) {
     await authSessionService.revokeSession(sid, {
-      db: { authSessions: authSessionRepository },
+      db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository },
       logger: req.logger,
     });
   }

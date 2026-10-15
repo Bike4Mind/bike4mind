@@ -26,6 +26,7 @@ vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: mocks.logAuthAudit }))
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mocks.findById },
   authSessionRepository: {},
+  realtimeConnectionRepository: {},
   trustedDeviceRepository: { revokeAllForUser: mocks.revokeAllForUser },
   passkeyCredentialRepository: { removeAllForUser: mocks.removeAllForUser },
 }));

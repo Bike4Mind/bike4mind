@@ -122,3 +122,30 @@ export const TOOL_CATEGORIES = {
 export const ALL_TOOL_NAMES = Object.values(TOOL_CATEGORIES).flat();
 
 export type ToolName = (typeof ALL_TOOL_NAMES)[number];
+
+/**
+ * Write tools whose preview issues a confirmation token. The confirm executors (web confirm route,
+ * Slack Confirm button) execute only these; any other pending-action tool name is refused.
+ * Must stay in sync with the `createPreviewResponse` execParams in ./tools (guarded by a test).
+ */
+export const GITHUB_CONFIRMABLE_TOOLS: ReadonlySet<string> = new Set([
+  TOOL_CREATE_ISSUE,
+  TOOL_UPDATE_ISSUE,
+  TOOL_CREATE_ISSUE_COMMENT,
+  TOOL_CREATE_LABEL,
+  TOOL_UPDATE_LABEL,
+  TOOL_DELETE_LABEL,
+  TOOL_CREATE_MILESTONE,
+  TOOL_UPDATE_MILESTONE,
+  TOOL_CLOSE_MILESTONE,
+  TOOL_CREATE_BRANCH,
+  TOOL_CREATE_OR_UPDATE_FILE,
+  TOOL_CREATE_PULL_REQUEST,
+  TOOL_UPDATE_PULL_REQUEST,
+  TOOL_MERGE_PULL_REQUEST,
+  TOOL_APPROVE_PR,
+  TOOL_CREATE_REVIEW,
+  TOOL_REQUEST_CHANGES,
+  TOOL_ADD_ISSUE_TO_PROJECT,
+  TOOL_UPDATE_PROJECT_ITEM_FIELDS,
+]);

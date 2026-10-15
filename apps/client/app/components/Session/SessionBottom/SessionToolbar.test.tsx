@@ -152,6 +152,16 @@ describe('SessionToolbar - Agent Mode admin kill switch', () => {
   });
 });
 
+describe('SessionToolbar - narrow pane layout', () => {
+  // jsdom has no layout engine, so this pins the CSS that keeps the scrolling AI-settings
+  // group from collapsing under its neighbours in a narrow pane.
+  it('wraps the actions row instead of squeezing the AI-settings group', () => {
+    render(<SessionToolbar {...baseProps} />, { wrapper: Wrapper });
+    const row = screen.getByTestId('session-bottom-actions');
+    expect(getComputedStyle(row).flexWrap).toBe('wrap');
+  });
+});
+
 describe('SessionToolbar - Send button blocked reason', () => {
   it('disables Send and exposes why when the socket is reconnecting', () => {
     render(<SessionToolbar {...baseProps} chatInputValue="hello" sendBlockedReason="reconnecting" />, {

@@ -48,7 +48,7 @@ export interface ResolvedImageArgs {
  * no reservation changes; a caller wanting OpenAI's dynamic effort names `'auto'`, which bills
  * at the ceiling. Other providers have no tier concept and keep the undefined.
  *
- * Both the credit reservation (`ToolBuilder.reserveImageCredits` reads the `onStart`
+ * Both the credit charge (`ToolBuilder.settleImageCredits` reads the `onFinish`
  * payload) and the provider dispatch read this output, so the two can never disagree about
  * which args an image ran with. Note that this is an agreement about args, not about price: a
  * panel-selected gpt-image-2 size outside the priced set (e.g. `2048x2048`) is honored here

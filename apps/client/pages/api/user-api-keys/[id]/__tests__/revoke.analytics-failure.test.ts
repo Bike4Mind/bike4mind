@@ -33,6 +33,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   organizationRepository: {},
   mongoose: {},
   Ability: class {},
