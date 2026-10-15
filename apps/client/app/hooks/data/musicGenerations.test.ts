@@ -39,7 +39,7 @@ import {
   useMusicGenerations,
   useMusicModels,
 } from './musicGenerations';
-import { GENERATION_RATE_LIMITED_MESSAGE } from './videoGenerationErrors';
+import { GENERATION_RATE_LIMITED_MESSAGE } from './generationErrors';
 
 const NOW = Date.parse('2026-10-07T00:00:10.000Z');
 

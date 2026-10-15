@@ -4,7 +4,7 @@ import {
   parseStorageLimitErrorInfo,
   type MusicGenerationApiErrorCode,
 } from '@bike4mind/common';
-import { GENERATION_RATE_LIMITED_MESSAGE } from './videoGenerationErrors';
+import { describeGenerationError } from './generationErrors';
 
 // Keyed by the API's errorCode (b4m-core/common/src/schemas/musicGenerations.ts). As with video, the response's
 // `error` text is never shown: user-facing messages come from the code.
@@ -25,17 +25,10 @@ const MESSAGES: Record<MusicGenerationApiErrorCode, string> = {
 // Storage is checked before the provider is paid; the route answers with the shared StorageLimitError (a 400).
 const STORAGE_FULL_MESSAGE = 'Your file storage is full. Free up space in Files, then try again.';
 
-const isMusicApiErrorCode = (value: unknown): value is MusicGenerationApiErrorCode =>
-  typeof value === 'string' && (MUSIC_GENERATION_API_ERROR_CODES as readonly string[]).includes(value);
-
-const readErrorCode = (data: unknown): unknown =>
-  typeof data === 'object' && data !== null && 'errorCode' in data ? data.errorCode : undefined;
-
 export function describeMusicGenerationError(error: unknown, fallback: string): string {
-  if (!isAxiosError(error)) return fallback;
-  if (error.response?.status === 429) return GENERATION_RATE_LIMITED_MESSAGE;
-  const data: unknown = error.response?.data;
-  const code = readErrorCode(data);
-  if (isMusicApiErrorCode(code)) return MESSAGES[code];
-  return parseStorageLimitErrorInfo(data) ? STORAGE_FULL_MESSAGE : fallback;
+  // Only music has a storage quota to report; a rate limit still wins over it.
+  if (isAxiosError(error) && error.response?.status !== 429 && parseStorageLimitErrorInfo(error.response?.data)) {
+    return STORAGE_FULL_MESSAGE;
+  }
+  return describeGenerationError(MUSIC_GENERATION_API_ERROR_CODES, MESSAGES, error, fallback);
 }

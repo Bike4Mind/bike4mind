@@ -1,7 +1,7 @@
 import { AxiosError, AxiosHeaders } from 'axios';
 import { describe, expect, it } from 'vitest';
+import { GENERATION_RATE_LIMITED_MESSAGE } from './generationErrors';
 import { describeMusicGenerationError } from './musicGenerationErrors';
-import { GENERATION_RATE_LIMITED_MESSAGE } from './videoGenerationErrors';
 
 const FALLBACK = 'Could not start the song. Try again.';
 
