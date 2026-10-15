@@ -651,17 +651,21 @@ describe('Skill Market (real mongod)', () => {
   });
 
   it('audit: a sampled version is audited once, and never by its author', async () => {
-    const { version } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public', undefined, depsAudit);
+    // The author is a super-admin, so the permission check lets them through for an unlisted
+    // listing; only the "never your own" guard stops them.
+    const { version } = await publish(await makeSkill(ADMIN, 'Rewrite as bullets.'), 'unlisted', undefined, depsAudit);
     expect(version).toMatchObject({ reviewStatus: 'auto_approved', auditSample: true, auditedAt: null });
 
-    await expect(call(reviewHandler, 'POST', AUTHOR, { vid: version.id }, { action: 'audit' })).rejects.toMatchObject({
-      statusCode: 403,
-    });
-    expect(
-      (await call(reviewHandler, 'POST', ADMIN, { vid: version.id }, { action: 'audit' }, true))._getStatusCode()
-    ).toBe(200);
     await expect(
       call(reviewHandler, 'POST', ADMIN, { vid: version.id }, { action: 'audit' }, true)
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect((await SkillListingVersion.findById(version.id))!.auditedAt).toBeNull();
+
+    expect(
+      (await call(reviewHandler, 'POST', 'auditor', { vid: version.id }, { action: 'audit' }, true))._getStatusCode()
+    ).toBe(200);
+    await expect(
+      call(reviewHandler, 'POST', 'auditor', { vid: version.id }, { action: 'audit' }, true)
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
@@ -686,16 +690,39 @@ describe('Skill Market (real mongod)', () => {
     orgs.members.set(AUTHOR, [ORG]);
     const skill = await makeSkill(AUTHOR, 'Rewrite as bullets.');
     const { listing } = await publish(skill, 'organization', ORG);
-    orgs.members.delete(AUTHOR);
-    await skillRepository.update({ id: skill.id, body: 'Rewrite as bullets v2.' });
-    await expect(call(versionsHandler, 'POST', AUTHOR, { id: listing.id })).rejects.toMatchObject({ statusCode: 403 });
-    expect((await SkillListing.findById(listing.id))!.currentVersion).toBe(1);
 
-    orgs.members.set(AUTHOR, [ORG]);
-    const held = await publish(await makeSkill(AUTHOR, 'THROW please'), 'organization', ORG);
-    expect(held.version.scanStatus).toBe('error');
+    // A current member's new version passes the gate and the listing serves it.
+    await skillRepository.update({ id: skill.id, body: 'Rewrite as bullets v2.' });
+    expect((await call(versionsHandler, 'POST', AUTHOR, { id: listing.id }))._getStatusCode()).toBe(201);
+    expect((await SkillListing.findById(listing.id))!.currentVersion).toBe(2);
+
+    // A current member can rescan an errored version too.
+    const errored = await SkillListingVersion.create({
+      listingId: listing.id,
+      version: 3,
+      snapshot: { name: listing.name, description: 'Formats text', body: 'Summarize the notes as a table.' },
+      contentHash: 'errored-org-hash',
+      scanStatus: 'error',
+      reviewStatus: 'not_required',
+    });
+    expect((await call(rescanHandler, 'POST', AUTHOR, { vid: String(errored._id) }))._getStatusCode()).toBe(200);
+    expect((await SkillListingVersion.findById(errored._id))!.scanStatus).toBe('passed');
+
+    // Once the author is removed from the org, both routes refuse and the live version is unchanged.
     orgs.members.delete(AUTHOR);
-    await expect(call(rescanHandler, 'POST', AUTHOR, { vid: held.version.id })).rejects.toMatchObject({
+    await skillRepository.update({ id: skill.id, body: 'Rewrite as bullets v3.' });
+    await expect(call(versionsHandler, 'POST', AUTHOR, { id: listing.id })).rejects.toMatchObject({ statusCode: 403 });
+    expect((await SkillListing.findById(listing.id))!.currentVersion).toBe(3);
+
+    const held = await SkillListingVersion.create({
+      listingId: listing.id,
+      version: 4,
+      snapshot: { name: listing.name, description: 'Formats text', body: 'Summarize the notes as bullets.' },
+      contentHash: 'errored-org-hash-2',
+      scanStatus: 'error',
+      reviewStatus: 'not_required',
+    });
+    await expect(call(rescanHandler, 'POST', AUTHOR, { vid: String(held._id) })).rejects.toMatchObject({
       statusCode: 403,
     });
   });
@@ -836,8 +863,14 @@ describe('Skill Market (real mongod)', () => {
       (await searchListings([ORG], { page: 1, limit: 50, sort: 'top', scope: 'org' })).data.map(l => l.id)
     ).toEqual([orgListing.id]);
     expect(await ids({ page: 1, limit: 50, sort: 'imports' })).toEqual([a.id, b.id]);
-    expect((await ids({ page: 1, limit: 50, sort: 'new' })).sort()).toEqual([a.id, b.id].sort());
-    expect((await ids({ page: 1, limit: 50, sort: 'updated' })).sort()).toEqual([a.id, b.id].sort());
+
+    // Distinct timestamps, so the order these two sorts produce is actually asserted.
+    const older = new Date('2020-01-01T00:00:00Z');
+    const newer = new Date('2020-01-02T00:00:00Z');
+    await SkillListing.updateOne({ _id: a.id }, { $set: { createdAt: older, publishedAt: older } });
+    await SkillListing.updateOne({ _id: b.id }, { $set: { createdAt: newer, publishedAt: newer } });
+    expect(await ids({ page: 1, limit: 50, sort: 'new' })).toEqual([b.id, a.id]);
+    expect(await ids({ page: 1, limit: 50, sort: 'updated' })).toEqual([b.id, a.id]);
 
     await SkillListing.updateOne({ _id: a.id }, { $set: { ratingSum: 5, ratingCount: 1 } });
     expect(await ids({ page: 1, limit: 50, sort: 'top', minRating: 4 })).toEqual([a.id]);
@@ -899,6 +932,13 @@ describe('Skill Market (real mongod)', () => {
 
     const tools = await scanOf({ toolsUsed: ['https://evil.example'] });
     expect(tools.scanFindings.map(f => f.rule)).toContain('summary_external_url');
+
+    // Fields are scanned one at a time: a `<` in one and a `>` in the next must not read as HTML.
+    const split = await scanOf({
+      whatItDoes: 'Keeps rows where score <threshold',
+      riskNotes: ['Description says CSV => but emits JSON'],
+    });
+    expect(split.scanFindings.map(f => f.rule)).not.toContain('summary_html_or_script');
   });
 
   it('refuses an unchanged resubmit and a resubmit after a delist', async () => {
