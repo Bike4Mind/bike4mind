@@ -13,7 +13,12 @@ const flatModel = {
 };
 
 // What the mocked adapter streams: one text frame, then the frame carrying usage.
-const emitted: { text: string; info: CompletionInfo; abortMidStream?: AbortController } = { text: '', info: {} };
+const emitted: {
+  text: string;
+  frames?: { text: string[]; info: CompletionInfo }[];
+  info: CompletionInfo;
+  abortMidStream?: AbortController;
+} = { text: '', info: {} };
 
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
@@ -29,7 +34,11 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
     complete: vi.fn(async (_model, _messages, _options, onChunk) => {
-      await onChunk([emitted.text], {});
+      if (emitted.frames) {
+        for (const frame of emitted.frames) await onChunk(frame.text, frame.info);
+      } else {
+        await onChunk([emitted.text], {});
+      }
       emitted.abortMidStream?.abort();
       await onChunk([], emitted.info);
     }),
@@ -42,6 +51,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsByNames: vi.fn(),
 }));
 
+import { estimateStreamedOutputTokens } from '@bike4mind/common';
 import { executeCompletion } from './cliCompletions';
 
 // any: partial repository doubles - only the methods executeCompletion calls are stubbed.
@@ -86,6 +96,7 @@ describe('executeCompletion - output of a first call cut short before the provid
     vi.clearAllMocks();
     emitted.text = PARTIAL;
     emitted.abortMidStream = undefined;
+    emitted.frames = undefined;
   });
 
   it('bills an estimate of the streamed output when the user stopped the call', async () => {
@@ -97,6 +108,28 @@ describe('executeCompletion - output of a first call cut short before the provid
 
     expect(final?.outputTokens).toBe(ESTIMATED_OUTPUT);
     expect(final?.usdCost).toBeCloseTo(1_000 * perM(1) + ESTIMATED_OUTPUT * perM(10), 12);
+  });
+
+  it('sums every streamed frame, think markers included, for a multi-frame reasoning stream', async () => {
+    const controller = new AbortController();
+    emitted.abortMidStream = controller;
+    emitted.frames = [
+      { text: ['<think>'], info: { channel: 'reasoning' } },
+      { text: ['Let me work out '], info: { channel: 'reasoning' } },
+      { text: [], info: {} },
+      { text: ['the answer step by step.'], info: { channel: 'reasoning' } },
+      { text: ['</think>'], info: { channel: 'reasoning' } },
+      { text: ['The first part '], info: {} },
+      { text: [], info: {} },
+      { text: ['of the reply'], info: {} },
+    ];
+    emitted.info = { ...promptOnly, stopReason: 'aborted' };
+    const totalChars = emitted.frames.reduce((sum, f) => sum + f.text.reduce((n, t) => n + t.length, 0), 0);
+
+    const final = await settle(controller.signal);
+
+    expect(final?.outputTokens).toBe(estimateStreamedOutputTokens(totalChars, 'flat-model'));
+    expect(final?.outputTokens).toBeGreaterThan(0);
   });
 
   it('bills an estimate of the streamed output when the stream was aborted as degenerate', async () => {
