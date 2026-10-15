@@ -3,6 +3,7 @@ import tempfile
 import unittest
 
 from distribution import assemble
+from test_distribution import appimage
 
 
 WORKFLOW = (Path(__file__).resolve().parents[3] / '.github/workflows/desktop-release.yml').read_text()
@@ -18,7 +19,7 @@ class ReleasePlatformsTest(unittest.TestCase):
             if extra:
                 names.add(extra)
             for name in names:
-                (root / name).write_text('installer')
+                (root / name).write_bytes(appimage() if name.endswith('.AppImage') else b'installer')
             try:
                 assemble(root, '0.1.1', 'example/dist', 'example/source')
                 return 0

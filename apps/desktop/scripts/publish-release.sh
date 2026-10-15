@@ -23,5 +23,12 @@ trap 'rm -rf "$download"' EXIT
 gh release download "$tag" --dir "$download"
 test "$(printf '%s\n' "$assets"/* | wc -l)" = "$(printf '%s\n' "$download"/* | wc -l)" || { echo 'Unexpected remote asset set'; exit 1; }
 for asset in "$assets"/*; do cmp "$asset" "$download/$(basename "$asset")"; done
-gh release edit "$tag" --draft=false "--latest=${RELEASE_LATEST:-true}"
+latest=${RELEASE_LATEST:-true}
+if [ "$latest" = true ]; then
+  # Failed-job reruns retain an older version even after a newer run publishes.
+  latest=$(gh api "repos/$GH_REPO/releases?per_page=100" --paginate --slurp |
+    python3 "$(dirname "$0")/release_policy.py" "$DESKTOP_VERSION")
+fi
+echo "Publishing $tag with latest=$latest"
+gh release edit "$tag" --draft=false "--latest=$latest"
 gh release view "$tag" --json isDraft,assets --jq '{isDraft,assets:[.assets[].name]}'

@@ -121,6 +121,15 @@ jobs:
       - name: Check updater transport with temporary profiles
         if: matrix.platform == 'linux'
         run: node apps/desktop/scripts/smoke-updater.cjs
+      - uses: actions/setup-python@v6
+        if: matrix.platform == 'linux'
+        with:
+          python-version: '3.12'
+      - name: Check embedded blockmap differential downloads
+        if: matrix.platform == 'linux'
+        run: |
+          python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
+          node apps/desktop/scripts/smoke-differential.cjs
       - name: Package installers
         if: matrix.platform != 'mac' || github.event_name == 'pull_request'
         working-directory: apps/desktop
@@ -161,6 +170,11 @@ jobs:
           grep -q '^Authority=Developer ID Application:' signing.txt
           xcrun stapler validate "$app_dir/Bike4Mind.app"
           xcrun stapler validate "release/Bike4Mind-$DESKTOP_VERSION-$ARCH.dmg"
+      - name: Compare Linux builder metadata with embedded blockmap
+        if: matrix.platform == 'linux'
+        env:
+          DESKTOP_RELEASE_REPOSITORY: ${{ vars.DESKTOP_RELEASE_REPOSITORY }}
+        run: python3 apps/desktop/scripts/distribution.py verify-linux apps/desktop/release
       - name: Install Linux smoke test runtime
         if: matrix.platform == 'linux'
         run: |
@@ -289,13 +303,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
           DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
-        run: |
-          tag="desktop-v$DESKTOP_VERSION"
-          if sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha 2>/dev/null); then
-            test "$sha" = "$GITHUB_SHA" || { echo 'Source version tag belongs to another commit'; exit 1; }
-          else
-            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA"
-          fi
+        run: python3 apps/desktop/scripts/reserve-source-tag.py
       - name: Publish desktop release
         env:
           DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
