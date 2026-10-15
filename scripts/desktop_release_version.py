@@ -77,6 +77,9 @@ def select_version(releases, baseline, preview='', title='', run=''):
         parts, previous, release = max(candidates, key=lambda candidate: candidate[0])
         target = release['target_commitish'] if release.get('draft') else previous
         released_sha = git('rev-parse', f'{target}^{{commit}}')
+        if release.get('draft'):
+            # Draft releases do not create a tag ref until publication.
+            previous = released_sha
         # Never reuse a version for a different commit or release an older checkout.
         subprocess.run(['git', 'merge-base', '--is-ancestor', released_sha, head], check=True)
         if released_sha == head and not preview:

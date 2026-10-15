@@ -43,10 +43,23 @@ class DesktopVersionTest(unittest.TestCase):
         self.commit('feat(desktop): feature')
         self.releases.append({'tag_name': 'desktop-v0.2.0', 'prerelease': False,
                               'draft': True, 'target_commitish': self.git('rev-parse', 'HEAD')})
-        self.assertEqual(select_version(self.releases, '0.1.0')[:2], ('0.2.0', True))
+        version, publish, previous = select_version(self.releases, '0.1.0')
+        self.assertEqual((version, publish), ('0.2.0', True))
+        self.assertEqual(previous, self.git('rev-parse', 'HEAD'))
+        self.assertNotIn('desktop-v0.2.0', self.git('tag', '--list').splitlines())
+        self.assertIn('# Desktop 0.2.0', release_notes(version, previous, 'example/repo'))
         self.commit('fix(desktop): another fix')
         with self.assertRaises(ValueError):
             select_version(self.releases, '0.1.0')
+
+    def test_initial_untagged_draft_can_generate_notes(self):
+        self.git('tag', '-d', 'desktop-v0.1.0')
+        releases = [{'tag_name': 'desktop-v0.1.0', 'prerelease': False,
+                     'draft': True, 'target_commitish': self.git('rev-parse', 'HEAD')}]
+        version, publish, previous = select_version(releases, '0.1.0')
+        self.assertEqual((version, publish), ('0.1.0', True))
+        self.assertEqual(self.git('tag', '--list'), '')
+        self.assertIn('# Desktop 0.1.0', release_notes(version, previous, 'example/repo'))
 
     def test_dependency_update_is_patch(self):
         self.commit('chore(deps): update dependencies', 'pnpm-lock.yaml')
