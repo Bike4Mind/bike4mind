@@ -78,11 +78,26 @@ typechecks and tests on macOS and Linux, then packages both macOS architectures 
 Linux x64. Publication waits for both build jobs and validates all five artifacts.
 Failed uploads leave a draft release, not a partially published download page.
 
-Installer versions use the package's `major.minor` and its patch plus the workflow run
-number. For example, package `0.1.0` on run 42 becomes `0.1.42`, tagged `desktop-v0.1.42`.
-Reruns reuse the same version; published assets are never overwritten. Keep the package
-version monotonic and do not rename the workflow, which would reset its run counter.
-Desktop releases do not replace the repository's overall latest release.
+Installer versions follow SemVer, selected automatically by
+`scripts/desktop_release_version.py`. The first release uses the package version
+(`0.1.0`). After that, desktop release tags are the version source of truth; there is
+no version-bump commit or separate package release PR.
+
+- `feat: ...` bumps minor; `fix: ...`, dependency updates, builds, refactors, and
+  other relevant changes bump patch.
+- `type!: ...` or a `BREAKING CHANGE:` footer bumps major, including before `1.0`.
+- `docs`, `test`, `ci`, and `style` alone do not publish a new stable release.
+- The highest bump across unreleased, desktop-relevant first-parent commits wins.
+  Unrelated web-only commits do not affect the desktop version. Squash merges use the
+  PR title as their commit header, so set it to the intended release type.
+- PR installers use prereleases such as `0.2.0-pr.123.42`, with the PR title supplying
+  its intended bump. They never become stable releases or change the next stable version.
+
+Reruns at an already released commit reuse its version and leave published assets
+unchanged. Draft releases reserve their version so a failed upload can be retried.
+An older checkout cannot publish after a newer desktop release. Desktop releases do
+not replace the repository's overall latest release. Keep desktop release tags intact;
+changing the package version does not override existing release history.
 
 Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
 Without it, users must select their own backend. The workflow deliberately leaves
