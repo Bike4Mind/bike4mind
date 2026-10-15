@@ -151,6 +151,51 @@ describe('useGeneratedMediaUrls', () => {
     await waitFor(() => expect(result.current.urls['a.png']).toBe('https://s3.test/a.png?sig=2'));
   });
 
+  it('retries a key the server omitted within seconds, not at the next re-sign', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(api.get)
+      .mockResolvedValueOnce(respond({}, 60 * MINUTE_MS))
+      .mockResolvedValue(respond({ 'report.xlsx': 'https://s3.test/report.xlsx?sig=1' }, 60 * MINUTE_MS));
+    const queryClient = newQueryClient();
+
+    const { result } = renderHook(() => useGeneratedMediaUrls('session-1', ['report.xlsx']), {
+      wrapper: createWrapper(queryClient),
+    });
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(1));
+    expect(result.current.urls).toEqual({});
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 1000);
+    });
+    await waitFor(() => expect(result.current.urls).toEqual({ 'report.xlsx': 'https://s3.test/report.xlsx?sig=1' }));
+    expect(api.get).toHaveBeenCalledTimes(2);
+
+    // Complete now: back to the normal re-sign schedule.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40 * MINUTE_MS);
+    });
+    expect(api.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops the fast retry after a capped number of attempts for a key that never resolves', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(api.get).mockResolvedValue(respond({}, 60 * MINUTE_MS));
+    const queryClient = newQueryClient();
+
+    renderHook(() => useGeneratedMediaUrls('session-1', ['foreign.png']), {
+      wrapper: createWrapper(queryClient),
+    });
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(1));
+
+    for (let tick = 0; tick < 10; tick++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5 * 1000);
+      });
+    }
+    // The first response plus 5 retries, then the 45-minute re-sign schedule takes over.
+    expect(api.get).toHaveBeenCalledTimes(6);
+  });
+
   it('schedules the refresh off the earliest held expiry, not the newest response', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const startMs = Date.now();

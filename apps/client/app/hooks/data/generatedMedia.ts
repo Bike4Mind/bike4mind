@@ -8,6 +8,11 @@ import { api } from '@client/app/contexts/ApiContext';
 // gcTime, so a cache entry revived on remount is always still valid while it refetches.
 const GENERATED_MEDIA_REFRESH_MARGIN_MS = 15 * 60 * 1000;
 const GENERATED_MEDIA_MIN_REFRESH_MS = 60 * 1000;
+// A key can reach the client before the stored quest records it, and the server omits it until
+// then. Retry briefly instead of caching the gap until the next re-sign; capped, because a key the
+// caller may not read is omitted for good. 5 x 4s outlasts the ~10s streaming heartbeat save.
+const MISSING_KEY_RETRY_MS = 4 * 1000;
+const MISSING_KEY_MAX_RETRIES = 5;
 
 const generatedMediaResponseSchema = z.object({
   urls: z.record(z.string(), z.string()),
@@ -16,6 +21,8 @@ const generatedMediaResponseSchema = z.object({
 
 type GeneratedMediaResponse = z.infer<typeof generatedMediaResponseSchema>;
 type SignedUrl = { url: string; expiresAtMs: number };
+// missingKeyRetries: consecutive responses so far, for this key set, that omitted a requested key.
+type GeneratedMediaUrls = GeneratedMediaResponse & { missingKeyRetries: number };
 
 const EMPTY_URLS: Record<string, string> = {};
 
@@ -23,9 +30,10 @@ export const generatedMediaKeys = {
   urls: (sessionId: string | undefined, keys: string[]) => ['generatedMediaUrls', sessionId, keys] as const,
 };
 
-const msUntilRefresh = (response: GeneratedMediaResponse | undefined): number => {
-  if (!response) return 0;
-  const refreshAt = Date.parse(response.expiresAt) - GENERATED_MEDIA_REFRESH_MARGIN_MS;
+const msUntilRefresh = (data: GeneratedMediaUrls | undefined): number => {
+  if (!data) return 0;
+  if (data.missingKeyRetries > 0 && data.missingKeyRetries <= MISSING_KEY_MAX_RETRIES) return MISSING_KEY_RETRY_MS;
+  const refreshAt = Date.parse(data.expiresAt) - GENERATED_MEDIA_REFRESH_MARGIN_MS;
   return Math.max(refreshAt - Date.now(), GENERATED_MEDIA_MIN_REFRESH_MS);
 };
 
@@ -68,17 +76,26 @@ export function useGeneratedMediaUrls(sessionId: string | undefined, keys: strin
   const normalizedKeys = [...new Set(keys)].sort();
   // Read and written only inside queryFn: URLs held from earlier responses of this message.
   const heldUrlsRef = useRef<Record<string, SignedUrl>>({});
+  // Read and written only inside queryFn: the missing-key retry count, scoped to one key set.
+  const missingKeyRetriesRef = useRef<{ keySet: string; retries: number }>({ keySet: '', retries: 0 });
 
   const query = useQuery({
     queryKey: generatedMediaKeys.urls(sessionId, normalizedKeys),
-    queryFn: async (): Promise<GeneratedMediaResponse> => {
+    queryFn: async (): Promise<GeneratedMediaUrls> => {
       // GET, not POST: this is a read, and a read-only session view may refuse writes to the session.
       const params = new URLSearchParams(normalizedKeys.map(key => ['keys', key]));
       const { data } = await api.get(`/api/sessions/${sessionId}/generated-media?${params.toString()}`);
       const response = generatedMediaResponseSchema.parse(data);
       const held = mergeStableUrls(heldUrlsRef.current, response);
       heldUrlsRef.current = held;
-      return toResponse(held, response);
+
+      const keySet = params.toString();
+      const isMissingKey = normalizedKeys.some(key => !(key in response.urls));
+      const previousRetries = missingKeyRetriesRef.current.keySet === keySet ? missingKeyRetriesRef.current.retries : 0;
+      const missingKeyRetries = isMissingKey ? previousRetries + 1 : 0;
+      missingKeyRetriesRef.current = { keySet, retries: missingKeyRetries };
+
+      return { ...toResponse(held, response), missingKeyRetries };
     },
     enabled: Boolean(sessionId) && normalizedKeys.length > 0,
     // Fresh until the refresh point: a remount or refocus inside it costs nothing, and one past it
