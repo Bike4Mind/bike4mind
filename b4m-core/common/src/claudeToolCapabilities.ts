@@ -1,4 +1,5 @@
 import { ModelBackend } from './models';
+import type { AdapterFamily } from './types/entities/ModelCatalogTypes';
 
 /**
  * Native Anthropic tool capabilities, by Claude family and version. Allow-lists rather than a
@@ -71,4 +72,21 @@ export function supportsToolSearch(model: ClaudeToolCapabilityModel): boolean {
 /** Whether a system-role message can carry `tool_addition` / `tool_removal` blocks. */
 export function supportsToolChanges(model: ClaudeToolCapabilityModel): boolean {
   return servedNatively(model, TOOL_CHANGES_VERSIONS);
+}
+
+export type CompletionsToolCapabilityModel = ClaudeToolCapabilityModel & {
+  adapterFamily?: AdapterFamily;
+};
+
+// Mirrors getLlmByModel's dispatch: a catalog row routes on adapterFamily first, everything else on backend.
+// MUST STAY IN SYNC WITH getLlmByModel (llm-adapters/src/index.ts) and backendForAdapterFamily
+// (llm-adapters/src/adapterFamilyDispatch.ts).
+// Bedrock Claude is left out until its adapter forwards defer_loading and replays server blocks.
+function completionsForwardsNativeTools(model: CompletionsToolCapabilityModel): boolean {
+  return model.adapterFamily ? model.adapterFamily === 'anthropic-messages' : model.backend === ModelBackend.Anthropic;
+}
+
+/** supportsToolSearch, narrowed to models whose `/api/ai/v1/completions` adapter actually forwards it. */
+export function completionsSupportsToolSearch(model: CompletionsToolCapabilityModel): boolean {
+  return completionsForwardsNativeTools(model) && supportsToolSearch(model);
 }

@@ -8,6 +8,7 @@ import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/Se
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 import { FallbackInfoSchema } from './llm';
 import { SystemPromptDetailSchema } from './contextTelemetry';
+import { COMPLETION_TOOL_ERROR_CODES } from './cliCompletions';
 import { ChatToolModeSchema } from './promptMeta';
 
 /**
@@ -339,10 +340,16 @@ export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal('provider_not_configured' satisfies ApiErrorCode).optional(),
 });
 
-/** 400 for a `model` the caller cannot use; `errorCode` is absent on the other 400s (e.g. malformed JSON). */
-export const UnknownModelErrorSchema = ApiErrorSchema.extend({
-  errorCode: z.literal(UNKNOWN_MODEL_ERROR_CODE).optional(),
+/**
+ * 400 for a `model` the caller cannot use, or a refused tool search request; `errorCode` is absent on the
+ * other 400s (e.g. malformed JSON).
+ */
+export const CompletionsBadRequestErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.enum([UNKNOWN_MODEL_ERROR_CODE, ...COMPLETION_TOOL_ERROR_CODES]).optional(),
 });
+
+/** @deprecated Use CompletionsBadRequestErrorSchema; kept so the published export does not break. */
+export const UnknownModelErrorSchema = CompletionsBadRequestErrorSchema;
 
 /**
  * Error envelope for the 403 apiKeyAuth (apps/client/server/middlewares/apiKeyAuth.ts)

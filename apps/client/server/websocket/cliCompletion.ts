@@ -1,4 +1,9 @@
-import { CliCompletionRequestAction, buildSSEEvent, IMessage, type CompletionSource } from '@bike4mind/common';
+import {
+  CliCompletionRequestAction,
+  buildCompletionStreamEvent,
+  IMessage,
+  type CompletionSource,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import {
@@ -20,7 +25,7 @@ import {
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { withWebSocketContext, sendToConnection } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
-import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
+import { cliCompletionErrorFields } from '@server/utils/errorSanitization';
 import { TooManyRequestsError } from '@server/utils/errors';
 
 const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';
@@ -140,7 +145,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   try {
     // Execute completion - same function as SSE handler
-    // Cast: Zod parses content/tools as unknown[], but executeCompletion expects typed arrays
+    // Cast: Zod parses message content as unknown[], but executeCompletion expects typed arrays
     await executeCompletion({
       userId,
       model,
@@ -166,7 +171,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         if (info?.outputTokens) finalOutputTokens = info.outputTokens;
         if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
-        const chunk = buildSSEEvent(text, info);
+        const chunk = buildCompletionStreamEvent(text, info);
         await sendToConnection(connectionId, endpoint, {
           action: 'cli_completion_chunk' as const,
           requestId,
@@ -187,7 +192,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     await logCompletionAnalytics({
       type: 'success',
       userId,
-      // WS variant accepts a looser tools shape (z.array(z.unknown())) than
+      // WS variant accepts a looser message content shape (z.array(z.unknown())) than
       // CompletionRequestSchema. Cast - analytics only reads model/messages.
       body: { model, messages, options } as Parameters<typeof logCompletionAnalytics>[0]['body'],
       apiKeyInfo: apiKeyInfoForCompletion,
@@ -208,14 +213,14 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     await sendToConnection(connectionId, endpoint, {
       action: 'cli_completion_error' as const,
       requestId,
-      error: sanitizeErrorMessage(error),
+      ...cliCompletionErrorFields(error),
     });
 
     // Log failed analytics
     await logCompletionAnalytics({
       type: 'failure',
       userId,
-      // WS variant accepts a looser tools shape (z.array(z.unknown())) than
+      // WS variant accepts a looser message content shape (z.array(z.unknown())) than
       // CompletionRequestSchema. Cast - analytics only reads model/messages.
       body: { model, messages, options } as Parameters<typeof logCompletionAnalytics>[0]['body'],
       apiKeyInfo: apiKeyInfoForCompletion,

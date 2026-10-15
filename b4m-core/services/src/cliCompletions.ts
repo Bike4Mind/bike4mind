@@ -51,6 +51,7 @@ import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE }
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
+import { prepareWireTools } from './cliCompletionsToolSearch';
 
 export interface CompletionParams {
   userId: string;
@@ -424,6 +425,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         modelMaxOutputTokens: modelInfo.max_tokens,
       })
     : (options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
+  // Before any credit reservation, so a refused tool search request costs nothing.
+  const wireTools = prepareWireTools(options?.tools, messages, modelInfo);
   // Promote wire tools to ICompletionOptionTools by stamping a no-op toolFn.
   // executeTools: false means the backend never calls toolFn - it only reads
   // toolSchema. The placeholder satisfies the type contract without changing
@@ -431,7 +434,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // ICompletionOptionTools requires a stricter property shape - the backend's
   // formatTools() coerces both shapes correctly.
   const noopToolFn: ICompletionOptionTools['toolFn'] = async () => '';
-  const promotedTools: ICompletionOptionTools[] | undefined = options?.tools?.map(t => ({
+  const promotedTools: ICompletionOptionTools[] | undefined = wireTools.tools.map(t => ({
     ...t,
     toolFn: (t as { toolFn?: ICompletionOptionTools['toolFn'] }).toolFn ?? noopToolFn,
   })) as ICompletionOptionTools[] | undefined;
@@ -447,6 +450,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     maxTokens,
     stream: options?.stream ?? true,
     tools: useServerTools ? params.serverTools! : (promotedTools ?? []),
+    ...(wireTools.providerTools.length > 0 ? { providerTools: wireTools.providerTools } : {}),
     executeTools: useServerTools,
     ...(useServerTools && params.maxToolCalls !== undefined
       ? { _internal: { maxToolCalls: params.maxToolCalls } }
