@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CreditHolderType } from '@bike4mind/common';
+import { BadRequestError, CreditHolderType } from '@bike4mind/common';
 import type { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { holdCredits, releaseCreditHold, settleCreditHold, type CreditHoldAdapters } from './creditHold';
@@ -101,6 +101,7 @@ describe('holdCredits', () => {
       adapters
     );
     await expect(hold).rejects.toThrow('User not found');
+    await expect(hold).rejects.toBeInstanceOf(BadRequestError);
     await expect(hold).rejects.not.toThrow(/enough credits/);
   });
 
@@ -108,9 +109,12 @@ describe('holdCredits', () => {
     const { adapters } = makeAdapters({ user: 100, org: 100 });
     vi.mocked(adapters.organizations.incrementCredits).mockResolvedValueOnce(null);
 
-    await expect(
-      holdCredits({ userId: 'u1', organizationId: 'o1', requiredCredits: 30, featureLabel: 'video', logger }, adapters)
-    ).rejects.toThrow('Billing organization not found');
+    const hold = holdCredits(
+      { userId: 'u1', organizationId: 'o1', requiredCredits: 30, featureLabel: 'video', logger },
+      adapters
+    );
+    await expect(hold).rejects.toThrow('Billing organization not found');
+    await expect(hold).rejects.toBeInstanceOf(BadRequestError);
   });
 
   it.each([-5, 0, Number.NaN, Number.POSITIVE_INFINITY])(

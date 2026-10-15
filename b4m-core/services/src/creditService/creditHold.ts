@@ -131,9 +131,9 @@ export async function holdCredits(
 }
 
 /**
- * Return the whole hold - the provider call failed and incurred no cost. Throws on a failed write, so a
- * caller that can retry (a job's terminal settlement) does not record it as released; a caller that
- * cannot logs it instead (reserveRequestCredits).
+ * Return the whole hold - the provider call failed and incurred no cost. Throws when the write rejects
+ * (a deleted holder resolves silently), so a caller that can retry (a job's terminal settlement) does
+ * not record it as released; a caller that cannot logs it instead (reserveRequestCredits).
  */
 export async function releaseCreditHold(hold: CreditHold, adapters: HolderAdapters): Promise<void> {
   if (hold.reservedCredits <= 0) return;
