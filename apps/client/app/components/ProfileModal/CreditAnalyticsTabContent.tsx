@@ -65,6 +65,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
   const {
     accessibleTextModels,
     accessibleImageModels,
+    accessibleVideoModels,
     isLoading: isLoadingModels,
     isModelsError,
   } = useAccessibleModels();
@@ -148,6 +149,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const modelUsageMap = aggregateUsageByModel(allDeductTransactions, [
       ...accessibleTextModels,
       ...accessibleImageModels,
+      ...accessibleVideoModels,
     ]);
 
     // Aggregate transactions by day for each type
@@ -460,7 +462,16 @@ const CreditAnalyticsTabContent: React.FC = () => {
       daysRemaining,
       observedDays,
     };
-  }, [transactions, timePeriod, viewMode, theme.palette, currentUser, accessibleTextModels, accessibleImageModels]);
+  }, [
+    transactions,
+    timePeriod,
+    viewMode,
+    theme.palette,
+    currentUser,
+    accessibleTextModels,
+    accessibleImageModels,
+    accessibleVideoModels,
+  ]);
 
   // Tooltip text for days remaining, adjusted based on selected time period
   // Only when a projection would otherwise exist: no burn or no balance is N/A, not "too early".
@@ -995,10 +1006,13 @@ const CreditAnalyticsTabContent: React.FC = () => {
 
         {viewMode === 'usage' && Object.keys(usageByModel).length > 0 && (
           <Card variant="outlined" sx={{ p: 2 }}>
-            <Stack direction="row" alignItems="center" sx={{ mb: 1 }}>
+            <Stack direction="row" alignItems="center" sx={{ mb: 0.5 }}>
               <PieChartIcon sx={{ mr: 1 }} />
               <Typography level="title-md">{t('credits.usage_by_model')}</Typography>
             </Stack>
+            <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
+              From the credit ledger over the range selected above; may differ from the usage-event breakdown below.
+            </Typography>
 
             <Box sx={{ height: 340 }}>
               <ResponsivePie
@@ -1070,12 +1084,12 @@ const CreditAnalyticsTabContent: React.FC = () => {
         {/* Removed bottom current balance card (duplicated at top) */}
       </Stack>
 
-      {/* Per-key/feature/source breakdown from the usage-event ledger (moved here from the API Keys tab,
-          which now links to it). It keeps its own range toggle: it supports 30/60/90 days, not 7/180. */}
+      {/* Owner-scoped usage-event breakdown. It keeps its own 30/60/90-day toggle: the credit
+          ledger behind the charts above offers different ranges. */}
       {currentUser?.id && (
         <Box data-testid="usage-spend-breakdown">
           <Divider sx={{ my: 4 }}>
-            <Typography level="title-md">Spend by key, feature and source</Typography>
+            <Typography level="title-md">Spend by key, model, feature and source</Typography>
           </Divider>
           <UsageDashboard ownerType={CreditHolderType.User} ownerId={currentUser.id} />
         </Box>
