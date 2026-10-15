@@ -6,7 +6,7 @@ import FilesSection from '@client/app/components/Session/AISettings/FilesSection
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
-import { useStatusLineCompact } from './ComposerStatusLine';
+import { STATUS_ITEM_HEIGHT, useStatusLineCompact } from './ComposerStatusLine';
 
 interface NotebookFilesChipProps {
   totalFilesCount: number;
@@ -20,8 +20,8 @@ interface NotebookFilesChipProps {
 
 // Quiet text like the balance on the other side of the line (CreditButton) - keep the two in sync.
 const quietSx = {
-  height: '24px',
-  minHeight: '24px',
+  height: STATUS_ITEM_HEIGHT,
+  minHeight: STATUS_ITEM_HEIGHT,
   px: 0.75,
   gap: 0.25,
   borderRadius: '6px',

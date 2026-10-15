@@ -5,7 +5,10 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { isImageModel } from '@client/app/utils/commands';
 import { orange } from '@client/app/utils/themes/colors';
-import { useStatusLineCompact } from '@client/app/components/Session/SessionBottom/ComposerStatusLine';
+import {
+  STATUS_ITEM_HEIGHT,
+  useStatusLineCompact,
+} from '@client/app/components/Session/SessionBottom/ComposerStatusLine';
 
 const ResearchModeIndicator: FC = () => {
   const researchMode = useLLM(state => state.researchMode);
@@ -43,8 +46,10 @@ const ResearchModeIndicator: FC = () => {
         onClick={() => openModal('research-mode')}
         startDecorator={<ScienceIcon sx={{ fontSize: 14, color: 'inherit' }} />}
         sx={{
-          height: '24px',
-          minHeight: '24px',
+          height: STATUS_ITEM_HEIGHT,
+          minHeight: STATUS_ITEM_HEIGHT,
+          // Icon-only when compact: at least square, so it is as easy to tap as it is tall.
+          minWidth: STATUS_ITEM_HEIGHT,
           px: 0.75,
           gap: 0.25,
           borderRadius: '6px',

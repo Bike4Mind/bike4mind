@@ -4,6 +4,7 @@ import { formatTokenCount, type SessionContextUsage } from '@client/app/hooks/us
 import { orange } from '@client/app/utils/themes/colors';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import type { AttachmentFitWarning } from '@client/app/hooks/useAttachmentFitWarning';
+import { STATUS_ITEM_HEIGHT } from './ComposerStatusLine';
 
 interface ContextUsageChipProps {
   /** The last completed turn's assembled context; null before the first turn. */
@@ -128,7 +129,7 @@ const ContextUsageChip: FC<ContextUsageChipProps> = ({ usage, modelName, inputOv
           display: 'inline-flex',
           alignItems: 'center',
           gap: '4px',
-          height: '24px',
+          height: STATUS_ITEM_HEIGHT,
           px: 0.75,
           borderRadius: '6px',
           fontSize: '12px',

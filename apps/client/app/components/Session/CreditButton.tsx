@@ -2,7 +2,7 @@ import { Box, Button, Tooltip, Typography } from '@mui/joy';
 import InfoRoundedIcon from '@mui/icons-material/InfoRounded';
 import type { ISessionDocument } from '@bike4mind/common';
 import { useCreditPayerNote } from './CreditPayerNote';
-import { useStatusLineCompact } from './SessionBottom/ComposerStatusLine';
+import { STATUS_ITEM_HEIGHT, useStatusLineCompact } from './SessionBottom/ComposerStatusLine';
 import { FC, useState } from 'react';
 import CreditIcon from '../svgs/icons/CreditIcon';
 import { orange } from '@client/app/utils/themes/colors';
@@ -69,8 +69,8 @@ export const CreditBalanceChipView: FC<{
           ) : undefined
         }
         sx={{
-          height: '24px',
-          minHeight: '24px',
+          height: STATUS_ITEM_HEIGHT,
+          minHeight: STATUS_ITEM_HEIGHT,
           px: 0.75,
           gap: 0.25,
           borderRadius: '6px',

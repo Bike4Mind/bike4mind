@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
+const mobile = vi.hoisted(() => ({ value: false }));
+vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => mobile.value }));
+
 import ComposerStatusLine, { useStatusLineCompact } from './ComposerStatusLine';
 
 // jsdom has no layout: the left side reports a content width wider than itself on demand.
@@ -32,6 +35,7 @@ beforeEach(() => {
   });
   size.client = 300;
   size.content = 200;
+  mobile.value = false;
 });
 
 afterEach(() => {
@@ -53,5 +57,20 @@ describe('ComposerStatusLine', () => {
     act(() => fire());
     expect(screen.getByTestId('left')).toHaveTextContent('compact');
     expect(screen.getByTestId('right')).toHaveTextContent('compact');
+  });
+
+  it('on phones keeps the notebook side compact and context and the balance in full', () => {
+    mobile.value = true;
+    render(<ComposerStatusLine left={<Probe id="left" />} right={<Probe id="right" />} />);
+    expect(screen.getByTestId('left')).toHaveTextContent('compact');
+    expect(screen.getByTestId('right')).toHaveTextContent('full');
+  });
+
+  it('on phones keeps the right side full even when the line runs out of room', () => {
+    mobile.value = true;
+    render(<ComposerStatusLine left={<Probe id="left" />} right={<Probe id="right" />} />);
+    size.content = 360;
+    act(() => fire());
+    expect(screen.getByTestId('right')).toHaveTextContent('full');
   });
 });

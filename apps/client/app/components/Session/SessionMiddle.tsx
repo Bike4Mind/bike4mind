@@ -73,9 +73,9 @@ const ScrollToBottomButton = memo(
         sx={{
           position: 'absolute',
           // Hangs down into the composer's status line (its empty middle) and stops 16px above the
-          // composer box. That line is 36px tall (ComposerStatusLine) - keep in sync. Account notes
-          // above the line push this pane's bottom up by their height, so add it back.
-          bottom: `${-20 - composerNotesHeight}px`,
+          // composer box. That line is 36px tall, 44px on phones (ComposerStatusLine) - keep in sync.
+          // Account notes above the line push this pane's bottom up by their height, so add it back.
+          bottom: { xs: `${-28 - composerNotesHeight}px`, sm: `${-20 - composerNotesHeight}px` },
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 1100,
