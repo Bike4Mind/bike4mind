@@ -210,6 +210,22 @@ async function writeCache(cache: UpdateCheckCache): Promise<void> {
   }
 }
 
+function toResult(currentVersion: string, latestVersion: string): UpdateCheckResult {
+  return { currentVersion, latestVersion, updateAvailable: compareSemver(latestVersion, currentVersion) > 0 };
+}
+
+/**
+ * The last known update status, from the cache alone. Never touches the network,
+ * so it is safe to await before first paint. A cache of any age is used: a newer
+ * published version stays newer, and checkForUpdate() refreshes the cache for the
+ * next launch. Null when nothing is cached for this version.
+ */
+export async function readCachedUpdate(currentVersion: string): Promise<UpdateCheckResult | null> {
+  const cache = await readCache();
+  if (!cache || cache.currentVersion !== currentVersion) return null;
+  return toResult(currentVersion, cache.latestVersion);
+}
+
 /**
  * Check for updates using cache when fresh.
  * Non-throwing - returns null on any error.
@@ -221,11 +237,7 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
     if (cache && cache.currentVersion === currentVersion) {
       const age = Date.now() - new Date(cache.lastChecked).getTime();
       if (age < CACHE_TTL_MS) {
-        return {
-          currentVersion,
-          latestVersion: cache.latestVersion,
-          updateAvailable: compareSemver(cache.latestVersion, currentVersion) > 0,
-        };
+        return toResult(currentVersion, cache.latestVersion);
       }
     }
 
@@ -239,11 +251,7 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
       currentVersion,
     });
 
-    return {
-      currentVersion,
-      latestVersion,
-      updateAvailable: compareSemver(latestVersion, currentVersion) > 0,
-    };
+    return toResult(currentVersion, latestVersion);
   } catch {
     return null;
   }

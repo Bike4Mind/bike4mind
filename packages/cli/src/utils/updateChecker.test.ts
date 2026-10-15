@@ -33,6 +33,7 @@ import { execSync } from 'child_process';
 import {
   fetchLatestVersion,
   checkForUpdate,
+  readCachedUpdate,
   forceCheckForUpdate,
   isNpmPrefixWritable,
   getAutoUpdatePreference,
@@ -192,6 +193,39 @@ describe('updateChecker', () => {
       const result = await checkForUpdate('0.2.28');
       expect(mockedAxios).toHaveBeenCalledTimes(1);
       expect(result?.updateAvailable).toBe(true);
+    });
+  });
+
+  describe('readCachedUpdate', () => {
+    it('reports a cached newer version without touching the network, however old the cache', async () => {
+      const staleCache = {
+        lastChecked: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+        latestVersion: '0.3.0',
+        currentVersion: '0.2.28',
+      };
+      mockedReadFile.mockResolvedValueOnce(JSON.stringify(staleCache));
+
+      expect(await readCachedUpdate('0.2.28')).toEqual({
+        currentVersion: '0.2.28',
+        latestVersion: '0.3.0',
+        updateAvailable: true,
+      });
+      expect(mockedAxios).not.toHaveBeenCalled();
+    });
+
+    it('returns null when the cache was written by another version', async () => {
+      const cache = { lastChecked: new Date().toISOString(), latestVersion: '0.3.0', currentVersion: '0.2.27' };
+      mockedReadFile.mockResolvedValueOnce(JSON.stringify(cache));
+
+      expect(await readCachedUpdate('0.2.28')).toBeNull();
+      expect(mockedAxios).not.toHaveBeenCalled();
+    });
+
+    it('returns null when there is no cache', async () => {
+      mockedReadFile.mockRejectedValueOnce(new Error('ENOENT'));
+
+      expect(await readCachedUpdate('0.2.28')).toBeNull();
+      expect(mockedAxios).not.toHaveBeenCalled();
     });
   });
 
