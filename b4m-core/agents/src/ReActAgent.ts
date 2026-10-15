@@ -977,17 +977,17 @@ BEHAVIOR GUIDELINES:
 Remember: You are an autonomous AGENT. Act independently and solve problems proactively.`;
   }
 
+  /** Live text is requested only for a listening view; without one, the backend keeps full retry. */
+  private hasTextDeltaListener(): boolean {
+    return this.listenerCount('text_delta') > 0;
+  }
+
   /**
    * Demote a would-be final answer to a thought and hand the model drained host
    * feedback (see AgentRunOptions.drainFeedback) as the next user message, so
    * the loop runs another iteration instead of ending. The user message is a
    * plain string and so is a normal iteration boundary for trimming.
    */
-  /** Live text is requested only for a listening view; without one, the backend keeps full retry. */
-  private hasTextDeltaListener(): boolean {
-    return this.listenerCount('text_delta') > 0;
-  }
-
   private reopenAnswerWithFeedback(messages: IMessage[], answer: string, feedback: string): AgentStep {
     const thoughtStep: AgentStep = { type: 'thought', content: answer, metadata: { timestamp: Date.now() } };
     this.steps.push(thoughtStep);
