@@ -49,6 +49,18 @@ describe('Gemini and xAI cache-read rates', () => {
     }
   );
 
+  // A >200K tier here would bill an entire agent run at the upper rate: the agent executor prices a
+  // run's summed input (apps/workers/src/queueHandlers/agentExecutor.billing.ts), not one request.
+  // #4679 makes that per-request and removes this guard.
+  it.each([ChatModels.GEMINI_2_5_PRO, ChatModels.GEMINI_3_1_PRO_PREVIEW])(
+    '%s stays flat until agentExecutor.billing.ts prices per iteration (#4679)',
+    async id => {
+      const model = await findModel(id);
+
+      expect(Object.keys(model.pricing).map(Number)).toEqual([2_097_152]);
+    }
+  );
+
   it('leaves every other model with no cache_read, so its cached tokens stay at the input rate', async () => {
     for (const model of await textModels()) {
       const tiers = Object.values(model.pricing);
