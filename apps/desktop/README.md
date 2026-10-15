@@ -74,6 +74,8 @@ Unrelated workspace sources, web-only lockfile changes, and unrelated root depen
 skip all packaging, startup, validation, and publication jobs. The same check governs
 semantic bumps and release notes. Shared workspace/build configuration remains a safe
 rebuild trigger; malformed or missing historical inputs fail safe by requiring a build.
+Pull requests compare their base with the head. Pushes and manual runs check every
+commit since the last desktop release, so a cancelled or failed run cannot strand a change.
 
 Pull requests targeting `main` run the same builds and artifact validation without
 publishing a release. In the workflow run's Artifacts section, download
