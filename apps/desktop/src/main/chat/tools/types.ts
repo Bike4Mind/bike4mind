@@ -471,7 +471,7 @@ export interface ApprovalPrompt {
   /**
    * Asked in 'auto' as well as 'ask' (only 'full' runs it). For a call that is allowed by
    * default but has a specific reason to stop first: a shell command naming a path outside the
-   * project, or a read of a `.env` file.
+   * project, a read of a `.env` file, or a command that can send data out.
    */
   askInAuto?: true;
   /**

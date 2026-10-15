@@ -377,6 +377,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const modelInfo = models.find(m => m.id === (model as ChatModels));
   const catalogued = CHAT_MODELS.includes(model as ChatModels);
 
+  // Catalogued but never runnable; unlike provider_not_configured, retrying cannot help.
+  if (modelInfo?.disabled) {
+    const reason = modelInfo.disabledReason ? `: ${modelInfo.disabledReason}` : '';
+    throw new BadRequestError(
+      `Model '${params.model}' is currently unavailable${reason}. List the models you can call with GET /api/v1/models.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
+
   const llm = getLlmByModel(apiKeys, {
     modelInfo,
     logger: logger ?? new Logger(),

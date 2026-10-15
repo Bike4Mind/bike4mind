@@ -168,14 +168,18 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
     expect(executePendingAction).not.toHaveBeenCalled();
   });
 
-  it.each(['confirm_action', 'cancel_action'] as const)('accepts a legacy bare quest ID for %s', async actionId => {
-    const response = await postAction(actionId, QUEST_ID);
+  it('refuses a confirm whose button does not name the displayed action ts', async () => {
+    const response = await postAction('confirm_action', QUEST_ID);
 
     expect(response._getStatusCode()).toBe(200);
-    if (actionId === 'confirm_action') {
-      expect(executePendingAction).toHaveBeenCalledWith(QUEST_ID, expect.anything(), expect.anything(), undefined);
-      return;
-    }
+    expect(executePendingAction).not.toHaveBeenCalled();
+    expect(JSON.stringify(response._getJSONData())).toContain('out of date');
+  });
+
+  it('still accepts a legacy bare quest ID for cancel_action', async () => {
+    const response = await postAction('cancel_action', QUEST_ID);
+
+    expect(response._getStatusCode()).toBe(200);
     expect(cancelPendingActionOnQuest).toHaveBeenCalledWith(QUEST_ID, expect.anything(), undefined);
   });
 

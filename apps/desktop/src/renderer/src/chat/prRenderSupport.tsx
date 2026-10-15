@@ -47,7 +47,7 @@ function barState(state: PrState, isDraft: boolean): PrBarState {
     gh: 'ok',
     refreshing: false,
     autoMerge: { mode: null },
-    autoFix: { status: 'off', attempts: 0, max: 3 },
+    autoFix: { status: 'off', attempts: 0, max: 5 },
   };
 }
 
