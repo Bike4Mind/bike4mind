@@ -169,7 +169,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     logger.updateMetadata({ requestId });
     res.setHeader(REQUEST_ID_HEADER, requestId);
 
-    // Distinguish CLI from 3rd-party API by the `b4m-cli/<version>` UA the CLI sets.
+    // Distinguish CLI and Desktop from 3rd-party API by the `b4m-cli/` / `b4m-desktop/` client signal.
     // Used for both the credit transaction and analytics so usage breaks down by surface.
     const source: CompletionSource = resolveApiCompletionSource(headers);
 
