@@ -126,6 +126,8 @@ describe('WebSocketLlmBackend transport (open)', () => {
     ws.emit({ action: 'cli_completion_error', error: 'model overloaded' });
 
     await expect(consumer).rejects.toThrow('model overloaded');
+    // No code on these frames, so nothing marks this one transient.
+    await expect(consumer).rejects.toMatchObject({ kind: 'refused' });
   });
 
   it('surfaces retryAfter from a rate-limit cli_completion_error frame', async () => {
@@ -140,6 +142,23 @@ describe('WebSocketLlmBackend transport (open)', () => {
 
     await expect(consumer).rejects.toThrow('Rate limit exceeded. (retry after 120s)');
     await expect(consumer).rejects.toMatchObject({ kind: 'rate_limited', retryAfterMs: 120_000 });
+  });
+
+  it('classifies a POST that could not connect as unreachable, and any other POST failure as plain', async () => {
+    const backendPosting = (failure: Error) =>
+      new WebSocketLlmBackend({
+        wsManager: new FakeWsManager() as unknown as WebSocketConnectionManager,
+        apiClient: { getAxiosInstance: () => ({ post: () => Promise.reject(failure) }) } as unknown as ApiClient,
+        model: 'test-model',
+        tokenGetter: async () => 'token',
+        wsCompletionUrl: '/ws-completions',
+      });
+    const failureOf = async (backend: WebSocketLlmBackend) => {
+      for await (const _event of backend.open(req)) void _event;
+    };
+    const refused = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+    await expect(failureOf(backendPosting(refused))).rejects.toMatchObject({ kind: 'unreachable' });
+    await expect(failureOf(backendPosting(new Error('bad request')))).rejects.not.toHaveProperty('kind');
   });
 
   it('throws a retryable error when the socket is not connected', async () => {

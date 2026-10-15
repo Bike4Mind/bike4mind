@@ -1,11 +1,13 @@
 import { B4mApiError, B4mStreamEndedError } from '@bike4mind/sdk';
 
 /**
- * Why a model call failed, as far as retrying is concerned. The first five are transient and
+ * Why a model call failed, as far as retrying is concerned. The first six are transient and
  * retried by {@link decideRetry}; `auth` and `refused` are answers that a retry would repeat.
+ * `unreachable` is a request that never got a response (connect failure, DNS); `network` and
+ * `stream_idle` are a response that was cut or went silent.
  */
 export type ModelCallErrorKind =
-  'rate_limited' | 'overloaded' | 'server' | 'network' | 'stream_idle' | 'auth' | 'refused';
+  'rate_limited' | 'overloaded' | 'server' | 'unreachable' | 'network' | 'stream_idle' | 'auth' | 'refused';
 
 export type ModelCallErrorDetails = {
   status?: number;
@@ -73,10 +75,10 @@ function errorCodeOf(value: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined;
 }
 
-/** True when `error` (or its `cause`) carries a code for a failed or dropped connection. */
-export function hasNetworkErrorCode(error: unknown): boolean {
+/** The failed- or dropped-connection code on `error` or its `cause`, if it carries one. */
+export function networkErrorCodeOf(error: unknown): string | undefined {
   const code = errorCodeOf(error) ?? errorCodeOf((error as { cause?: unknown } | null)?.cause);
-  return code !== undefined && NETWORK_ERROR_CODES.has(code);
+  return code !== undefined && NETWORK_ERROR_CODES.has(code) ? code : undefined;
 }
 
 /** Kind for an HTTP status from the B4M API or a model provider behind it. */
@@ -106,13 +108,16 @@ export function kindForApiError(error: B4mApiError): ModelCallErrorKind {
 export function classifyModelCallError(error: unknown): ModelCallError | undefined {
   if (error instanceof ModelCallError) return error;
   if (!(error instanceof Error)) return undefined;
-  if (error instanceof B4mStreamEndedError || hasNetworkErrorCode(error)) {
+  if (error instanceof B4mStreamEndedError || networkErrorCodeOf(error) !== undefined) {
     return new ModelCallError('network', error.message, { code: errorCodeOf(error), cause: error });
   }
   return undefined;
 }
 
-/** True for a dropped, refused or stalled connection: the request may never have been answered. */
+/**
+ * True for a response that was cut or went silent mid-way. Not `unreachable`: a request that never
+ * got a response keeps its own message, which session handoff (utils/handoff.ts) matches on.
+ */
 export function isConnectionDrop(error: unknown): error is Error {
   const kind = classifyModelCallError(error)?.kind;
   return kind === 'network' || kind === 'stream_idle';

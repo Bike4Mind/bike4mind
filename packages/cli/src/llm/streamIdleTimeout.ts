@@ -28,8 +28,7 @@ export function withIdleTimeout(body: ReadableStream<Uint8Array>, idleMs: number
       async pull(controller) {
         const idle = new Promise<never>((_, reject) => {
           timer = setTimeout(
-            () =>
-              reject(new ModelCallError('stream_idle', `No data from the server for ${Math.round(idleMs / 1000)}s`)),
+            () => reject(new ModelCallError('stream_idle', `No data from the server for ${idleMs / 1000}s`)),
             idleMs
           );
         });

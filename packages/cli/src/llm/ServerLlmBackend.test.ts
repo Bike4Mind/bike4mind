@@ -94,9 +94,47 @@ describe('ServerLlmBackend SSE transport (open)', () => {
         model: 'test-model',
       });
       await expect(collect(backend)).rejects.toThrow(wording);
-      await expect(collect(backend)).rejects.toMatchObject({ kind: 'network' });
+      await expect(collect(backend)).rejects.toMatchObject({ kind: 'unreachable' });
     }
   );
+
+  it('does not retry an axios request timeout', async () => {
+    const backend = new ServerLlmBackend({
+      apiClient: {
+        baseURL: 'http://localhost:3000',
+        fetch: async () => {
+          throw new AxiosError('timeout of 600000ms exceeded', 'ECONNABORTED');
+        },
+      } as unknown as ApiClient,
+      model: 'test-model',
+    });
+    const error = await collect(backend).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toHaveProperty('kind');
+  });
+
+  describe('complete() when the server stays unreachable', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('retries, then keeps the wording session handoff falls back on', async () => {
+      vi.useFakeTimers();
+      const fetch = vi.fn(async () => {
+        throw new AxiosError('connect ECONNREFUSED 127.0.0.1:3000', 'ECONNREFUSED');
+      });
+      const backend = new ServerLlmBackend({
+        apiClient: { baseURL: 'http://localhost:3000', fetch } as unknown as ApiClient,
+        model: 'test-model',
+      });
+      const outcome = backend.complete('test-model', [], {}, async () => undefined).catch((e: unknown) => e);
+      await vi.runAllTimersAsync();
+      const error = await outcome;
+      expect(fetch).toHaveBeenCalledTimes(4);
+      expect(error).toMatchObject({ message: expect.stringContaining('Cannot connect to Bike4Mind server') });
+      expect(isLlmUnavailableError(error)).toBe(true);
+    });
+  });
 
   it.each([
     ['Model provider returned an error (upstream 529)', 'provider_error', 'overloaded', 529],

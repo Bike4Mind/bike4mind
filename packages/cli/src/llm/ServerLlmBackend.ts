@@ -10,10 +10,10 @@ import { parseStreamEvent, type StreamEvent } from './streamEvents';
 import { runCompletion } from './runCompletion';
 import {
   classifyModelCallError,
-  hasNetworkErrorCode,
   kindForApiError,
   kindForStatus,
   ModelCallError,
+  networkErrorCodeOf,
 } from './modelCallError';
 import { fetchWithStreamIdleTimeout, resolveStreamIdleTimeoutMs } from './streamIdleTimeout';
 import type { CompletionRequest, StreamTransport } from './streamTransport';
@@ -144,7 +144,7 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
 
   /**
    * Map a streaming-request (pre-stream) failure to a clear Error: an HTTP status becomes a
-   * {@link ModelCallError} classified by status, a dropped or refused connection a `network` one.
+   * {@link ModelCallError} classified by status, a failed connection an `unreachable` one.
    * Auth and other errors stay plain. Abort and ERR_CANCELED are handled by the caller, not here.
    */
   private toStreamingRequestError(error: unknown): Error {
@@ -176,7 +176,11 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
       const message = error.message.includes('ECONNREFUSED')
         ? 'Cannot connect to Bike4Mind server. Please check your internet connection.'
         : `Failed to complete LLM request: ${error.message}`;
-      return hasNetworkErrorCode(error) ? new ModelCallError('network', message, { cause: error }) : new Error(message);
+      const code = networkErrorCodeOf(error);
+      // ECONNABORTED is axios's own request timeout (10 min by default): waiting it out again is not a retry.
+      return code !== undefined && code !== 'ECONNABORTED'
+        ? new ModelCallError('unreachable', message, { code, cause: error })
+        : new Error(message);
     }
     return new Error(String(error));
   }

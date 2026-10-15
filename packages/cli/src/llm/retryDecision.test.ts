@@ -11,6 +11,7 @@ const delayOf = (error: unknown, attempt: number, random: () => number = midJitt
 
 describe('decideRetry', () => {
   it.each<[ModelCallErrorKind, number]>([
+    ['unreachable', 500],
     ['network', 500],
     ['stream_idle', 500],
     ['rate_limited', 2_000],

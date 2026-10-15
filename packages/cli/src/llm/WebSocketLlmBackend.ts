@@ -6,7 +6,7 @@ import { logger } from '../utils/Logger';
 import { StreamLogger } from '../utils/StreamLogger';
 import { parseStreamEvent, type StreamEvent } from './streamEvents';
 import { runCompletion } from './runCompletion';
-import { classifyModelCallError, ModelCallError } from './modelCallError';
+import { ModelCallError, networkErrorCodeOf } from './modelCallError';
 import { bridgeToAsyncIterable } from './streamBridge';
 import type { CompletionRequest, StreamTransport } from './streamTransport';
 import { v4 as uuidv4 } from 'uuid';
@@ -129,7 +129,7 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
               ? `${baseMessage} (retry after ${retryAfter}s)`
               : baseMessage;
           streamLogger.onCriticalEvent(eventCount, 'ERROR', errorMsg);
-          // A frame carrying retryAfter is the server's rate limit; any other frame is its answer.
+          // These frames carry no code, so only a rate limit (it has retryAfter) is known to be transient.
           sink.fail(
             typeof retryAfter === 'number' && Number.isFinite(retryAfter)
               ? new ModelCallError('rate_limited', errorMsg, { retryAfterMs: retryAfter * 1000 })
@@ -178,8 +178,11 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
         .catch(err => {
           if (signal?.aborted) return;
           const message = `HTTP request failed: ${err instanceof Error ? err.message : String(err)}`;
-          const kind = classifyModelCallError(err)?.kind;
-          sink.fail(kind ? new ModelCallError(kind, message, { cause: err }) : new Error(message));
+          sink.fail(
+            networkErrorCodeOf(err) === undefined
+              ? new Error(message)
+              : new ModelCallError('unreachable', message, { cause: err })
+          );
         });
 
       return () => {

@@ -16,6 +16,7 @@ const JITTER = 0.2;
 
 /** First backoff (ms) per retryable kind; a struggling provider gets more room than a dropped socket. */
 const BASE_DELAY_MS: Partial<Record<ModelCallErrorKind | 'empty', number>> = {
+  unreachable: 500,
   network: 500,
   stream_idle: 500,
   empty: 500,
