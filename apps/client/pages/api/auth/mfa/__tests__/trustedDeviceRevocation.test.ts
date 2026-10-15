@@ -24,6 +24,7 @@ const mockRevokeAllForUser = vi.fn();
 const mockFindById = vi.fn();
 const mockRemovePasskeys = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   userRepository: { findById: (...a: any[]) => mockFindById(...a) },
   adminSettingsRepository: { findBySettingName: vi.fn(() => Promise.resolve(null)) },
   authSessionRepository: {},

@@ -23,6 +23,7 @@ vi.mock('@bike4mind/services', () => ({
   userService: { adminDeleteUser: (...a: unknown[]) => mockAdminDeleteUser(...a) },
 }));
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   userRepository: { delete: (...a: unknown[]) => mockRepoDelete(...a) },
   adminSettingsRepository: {},
 }));

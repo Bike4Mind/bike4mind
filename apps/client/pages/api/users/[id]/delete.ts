@@ -1,6 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { adminSettingsRepository, userRepository } from '@bike4mind/database';
+import { adminSettingsRepository, userRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { userService } from '@bike4mind/services';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
@@ -42,6 +42,7 @@ const handler = baseApi().delete(
           db: {
             users,
             adminSettings: adminSettingsRepository,
+            realtimeConnections: realtimeConnectionRepository,
           },
           notify: {
             // postMessageToSlack reports whether it delivered; the adapter contract returns void.

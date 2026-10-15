@@ -4,11 +4,29 @@ import { Logger } from '@bike4mind/observability';
 import { JsonWebTokenError, NotBeforeError, TokenExpiredError } from 'jsonwebtoken';
 import type { Context } from 'aws-lambda';
 
+const sendToClientMocks = vi.hoisted(() => ({
+  find: vi.fn(),
+  deleteOne: vi.fn(),
+  send: vi.fn(),
+}));
+
+vi.mock('@bike4mind/database/social', () => ({
+  Connection: { find: sendToClientMocks.find, deleteOne: sendToClientMocks.deleteOne },
+}));
+
+vi.mock('@aws-sdk/client-apigatewaymanagementapi', async importOriginal => ({
+  ...(await importOriginal<typeof import('@aws-sdk/client-apigatewaymanagementapi')>()),
+  ApiGatewayManagementApiClient: class {
+    send = sendToClientMocks.send;
+  },
+}));
+
 vi.mock('@server/utils/config', () => ({
   Config: { STAGE: 'test', MONGODB_URI: 'mongodb://test' },
 }));
 
-import { withWebSocketContext } from '../utils';
+import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
+import { sendToClient, withWebSocketContext } from '../utils';
 
 const mockContext = { functionName: 'test-fn', awsRequestId: 'req-1', functionVersion: '1' } as Context;
 
@@ -151,5 +169,36 @@ describe('withWebSocketContext - auth-error detection', () => {
       expect(errorSpy).toHaveBeenCalledTimes(1);
       expect(infoSpy).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('sendToClient - which failed sends delete a connection row', () => {
+  const message = { action: 'heartbeat' } as never;
+
+  beforeEach(() => {
+    sendToClientMocks.find.mockReset();
+    sendToClientMocks.deleteOne.mockReset();
+    sendToClientMocks.send.mockReset();
+    sendToClientMocks.find.mockResolvedValue([{ connectionId: 'c-gone' }, { connectionId: 'c-flaky' }]);
+    sendToClientMocks.deleteOne.mockResolvedValue({ deletedCount: 1 });
+  });
+
+  it('deletes the row of a gone socket and keeps the row of one that failed for another reason', async () => {
+    sendToClientMocks.send
+      .mockRejectedValueOnce(new GoneException({ message: 'gone', $metadata: {} }))
+      .mockRejectedValueOnce(new Error('throttled'));
+
+    await sendToClient('user-1', 'https://ws.example.com/test', message);
+
+    expect(sendToClientMocks.deleteOne).toHaveBeenCalledTimes(1);
+    expect(sendToClientMocks.deleteOne).toHaveBeenCalledWith({ connectionId: 'c-gone' });
+  });
+
+  it('deletes nothing when every send succeeds', async () => {
+    sendToClientMocks.send.mockResolvedValue({});
+
+    await sendToClient('user-1', 'https://ws.example.com/test', message);
+
+    expect(sendToClientMocks.deleteOne).not.toHaveBeenCalled();
   });
 });
