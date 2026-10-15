@@ -21,6 +21,11 @@ export interface IWsConnectTicketDoc {
   userId: string;
   /** User's tokenVersion snapshotted at mint; null-safe normalizes to 0 like the JWT path. */
   tokenVersion: number;
+  /** AuthSession of the minting request, so the connection ends when that session is revoked.
+   *  Absent when the minting token carried no sid (legacy tokens). */
+  sid?: string;
+  /** Expiry of the minting access token; the connection must reauth before it. */
+  authExpiresAt?: Date;
   /** Set once on consume; prevents replay. */
   used: boolean;
   expiresAt: Date;
@@ -35,6 +40,8 @@ const WsConnectTicketSchema = new Schema<IWsConnectTicketDoc>(
     ticket: { type: String, required: true, unique: true },
     userId: { type: String, required: true },
     tokenVersion: { type: Number, required: true, default: 0 },
+    sid: { type: String },
+    authExpiresAt: { type: Date },
     used: { type: Boolean, required: true, default: false },
     expiresAt: { type: Date, required: true },
   },

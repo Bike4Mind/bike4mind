@@ -40,7 +40,8 @@ function isNcmecConfigured(creds: ReturnType<typeof resolveNcmecCredentials>): b
  *   false_positive  -> mark the incident 'false_positive' (no NCMEC submission).
  *   record_manual_report -> the admin filed the CyberTip by hand on the NCMEC web form; mark
  *                      the incident 'reported' with that report id. Needs no NCMEC API
- *                      credentials, so it works before ESP API access is provisioned.
+ *                      credentials, so it works before ESP API access is provisioned. Also
+ *                      overrides a 'false_positive' verdict, since the tip already exists.
  *
  * Recovery verdicts (incident stuck in confirmed_csam after unknown NCMEC outcome; only
  * claims older than STALE_CONFIRMED_CSAM_MS are resolvable, so a live submission is safe):
@@ -190,10 +191,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
             : 'Incident has an API submission in flight or with an unknown outcome -- once it is stale, use mark_reported if NCMEC has a tip, or requeue then record_manual_report if it does not',
         });
       }
+      if (incident.reviewStatus === 'reported') {
+        // A second filed tip is not stored on the incident; the warn line above is its only record.
+        return res.status(409).json({
+          error: `Incident is already reported (reportId=${incident.ncmecReportId ?? 'unknown'}); your report id was not stored -- keep it for the duplicate-tip record`,
+        });
+      }
       return res.status(409).json({ error: `Incident is already ${incident.reviewStatus}` });
     }
     req.logger.info(
-      `[NCMEC] incident ${incidentId} recorded as manually reported, reportId=${body.ncmecReportId}, by admin=${req.user.id}`
+      `[NCMEC] incident ${incidentId} recorded as manually reported${updated.previousReviewStatus ? ` (overriding ${updated.previousReviewStatus})` : ''}, reportId=${body.ncmecReportId}, by admin=${req.user.id}`
     );
     return res.status(200).json({ ok: true, ncmecReportId: body.ncmecReportId });
   }
@@ -303,7 +310,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   }
 
   // false_positive: no NCMEC submission, just update the status.
-  const updated = await imageModerationIncidentRepository.updateReviewStatus(incidentId, 'false_positive');
+  const updated = await imageModerationIncidentRepository.updateReviewStatus(
+    incidentId,
+    'false_positive',
+    undefined,
+    req.user.id
+  );
   if (!updated) {
     const incident = await imageModerationIncidentRepository.findById(incidentId);
     if (!incident) return res.status(404).json({ error: 'Incident not found' });

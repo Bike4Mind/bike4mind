@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Box, Button, Card, Chip, Divider, Input, Stack, Typography } from '@mui/joy';
+import { Box, Button, Chip, Divider, Input, Stack, Typography } from '@mui/joy';
 import FingerprintIcon from '@mui/icons-material/Fingerprint';
 import { toast } from 'sonner';
+import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyles';
 import {
   describePasskeyError,
   passkeysSupported,
@@ -58,7 +59,7 @@ const PasskeysSection: React.FC<{ enabled: boolean }> = ({ enabled }) => {
   };
 
   return (
-    <Card variant="outlined" sx={{ p: 3, mt: 2 }} data-testid="passkeys-section">
+    <Box sx={theme => ({ ...cardSurfaceSx(theme), mt: 2 })} data-testid="passkeys-section">
       <Typography level="h4" sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
         <FingerprintIcon /> Passkeys
       </Typography>
@@ -132,7 +133,7 @@ const PasskeysSection: React.FC<{ enabled: boolean }> = ({ enabled }) => {
           </Button>
         </Stack>
       )}
-    </Card>
+    </Box>
   );
 };
 

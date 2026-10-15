@@ -5,13 +5,13 @@ on:
     types: [labeled]
 
 env:
-  AWS_REGION: us-east-2
   NODE_VERSION: '24'
 
 jobs:
   e2e:
-    # Same-repo head only: a fork PR has no preview env and no AWS secret, so the
-    # AWS-credentials step would soft-fail. Skip on forks (label is maintainer-added).
+    # Same-repo head only: a fork PR has no preview env and no E2E secret. Skip on forks
+    # (label is maintainer-added). No AWS credentials here: the dev role's OIDC trust
+    # rejects the pull_request subject, and preview runs never `sst shell` anyway.
     if: github.event.label.name == 'run-e2e' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: E2E Tests
@@ -23,7 +23,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-      id-token: write
 
     steps:
       - name: Resolve configuration
@@ -69,12 +68,6 @@ jobs:
 
       - name: Build core packages
         run: pnpm core:build
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
 
       - name: Install Playwright Chromium
         working-directory: apps/client

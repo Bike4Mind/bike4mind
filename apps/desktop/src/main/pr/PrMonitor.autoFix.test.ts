@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChatAutomaticOrigin } from '@shared/chat';
 import type { PrBinding } from '@shared/pullRequest';
 import { MAX_AUTO_FIX_ATTEMPTS } from './autoFix';
-import { PrMonitor } from './PrMonitor';
-import { REF, check, collector, fakeGithub, quietLogger, snapshot, tempStore } from './prTestSupport';
+import { REF, TrackedMonitor, check, collector, fakeGithub, quietLogger, snapshot, tempStore } from './prTestSupport';
 
 const SESSION = 'session-1';
 const bound: PrBinding = {
@@ -22,7 +21,7 @@ function setup({ busy = false, accept = true } = {}) {
   const out = collector();
   const started: { prompt: string; origin: ChatAutomaticOrigin }[] = [];
   const state = { busy, accept, refuseAsBusy: true };
-  const monitor = new PrMonitor({
+  const monitor = new TrackedMonitor({
     store,
     github: fake.github,
     chat: {
@@ -42,8 +41,6 @@ function setup({ busy = false, accept = true } = {}) {
   });
   return { store, fake, out, monitor, started, state };
 }
-
-const settle = () => new Promise(resolve => setTimeout(resolve, 20));
 
 describe('PrMonitor auto-fix', () => {
   it('starts one turn for a failing run, recording the attempt first', async () => {
@@ -77,7 +74,7 @@ describe('PrMonitor auto-fix', () => {
 
     state.busy = false;
     monitor.turnSettled(SESSION);
-    await settle();
+    await monitor.idle();
     expect(started).toHaveLength(1);
     expect(out.last().autoFix.status).toBe('started');
   });
@@ -109,7 +106,7 @@ describe('PrMonitor auto-fix', () => {
     await monitor.refresh(SESSION);
     state.busy = false;
     await Promise.all([monitor.refresh(SESSION), Promise.resolve(monitor.turnSettled(SESSION))]);
-    await settle();
+    await monitor.idle();
     expect(started).toHaveLength(1);
     expect((await store.get(SESSION))?.autoFixAttempts).toBe(1);
   });
@@ -142,7 +139,7 @@ describe('PrMonitor auto-fix', () => {
     expect(out.last().autoFix.note).toContain('gave up after 3 attempts');
 
     await monitor.setOption(SESSION, 'autoFix', true);
-    await settle();
+    await monitor.idle();
     expect(started).toHaveLength(1);
     expect(started[0].prompt).toContain(`Attempt 1 of ${MAX_AUTO_FIX_ATTEMPTS}`);
     expect(await store.get(SESSION)).toMatchObject({ autoFixAttempts: 1, autoFixMax: MAX_AUTO_FIX_ATTEMPTS });
@@ -173,7 +170,7 @@ describe('PrMonitor auto-fix', () => {
     const { store, monitor, out } = setup();
     await store.set(SESSION, { ...bound, autoFix: false, autoFixAttempts: 0 });
     await monitor.setOption(SESSION, 'autoFix', true);
-    await settle();
+    await monitor.idle();
     expect((await store.get(SESSION))?.autoFixMax).toBe(5);
     expect(out.last().autoFix.max).toBe(5);
   });
@@ -186,7 +183,7 @@ describe('PrMonitor auto-fix', () => {
     expect(started).toHaveLength(0);
 
     await monitor.setOption(SESSION, 'autoFix', true);
-    await settle();
+    await monitor.idle();
     expect(started).toHaveLength(1);
     expect((await store.get(SESSION))?.autoFixAttempts).toBe(1);
 
@@ -211,7 +208,7 @@ describe('PrMonitor auto-fix', () => {
     expect(started).toHaveLength(1);
 
     monitor.turnSettled(SESSION);
-    await settle();
+    await monitor.idle();
     expect(out.last().autoFix.conflicts).toBeUndefined();
   });
 });

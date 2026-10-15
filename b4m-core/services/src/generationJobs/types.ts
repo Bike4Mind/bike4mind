@@ -28,6 +28,12 @@ export type GenerationJobStepContext = { signal: AbortSignal };
 export type GenerationJobHandler<K extends GenerationJobKind = GenerationJobKind> = {
   kind: K;
   /**
+   * `async`: submit creates a provider job that poll follows, and a cancel stops it at the provider.
+   * `sync`: submit makes the whole provider call and returns the outcome. The job reports running for the call's
+   * duration, and since the provider bills from the moment it starts, a job is only cancellable before it.
+   */
+  submitMode: 'sync' | 'async';
+  /**
    * Throwing means the outcome is unknown (the provider may have created a job), so the engine fails it as
    * orphaned_submit. Return `{ next: 'retry' }` for anything that created nothing (a failure before the provider
    * call, or a definitive rejection); it is resubmitted.
@@ -54,3 +60,12 @@ export type GenerationJobEngineDeps = {
 };
 
 export type StepOutcome = 'skipped' | 'advanced' | 'terminal';
+
+/**
+ * What a cancel request did. `not_cancellable`: a sync job whose provider call has started (and so is billed).
+ * `unchanged`: the job is storing (its output already paid for), terminal, or gone; null when gone.
+ */
+export type CancelRequestOutcome =
+  | { status: 'requested'; job: IGenerationJobDocument }
+  | { status: 'not_cancellable'; job: IGenerationJobDocument }
+  | { status: 'unchanged'; job: IGenerationJobDocument | null };

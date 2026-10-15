@@ -3,7 +3,7 @@ import type { CompletionInfo } from '@bike4mind/common';
 
 const perM = (usd: number) => usd / 1_000_000;
 
-// Two-tier ladder shaped like gemini-3.1-pro-preview: the long rate applies above 200K per request.
+// Synthetic two-tier Gemini-style ladder: the long rate applies above 200K per request.
 const tieredModel = {
   id: 'tiered-model',
   type: 'text',
@@ -11,8 +11,8 @@ const tieredModel = {
   contextWindow: 1_048_576,
   max_tokens: 8192,
   pricing: {
-    200_000: { input: perM(2), output: perM(12) },
-    1_048_576: { input: perM(4), output: perM(18) },
+    200_000: { input: perM(2), output: perM(12), cache_read: perM(0.2) },
+    1_048_576: { input: perM(4), output: perM(18), cache_read: perM(0.4) },
   },
 };
 
@@ -96,7 +96,7 @@ describe('executeCompletion - long-context tier per request', () => {
       outputTokens: 1_000,
       turnUsage: turns,
     });
-    expect(usd).toBeCloseTo(20_000 * perM(4) + 190_000 * perM(4) * 0.1 + 1_000 * perM(18), 10);
+    expect(usd).toBeCloseTo(20_000 * perM(4) + 190_000 * perM(0.4) + 1_000 * perM(18), 10);
   });
 
   it('prices the errored-run usage event request by request too', async () => {

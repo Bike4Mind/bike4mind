@@ -115,6 +115,14 @@ describe('/api/agents/[id] access levels', () => {
       expect(res._getJSONData()).toMatchObject({ name: 'renamed' });
     });
 
+    it('strips currentCredits so a PUT cannot set the agent balance', async () => {
+      agentRepositoryMock.update.mockResolvedValue({ id: 'a1', name: 'renamed' });
+      const { res, run } = invoke('PUT', 'owner', { body: { name: 'renamed', currentCredits: 1e9 } });
+      await run();
+      expect(agentRepositoryMock.update).toHaveBeenCalledWith({ name: 'renamed', id: 'a1' }, { new: true });
+      expect(res._getStatusCode()).toBe(200);
+    });
+
     it.each<[string, Record<string, unknown>, RegExp]>([
       ['temperature', { temperature: 3 }, /Temperature/],
       ['allowedTools', { allowedTools: Array.from({ length: 101 }, (_, i) => `t${i}`) }, /^allowedTools /],

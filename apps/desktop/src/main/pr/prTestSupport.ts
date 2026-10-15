@@ -1,9 +1,10 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { PrBarState, PrCheck, PrMergeMethod, PrRef, PrSnapshot } from '@shared/pullRequest';
+import type { PrBarState, PrBindingSource, PrCheck, PrMergeMethod, PrRef, PrSnapshot } from '@shared/pullRequest';
 import type { PrGithub } from './github';
 import { PrBindingStore } from './PrBindingStore';
+import { PrMonitor } from './PrMonitor';
 
 /** Test-only fixtures for the PR monitor. Every repo and PR here is made up. */
 
@@ -101,3 +102,50 @@ export function collector() {
 }
 
 export const quietLogger = { debug: () => undefined, warn: () => undefined };
+
+/**
+ * A monitor that tracks every read, bind, schedule, publish, branch lookup and auto-fix decision
+ * it starts, including the ones it fires and forgets, so a test can wait for all of them instead
+ * of sleeping. A fixed sleep raced the binding store's real disk writes and failed under load.
+ */
+export class TrackedMonitor extends PrMonitor {
+  private readonly work = new Set<Promise<unknown>>();
+
+  private track<T>(promise: Promise<T>): Promise<T> {
+    this.work.add(promise);
+    void promise.then(
+      () => this.work.delete(promise),
+      () => this.work.delete(promise)
+    );
+    return promise;
+  }
+
+  protected override read(sessionId: string): Promise<void> {
+    return this.track(super.read(sessionId));
+  }
+
+  protected override bind(sessionId: string, ref: PrRef, source: PrBindingSource): Promise<void> {
+    return this.track(super.bind(sessionId, ref, source));
+  }
+
+  protected override schedule(sessionId: string): Promise<void> {
+    return this.track(super.schedule(sessionId));
+  }
+
+  protected override publish(sessionId: string): Promise<void> {
+    return this.track(super.publish(sessionId));
+  }
+
+  protected override lookUpBranch(sessionId: string): Promise<void> {
+    return this.track(super.lookUpBranch(sessionId));
+  }
+
+  protected override evaluateAutoFix(sessionId: string, snapshot: PrSnapshot): Promise<void> {
+    return this.track(super.evaluateAutoFix(sessionId, snapshot));
+  }
+
+  /** Everything started so far, and anything that work started in turn, has finished. */
+  async idle(): Promise<void> {
+    while (this.work.size > 0) await Promise.allSettled([...this.work]);
+  }
+}
