@@ -170,4 +170,84 @@ describe('ReActAgent transcript owner', () => {
     );
     expect(toolResults([first[callIndex + 1]])).toHaveLength(1);
   });
+
+  it('keeps the current query when a repair inside the history shifts its position', async () => {
+    const rounds = Array.from({ length: 7 }, (_, i) => [
+      { id: `call-${i}`, name: 'read', arguments: `{"path": "${i}.ts"}` },
+    ]);
+    const { llm, requests } = createRecordingLlm(rounds);
+    const agent = new ReActAgent(createContext(llm));
+
+    await agent.run('THE QUERY', {
+      previousMessages: [
+        { role: 'user', content: 'earlier question' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'stale', name: 'read', input: {} }] },
+      ],
+    });
+
+    const sent = requests();
+    expect(sent).toHaveLength(8);
+    for (const request of sent) {
+      expect(request.some(message => message.content === 'THE QUERY')).toBe(true);
+    }
+  });
+
+  it('hands reactive compaction the protected prefix length after repair', async () => {
+    const { llm } = createRecordingLlm([]);
+    const complete = llm.complete;
+    let failed = false;
+    llm.complete = async (...args) => {
+      if (!failed) {
+        failed = true;
+        throw new Error('prompt is too long: context window exceeded');
+      }
+      return complete(...args);
+    };
+    const onContextLimit = vi.fn(async () => null);
+    const agent = new ReActAgent(createContext(llm));
+
+    await agent
+      .run('continue', {
+        previousMessages: [
+          { role: 'assistant', content: [{ type: 'tool_use', id: 'stale', name: 'read', input: {} }] },
+        ],
+        onContextLimit,
+      })
+      .catch(() => undefined);
+
+    // system + stale call + its synthesized result + query
+    expect(onContextLimit).toHaveBeenCalledWith(expect.any(Array), 4);
+  });
+
+  it('sends the history as is when the backend cannot build a result', async () => {
+    const { llm, requests } = createRecordingLlm([]);
+    llm.pushToolMessages = () => {
+      throw new Error('tools not supported');
+    };
+    const agent = new ReActAgent(createContext(llm));
+
+    const result = await agent.run('continue', {
+      previousMessages: [{ role: 'assistant', content: [{ type: 'tool_use', id: 'stale', name: 'read', input: {} }] }],
+    });
+
+    expect(result.finalAnswer).toBe('final answer');
+    expect(toolResults(requests()[0])).toEqual([]);
+  });
+
+  it('gives identical parallel calls with different ids their own results', async () => {
+    let runs = 0;
+    const countingTool = { ...readTool, toolFn: async () => `run ${++runs}` };
+    const { llm, requests } = createRecordingLlm([
+      [
+        { id: 'call-1', name: 'read', arguments: '{"path": "a.ts"}' },
+        { id: 'call-2', name: 'read', arguments: '{"path": "a.ts"}' },
+      ],
+    ]);
+    const agent = new ReActAgent(createContext(llm, { tools: [countingTool] }));
+
+    await agent.run('read it twice', { parallelExecution: true, isReadOnlyTool: () => true });
+
+    const contents = toolResults(requests()[1]).map(block => block.content);
+    expect(new Set(contents)).toEqual(new Set(['run 1', 'run 2']));
+  });
 });

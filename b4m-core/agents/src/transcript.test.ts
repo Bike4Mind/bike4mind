@@ -32,7 +32,7 @@ describe('repairTranscript', () => {
 
     const report = repairTranscript(messages, anthropicResults);
 
-    expect(report).toEqual({ synthesizedResults: 0, movedResults: 0, droppedOrphanResults: 0, replacedArguments: 0 });
+    expect(report).toEqual({ synthesizedResults: 0, movedResults: 0, droppedResults: 0, replacedArguments: 0 });
     expect(messages).toHaveLength(before.length);
     messages.forEach((message, index) => expect(message).toBe(before[index]));
   });
@@ -93,8 +93,33 @@ describe('repairTranscript', () => {
 
     const report = repairTranscript(messages, anthropicResults);
 
-    expect(report.droppedOrphanResults).toBe(1);
+    expect(report.droppedResults).toBe(1);
     expect(messages).toEqual([system, question, use('a'), result('a')]);
+  });
+
+  it('drops a second result for a call that is already answered', () => {
+    const messages = [system, openAiCall('a'), openAiResult('a'), question, openAiResult('a')];
+
+    const report = repairTranscript(messages, openAiResults);
+
+    expect(report.droppedResults).toBe(1);
+    expect(messages).toEqual([system, openAiCall('a'), openAiResult('a'), question]);
+  });
+
+  it('drops the orphan result blocks from a carrier that also answers a call', () => {
+    const carrier: IMessage = {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'a', content: 'result a' },
+        { type: 'tool_result', tool_use_id: 'ghost', content: 'result ghost' },
+      ],
+    };
+    const messages = [system, use('a'), carrier];
+
+    const report = repairTranscript(messages, anthropicResults);
+
+    expect(report.droppedResults).toBe(1);
+    expect(messages).toEqual([system, use('a'), result('a')]);
   });
 
   it('replaces tool_use input that is not a JSON object', () => {
@@ -111,7 +136,7 @@ describe('repairTranscript', () => {
 
     const report = repairTranscript(messages, openAiResults);
 
-    expect(report).toEqual({ synthesizedResults: 1, movedResults: 0, droppedOrphanResults: 0, replacedArguments: 1 });
+    expect(report).toEqual({ synthesizedResults: 1, movedResults: 0, droppedResults: 0, replacedArguments: 1 });
     expect(messages).toEqual([
       system,
       openAiCall('a', '{}'),

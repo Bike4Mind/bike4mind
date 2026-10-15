@@ -18,7 +18,8 @@ export type ToolResultBuilder = (call: TranscriptToolCall, observation: string) 
 export type TranscriptRepairReport = {
   synthesizedResults: number;
   movedResults: number;
-  droppedOrphanResults: number;
+  /** Results whose call is not in the transcript, and second results for an already-answered call. */
+  droppedResults: number;
   replacedArguments: number;
 };
 
@@ -77,9 +78,13 @@ export function isJsonObjectString(value: string): boolean {
   }
 }
 
+// Messages whose arguments were already checked, so a long run does not re-parse every call's
+// arguments on every request. A repaired message is a new object and is checked once in turn.
+const hasValidArguments = new WeakSet<IMessage>();
+
 /** Returns a copy with malformed tool-call arguments replaced by `{}`, or null if none were malformed. */
 function withValidArguments(message: IMessage): { message: IMessage; replaced: number } | null {
-  if (message.role !== 'assistant') return null;
+  if (message.role !== 'assistant' || hasValidArguments.has(message)) return null;
   let replaced = 0;
 
   const blocks = blocksOf(message);
@@ -98,7 +103,10 @@ function withValidArguments(message: IMessage): { message: IMessage; replaced: n
     return { ...call, function: { ...call.function, arguments: '{}' } };
   });
 
-  if (replaced === 0) return null;
+  if (replaced === 0) {
+    hasValidArguments.add(message);
+    return null;
+  }
   const fixed: LooseMessage = { ...message };
   if (blocks.length > 0) fixed.content = fixedBlocks as IMessage['content'];
   if (fixedToolCalls) fixed.tool_calls = fixedToolCalls;
@@ -109,49 +117,49 @@ function withValidArguments(message: IMessage): { message: IMessage; replaced: n
  * Makes the transcript valid to send, in place, before every model request:
  * - each tool call is followed by its result: a result found elsewhere is moved up behind its call, a
  *   missing one is synthesized (`MISSING_TOOL_RESULT`) through `buildResult`;
- * - a result whose call is nowhere in the transcript is dropped;
+ * - a result whose call is nowhere in the transcript, or a second result for a call, is dropped;
  * - tool-call arguments that are not a JSON object are replaced by `{}`.
  *
  * A valid transcript is left untouched (same array contents, same message objects), so on the normal
  * path, where backends append each call and its result as a pair, repair changes no request bytes.
+ * A call id that appears in two assistant messages is answered once, after the first.
  */
 export function repairTranscript(messages: IMessage[], buildResult: ToolResultBuilder): TranscriptRepairReport {
   const report: TranscriptRepairReport = {
     synthesizedResults: 0,
     movedResults: 0,
-    droppedOrphanResults: 0,
+    droppedResults: 0,
     replacedArguments: 0,
   };
 
   const callIds = new Set(messages.flatMap(message => toolCallsOf(message).map(call => call.id)));
-  const carrierIdsByIndex = new Map<number, string[]>();
-  const carrierIndexByResultId = new Map<string, number>();
   // A result inside a message that also carries other content is never moved, so it answers its call
   // wherever it sits.
   const answered = new Set<string>();
-  messages.forEach((message, index) => {
-    const resultIds = resultIdsOf(message);
-    if (!resultIds) {
-      for (const block of blocksOf(message)) {
-        if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') answered.add(block.tool_use_id);
-      }
-      return;
+  for (const message of messages) {
+    if (resultIdsOf(message)) continue;
+    for (const block of blocksOf(message)) {
+      if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') answered.add(block.tool_use_id);
     }
-    carrierIdsByIndex.set(index, resultIds);
-    for (const id of resultIds) {
-      if (!carrierIndexByResultId.has(id)) carrierIndexByResultId.set(id, index);
+  }
+  // Each answerable result id is owned by the first pure carrier holding it; every other copy is dropped.
+  const ownerByResultId = new Map<string, number>();
+  messages.forEach((message, index) => {
+    for (const id of resultIdsOf(message) ?? []) {
+      if (callIds.has(id) && !answered.has(id) && !ownerByResultId.has(id)) ownerByResultId.set(id, index);
     }
   });
+  const ownedIds = (index: number) =>
+    (resultIdsOf(messages[index]) ?? []).filter(id => ownerByResultId.get(id) === index);
 
   const repaired: IMessage[] = [];
   const placedCarriers = new Set<number>();
 
   messages.forEach((message, index) => {
-    const resultIds = carrierIdsByIndex.get(index);
+    const resultIds = resultIdsOf(message);
     if (resultIds) {
-      // Already placed behind its call, or waiting for a call later in the transcript.
-      if (placedCarriers.has(index) || resultIds.some(id => callIds.has(id))) return;
-      report.droppedOrphanResults++;
+      // Owned carriers are placed behind their call, which may come later; the rest are dropped.
+      if (ownedIds(index).length === 0) report.droppedResults += resultIds.length;
       return;
     }
 
@@ -162,20 +170,22 @@ export function repairTranscript(messages: IMessage[], buildResult: ToolResultBu
     let expectedCarrierIndex = index + 1;
     for (const call of toolCallsOf(message)) {
       if (answered.has(call.id)) continue;
-      const carrierIndex = carrierIndexByResultId.get(call.id);
-      if (carrierIndex !== undefined && !placedCarriers.has(carrierIndex)) {
-        if (carrierIndex === expectedCarrierIndex) expectedCarrierIndex++;
-        else report.movedResults++;
-        placedCarriers.add(carrierIndex);
-        for (const id of carrierIdsByIndex.get(carrierIndex) ?? []) answered.add(id);
-        repaired.push(messages[carrierIndex]);
+      answered.add(call.id);
+      const carrierIndex = ownerByResultId.get(call.id);
+      if (carrierIndex === undefined) {
+        const synthesized = buildResult(call, MISSING_TOOL_RESULT);
+        if (synthesized.length === 0) continue;
+        report.synthesizedResults++;
+        repaired.push(...synthesized);
         continue;
       }
-      const synthesized = buildResult(call, MISSING_TOOL_RESULT);
-      if (synthesized.length === 0) continue;
-      report.synthesizedResults++;
-      answered.add(call.id);
-      repaired.push(...synthesized);
+      if (placedCarriers.has(carrierIndex)) continue;
+      placedCarriers.add(carrierIndex);
+      if (carrierIndex === expectedCarrierIndex) expectedCarrierIndex++;
+      else report.movedResults++;
+      const owned = ownedIds(carrierIndex);
+      for (const id of owned) answered.add(id);
+      repaired.push(withOnlyResults(messages[carrierIndex], owned, report));
     }
   });
 
@@ -183,6 +193,15 @@ export function repairTranscript(messages: IMessage[], buildResult: ToolResultBu
   return report;
 }
 
+/** The carrier with only the result blocks for `ids`; any other result block is dropped and counted. */
+function withOnlyResults(carrier: IMessage, ids: string[], report: TranscriptRepairReport): IMessage {
+  const blocks = blocksOf(carrier);
+  const kept = blocks.filter(block => ids.includes(block.tool_use_id as string));
+  if (kept.length === blocks.length) return carrier;
+  report.droppedResults += blocks.length - kept.length;
+  return { ...carrier, content: kept as IMessage['content'] };
+}
+
 export function isRepaired(report: TranscriptRepairReport): boolean {
-  return report.synthesizedResults + report.movedResults + report.droppedOrphanResults + report.replacedArguments > 0;
+  return report.synthesizedResults + report.movedResults + report.droppedResults + report.replacedArguments > 0;
 }

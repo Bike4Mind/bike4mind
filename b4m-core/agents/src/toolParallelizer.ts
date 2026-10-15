@@ -96,10 +96,11 @@ export function defaultIsReadOnlyTool(toolName: string): boolean {
 }
 
 /**
- * Generate a unique ID for a tool call based on name and arguments.
+ * Identifies a tool call: its provider id when it has one, so two identical calls in one response run
+ * and record separately; name + arguments for backends that send no id.
  */
 export function getToolId(tool: ToolUseInfo): string {
-  return `${tool.name}_${JSON.stringify(tool.arguments)}`;
+  return tool.id || `${tool.name}_${JSON.stringify(tool.arguments)}`;
 }
 
 /**
