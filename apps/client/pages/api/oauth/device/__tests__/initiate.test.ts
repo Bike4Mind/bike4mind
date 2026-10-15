@@ -22,6 +22,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@server/utils/validators', () => ({ isLocalAppUrl: () => false }));
 vi.mock('@bike4mind/common', () => ({ OAUTH_DEVICE_CLIENT_IDS: ['b4m-cli', 'b4m-desktop'] }));
+// The real resolver pulls in @bike4mind/fab-pipeline, which needs far more of @bike4mind/common.
+vi.mock('@server/utils/ip', () => ({ getClientIp: () => '203.0.113.10' }));
 
 const incrementCounterConditional = vi.hoisted(() => vi.fn());
 const createOrUpdate = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
