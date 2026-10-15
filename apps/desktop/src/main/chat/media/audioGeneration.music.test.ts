@@ -1,6 +1,13 @@
 import type { MusicGeneration } from '@bike4mind/common';
 import { describe, expect, it, vi } from 'vitest';
-import { MUSIC_DEADLINE_MS, MUSIC_POLL_INTERVAL_MS, generateMusic, type AudioDeps } from './audioGeneration';
+import {
+  MUSIC_DEADLINE_MS,
+  MUSIC_MAX_POLL_FAILURES,
+  MUSIC_POLL_INTERVAL_MS,
+  MUSIC_RATE_LIMIT_BACKOFF_MS,
+  generateMusic,
+  type AudioDeps,
+} from './audioGeneration';
 import { MediaToolError, type MediaApiClient } from './MediaApiClient';
 import type { MediaStore } from './MediaStore';
 
@@ -41,6 +48,7 @@ function setup(polls: MusicGeneration[], created: MusicGeneration = job()) {
   const client = {
     createMusicGeneration: vi.fn().mockResolvedValue(created),
     getMusicGeneration: vi.fn(),
+    cancelMusicGeneration: vi.fn().mockResolvedValue(job({ state: 'cancelled' })),
     fetchGenerated: vi.fn().mockResolvedValue({ bytes: Buffer.from('mp3'), contentType: 'audio/mpeg' }),
   };
   for (const poll of polls) client.getMusicGeneration.mockResolvedValueOnce(poll);
@@ -67,10 +75,20 @@ describe('generateMusic', () => {
     const [body, key] = t.client.createMusicGeneration.mock.calls[0];
     expect(body).toEqual({ model: 'lyria-3.5', prompt: 'lo-fi', duration_seconds: 30, instrumental: true });
     expect(key).toMatch(/^[0-9a-f-]{36}$/);
+    expect(t.client.fetchGenerated).toHaveBeenCalledWith(
+      'https://cdn.example/song.mp3',
+      'Downloading the generated song'
+    );
     expect(t.save).toHaveBeenCalledWith('s1', Buffer.from('mp3'), 'audio/mpeg');
     expect(result.fabFileId).toBe('file-1');
     expect(result.media).toMatchObject({ kind: 'audio', caption: 'lo-fi', fabFileId: 'file-1' });
     expect(t.sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the idempotency key it is given', async () => {
+    const t = setup([succeeded(output())]);
+    await generateMusic(request, t.deps, { ...t.options, idempotencyKey: 'desktop-music:c1' });
+    expect(t.client.createMusicGeneration.mock.calls[0][1]).toBe('desktop-music:c1');
   });
 
   it('omits duration and instrumental when not given', async () => {
@@ -104,9 +122,9 @@ describe('generateMusic', () => {
 
   it('says the file is unavailable when the scan blocked it or there is no output', async () => {
     const blocked = setup([succeeded(output({ availability: 'unavailable', url: null }))]);
-    await expect(generateMusic(request, blocked.deps, blocked.options)).rejects.toThrow(/unavailable/);
+    await expect(generateMusic(request, blocked.deps, blocked.options)).rejects.toThrow(/blocked or removed/);
     const none = setup([succeeded(null)]);
-    await expect(generateMusic(request, none.deps, none.options)).rejects.toThrow(/unavailable/);
+    await expect(generateMusic(request, none.deps, none.options)).rejects.toThrow(/not stored/);
     expect(blocked.save).not.toHaveBeenCalled();
   });
 
@@ -120,7 +138,67 @@ describe('generateMusic', () => {
     expect(t.client.getMusicGeneration.mock.calls.length).toBeLessThanOrEqual(
       MUSIC_DEADLINE_MS / MUSIC_POLL_INTERVAL_MS
     );
-    expect(t.client).not.toHaveProperty('cancelMusicGeneration');
+    expect(t.client.cancelMusicGeneration).not.toHaveBeenCalled();
+  });
+
+  it('says the song finished and is being scanned when the deadline hits in pending_scan', async () => {
+    const t = setup([], succeeded(output({ availability: 'pending_scan', url: null })));
+    t.client.getMusicGeneration.mockResolvedValue(succeeded(output({ availability: 'pending_scan', url: null })));
+    const error = await generateMusic(request, t.deps, t.options).catch((e: unknown) => e);
+    expect((error as Error).message).toMatch(/finished.*scanned.*Files/);
+    expect((error as Error).message).not.toMatch(/still rendering/);
+  });
+
+  it('rides out a failed read and gives up only after consecutive failures', async () => {
+    const blip = setup([]);
+    blip.client.getMusicGeneration
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValueOnce(succeeded(output()));
+    await generateMusic(request, blip.deps, blip.options);
+    expect(blip.save).toHaveBeenCalledOnce();
+
+    const down = setup([]);
+    down.client.getMusicGeneration.mockRejectedValue(new Error('network'));
+    const error = await generateMusic(request, down.deps, down.options).catch((e: unknown) => e);
+    expect(down.client.getMusicGeneration).toHaveBeenCalledTimes(MUSIC_MAX_POLL_FAILURES);
+    expect((error as Error).message).toMatch(/may still land in Files/);
+    expect(down.client.cancelMusicGeneration).not.toHaveBeenCalled();
+  });
+
+  it('backs off after a rate-limited read', async () => {
+    const t = setup([]);
+    const limited = Object.assign(new MediaToolError('slow down'), { status: 429 });
+    t.client.getMusicGeneration.mockRejectedValueOnce(limited).mockResolvedValueOnce(succeeded(output()));
+    await generateMusic(request, t.deps, t.options);
+    expect(t.sleep.mock.calls.map(call => call[0])).toEqual([MUSIC_POLL_INTERVAL_MS, MUSIC_RATE_LIMIT_BACKOFF_MS]);
+  });
+
+  it('cancels the job when stopped after it exists', async () => {
+    const controller = new AbortController();
+    const t = setup([]);
+    const sleep = vi.fn(async () => controller.abort());
+    const error = await generateMusic(request, t.deps, { ...t.options, sleep, signal: controller.signal }).catch(
+      (e: unknown) => e
+    );
+    expect(t.client.cancelMusicGeneration).toHaveBeenCalledWith('job-1');
+    expect((error as Error).message).toMatch(/stopped/);
+  });
+
+  it('still reports the stop when the cancel call fails', async () => {
+    const controller = new AbortController();
+    const t = setup([]);
+    t.client.cancelMusicGeneration.mockRejectedValue(new Error('offline'));
+    const sleep = vi.fn(async () => controller.abort());
+    await expect(generateMusic(request, t.deps, { ...t.options, sleep, signal: controller.signal })).rejects.toThrow(
+      /stopped/
+    );
+  });
+
+  it('passes the signal to the create call', async () => {
+    const controller = new AbortController();
+    const t = setup([succeeded(output())]);
+    await generateMusic(request, t.deps, { ...t.options, signal: controller.signal });
+    expect(t.client.createMusicGeneration.mock.calls[0][2]).toBe(controller.signal);
   });
 
   it('stops at once when the signal aborts mid-wait', async () => {

@@ -4,7 +4,6 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
   CreateFileUploadResponseSchema,
   FileResponseSchema,
-  ListMusicModelsResponseSchema,
   MusicGenerationSchema,
   VideoGenerationSchema,
   ttsBase64ResponseSchema,
@@ -20,6 +19,7 @@ import {
   type TtsBase64Response,
 } from '@bike4mind/common';
 import type { ChatToolNotice } from '@shared/chat';
+import { parseMusicModels } from './musicModels';
 
 /**
  * A generation failure worth saying something specific about.
@@ -148,7 +148,7 @@ export class MediaApiClient {
    * client. An absolute one is a CDN that serves it unauthenticated, and is fetched with a bare
    * axios instance so the access token is never sent to an origin that is not the backend.
    */
-  async fetchGenerated(url: string): Promise<FetchedBytes> {
+  async fetchGenerated(url: string, action = 'Downloading the generated image'): Promise<FetchedBytes> {
     const absolute = /^https?:\/\//i.test(url);
     try {
       const config = { responseType: 'arraybuffer' as const, timeout: TIMEOUT_MS.download };
@@ -161,7 +161,7 @@ export class MediaApiClient {
         contentType: typeof header === 'string' ? header : '',
       };
     } catch (error) {
-      throw toMediaError(error, 'Downloading the generated image');
+      throw toMediaError(error, action);
     }
   }
 
@@ -295,7 +295,7 @@ export class MediaApiClient {
   async listMusicModels(): Promise<PublicMusicModel[]> {
     try {
       const response = await this.api.get<unknown>('/api/v1/music-models', { timeout: TIMEOUT_MS.download });
-      return ListMusicModelsResponseSchema.parse(response).models;
+      return parseMusicModels(response);
     } catch (error) {
       throw toMediaError(error, 'Listing music models');
     }
@@ -305,11 +305,16 @@ export class MediaApiClient {
    * Start a music job. Returns as soon as it is queued; the song renders server-side.
    * `idempotencyKey` makes a retried submit of the same call return the same job, not a second bill.
    */
-  async createMusicGeneration(body: CreateMusicGenerationBody, idempotencyKey: string): Promise<MusicGeneration> {
+  async createMusicGeneration(
+    body: CreateMusicGenerationBody,
+    idempotencyKey: string,
+    signal?: AbortSignal
+  ): Promise<MusicGeneration> {
     try {
       const response = await this.api.post<unknown>('/api/v1/music-generations', body, {
         timeout: TIMEOUT_MS.submit,
         headers: { 'Idempotency-Key': idempotencyKey },
+        signal,
       });
       return MusicGenerationSchema.parse(response);
     } catch (error) {
@@ -326,6 +331,19 @@ export class MediaApiClient {
       return MusicGenerationSchema.parse(response);
     } catch (error) {
       throw toMediaError(error, 'Reading the music job');
+    }
+  }
+
+  async cancelMusicGeneration(jobId: string): Promise<MusicGeneration> {
+    try {
+      const response = await this.api.post<unknown>(
+        `/api/v1/music-generations/${encodeURIComponent(jobId)}/cancel`,
+        {},
+        { timeout: TIMEOUT_MS.download }
+      );
+      return MusicGenerationSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Cancelling the song');
     }
   }
 

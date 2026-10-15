@@ -96,6 +96,15 @@ describe('defineLambdaRoute + chatContract', () => {
   });
 });
 
+describe('defineLambdaRoute + deprecated contract', () => {
+  it('refuses a deprecated contract, whose documented headers it cannot send', () => {
+    const deprecated = { ...chatContract, deprecated: { since: '2026-10-15', sunset: '2027-01-15' } };
+    expect(() => defineLambdaRoute(deprecated, async () => ({ statusCode: 200, body: {} }))).toThrow(
+      /defineLambdaRoute\(sendChatMessage\): deprecated contracts/
+    );
+  });
+});
+
 describe('defineLambdaRoute + executeToolContract auth status', () => {
   const route = defineLambdaRoute(executeToolContract, async () => ({ statusCode: 200, body: {} }));
 

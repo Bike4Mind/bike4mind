@@ -17,6 +17,7 @@ import {
 } from '../media/audioGeneration';
 import { generateImage } from '../media/imageGeneration';
 import { MediaToolError } from '../media/MediaApiClient';
+import { planMusicRequest, type MusicPlan } from '../media/musicModels';
 import { resolveInputImage, uploadInputImage, type VideoInputImage } from '../media/videoInput';
 import {
   describeVideoModel,
@@ -354,6 +355,17 @@ function describeMusicLength(durationSeconds: number | undefined): string {
   return durationSeconds === undefined ? 'a track of the default length' : `${durationSeconds}s of music`;
 }
 
+function planMusic(
+  model: PublicMusicModel,
+  durationSeconds: number | undefined,
+  instrumental: boolean | undefined
+): MusicPlan {
+  return planMusicRequest(model, {
+    ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+    ...(instrumental !== undefined ? { instrumental } : {}),
+  });
+}
+
 function optionalDurationSeconds(input: Record<string, unknown>): number | undefined {
   const value = optionalNumber(input, 'durationSeconds');
   if (value === undefined) return undefined;
@@ -389,10 +401,12 @@ export const generateMusicTool: ToolDefinition = {
     const durationSeconds = optionalDurationSeconds(input);
     const instrumental = typeof input.instrumental === 'boolean' ? input.instrumental : undefined;
     const model = await resolveMusicModel(requireMedia(context));
+    const { effectiveSeconds, estimatedCredits } = planMusic(model, durationSeconds, instrumental);
 
     return {
       detail:
-        `Generate ${describeMusicLength(durationSeconds)} with ${model.display_name}.\n` +
+        `Generate ${effectiveSeconds}s of music with ${model.display_name}.\n` +
+        `Estimated cost: about ${formatCredits(estimatedCredits)} credits. ` +
         'This spends credits on your Bike4Mind account.\n\n' +
         excerpt(prompt),
       key: `generate_music:${model.id}:${durationSeconds ?? 'default'}:${instrumental ?? 'default'}:${prompt}`,
@@ -403,19 +417,22 @@ export const generateMusicTool: ToolDefinition = {
     const media = requireMedia(context);
     const prompt = requireString(input, 'prompt');
     const durationSeconds = optionalDurationSeconds(input);
+    const instrumental = typeof input.instrumental === 'boolean' ? input.instrumental : undefined;
 
     return reporting(context, async () => {
       const model = await resolveMusicModel(media);
+      planMusic(model, durationSeconds, instrumental);
       context.report?.progress('Rendering the song...');
       const outcome = await generateMusic(
         {
           model: model.id,
           prompt,
           ...(durationSeconds !== undefined ? { durationSeconds } : {}),
-          ...(typeof input.instrumental === 'boolean' ? { instrumental: input.instrumental } : {}),
+          ...(instrumental !== undefined ? { instrumental } : {}),
         },
         audioDeps(context, media),
-        { signal: context.signal }
+        // Per call, so a retried submit of this call returns its job instead of starting a second bill.
+        { signal: context.signal, idempotencyKey: `desktop-music:${context.callId ?? randomUUID()}` }
       );
       return describeAudio(context, outcome, describeMusicLength(durationSeconds));
     });

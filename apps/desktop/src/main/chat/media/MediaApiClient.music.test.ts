@@ -62,6 +62,13 @@ describe('music job client', () => {
     expect(get.mock.calls[0][1].signal).toBe(signal);
   });
 
+  it('cancels a job by encoded id', async () => {
+    const post = vi.fn().mockResolvedValue({ ...jobBody, state: 'cancelled' });
+    const job = await clientWith({ post }).cancelMusicGeneration('job 1');
+    expect(post.mock.calls[0][0]).toBe('/api/v1/music-generations/job%201/cancel');
+    expect(job.state).toBe('cancelled');
+  });
+
   it('rejects a response that does not parse as a music job', async () => {
     const get = vi.fn().mockResolvedValue({ id: 'x' });
     await expect(clientWith({ get }).getMusicGeneration('x')).rejects.toThrow();

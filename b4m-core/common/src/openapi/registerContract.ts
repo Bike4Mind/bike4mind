@@ -140,8 +140,9 @@ export function registerContract(contract: EndpointContract): void {
               ...(body.example !== undefined && { example: body.example }),
             });
 
-  // Only the contract's own statuses: the adapter sets these headers just ahead of the
-  // handler, so the 401/403/405 that baseApi answers earlier never carry them.
+  // Only the contract's own statuses: the adapter sets these headers at the start of its
+  // prelude (ahead of rate limit and validation, hence the 422), so the 401/403/405 that
+  // baseApi answers earlier never carry them.
   const deprecationHeaderDocs: Record<string, string> = contract.deprecated
     ? Object.fromEntries(
         Object.entries(deprecationHeaders(contract.deprecated)).map(([name, value]) => [

@@ -7,7 +7,15 @@ import { MediaStore } from '../media/MediaStore';
 import { generateMusicTool } from './mediaTools';
 import type { ToolContext } from './types';
 
-const model = (id: string, preview: boolean) => ({ id, display_name: `Name ${id}`, preview });
+const model = (id: string, preview: boolean, overrides: Record<string, unknown> = {}) => ({
+  id,
+  display_name: `Name ${id}`,
+  preview,
+  vocals: 'optional',
+  duration: { control: 'approximate', min: 10, max: 180, default: 60 },
+  pricing: { unit: 'per_song', credits: 1200 },
+  ...overrides,
+});
 
 const readyJob = {
   id: 'job-1',
@@ -42,7 +50,9 @@ describe('generate_music', () => {
     expect(card.detail).toContain('Name lyria');
 
     const base = await generateMusicTool.approval!({ prompt: 'lo-fi' }, context);
-    expect(base.detail).toContain('default length');
+    expect(base.detail).toContain('60s of music');
+    expect(base.detail).toContain('Estimated cost: about 1,200 credits');
+    expect(base.detail).toContain('spends credits');
     const keys = [
       card.key,
       base.key,
@@ -50,6 +60,23 @@ describe('generate_music', () => {
       (await generateMusicTool.approval!({ prompt: 'lo-fi', instrumental: false }, context)).key,
     ];
     expect(new Set(keys).size).toBe(4);
+  });
+
+  it('prices per second on the effective length and validates against the model', async () => {
+    const perSecond = model('m', false, {
+      vocals: 'never',
+      pricing: { unit: 'per_second', credits: 2 },
+      duration: { control: 'exact', min: 10, max: 60, default: 30 },
+    });
+    const { context } = await setup([perSecond]);
+    expect((await generateMusicTool.approval!({ prompt: 'x' }, context)).detail).toContain('about 60 credits');
+    expect((await generateMusicTool.approval!({ prompt: 'x', durationSeconds: 45 }, context)).detail).toContain(
+      'about 90 credits'
+    );
+    await expect(generateMusicTool.approval!({ prompt: 'x', durationSeconds: 90 }, context)).rejects.toThrow(/10-60s/);
+    await expect(generateMusicTool.approval!({ prompt: 'x', instrumental: false }, context)).rejects.toThrow(
+      /only makes instrumental/
+    );
   });
 
   it('falls back to the first model when every one is a preview', async () => {
@@ -74,6 +101,7 @@ describe('generate_music', () => {
   it('runs the job with the resolved model and reports the player', async () => {
     const { client, context } = await setup([model('m', false)]);
     const media: unknown[] = [];
+    context.callId = 'call-7';
     context.report = {
       media: (item: unknown) => media.push(item),
       progress: () => undefined,
@@ -86,6 +114,7 @@ describe('generate_music', () => {
       duration_seconds: 30,
       instrumental: true,
     });
+    expect(client.createMusicGeneration.mock.calls[0][1]).toBe('desktop-music:call-7');
     expect(media).toHaveLength(1);
     expect(result).toMatch(/30s of music.*Saved to the file browser as f1/);
   });

@@ -410,6 +410,18 @@ describe('nextRouteForContract', () => {
       expect(res.getHeader('Sunset')).toBe('Fri, 15 Jan 2027 00:00:00 GMT');
     });
 
+    it('still sends them when the rateLimit option rejects the request', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const limiter = (_req: unknown, res: { status: (code: number) => { json: (body: unknown) => void } }) =>
+        res.status(429).json({ error: 'slow down' });
+      // any: the fixture limiter isn't typed as the adapter's ValidatedReq handler.
+      const route = nextRouteForContract(makeContract({ deprecated }), { rateLimit: limiter as any }).post(vi.fn());
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(res.getHeader('Sunset')).toBe('Fri, 15 Jan 2027 00:00:00 GMT');
+    });
+
     it('sends none on a contract that is not deprecated', async () => {
       validKey([ApiKeyScope.AI_CHAT]);
       const route = nextRouteForContract(makeContract()).post((_req, res) => res.json({ ok: true }));
