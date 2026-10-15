@@ -172,9 +172,11 @@ describe('the Customize screen', () => {
     renderScreen();
     const account = allByTestId('skill-group').find(group => text(group)?.includes('Bike4Mind skills'));
     expect(text(account)).toContain('/web-summary');
-    expect(text(account)).toContain('Bike4Mind');
     expect(text(account)).not.toContain('No Bike4Mind account skills loaded.');
     expect(text(byTestId('user-skill-scopes'))).not.toContain('web-summary');
+
+    const row = allByTestId('customize-skill-row').find(candidate => text(candidate)?.includes('/web-summary'));
+    expect(text(row?.querySelector('[data-testid="customize-skill-chip"]'))).toBe('Bike4Mind');
   });
 
   it('switches to MCP and preserves its inline controls', () => {

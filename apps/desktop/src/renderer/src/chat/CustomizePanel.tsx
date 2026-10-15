@@ -79,7 +79,12 @@ function SkillGroup({ title, skills, empty }: { title: string; skills: SkillSumm
                     {skill.description}
                   </Typography>
                 </Box>
-                <Chip size="sm" variant="plain" color={skillChipColor(skill.source)}>
+                <Chip
+                  size="sm"
+                  variant="plain"
+                  color={skillChipColor(skill.source)}
+                  data-testid="customize-skill-chip"
+                >
                   {skillSourceLabel(skill.source)}
                 </Chip>
               </Stack>

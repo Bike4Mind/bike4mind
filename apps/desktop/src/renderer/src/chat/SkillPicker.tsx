@@ -155,8 +155,14 @@ export function SkillPicker({
                     </Typography>
                   )}
                   <Box sx={{ flex: 1 }} />
-                  <Chip size="sm" variant="soft" color={skillChipColor(skill.source)} title={skill.filePath}>
-                    {skill.source === 'account' ? skillSourceLabel(skill.source) : skill.source}
+                  <Chip
+                    size="sm"
+                    variant="soft"
+                    color={skillChipColor(skill.source)}
+                    title={skill.filePath}
+                    data-testid="skill-picker-chip"
+                  >
+                    {skillSourceLabel(skill.source)}
                   </Chip>
                 </Stack>
                 <Typography level="body-xs" textColor="text.tertiary" noWrap>

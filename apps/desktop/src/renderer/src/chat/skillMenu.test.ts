@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { SkillSummary } from '@shared/skills';
-import { matchSkills, skillQuery } from './skillMenu';
+import type { SkillSource, SkillSummary } from '@shared/skills';
+import { matchSkills, skillChipColor, skillQuery, skillSourceLabel } from './skillMenu';
 
 function skill(name: string, source: SkillSummary['source'], description = 'does a thing'): SkillSummary {
   return { name, source, description, filePath: `/tmp/${name}` };
@@ -65,5 +65,21 @@ describe('matchSkills', () => {
 
   it('returns nothing for a name no skill has', () => {
     expect(matchSkills(skills, 'nope')).toEqual([]);
+  });
+});
+
+describe('skill chip presentation', () => {
+  it.each([
+    ['project', 'warning', 'Project'],
+    ['global', 'neutral', 'Global'],
+    ['account', 'primary', 'Bike4Mind'],
+  ] as const)('presents %s as %s / %s', (source, color, label) => {
+    expect(skillChipColor(source)).toBe(color);
+    expect(skillSourceLabel(source)).toBe(label);
+  });
+
+  it('covers every source, so a new one cannot fall through to the global look', () => {
+    const sources: SkillSource[] = ['project', 'global', 'account'];
+    expect(sources.map(skillSourceLabel)).toEqual(['Project', 'Global', 'Bike4Mind']);
   });
 });

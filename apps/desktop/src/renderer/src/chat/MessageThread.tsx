@@ -114,7 +114,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
                 {skill.args ? ` ${skill.args}` : ''}
               </Typography>
               <Chip size="sm" variant="soft" color={skillChipColor(skill.source)}>
-                {skill.source === 'account' ? skillSourceLabel(skill.source) : skill.source} skill
+                {skillSourceLabel(skill.source)} skill
               </Chip>
             </Stack>
             <Box>
