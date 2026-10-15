@@ -3,7 +3,14 @@ import type { PrBinding, PrChangeRequest, PrReviewThread } from '@shared/pullReq
 import { MAX_AUTO_FIX_ATTEMPTS, autoFixRefusal, autoFixToolRefusal, planAutoFix } from './autoFix';
 import { REF, check, snapshot } from './prTestSupport';
 
-const binding: PrBinding = { ...REF, source: 'shell', boundAt: '', autoFix: true, lastState: 'OPEN' };
+const binding: PrBinding = {
+  ...REF,
+  source: 'shell',
+  boundAt: '',
+  autoFix: true,
+  autoFixMax: MAX_AUTO_FIX_ATTEMPTS,
+  lastState: 'OPEN',
+};
 
 function thread(overrides: Partial<PrReviewThread> = {}): PrReviewThread {
   return {
@@ -40,7 +47,7 @@ describe('planAutoFix', () => {
     if (plan.kind !== 'start') return;
     expect(plan.fingerprints).toEqual(['ci:sha-bad']);
     expect(plan.summary).toBe('1 failing check on #611');
-    expect(plan.prompt).toContain('Attempt 1 of 3');
+    expect(plan.prompt).toContain(`Attempt 1 of ${MAX_AUTO_FIX_ATTEMPTS}`);
     expect(plan.prompt).toContain('Never force-push');
   });
 
@@ -66,6 +73,19 @@ describe('planAutoFix', () => {
     expect(planAutoFix({ ...binding, autoFixAttempts: MAX_AUTO_FIX_ATTEMPTS }, failing, false)).toEqual({
       kind: 'exhausted',
     });
+  });
+
+  it('gives a binding ticked for the new budget five attempts', () => {
+    const last = planAutoFix({ ...binding, autoFixAttempts: 4 }, failing, false);
+    expect(last.kind === 'start' && last.prompt).toContain('Attempt 5 of 5');
+    expect(planAutoFix({ ...binding, autoFixAttempts: 5 }, failing, false)).toEqual({ kind: 'exhausted' });
+  });
+
+  it('keeps a binding ticked before the budget was stored at three attempts', () => {
+    const { autoFixMax: _, ...legacy } = binding;
+    expect(planAutoFix({ ...legacy, autoFixAttempts: 3 }, failing, false)).toEqual({ kind: 'exhausted' });
+    const plan = planAutoFix({ ...legacy, autoFixAttempts: 2 }, failing, false);
+    expect(plan.kind === 'start' && plan.prompt).toContain('Attempt 3 of 3');
   });
 
   it('waits for a running turn instead of starting one', () => {
