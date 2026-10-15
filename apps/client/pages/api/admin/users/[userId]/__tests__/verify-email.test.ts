@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   findById: vi.fn(),
   update: vi.fn(),
+  commit: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -20,7 +21,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: h.findById, update: h.update },
-  withTransaction: (fn: () => Promise<unknown>) => fn(),
+  // Resolves the callback then records the commit, so a test can pin the grants AFTER the commit
+  // rather than merely after the write inside the callback.
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    const result = await fn();
+    h.commit();
+    return result;
+  },
 }));
 const mockApplyGrants = vi.hoisted(() => vi.fn());
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
@@ -77,6 +84,8 @@ describe('POST /api/admin/users/[userId]/verify-email', () => {
       logger: req.logger,
     });
     expect(h.update.mock.invocationCallOrder[0]).toBeLessThan(mockApplyGrants.mock.invocationCallOrder[0]);
+    // Grants run after the commit, not inside the callback's transaction.
+    expect(h.commit.mock.invocationCallOrder[0]).toBeLessThan(mockApplyGrants.mock.invocationCallOrder[0]);
   });
 
   it('skips the grants for a user without an email', async () => {
