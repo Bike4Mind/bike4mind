@@ -617,16 +617,30 @@ describe('CookieConsentBanner', () => {
       expect(screen.queryByTestId('cookie-consent-cancel-btn')).not.toBeInTheDocument();
     });
 
-    it('names every configured vendor on the first-run ask', () => {
+    // Pairs each loader a grant fires with the vendor the ask named, so a loader added to the
+    // grant without a name here fails rather than shipping uninformed consent.
+    it('names every vendor the grant then loads on the first-run ask', () => {
       vi.stubEnv('NEXT_PUBLIC_GA_MEASUREMENT_ID', 'G-TEST');
       vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
       vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
+      document.getElementById('mailerlite')?.remove();
       try {
-        renderAndReopen();
-
-        expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
+        render(
+          <TestWrapper>
+            <CookieConsentBanner />
+          </TestWrapper>
+        );
+        const asked = screen.getByTestId('cookie-consent-banner').textContent;
+        expect(asked).toContain(
           'you consent to our use of analytics (Google Analytics), advertising (Meta, Reddit), email marketing (MailerLite) and campaign attribution cookies.'
         );
+
+        fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+        expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'granted' });
+        expect(mockLoadMetaPixel).toHaveBeenCalledTimes(1);
+        expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
+        expect(document.getElementById('mailerlite')).not.toBeNull();
       } finally {
         vi.unstubAllEnvs();
       }
