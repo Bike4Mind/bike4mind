@@ -153,7 +153,7 @@ jobs:
 
             Your changes will be deployed to:
             - **Staging**: \`docs.staging.bike4mind.com\` (when merged to \`main\`)
-            - **Production**: \`docs.bike4mind.com\` (when merged to \`prod\`)`;
+            - **Production**: \`docs.bike4mind.com\` (manual Deploy Docs Site dispatch)`;
             
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
