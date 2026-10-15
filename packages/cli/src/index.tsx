@@ -12,7 +12,6 @@ process.on('warning', warning => {
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
-import { execSync } from 'child_process';
 import { randomBytes } from 'crypto';
 import { existsSync, promises as fs } from 'fs';
 import { homedir } from 'os';
@@ -145,6 +144,7 @@ import { WebSocketConnectionManager } from './ws/WebSocketConnectionManager';
 import { setWebSocketToolExecutor, registerFeatureModuleTools, clearFeatureModuleTools } from './llm/ToolRouter';
 import { ApiClient } from './auth/ApiClient';
 import { warmFileCache } from './utils/fileSearch.js';
+import { runBangCommand } from './utils/runBangCommand.js';
 import { isAxiosError } from 'axios';
 import { logger } from './utils/Logger';
 import { startPeonNotifier, emitPeonSessionEnd } from './utils/peonNotifier';
@@ -1785,27 +1785,16 @@ function CliApp() {
 
   // Handle bash command execution directly (no backend calls)
   const handleBashCommand = useCallback(
-    (command: string) => {
+    async (command: string) => {
+      if (!useCliStore.getState().session) return;
+
+      const { output, isError } = await runBangCommand(command, { cwd: process.cwd() });
+
+      // Read the session after the command: an agent turn may have added messages while it ran.
+      // Both messages land together so the history never holds an unanswered `$ command` turn.
       const session = useCliStore.getState().session;
       if (!session) return;
 
-      let output: string;
-      let isError = false;
-
-      try {
-        output = execSync(command, {
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-          cwd: process.cwd(),
-          maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-        });
-      } catch (error) {
-        const execError = error as { stderr?: string; message?: string };
-        output = execError.stderr || execError.message || 'Command failed';
-        isError = true;
-      }
-
-      // Create messages for the bash command
       const userMessage: Message = {
         id: uuidv4(),
         role: 'user',
