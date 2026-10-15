@@ -39,6 +39,29 @@ def relevant(path):
     return path in FILES or path.startswith(PATHS)
 
 
+def release_notes(version, previous, repository):
+    changes = []
+    revisions = git('rev-list', '--first-parent', f'{previous}..HEAD') if previous else git('rev-list', '-n', '1', 'HEAD')
+    for sha in revisions.splitlines():
+        parents = git('rev-list', '--parents', '-n', '1', sha).split()
+        paths = (git('diff', '--name-only', parents[1], sha) if len(parents) > 1 else
+                 git('diff-tree', '--root', '--no-commit-id', '--name-only', '-r', sha)).splitlines()
+        if any(relevant(path) for path in paths):
+            message = git('show', '-s', '--format=%B', sha)
+            changes.append((sha, message.splitlines()[0], bump_level(message)))
+    reason = ['no semantic bump', 'patch', 'minor', 'major'][max((c[2] for c in changes), default=0)]
+    if not previous:
+        reason = 'initial package baseline'
+    lines = [f'# Desktop {version}', '', f'Version selection: {reason}.', '', '## Changes', '']
+    lines.extend(f'- {subject} ([commit](https://github.com/{repository}/commit/{sha}))'
+                 for sha, subject, _ in changes)
+    lines.extend(['', '## Installation', '',
+                  'Choose arm64.dmg for Apple Silicon, x64.dmg for Intel, or x64.AppImage for Linux.',
+                  'SHA256SUMS.txt contains installer checksums. Updates are installed manually.',
+                  'Unsigned builds may need approval in macOS Privacy & Security. Only approve downloads you trust.', ''])
+    return '\n'.join(lines)
+
+
 def select_version(releases, baseline, preview='', title='', run=''):
     if not VERSION.fullmatch(baseline):
         raise ValueError('Desktop baseline must be major.minor.patch')
@@ -104,6 +127,7 @@ def main():
         os.environ.get('PR_TITLE', ''), os.environ.get('GITHUB_RUN_NUMBER', ''),
     )
     result = f'version={version}\nrelease={str(publish).lower()}\nprevious={previous}\n'
+    Path('desktop-release-notes.md').write_text(release_notes(version, previous, os.environ['GITHUB_REPOSITORY']))
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         output.write(result)
     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:

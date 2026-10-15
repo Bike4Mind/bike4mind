@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 import unittest
 
-from desktop_release_version import bump_level, relevant, select_version
+from desktop_release_version import bump_level, relevant, release_notes, select_version
 
 
 class DesktopVersionTest(unittest.TestCase):
@@ -118,6 +118,15 @@ class DesktopVersionTest(unittest.TestCase):
         self.assertTrue(relevant('b4m-core/common/src/index.ts'))
         self.assertTrue(relevant('pnpm-lock.yaml'))
         self.assertFalse(relevant('apps/client/page.tsx'))
+
+    def test_release_notes_are_scoped_and_explain_bump(self):
+        self.commit('feat(web): unrelated', 'apps/client/page.tsx')
+        self.commit('feat(desktop): add feature')
+        notes = release_notes('0.2.0', 'desktop-v0.1.0', 'example/repo')
+        self.assertIn('Version selection: minor', notes)
+        self.assertIn('feat(desktop): add feature', notes)
+        self.assertNotIn('feat(web): unrelated', notes)
+        self.assertIn('https://github.com/example/repo/commit/', notes)
 
 
 if __name__ == '__main__':

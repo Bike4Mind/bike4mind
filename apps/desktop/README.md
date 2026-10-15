@@ -69,17 +69,19 @@ dependencies. It can also be run manually from Actions on `main`.
 
 Pull requests targeting `main` run the same builds and artifact validation without
 publishing a release. In the workflow run's Artifacts section, download
-`desktop-installers` for the five installers and `SHA256SUMS.txt`. PR jobs have only
+`desktop-mac-arm64`, `desktop-mac-x64`, and `desktop-linux-x64` for installers,
+plus `installer-checksums` for `SHA256SUMS.txt`. PR jobs have only
 read access to repository contents; the publication job runs only for pushes or manual
 dispatches on `main`. PR runs are isolated from the main release concurrency group.
 
 The workflow installs from the frozen lockfile, builds shared packages, runs desktop
 typechecks and tests on macOS and Linux, then packages both macOS architectures and
-Linux x64. Publication waits for both build jobs and validates all five artifacts.
+Linux x64. Publication waits for all three build jobs and validates all five artifacts.
 Failed uploads leave a draft release, not a partially published download page.
 
-Storage is deliberately short-lived: intermediate platform artifacts and the combined
-installer download expire after one day; startup evidence expires after three days.
+Storage is deliberately short-lived: platform installers, checksums, and release notes
+expire after one day; startup evidence expires after three days. Installers are stored
+only once per platform; there is no duplicate combined installer upload.
 Superseded PR runs are canceled; main release runs are not interrupted.
 Dependency caching is disabled for this workflow, including setup-node's automatic
 package-manager cache. Runner-local build files disappear with the hosted runner.
@@ -90,16 +92,17 @@ delete existing artifacts or caches created by earlier runs or other workflows.
 
 The Linux job also launches the actual AppImage under Xvfb with an isolated temporary
 profile. It checks the rendered sign-in/environment screen, auth initialization, and
-the packaged version through main/preload IPC. `linux-smoke-results` contains a screenshot
+the packaged version through main/preload IPC. `linux-x64-smoke-results` contains a screenshot
 and startup logs. This smoke test uses AppImage extraction and `--no-sandbox` only in
 CI; it does not verify FUSE mounting, desktop integration, sandbox compatibility on a
 real workstation, or authenticated chat. Those still need real-machine acceptance tests.
 
 The macOS job mounts the native-architecture DMG read-only, copies the app to a temporary
 installation directory, and runs the same startup checks with an isolated profile.
-`mac-smoke-results` contains the screenshot and logs. The test uses a mock keychain
+`mac-arm64-smoke-results` and `mac-x64-smoke-results` contain screenshots and logs.
+Both architectures run on native standard runners. The tests use a mock keychain
 to avoid system prompts or accessing a real login keychain. It does not verify secure
-credential persistence. The other architecture is packaged but not launched. This does
+credential persistence. This does
 not verify Gatekeeper approval on a fresh machine.
 
 Installer versions follow SemVer, selected automatically by
@@ -127,7 +130,24 @@ Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
 Without it, users must select their own backend. The workflow deliberately leaves
 `B4M_UPDATE_FEED_URL` unset: downloadable releases do not configure in-app updates.
 Installing a newer release is currently manual. Only the final publication job has
-`contents: write`; build jobs have read-only tokens and no signing credentials.
+`contents: write`; build jobs have read-only tokens. PR builds have no signing credentials.
+
+Release notes list desktop-relevant first-parent changes and explain the semantic bump.
+The publication script is `apps/desktop/scripts/publish-release.sh`, shared with
+`apps/desktop/scripts/verify-publication.sh`. Run the latter from the repository root
+with an explicitly selected sandbox `owner/repo` argument and a gh login with write
+access there. It creates a temporary release, downloads and compares its probe asset,
+checks that reruns do not overwrite published assets, then deletes the release and tag.
+It refuses the current repository. This tests the API flow, not the workflow token's
+production permissions or the full installer set. No sandbox is configured by default.
+
+Set `DESKTOP_MAC_SIGNING=true` only after configuring all five repository secrets:
+`DESKTOP_CSC_LINK`, `DESKTOP_CSC_KEY_PASSWORD`, `DESKTOP_APPLE_ID`,
+`DESKTOP_APPLE_APP_SPECIFIC_PASSWORD`, and `DESKTOP_APPLE_TEAM_ID`.
+Only trusted main runs receive these credentials. Opting in with incomplete credentials
+fails rather than silently publishing unsigned builds. Signed runs require code-signature
+and stapling validation. Without opt-in, releases remain unsigned. Signing credentials
+and end-to-end notarization verification are external setup requirements.
 
 To roll back, download and reinstall an earlier desktop release. Back up the app's
 user-data directory before downgrading because older builds may not understand newer

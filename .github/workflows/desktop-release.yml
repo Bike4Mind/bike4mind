@@ -72,6 +72,11 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: python3 scripts/desktop_release_version.py
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-notes
+          path: desktop-release-notes.md
+          retention-days: 1
 
   build:
     needs: version
@@ -82,8 +87,13 @@ jobs:
         include:
           - os: macos-15
             platform: mac
+            arch: arm64
+          - os: macos-15-intel
+            platform: mac
+            arch: x64
           - os: ubuntu-24.04
             platform: linux
+            arch: x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -107,13 +117,39 @@ jobs:
       - name: Test desktop
         run: pnpm --filter @bike4mind/desktop test
       - name: Package installers
+        if: matrix.platform != 'mac' || github.event_name == 'pull_request' || vars.DESKTOP_MAC_SIGNING != 'true'
         working-directory: apps/desktop
         env:
           PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
           pnpm build
-          pnpm exec electron-builder "--$PLATFORM" --publish never "-c.extraMetadata.version=$DESKTOP_VERSION"
+          if [ "$PLATFORM" = mac ]; then
+            pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never "-c.extraMetadata.version=$DESKTOP_VERSION"
+          else
+            pnpm exec electron-builder --linux --publish never "-c.extraMetadata.version=$DESKTOP_VERSION"
+          fi
+      - name: Sign and notarize macOS installers
+        if: matrix.platform == 'mac' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DESKTOP_MAC_SIGNING == 'true'
+        working-directory: apps/desktop
+        env:
+          ARCH: ${{ matrix.arch }}
+          CSC_LINK: ${{ secrets.DESKTOP_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.DESKTOP_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.DESKTOP_APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.DESKTOP_APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.DESKTOP_APPLE_TEAM_ID }}
+        run: |
+          for key in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!key}" ]; then echo "Missing signing credential: $key"; exit 1; fi
+          done
+          pnpm build
+          pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.forceCodeSigning=true -c.mac.notarize=true "-c.extraMetadata.version=$DESKTOP_VERSION"
+          app_dir=release/mac
+          if [ "$ARCH" = arm64 ]; then app_dir=release/mac-arm64; fi
+          codesign --verify --deep --strict "$app_dir/Bike4Mind.app"
+          xcrun stapler validate "release/Bike4Mind-$DESKTOP_VERSION-$ARCH.dmg"
       - name: Install Linux smoke test runtime
         if: matrix.platform == 'linux'
         run: |
@@ -140,12 +176,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ matrix.platform }}-smoke-results
+          name: ${{ matrix.platform }}-${{ matrix.arch }}-smoke-results
           path: apps/desktop/smoke-results/
           retention-days: 3
       - uses: actions/upload-artifact@v6
         with:
-          name: desktop-${{ matrix.platform }}
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
           if-no-files-found: error
           retention-days: 1
           path: |
@@ -194,8 +230,8 @@ jobs:
           sha256sum -- *.dmg *.zip *.AppImage > SHA256SUMS.txt
       - uses: actions/upload-artifact@v6
         with:
-          name: desktop-installers
-          path: installers/*
+          name: installer-checksums
+          path: installers/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 1
 
@@ -207,35 +243,31 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v7
         with:
-          name: desktop-installers
+          pattern: desktop-*
+          merge-multiple: true
           path: installers
+      - uses: actions/download-artifact@v7
+        with:
+          name: installer-checksums
+          path: installers
+      - uses: actions/download-artifact@v7
+        with:
+          name: release-notes
+          path: notes
       - name: Publish desktop release
         env:
           DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TARGET: ${{ github.sha }}
+          SIGNED: ${{ vars.DESKTOP_MAC_SIGNING == 'true' }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          tag="desktop-v$DESKTOP_VERSION"
-          if gh release view "$tag" --json isDraft > release-state.json; then
-            if jq -e '.isDraft == false' release-state.json > /dev/null; then
-              echo "Release $tag is already published; leaving its assets unchanged."
-              exit 0
-            fi
-          else
-            gh release create "$tag" --target "$GITHUB_SHA" --draft --title "Desktop $DESKTOP_VERSION" --notes-file - <<'NOTES'
-          Download the installer for your platform below:
-
-          - macOS Apple Silicon: arm64.dmg
-          - macOS Intel: x64.dmg
-          - Linux x64: AppImage (mark executable before launching)
-
-          These builds are not signed or notarized. macOS may block launch until approved in System Settings > Privacy & Security. Only approve a download you trust. Windows installers are not included yet.
-
-          SHA256SUMS.txt contains checksums for all downloads. ZIP files are also available for macOS. In-app updates are not enabled by this release pipeline; download and install a newer release manually.
-          NOTES
-          fi
-          gh release upload "$tag" installers/* --clobber
-          gh release edit "$tag" --draft=false --latest=false
-          printf 'Desktop release: https://github.com/%s/releases/tag/%s\n' "$GH_REPO" "$tag" >> "$GITHUB_STEP_SUMMARY"
+          printf '\nmacOS signing and notarization enabled: %s\n' "$SIGNED" >> notes/desktop-release-notes.md
+          (cd installers && sha256sum --check SHA256SUMS.txt)
+          bash apps/desktop/scripts/publish-release.sh installers notes/desktop-release-notes.md
+          printf 'Desktop release: https://github.com/%s/releases/tag/desktop-v%s\n' "$GH_REPO" "$DESKTOP_VERSION" >> "$GITHUB_STEP_SUMMARY"
