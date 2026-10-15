@@ -1,4 +1,5 @@
-import { test as setup } from '@playwright/test';
+// The fixtures seed cookie consent (its banner covers the chat toolbar) and re-auth each goto.
+import { test as setup } from './fixtures';
 import { TIMEOUTS, MONITORED_MODELS } from './constants';
 import { BasePage } from './pages/BasePage';
 import { ChatPage } from './pages/ChatPage';
