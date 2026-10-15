@@ -58,6 +58,7 @@ interface Cached {
 
 export class SkillCatalog {
   private readonly cache = new Map<string, Cached>();
+  private readonly inFlight = new Map<string, Promise<CustomCommand[]>>();
   private trustRevision = 0;
 
   constructor(
@@ -130,17 +131,34 @@ export class SkillCatalog {
     this.trustRevision++;
   }
 
-  private async load(root: string | null, trusted: boolean): Promise<CustomCommand[]> {
+  private load(root: string | null, trusted: boolean): Promise<CustomCommand[]> {
     const account = this.remote();
     const key = `${trusted ? 'trusted' : 'untrusted'}:${root ?? ''}:${account?.key ?? 'none'}`;
     const cached = this.cache.get(key);
-    if (cached && Date.now() - cached.at < CACHE_MS) return cached.commands;
+    if (cached && Date.now() - cached.at < CACHE_MS) return Promise.resolve(cached.commands);
 
+    // The picker and the first turn of a conversation read a cold or past-TTL catalog at the same
+    // moment. Both would otherwise build their own store and each hit /api/skills; the first
+    // read's promise is shared until it settles.
+    const running = this.inFlight.get(key);
+    if (running) return running;
+
+    const loading = this.scan(key, root, trusted, account?.source).finally(() => this.inFlight.delete(key));
+    this.inFlight.set(key, loading);
+    return loading;
+  }
+
+  private async scan(
+    key: string,
+    root: string | null,
+    trusted: boolean,
+    remoteSource: RemoteSkillSource | undefined
+  ): Promise<CustomCommand[]> {
     // A session with no project still needs a root for the constructor, and the default is
     // process.cwd() - for a packaged Electron app, wherever the user happened to launch it
     // from. The home directory is passed instead, and `setProjectTrusted` is never called for
     // it, so its project directories are not scanned and only ~/.claude/skills loads.
-    const store = new CustomCommandStore(root ?? homedir(), { remoteSource: account?.source });
+    const store = new CustomCommandStore(root ?? homedir(), { remoteSource });
     // Honestly, not to make a test pass: false for an untrusted root is the whole gate, and
     // false for "no project" is what keeps repo skills out of a Chat session.
     store.setProjectTrusted(trusted);

@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RemoteSkillSource } from '@bike4mind/cli/skills';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -133,6 +133,7 @@ describe('SkillCatalog account skills', () => {
   let trustFile: string;
   let account: { userId: string; skills: unknown[] } | null;
   let fetches: number;
+  let offline: boolean;
 
   // The real RemoteSkillSource over a stub client, so the owner and reserved-name filter under
   // test is the CLI's own, not a re-statement of it.
@@ -142,6 +143,7 @@ describe('SkillCatalog account skills', () => {
     const api = {
       get: async () => {
         fetches++;
+        if (offline) throw new Error('backend unreachable');
         return { data: skills };
       },
       getCurrentUser: async () => ({ id: userId }),
@@ -156,6 +158,7 @@ describe('SkillCatalog account skills', () => {
     project = join(base, 'repo');
     trustFile = join(base, 'trust.json');
     fetches = 0;
+    offline = false;
     const skillDir = join(project, '.claude', 'skills', 'deploy');
     await mkdir(skillDir, { recursive: true });
     await writeFile(join(skillDir, 'SKILL.md'), ['---', 'description: Local deploy', '---', '', 'Local.'].join('\n'));
@@ -240,6 +243,38 @@ describe('SkillCatalog account skills', () => {
     expect(store.revision).toBe(before);
     expect(fetches).toBe(1);
   });
+
+  it('still loads the local skills when the account fetch fails and there is no cache', async () => {
+    const store = catalog();
+    await store.setTrusted(project, true);
+    offline = true;
+
+    const state = await store.state(project);
+    expect(state.skills.find(skill => skill.name === 'deploy')?.source).toBe('project');
+    expect(state.skills.some(skill => skill.source === 'account')).toBe(false);
+  });
+
+  it('serves the cached account skills when a stale snapshot cannot be refreshed', async () => {
+    const key = remoteSkillsKey('https://app.example.test', 'me');
+    // Older than the source's 5-minute TTL, so the next fetch tries the network first.
+    await writeFile(
+      join(base, `${key}.json`),
+      JSON.stringify({
+        fetchedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+        skills: [{ id: 'a1', name: 'web-summary', description: 'Summarise', body: 'Offline.', userId: 'me' }],
+      }),
+      'utf8'
+    );
+    offline = true;
+
+    expect(await names(catalog(), null)).toEqual(['web-summary']);
+  });
+
+  it('fetches the account once when the picker and the first turn read a cold catalog together', async () => {
+    const store = catalog();
+    await Promise.all([store.state(null), store.forModel(null)]);
+    expect(fetches).toBe(1);
+  });
 });
 
 describe('remoteSkillsKey', () => {
@@ -255,11 +290,5 @@ describe('remoteSkillsKey', () => {
 
   it('is not fooled by a boundary shift between url and user id', () => {
     expect(remoteSkillsKey('https://a', 'bc')).not.toBe(remoteSkillsKey('https://ab', 'c'));
-  });
-
-  it('never names the CLI shared cache file', () => {
-    const cliDefault = join(homedir(), '.bike4mind', 'cache', 'remote-skills.json');
-    const desktopPath = join('/userData', 'remote-skills', `${remoteSkillsKey('https://a', 'u')}.json`);
-    expect(desktopPath).not.toBe(cliDefault);
   });
 });
