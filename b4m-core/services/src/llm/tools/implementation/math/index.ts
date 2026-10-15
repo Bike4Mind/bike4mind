@@ -49,6 +49,12 @@ function formatResult(math: MathJsInstance, value: unknown, precision?: number):
   return math.format(v, { precision });
 }
 
+/**
+ * Thrown for an expression the tool cannot evaluate. A throw (not an "Error: ..." return value) is
+ * what makes the adapters record the call as failed; they still pass the message to the model.
+ */
+class MathEvaluationError extends Error {}
+
 async function evaluateMath(params: MathParams): Promise<string> {
   Logger.globalInstance.log('🔢 Math Tool: Starting evaluation of expression:', params.expression);
 
@@ -76,7 +82,9 @@ async function evaluateMath(params: MathParams): Promise<string> {
     }
     if (depth !== 0) {
       const issue = depth > 0 ? `${depth} unclosed opening parenthesis` : `unexpected closing parenthesis`;
-      return `Error: Unbalanced parentheses in expression "${params.expression}". Found ${issue}. Please fix the parentheses and try again.`;
+      throw new MathEvaluationError(
+        `Unbalanced parentheses in expression "${params.expression}". Found ${issue}. Please fix the parentheses and try again.`
+      );
     }
 
     // Handle multi-statement semicolon-separated expressions (e.g., "muE=3.986e14; d=3.844e8; muE/d")
@@ -191,6 +199,7 @@ async function evaluateMath(params: MathParams): Promise<string> {
     Logger.globalInstance.log('🔢 Math Tool: Final formatted result:', formattedResult);
     return formattedResult;
   } catch (error: unknown) {
+    if (error instanceof MathEvaluationError) throw error;
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     Logger.globalInstance.error(`❌ Math Tool: Evaluation error for expression "${params.expression}":`, errorMessage);
 
@@ -201,10 +210,14 @@ async function evaluateMath(params: MathParams): Promise<string> {
     const undefinedSymbol = errorMessage.match(/Undefined symbol (\w+)/);
     if (undefinedSymbol) {
       const symbol = undefinedSymbol[1];
-      return `Error: Failed to evaluate math expression "${params.expression}". Reason: the symbol "${symbol}" is used but never assigned a value. Assign it first with a semicolon-separated statement (e.g. "${symbol} = <value>; ...") before referencing it, then try again.`;
+      throw new MathEvaluationError(
+        `Failed to evaluate math expression "${params.expression}". Reason: the symbol "${symbol}" is used but never assigned a value. Assign it first with a semicolon-separated statement (e.g. "${symbol} = <value>; ...") before referencing it, then try again.`
+      );
     }
 
-    return `Error: Failed to evaluate math expression "${params.expression}". Reason: ${errorMessage}. Please provide a valid mathematical expression using numbers and operators only (no natural language).`;
+    throw new MathEvaluationError(
+      `Failed to evaluate math expression "${params.expression}". Reason: ${errorMessage}. Please provide a valid mathjs expression (no natural language or JavaScript syntax).`
+    );
   }
 }
 
@@ -348,7 +361,7 @@ export const mathTool: ToolDefinition = {
     toolFn: value => evaluateMath(value as MathParams),
     toolSchema: {
       name: 'math_evaluate',
-      description: `Evaluate mathematical expressions using mathjs syntax. Supports arithmetic, algebra, trigonometry, calculus, and statistics. Supports multi-step calculations with semicolon-separated statements sharing a scope (e.g., "x = 5; y = 10; x * y" returns 50). IMPORTANT: Use simple mathematical notation only - no loops or programming constructs.
+      description: `Evaluate mathematical expressions using mathjs syntax. Supports arithmetic, algebra, trigonometry, calculus, and statistics. Supports multi-step calculations with semicolon-separated statements sharing a scope (e.g., "x = 5; y = 10; x * y" returns 50). IMPORTANT: Use simple mathematical notation only - no loops or programming constructs, and no JavaScript syntax (no spread "...", no let/const, no Math.max; use max([1, 2, 3]) or "v = [1, 2, 3]; max(v)"). If a call fails, fix the expression from the error message instead of resending it.
 
 Present mathematical work in your response using LaTeX: $...$ inline, $$...$$ for display equations. Inline spans are only rendered as math when they contain a backslash command, so write $\\int_0^3 x^2 dx = 9$ rather than $x^2 = 9$. That rendering is part of your response text, not a tool call.`,
       parameters: {

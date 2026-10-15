@@ -1557,6 +1557,56 @@ describe('ChatCompletionProcess', () => {
   });
 
   describe('process', () => {
+    // Wiring test: the chat turn wraps its tools in the consecutive-failure guard, so a tool the
+    // model keeps calling with inputs it cannot handle stops running (toolFailureGuard.ts).
+    it('stops running a tool after repeated consecutive failures within a turn', async () => {
+      const impl = vi.fn().mockRejectedValue(new Error('parse error'));
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([
+        {
+          toolFn: impl,
+          toolSchema: { name: 'math_evaluate', description: 'math', parameters: { type: 'object', properties: {} } },
+        },
+      ]);
+      const errors: string[] = [];
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+          for (let i = 0; i < 8; i++) {
+            await opts.tools[0].toolFn({ expression: `bad ${i}` }).catch((e: Error) => errors.push(e.message));
+          }
+          await cb(['done']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+      buildToolsSpy.mockRestore();
+
+      expect(impl).toHaveBeenCalledTimes(4);
+      expect(errors).toHaveLength(8);
+      expect(errors[7]).toContain('Not run: "math_evaluate"');
+    });
+
     it('should process a quest successfully', async () => {
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
