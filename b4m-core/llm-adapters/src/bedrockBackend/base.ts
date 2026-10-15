@@ -8,6 +8,7 @@ import {
   ARTIFACT_DELIVERED_PLACEHOLDER,
   ARTIFACT_REMOVED_PLACEHOLDER,
   bedrockClientConfig,
+  estimateStreamedOutputTokens,
   type ModelInfo,
   type TurnUsage,
 } from '@bike4mind/common';
@@ -578,6 +579,23 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               `TRUNCATED. Usually a stalled Bedrock socket cut the stream short; the partial text is ` +
               `withheld deliberately rather than returned as a finished answer.`
           );
+        }
+
+        // A Stop cut the stream before its terminal usage event, so this call reported its prompt
+        // (Claude's message_start) but no output, though the provider billed what it streamed.
+        // Estimated only on call 2+, for the reason given at anthropicBackend's
+        // withAbortedOutputEstimate; the final callback carries it to settlement.
+        if (
+          this.signalsStreamTermination &&
+          !sawTerminalEvent &&
+          options.abortSignal?.aborted &&
+          outputTokens === 0 &&
+          inputTokens + cacheReadTokens + cacheWriteTokens > 0 &&
+          accumTurnUsage?.length
+        ) {
+          const toolArgumentChars = func.reduce((n, f) => n + (f?.parameters?.length ?? 0), 0);
+          outputTokens = estimateStreamedOutputTokens(emittedTextChars + toolArgumentChars, model);
+          await callback([], buildCompletionInfo());
         }
 
         // If there is a tool being used, then

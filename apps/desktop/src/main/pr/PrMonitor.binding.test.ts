@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChatToolCall } from '@shared/chat';
 import { GhError } from './gh';
 import { PrMonitor } from './PrMonitor';
@@ -37,10 +37,11 @@ describe('PrMonitor binding', () => {
   it('binds from gh pr create output and reads the PR once', async () => {
     const { store, fake, out, monitor } = setup();
     monitor.observeToolEnd(SESSION, shellCall('gh pr create --fill', `${REF.url}\n`));
-    await settle();
-    expect(await store.get(SESSION)).toMatchObject({ number: 611, source: 'shell' });
-    expect(fake.calls).toEqual(['snapshot']);
-    expect(out.last()).toMatchObject({ binding: { number: 611 }, snapshot: { additions: 157 }, gh: 'ok' });
+    await vi.waitFor(async () => {
+      expect(await store.get(SESSION)).toMatchObject({ number: 611, source: 'shell' });
+      expect(fake.calls).toEqual(['snapshot']);
+      expect(out.last()).toMatchObject({ binding: { number: 611 }, snapshot: { additions: 157 }, gh: 'ok' });
+    });
     monitor.dispose();
   });
 

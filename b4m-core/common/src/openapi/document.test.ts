@@ -42,6 +42,16 @@ describe('buildOpenApiDocument', () => {
     expect(tools.operationId).toBe('executeTool');
   });
 
+  it('publishes the sync music route as deprecated, pointing at the job resource', () => {
+    const music = doc.paths['/api/ai/music'].post;
+    expect(music.deprecated).toBe(true);
+    expect(music.description).toMatch(
+      /^\*\*Deprecated, sunset \d{4}-\d{2}-\d{2}\.\*\* Use `\/api\/v1\/music-generations`/
+    );
+    expect(music.responses['200'].headers).toHaveProperty('Sunset');
+    expect(doc.paths['/api/v1/music-generations'].post.deprecated).toBeUndefined();
+  });
+
   it('declares the security schemes and requires the right one per operation', () => {
     expect(Object.keys(doc.components.securitySchemes).sort()).toEqual(['apiKeyAuth', 'bearerAuth', 'jwtAuth']);
     // Completions accepts an API key (either header) OR a JWT.
