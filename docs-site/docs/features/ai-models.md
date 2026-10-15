@@ -112,11 +112,15 @@ Controls randomness in responses:
 - **1.0**: Default setting
 - **2.0**: Maximum creativity
 
+Gemini thinking models run at Google's default temperature, so this setting does not apply to them.
+
 ### Max Tokens
 Controls response length:
 - Automatically adjusted based on model capabilities
 - Context-aware limits to prevent overflow
 - Model-specific maximums respected
+
+Gemini thinking models run at Google's default output limit, so this setting does not apply to them.
 
 ### Advanced Settings
 

@@ -1,4 +1,12 @@
-import { Content, GenerationConfig, GoogleGenAI, Part, Tool } from '@google/genai';
+import {
+  Content,
+  GenerateContentConfig,
+  GenerateContentParameters,
+  GenerateContentResponse,
+  GoogleGenAI,
+  Part,
+  Tool,
+} from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
@@ -64,6 +72,11 @@ type GeminiCandidate = {
   finishReason?: string;
   finishMessage?: string;
 };
+
+// Gemini reports thinking tokens apart from candidates but bills them as output.
+function geminiOutputTokens(usage: GenerateContentResponse['usageMetadata']): number {
+  return (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0);
+}
 
 export class GeminiBackend implements ICompletionBackend {
   private _api: GoogleGenAI;
@@ -675,17 +688,17 @@ export class GeminiBackend implements ICompletionBackend {
           },
         ] as Tool[]);
 
-    const config = {
+    const request: GenerateContentParameters = {
       model: modelName,
       contents,
-      systemInstruction: systemInstruction || undefined,
-      generationConfig,
       config: {
+        systemInstruction: systemInstruction || undefined,
         tools,
+        ...generationConfig,
       },
     };
 
-    this.logger.debug('[Gemini] Request config:', { config });
+    this.logger.debug('[Gemini] Request config:', { request });
 
     const toolCalls: ToolCall[] = [];
 
@@ -709,7 +722,7 @@ export class GeminiBackend implements ICompletionBackend {
 
     if (options.stream) {
       try {
-        const result = await this._api.models.generateContentStream(config);
+        const result = await this._api.models.generateContentStream(request);
 
         let lastChunk: any = null;
         for await (const chunk of result) {
@@ -795,7 +808,7 @@ export class GeminiBackend implements ICompletionBackend {
           }
 
           turnInputTokens = lastChunk.usageMetadata?.promptTokenCount ?? 0;
-          turnOutputTokens = lastChunk.usageMetadata?.candidatesTokenCount ?? 0;
+          turnOutputTokens = geminiOutputTokens(lastChunk.usageMetadata);
           turnCacheReadTokens = turnCacheReads(lastChunk.usageMetadata);
           const finishReason = normalizeGeminiFinishReason(lastChunk.candidates?.[0]?.finishReason);
           // Emit accum + this turn's tokens. When the call recurses below,
@@ -1041,7 +1054,7 @@ export class GeminiBackend implements ICompletionBackend {
         // request throws - removing it only on the success path leaked one
         // listener per failed call on a reused signal.
         const result = await withAbortListener(options.abortSignal, abortListener, () =>
-          this._api.models.generateContent(config)
+          this._api.models.generateContent(request)
         );
         const r = result;
 
@@ -1083,7 +1096,7 @@ export class GeminiBackend implements ICompletionBackend {
         });
 
         turnInputTokens = r.usageMetadata?.promptTokenCount ?? 0;
-        turnOutputTokens = r.usageMetadata?.candidatesTokenCount ?? 0;
+        turnOutputTokens = geminiOutputTokens(r.usageMetadata);
         turnCacheReadTokens = turnCacheReads(r.usageMetadata);
         const finishReason = normalizeGeminiFinishReason(r.candidates?.[0]?.finishReason);
         // Emit accum + this turn's tokens. The recursive call below (if any)
@@ -1579,9 +1592,16 @@ export class GeminiBackend implements ICompletionBackend {
     return sanitized;
   }
 
-  private getGenerationConfig(model: ModelInfo, options: Partial<ICompletionOptions>): GenerationConfig {
+  private getGenerationConfig(
+    model: ModelInfo,
+    options: Partial<ICompletionOptions>
+  ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens'> {
+    // Thinking models get neither setting. Google's default temperature of 1.0 avoids looping and
+    // degraded reasoning, and thinking counts against maxOutputTokens, which we send no budget for,
+    // so a caller's small cap would starve the visible reply.
+    if (model.can_think) return {};
     return {
-      temperature: options.temperature ?? 0.9,
+      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
       maxOutputTokens: options.maxTokens ?? 8192,
     };
   }
