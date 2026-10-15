@@ -617,6 +617,44 @@ describe('planCatalogWrites', () => {
       expect(result.rows).toEqual([]);
     });
 
+    it('keeps a future date a provider itself supplies, whatever another provider reports', () => {
+      const result = plan({
+        base: held({ status: 'active' }),
+        priorDiscoveryGroups,
+        providerUndated,
+        contributions: [
+          { name: 'openai', kind: 'provider', records: [gpt6()] },
+          {
+            name: 'bedrock',
+            kind: 'provider',
+            records: [
+              {
+                modelId: 'gpt-6',
+                patch: { lifecycle: { status: 'active', deprecationDate: FUTURE } },
+                lifecycleEvidence: 'typed',
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'active', deprecationDate: FUTURE });
+      expect(result.dropped).toEqual([]);
+    });
+
+    it('lets an aggregator set a new future date once the held one has passed', () => {
+      const result = plan({
+        base: held({ status: 'active', deprecationDate: '2026-07-01' }),
+        priorDiscoveryGroups,
+        providerUndated,
+        contributions: [{ name: 'openai', kind: 'provider', records: [gpt6()] }, litellmDate],
+      });
+
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'active', deprecationDate: FUTURE });
+    });
+
     it('keeps the date of a model held in a sunset status', () => {
       const result = plan({
         base: held({ status: 'deprecated', deprecationDate: FUTURE }),

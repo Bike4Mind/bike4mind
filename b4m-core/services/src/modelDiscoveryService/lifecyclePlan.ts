@@ -94,6 +94,8 @@ export interface LifecycleSignals {
   /**
    * Provider name per model a PROVIDER reported this run in a non-sunset status with no
    * deprecationDate. Docs-tier claims count: catalogWrite only lets this remove a future date.
+   * A docs page that lags a deprecation announcement can therefore outrank an aggregator's
+   * future date until the page catches up.
    */
   providerUndated: Map<string, string>;
 }
