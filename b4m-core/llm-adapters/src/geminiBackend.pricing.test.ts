@@ -66,6 +66,18 @@ describe('Gemini and xAI cache-read rates', () => {
   });
 
   it.each([
+    [ChatModels.GEMINI_2_5_PRO, 1.25, 0.125, 10],
+    [ChatModels.GEMINI_3_1_PRO_PREVIEW, 2, 0.2, 18],
+  ])('bills a cached %s request at or under 200K at the <=200K rates', async (id, input, cacheRead, output) => {
+    const model = await findModel(id);
+
+    // 150K-token prompt, 100K of it served from cache, 1K out.
+    const cost = getTurnsCost(model, [{ inputTokens: 50_000, cacheReadInputTokens: 100_000, outputTokens: 1_000 }]);
+
+    expect(cost).toBeCloseTo((50_000 * input + 100_000 * cacheRead + 1_000 * output) / 1_000_000, 10);
+  });
+
+  it.each([
     [ChatModels.GEMINI_2_5_PRO, 2.5, 0.25, 15],
     [ChatModels.GEMINI_3_1_PRO_PREVIEW, 4, 0.4, 18],
   ])(
