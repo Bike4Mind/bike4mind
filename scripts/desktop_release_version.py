@@ -56,7 +56,7 @@ def release_notes(version, previous, repository):
     lines.extend(f'- {subject} ([commit](https://github.com/{repository}/commit/{sha}))'
                  for sha, subject, _ in changes)
     lines.extend(['', '## Installation', '',
-                  'Choose arm64.dmg for Apple Silicon, x64.dmg for Intel, or x64.AppImage for Linux.',
+                  'Choose arm64.dmg for Apple Silicon or x64.AppImage for Linux. Intel Mac builds are temporarily paused.',
                   'SHA256SUMS.txt contains installer checksums. Updates are installed manually.',
                   'Unsigned builds may need approval in macOS Privacy & Security. Only approve downloads you trust.', ''])
     return '\n'.join(lines)
