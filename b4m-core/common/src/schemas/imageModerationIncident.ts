@@ -11,8 +11,9 @@ export const INCIDENT_REVIEW_STATUSES = ['pending_review', 'confirmed_csam', 'fa
 export type IncidentReviewStatus = (typeof INCIDENT_REVIEW_STATUSES)[number];
 
 // 'manual' = an admin filed the CyberTip on the CyberTipline web form and recorded it via the
-// record_manual_report verdict. Absent = recorded by the API path or by the mark_reported /
-// retry_finish recovery verdicts, whose report id may come from either channel.
+// record_manual_report verdict. Absent = recorded without a channel: the API paths
+// (confirmed_csam, retry_finish) are always the API channel, while mark_reported can close a tip
+// that originated from either channel, so nothing can be attributed.
 export const INCIDENT_REPORT_CHANNELS = ['manual'] as const;
 export type IncidentReportChannel = (typeof INCIDENT_REPORT_CHANNELS)[number];
 
