@@ -8,6 +8,7 @@ import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/truste
 import { Config } from '@server/utils/config';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { logEvent } from '@server/utils/analyticsLog';
+import { getClientIp } from '@server/utils/ip';
 
 const MFA_PENDING_TOKEN_TTL = '10m';
 
@@ -138,7 +139,7 @@ export async function logSecondFactorSignIn(
     type: AuthEvents.LOGIN,
     metadata: {
       strategy: origin.strategy,
-      ip: req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown',
+      ip: getClientIp(req),
       userAgent: req.headers['user-agent'] || 'unknown',
     },
   }).catch(err => req.logger?.error('Second-factor sign-in analytics log failed', err));

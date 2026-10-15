@@ -21,7 +21,13 @@ import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCac
 import { mergeRetrievalSummary } from './retrievalSummaryMerge';
 import { ToolDefinition, type ToolContext } from './base/types';
 import { validateUserCredits, validateAudioCredits } from './base/utils';
-import type { CostInput } from '../imageCostCalculator/types';
+import { estimateImageCredits } from '../../imageCost';
+import {
+  toImageCostInput,
+  type ImageToolCostInput,
+  type ImageToolFinishData,
+  type ImageToolName,
+} from './imageToolBilling';
 import { estimateAudioCredits, type AudioCostInput } from '../../audioCost';
 import {
   extractAndSaveEntitiesFromUserMessage,
@@ -596,57 +602,87 @@ export class ToolBuilder {
   }
 
   /**
-   * Reserve credits for a started image_generation/edit_image call (onToolStart). Image
-   * cost is known up front from the model + n/size/quality, so it reserves at start
-   * (unlike audio, which reserves on delivery in settleAudioCredits). One reservation per
-   * call feeds the per-name queue that settleToolCallCredits distributes, so two calls in
-   * a turn settle as the sum of both. No-op when enforcement is off, the model is unknown,
-   * or the credit store is unavailable. Exposed for unit-testing the credit branch.
+   * Up-front affordability gate for image_generation/edit_image (onToolStart): throws
+   * insufficient_credits before the paid provider call. Like audio, the charge itself is
+   * deferred to settleImageCredits so a failed generation is never billed. No-op when
+   * enforcement is off, the model is unknown, or the credit store is unavailable. Exposed for
+   * unit-testing the credit branch.
    */
-  async reserveImageCredits(
-    toolName: 'image_generation' | 'edit_image',
-    data: { model?: string; n?: number; size?: string; quality?: string },
+  async gateImageCredits(
+    toolName: ImageToolName,
+    data: ImageToolCostInput,
     enforceCredits: boolean,
     organization: IOrganizationDocument | null | undefined,
-    quest: IChatHistoryItemDocument,
-    saveQuest: (quest: IChatHistoryItemDocument) => Promise<IChatHistoryItemDocument | null>,
     availableModels: ModelInfo[]
   ): Promise<void> {
-    const { model: toolModel, n, size, quality } = data;
-    if (!toolModel) return;
-    if (!enforceCredits || !this.deps.db.creditTransactions) return;
-    const modelInfo = availableModels.find(m => m.id === toolModel);
+    const modelInfo = this.resolveBilledImageModel(data, enforceCredits, availableModels);
     if (!modelInfo) return;
-
-    const { requiredCredits: creditsUsed, usdCost } = await validateUserCredits(
+    await validateUserCredits(
       this.deps.user,
       modelInfo,
-      n || 1,
-      // Runtime tool args are untyped strings; the calculator narrows by model backend.
-      // edit_image sends its one source image as input; image_generation sends none.
-      { model: toolModel, size, quality, inputImageCount: toolName === 'edit_image' ? 1 : 0 } as CostInput,
+      data.n || 1,
+      toImageCostInput(toolName, data),
       this.deps.logger,
       organization
     );
-    this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
-    this.reserveToolCredits(toolName, creditsUsed, toolModel);
-    quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
-    await saveQuest(quest);
-    recordToolUsageEvent(
-      this.deps.db,
-      this.deps.logger,
-      toolName,
-      buildToolUsageEvent({
-        quest,
-        user: this.deps.user,
-        organization,
-        provider: modelInfo.backend,
-        model: toolModel,
-        costUsd: usdCost,
-        creditsCharged: creditsUsed,
-        units: n || 1,
-      })
-    );
+  }
+
+  /**
+   * Reserve + record a delivered image call's credits (onToolFinish) and ride its paths on
+   * quest.images. Reached only after the image is stored, so a call that fails is never
+   * billed. One reservation per call feeds the per-name queue that settleToolCallCredits
+   * distributes, so two calls in a turn settle as the sum of both. Does not persist the
+   * quest - the caller saves. Exposed for unit-testing the credit branch.
+   */
+  settleImageCredits(
+    toolName: ImageToolName,
+    quest: IChatHistoryItemDocument,
+    data: ImageToolFinishData,
+    enforceCredits: boolean,
+    organization: IOrganizationDocument | null | undefined,
+    availableModels: ModelInfo[]
+  ): void {
+    const modelInfo = this.resolveBilledImageModel(data, enforceCredits, availableModels);
+    if (modelInfo) {
+      const units = data.n || 1;
+      const { requiredCredits: creditsUsed, usdCost } = estimateImageCredits(
+        modelInfo,
+        units,
+        toImageCostInput(toolName, data)
+      );
+      this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
+      this.reserveToolCredits(toolName, creditsUsed, modelInfo.id);
+      quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
+      recordToolUsageEvent(
+        this.deps.db,
+        this.deps.logger,
+        toolName,
+        buildToolUsageEvent({
+          quest,
+          user: this.deps.user,
+          organization,
+          provider: modelInfo.backend,
+          model: modelInfo.id,
+          costUsd: usdCost,
+          creditsCharged: creditsUsed,
+          units,
+        })
+      );
+    }
+    if (!quest.images) quest.images = [];
+    data.paths.forEach(path => {
+      if (!quest.images?.includes(path)) quest.images?.push(path);
+    });
+  }
+
+  /** The model an image call bills against, or undefined when it is not billed at all. */
+  private resolveBilledImageModel(
+    { model }: ImageToolCostInput,
+    enforceCredits: boolean,
+    availableModels: ModelInfo[]
+  ): ModelInfo | undefined {
+    if (!model || !enforceCredits || !this.deps.db.creditTransactions) return undefined;
+    return availableModels.find(m => m.id === model);
   }
 
   /**
@@ -871,13 +907,11 @@ export class ToolBuilder {
           if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} started with data: ${JSON.stringify(data)}`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
-            await this.reserveImageCredits(
+            await this.gateImageCredits(
               toolName,
-              data,
+              data as ImageToolCostInput,
               enforceCredits,
               organization,
-              quest,
-              saveQuest,
               precomputed?.models ?? []
             );
           }
@@ -914,14 +948,18 @@ export class ToolBuilder {
             );
             await saveQuest(quest);
           }
-          // image_generation / edit_image ride quest.images too (data is the path array).
+          // Settle image billing HERE, like audio: a provider error returns before onFinish.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
-            const generatedPaths = Array.isArray(data) ? data : [data];
-            if (!quest.images) quest.images = [];
-            generatedPaths.forEach((path: string) => {
-              if (!quest.images?.includes(path)) quest.images?.push(path);
-            });
+            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
+            this.settleImageCredits(
+              toolName,
+              quest,
+              data as ImageToolFinishData,
+              enforceCredits,
+              organization,
+              precomputed?.models ?? []
+            );
             await saveQuest(quest);
           }
         },

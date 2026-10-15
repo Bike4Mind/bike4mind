@@ -10,6 +10,7 @@ const { mockRevokeUserSessions, mockRevokeTrustedDevices, mockLogAuthAudit, mock
 vi.mock('@bike4mind/database', () => ({
   userRepository: { name: 'users' },
   authSessionRepository: { name: 'authSessions' },
+  realtimeConnectionRepository: { name: 'realtimeConnections' },
   trustedDeviceRepository: { revokeAllForUser: (...a: unknown[]) => mockRevokeTrustedDevices(...a) },
   withTransaction: (fn: () => unknown) => mockWithTransaction(fn),
 }));
@@ -67,7 +68,11 @@ describe('commitWithSessionEnd', () => {
     expect(mockWithTransaction).toHaveBeenCalledTimes(1);
     expect(ranInTransaction).toEqual({ change: true, revokeSessions: true, revokeDevices: true, audit: false });
     expect(mockRevokeUserSessions).toHaveBeenCalledWith('user-1', {
-      db: { users: { name: 'users' }, authSessions: { name: 'authSessions' } },
+      db: {
+        users: { name: 'users' },
+        authSessions: { name: 'authSessions' },
+        realtimeConnections: { name: 'realtimeConnections' },
+      },
       logger: req.logger,
     });
     expect(mockRevokeTrustedDevices).toHaveBeenCalledWith('user-1');

@@ -23,7 +23,7 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateMusicJobDeps } from '@server/generationJobs/wiring';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
-import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { toPublicMusicGeneration } from '@server/musicGenerations/toPublicMusicGeneration';
@@ -60,7 +60,8 @@ const createRouter = nextRouteForContract(createMusicGenerationContract, {
   const request = toDomainRequest(req.validated);
   // As in video-generations: 'studio' is any first-party session, and idempotency keys are scoped per source.
   const source: GenerationJobSource = isApiKeyAuth(req) ? 'api' : 'studio';
-  const organizationId = await resolveBillingOrgId(req, req.validated.organization_id);
+  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
+  const organizationId = await resolveMediaBillingOrgId(req, req.validated.organization_id);
   const result = await createMusicJob(
     {
       user: { id: req.user.id, organizationId },

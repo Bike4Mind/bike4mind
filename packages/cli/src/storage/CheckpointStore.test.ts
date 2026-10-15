@@ -103,6 +103,50 @@ describe('CheckpointStore', () => {
       expect(checkpoint!.name).toContain('before-edit_local_file');
     });
 
+    it('does not block the event loop while git runs', async () => {
+      const filePath = 'src/hello.ts';
+      await fs.mkdir(path.join(testDir, 'src'), { recursive: true });
+      await fs.writeFile(path.join(testDir, filePath), 'const x = 1;', 'utf-8');
+      // createCheckpoint also awaits fs calls that yield on their own, so probe the
+      // git runner directly: a sync implementation runs to completion before the
+      // call returns, so the immediate can only fire after the promise settles.
+      const runGit = (checkpointStore as unknown as { git: (...args: string[]) => Promise<string> }).git.bind(
+        checkpointStore
+      );
+      const order: string[] = [];
+
+      const pending = runGit('status').then(() => order.push('git-done'));
+      setImmediate(() => order.push('event-loop-turn'));
+      await pending;
+
+      expect(order).toEqual(['event-loop-turn', 'git-done']);
+      expect(await checkpointStore.createCheckpoint('edit_local_file', [filePath])).not.toBeNull();
+    });
+
+    it('keeps every checkpoint intact when subagents checkpoint concurrently', async () => {
+      const files = ['a.ts', 'b.ts', 'c.ts', 'd.ts'];
+      await Promise.all(files.map(file => fs.writeFile(path.join(testDir, file), `original ${file}`, 'utf-8')));
+
+      // Staggered so each call's git sequence starts while another's is mid-flight.
+      const checkpoints = await Promise.all(
+        files.map(async (file, i) => {
+          await new Promise(resolve => setTimeout(resolve, i * 10));
+          return checkpointStore.createCheckpoint('edit_local_file', [file]);
+        })
+      );
+
+      expect(checkpoints.every(checkpoint => checkpoint !== null)).toBe(true);
+      expect(new Set(checkpoints.map(checkpoint => checkpoint!.id)).size).toBe(files.length);
+
+      await Promise.all(files.map(file => fs.writeFile(path.join(testDir, file), 'edited', 'utf-8')));
+      for (const checkpoint of checkpoints) {
+        const index = checkpointStore.listCheckpoints().findIndex(listed => listed.id === checkpoint!.id) + 1;
+        await checkpointStore.restoreCheckpoint(index);
+        const [file] = checkpoint!.filePaths;
+        expect(await fs.readFile(path.join(testDir, file), 'utf-8')).toBe(`original ${file}`);
+      }
+    });
+
     it('should record absent marker for non-existent files', async () => {
       // File does not exist yet (will be created by create_file)
       const filePath = 'new-file.ts';
@@ -211,6 +255,21 @@ describe('CheckpointStore', () => {
     });
   });
 
+  describe('operation queue', () => {
+    it('stays usable after a queued operation rejects', async () => {
+      // The queue tail swallows the rejection so one bad /restore index does not reject every
+      // later operation. The tool layer swallows the error too, so without this a single typo
+      // would silently disable checkpointing for the rest of the session.
+      await fs.writeFile(path.join(testDir, 'a.txt'), 'original', 'utf-8');
+      await expect(checkpointStore.restoreCheckpoint(99)).rejects.toThrow('Checkpoint #99 not found');
+
+      expect(await checkpointStore.createCheckpoint('edit_local_file', ['a.txt'])).not.toBeNull();
+
+      await fs.writeFile(path.join(testDir, 'a.txt'), 'edited', 'utf-8');
+      await expect(checkpointStore.getCheckpointDiff(1)).resolves.toContain('a.txt');
+    });
+  });
+
   describe('undoLast', () => {
     it('should restore to most recent checkpoint', async () => {
       const filePath = 'test.ts';
@@ -224,6 +283,18 @@ describe('CheckpointStore', () => {
 
       const content = await fs.readFile(path.join(testDir, filePath), 'utf-8');
       expect(content).toBe('original');
+    });
+
+    it('restores a file larger than the default 1 MiB subprocess buffer', async () => {
+      const filePath = 'large.txt';
+      const original = 'x'.repeat(2_000_000);
+      await fs.writeFile(path.join(testDir, filePath), original, 'utf-8');
+      await checkpointStore.createCheckpoint('edit_local_file', [filePath]);
+
+      await fs.writeFile(path.join(testDir, filePath), 'modified', 'utf-8');
+      await checkpointStore.undoLast();
+
+      expect(await fs.readFile(path.join(testDir, filePath), 'utf-8')).toBe(original);
     });
 
     it('should throw when no checkpoints exist', async () => {
@@ -240,7 +311,7 @@ describe('CheckpointStore', () => {
       // Modify file
       await fs.writeFile(path.join(testDir, filePath), 'line1\nline2\nline3\n', 'utf-8');
 
-      const diff = checkpointStore.getCheckpointDiff(1);
+      const diff = await checkpointStore.getCheckpointDiff(1);
       expect(diff).toContain('line3');
     });
 
@@ -250,12 +321,39 @@ describe('CheckpointStore', () => {
       await checkpointStore.createCheckpoint('edit_local_file', [filePath]);
 
       // Don't modify the file
-      const diff = checkpointStore.getCheckpointDiff(1);
+      const diff = await checkpointStore.getCheckpointDiff(1);
       expect(diff.trim()).toBe('');
     });
 
-    it('should throw for invalid checkpoint index', () => {
-      expect(() => checkpointStore.getCheckpointDiff(99)).toThrow('Checkpoint #99 not found');
+    it('flags output git truncated at the buffer limit instead of passing it off as the whole diff', async () => {
+      const filePath = 'big.txt';
+      await fs.writeFile(path.join(testDir, filePath), 'v1', 'utf-8');
+      await checkpointStore.createCheckpoint('edit_local_file', [filePath]);
+      await fs.writeFile(path.join(testDir, filePath), 'v2', 'utf-8');
+
+      // A diff larger than GIT_MAX_BUFFER makes git reject with only the partial stdout.
+      const store = checkpointStore as unknown as { git: (...args: string[]) => Promise<string> };
+      const realGit = store.git.bind(checkpointStore);
+      store.git = (...args: string[]) => {
+        if (args[0] === 'diff') {
+          return Promise.reject(
+            Object.assign(new Error('maxBuffer exceeded'), {
+              code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+              stdout: Buffer.from('-old\n+new\n'),
+            })
+          );
+        }
+        return realGit(...args);
+      };
+
+      const diff = await checkpointStore.getCheckpointDiff(1);
+
+      expect(diff).toContain('-old\n+new');
+      expect(diff).toContain('(diff truncated)');
+    });
+
+    it('should throw for invalid checkpoint index', async () => {
+      await expect(checkpointStore.getCheckpointDiff(99)).rejects.toThrow('Checkpoint #99 not found');
     });
   });
 
@@ -474,7 +572,7 @@ describe('CheckpointStore repo-trust hardening', () => {
       await fs.writeFile(victim, 'victim-original', 'utf-8');
       await fs.symlink(victim, path.join(proj, '.b4m', 'shadow-repo', '.diff-a'));
 
-      expect(() => store.getCheckpointDiff(1)).toThrow(/symlink|sandbox/i);
+      await expect(store.getCheckpointDiff(1)).rejects.toThrow(/symlink|sandbox/i);
       expect(await fs.readFile(victim, 'utf-8')).toBe('victim-original');
     } finally {
       await cleanup(proj);

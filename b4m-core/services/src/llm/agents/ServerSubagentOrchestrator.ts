@@ -1,6 +1,12 @@
 import { ReActAgent, selectSubagentTools, humanizeToolName } from '@bike4mind/agents';
 import type { AgentResult, AgentStep, ThoroughnessLevel, ServerAgentDefinition } from '@bike4mind/agents';
-import { DELEGATION_TOOLS, classifyToolPermission, getTextModelCost, type ModelInfo } from '@bike4mind/common';
+import {
+  DELEGATION_TOOLS,
+  classifyToolPermission,
+  getTextModelCost,
+  getTurnsCost,
+  type ModelInfo,
+} from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
@@ -664,7 +670,7 @@ export class ServerSubagentOrchestrator {
       if (!result.completionInfo.totalCredits && this.deps.availableModels) {
         const modelInfo = this.deps.availableModels.find(m => m.id === effectiveModel);
         if (modelInfo) {
-          const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens } =
+          const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, turnUsage } =
             result.completionInfo;
           // Cache-aware so this fallback stays on the same basis as the cache-aware
           // costUsd recorded by delegateToAgent's onCredits (see #151) - otherwise a
@@ -674,13 +680,16 @@ export class ServerSubagentOrchestrator {
           // That shape is shared with the main cliCompletions credit path, so credits
           // stay consistent across the two paths rather than diverging - matching the
           // primary path is deliberate; do not "fix" it here in isolation.
-          const usdCost = getTextModelCost(
-            modelInfo,
-            totalInputTokens,
-            totalOutputTokens,
-            totalCacheReadTokens ?? 0,
-            totalCacheWriteTokens ?? 0
-          );
+          // Per request when the agent reports it: long-context tiers are chosen per request.
+          const usdCost = turnUsage?.length
+            ? getTurnsCost(modelInfo, turnUsage)
+            : getTextModelCost(
+                modelInfo,
+                totalInputTokens,
+                totalOutputTokens,
+                totalCacheReadTokens ?? 0,
+                totalCacheWriteTokens ?? 0
+              );
           result.completionInfo.totalCredits = usdToCredits(usdCost);
         } else {
           // Model absent from availableModels: credits stay unset and the delegation's

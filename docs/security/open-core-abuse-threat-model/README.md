@@ -74,6 +74,7 @@ Detection -> block (FabFile.moderationStatus = 'blocked')
                false_positive  -> reviewStatus = 'false_positive' (no NCMEC submission)
                record_manual_report -> filed by hand on the CyberTipline web form
                                        -> reviewStatus = 'reported', reportChannel = 'manual'
+                                       (also from 'false_positive'; previousReviewStatus = 'false_positive')
 ```
 
 The triage queue returns incidents with `reviewStatus` absent or `'pending_review'`, oldest
@@ -102,7 +103,8 @@ than an explicit `'false'` uses the test host, so a missing value cannot post to
   Only one concurrent admin request can claim a given incident; others receive 409.
 - `updateReviewStatus` uses `$nin: ['reported', 'confirmed_csam']` for `false_positive`
   transitions, preventing a concurrent false_positive verdict from overriding an in-flight
-  NCMEC submission.
+  NCMEC submission or a recorded report. The reverse is allowed only for
+  `record_manual_report`: a hand-filed tip overrides `false_positive`.
 - On NCMEC failure, the verdict route distinguishes two outcomes:
   - **Rejected** (`NcmecRejectedError`, non-2xx on `/submit`): no tip was filed; the route
     rolls back `confirmed_csam` -> `pending_review` and returns 502.
@@ -130,7 +132,12 @@ whenever the API is unavailable, an admin files the CyberTip by hand on the Cybe
 form and records it with `{ verdict: "record_manual_report", ncmecReportId }`. This moves the
 incident from `pending_review`/absent straight to `'reported'` in one atomic write, stores
 `reportChannel: 'manual'` and the admin's user id in `reportedBy`, and needs no NCMEC
-credentials. The report id must be letters, digits and dashes only. It does not act on a
+credentials. It also overrides a `false_positive` verdict, because the tip already exists at
+NCMEC and the record must say so; `previousReviewStatus: 'false_positive'` keeps the earlier
+verdict visible, and `falsePositiveBy`/`falsePositiveAt` (written by the `false_positive`
+verdict and left untouched by the override) keep who made it and when. A second hand-filed tip
+on an already `reported` incident is refused and not stored; the 409 says so and the warn log
+keeps its id. The report id must be letters, digits and dashes only. It does not act on a
 `confirmed_csam` claim; resolve that through the recovery verdicts first: `retry_finish` when
 an unfinished report id is stored (once NCMEC's 24-hour window has passed, file by hand and
 use `mark_reported` with the new report id instead), otherwise (once the claim is stale) `mark_reported` if NCMEC

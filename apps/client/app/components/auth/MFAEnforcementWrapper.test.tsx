@@ -33,7 +33,14 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
 
 // Keep the modal + toasts inert so the test focuses on the effect's call behavior.
 vi.mock('@client/app/components/common/MFAModal', () => ({ default: () => null }));
-vi.mock('sonner', () => ({ toast: { info: vi.fn(), error: vi.fn(), success: vi.fn() } }));
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+vi.mock('sonner', () => ({ toast: { info: vi.fn(), error: toastError, success: vi.fn() } }));
+
+// The interceptor tags a dismissed verification prompt with a private symbol; stand in a marker.
+const CANCELLED = 'verification-dismissed';
+vi.mock('@client/app/utils/stepUpInterceptor', () => ({
+  isStepUpCancelled: (error: unknown) => error instanceof Error && error.message === CANCELLED,
+}));
 
 import MFAEnforcementWrapper from './MFAEnforcementWrapper';
 
@@ -79,6 +86,9 @@ describe('MFAEnforcementWrapper - auto-setup does not loop on persistent failure
 
     // The isError guard stops the re-fire: exactly one attempt, not an unbounded storm.
     expect(mfaSetupCalls()).toBe(1);
+
+    // A real (non-cancelled) failure must still surface; only a dismissed prompt stays silent.
+    expect(toastError).toHaveBeenCalledWith('setup failed');
   });
 
   it('renders a retry button on failure, and clicking it fires a new setup attempt', async () => {
@@ -92,6 +102,31 @@ describe('MFAEnforcementWrapper - auto-setup does not loop on persistent failure
 
     // The manual retry re-fires setup (calling mutate clears isError), so the user is not
     // dead-ended - exactly what the auto-guard deliberately won't do on its own.
+    await waitFor(() => expect(mfaSetupCalls()).toBe(2));
+  });
+});
+
+describe('MFAEnforcementWrapper - dismissed verification prompt', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    get.mockResolvedValue({ data: { enabled: false } });
+    post.mockRejectedValue(new Error(CANCELLED));
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('offers to continue instead of reporting a failure, and continuing retries setup', async () => {
+    renderWrapper();
+
+    const continueButton = await screen.findByTestId('mfa-enforcement-continue-btn');
+    expect(screen.queryByTestId('mfa-enforcement-retry-btn')).toBeNull();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(mfaSetupCalls()).toBe(1);
+
+    fireEvent.click(continueButton);
     await waitFor(() => expect(mfaSetupCalls()).toBe(2));
   });
 });

@@ -1,9 +1,11 @@
 import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { RemoteSkillSource } from '@bike4mind/cli/skills';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { remoteSkillsKey } from './accountSkills';
 import { ProjectTrustStore } from './ProjectTrustStore';
-import { SkillCatalog } from './SkillCatalog';
+import { SkillCatalog, type RemoteSkills } from './SkillCatalog';
 
 /**
  * The gate, not the loader. Discovery is the CLI's and has its own tests; what is proven here is
@@ -123,5 +125,191 @@ describe('SkillCatalog project trust', () => {
     expect(state.skills.every(skill => skill.source === 'global')).toBe(true);
     expect(state.projectDirectory).toBeNull();
     expect(state.untrustedProject).toBeNull();
+  });
+});
+
+describe('SkillCatalog account skills', () => {
+  let base: string;
+  let project: string;
+  let trustFile: string;
+  let account: { userId: string; skills: unknown[] } | null;
+  let fetches: number;
+  let offline: boolean;
+
+  // The real RemoteSkillSource over a stub client, so the owner and reserved-name filter under
+  // test is the CLI's own, not a re-statement of it.
+  const remote: RemoteSkills = () => {
+    if (!account) return null;
+    const { userId, skills } = account;
+    const api = {
+      get: async () => {
+        fetches++;
+        if (offline) throw new Error('backend unreachable');
+        return { data: skills };
+      },
+      getCurrentUser: async () => ({ id: userId }),
+    } as unknown as ConstructorParameters<typeof RemoteSkillSource>[0];
+    const key = remoteSkillsKey('https://app.example.test', userId);
+    return { key, source: new RemoteSkillSource(api, { cacheFilePath: join(base, `${key}.json`) }) };
+  };
+  const catalog = () => new SkillCatalog(new ProjectTrustStore(trustFile), remote);
+
+  beforeEach(async () => {
+    base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-account-skills-')));
+    project = join(base, 'repo');
+    trustFile = join(base, 'trust.json');
+    fetches = 0;
+    offline = false;
+    const skillDir = join(project, '.claude', 'skills', 'deploy');
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, 'SKILL.md'), ['---', 'description: Local deploy', '---', '', 'Local.'].join('\n'));
+    account = {
+      userId: 'me',
+      skills: [
+        { id: 'a1', name: 'web-summary', description: 'Summarise', body: 'Summarise $ARGUMENTS', userId: 'me' },
+        { id: 'a2', name: 'deploy', description: 'Remote deploy', body: 'Remote.', userId: 'me' },
+        { id: 'a3', name: 'theirs', description: 'Foreign', body: 'No.', userId: 'someone-else' },
+        { id: 'a4', name: 'help', description: 'Reserved', body: 'No.', userId: 'me' },
+      ],
+    };
+  });
+
+  const names = async (store: SkillCatalog, root: string | null) =>
+    (await store.state(root)).skills.filter(skill => skill.source === 'account').map(skill => skill.name);
+
+  it('offers own account skills in a session with no project, labelled as account', async () => {
+    const state = await catalog().state(null);
+    expect(state.skills.find(skill => skill.name === 'web-summary')).toMatchObject({
+      source: 'account',
+      filePath: 'b4m:/api/skills/a1',
+    });
+  });
+
+  it('never offers a foreign-owned or reserved-name skill', async () => {
+    const offered = await names(catalog(), null);
+    expect(offered).not.toContain('theirs');
+    expect(offered).not.toContain('help');
+  });
+
+  it('offers account skills in an untrusted project while still withholding the project ones', async () => {
+    const state = await catalog().state(project);
+    expect(state.untrustedProject).toBe(project);
+    expect(state.skills.find(skill => skill.name === 'web-summary')?.source).toBe('account');
+    // The only `deploy` on offer is the account one; the repo's is withheld.
+    expect(state.skills.find(skill => skill.name === 'deploy')?.source).toBe('account');
+  });
+
+  it('lets a local skill win a name collision in a trusted project, leaving one entry', async () => {
+    const store = catalog();
+    await store.setTrusted(project, true);
+    const deploys = (await store.state(project)).skills.filter(skill => skill.name === 'deploy');
+    expect(deploys).toEqual([expect.objectContaining({ source: 'project', description: 'Local deploy' })]);
+    expect((await store.state(project)).skills.some(skill => skill.name === 'web-summary')).toBe(true);
+  });
+
+  it('reaches the model and the send path too', async () => {
+    const store = catalog();
+    expect((await store.forModel(null)).some(command => command.name === 'web-summary')).toBe(true);
+    await expect(store.get(null, 'web-summary')).resolves.toMatchObject({ body: 'Summarise $ARGUMENTS' });
+  });
+
+  it('shows nothing from the account once signed out, without waiting out the scan cache', async () => {
+    const store = catalog();
+    expect(await names(store, null)).toContain('web-summary');
+
+    account = null;
+    expect(await names(store, null)).toEqual([]);
+    expect((await store.forModel(null)).some(command => command.name === 'web-summary')).toBe(false);
+    await expect(store.get(null, 'web-summary')).resolves.toBeUndefined();
+  });
+
+  it('serves the new account on a switch, and moves the revision so the prompt snapshot rebuilds', async () => {
+    const store = catalog();
+    expect(await names(store, null)).toContain('web-summary');
+    const before = store.revision;
+
+    account = {
+      userId: 'other',
+      skills: [{ id: 'b1', name: 'other-skill', description: 'd', body: 'b', userId: 'other' }],
+    };
+    expect(store.revision).not.toBe(before);
+    expect(await names(store, null)).toEqual(['other-skill']);
+  });
+
+  it('holds its revision across ordinary reads by the same account', async () => {
+    const store = catalog();
+    const before = store.revision;
+    await store.state(null);
+    await store.forModel(null);
+    expect(store.revision).toBe(before);
+    expect(fetches).toBe(1);
+  });
+
+  it('still loads the local skills when the account fetch fails and there is no cache', async () => {
+    const store = catalog();
+    await store.setTrusted(project, true);
+    offline = true;
+
+    const state = await store.state(project);
+    expect(state.skills.find(skill => skill.name === 'deploy')?.source).toBe('project');
+    expect(state.skills.some(skill => skill.source === 'account')).toBe(false);
+  });
+
+  it('serves the cached account skills when a stale snapshot cannot be refreshed', async () => {
+    const key = remoteSkillsKey('https://app.example.test', 'me');
+    // Older than the source's 5-minute TTL, so the next fetch tries the network first.
+    await writeFile(
+      join(base, `${key}.json`),
+      JSON.stringify({
+        fetchedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+        skills: [{ id: 'a1', name: 'web-summary', description: 'Summarise', body: 'Offline.', userId: 'me' }],
+      }),
+      'utf8'
+    );
+    offline = true;
+
+    expect(await names(catalog(), null)).toEqual(['web-summary']);
+  });
+
+  it('fetches the account once when the picker and the first turn read a cold catalog together', async () => {
+    const store = catalog();
+    await Promise.all([store.state(null), store.forModel(null)]);
+    expect(fetches).toBe(1);
+  });
+
+  it('re-scans after the scan cache expires, so a settled read does not stick', async () => {
+    const now = vi.spyOn(Date, 'now');
+    const start = Date.now();
+
+    try {
+      const store = catalog();
+      await Promise.all([store.state(null), store.forModel(null)]);
+      expect(fetches).toBe(1);
+
+      // Past the catalog's 2s scan cache AND the source's own 5-minute snapshot TTL, so the read
+      // must walk the roots again rather than replay the promise the first read already settled.
+      now.mockReturnValue(start + 6 * 60_000);
+
+      expect(await names(store, null)).toContain('web-summary');
+      expect(fetches).toBe(2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+});
+
+describe('remoteSkillsKey', () => {
+  it('differs per backend and per user, and is filename-safe', () => {
+    const keys = new Set([
+      remoteSkillsKey('https://app.bike4mind.com', 'u1'),
+      remoteSkillsKey('https://app.bike4mind.com', 'u2'),
+      remoteSkillsKey('http://localhost:3000', 'u1'),
+    ]);
+    expect(keys.size).toBe(3);
+    for (const key of keys) expect(key).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('is not fooled by a boundary shift between url and user id', () => {
+    expect(remoteSkillsKey('https://a', 'bc')).not.toBe(remoteSkillsKey('https://ab', 'c'));
   });
 });

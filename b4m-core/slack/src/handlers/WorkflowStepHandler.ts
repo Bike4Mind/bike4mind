@@ -4,7 +4,6 @@ import { SlackClient } from '../SlackClient';
 import { ChatModels, IChatHistoryItem, IUserDocument, stripSearchResultCardFences } from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
 import { getSlackDeps, getSlackDb } from '../di/registry';
-import { resolveAccessibleNotebookId } from './notebook-manager';
 
 /**
  * Workflow step callback IDs - must match the app manifest
@@ -265,15 +264,26 @@ export class WorkflowStepHandler {
   }
 
   /**
-   * The user's saved Slack default notebook, else their last web notebook, if they can still
-   * write to it (same check as getOrCreateNotebookForSlackUser in notebook-manager.ts).
+   * The notebook a workflow step runs in: the builder-supplied `notebook_id`, else a fresh one.
+   * Never the runner's saved default or last notebook - the builder authors the prompt and reads
+   * the reply, so it must not run against the runner's existing notebook context. An explicit id
+   * is write-checked against the runner by addMessageToSession and again by ChatCompletionInvoke.
    */
-  private async resolveSavedNotebookId(user: IUserDocument): Promise<string | null> {
-    const { Session } = getSlackDb();
-    return (
-      (await resolveAccessibleNotebookId(Session, user.slackSettings?.defaultNotebookId, user)) ??
-      (await resolveAccessibleNotebookId(Session, user.lastNotebookId, user))
+  private async resolveWorkflowNotebookId(
+    user: IUserDocument,
+    notebookId: string | undefined,
+    newNotebookName: string
+  ): Promise<string> {
+    if (notebookId) return notebookId;
+
+    const { defineAbilitiesFor } = getSlackDb();
+    const { sessionManager } = getSlackDeps();
+    const newSession = await (sessionManager as any).createSession(
+      user.id,
+      { name: newNotebookName, origin: { channel: 'slack' } },
+      defineAbilitiesFor(user)
     );
+    return newSession.id;
   }
 
   /**
@@ -318,7 +328,10 @@ export class WorkflowStepHandler {
           sessionId,
           message,
           messageFileIds: [],
-          historyCount: 5,
+          // The prompt is builder-authored and the reply flows back to the builder, so the run gets
+          // none of the runner's context: no notebook history, no user integrations (MCP, agents and
+          // delegation, skills) and no auto-offered tools such as knowledge/lake search.
+          historyCount: 0,
           fabFileIds: [],
           dashboardParams: {
             dashboardDataSources: [],
@@ -327,7 +340,10 @@ export class WorkflowStepHandler {
           enableQuestMaster: false,
           enableMementos: false,
           enableArtifacts: false,
-          enableAgents: true,
+          enableAgents: false,
+          disableUserIntegrations: true,
+          skipAutoOffers: true,
+          tools: [],
           organizationId: user.organizationId,
         },
         userId: user.id,
@@ -378,13 +394,14 @@ export class WorkflowStepHandler {
       const { defineAbilitiesFor } = getSlackDb();
       const { sessionManager } = getSlackDeps();
       const ability = defineAbilitiesFor(user);
+      // Never make this the runner's lastNotebookId: the builder names it and later steps can
+      // write builder-authored prompts into it, and the runner's ordinary Slack chat falls back
+      // to lastNotebookId (see getOrCreateNotebookForSlackUser in notebook-manager.ts).
       const newSession = await (sessionManager as any).createSession(
         user.id,
         { name: notebookName, origin: { channel: 'slack' } },
         ability,
-        {
-          setLastNotebook: true,
-        }
+        { setLastNotebook: false }
       );
 
       const appUrl = process.env.APP_URL;
@@ -456,29 +473,7 @@ export class WorkflowStepHandler {
     }
 
     try {
-      // Determine which notebook to use
-      let resolvedNotebookId: string;
-      const savedNotebookId = notebookId ? null : await this.resolveSavedNotebookId(user);
-
-      if (notebookId) {
-        resolvedNotebookId = notebookId;
-      } else if (savedNotebookId) {
-        resolvedNotebookId = savedNotebookId;
-      } else {
-        // No existing notebook, create one
-        const { defineAbilitiesFor: defineAbilities } = getSlackDb();
-        const { sessionManager: sm } = getSlackDeps();
-        const abilityForCreate = defineAbilities(user);
-        const newSession = await (sm as any).createSession(
-          user.id,
-          { name: this.generateNotebookName(), origin: { channel: 'slack' } },
-          abilityForCreate,
-          {
-            setLastNotebook: true,
-          }
-        );
-        resolvedNotebookId = newSession.id;
-      }
+      const resolvedNotebookId = await this.resolveWorkflowNotebookId(user, notebookId, this.generateNotebookName());
 
       // Add message to session
       const { defineAbilitiesFor: defineAbilitiesForMsg } = getSlackDb();
@@ -586,27 +581,11 @@ export class WorkflowStepHandler {
     }
 
     try {
-      // Determine which notebook to use
-      let resolvedNotebookId: string;
-      const savedNotebookId = notebookId ? null : await this.resolveSavedNotebookId(user);
-
-      if (notebookId) {
-        resolvedNotebookId = notebookId;
-      } else if (savedNotebookId) {
-        resolvedNotebookId = savedNotebookId;
-      } else {
-        // No existing notebook, create one for this query
-        const { defineAbilitiesFor: defineAbilitiesQ } = getSlackDb();
-        const { sessionManager: smQ } = getSlackDeps();
-        const abilityQ = defineAbilitiesQ(user);
-        const newSession = await (smQ as any).createSession(
-          user.id,
-          { name: `Query - ${new Date().toLocaleDateString()}`, origin: { channel: 'slack' } },
-          abilityQ,
-          { setLastNotebook: true }
-        );
-        resolvedNotebookId = newSession.id;
-      }
+      const resolvedNotebookId = await this.resolveWorkflowNotebookId(
+        user,
+        notebookId,
+        `Query - ${new Date().toLocaleDateString()}`
+      );
 
       // Add query to session - don't wait for AI response due to Slack timeout constraints
       const { defineAbilitiesFor: defineAbilitiesQuery } = getSlackDb();

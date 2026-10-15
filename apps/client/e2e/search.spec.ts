@@ -63,6 +63,89 @@ test.describe('File Browser Search', () => {
       page.getByTestId('file-browser-dialog').getByText('E2E-SearchUniqueFile', { exact: false })
     ).toBeVisible({ timeout: TIMEOUTS.ACTION });
   });
+
+  // The toolbar switches layout on the dialog's width, not the viewport's: the dialog is 90vw wide and the
+  // content has 32px of horizontal padding, so its container is 0.9 * viewport - 64. These viewports sit on
+  // both sides of each switch in the toolbar constants (Files/Browser/Content.tsx).
+  const toolbarViewports = [
+    { width: 930, singleRow: false }, // ~773px: single column
+    { width: 1020, singleRow: false }, // ~854px: views + actions over filters
+    { width: 1520, singleRow: false }, // ~1304px: two rows, just below the single-row switch
+    { width: 1560, singleRow: true }, // ~1340px: one row, just above it
+    { width: 1920, singleRow: true }, // ~1664px: one row
+  ];
+
+  for (const { width, singleRow } of toolbarViewports) {
+    test(`should keep the search box usable at a ${width}px viewport`, async ({ page, basePage, fileUpload }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/');
+      await page.waitForLoadState('domcontentloaded');
+      await basePage.dismissModals();
+
+      await fileUpload.openFileBrowser();
+
+      const searchInput = page.getByTestId('file-browser-search-input');
+      const toolbarFilters = page.getByTestId('file-browser-toolbar-filters');
+      const toolbarActions = page.getByTestId('file-browser-toolbar-actions');
+      await expect(searchInput).toBeVisible({ timeout: TIMEOUTS.ACTION });
+      await expect(toolbarActions).toBeVisible({ timeout: TIMEOUTS.ACTION });
+
+      // The row is only the crowded one with Research present (the search user enables it in search.setup.ts).
+      // Count `button` elements rather than the button role: the Upload control is a Select whose trigger is a
+      // <button role="combobox">, so a role query resolves 2 of the 3 and the count would never hold.
+      await expect(toolbarActions.locator('button')).toHaveCount(3);
+      await expect(toolbarActions.getByRole('button', { name: /research/i })).toBeVisible();
+
+      const search = await searchInput.boundingBox();
+      const filters = await toolbarFilters.boundingBox();
+      const actions = await toolbarActions.boundingBox();
+      expect(search).not.toBeNull();
+      expect(filters).not.toBeNull();
+      expect(actions).not.toBeNull();
+      if (!search || !filters || !actions) return;
+
+      expect(search.width).toBeGreaterThanOrEqual(160);
+      // The whole filter row, not just the search box: the type select and the Generated toggle sit in it too.
+      const overlaps =
+        filters.x < actions.x + actions.width &&
+        actions.x < filters.x + filters.width &&
+        filters.y < actions.y + actions.height &&
+        actions.y < filters.y + filters.height;
+      expect(overlaps).toBe(false);
+
+      // Confirm the band instead of assuming it: one row puts the filters beside the actions, the two-row and
+      // single-column layouts stack them underneath.
+      const actionsCenter = actions.y + actions.height / 2;
+      const filtersCenter = filters.y + filters.height / 2;
+      if (singleRow) {
+        expect(Math.abs(filtersCenter - actionsCenter)).toBeLessThanOrEqual(4);
+      } else {
+        expect(filtersCenter).toBeGreaterThan(actionsCenter + 4);
+      }
+
+      // No action label may be squeezed or wrapped: a squeezed label overflows its button horizontally, a
+      // wrapped one renders more than one line box. Measure once the webfonts have settled so a late swap
+      // cannot change the widths mid-read.
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
+      const badActions = await toolbarActions.evaluate(el => {
+        const lineBoxes = (button: HTMLElement) => {
+          const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+          let boxes = 0;
+          while (walker.nextNode()) {
+            const range = document.createRange();
+            range.selectNodeContents(walker.currentNode);
+            boxes += range.getClientRects().length;
+          }
+          return boxes;
+        };
+        // scrollWidth/clientWidth round independently, so a fractional-width label that fits can read 1px over.
+        return Array.from(el.querySelectorAll('button')).filter(
+          button => button.scrollWidth > button.clientWidth + 1 || lineBoxes(button) > 1
+        ).length;
+      });
+      expect(badActions).toBe(0);
+    });
+  }
 });
 
 test.describe('Notebook Search', () => {

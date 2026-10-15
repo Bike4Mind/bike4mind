@@ -1,3 +1,4 @@
+import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
 import { IConnection, MessageDataToClient } from '@bike4mind/common';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
@@ -84,6 +85,9 @@ export class ClientMessageSender {
         if (result.status === 'rejected') {
           const connection = connections[index];
           this.logger.info(`Failed to send message to connection ${connection.connectionId}: ${result.reason.message}`);
+          // Only a gone socket is stale. A transient or payload error must not delete a live
+          // connection's row: the row is what keeps its subscriptions alive.
+          if (!(result.reason instanceof GoneException)) return undefined;
           this.logger.log(`Deleting connection ${connection.connectionId}`);
 
           // Drop the failed connection from the cache.

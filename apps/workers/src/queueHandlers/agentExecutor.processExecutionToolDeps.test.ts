@@ -68,7 +68,12 @@ vi.mock('./agentExecutor.musicToolConfig', async () => {
   return {
     ...actual,
     getAgentMusicToolConfigDeps: vi.fn().mockReturnValue({
-      buildBaseConfig: vi.fn().mockResolvedValue({ usableModels: ['test-music'], createJob: vi.fn() }),
+      resolveTrackLimit: vi.fn().mockResolvedValue(2),
+      buildBaseConfig: vi.fn().mockResolvedValue({
+        usableModels: ['test-music'],
+        createJob: vi.fn().mockResolvedValue({ ok: true, created: true }),
+      }),
+      slots: { claim: vi.fn().mockResolvedValue(true), release: vi.fn().mockResolvedValue(undefined) },
       logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
     }),
   };
@@ -266,6 +271,18 @@ describe('processExecution tool deps', () => {
       await runWithExecDoc(musicExecDoc);
 
       expect(vi.mocked(buildSubagentToolConfig).mock.calls[0][0].musicConfig).not.toBeNull();
+    });
+
+    it('caps songs on the run Quest with the limit resolved for the run org', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      const { getAgentMusicToolConfigDeps } = await import('./agentExecutor.musicToolConfig');
+      await runWithExecDoc({ ...musicExecDoc, organizationId: 'org-1' });
+
+      const deps = vi.mocked(getAgentMusicToolConfigDeps).mock.results[0].value;
+      expect(deps.resolveTrackLimit).toHaveBeenCalledWith({ userId: 'user-1', organizationId: 'org-1' });
+      const musicConfig = vi.mocked(buildSubagentToolConfig).mock.calls[0][0].musicConfig;
+      await musicConfig!.createJob({ user: { id: 'user-1', organizationId: 'org-1' }, request: {}, source: 'agent' });
+      expect(deps.slots.claim).toHaveBeenCalledWith('q-run', 2);
     });
 
     it('withholds the music tool from a run started with an API key', async () => {

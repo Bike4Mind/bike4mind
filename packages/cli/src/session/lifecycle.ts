@@ -211,6 +211,16 @@ export async function compactSession(
   ctx: SessionLifecycleContext,
   options: { userInstructions?: string } = {}
 ): Promise<void> {
+  // Held throughout: the compacted session is built from the snapshot read below.
+  const releaseSession = useCliStore.getState().holdSession();
+  try {
+    await compactHeldSession(ctx, options);
+  } finally {
+    releaseSession();
+  }
+}
+
+async function compactHeldSession(ctx: SessionLifecycleContext, options: { userInstructions?: string }): Promise<void> {
   const session = useCliStore.getState().session;
   if (!session || !ctx.agent) {
     console.log('No active session');

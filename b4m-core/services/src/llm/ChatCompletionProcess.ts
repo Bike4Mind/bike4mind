@@ -2060,8 +2060,10 @@ export class ChatCompletionProcess {
       // Generic per-session integration isolation: a curated-surface session (e.g. /opti)
       // can suppress the user's personal integrations so it runs only its server-owned
       // toolset - no user MCP servers, no agent delegation. No product-specific branch in
-      // core; mirrors the generic `enabledTools`/`disabledTools` capability above.
-      if (session.disableUserIntegrations) {
+      // core; mirrors the generic `enabledTools`/`disabledTools` capability above. The request
+      // field is the per-turn twin for callers running a prompt the user did not author.
+      const userIntegrationsDisabled = Boolean(session.disableUserIntegrations || parsedBody.disableUserIntegrations);
+      if (userIntegrationsDisabled) {
         enableAgents = false;
         parsedBody.mcpServers = [];
       }
@@ -2248,7 +2250,10 @@ export class ChatCompletionProcess {
         projectId,
         // Not built at all under a prompt mode, rather than built and filtered later: these
         // features have side effects (memory writes, reply replacement) that outlive the prompt.
-        filterFeaturesByPromptMode(optimizedFeatureList, promptMode),
+        // Skills are the user's own authored instructions, so they go with their integrations.
+        filterFeaturesByPromptMode(optimizedFeatureList, promptMode).filter(
+          feature => !(userIntegrationsDisabled && feature === 'skills')
+        ),
         organization,
         sessionSystemPrompt,
         // A mode overrides the session flag in both directions; see resolveForcedRetrieval.
@@ -3048,7 +3053,7 @@ export class ChatCompletionProcess {
         // A curated surface that suppresses user integrations must never delegate to agents. This
         // hard veto makes `session.disableUserIntegrations` honor its "no agent delegation"
         // contract self-sufficiently; the disabledTools denylist below is the second layer.
-        disableUserIntegrations: Boolean(session.disableUserIntegrations),
+        disableUserIntegrations: userIntegrationsDisabled,
         allowedAgents: parsedBody.allowedAgents,
         sessionAgentIds: session.agentIds,
         message,
@@ -5036,6 +5041,7 @@ export class ChatCompletionProcess {
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
+                  requireTools: !!options.tools?.length,
                 }
               );
 

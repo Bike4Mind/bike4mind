@@ -373,12 +373,16 @@ export type CompletionInfo = {
     content: string;
     is_error?: boolean;
   }>;
-  /** Prompt caching statistics (if caching was enabled) */
+  /**
+   * Prompt caching statistics (if caching was enabled). Diagnostic only: no billing or token
+   * accounting reads it, because some adapters set it while keeping the cached tokens inside
+   * `inputTokens`. Accounting reads `cacheReadInputTokens`/`cacheCreationInputTokens` below.
+   */
   cacheStats?: CacheUsageStats;
   /**
-   * Anthropic-style cache token deltas. Surfaced separately from `inputTokens`
-   * so credit accounting can apply provider-specific multipliers (read: 0.1x,
-   * write: 1.25x of base input rate).
+   * Cache token counts in the billing convention: always disjoint from `inputTokens` (an adapter
+   * whose `inputTokens` includes cached tokens leaves these unset), so settlement prices each at
+   * its own rate. The fields `foldCompletionInfo` in @bike4mind/agents sums into agent totals.
    */
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
@@ -482,7 +486,8 @@ export interface ICompletionBackend {
    * prefers `dispatchProfile` over its hardcoded id tables, which is what lets a
    * model this build has no id knowledge of get a correctly shaped request
    * instead of a 400. Optional: a backend whose request shape is id-independent
-   * has nothing to read.
+   * has nothing to read. Gemini and xAI also gate cache-read forwarding on this
+   * record, so for them it must be the record settlement prices with.
    */
   setDispatchModel?(info: ModelInfo): void;
 }

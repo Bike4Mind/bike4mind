@@ -22,6 +22,7 @@ export * from './RateLimitSnapshotModel';
 export * from './ScopedSettingModel';
 export * from './SreErrorPatternModel';
 export * from './SreErrorTrackingModel';
+export * from './StorageDriftRecordModel';
 export * from './TaskScheduleModel';
 export * from './TeamMetricsCacheModel';
 export * from './TelemetryAuditLogModel';

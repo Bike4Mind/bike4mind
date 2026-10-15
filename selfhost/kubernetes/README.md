@@ -79,9 +79,9 @@ Copy `images.example.yaml` outside the checkout and replace all registry placeho
 
 ## Configuration and mixed providers
 
-Non-secret defaults come from a ConfigMap. `config` values override those defaults. The existing Secret is loaded after the ConfigMap, so explicit Secret endpoint/provider settings override configuration. Authentication keys always refer to required Secret keys. These values are shared across application roles; the gateway also gets its private application endpoint explicitly.
+Non-secret defaults come from a ConfigMap. `config` values override those defaults. The existing Secret is loaded after the ConfigMap, so explicit Secret endpoint/provider settings override configuration. MongoDB uses an explicit reference: local mode reads `MONGODB_URI` from the ConfigMap, while external mode reads it from the Secret. Authentication keys always refer to required Secret keys. These values are shared across application roles; the gateway also gets its private application endpoint explicitly.
 
-To retain an external S3-compatible backend, set `AWS_ENDPOINT_URL_S3`, bucket names and compatible credentials for the application. Queue and model endpoints can similarly point outside the namespace. The local MongoDB, MinIO, ElasticMQ and Mailpit are still provisioned by this version of the chart. The storage initializer and marker check always target the private chart MinIO service; they never initialize or modify external S3 buckets. Provision external buckets, lifecycle and notification delivery separately before selecting them. Do not interpret a healthy local backing service as proof that the selected external provider works.
+To retain an external S3-compatible backend, set `AWS_ENDPOINT_URL_S3`, bucket names and compatible credentials for the application. Queue and model endpoints can similarly point outside the namespace. MinIO, ElasticMQ and Mailpit remain local; MongoDB is omitted when external Mongo mode is enabled. The storage initializer and marker check always target the private chart MinIO service; they never initialize or modify external S3 buckets. Provision external buckets, lifecycle and notification delivery separately before selecting them. Do not interpret a healthy local backing service as proof that the selected external provider works.
 
 Queue declarations and environment names mirror root `elasticmq.conf` and `.env.selfhost.example`; tests reject drift. Configuring a queue does not prove its consumer's outcome. The WebSocket gateway and scheduler worker remain singleton deployments with `Recreate`, since their state/leases do not justify unrestricted scaling. No ArgoCD, AWS-specific storage class, load balancer or administrative tunnel is installed.
 
@@ -90,7 +90,7 @@ For agent execution, set `agentExecutor.enabled: true`, supply the matching sour
 ## Restart and rollback
 
 - Record the exact source/image references and `helm get values b4m -n bike4mind-eval` before upgrading. Never include secret values in receipts.
-- Upgrade with the same release/namespace and reviewed values. PVCs retain MongoDB, object and queue data. App deployments use `Recreate`; transient interruption is expected. Changing Secret contents does not restart pods automatically. After a reviewed Secret update, bump `initializationRevision` and run the same upgrade command.
+- Upgrade with the same release/namespace and reviewed values. Local mode now ignores a `MONGODB_URI` left in the runtime Secret: an install that used that key to reach an external database must set `externalMongo.enabled: true` (with `config.MONGODB_URI` unset) to keep using it. PVCs retain MongoDB, object and queue data. App deployments use `Recreate`; transient interruption is expected. Changing Secret contents does not restart pods automatically. After a reviewed Secret update, bump `initializationRevision` and run the same upgrade command.
 - For a restart proof, record a signed-in user's ID, recreate Mongo and app pods, wait for PRIMARY/readiness and sign in again. Check unchanged PVC identities and the same user. This proves persistence for that case, not full restore or host-loss recovery.
 - Inspect `kubectl logs -n bike4mind-eval pod/<mongo-pod> -c wait-member-dns` for DNS guard failures. Confirm the advertised member DNS resolves only to its current IP. An existing replica-set configuration mismatch fails closed; investigate it rather than deleting database storage or silently reconfiguring it.
 - Roll back image/config-only releases with `helm history` and `helm rollback b4m <revision> -n bike4mind-eval --wait --timeout 15m`. Rollback does not reverse database migrations, bucket changes or Secret rotation. Keep compatible previous images and backups before upgrades that change persisted data.
@@ -104,6 +104,26 @@ jq --version
 python3 -m pip install PyYAML==6.0.2
 python3 -m unittest discover -s selfhost/kubernetes/tests
 helm lint selfhost/kubernetes -f selfhost/kubernetes/images.example.yaml
+helm lint selfhost/kubernetes -f selfhost/kubernetes/images.example.yaml -f selfhost/kubernetes/external-mongo.example.yaml
 ```
 
 Tests render the real chart, reject duplicate YAML keys and unsafe configuration, validate current worker/drain/persistence contracts, isolate mixed S3 initialization, verify deterministic Job reruns, and exercise the actual DNS guard with missing/stale/mixed/current IPv4 and IPv6 resolver answers. Runtime acceptance still requires a fresh cluster installation, authenticated signup/session and ticket-based WebSocket checks, idempotent object setup, queue inventory, and persistence after Mongo/app recreation. Full chat, agent, import, schedule outcomes and production recovery remain separate parity work.
+
+## External MongoDB
+
+Local MongoDB remains the default. To prepare an Atlas deployment, combine the normal image values with `external-mongo.example.yaml`. Create the runtime Secret separately with all required runtime keys plus `MONGODB_URI`. The chart requires that key explicitly and rejects a URI in config values when external MongoDB is enabled. No credential belongs in Git, Helm values, or command arguments.
+
+External mode omits the local MongoDB StatefulSet, Service, PVC, default URI, and DNS guard. Its startup check reads the URI from the environment, requires a writable primary, and never initializes or changes the external replica set. Each of 60 attempts is limited to 15 seconds, with a further 5 seconds to force termination, even when the URI specifies unlimited timeouts. Existing timeout options are preserved; defaults are added only for missing options. Connection output is suppressed and failures emit only fixed, credential-free reason names. Use Atlas TLS verification without insecure URI options, a dedicated evaluation database and least-privilege database user, and an Atlas network allowlist matching the cluster's actual outbound addresses. This chart does not manage Atlas access, backups, or migration. Switching an existing local installation does not migrate its data; preserve its retained PVC and migrate separately. Disabling external mode restores the ConfigMap URI even if the Secret still contains an external URI; it does not copy external data into local MongoDB.
+
+MinIO and ElasticMQ remain local and require persistent storage (20Gi and 5Gi by default). On EKS, install and verify a compatible EBS CSI driver and StorageClass before deployment. External MongoDB does not make the complete stack fit a single small worker: default application/init requests total 2816Mi, plus existing system workloads, and eight steady pods require an additional slot for the bucket initialization Job. Measure capacity and preserve honest requests and limits before deployment; the example does not lower them. The optional executor adds another pod and 512Mi requested memory.
+
+## Argo CD evaluation
+
+`argocd-application.example.yaml` starts with local MongoDB and loopback URLs for explicit port-forward evaluation. Replace the commit placeholder with an immutable chart commit and every image placeholder with a verified matching-source digest (including the separately published fanout image). The example intentionally has no automated sync, pruning, or namespace creation. Create the destination namespace separately and sync manually only after the following gates pass:
+
+1. All referenced images pull on the worker architecture and match the selected source revision.
+2. The namespace contains `bike4mind-runtime` with every required runtime key, generated independently of Git and Helm values.
+3. EBS CSI is healthy and `gp3-retain` exists with retain semantics and compatible scheduling; verify persistent-volume provisioning before synchronization.
+4. Available CPU, memory, pod slots, and volume attachment capacity cover the complete workload plus the initializer Job and rollout overhead. Current resource requests and limits remain unchanged; this example does not establish that any particular worker fits.
+
+Review the rendered manifests before each manual sync. Keep pruning disabled and preserve retained PVCs during rollback. Atlas can be configured later through the external Mongo mode and the existing runtime Secret; changing the mode does not migrate local data.

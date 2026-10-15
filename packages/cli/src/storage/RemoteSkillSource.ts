@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import type { ApiClient } from '../auth/ApiClient.js';
+import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { CustomCommand } from './types.js';
 import { isReservedCommandName } from '../config/commands.js';
 
@@ -62,7 +62,7 @@ export class RemoteSkillSource {
   private readonly pageLimit: number;
 
   constructor(
-    private readonly apiClient: ApiClient,
+    private readonly apiClient: Pick<AuthenticatedApiClient, 'get' | 'getCurrentUser'>,
     options: RemoteSkillSourceOptions = {}
   ) {
     this.cacheFilePath = options.cacheFilePath ?? path.join(os.homedir(), '.bike4mind', 'cache', 'remote-skills.json');

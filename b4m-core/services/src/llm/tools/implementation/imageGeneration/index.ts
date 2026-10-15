@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
+import type { ImageToolCostInput, ImageToolFinishData } from '../../imageToolBilling';
 import {
   ApiKeyType,
   ImageModels,
@@ -134,9 +135,14 @@ export async function processAndStoreImages(
   );
 }
 
-async function updateQuestAndReturnMarkdown(storedImageUrls: string[], context: ToolContext): Promise<string> {
-  // Call onFinish callback for credit deduction
-  await context.onFinish?.('image_generation', storedImageUrls);
+async function updateQuestAndReturnMarkdown(
+  storedImageUrls: string[],
+  costInput: ImageToolCostInput,
+  context: ToolContext
+): Promise<string> {
+  // onFinish is where both credit rails bill, so only a delivered image is charged.
+  const finishData: ImageToolFinishData = { ...costInput, paths: storedImageUrls };
+  await context.onFinish?.('image_generation', finishData);
 
   // Update the quest's images array AND return markdown for compatibility
   await context.statusUpdate({ images: storedImageUrls });
@@ -233,14 +239,9 @@ export const imageGenerationTool: ToolDefinition = {
               ? 'local-image'
               : 'openai';
 
-      // Call onStart callback for credit validation
-      await context.onStart?.('image_generation', {
-        model,
-        n,
-        size,
-        quality,
-        prompt,
-      });
+      // onStart only gates affordability; the charge waits for onFinish.
+      const costInput: ImageToolCostInput = { model, n, size, quality };
+      await context.onStart?.('image_generation', { ...costInput, prompt });
 
       await context.statusUpdate({}, 'Now painting image...');
 
@@ -257,7 +258,7 @@ export const imageGenerationTool: ToolDefinition = {
 
         const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
-        return updateQuestAndReturnMarkdown(storedImageUrls, context);
+        return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       } else if (isBFLModel) {
         const apiKey = await getEffectiveApiKey(context.userId, { type: ApiKeyType.bfl }, { db: context.db });
         const service = new BFLImageService(
@@ -285,7 +286,7 @@ export const imageGenerationTool: ToolDefinition = {
 
           const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
-          return updateQuestAndReturnMarkdown(storedImageUrls, context);
+          return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
         } catch (bflError) {
           // Log status + message only. Never log the raw AxiosError: its
           // `config.headers` carries the BFL `x-key`, which would leak the API
@@ -336,7 +337,7 @@ export const imageGenerationTool: ToolDefinition = {
 
         const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
-        return updateQuestAndReturnMarkdown(storedImageUrls, context);
+        return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       } else if (isLocalImageModel) {
         // Self-hosted Stable-Diffusion server (A1111-compatible REST API), gated
         // by IMAGE_GEN_BASE_URL. The env var is honored ONLY under B4M_SELF_HOST
@@ -363,7 +364,7 @@ export const imageGenerationTool: ToolDefinition = {
 
         const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
-        return updateQuestAndReturnMarkdown(storedImageUrls, context);
+        return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       } else {
         const apiKey = await getEffectiveApiKey(context.userId, { type: ApiKeyType.openai }, { db: context.db });
         const service = new OpenAIImageService(requireApiKey(apiKey, 'OpenAI', context.logger), context.logger);
@@ -393,7 +394,7 @@ export const imageGenerationTool: ToolDefinition = {
 
         const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
-        return updateQuestAndReturnMarkdown(storedImageUrls, context);
+        return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       }
     },
     toolSchema: {

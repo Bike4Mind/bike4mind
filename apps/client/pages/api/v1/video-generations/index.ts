@@ -23,7 +23,7 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
-import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
@@ -63,8 +63,8 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
   // 'studio' means any first-party session (the SPA), not only the Studio page; an API key is the public API.
   // Idempotency keys are scoped per source, so the same key sent from both is two different requests.
   const source: GenerationJobSource = isApiKeyAuth(req) ? 'api' : 'studio';
-  // null = personal account, undefined = the caller's own org; any org the caller isn't a member of is rejected.
-  const organizationId = await resolveBillingOrgId(req, req.validated.organization_id);
+  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
+  const organizationId = await resolveMediaBillingOrgId(req, req.validated.organization_id);
   // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(
     {

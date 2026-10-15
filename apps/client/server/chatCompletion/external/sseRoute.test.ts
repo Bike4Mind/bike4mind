@@ -212,7 +212,13 @@ describe('JWT rate limiting', () => {
 
   it('hands the calling client to the rate limiter, so its own cap applies', async () => {
     expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(200);
-    expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith('u1', 'api', { client: 'b4m-desktop/0.1.0' });
+    expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith('u1', 'desktop', { client: 'b4m-desktop/0.1.0' });
+  });
+
+  it("attributes a b4m-desktop client as source 'desktop' on the completion and its analytics", async () => {
+    expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
+    expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
   });
 
   /**
@@ -311,6 +317,38 @@ describe('POST /api/ai/v1/completions - stream', () => {
 
     expect(beforeReady).toBe(0);
     expect(afterReady).toBe(1);
+  });
+
+  it('passes the per-request usage from the final frame to analytics, so each request is priced on its own tier', async () => {
+    const turnUsage = [
+      { inputTokens: 1000, outputTokens: 20, cacheReadInputTokens: 150_000 },
+      { inputTokens: 2000, outputTokens: 30, cacheReadInputTokens: 151_000 },
+    ];
+    mockExecuteCompletion.mockImplementationOnce(async (params: ExecuteParams) => {
+      await params.onReady?.();
+      await params.onChunk(['', 'partial'], { inputTokens: 1000, outputTokens: 20, turnUsage: turnUsage.slice(0, 1) });
+      await params.onChunk(['', 'done'], {
+        inputTokens: 3000,
+        outputTokens: 50,
+        cacheReadInputTokens: 301_000,
+        cacheCreationInputTokens: 500,
+        turnUsage,
+      });
+      // A trailing frame without the breakdown must not clear the latched one.
+      await params.onChunk([''], { stopReason: 'end_turn' });
+    });
+
+    await (await post()).text();
+
+    expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'success',
+        finalInputTokens: 3000,
+        finalCacheReadTokens: 301_000,
+        finalCacheWriteTokens: 500,
+        finalTurnUsage: turnUsage,
+      })
+    );
   });
 
   // Tokens already streamed, so neither a status code nor a pre-flight check can carry the signal.

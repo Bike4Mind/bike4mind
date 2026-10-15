@@ -363,8 +363,8 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     {
       name: 'Audio',
       description:
-        'Speech, music, and sound-effect generation. For music, prefer `POST /api/v1/music-generations` over ' +
-        '`/api/ai/music`.',
+        'Speech, music, and sound-effect generation. For music, use `POST /api/v1/music-generations`; ' +
+        '`/api/ai/music` is deprecated.',
     },
     {
       name: 'Music',
