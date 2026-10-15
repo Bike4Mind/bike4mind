@@ -69,10 +69,14 @@ win:
 
 linux:
   icon: build/icon.png
+  executableName: bike4mind
   category: Development
   target:
     - target: AppImage
       arch: [x64]
+
+appImage:
+  artifactName: ${productName}-${version}-x64.${ext}
 
 nsis:
   oneClick: false
