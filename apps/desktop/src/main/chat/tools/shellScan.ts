@@ -162,19 +162,22 @@ const WGET_SENDS = /^--(post|body)/;
 const DASH_C = /^-[a-zA-Z]*c/;
 const INLINE_SCRIPT: Record<string, RegExp> = {
   node: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
-  ruby: /^-[a-zA-Z]*e$/,
-  perl: /^-[a-zA-Z]*[eE]$/,
-  php: /^-r$/,
+  ruby: /^-[a-zA-Z]*e/,
+  perl: /^-[a-zA-Z]*[eE]/,
+  php: /^-r/,
   bun: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
-  osascript: /^-e$/,
+  osascript: /^-e/,
   sh: DASH_C,
   bash: DASH_C,
   zsh: DASH_C,
   dash: DASH_C,
 };
 
-/** Interpreters that run a script fed on stdin when given no script file: `python3 - <<'EOF'`, `echo x | sh`. */
-const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zsh|dash)$/;
+/**
+ * Interpreters that run a script fed on stdin when given no script file: `python3 - <<'EOF'`,
+ * `echo x | sh`, and the shell builtins that read one in-process: `source <(curl https://x)`.
+ */
+const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zsh|dash|source|\.)$/;
 
 /** Arguments that name the command's own standard input rather than a script file. */
 const STDIN_SCRIPT_ARG = /^(\/(dev|proc\/self)\/fd\/[\d]+|\/dev\/stdin|[<>]\()/;
@@ -184,8 +187,6 @@ const RESOLVERS = new Set(['dig', 'nslookup', 'host']);
 
 /** Git's global options that take the value in the next argument, which is not a subcommand. */
 const GIT_OPTION_VALUES = /^--(git-dir|work-tree|namespace)(=|$)/;
-
-
 
 /**
  * Whether a command's stdin is fed: piped into, a heredoc or here-string, or a `<` redirect. A
@@ -331,7 +332,11 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   // A name built from a command substitution carries what it read into the lookup itself.
   if (RESOLVERS.has(program) && computed) return `${program} with a computed argument`;
   const inlineScript = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
-  const inline = inlineScript ? args.find(arg => inlineScript.test(arg)) : undefined;
+  // Only the option prefix counts: a script's own arguments (`python3 x.py -config`) are not the
+  // interpreter's options, and treating them as such asks on a command that cannot send anything.
+  const optionEnd = args.findIndex(arg => !arg.startsWith('-'));
+  const options = optionEnd === -1 ? args : args.slice(0, optionEnd);
+  const inline = inlineScript ? options.find(arg => inlineScript.test(arg)) : undefined;
   if (inline) return `${program} ${(inlineScript?.exec(inline)?.[0] ?? inline.split('=')[0]).replace(/=$/, '')}`;
   if (
     stdin &&
