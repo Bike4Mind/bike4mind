@@ -95,6 +95,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     const updated = await imageModerationIncidentRepository.resolveConfirmedCsam(incidentId, {
       status: 'reported',
       ncmecReportId: body.ncmecReportId,
+      reportedBy: req.user.id,
     });
     if (!updated) {
       return res
@@ -158,7 +159,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     // in-flight submission, not to gate a retry we just confirmed succeeded).
     const updated = await imageModerationIncidentRepository.resolveConfirmedCsam(
       incidentId,
-      { status: 'reported', ncmecReportId: incident.ncmecReportId },
+      { status: 'reported', ncmecReportId: incident.ncmecReportId, reportedBy: req.user.id },
       0
     );
     if (!updated) {
@@ -283,7 +284,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       `[NCMEC] submission accepted for incident ${incidentId}, reportId=${ncmecReportId}; persisting to DB`
     );
 
-    const updated = await imageModerationIncidentRepository.updateReviewStatus(incidentId, 'reported', ncmecReportId);
+    const updated = await imageModerationIncidentRepository.updateReviewStatus(
+      incidentId,
+      'reported',
+      ncmecReportId,
+      req.user.id
+    );
     if (!updated) {
       req.logger.warn(
         `[NCMEC] DB update skipped for incident ${incidentId} (already reported); NCMEC reportId=${ncmecReportId}`

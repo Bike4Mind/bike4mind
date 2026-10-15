@@ -133,7 +133,7 @@ holds a tip, or `requeue` followed by `record_manual_report` if it does not. A r
 
 `reportChannel: 'manual'` marks incidents recorded through `record_manual_report`. An incident
 without it was recorded by the API path or by `mark_reported` / `retry_finish`. Every path to
-`'reported'` stamps `reportedAt`.
+`'reported'` stamps `reportedAt` and stores the acting admin's user id in `reportedBy`.
 
 **Before going live:** validate the exact XML schema, element names, and endpoint paths with
 your NCMEC ESP representative. Run a full end-to-end test against the NCMEC test host

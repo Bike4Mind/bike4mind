@@ -44,7 +44,7 @@ export const ImageModerationIncidentSchema = z.object({
   // returned by NCMEC; retained as the audit trail that reporting occurred.
   ncmecReportId: z.string().optional(),
   reportChannel: z.enum(INCIDENT_REPORT_CHANNELS).optional(),
-  // Admin user id that recorded a manual report.
+  // Admin user id that moved the incident to 'reported' (any channel).
   reportedBy: z.string().optional(),
   // When the incident moved to 'reported'; unlike updatedAt, later writes do not move it.
   reportedAt: z.union([z.string(), z.date()]).optional(),

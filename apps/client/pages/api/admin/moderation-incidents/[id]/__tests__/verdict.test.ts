@@ -132,7 +132,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
 
       expect(mockClaimForNcmecSubmission).toHaveBeenCalledWith('inc-1');
       expect(mockSubmitNcmecReport).toHaveBeenCalledOnce();
-      expect(mockUpdateReviewStatus).toHaveBeenCalledWith('inc-1', 'reported', 'RPT-001');
+      expect(mockUpdateReviewStatus).toHaveBeenCalledWith('inc-1', 'reported', 'RPT-001', 'admin-1');
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({ ok: true, ncmecReportId: 'RPT-001' });
     });
@@ -307,6 +307,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(mockResolveConfirmedCsam).toHaveBeenCalledWith('inc-1', {
         status: 'reported',
         ncmecReportId: 'RPT-MANUAL',
+        reportedBy: 'admin-1',
       });
       expect(res.status).toHaveBeenCalledWith(200);
       const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { ok: boolean; ncmecReportId: string };
@@ -360,7 +361,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       // staleAfterMs=0 bypasses the stale guard -- outcome is known after /finish succeeds
       expect(mockResolveConfirmedCsam).toHaveBeenCalledWith(
         'inc-1',
-        { status: 'reported', ncmecReportId: 'RPT-STORED' },
+        { status: 'reported', ncmecReportId: 'RPT-STORED', reportedBy: 'admin-1' },
         0
       );
       expect(res.status).toHaveBeenCalledWith(200);

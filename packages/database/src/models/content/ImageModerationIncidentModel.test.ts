@@ -106,9 +106,15 @@ describe('ImageModerationIncidentRepository', () => {
 
     it('persists ncmecReportId when provided', async () => {
       const inc = await imageModerationIncidentRepository.record(baseIncident());
-      const updated = await imageModerationIncidentRepository.updateReviewStatus(String(inc._id), 'reported', 'rpt-42');
+      const updated = await imageModerationIncidentRepository.updateReviewStatus(
+        String(inc._id),
+        'reported',
+        'rpt-42',
+        'admin-1'
+      );
       expect(updated?.reviewStatus).toBe('reported');
       expect(updated?.ncmecReportId).toBe('rpt-42');
+      expect(updated?.reportedBy).toBe('admin-1');
       expect(updated?.reportedAt).toBeInstanceOf(Date);
     });
 
@@ -182,9 +188,11 @@ describe('ImageModerationIncidentRepository', () => {
       const out = await imageModerationIncidentRepository.resolveConfirmedCsam(id, {
         status: 'reported',
         ncmecReportId: 'RPT-M',
+        reportedBy: 'admin-1',
       });
       expect(out?.reviewStatus).toBe('reported');
       expect(out?.ncmecReportId).toBe('RPT-M');
+      expect(out?.reportedBy).toBe('admin-1');
       expect(out?.reportedAt).toBeInstanceOf(Date);
     });
 
@@ -198,7 +206,11 @@ describe('ImageModerationIncidentRepository', () => {
       const id = await claimed(false);
       expect(await imageModerationIncidentRepository.resolveConfirmedCsam(id, { status: 'pending_review' })).toBeNull();
       expect(
-        await imageModerationIncidentRepository.resolveConfirmedCsam(id, { status: 'reported', ncmecReportId: 'X' })
+        await imageModerationIncidentRepository.resolveConfirmedCsam(id, {
+          status: 'reported',
+          ncmecReportId: 'X',
+          reportedBy: 'admin-1',
+        })
       ).toBeNull();
       expect((await ImageModerationIncident.findById(id))?.reviewStatus).toBe('confirmed_csam');
     });
@@ -211,6 +223,7 @@ describe('ImageModerationIncidentRepository', () => {
       const out = await imageModerationIncidentRepository.resolveConfirmedCsam(id, {
         status: 'reported',
         ncmecReportId: 'RPT-UNFINISHED',
+        reportedBy: 'admin-1',
       });
       expect(out?.reviewStatus).toBe('reported');
     });

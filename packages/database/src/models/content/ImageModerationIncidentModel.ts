@@ -158,8 +158,8 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   }
 
   /**
-   * Transition an incident to a terminal reviewStatus. `ncmecReportId` is set when
-   * `status === 'reported'`. Returns null if the transition is disallowed:
+   * Transition an incident to a terminal reviewStatus. `ncmecReportId` and `reportedBy` are set
+   * when `status === 'reported'`. Returns null if the transition is disallowed:
    * - always blocked when already 'reported' (idempotency)
    * - also blocked from 'confirmed_csam' when targeting 'false_positive', to prevent a
    *   concurrent false_positive verdict from overriding an in-flight NCMEC submission.
@@ -167,11 +167,15 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   async updateReviewStatus(
     id: string,
     status: IncidentReviewStatus,
-    ncmecReportId?: string
+    ncmecReportId?: string,
+    reportedBy?: string
   ): Promise<IImageModerationIncidentDocument | null> {
     const update: Record<string, unknown> = { reviewStatus: status };
     if (ncmecReportId) update.ncmecReportId = ncmecReportId;
-    if (status === 'reported') update.reportedAt = new Date();
+    if (status === 'reported') {
+      update.reportedAt = new Date();
+      if (reportedBy) update.reportedBy = reportedBy;
+    }
     const excluded = status === 'false_positive' ? ['reported', 'confirmed_csam'] : ['reported'];
     return this.model.findOneAndUpdate({ _id: id, reviewStatus: { $nin: excluded } }, { $set: update }, { new: true });
   }
@@ -190,12 +194,13 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    */
   async resolveConfirmedCsam(
     id: string,
-    target: { status: 'reported'; ncmecReportId: string } | { status: 'pending_review' },
+    target: { status: 'reported'; ncmecReportId: string; reportedBy: string } | { status: 'pending_review' },
     staleAfterMs = STALE_CONFIRMED_CSAM_MS
   ): Promise<IImageModerationIncidentDocument | null> {
     const update: Record<string, unknown> = { reviewStatus: target.status };
     if (target.status === 'reported') {
       update.ncmecReportId = target.ncmecReportId;
+      update.reportedBy = target.reportedBy;
       update.reportedAt = new Date();
     }
     const filter: Record<string, unknown> = {
