@@ -486,14 +486,17 @@ restores the transparent corners with a circular mask.
 | File | Consumed by |
 | --- | --- |
 | `build/icon.icns` | electron-builder, macOS app bundle |
+| `build/icon-mac.png` | macOS development Dock icon (1024x1024) |
 | `build/icon.ico` | electron-builder, Windows |
 | `build/icon.png` | electron-builder, Linux (512x512) |
 | `src/renderer/favicon.png` | the renderer's `<link rel="icon">` |
 
-The mark is inset rather than bled to the edge: 824/1024 on macOS, which is Apple's icon
-grid, and a looser 0.92 elsewhere, where there is no grid to match. It stops reading as a
-wheel below about 32px - the white filigree inside the disc washes out into a pale blob at
-16px - but the disc silhouette and the brand blue still carry it.
+macOS uses the full-size mark with its own blue gradient extended behind it, making the
+circular edge seamless with the rounded-square tile. The corner radius is 22% of the tile
+width. The tile retains the 824/1024 outer inset for the macOS icon grid; the
+transparent margin is outside the tile, not between a circular silhouette and the grid.
+Windows, Linux, and the favicon keep the circular mark with a 0.92 inset. At small sizes,
+the fine detail softens, but the silhouette and brand blue still carry it.
 
 Where the icon actually shows:
 
@@ -502,7 +505,9 @@ Where the icon actually shows:
   path is correct both in dev and when packaged.
 - **macOS** ignores that option - its windows have no icon - and reads the dock icon from the
   app bundle, which only exists once the app is packaged. `app.dock.setIcon()` covers the gap
-  for `pnpm dev`.
+  for `pnpm dev`, using `build/icon-mac.png` with the same tile as the bundle icon. Restart
+  dev after regenerating icons. An installed app needs to be rebuilt and replaced before
+  its bundle icon changes.
 - The renderer's favicon is cosmetic inside Electron, which does not apply a page favicon to
   the window. It is there for where the renderer is opened as a page: devtools and
   `electron-vite preview`.
