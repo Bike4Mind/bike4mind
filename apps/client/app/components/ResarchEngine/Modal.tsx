@@ -36,9 +36,6 @@ const ResearchEngineModal: FC<ResearchEngineModalButtonProps> = ({
               alignItems: 'center',
               justifyContent: 'center',
               padding: '6px 14px',
-              '@media (max-width: 600px)': {
-                width: '100%',
-              },
               borderRadius: '6px',
               border: '1px solid',
               borderColor: 'fileBrowser.selectAll.borderColor',
