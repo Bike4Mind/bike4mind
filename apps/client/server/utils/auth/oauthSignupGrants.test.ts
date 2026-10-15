@@ -127,7 +127,7 @@ describe('oauthSignupGrants', () => {
         expect.objectContaining({ reason: 'link test' })
       );
       expect(mockApplySignupDomainGrant).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'user-1', email: 'dee@partner.example', trigger: 'email-verification' })
+        expect.objectContaining({ userId: 'user-1', email: 'dee@partner.example', trigger: 'oauth-link-verification' })
       );
     });
 
@@ -149,7 +149,7 @@ describe('oauthSignupGrants', () => {
       ).resolves.toBeUndefined();
       expect(mockLoggerError).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
       expect(mockApplySignupDomainGrant).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'user-1', trigger: 'email-verification' })
+        expect.objectContaining({ userId: 'user-1', trigger: 'oauth-link-verification' })
       );
     });
   });

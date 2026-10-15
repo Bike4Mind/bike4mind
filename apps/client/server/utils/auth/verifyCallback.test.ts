@@ -1249,6 +1249,8 @@ describe('verifyCallback - pending free credits on account link', () => {
       { userId: 'u-pending', organizationId: 'org-1' },
       expect.anything()
     );
+    // Membership re-reads emailVerified, so the grant must follow the write that persists it.
+    expect(mockUpdateOne.mock.invocationCallOrder[0]).toBeLessThan(mockAddCredits.mock.invocationCallOrder[0]);
   });
 
   it('does not apply the domain grant on a plain link of an already-verified account', async () => {

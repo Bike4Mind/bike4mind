@@ -255,6 +255,10 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
       'user@example.com',
       'Okta account link (email verified)'
     );
+    // Membership re-reads emailVerified, so the grants must follow the write that persists it.
+    expect(mockUpdateOne.mock.invocationCallOrder[0]).toBeLessThan(
+      mockApplyOAuthLinkVerificationGrants.mock.invocationCallOrder[0]
+    );
   });
 
   it('applies the link verification grants only when the link promotes emailVerified', async () => {

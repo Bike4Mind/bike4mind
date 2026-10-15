@@ -754,13 +754,16 @@ describe('/api/otc/verify - existing user verification and pending free credits'
 
   it('applies the verified domain grant (credits and partner org) to an unverified existing user', async () => {
     partnerRuleGrant();
-    mockFindByEmail.mockResolvedValue(pendingUser());
+    const user = pendingUser();
+    mockFindByEmail.mockResolvedValue(user);
     mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
     const { req, res } = makeReqRes(DOMAIN_EMAIL);
 
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    // Reflected onto the doc the response serializes, so the client sees the grant without a refetch.
+    expect(user).toMatchObject({ currentCredits: 15_000, organizationId: 'org-partner' });
     expect(mockAddCredits).toHaveBeenCalledWith(
       expect.objectContaining({
         ownerId: 'u-existing',

@@ -74,7 +74,7 @@ export async function applyOAuthLinkVerificationGrants(
   reason: string
 ): Promise<void> {
   await releaseOAuthPendingFreeCredits(user, reason);
-  await applyDomainGrantSafely(user.id, verifiedEmail, 'email-verification');
+  await applyDomainGrantSafely(user.id, verifiedEmail, 'oauth-link-verification');
 }
 
 async function applyDomainGrantSafely(userId: string, email: string, trigger: SeatCeilingRaiseTrigger): Promise<void> {

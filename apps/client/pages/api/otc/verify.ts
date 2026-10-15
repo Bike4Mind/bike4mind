@@ -210,7 +210,7 @@ const handler = baseApi({ auth: false })
           const domainGrant = await applySignupDomainGrant({
             userId: existingUser.id,
             email: normalizedEmail,
-            trigger: 'email-verification',
+            trigger: 'otc-login-verification',
             logger: req.logger,
           });
           if (domainGrant.currentCredits !== null) existingUser.currentCredits = domainGrant.currentCredits;
