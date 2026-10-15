@@ -60,6 +60,8 @@ import {
   type BuildToolPromptArgs,
   type BuildToolsArgs,
 } from './tools/ToolBuilder';
+import type { VideoToolConfig } from './tools/implementation/videoGeneration';
+import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
@@ -6388,6 +6390,91 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockRestore();
 
       expect(toolAvailability).toBeTypeOf('object');
+    });
+  });
+
+  // The job-tool configs come from resolvers injected at this call site. sharedToolBuilder.jobToolGate.test.ts
+  // proves buildSharedTools offers a job tool only when its config is present, but it cannot prove
+  // ChatCompletionProcess actually calls the resolver and forwards the result - deleting either line would leave
+  // that suite green. Asserted against the args handed to buildTools, not the resolver in isolation.
+  describe('video/music tool-config resolvers threaded into buildTools', () => {
+    const runWithResolvers = async (opts: {
+      enabledTools: string[];
+      videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
+      musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
+    }) => {
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      buildToolsSpy.mockClear();
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = { ...startQuestParams, tools: opts.enabledTools, projectId: undefined, organizationId: undefined };
+      try {
+        await service.process({
+          body,
+          logger: mockLogger,
+          videoToolConfigResolver: opts.videoToolConfigResolver,
+          musicToolConfigResolver: opts.musicToolConfigResolver,
+        });
+        return buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined;
+      } finally {
+        buildToolsSpy.mockRestore();
+        buildToolPromptSpy.mockRestore();
+      }
+    };
+
+    it('calls musicToolConfigResolver and threads its config into buildTools', async () => {
+      const config = { usableModels: [], createJob: vi.fn() } as MusicToolConfig;
+      const resolver = vi.fn().mockResolvedValue(config);
+      const passed = await runWithResolvers({ enabledTools: ['music_generation'], musicToolConfigResolver: resolver });
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(passed?.config?.music_generation).toBe(config);
+    });
+
+    it('does not call the music resolver when music_generation is not enabled', async () => {
+      const resolver = vi.fn().mockResolvedValue(null);
+      const passed = await runWithResolvers({ enabledTools: [], musicToolConfigResolver: resolver });
+      expect(resolver).not.toHaveBeenCalled();
+      expect(passed?.config?.music_generation).toBeUndefined();
+    });
+
+    it('calls videoToolConfigResolver and threads its config into buildTools', async () => {
+      const config = { usableModels: [], createJob: vi.fn() } as VideoToolConfig;
+      const resolver = vi.fn().mockResolvedValue(config);
+      const passed = await runWithResolvers({ enabledTools: ['video_generation'], videoToolConfigResolver: resolver });
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(passed?.config?.video_generation).toBe(config);
+    });
+
+    it('does not call the video resolver when video_generation is not enabled', async () => {
+      const resolver = vi.fn().mockResolvedValue(null);
+      const passed = await runWithResolvers({ enabledTools: [], videoToolConfigResolver: resolver });
+      expect(resolver).not.toHaveBeenCalled();
+      expect(passed?.config?.video_generation).toBeUndefined();
     });
   });
 
