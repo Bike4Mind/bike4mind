@@ -312,7 +312,7 @@ describe('AnthropicBackend - stream ending before message_stop', () => {
     ]);
   });
 
-  it('keeps the provider output count when Stop lands after message_delta', async () => {
+  it('keeps the provider output count when Stop is observed after message_delta', async () => {
     const backend = buildBackend([
       [
         { type: 'message_start', message: { usage: { input_tokens: 80, output_tokens: 1 } } },
@@ -326,7 +326,9 @@ describe('AnthropicBackend - stream ending before message_stop', () => {
         { type: 'message_start', message: { usage: { input_tokens: 120, output_tokens: 1 } } },
         { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
         { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'p'.repeat(20) } },
-        // The terminal usage event arrives, then Stop lands before message_stop.
+        // The terminal usage event arrives; Stop is raised from the text callback above but
+        // only observed once the loop exits (the backend checks the signal after the loop,
+        // not per event), so the provider's own count stands.
         { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 40 } },
       ],
     ]);
