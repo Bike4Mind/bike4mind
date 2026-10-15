@@ -1,7 +1,10 @@
-import { adminSettingsRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { userService } from '@bike4mind/services';
-import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
+import {
+  applyEmailVerifiedGrants,
+  isEligibleForFreeCredits,
+  releaseVerifiedPendingFreeCredits,
+  type PendingFreeCreditUser,
+} from '@server/auth/emailVerifiedGrants';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
 
 /**
@@ -10,19 +13,12 @@ import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
  * a grant failure must never fail a login.
  */
 
-type PendingFreeCreditUser = { id: string; tags?: readonly string[] | null; pendingCreditGrant?: number | null };
-
 /**
  * Whether a brand-new self-serve OAuth account should carry the deferred flat grant. Applies the
  * same disposable-email gate as registerUser. A settings read failure withholds the grant.
  */
 export async function isEligibleForOAuthFreeCredits(email: string): Promise<boolean> {
-  try {
-    return !(await userService.shouldBlockDisposableEmail(email, { adminSettings: adminSettingsRepository }));
-  } catch (error) {
-    Logger.globalInstance.error('OAuth signup free-credit eligibility check failed; withholding the grant', error);
-    return false;
-  }
+  return isEligibleForFreeCredits(email, Logger.globalInstance);
 }
 
 /**

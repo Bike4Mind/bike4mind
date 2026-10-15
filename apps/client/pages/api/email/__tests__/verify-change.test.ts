@@ -44,8 +44,10 @@ vi.mock('@server/auth/endUserSessions', () => ({
 }));
 
 const mockReleaseVerifiedPending = vi.fn();
+const mockIsEligibleForFreeCredits = vi.fn();
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   releaseVerifiedPendingFreeCredits: (...a: unknown[]) => mockReleaseVerifiedPending(...a),
+  isEligibleForFreeCredits: (...a: unknown[]) => mockIsEligibleForFreeCredits(...a),
 }));
 const mockApplySignupDomainGrant = vi.fn();
 vi.mock('@server/entitlements/signupDomainGrant', () => ({
@@ -87,6 +89,7 @@ describe('POST /api/email/verify-change', () => {
     mockFindByPendingToken.mockResolvedValue(USER);
     mockVerifyEmailChange.mockResolvedValue('changed');
     mockSessionEnded.mockResolvedValue(undefined);
+    mockIsEligibleForFreeCredits.mockResolvedValue(true);
   });
 
   it('signs the user out everywhere once the new email is confirmed', async () => {
@@ -104,6 +107,16 @@ describe('POST /api/email/verify-change', () => {
     expect(mockReleaseVerifiedPending).toHaveBeenCalledTimes(1);
     expect(mockReleaseVerifiedPending).toHaveBeenCalledWith(USER, 'email change (email verified)', req.logger);
     expect(mockApplySignupDomainGrant).not.toHaveBeenCalled();
+  });
+
+  it('withholds the deferred free credits when the new address is disposable', async () => {
+    mockIsEligibleForFreeCredits.mockResolvedValue(false);
+    const { req, res } = fire();
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockIsEligibleForFreeCredits).toHaveBeenCalledWith('new@example.com', req.logger);
+    expect(mockReleaseVerifiedPending).not.toHaveBeenCalled();
   });
 
   it('releases nothing when the new address is unavailable', async () => {

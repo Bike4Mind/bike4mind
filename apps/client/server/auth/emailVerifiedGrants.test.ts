@@ -23,7 +23,7 @@ vi.mock('@server/entitlements/signupDomainGrant', () => ({
 import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from './emailVerifiedGrants';
 
 const mockLoggerError = vi.fn();
-const logger = { error: (...a: unknown[]) => mockLoggerError(...a) } as unknown as Logger;
+const logger = { info: vi.fn(), error: (...a: unknown[]) => mockLoggerError(...a) } as unknown as Logger;
 
 const taggedUser = { id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG, 'Customer'], pendingCreditGrant: 100 };
 const releasedResult = {
@@ -83,7 +83,7 @@ describe('emailVerifiedGrants', () => {
       await expect(releaseVerifiedPendingFreeCredits(taggedUser, 'test', logger)).resolves.toEqual({
         creditsGranted: 100,
         currentCredits: 100,
-        tags: ['Customer'],
+        tags: null,
       });
       expect(mockLoggerError).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
     });
@@ -166,6 +166,8 @@ describe('emailVerifiedGrants', () => {
       const result = await applyEmailVerifiedGrants(params);
 
       expect(result.creditsGranted).toBe(100);
+      // The tag is still persisted, so callers must not reflect its removal.
+      expect(result.tags).toBeNull();
       expect(mockApplySignupDomainGrant).toHaveBeenCalled();
     });
 

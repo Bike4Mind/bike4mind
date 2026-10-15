@@ -25,7 +25,7 @@ vi.mock('@server/entitlements/signupDomainGrant', () => ({
 
 const mockLoggerError = vi.fn();
 vi.mock('@bike4mind/observability', () => ({
-  Logger: { globalInstance: { error: (...a: unknown[]) => mockLoggerError(...a) } },
+  Logger: { globalInstance: { info: vi.fn(), error: (...a: unknown[]) => mockLoggerError(...a) } },
 }));
 
 import {
