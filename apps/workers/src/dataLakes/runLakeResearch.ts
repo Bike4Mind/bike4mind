@@ -17,7 +17,7 @@ import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import type { ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
-import { lakeConfigAuditDb } from './lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 /**
  * Binds one queued research run (#1682) to the real world and executes it: the admin-configured

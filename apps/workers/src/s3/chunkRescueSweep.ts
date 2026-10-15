@@ -39,7 +39,7 @@ import {
   resolvePlatformOnlyMembership,
   toChunkScanConvergencePause,
   type PausableLake,
-} from '@server/dataLakes/convergencePauseScope';
+} from '@workers/dataLakes/convergencePauseScope';
 
 /**
  * How many rescue sends are in flight at once, matching driveLakeResyncPoll's sweep. Governs BOTH

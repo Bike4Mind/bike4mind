@@ -30,7 +30,7 @@ vi.mock('@bike4mind/database', () => ({
     setLakeMemoryCursor: (...a: unknown[]) => setLakeMemoryCursorMock(...a),
   },
 }));
-vi.mock('@server/dataLakes/extractLakeMemory', () => ({
+vi.mock('@workers/dataLakes/extractLakeMemory', () => ({
   extractLakeMemoryForBatch: (...a: unknown[]) => extractMock(...a),
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => sendToQueueMock(...a) }));
