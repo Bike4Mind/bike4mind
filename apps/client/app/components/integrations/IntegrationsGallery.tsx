@@ -6,6 +6,7 @@ import {
   IntegrationsEvents,
   MODEL_PROVIDERS,
   MODEL_PROVIDER_KIND_LABELS,
+  buildIntegrationsSearchMetadata,
   canAccessTavern,
   normalizeIntegrationsSearchQuery,
   type DerivedIntegration,
@@ -323,7 +324,7 @@ const IntegrationsGallery = ({ source = 'direct' }: { source?: IntegrationsPageS
       lastLoggedQuery.current = normalized;
       logEvent({
         type: IntegrationsEvents.INTEGRATIONS_SEARCH_PERFORMED,
-        metadata: { query: normalized, resultCount, tab },
+        metadata: buildIntegrationsSearchMetadata(query, resultCount, tab),
       });
     }, SEARCH_SETTLE_MS);
     return () => clearTimeout(timer);

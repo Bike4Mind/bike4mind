@@ -34,6 +34,24 @@ export const normalizeIntegrationsSearchQuery = (query: string): string =>
 export type IntegrationsGalleryTab = 'integrations' | 'models';
 export type IntegrationsGalleryFilter = 'category' | 'status' | 'kind';
 
+/**
+ * Metadata of a settled search. A query holding '@' is most likely an email address typed into
+ * the wrong box, so its text is withheld (`redacted`) and only the counts are recorded.
+ */
+export type IntegrationsSearchMetadata = { resultCount: number; tab: IntegrationsGalleryTab } & (
+  { query: string; redacted?: undefined } | { redacted: true; query?: undefined }
+);
+
+/** The metadata to record for a settled search; checks the raw text, since normalizing truncates it. */
+export const buildIntegrationsSearchMetadata = (
+  rawQuery: string,
+  resultCount: number,
+  tab: IntegrationsGalleryTab
+): IntegrationsSearchMetadata =>
+  rawQuery.includes('@')
+    ? { redacted: true, resultCount, tab }
+    : { query: normalizeIntegrationsSearchQuery(rawQuery), resultCount, tab };
+
 interface IIntegrationsPageViewedEvent extends IBaseEvent {
   type: IntegrationsEvents.INTEGRATIONS_PAGE_VIEWED;
   // Not `source`: CounterLog reports group every event by `metadata.source` as a CompletionSource
@@ -43,16 +61,14 @@ interface IIntegrationsPageViewedEvent extends IBaseEvent {
   };
 }
 
-/** Fired once the query settles, not per keystroke. */
+/**
+ * Fired once the query settles, not per keystroke. `query` is normalized by
+ * normalizeIntegrationsSearchQuery and absent when `redacted`; `resultCount` is the entries shown
+ * for the query on the active tab, under its active filters.
+ */
 interface IIntegrationsSearchPerformedEvent extends IBaseEvent {
   type: IntegrationsEvents.INTEGRATIONS_SEARCH_PERFORMED;
-  metadata: {
-    /** Normalized by normalizeIntegrationsSearchQuery. */
-    query: string;
-    /** Entries shown for the query on the active tab, under its active filters. */
-    resultCount: number;
-    tab: IntegrationsGalleryTab;
-  };
+  metadata: IntegrationsSearchMetadata;
 }
 
 interface IIntegrationsFilterChangedEvent extends IBaseEvent {

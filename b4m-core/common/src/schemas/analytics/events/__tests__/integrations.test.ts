@@ -3,6 +3,7 @@ import {
   INTEGRATIONS_PAGE_SOURCES,
   INTEGRATIONS_SEARCH_QUERY_MAX_LENGTH,
   IntegrationsEvents,
+  buildIntegrationsSearchMetadata,
   isIntegrationsPageSource,
   normalizeIntegrationsSearchQuery,
 } from '../integrations';
@@ -40,4 +41,24 @@ describe('normalizeIntegrationsSearchQuery', () => {
   it('reduces whitespace alone to an empty query', () => {
     expect(normalizeIntegrationsSearchQuery('   ')).toBe('');
   });
+});
+
+describe('buildIntegrationsSearchMetadata', () => {
+  it('records the normalized query with what it found', () => {
+    expect(buildIntegrationsSearchMetadata('  HubSpot CRM ', 2, 'integrations')).toEqual({
+      query: 'hubspot crm',
+      resultCount: 2,
+      tab: 'integrations',
+    });
+  });
+
+  it.each(['ada@example.com', '  Ada@Example.COM ', '@ada', 'mail ada@', `${'a'.repeat(80)}@example.com`])(
+    'withholds a query containing an @ (%s) and keeps only the counts',
+    query => {
+      const metadata = buildIntegrationsSearchMetadata(query, 0, 'models');
+      expect(metadata).toEqual({ redacted: true, resultCount: 0, tab: 'models' });
+      expect(JSON.stringify(metadata)).not.toContain('example');
+      expect('query' in metadata).toBe(false);
+    }
+  );
 });

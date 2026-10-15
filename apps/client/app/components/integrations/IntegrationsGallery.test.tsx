@@ -401,6 +401,25 @@ describe('IntegrationsGallery analytics', () => {
     }
   });
 
+  it('never records the text of a query holding an @, only that a search settled and what it found', () => {
+    vi.useFakeTimers();
+    try {
+      renderGallery();
+      fireEvent.change(screen.getByTestId('integrations-search-input'), { target: { value: ' Ada@Example.com ' } });
+      act(() => vi.advanceTimersByTime(SEARCH_SETTLE_MS));
+
+      expect(logged(IntegrationsEvents.INTEGRATIONS_SEARCH_PERFORMED)).toEqual([
+        {
+          type: IntegrationsEvents.INTEGRATIONS_SEARCH_PERFORMED,
+          metadata: { redacted: true, resultCount: 0, tab: 'integrations' },
+        },
+      ]);
+      expect(JSON.stringify(h.logEvent.mock.calls)).not.toMatch(/ada@|example/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('records each filter pick, but not the reset a tab switch performs', async () => {
     renderGallery();
     await pick('status', 'connected');
