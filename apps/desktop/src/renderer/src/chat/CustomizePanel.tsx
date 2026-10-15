@@ -15,6 +15,7 @@ import { entryAttentionChip, EntrySection, type ConfigEntry } from './ConfigEntr
 import { CloseIcon, ServerIcon, SlidersIcon, SparkIcon } from './icons';
 import { McpServersSettings } from './McpServersSettings';
 import { NavItem } from './SessionList';
+import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
 import { useMcpServers, type McpServersController } from './useMcpServers';
 import { useSkills } from './useSkills';
@@ -78,8 +79,13 @@ function SkillGroup({ title, skills, empty }: { title: string; skills: SkillSumm
                     {skill.description}
                   </Typography>
                 </Box>
-                <Chip size="sm" variant="plain" color={skill.source === 'project' ? 'warning' : 'neutral'}>
-                  {skill.source === 'project' ? 'Project' : 'Global'}
+                <Chip
+                  size="sm"
+                  variant="plain"
+                  color={skillChipColor(skill.source)}
+                  data-testid="customize-skill-chip"
+                >
+                  {skillSourceLabel(skill.source)}
                 </Chip>
               </Stack>
             </ListItem>
@@ -131,7 +137,11 @@ function SkillsSettings({ sessionId }: { sessionId: string | null }) {
           </Stack>
         )}
       </Box>
-      <SkillGroup title="Bike4Mind skills" skills={[]} empty="No Bike4Mind account skills loaded." />
+      <SkillGroup
+        title="Bike4Mind skills"
+        skills={skills.filter(skill => skill.source === 'account')}
+        empty="No Bike4Mind account skills loaded."
+      />
     </Stack>
   );
 }

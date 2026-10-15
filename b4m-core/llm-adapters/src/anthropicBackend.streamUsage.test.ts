@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, estimateStreamedOutputTokens } from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
 import type { CompletionInfo, ICompletionOptionTools } from './backend';
 import { DEGENERATE_STREAM_STOP_REASON } from './degenerateStreamGuard';
@@ -22,11 +22,17 @@ const textDelta = (text: string) => ({ type: 'content_block_delta', index: 0, de
  */
 function degenerateStream(startUsage: Usage, onAbort: 'end' | 'throw') {
   let aborted = false;
+  const unit = '</invoke>\n';
   return {
-    [Symbol.asyncIterator]: async function* () {
+    /** Chars of text streamed before the abort landed. */
+    streamedChars: 0,
+    [Symbol.asyncIterator]: async function* (this: { streamedChars: number }) {
       yield messageStart(startUsage);
       yield textStart;
-      for (let i = 0; i < 2000 && !aborted; i++) yield textDelta('</invoke>\n');
+      for (let i = 0; i < 2000 && !aborted; i++) {
+        this.streamedChars += unit.length;
+        yield textDelta(unit);
+      }
       if (aborted && onAbort === 'throw') {
         const err = new Error('Request was aborted.');
         err.name = 'AbortError';
@@ -106,6 +112,7 @@ describe('AnthropicBackend - usage on a degenerate stream', () => {
 
     expect(last.stopReason).toBe(DEGENERATE_STREAM_STOP_REASON);
     expect(last.inputTokens).toBe(10);
+    // A first call leaves output to the caller's own estimate (see withAbortedOutputEstimate).
     expect(last.outputTokens).toBe(0);
     expect(last.cacheReadInputTokens).toBe(5000);
     expect(last.cacheCreationInputTokens).toBe(200);
@@ -114,19 +121,34 @@ describe('AnthropicBackend - usage on a degenerate stream', () => {
     ]);
   });
 
-  it('reports the prior calls plus this prompt when the degeneration abort throws', async () => {
-    const last = await run(
-      [toolTurn, degenerateStream({ input_tokens: 20, output_tokens: 1, cache_read_input_tokens: 3100 }, 'throw')],
-      [weatherTool]
-    );
+  it('estimates the output of a degenerate second call from what it streamed, when the abort throws', async () => {
+    const stream = degenerateStream({ input_tokens: 20, output_tokens: 1, cache_read_input_tokens: 3100 }, 'throw');
+    const last = await run([toolTurn, stream], [weatherTool]);
 
+    // message_delta never came, but the provider billed the streamed repetition.
+    const estimated = estimateStreamedOutputTokens(stream.streamedChars, ChatModels.CLAUDE_4_8_OPUS);
+    expect(estimated).toBeGreaterThan(0);
     expect(last.stopReason).toBe(DEGENERATE_STREAM_STOP_REASON);
     expect(last.inputTokens).toBe(100);
-    expect(last.outputTokens).toBe(15);
+    expect(last.outputTokens).toBe(15 + estimated);
     expect(last.cacheReadInputTokens).toBe(6100);
     expect(last.turnUsage).toEqual([
       { inputTokens: 80, outputTokens: 15, cacheReadInputTokens: 3000 },
-      { inputTokens: 20, outputTokens: 0, cacheReadInputTokens: 3100 },
+      { inputTokens: 20, outputTokens: estimated, cacheReadInputTokens: 3100 },
+    ]);
+  });
+
+  it('estimates the output of a degenerate second call from what it streamed, when the stream ends', async () => {
+    const stream = degenerateStream({ input_tokens: 20, output_tokens: 1 }, 'end');
+    const last = await run([toolTurn, stream], [weatherTool]);
+
+    const estimated = estimateStreamedOutputTokens(stream.streamedChars, ChatModels.CLAUDE_4_8_OPUS);
+    expect(estimated).toBeGreaterThan(0);
+    expect(last.stopReason).toBe(DEGENERATE_STREAM_STOP_REASON);
+    expect(last.outputTokens).toBe(15 + estimated);
+    expect(last.turnUsage).toEqual([
+      { inputTokens: 80, outputTokens: 15, cacheReadInputTokens: 3000 },
+      { inputTokens: 20, outputTokens: estimated },
     ]);
   });
 });

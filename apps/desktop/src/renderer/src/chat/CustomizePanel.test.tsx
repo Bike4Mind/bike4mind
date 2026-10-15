@@ -164,6 +164,21 @@ describe('the Customize screen', () => {
     expect(text(container)).toContain('No Bike4Mind account skills loaded.');
   });
 
+  it('lists account skills under Bike4Mind skills with a Bike4Mind chip, and not under Your skills', () => {
+    skills.state.skills = [
+      ...skills.state.skills,
+      { name: 'web-summary', description: 'Summarise', source: 'account', filePath: 'b4m:/api/skills/a1' },
+    ];
+    renderScreen();
+    const account = allByTestId('skill-group').find(group => text(group)?.includes('Bike4Mind skills'));
+    expect(text(account)).toContain('/web-summary');
+    expect(text(account)).not.toContain('No Bike4Mind account skills loaded.');
+    expect(text(byTestId('user-skill-scopes'))).not.toContain('web-summary');
+
+    const row = allByTestId('customize-skill-row').find(candidate => text(candidate)?.includes('/web-summary'));
+    expect(text(row?.querySelector('[data-testid="customize-skill-chip"]'))).toBe('Bike4Mind');
+  });
+
   it('switches to MCP and preserves its inline controls', () => {
     renderScreen();
     act(() => byTestId('customize-mcp-tab')?.click());

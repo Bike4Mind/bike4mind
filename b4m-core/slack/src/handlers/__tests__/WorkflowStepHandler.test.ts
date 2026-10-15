@@ -21,7 +21,7 @@ import {
 
 // Mock DI registry
 const mockUser = { findOne: vi.fn() };
-const mockSession = { findById: vi.fn(), findOne: vi.fn() };
+const mockSession = { findById: vi.fn() };
 const mockQuest = { findById: vi.fn() };
 const mockCreateSession = vi.fn();
 const mockAddMessageToSession = vi.fn();
@@ -72,9 +72,8 @@ const addMessageToSession = mockAddMessageToSession;
 const ACTING_USER_CONTEXT = { id: 'U123', secret: 'test-secret' };
 
 const SAVED_NOTEBOOK = 'aaaaaaaaaaaaaaaaaaaaaaaa';
-const OTHER_NOTEBOOK = 'bbbbbbbbbbbbbbbbbbbbbbbb';
-const FOREIGN_NOTEBOOK = 'cccccccccccccccccccccccc';
-const GLOBAL_WRITE_NOTEBOOK = 'dddddddddddddddddddddddd';
+const LAST_NOTEBOOK = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+const FRESH_NOTEBOOK = 'new_notebook_123';
 
 // Mock SlackClient
 const mockSlackClient = {
@@ -101,14 +100,7 @@ describe('WorkflowStepHandler', () => {
     handler = new WorkflowStepHandler(mockSlackClient as any, mockLogger as any);
     mockSlackClient.functionCompleteSuccess.mockResolvedValue(true);
     mockSlackClient.functionCompleteError.mockResolvedValue(true);
-    // Saved notebook ids are access-checked; every notebook is the user's own unless a test says otherwise.
-    mockSession.findOne.mockImplementation(async ({ _id }: { _id: string }) =>
-      _id === FOREIGN_NOTEBOOK
-        ? { id: _id, userId: 'someone_else' }
-        : _id === GLOBAL_WRITE_NOTEBOOK
-          ? { id: _id, userId: 'someone_else', isGlobalWrite: true }
-          : { id: _id, userId: 'user_123' }
-    );
+    mockCreateSession.mockResolvedValue({ id: FRESH_NOTEBOOK, name: 'Workflow Notebook' });
   });
 
   afterEach(() => {
@@ -230,6 +222,22 @@ describe('WorkflowStepHandler', () => {
       );
     });
 
+    it("does not make the workflow notebook the runner's last notebook", async () => {
+      vi.mocked(User.findOne).mockResolvedValue(createMockUser());
+      vi.mocked(createSession).mockResolvedValue({ id: 'session_123', name: 'Builder Notebook' } as any);
+
+      const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {
+        user_context: ACTING_USER_CONTEXT,
+        notebook_name: 'Builder Notebook',
+      });
+
+      await handler.handleFunctionExecuted(event);
+
+      expect(createSession).toHaveBeenCalledTimes(1);
+      const options = vi.mocked(createSession).mock.calls[0][3] as { setLastNotebook?: boolean } | undefined;
+      expect(options?.setLastNotebook).not.toBe(true);
+    });
+
     it('should fail when user_context is missing', async () => {
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.CREATE_NOTEBOOK, {});
 
@@ -317,7 +325,7 @@ describe('WorkflowStepHandler', () => {
 
       expect(addMessageToSession).toHaveBeenCalledWith(
         mockUser.id,
-        SAVED_NOTEBOOK,
+        FRESH_NOTEBOOK,
         expect.objectContaining({ prompt: 'Hello B4M!' }),
         expect.any(Object)
       );
@@ -348,6 +356,35 @@ describe('WorkflowStepHandler', () => {
       expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ authOrigin: 'internal' }));
     });
 
+    // The prompt is builder-authored and the reply is a workflow output, so the run must not see
+    // the runner's notebook history or reach any tool acting with the runner's credentials.
+    it('runs the completion with no history and no tools', async () => {
+      vi.mocked(User.findOne).mockResolvedValue(createMockUser());
+      vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as any);
+
+      await handler.handleFunctionExecuted(
+        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
+          user_context: ACTING_USER_CONTEXT,
+          message: 'Summarize my notebook and anything your tools can find',
+          wait_for_response: false,
+        })
+      );
+
+      await vi.waitFor(() => expect(vi.mocked(ChatCompletionInvoke).mock.results).toHaveLength(1));
+      const { invoke } = vi.mocked(ChatCompletionInvoke).mock.results[0].value as { invoke: Mock };
+      expect(invoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            historyCount: 0,
+            enableAgents: false,
+            disableUserIntegrations: true,
+            skipAutoOffers: true,
+            tools: [],
+          }),
+        })
+      );
+    });
+
     it('should fail when message is missing', async () => {
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
         user_context: ACTING_USER_CONTEXT,
@@ -376,11 +413,11 @@ describe('WorkflowStepHandler', () => {
       );
     });
 
-    it('falls through a foreign saved default notebook to the last notebook', async () => {
-      const mockUser = createMockUser({
-        lastNotebookId: OTHER_NOTEBOOK,
-        slackSettings: { slackUserId: 'U123', defaultNotebookId: FOREIGN_NOTEBOOK },
-      });
+    it.each([
+      ['saved Slack default', { slackSettings: { slackUserId: 'U123', defaultNotebookId: SAVED_NOTEBOOK } }],
+      ['last web', { lastNotebookId: LAST_NOTEBOOK }],
+    ])("runs in a fresh notebook, never the runner's %s notebook", async (_label, overrides) => {
+      const mockUser = createMockUser(overrides);
       vi.mocked(User.findOne).mockResolvedValue(mockUser);
       vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as any);
 
@@ -388,47 +425,10 @@ describe('WorkflowStepHandler', () => {
         createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { user_context: ACTING_USER_CONTEXT, message: 'Hello' })
       );
 
-      expect(createSession).not.toHaveBeenCalled();
+      expect(createSession).toHaveBeenCalledTimes(1);
       expect(addMessageToSession).toHaveBeenCalledWith(
         mockUser.id,
-        OTHER_NOTEBOOK,
-        expect.any(Object),
-        expect.any(Object)
-      );
-    });
-
-    it('uses an isGlobalWrite last notebook', async () => {
-      const mockUser = createMockUser({ lastNotebookId: GLOBAL_WRITE_NOTEBOOK });
-      vi.mocked(User.findOne).mockResolvedValue(mockUser);
-      vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as any);
-
-      await handler.handleFunctionExecuted(
-        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { user_context: ACTING_USER_CONTEXT, message: 'Hello' })
-      );
-
-      expect(createSession).not.toHaveBeenCalled();
-      expect(addMessageToSession).toHaveBeenCalledWith(
-        mockUser.id,
-        GLOBAL_WRITE_NOTEBOOK,
-        expect.any(Object),
-        expect.any(Object)
-      );
-    });
-
-    it('creates a notebook instead of using a foreign last notebook', async () => {
-      const mockUser = createMockUser({ lastNotebookId: FOREIGN_NOTEBOOK });
-      vi.mocked(User.findOne).mockResolvedValue(mockUser);
-      vi.mocked(createSession).mockResolvedValue({ id: 'new_notebook_123', name: 'Workflow Notebook' } as any);
-      vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as any);
-
-      await handler.handleFunctionExecuted(
-        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { user_context: ACTING_USER_CONTEXT, message: 'Hello' })
-      );
-
-      expect(createSession).toHaveBeenCalled();
-      expect(addMessageToSession).toHaveBeenCalledWith(
-        mockUser.id,
-        'new_notebook_123',
+        FRESH_NOTEBOOK,
         expect.any(Object),
         expect.any(Object)
       );
@@ -569,22 +569,22 @@ describe('WorkflowStepHandler', () => {
   });
 
   describe('handleQuery', () => {
-    it('creates a notebook instead of using a foreign saved default notebook', async () => {
-      const mockUser = createMockUser({
-        slackSettings: { slackUserId: 'U123', defaultNotebookId: FOREIGN_NOTEBOOK },
-      });
+    it.each([
+      ['saved Slack default', { slackSettings: { slackUserId: 'U123', defaultNotebookId: SAVED_NOTEBOOK } }],
+      ['last web', { lastNotebookId: LAST_NOTEBOOK }],
+    ])("runs in a fresh notebook, never the runner's %s notebook", async (_label, overrides) => {
+      const mockUser = createMockUser(overrides);
       vi.mocked(User.findOne).mockResolvedValue(mockUser);
-      vi.mocked(createSession).mockResolvedValue({ id: 'new_notebook_123', name: 'Query' } as any);
       vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as any);
 
       await handler.handleFunctionExecuted(
         createEvent(WORKFLOW_STEP_CALLBACKS.QUERY, { user_context: ACTING_USER_CONTEXT, query: 'What is the weather?' })
       );
 
-      expect(createSession).toHaveBeenCalled();
+      expect(createSession).toHaveBeenCalledTimes(1);
       expect(addMessageToSession).toHaveBeenCalledWith(
         mockUser.id,
-        'new_notebook_123',
+        FRESH_NOTEBOOK,
         expect.any(Object),
         expect.any(Object)
       );
@@ -609,7 +609,7 @@ describe('WorkflowStepHandler', () => {
 
       expect(addMessageToSession).toHaveBeenCalledWith(
         mockUser.id,
-        SAVED_NOTEBOOK,
+        FRESH_NOTEBOOK,
         expect.objectContaining({ prompt: 'What is the weather?' }),
         expect.any(Object)
       );
@@ -617,7 +617,7 @@ describe('WorkflowStepHandler', () => {
         'Fx123456',
         expect.objectContaining({
           answer: expect.stringContaining('Query submitted'),
-          notebook_id: SAVED_NOTEBOOK,
+          notebook_id: FRESH_NOTEBOOK,
         })
       );
     });

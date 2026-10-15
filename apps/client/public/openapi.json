@@ -14656,7 +14656,8 @@
       "post": {
         "operationId": "generateMusic",
         "summary": "Generate background music",
-        "description": "Generates an instrumental or vocal background-music track from a text prompt. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "**Deprecated, sunset 2027-01-15.** Use `/api/v1/music-generations` instead. Generates an instrumental or vocal background-music track from a text prompt. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "deprecated": true,
         "tags": [
           "Audio"
         ],
@@ -14708,6 +14709,24 @@
               },
               "X-B4M-Audio-File-Url": {
                 "description": "Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Deprecation": {
+                "description": "RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Link": {
+                "description": "RFC 8288: the replacement endpoint (`rel=\"successor-version\"`). Always `</api/v1/music-generations>; rel=\"successor-version\"` on this endpoint.",
                 "schema": {
                   "type": "string"
                 }
@@ -14826,6 +14845,24 @@
                   "type": "string"
                 }
               },
+              "Deprecation": {
+                "description": "RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Link": {
+                "description": "RFC 8288: the replacement endpoint (`rel=\"successor-version\"`). Always `</api/v1/music-generations>; rel=\"successor-version\"` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-RateLimit-Limit-Minute": {
                 "description": "Request quota per minute.",
                 "schema": {
@@ -14866,16 +14903,27 @@
           },
           "400": {
             "description": "The billing user or organization could not be resolved.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Deprecation": {
+                "description": "RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Link": {
+                "description": "RFC 8288: the replacement endpoint (`rel=\"successor-version\"`). Always `</api/v1/music-generations>; rel=\"successor-version\"` on this endpoint.",
                 "schema": {
                   "type": "string"
                 }
@@ -14914,6 +14962,13 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -14980,16 +15035,99 @@
           },
           "413": {
             "description": "The audio was generated (and billed) and exceeds the response ceiling, and offloading it to storage failed. Retry, or request shorter output.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Deprecation": {
+                "description": "RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Link": {
+                "description": "RFC 8288: the replacement endpoint (`rel=\"successor-version\"`). Always `</api/v1/music-generations>; rel=\"successor-version\"` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/generateMusicResponse413"
                 }
               }
-            },
+            }
+          },
+          "422": {
+            "description": "Request body failed validation, or the caller cannot afford the track - the latter is tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted).",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Deprecation": {
+                "description": "RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Link": {
+                "description": "RFC 8288: the replacement endpoint (`rel=\"successor-version\"`). Always `</api/v1/music-generations>; rel=\"successor-version\"` on this endpoint.",
                 "schema": {
                   "type": "string"
                 }
@@ -15030,74 +15168,38 @@
                   "type": "integer"
                 }
               }
-            }
-          },
-          "422": {
-            "description": "Request body failed validation, or the caller cannot afford the track - the latter is tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted).",
+            },
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/generateMusicResponse422"
                 }
               }
-            },
-            "headers": {
-              "X-Request-ID": {
-                "description": "Correlation id for this request; safe to log and quote in support requests.",
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "X-RateLimit-Limit-Minute": {
-                "description": "Request quota per minute.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Remaining-Minute": {
-                "description": "Requests remaining in the current minute.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Reset-Minute": {
-                "description": "Unix epoch (seconds) when the minute window resets.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Limit-Day": {
-                "description": "Request quota per day.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Remaining-Day": {
-                "description": "Requests remaining in the current day.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Reset-Day": {
-                "description": "Unix epoch (seconds) when the day window resets.",
-                "schema": {
-                  "type": "integer"
-                }
-              }
             }
           },
           "502": {
             "description": "The provider failed to generate the track; reserved credits are refunded.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Deprecation": {
+                "description": "RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Link": {
+                "description": "RFC 8288: the replacement endpoint (`rel=\"successor-version\"`). Always `</api/v1/music-generations>; rel=\"successor-version\"` on this endpoint.",
                 "schema": {
                   "type": "string"
                 }
@@ -15136,22 +15238,40 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
           },
           "503": {
             "description": "No provider API key is configured for this deployment.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Deprecation": {
+                "description": "RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Sunset": {
+                "description": "RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Link": {
+                "description": "RFC 8288: the replacement endpoint (`rel=\"successor-version\"`). Always `</api/v1/music-generations>; rel=\"successor-version\"` on this endpoint.",
                 "schema": {
                   "type": "string"
                 }
@@ -15190,6 +15310,13 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -35438,7 +35565,7 @@
     },
     {
       "name": "Audio",
-      "description": "Speech, music, and sound-effect generation. For music, prefer `POST /api/v1/music-generations` over `/api/ai/music`."
+      "description": "Speech, music, and sound-effect generation. For music, use `POST /api/v1/music-generations`; `/api/ai/music` is deprecated."
     },
     {
       "name": "Music",
