@@ -151,18 +151,21 @@ const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'ni
 
 const ALWAYS_OUTBOUND = new Set(['scp', 'sftp', 'ftp', 'nc', 'ncat', 'netcat', 'socat', 'telnet', 'ssh']);
 
-// `-K` reads options from a file, which can hold `--data`.
-const CURL_SENDS = /^(-d|--data.*|-F|--form.*|-T|--upload-file|--json|-K|--config)$/;
-const WGET_SENDS = /^--(post|body)-(data|file)$/;
+// `-K` reads options from a file, which can hold `--data`; the `--url-query` and `--variable`
+// families read one into the URL, and `--expand-*` runs a template over variables.
+const CURL_SENDS =
+  /^(-d|--data.*|-F|--form.*|-T|--upload-file|--json|-K|--config|--url-query|--variable|--expand-.*)$/;
+// GNU wget accepts any unambiguous prefix, so `--post-f` means `--post-file`.
+const WGET_SENDS = /^--(post|body)/;
 
 /** Options that run a script given inline, which can open a socket no scan of the text sees. */
-const DASH_C = /^-[a-zA-Z]*c$/;
+const DASH_C = /^-[a-zA-Z]*c/;
 const INLINE_SCRIPT: Record<string, RegExp> = {
-  node: /^(-e|-p|--eval|--print)(=|$)/,
+  node: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
   ruby: /^-[a-zA-Z]*e$/,
   perl: /^-[a-zA-Z]*[eE]$/,
   php: /^-r$/,
-  bun: /^(-e|--eval)(=|$)/,
+  bun: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
   osascript: /^-e$/,
   sh: DASH_C,
   bash: DASH_C,
@@ -173,13 +176,30 @@ const INLINE_SCRIPT: Record<string, RegExp> = {
 /** Interpreters that run a script fed on stdin when given no script file: `python3 - <<'EOF'`, `echo x | sh`. */
 const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zsh|dash)$/;
 
+/** Arguments that name the command's own standard input rather than a script file. */
+const STDIN_SCRIPT_ARG = /^(\/(dev|proc\/self)\/fd\/[\d]+|\/dev\/stdin|[<>]\()/;
+
+/** Programs that resolve a name, so a computed argument can smuggle data into a query. */
+const RESOLVERS = new Set(['dig', 'nslookup', 'host']);
+
+/** Git's global options that take the value in the next argument, which is not a subcommand. */
+const GIT_OPTION_VALUES = /^--(git-dir|work-tree|namespace)(=|$)/;
+
+
+
 /**
  * Whether a command's stdin is fed: piped into, a heredoc or here-string, or a `<` redirect. A
  * here-string parses as the command's own child, and `cat <<'EOF' | python3` nests the pipe that
  * feeds python3 inside the heredoc redirect, where python3 is that pipeline's first command.
  */
 function readsStdin(node: Node): boolean {
-  if (node.namedChildren.some(child => child?.type === 'herestring_redirect')) return true;
+  if (
+    node.namedChildren.some(
+      child => child?.type === 'herestring_redirect' || child?.type === 'process_substitution'
+    )
+  ) {
+    return true;
+  }
   let self: Node = node;
   let parent = node.parent;
   if (parent?.type === 'redirected_statement') {
@@ -240,6 +260,8 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
       arg => CURL_SENDS.test(arg.split('=')[0]) || (!/^-[a-zA-Z]*X/.test(arg) && /^-[a-zA-Z]*[dFTK]/.test(arg))
     );
     if (flag) return `curl ${flag.split('=')[0]}`;
+    // A header read from a file (`-H @path`) sends what the file holds as a header value.
+    if (optionValue(args, ['-H', '--header'])?.startsWith('@')) return 'curl -H';
     // `-sX POST` sets the method too.
     const method = optionValue(
       args.map(arg => arg.replace(/^-[a-zA-Z]*X/, '-X')),
@@ -263,7 +285,9 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     const words: string[] = [];
     for (let i = 0; i < args.length; i++) {
       if (args[i] === '-C' || args[i] === '-c') i++;
-      else if (!args[i].startsWith('-')) words.push(args[i]);
+      else if (GIT_OPTION_VALUES.test(args[i])) {
+        if (!args[i].includes('=')) i++;
+      } else if (!args[i].startsWith('-')) words.push(args[i]);
     }
     const [sub, action] = words;
     if (sub === 'push' || sub === 'send-email') return `git ${sub}`;
@@ -275,6 +299,11 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     if ((sub === 'gist' && (action === 'create' || action === 'edit')) || (sub === 'release' && action === 'upload')) {
       return `gh ${sub} ${action}`;
     }
+    // Writing an issue, a pull request or a release posts text under the user's own account.
+    if ((sub === 'issue' || sub === 'pr') && (action === 'create' || action === 'comment' || action === 'edit')) {
+      return `gh ${sub} ${action}`;
+    }
+    if (sub === 'release' && action === 'create') return 'gh release create';
     const fields = args.some(arg => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(arg));
     return sub === 'api' && (fields || sendsBody(optionValue(args, ['-X', '--method']))) ? 'gh api' : null;
   }
@@ -289,9 +318,16 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   }
   if (program === 'deno') return args[0] === 'eval' ? 'deno eval' : null;
   if (program === 'eval') return 'eval';
-  const inline = args.find(arg => (/^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program])?.test(arg));
-  if (inline) return `${program} ${inline.split('=')[0]}`;
-  if (stdin && STDIN_SCRIPT.test(program) && args.every(arg => arg.startsWith('-'))) {
+  // A name built from a command substitution carries what it read into the lookup itself.
+  if (RESOLVERS.has(program) && computed) return `${program} with a computed argument`;
+  const inlineScript = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
+  const inline = inlineScript ? args.find(arg => inlineScript.test(arg)) : undefined;
+  if (inline) return `${program} ${(inlineScript?.exec(inline)?.[0] ?? inline.split('=')[0]).replace(/=$/, '')}`;
+  if (
+    stdin &&
+    STDIN_SCRIPT.test(program) &&
+    args.every(arg => arg.startsWith('-') || STDIN_SCRIPT_ARG.test(arg))
+  ) {
     return `${program} reading a script from stdin`;
   }
   if ((program === 'npm' || program === 'pnpm' || program === 'yarn') && args.includes('publish')) {
