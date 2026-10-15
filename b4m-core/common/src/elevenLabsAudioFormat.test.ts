@@ -4,6 +4,7 @@ import {
   elevenLabsContentTypeForFormat,
   isSupportedElevenLabsFormat,
 } from './elevenLabsAudioFormat';
+import { extensionFromMimeType } from './utils';
 
 describe('elevenLabsContentTypeForFormat', () => {
   it.each([
@@ -25,5 +26,9 @@ describe('elevenLabsContentTypeForFormat', () => {
 
   it('publishes exactly the content types it can map to', () => {
     expect(ELEVENLABS_AUDIO_CONTENT_TYPES).toEqual(['audio/mpeg', 'audio/opus', 'audio/L16', 'audio/basic']);
+  });
+
+  it.each(ELEVENLABS_AUDIO_CONTENT_TYPES)('resolves a file extension for %s, so the saved copy is not a .bin', type => {
+    expect(extensionFromMimeType(type)).toBeDefined();
   });
 });

@@ -392,15 +392,15 @@ describe('POST /api/ai/music', () => {
     expect(getEffectiveApiKey).not.toHaveBeenCalled();
   });
 
-  it('refuses a format the provider has no MIME type for with 422, before reserving or generating', async () => {
+  it.each(['alaw_8000', ''])('refuses format %j with 422, before reserving or generating', async format => {
     getSettingsValue.mockReturnValue(true);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
 
-    const { res, promise } = run({ prompt: 'thunder score', lengthMs: 30000, format: 'alaw_8000' });
+    const { res, promise } = run({ prompt: 'thunder score', lengthMs: 30000, format });
     await promise;
 
     expect(res._getStatusCode()).toBe(422);
-    expect(res._getJSONData().error).toMatch(/alaw_8000/);
+    expect(res._getJSONData().error).toContain(`'${format}'`);
     expect(userIncrement).not.toHaveBeenCalled();
     expect(generate).not.toHaveBeenCalled();
   });

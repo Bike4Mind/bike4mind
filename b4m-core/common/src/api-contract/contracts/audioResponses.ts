@@ -10,7 +10,7 @@ import { ELEVENLABS_AUDIO_CONTENT_TYPES } from '../../elevenLabsAudioFormat';
  * three must agree.
  */
 
-/** Every Content-Type a generated-audio endpoint's binary encoding can return. */
+/** Every Content-Type the music and sound-effects binary encodings can return (TTS declares its own). */
 export const GENERATED_AUDIO_CONTENT_TYPES = ELEVENLABS_AUDIO_CONTENT_TYPES;
 
 /**

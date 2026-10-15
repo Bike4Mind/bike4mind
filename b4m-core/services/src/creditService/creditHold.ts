@@ -45,7 +45,8 @@ const holderMethodsFor = (hold: Pick<CreditHold, 'ownerType'>, adapters: HolderA
 /**
  * Hold `requiredCredits` against the user, or against `organizationId`'s pool when given, BEFORE
  * any provider cost is incurred. Throws a 422 `insufficient_credits` when the member cap or the
- * pool cannot cover it; nothing has moved when it throws.
+ * pool cannot cover it. Nothing has moved when it throws, unless the overdraw rollback itself fails,
+ * which is logged at error level for a manual credit.
  */
 export async function holdCredits(
   params: {

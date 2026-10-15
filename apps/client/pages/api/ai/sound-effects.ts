@@ -45,8 +45,9 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   const { provider, text, durationSeconds, promptInfluence, format, encoding, preview } = req.validated;
   const userId = req.user?.id;
 
-  // Undefined falls back to the vendor's mp3 default, which every vendor supports.
-  if (format && !SUPPORTS_OUTPUT_FORMAT[provider](format)) {
+  // Undefined falls back to the vendor's mp3 default, which every vendor supports. An empty string is
+  // checked too: the generators keep it (`??`), so it would otherwise fail only after the reservation.
+  if (format !== undefined && !SUPPORTS_OUTPUT_FORMAT[provider](format)) {
     throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
   }
 

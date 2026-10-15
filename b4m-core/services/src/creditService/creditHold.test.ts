@@ -104,6 +104,15 @@ describe('holdCredits', () => {
     await expect(hold).rejects.not.toThrow(/enough credits/);
   });
 
+  it('reports a billing org deleted mid-request as not found, not as insufficient credits', async () => {
+    const { adapters } = makeAdapters({ user: 100, org: 100 });
+    vi.mocked(adapters.organizations.incrementCredits).mockResolvedValueOnce(null);
+
+    await expect(
+      holdCredits({ userId: 'u1', organizationId: 'o1', requiredCredits: 30, featureLabel: 'video', logger }, adapters)
+    ).rejects.toThrow('Billing organization not found');
+  });
+
   it.each([-5, 0, Number.NaN, Number.POSITIVE_INFINITY])(
     'refuses a non-positive or non-finite amount (%s) before reading anything',
     async requiredCredits => {

@@ -107,7 +107,7 @@ export async function reserveRequestCredits({
       try {
         await creditService.releaseCreditHold(hold, holdAdapters);
       } catch (err) {
-        req.logger.error(`${featureLabel} refund failed - caller charged for a failed generation`, {
+        req.logger.error(`${featureLabel} refund failed - caller charged for a failed request`, {
           ownerId: hold.ownerId,
           ownerType: hold.ownerType,
           reservedCredits: hold.reservedCredits,

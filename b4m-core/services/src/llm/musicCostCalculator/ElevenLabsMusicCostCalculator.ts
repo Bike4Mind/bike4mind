@@ -11,7 +11,7 @@ const USD_PER_SECOND = 0.15 / 60; // $0.0025
 
 export interface ElevenLabsMusicCostInput {
   /** Required, with no fallback here: the billed length must be the exact length the caller sends the
-   * provider, so the default is applied once, upstream (musicRequestSchema), never in two places. */
+   * provider, so the caller resolves it once (musicRequestSchema's default) and passes it to both. */
   lengthMs: number;
 }
 
