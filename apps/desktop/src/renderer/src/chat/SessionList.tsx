@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type SyntheticEvent } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -126,6 +126,8 @@ interface RowActions {
   moveToSection: (sessionId: string, sectionId: string | null) => void;
   /** Opens the name dialog for a section the session will be moved into. */
   requestNewSection: (sessionId: string) => void;
+  /** A row was picked up to drag into, or out of, a section; null when the drag ends. */
+  drag: (sessionId: string | null) => void;
 }
 
 interface RowProps {
@@ -421,6 +423,14 @@ const SessionRow = memo(function SessionRow({
       <ListItemButton
         selected={selected}
         onClick={editing ? undefined : () => actions.select(session.id)}
+        // Not while renaming, or selecting text in the input would pick the whole row up.
+        draggable={!editing}
+        onDragStart={event => {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData(SESSION_DRAG_TYPE, session.id);
+          actions.drag(session.id);
+        }}
+        onDragEnd={() => actions.drag(null)}
         sx={{
           // Paired with the opacity the button fades in on, so the title's edge travels with
           // the button instead of snapping the moment the pointer lands.
@@ -568,6 +578,15 @@ function CustomSectionHeader({
   );
 }
 
+/**
+ * Carries a dragged row's session id. A type of our own, so a drag from anywhere else - text,
+ * a link, the files useFileDrop handles - is never taken for one.
+ */
+const SESSION_DRAG_TYPE = 'application/x-b4m-session';
+
+/** Where a dragged row would land: a section by id, or the default groups, out of any section. */
+type DropTarget = { kind: 'section'; sectionId: string } | { kind: 'default' };
+
 /** Rows a right-click in them should leave alone; the sidebar's own menu is for empty space. */
 const OWN_CONTEXT_TARGETS = '[data-testid="chat-session-item"], input, textarea, [role="menu"]';
 
@@ -649,6 +668,8 @@ export function SessionList({
   const [archivedOpen, setArchivedOpen] = useState(false);
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [draggedSession, setDraggedSession] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [nameRequest, setNameRequest] = useState<SectionNameRequest | null>(null);
 
   const sections = useMemo(() => groupSessions(matching, mode, userSections), [matching, mode, userSections]);
@@ -695,6 +716,10 @@ export function SessionList({
       rename: (session, title) => target.current.onRename(session, title),
       moveToSection: (sessionId, sectionId) => target.current.sectionActions.move(sessionId, sectionId),
       requestNewSection: sessionId => setNameRequest({ kind: 'create', sessionId }),
+      drag: sessionId => {
+        setDraggedSession(sessionId);
+        if (!sessionId) setDropTarget(null);
+      },
     }),
     []
   );
@@ -744,8 +769,67 @@ export function SessionList({
     />
   );
 
+  const draggingSectionId = draggedSession ? userSections.assignments[draggedSession] : undefined;
+
+  /**
+   * dragover rather than dragenter decides the target: it keeps firing while the pointer is over
+   * a section's children, where enter and leave would flicker. A section stops it here so the
+   * list around it never sees it.
+   */
+  const dragOverSection = (sectionId: string) => (event: DragEvent<HTMLElement>) => {
+    if (!draggedSession || !event.dataTransfer.types.includes(SESSION_DRAG_TYPE)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = sectionId === draggingSectionId ? 'none' : 'move';
+    if (dropTarget?.kind !== 'section' || dropTarget.sectionId !== sectionId) {
+      setDropTarget({ kind: 'section', sectionId });
+    }
+  };
+
+  const dropOnSection = (sectionId: string) => (event: DragEvent<HTMLElement>) => {
+    const sessionId = event.dataTransfer.getData(SESSION_DRAG_TYPE);
+    if (!sessionId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDropTarget(null);
+    if (userSections.assignments[sessionId] !== sectionId) sectionActions.move(sessionId, sectionId);
+  };
+
+  // Anywhere in the list outside a section takes a session out of its section; a row in no
+  // section has nowhere new to go there, so it is not offered as a target at all.
+  const dragOverList = (event: DragEvent<HTMLElement>) => {
+    if (!draggingSectionId || !event.dataTransfer.types.includes(SESSION_DRAG_TYPE)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    if (dropTarget?.kind !== 'default') setDropTarget({ kind: 'default' });
+  };
+
+  const dropOnList = (event: DragEvent<HTMLElement>) => {
+    const sessionId = event.dataTransfer.getData(SESSION_DRAG_TYPE);
+    if (!sessionId) return;
+    event.preventDefault();
+    setDropTarget(null);
+    if (userSections.assignments[sessionId] !== undefined) sectionActions.move(sessionId, null);
+  };
+
   const customGroup = (group: CustomGroup) => (
-    <Box key={group.section.id} data-testid="sidebar-section" data-section-id={group.section.id}>
+    <Box
+      key={group.section.id}
+      onDragOver={dragOverSection(group.section.id)}
+      onDrop={dropOnSection(group.section.id)}
+      sx={{
+        borderRadius: '8px',
+        transition: 'background-color 120ms',
+        ...(dropTarget?.kind === 'section' &&
+          dropTarget.sectionId === group.section.id &&
+          group.section.id !== draggingSectionId && { bgcolor: 'primary.softBg' }),
+      }}
+      data-testid="sidebar-section"
+      data-section-id={group.section.id}
+      data-drop-target={
+        dropTarget?.kind === 'section' && dropTarget.sectionId === group.section.id ? 'true' : undefined
+      }
+    >
       <CustomSectionHeader
         section={group.section}
         onRename={section => setNameRequest({ kind: 'rename', sectionId: section.id, currentName: section.name })}
@@ -762,7 +846,7 @@ export function SessionList({
           sx={{ px: 1, py: 0.25 }}
           data-testid="sidebar-section-empty"
         >
-          {query.trim() ? 'No matches' : 'Move a session here from its menu'}
+          {query.trim() ? 'No matches' : 'Drag a session here, or use its menu'}
         </Typography>
       )}
     </Box>
@@ -886,12 +970,25 @@ export function SessionList({
           px: 1,
           pb: 1,
           ...thinScrollbarSx,
+          // Inset so the outline never adds to the width or is clipped by the scroll edge.
+          ...(dropTarget?.kind === 'default' && {
+            boxShadow: 'inset 0 0 0 2px var(--joy-palette-primary-outlinedBorder)',
+          }),
         }}
         onContextMenu={event => {
           if (event.target instanceof Element && event.target.closest(OWN_CONTEXT_TARGETS)) return;
           event.preventDefault();
           setContextMenu({ x: event.clientX, y: event.clientY });
         }}
+        onDragOver={dragOverList}
+        onDrop={dropOnList}
+        onDragLeave={event => {
+          // Only when the pointer leaves the list itself, not when it crosses into a child.
+          if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) {
+            setDropTarget(null);
+          }
+        }}
+        data-drop-target={dropTarget?.kind === 'default' ? 'true' : undefined}
         data-testid="sidebar-session-scroll"
       >
         {loading ? (

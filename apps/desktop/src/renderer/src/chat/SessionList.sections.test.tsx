@@ -354,3 +354,132 @@ describe("a section's own menu", () => {
     expect(sectionNamed('Work')).toBeTruthy();
   });
 });
+
+/** jsdom has no DataTransfer; this keeps the parts the sidebar reads. */
+function fakeDataTransfer() {
+  const data = new Map<string, string>();
+  return {
+    effectAllowed: 'all',
+    dropEffect: 'none',
+    get types() {
+      return [...data.keys()];
+    },
+    setData: (type: string, value: string) => void data.set(type, value),
+    getData: (type: string) => data.get(type) ?? '',
+  };
+}
+
+type FakeTransfer = ReturnType<typeof fakeDataTransfer>;
+
+/** Fires a drag event the way the browser would, returning whether a handler accepted it. */
+function fireDrag(node: HTMLElement, type: string, dataTransfer: FakeTransfer) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'dataTransfer', { value: dataTransfer });
+  act(() => {
+    node.dispatchEvent(event);
+  });
+  return event.defaultPrevented;
+}
+
+const rowNamed = (title: string) => {
+  const row = all('chat-session-item').find(item => item.textContent === title);
+  if (!row) throw new Error(`no row ${title}`);
+  return row;
+};
+
+/** Picks a row up, drags it over a target and drops it there, as one gesture. */
+async function dragRowOnto(title: string, target: HTMLElement) {
+  const transfer = fakeDataTransfer();
+  const row = rowNamed(title);
+  fireDrag(row, 'dragstart', transfer);
+  const accepted = fireDrag(target, 'dragover', transfer);
+  fireDrag(target, 'drop', transfer);
+  fireDrag(row, 'dragend', transfer);
+  await settle();
+  return accepted;
+}
+
+describe('dragging a session', () => {
+  it('moves a row dropped on a section into it', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
+
+    const accepted = await dragRowOnto('Beta', el('sidebar-section-empty', sectionNamed('Home')));
+
+    expect(accepted).toBe(true);
+    expect(bridge.moveSession).toHaveBeenCalledWith('b', 'home');
+    expect(titlesIn(sectionNamed('Home'))).toEqual(['Beta']);
+  });
+
+  it('moves a row between sections', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    await dragRowOnto('Alpha', el('sidebar-section-header', sectionNamed('Home')));
+
+    expect(bridge.moveSession).toHaveBeenCalledWith('a', 'home');
+    expect(titlesIn(sectionNamed('Work'))).toEqual([]);
+    expect(titlesIn(sectionNamed('Home'))).toEqual(['Alpha']);
+  });
+
+  it('marks the section under the pointer, and clears it when the drag ends', async () => {
+    await mount([summary('b', 'Beta')], workAndHome);
+    const transfer = fakeDataTransfer();
+
+    fireDrag(rowNamed('Beta'), 'dragstart', transfer);
+    fireDrag(sectionNamed('Home'), 'dragover', transfer);
+    expect(sectionNamed('Home').dataset.dropTarget).toBe('true');
+    expect(sectionNamed('Work').dataset.dropTarget).toBeUndefined();
+
+    fireDrag(rowNamed('Beta'), 'dragend', transfer);
+    expect(sectionNamed('Home').dataset.dropTarget).toBeUndefined();
+  });
+
+  it('takes a row out of its section when dropped on the list outside every section', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
+
+    const accepted = await dragRowOnto('Alpha', rowNamed('Beta'));
+
+    expect(accepted).toBe(true);
+    expect(bridge.moveSession).toHaveBeenCalledWith('a', null);
+    expect(looseTitles()).toEqual(['Alpha', 'Beta']);
+  });
+
+  it('offers the list as no target to a row that is in no section', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
+
+    const accepted = await dragRowOnto('Beta', rowNamed('Beta'));
+
+    expect(accepted).toBe(false);
+    expect(el('sidebar-session-scroll').dataset.dropTarget).toBeUndefined();
+    expect(bridge.moveSession).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when a row is dropped back on its own section', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    await dragRowOnto('Alpha', sectionNamed('Work'));
+
+    expect(bridge.moveSession).not.toHaveBeenCalled();
+  });
+
+  it('ignores a drag that is not a session row', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+    const transfer = fakeDataTransfer();
+    transfer.setData('text/plain', 'a');
+
+    expect(fireDrag(sectionNamed('Home'), 'dragover', transfer)).toBe(false);
+    fireDrag(sectionNamed('Home'), 'drop', transfer);
+    await settle();
+
+    expect(bridge.moveSession).not.toHaveBeenCalled();
+  });
+
+  it('cannot pick up a row while it is being renamed', async () => {
+    await mount([summary('a', 'Alpha')], workAndHome);
+
+    expect(rowNamed('Alpha').getAttribute('draggable')).toBe('true');
+    await openRowMenu('Alpha');
+    await click(el('chat-rename-session-btn'));
+
+    expect(el('chat-session-item').getAttribute('draggable')).toBe('false');
+  });
+});
