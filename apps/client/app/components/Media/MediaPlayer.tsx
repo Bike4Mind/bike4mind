@@ -26,7 +26,7 @@ type Status = 'ready' | 'refreshing' | 'failed';
 /** A load error this soon after a re-sign means the fresh URL failed too; later, it has most likely expired. */
 const RESIGN_GIVE_UP_WINDOW_MS = 60 * 1000;
 
-const hasExpired = (expireAt: MediaPlayerFile['fileUrlExpireAt']): boolean =>
+export const hasExpired = (expireAt: MediaPlayerFile['fileUrlExpireAt']): boolean =>
   !!expireAt && new Date(expireAt).getTime() <= Date.now();
 
 /**
