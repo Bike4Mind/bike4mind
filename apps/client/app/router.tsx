@@ -42,6 +42,7 @@ const ProjectsPage = lazy(() => import('./routes/projects'));
 const ProjectPage = lazy(() => import('./routes/projects/$id'));
 const ProfilePage = lazy(() => import('./routes/profile/index'));
 const GearsPage = lazy(() => import('./routes/gears/index'));
+const IntegrationsPage = lazy(() => import('./routes/integrations/index'));
 const ProfileDetailPage = lazy(() => import('./routes/profile/$id'));
 const SubscriptionsCheckoutPage = lazy(() => import('./routes/subscriptions/checkout'));
 const BillingDeepLinkModals = lazy(() => import('./components/subscription/BillingDeepLinkModals'));
@@ -360,6 +361,17 @@ const gearsRoute = createRoute({
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <GearsPage />
+    </Suspense>
+  ),
+});
+
+// Integrations - the directory of every integration and model provider, with roadmap requests.
+const integrationsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/integrations',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <IntegrationsPage />
     </Suspense>
   ),
 });
@@ -1208,6 +1220,7 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     notebookShellRoute.addChildren([newRoute, notebookRoute]),
     gearsRoute,
+    integrationsRoute,
     projectsRoute,
     projectRoute,
     profileRoute,
