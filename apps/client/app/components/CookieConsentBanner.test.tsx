@@ -66,8 +66,15 @@ describe('CookieConsentBanner', () => {
     mockLoadMetaPixel.mockClear();
     clearCookies();
     useCookieSettings.setState({ isOpen: false });
+    // The grant loads only configured vendors, so configure the pixels the mocks stand in for.
+    vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
+    vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
     // What the inline tag in layout.tsx would have set; each test states its own.
     delete window.__b4mGaConsentDefault;
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('shows banner when no consent is stored', () => {
@@ -489,7 +496,7 @@ describe('CookieConsentBanner', () => {
 
       expect(screen.getByText('Cookie settings.')).toBeInTheDocument();
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
-        'You are currently allowing email marketing (MailerLite) and campaign attribution cookies.'
+        'You are currently allowing advertising (Meta, Reddit), email marketing (MailerLite) and campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent('Declining reloads the page');
       expect(screen.getByTestId('cookie-consent-cancel-btn')).toBeInTheDocument();
@@ -550,7 +557,7 @@ describe('CookieConsentBanner', () => {
       renderAndReopen();
 
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
-        'You are currently declining email marketing (MailerLite) and campaign attribution cookies.'
+        'You are currently declining advertising (Meta, Reddit), email marketing (MailerLite) and campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).not.toHaveTextContent('reloads the page');
 
@@ -628,6 +635,7 @@ describe('CookieConsentBanner', () => {
       vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
       vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
       document.getElementById('mailerlite')?.remove();
+      const scriptsBefore = new Set(document.querySelectorAll('script'));
       try {
         render(
           <TestWrapper>
@@ -645,6 +653,10 @@ describe('CookieConsentBanner', () => {
         expect(mockLoadMetaPixel).toHaveBeenCalledTimes(1);
         expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
         expect(document.getElementById('mailerlite')).not.toBeNull();
+        // The pixel loaders are mocked, so MailerLite is the only real script a grant may add. A
+        // loader called outside the consent registry would add another and fail here.
+        const added = [...document.querySelectorAll('script')].filter(script => !scriptsBefore.has(script));
+        expect(added.map(script => script.id)).toEqual(['mailerlite']);
       } finally {
         vi.unstubAllEnvs();
       }
@@ -665,6 +677,17 @@ describe('CookieConsentBanner', () => {
       } finally {
         vi.unstubAllEnvs();
       }
+    });
+
+    it('does not load an unnamed vendor on a grant', () => {
+      vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', '');
+      renderAndReopen();
+
+      expect(screen.getByTestId('cookie-consent-banner')).not.toHaveTextContent('Meta');
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(mockLoadMetaPixel).not.toHaveBeenCalled();
+      expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
     });
 
     it('names only the ad vendor whose pixel is configured', () => {

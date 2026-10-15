@@ -50,9 +50,8 @@ function activateConsent(value: Consent) {
     gtag('consent', 'update', { analytics_storage: value });
     if (value === 'granted') recordPageOnGrant();
   }
-  // The ads pixels have no consent-mode equivalent: granted == load the scripts
-  // (until then they only queue in memory), denied == they never load. Each
-  // no-ops when its own pixel id is unconfigured.
+  // The other vendors have no consent-mode equivalent: granted == load the scripts
+  // (until then the pixels only queue in memory), denied == they never load.
   if (value === 'granted') {
     loadConsentVendors();
     // The campaign this visitor landed on, held unwritten since module load if they were

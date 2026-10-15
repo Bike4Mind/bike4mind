@@ -20,6 +20,12 @@ import { CONSENT_KEY } from './consentRegion';
  * Only 'granted' is granted: 'unset' (in the opt-in region, not asked yet) stays denied
  * until the visitor answers.
  */
+/** The GA4 id, or undefined when this build has no GA. Gates both the gtag tag in app/layout.tsx
+ * and the consent banner naming Google Analytics (utils/consentVendors.ts). */
+export function getGaMeasurementId(): string | undefined {
+  return process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID || undefined;
+}
+
 export function gaBootstrapScript(measurementId: string, cookieDomain?: string): string {
   const config = cookieDomain ? `, ${JSON.stringify({ cookie_domain: cookieDomain })}` : '';
   return `

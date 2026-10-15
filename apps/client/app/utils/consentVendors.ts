@@ -1,6 +1,7 @@
 import { isMetaPixelConfigured, loadMetaPixel } from './metaPixel';
 import { isRedditPixelConfigured, loadRedditPixel } from './redditPixel';
 import { loadMailerLite } from './mailerLite';
+import { getGaMeasurementId } from './gaConsentBootstrap';
 
 export type ConsentVendor = {
   category: 'analytics' | 'advertising' | 'email marketing';
@@ -20,13 +21,14 @@ export const CONSENT_VENDORS: readonly ConsentVendor[] = [
   {
     category: 'analytics',
     name: 'Google Analytics',
-    isConfigured: () => Boolean(process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID),
+    isConfigured: () => Boolean(getGaMeasurementId()),
   },
   { category: 'advertising', name: 'Meta', isConfigured: isMetaPixelConfigured, load: loadMetaPixel },
   { category: 'advertising', name: 'Reddit', isConfigured: isRedditPixelConfigured, load: loadRedditPixel },
   { category: 'email marketing', name: 'MailerLite', isConfigured: () => true, load: loadMailerLite },
 ];
 
+/** Runs the loader of every configured vendor - the same set the banner names. */
 export function loadConsentVendors(): void {
-  for (const vendor of CONSENT_VENDORS) vendor.load?.();
+  for (const vendor of CONSENT_VENDORS) if (vendor.isConfigured()) vendor.load?.();
 }
