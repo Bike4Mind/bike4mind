@@ -127,6 +127,31 @@ describe('ChatService with an MCP server', () => {
     expect(toolEvents('running')).toHaveLength(0);
   }, 30_000);
 
+  it('asks in "Approve for me" before an outbound call that follows an MCP result', async () => {
+    const { id } = await service.createSession();
+    await service.setApprovalMode(id, 'auto');
+    await service.send(id, 'say hello');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 10_000, interval: 5 });
+
+    streams[0].write(
+      frame({ type: 'tool_use', tools: [{ id: 'call_1', name: 'mcp__echo_echo', arguments: '{"text":"hello"}' }] })
+    );
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === 2, { timeout: 10_000, interval: 5 });
+    streams[1].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'call_2', name: 'web_fetch', arguments: '{"url":"https://example.com/"}' }],
+      })
+    );
+    streams[1].write(frame('[DONE]'));
+
+    const asked = await vi.waitUntil(() => toolEvents('awaiting-approval')[0], { timeout: 10_000, interval: 5 });
+    if (asked.type !== 'tool-start') throw new Error('no approval announced');
+    expect(asked.call.name).toBe('web_fetch');
+    expect(asked.call.approvalDetail).toContain('read content from an MCP server (mcp__echo_echo)');
+  }, 30_000);
+
   it('feeds an approved MCP tool result back into the turn', async () => {
     const { id } = await service.createSession();
     await service.setApprovalMode(id, 'ask');

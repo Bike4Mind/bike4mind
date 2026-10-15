@@ -3,13 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatStreamEvent } from '@shared/chat';
+import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { SkillCatalog } from './skills/SkillCatalog';
 import type { AccessStore } from './tools/AccessStore';
+import { ApprovalGate } from './tools/ApprovalGate';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -70,6 +71,7 @@ describe('ChatService and skills', () => {
       getEnvironmentUrl: () => 'http://localhost:3000',
       userInstructionsRoot: join(base, 'user'),
       skills: catalog,
+      approvals: new ApprovalGate(),
       emit: event => events.push(event),
     });
   });
@@ -118,6 +120,32 @@ describe('ChatService and skills', () => {
   it('lists nothing from a project the user has not trusted', async () => {
     const id = await session();
     expect(systemText(await turn(id, 'hello', 1))).not.toContain('ship-it');
+  });
+
+  it('asks in "Approve for me" before an outbound call that follows a skill', async () => {
+    const id = await session();
+    await catalog.setTrusted(project, true);
+    await service.send(id, 'release it');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    streams[0].write(
+      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'skill', arguments: '{"skill":"ship-it"}' }] })
+    );
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    streams[1].write(
+      frame({ type: 'tool_use', tools: [{ id: 'c2', name: 'web_fetch', arguments: '{"url":"https://example.com/"}' }] })
+    );
+    streams[1].write(frame('[DONE]'));
+
+    const asked = await vi.waitUntil(
+      () =>
+        events
+          .map(event => (event.type === 'tool-start' ? event.call : null))
+          .find((call): call is ChatToolCall => call?.status === 'awaiting-approval'),
+      { timeout: 3000, interval: 5 }
+    );
+    expect(asked.name).toBe('web_fetch');
+    expect(asked.approvalDetail).toContain('read content from a skill (skill)');
   });
 
   it('keeps the system prompt byte-identical across turns, so the cached prefix holds', async () => {

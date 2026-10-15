@@ -128,6 +128,8 @@ import { DoomLoopTracker } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
 import { spendsCredits } from './tools/riskAssessment';
+import { MCP_TOOL_PREFIX } from './mcp/names';
+import { WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME } from '@shared/webSearch';
 import {
   capOutput,
   outputCapFor,
@@ -2661,6 +2663,14 @@ export class ChatService {
           });
         }
 
+        if (
+          settled.status === 'done' &&
+          scope.directories &&
+          !scope.directories.untrusted &&
+          readsUntrusted(request.name)
+        ) {
+          scope.directories.untrusted = request.name;
+        }
         this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
         return settled;
       })
@@ -3380,11 +3390,17 @@ export class ChatService {
     // The same call a third time in a row is asked about in 'auto' whatever was allowed before:
     // the model is more likely stuck than making progress, and this is the point to find out.
     const stuck = looping && mode === 'auto';
+    // Once this reply has read web, MCP or skill content, an injected instruction may be steering
+    // it, so a call that can send data out is asked whatever "always" was answered before.
+    const tainted = mode === 'auto' && !!directories.untrusted && sendsOut(call.name);
+    if (tainted && directories.untrusted) {
+      prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(directories.untrusted)}` };
+    }
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
-    if (!prompt.irreversible && !stuck) {
+    if (!prompt.irreversible && !stuck && !tainted) {
       const standing = gate.isStanding(
         sessionId,
         prompt.key,
@@ -3409,7 +3425,7 @@ export class ChatService {
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
-    if (this.autoApproves(mode, sessionId, call, prompt, stuck)) {
+    if (this.autoApproves(mode, sessionId, call, prompt, stuck || tainted)) {
       return { input: applyOption(call.input, runnable[0]) };
     }
 
@@ -3736,8 +3752,9 @@ export class ChatService {
    * their cookies on a site they happen to have open.
    *
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
-   * repeat of the last two calls, a read of a `.env` file, a script that does not parse, or a
-   * path outside the project that the user has not already allowed.
+   * repeat of the last two calls, a read of a `.env` file, a script that does not parse, a
+   * command that can send data out, an outbound call after the reply read untrusted content
+   * (see DirectoryTurn.untrusted), or a path outside the project the user has not allowed.
    */
   private autoApproves(
     mode: ChatApprovalMode,
@@ -4633,6 +4650,46 @@ interface ApprovalOutcome {
 interface DirectoryTurn {
   declined: string[];
   granted: boolean;
+  /**
+   * The first tool this reply read untrusted content from. Outbound calls after it ask in 'auto'.
+   * Reply-scoped so one web search does not turn the rest of the conversation into 'ask'.
+   */
+  untrusted?: string;
+}
+
+/** Tools whose result is someone else's text - a web page, an MCP server, a skill - that can carry injected instructions. */
+function readsUntrusted(name: string): boolean {
+  return (
+    name === WEB_FETCH_TOOL_NAME ||
+    name === WEB_SEARCH_TOOL_NAME ||
+    name === 'skill' ||
+    name.startsWith('browser_') ||
+    name.startsWith(MCP_TOOL_PREFIX)
+  );
+}
+
+/** Tools that can carry data off this computer, or into a session that has not read the untrusted content. */
+function sendsOut(name: string): boolean {
+  return (
+    name === 'bash_execute' ||
+    name === 'bash_background' ||
+    name === WEB_FETCH_TOOL_NAME ||
+    name === 'browser_navigate' ||
+    name === 'browser_tabs' ||
+    name === 'session_send' ||
+    name.startsWith(MCP_TOOL_PREFIX)
+  );
+}
+
+function untrustedReason(tool: string): string {
+  const source = tool.startsWith('browser_')
+    ? 'a web page in the browser'
+    : tool.startsWith(MCP_TOOL_PREFIX)
+      ? 'an MCP server'
+      : tool === 'skill'
+        ? 'a skill'
+        : 'the web';
+  return `Asked because this reply read content from ${source} (${tool}).`;
 }
 
 /** `first`, then whatever of `second` it does not already hold, in order. */
