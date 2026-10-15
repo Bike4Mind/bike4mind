@@ -182,7 +182,8 @@ export interface paths {
     put?: never;
     /**
      * Generate background music
-     * @description Generates an instrumental or vocal background-music track from a text prompt. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @deprecated
+     * @description **Deprecated, sunset 2027-01-15.** Use `/api/v1/music-generations` instead. Generates an instrumental or vocal background-music track from a text prompt. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
      */
     post: operations['generateMusic'];
     delete?: never;
@@ -6596,6 +6597,12 @@ export interface operations {
           'X-B4M-Audio-File-Name'?: string;
           /** @description Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes. */
           'X-B4M-Audio-File-Url'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6634,6 +6641,12 @@ export interface operations {
           'X-B4M-Audio-File-Name'?: string;
           /** @description Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes. */
           'X-B4M-Audio-File-Url'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6655,6 +6668,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6713,6 +6732,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6736,6 +6761,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6759,6 +6790,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6782,6 +6819,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
