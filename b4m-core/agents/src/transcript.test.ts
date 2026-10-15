@@ -88,6 +88,55 @@ describe('repairTranscript', () => {
     expect(messages).toEqual([system, multiCall, result('a'), result('b')]);
   });
 
+  it('splits a carrier answering calls of two assistant messages behind each call', () => {
+    const carrier: IMessage = {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'x', content: 'result x' },
+        { type: 'tool_result', tool_use_id: 'y', content: 'result y' },
+      ],
+    };
+    const messages = [system, use('x'), use('y'), carrier];
+
+    const report = repairTranscript(messages, anthropicResults);
+
+    expect(report).toEqual({ synthesizedResults: 0, movedResults: 2, droppedResults: 0, replacedArguments: 0 });
+    expect(messages).toEqual([system, use('x'), result('x'), use('y'), result('y')]);
+  });
+
+  it('splits a carrier that sits behind the first call but also answers a later one', () => {
+    const carrier: IMessage = {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'x', content: 'result x' },
+        { type: 'tool_result', tool_use_id: 'y', content: 'result y' },
+      ],
+    };
+    const messages = [system, use('x'), carrier, use('y')];
+
+    const report = repairTranscript(messages, anthropicResults);
+
+    expect(report.droppedResults).toBe(0);
+    expect(report.synthesizedResults).toBe(0);
+    expect(messages).toEqual([system, use('x'), result('x'), use('y'), result('y')]);
+  });
+
+  it('drops a duplicate result block inside one carrier', () => {
+    const carrier: IMessage = {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'a', content: 'result a' },
+        { type: 'tool_result', tool_use_id: 'a', content: 'again' },
+      ],
+    };
+    const messages = [system, use('a'), carrier];
+
+    const report = repairTranscript(messages, anthropicResults);
+
+    expect(report.droppedResults).toBe(1);
+    expect(messages).toEqual([system, use('a'), result('a')]);
+  });
+
   it('drops a result whose call is not in the transcript', () => {
     const messages = [system, question, result('ghost'), use('a'), result('a')];
 

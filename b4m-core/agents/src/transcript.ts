@@ -150,16 +150,15 @@ export function repairTranscript(messages: IMessage[], buildResult: ToolResultBu
     }
   });
   const ownedIds = (index: number) =>
-    (resultIdsOf(messages[index]) ?? []).filter(id => ownerByResultId.get(id) === index);
+    [...new Set(resultIdsOf(messages[index]) ?? [])].filter(id => ownerByResultId.get(id) === index);
 
   const repaired: IMessage[] = [];
-  const placedCarriers = new Set<number>();
 
   messages.forEach((message, index) => {
     const resultIds = resultIdsOf(message);
     if (resultIds) {
-      // Owned carriers are placed behind their call, which may come later; the rest are dropped.
-      if (ownedIds(index).length === 0) report.droppedResults += resultIds.length;
+      // Owned results are placed behind their call, which may come later; the rest are dropped.
+      report.droppedResults += resultIds.length - ownedIds(index).length;
       return;
     }
 
@@ -168,24 +167,26 @@ export function repairTranscript(messages: IMessage[], buildResult: ToolResultBu
     repaired.push(argumentFix?.message ?? message);
 
     let expectedCarrierIndex = index + 1;
-    for (const call of toolCallsOf(message)) {
+    const calls = toolCallsOf(message);
+    for (const call of calls) {
       if (answered.has(call.id)) continue;
-      answered.add(call.id);
       const carrierIndex = ownerByResultId.get(call.id);
       if (carrierIndex === undefined) {
+        answered.add(call.id);
         const synthesized = buildResult(call, MISSING_TOOL_RESULT);
         if (synthesized.length === 0) continue;
         report.synthesizedResults++;
         repaired.push(...synthesized);
         continue;
       }
-      if (placedCarriers.has(carrierIndex)) continue;
-      placedCarriers.add(carrierIndex);
-      if (carrierIndex === expectedCarrierIndex) expectedCarrierIndex++;
+      // Only this message's results go here; a carrier answering calls of a later message is split.
+      const ids = [...new Set(calls.map(c => c.id))].filter(
+        id => !answered.has(id) && ownerByResultId.get(id) === carrierIndex
+      );
+      for (const id of ids) answered.add(id);
+      if (carrierIndex === expectedCarrierIndex && ids.length === ownedIds(carrierIndex).length) expectedCarrierIndex++;
       else report.movedResults++;
-      const owned = ownedIds(carrierIndex);
-      for (const id of owned) answered.add(id);
-      repaired.push(withOnlyResults(messages[carrierIndex], owned, report));
+      repaired.push(withOnlyResults(messages[carrierIndex], ids));
     }
   });
 
@@ -193,12 +194,12 @@ export function repairTranscript(messages: IMessage[], buildResult: ToolResultBu
   return report;
 }
 
-/** The carrier with only the result blocks for `ids`; any other result block is dropped and counted. */
-function withOnlyResults(carrier: IMessage, ids: string[], report: TranscriptRepairReport): IMessage {
+/** The carrier with only the first result block for each of `ids`. */
+function withOnlyResults(carrier: IMessage, ids: string[]): IMessage {
   const blocks = blocksOf(carrier);
-  const kept = blocks.filter(block => ids.includes(block.tool_use_id as string));
+  const remaining = new Set(ids);
+  const kept = blocks.filter(block => remaining.delete(block.tool_use_id as string));
   if (kept.length === blocks.length) return carrier;
-  report.droppedResults += blocks.length - kept.length;
   return { ...carrier, content: kept as IMessage['content'] };
 }
 
