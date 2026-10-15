@@ -26,7 +26,10 @@ export type GenerationJobCacheKeys = {
 export type GenerationJobCache<TJob, TUpdate> = {
   /** Writes a job read as part of a list into its detail entry, unless the cache already holds something newer. */
   seed: (queryClient: QueryClient, job: TJob) => void;
-  /** Puts a just-created job at the top of the gallery. A replayed create (same Idempotency-Key) moves, not doubles. */
+  /**
+   * Puts a just-created job at the top of the gallery, or refetches a gallery that has not loaded yet. A replayed
+   * create (same Idempotency-Key) moves, not doubles.
+   */
   prepend: (queryClient: QueryClient, job: TJob) => void;
   /**
    * Writes an authoritative server response (the cancel mutation) into the detail entry and its list row. A late
@@ -61,6 +64,12 @@ export function createGenerationJobCache<TJob extends CacheableJob, TUpdate exte
 
   const prepend = (queryClient: QueryClient, job: TJob): void => {
     seed(queryClient, job);
+    // A list still loading was read before this job existed, and the job's frames then find its detail entry, so
+    // nothing else would refresh the list: refetch it instead.
+    if (!queryClient.getQueryData(keys.list)) {
+      void queryClient.invalidateQueries({ queryKey: keys.list });
+      return;
+    }
     queryClient.setQueryData<GenerationJobList<TJob>>(keys.list, list => {
       if (!list || list.pages.length === 0) return list;
       const [first, ...rest] = list.pages;
