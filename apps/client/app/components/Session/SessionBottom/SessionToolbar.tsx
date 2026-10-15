@@ -186,6 +186,10 @@ export function SessionToolbar(props: SessionToolbarProps) {
               sx={{
                 display: 'flex',
                 flexDirection: 'row',
+                // The AI-settings group (AdvancedAISettings) scrolls sideways, so without wrapping
+                // a narrow pane squeezes it to near zero and the Tools button ends up under the
+                // credit chip / attach button. Wrapping drops the group onto its own line instead.
+                flexWrap: 'wrap',
                 alignItems: 'center',
                 gap: isMobile ? '12px' : '10px',
               }}
