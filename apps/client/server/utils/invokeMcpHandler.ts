@@ -191,7 +191,7 @@ function describeFunctionError(functionError: string, raw: string): string {
 }
 
 // Safe: only called when mcpName is truthy (the Resource.mcpHandler lookup above ensures it is accessible)
-async function invokeLambda<T>(payload: Parameters<typeof localMcpHandler>[0], tenantKey: string): Promise<T> {
+async function invokeLambda<T>(payload: InvokeMcpHandlerPayload, tenantKey: string): Promise<T> {
   const client = new LambdaClient({});
   const command = new InvokeCommand({
     FunctionName: Resource.mcpHandler.name,
