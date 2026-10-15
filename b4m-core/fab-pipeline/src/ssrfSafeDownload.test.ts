@@ -86,4 +86,69 @@ describe('ssrfSafeDownload', () => {
 
     await expect(ssrfSafeDownload(PUBLIC_URL, OPTIONS)).rejects.toThrow(/no redirect target/);
   });
+
+  it('accepts a 3xx status through validateStatus but not a 4xx/5xx final', async () => {
+    axiosGet.mockResolvedValueOnce(ok('x'));
+
+    await ssrfSafeDownload(PUBLIC_URL, OPTIONS);
+
+    const validateStatus = (axiosGet.mock.calls[0][1] as { validateStatus: (s: number) => boolean }).validateStatus;
+    expect(validateStatus(200)).toBe(true);
+    expect(validateStatus(302)).toBe(true);
+    expect(validateStatus(399)).toBe(true);
+    expect(validateStatus(400)).toBe(false);
+    expect(validateStatus(404)).toBe(false);
+    expect(validateStatus(500)).toBe(false);
+  });
+
+  it('surfaces a non-2xx final response rather than returning it as a body', async () => {
+    axiosGet.mockRejectedValueOnce(new Error('Request failed with status code 404'));
+
+    await expect(ssrfSafeDownload(PUBLIC_URL, OPTIONS)).rejects.toThrow(/404/);
+  });
+
+  it('stops when the deadline runs out between hops instead of fetching the next one', async () => {
+    let now = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    axiosGet.mockImplementationOnce(async () => {
+      now = 5_000; // the first hop alone burns the whole budget
+      return redirectTo('/next.pdf');
+    });
+
+    await expect(ssrfSafeDownload(PUBLIC_URL, { maxBytes: 1024, timeoutMs: 5_000 })).rejects.toThrow(/Timed out/);
+    expect(axiosGet).toHaveBeenCalledTimes(1);
+    nowSpy.mockRestore();
+  });
+
+  it('narrows the per-hop timeout to the remaining budget and re-pins the next hop', async () => {
+    let now = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    axiosGet.mockImplementationOnce(async () => {
+      now = 1_000;
+      return redirectTo('/moved.pdf');
+    });
+    axiosGet.mockResolvedValueOnce(ok('moved'));
+
+    await ssrfSafeDownload(PUBLIC_URL, { maxBytes: 1024, timeoutMs: 5_000 });
+
+    const hop1 = axiosGet.mock.calls[0][1] as { timeout: number };
+    const hop2 = axiosGet.mock.calls[1][1] as {
+      timeout: number;
+      httpAgent: unknown;
+      httpsAgent: unknown;
+      proxy: boolean;
+      maxRedirects: number;
+      signal: unknown;
+    };
+    expect(hop1.timeout).toBe(5_000);
+    expect(hop2.timeout).toBe(4_000);
+    expect(hop2.timeout).toBeLessThan(5_000);
+    expect(hop2.httpAgent).toBe(ssrfSafeHttpAgent);
+    expect(hop2.httpsAgent).toBe(ssrfSafeHttpsAgent);
+    expect(hop2.proxy).toBe(false);
+    expect(hop2.maxRedirects).toBe(0);
+    expect(hop2.signal).toBeInstanceOf(AbortSignal);
+
+    nowSpy.mockRestore();
+  });
 });
