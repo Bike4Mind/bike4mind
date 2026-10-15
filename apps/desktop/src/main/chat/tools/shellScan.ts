@@ -244,19 +244,21 @@ function plainWord(arg: string | undefined): boolean {
 }
 
 /**
- * An interpreter's options up to its first operand. A value-taking option swallows the rest of its
- * cluster (`ruby -rset x.rb`) or its next argument (`python3 -W ignore -c ...`), so neither the
- * swallowed word nor a later script argument is read as one of the interpreter's own options. An
- * unrecognised long option is assumed to take the next word, so a script after it cannot end the
- * option prefix early (`node --loader ./x.mjs -e ...` still runs `-e`).
+ * An interpreter's options, and the operands after them (a script file and its arguments). A
+ * value-taking option swallows the rest of its cluster (`ruby -rset x.rb`) or its next argument
+ * (`python3 -W ignore -c ...`), so neither the swallowed word nor a later script argument is read
+ * as one of the interpreter's own options. An unrecognised long option is assumed to take the next
+ * word, so a script after it cannot end the option prefix early (`node --loader ./x.mjs -e ...`
+ * still runs `-e`).
  */
-function interpreterOptions(program: string, args: readonly string[]): string[] {
+function interpreterOptions(program: string, args: readonly string[]): { options: string[]; operands: string[] } {
   const letters = optionValueLetters(program);
   const shellWord = SHELL_OPTION_WORD.has(program);
   // Shells also take flags as `+e`, which turn an option off rather than ending the options.
   const plusFlags = INLINE_SCRIPT[program] === DASH_C;
   const options: string[] = [];
-  for (let i = 0; i < args.length; i++) {
+  let i = 0;
+  for (; i < args.length; i++) {
     const arg = args[i];
     // `bash -oc pipefail '...'` is `-o pipefail` plus `-c`: `o` takes the next word and the letters
     // after it stay flags, unlike the glued value other interpreters read.
@@ -265,7 +267,8 @@ function interpreterOptions(program: string, args: readonly string[]): string[] 
       i += [...arg.slice(1)].filter(letter => letter === 'o' || letter === 'O').length;
       continue;
     }
-    if (!arg.startsWith('-') && !(plusFlags && arg.startsWith('+'))) break;
+    // A lone `-` is the stdin operand, not an option.
+    if (arg === '-' || (!arg.startsWith('-') && !(plusFlags && arg.startsWith('+')))) break;
     options.push(flagRun(arg, letters));
     if (takesNextArgument(program, arg)) i++;
     else if (
@@ -278,7 +281,7 @@ function interpreterOptions(program: string, args: readonly string[]): string[] 
       i++;
     }
   }
-  return options;
+  return { options, operands: args.slice(i) };
 }
 
 /**
@@ -439,10 +442,17 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   if (RESOLVERS.has(program) && computed) return `${program} with a computed argument`;
   const inlineScript = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
   // A script's own arguments are not options: `python3 x.py -config` never runs an inline script.
-  const options = interpreterOptions(program, args);
+  const { options, operands } = interpreterOptions(program, args);
   const inline = inlineScript ? options.find(arg => inlineScript.test(arg)) : undefined;
   if (inline) return `${program} ${(inlineScript?.exec(inline)?.[0] ?? inline.split('=')[0]).replace(/=$/, '')}`;
-  if (stdin && STDIN_SCRIPT.test(program) && args.every(arg => arg.startsWith('-') || STDIN_SCRIPT_ARG.test(arg))) {
+  // `bash -s` reads its script from stdin even when operands follow, as `curl ... | bash -s -- arg`.
+  const scriptOperand =
+    INLINE_SCRIPT[program] === DASH_C && options.some(arg => /^-[a-zA-Z]*s/.test(arg)) ? '-' : operands[0];
+  if (
+    stdin &&
+    STDIN_SCRIPT.test(program) &&
+    (scriptOperand === undefined || scriptOperand === '-' || STDIN_SCRIPT_ARG.test(scriptOperand))
+  ) {
     return `${program} reading a script from stdin`;
   }
   if ((program === 'npm' || program === 'pnpm' || program === 'yarn') && args.includes('publish')) {
