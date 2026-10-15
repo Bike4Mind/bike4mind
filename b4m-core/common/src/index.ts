@@ -18,6 +18,7 @@ export * from './realtimeVoicePricing';
 export * from './imageGeneration';
 export * from './generatedAsset';
 export * from './generatedAudio';
+export * from './elevenLabsAudioFormat';
 export * from './voiceGeneration';
 export * from './voicePricing';
 export * from './generation';

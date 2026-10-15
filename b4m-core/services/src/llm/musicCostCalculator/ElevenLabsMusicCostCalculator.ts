@@ -1,4 +1,3 @@
-import { DEFAULT_MUSIC_LENGTH_MS } from '@bike4mind/common';
 import { MusicCost, MusicCostCalculator } from './types';
 
 /**
@@ -11,12 +10,14 @@ import { MusicCost, MusicCostCalculator } from './types';
 const USD_PER_SECOND = 0.15 / 60; // $0.0025
 
 export interface ElevenLabsMusicCostInput {
-  lengthMs?: number;
+  /** Required, with no fallback here: the billed length must be the exact length the caller sends the
+   * provider, so the default is applied once, upstream (musicRequestSchema), never in two places. */
+  lengthMs: number;
 }
 
 export class ElevenLabsMusicCostCalculator implements MusicCostCalculator<ElevenLabsMusicCostInput> {
   getCost(input: ElevenLabsMusicCostInput): MusicCost {
-    const billedSeconds = (input.lengthMs ?? DEFAULT_MUSIC_LENGTH_MS) / 1000;
+    const billedSeconds = input.lengthMs / 1000;
     return { usdCost: billedSeconds * USD_PER_SECOND, billedSeconds };
   }
 }

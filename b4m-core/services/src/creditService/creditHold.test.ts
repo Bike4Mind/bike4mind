@@ -41,7 +41,7 @@ describe('holdCredits', () => {
   it('moves the credits out of the user balance and returns plain data', async () => {
     const { adapters, state } = makeAdapters({ user: 100 });
     const hold = await holdCredits(
-      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video' },
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
       adapters
     );
     expect(hold).toEqual({
@@ -59,7 +59,7 @@ describe('holdCredits', () => {
   it('bills the organization pool when an organization is given', async () => {
     const { adapters, state } = makeAdapters({ user: 0, org: 50 });
     const hold = await holdCredits(
-      { userId: 'u1', organizationId: 'o1', requiredCredits: 20, featureLabel: 'video' },
+      { userId: 'u1', organizationId: 'o1', requiredCredits: 20, featureLabel: 'video', logger },
       adapters
     );
     expect(hold.ownerType).toBe(CreditHolderType.Organization);
@@ -70,9 +70,38 @@ describe('holdCredits', () => {
   it('rolls back and throws insufficient credits when the hold overdraws', async () => {
     const { adapters, state } = makeAdapters({ user: 10 });
     await expect(
-      holdCredits({ userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video' }, adapters)
+      holdCredits({ userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger }, adapters)
     ).rejects.toThrow(/do not have enough credits for video/);
     expect(state.user).toBe(10);
+  });
+
+  it('logs a failed overdraw rollback and still answers insufficient credits', async () => {
+    const { adapters } = makeAdapters({ user: 10 });
+    vi.mocked(adapters.users.incrementCredits)
+      .mockResolvedValueOnce({ currentCredits: -20 } as never)
+      .mockRejectedValueOnce(new Error('db down'));
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    await expect(
+      holdCredits({ userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger }, adapters)
+    ).rejects.toThrow(/do not have enough credits for video/);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('overdraw rollback failed'),
+      expect.objectContaining({ ownerId: 'u1', requiredCredits: 30, error: 'db down' })
+    );
+    error.mockRestore();
+  });
+
+  it('reports a holder deleted mid-request as not found, not as insufficient credits', async () => {
+    const { adapters } = makeAdapters({ user: 100 });
+    vi.mocked(adapters.users.incrementCredits).mockResolvedValueOnce(null);
+
+    const hold = holdCredits(
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
+      adapters
+    );
+    await expect(hold).rejects.toThrow('User not found');
+    await expect(hold).rejects.not.toThrow(/enough credits/);
   });
 
   it.each([-5, 0, Number.NaN, Number.POSITIVE_INFINITY])(
@@ -80,7 +109,7 @@ describe('holdCredits', () => {
     async requiredCredits => {
       const { adapters, state } = makeAdapters({ user: 100 });
       await expect(
-        holdCredits({ userId: 'u1', organizationId: null, requiredCredits, featureLabel: 'video' }, adapters)
+        holdCredits({ userId: 'u1', organizationId: null, requiredCredits, featureLabel: 'video', logger }, adapters)
       ).rejects.toThrow(`video credit hold requires a positive finite amount, got ${requiredCredits}`);
       expect(adapters.users.findById).not.toHaveBeenCalled();
       expect(adapters.users.incrementCredits).not.toHaveBeenCalled();
@@ -97,6 +126,7 @@ describe('holdCredits', () => {
           organizationId: null,
           requiredCredits: 30,
           featureLabel: 'video',
+          logger,
           assertBillable: () => {
             throw new Error('nope');
           },
@@ -114,7 +144,7 @@ describe('settleCreditHold', () => {
   it('refunds the over-reservation and writes the ledger row for what was kept', async () => {
     const { adapters, state } = makeAdapters({ user: 100 });
     const hold = await holdCredits(
-      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video' },
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
       adapters
     );
     const charged = await settleCreditHold(hold, 20, entry, { featureLabel: 'video', logger }, adapters);
@@ -130,7 +160,7 @@ describe('settleCreditHold', () => {
   it('never keeps more than it reserved', async () => {
     const { adapters, state } = makeAdapters({ user: 100 });
     const hold = await holdCredits(
-      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video' },
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
       adapters
     );
     expect(await settleCreditHold(hold, 999, entry, { featureLabel: 'video', logger }, adapters)).toBe(30);
@@ -140,7 +170,7 @@ describe('settleCreditHold', () => {
   it('settles a hold that went through JSON, as a different process would', async () => {
     const { adapters, state } = makeAdapters({ user: 100 });
     const hold = await holdCredits(
-      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video' },
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
       adapters
     );
     const revived = JSON.parse(JSON.stringify(hold));
@@ -152,7 +182,7 @@ describe('settleCreditHold', () => {
     const { adapters, state } = makeAdapters({ user: 100 });
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
     const hold = await holdCredits(
-      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video' },
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
       adapters
     );
     expect(await settleCreditHold(hold, Number.NaN, entry, { featureLabel: 'video', logger }, adapters)).toBe(30);
@@ -173,7 +203,7 @@ describe('settleCreditHold', () => {
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
     vi.mocked(deductCreditsWithOrgSupport).mockRejectedValueOnce(new Error('ledger down'));
     const hold = await holdCredits(
-      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video' },
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
       adapters
     );
     expect(await settleCreditHold(hold, 30, entry, { featureLabel: 'video', logger }, adapters)).toBe(30);
@@ -188,7 +218,7 @@ describe('releaseCreditHold', () => {
   it('returns the whole reservation', async () => {
     const { adapters, state } = makeAdapters({ user: 100 });
     const hold = await holdCredits(
-      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video' },
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
       adapters
     );
     await releaseCreditHold(hold, adapters);

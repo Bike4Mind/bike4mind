@@ -14797,12 +14797,6 @@
                   "type": "string",
                   "contentEncoding": "binary"
                 }
-              },
-              "application/octet-stream": {
-                "schema": {
-                  "type": "string",
-                  "contentEncoding": "binary"
-                }
               }
             }
           },
@@ -15106,7 +15100,7 @@
             }
           },
           "422": {
-            "description": "Request body failed validation, or the caller cannot afford the track - the latter is tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted).",
+            "description": "Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the track - the latter is tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted).",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
@@ -15470,12 +15464,6 @@
                   "type": "string",
                   "contentEncoding": "binary"
                 }
-              },
-              "application/octet-stream": {
-                "schema": {
-                  "type": "string",
-                  "contentEncoding": "binary"
-                }
               }
             }
           },
@@ -15725,7 +15713,7 @@
             }
           },
           "422": {
-            "description": "Request body failed validation, or the caller cannot afford the effect - the latter is tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted).",
+            "description": "Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the effect - the latter is tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted).",
             "content": {
               "application/json": {
                 "schema": {

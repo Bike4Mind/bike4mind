@@ -392,6 +392,33 @@ describe('POST /api/ai/music', () => {
     expect(getEffectiveApiKey).not.toHaveBeenCalled();
   });
 
+  it('refuses a format the provider has no MIME type for with 422, before reserving or generating', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+
+    const { res, promise } = run({ prompt: 'thunder score', lengthMs: 30000, format: 'alaw_8000' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData().error).toMatch(/alaw_8000/);
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('still answers 502 when refunding the failed generation also fails', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+    generate.mockRejectedValue(new Error('provider down'));
+    userIncrement.mockResolvedValueOnce({ currentCredits: 850 }).mockRejectedValueOnce(new Error('db down'));
+
+    const { res, promise } = run({ prompt: 'thunder score', lengthMs: 30000 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(502);
+    expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 150);
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+  });
+
   it('maps an upstream provider failure to 502 and refunds the reservation', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });

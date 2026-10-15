@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { ResponseSpec } from '../types';
+import { ELEVENLABS_AUDIO_CONTENT_TYPES } from '../../elevenLabsAudioFormat';
 
 /**
  * Responses shared by the endpoints that return generated audio (TTS, music,
@@ -9,18 +10,8 @@ import type { ResponseSpec } from '../types';
  * three must agree.
  */
 
-/**
- * Every Content-Type the ElevenLabs generators map an `output_format` token to
- * (`contentTypeForFormat` in ElevenLabsMusicGenerator / ElevenLabsSoundGenerator).
- * Must stay in sync with those two mappings.
- */
-export const GENERATED_AUDIO_CONTENT_TYPES = [
-  'audio/mpeg',
-  'audio/opus',
-  'audio/L16',
-  'audio/basic',
-  'application/octet-stream',
-] as const;
+/** Every Content-Type a generated-audio endpoint's binary encoding can return. */
+export const GENERATED_AUDIO_CONTENT_TYPES = ELEVENLABS_AUDIO_CONTENT_TYPES;
 
 /**
  * Where the browsable copy of the generated audio ended up. The binary encoding
