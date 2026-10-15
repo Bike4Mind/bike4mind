@@ -61,6 +61,19 @@ vi.mock('./agentExecutor.videoToolConfig', async () => {
   };
 });
 
+vi.mock('./agentExecutor.musicToolConfig', async () => {
+  const actual = await vi.importActual<typeof import('./agentExecutor.musicToolConfig')>(
+    './agentExecutor.musicToolConfig'
+  );
+  return {
+    ...actual,
+    getAgentMusicToolConfigDeps: vi.fn().mockReturnValue({
+      buildBaseConfig: vi.fn().mockResolvedValue({ usableModels: ['test-music'], createJob: vi.fn() }),
+      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    }),
+  };
+});
+
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: vi.fn().mockReturnValue({}),
   getGeneratedImageStorage: vi.fn().mockReturnValue({}),
@@ -232,6 +245,34 @@ describe('processExecution tool deps', () => {
       await toolCallbacks.onStatusUpdate({ generationJobs: [{ id: 'job-1', kind: 'music' }] });
 
       expect(questRepository.addGenerationJobs).toHaveBeenCalledWith('q-run', [{ id: 'job-1', kind: 'music' }]);
+    });
+  });
+
+  describe('music_generation wiring', () => {
+    const musicExecDoc = {
+      ...execDoc,
+      linkedQuestId: 'q-run',
+      resolvedEnabledTools: ['music_generation'],
+    };
+
+    async function runWithExecDoc(doc: Record<string, unknown>) {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      await runWithSession(baseSession);
+    }
+
+    it('offers the music tool to a run without an API key', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      await runWithExecDoc(musicExecDoc);
+
+      expect(vi.mocked(buildSubagentToolConfig).mock.calls[0][0].musicConfig).not.toBeNull();
+    });
+
+    it('withholds the music tool from a run started with an API key', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      await runWithExecDoc({ ...musicExecDoc, apiKeyId: 'key-1' });
+
+      expect(vi.mocked(buildSubagentToolConfig).mock.calls[0][0].musicConfig).toBeNull();
     });
   });
 
