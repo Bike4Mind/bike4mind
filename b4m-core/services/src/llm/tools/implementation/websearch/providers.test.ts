@@ -449,6 +449,33 @@ describe('outgoing search request logging', () => {
     });
   });
 
+  it('logs a permanent SearXNG client error at error under a hedge', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 403));
+
+    await expect(
+      createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5, { throwOnError: true })
+    ).rejects.toThrow('SearXNG error: HTTP 403');
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('SearXNG error'),
+      expect.objectContaining({ status: 403 })
+    );
+  });
+
+  it('keeps a rate-limited SearXNG attempt at warn under a hedge', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 429));
+
+    await expect(
+      createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5, { throwOnError: true })
+    ).rejects.toThrow('SearXNG error: HTTP 429');
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('SearXNG error'),
+      expect.objectContaining({ status: 429 })
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
   it('logs the SearXNG request when the fetch throws', async () => {
     fetchMock.mockRejectedValue(new Error('boom'));
 
