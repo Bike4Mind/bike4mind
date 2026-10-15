@@ -64,20 +64,43 @@ auto-update can.
 ### Automated releases
 
 [`Desktop Release`](../../.github/workflows/desktop-release.yml) runs on pushes to
-`main` touching desktop, shared core packages, CLI sources, build configuration, or
-dependencies. It can also be run manually from Actions on `main`.
+`main` and pull requests touching `apps/desktop/**` or the desktop release workflow,
+version script, dependency gate, and their tests. It can also be run manually from
+Actions on `main`.
+
+Automatic triggers are temporarily desktop-only. Shared/core/backend sources, root
+dependencies, lockfiles, patches, and shared configuration alone do not start this
+workflow, even when desktop depends on them. Until dependency-aware triggers are
+restored, those changes need a manual run or a later desktop change to package.
+
+When a run starts, before packaging,
+`scripts/desktop_affected.py` compares the desktop workspace dependency closure on both
+sides, including dev/typecheck dependencies and transitively resolved lockfile entries.
+The same check governs semantic bumps and release notes, excluding unrelated workspace
+and web-only changes. Shared workspace/build configuration remains a conservative
+input within an existing run; malformed or missing historical inputs require a build.
+Pull requests compare their base with the head. Pushes and manual runs check every
+commit since the last desktop release, including pending shared dependency changes.
 
 Pull requests targeting `main` run the same builds and artifact validation without
 publishing a release. In the workflow run's Artifacts section, download
-`desktop-mac-arm64`, `desktop-mac-x64`, and `desktop-linux-x64` for installers,
+`desktop-mac-arm64` and `desktop-linux-x64` for installers,
 plus `installer-checksums` for `SHA256SUMS.txt`. PR jobs have only
 read access to repository contents; the publication job runs only for pushes or manual
 dispatches on `main`. PR runs are isolated from the main release concurrency group.
 
 The workflow installs from the frozen lockfile, builds shared packages, runs desktop
-typechecks and tests on macOS and Linux, then packages both macOS architectures and
-Linux x64. Publication waits for all three build jobs and validates all five artifacts.
+typechecks and tests on macOS and Linux, then packages Apple Silicon and Linux x64.
+The two platform jobs run in parallel; Turbo also builds independent shared packages
+in parallel while respecting dependency order. Intel macOS release builds are temporarily
+paused; local x64 packaging remains available. Publication waits for both build jobs and
+validates the arm64 DMG, arm64 ZIP, and Linux AppImage.
 Failed uploads leave a draft release, not a partially published download page.
+
+macOS jobs read the repository or organization Actions variable `OSX_RUNNER_LABEL`,
+defaulting to `macos-26-runner` when unset or empty. The selected runner must be
+Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`.
+Paid runner usage is billed by GitHub.
 
 Publication uses the existing release App with repository-scoped contents write access
 to create protected tags. The workflow token and PR build jobs remain read-only. Missing
@@ -103,8 +126,8 @@ real workstation, or authenticated chat. Those still need real-machine acceptanc
 
 The macOS job mounts the native-architecture DMG read-only, copies the app to a temporary
 installation directory, and runs the same startup checks with an isolated profile.
-`mac-arm64-smoke-results` and `mac-x64-smoke-results` contain screenshots and logs.
-Both architectures run on native standard runners. The tests use a mock keychain
+`mac-arm64-smoke-results` contains screenshots and logs.
+Apple Silicon runs on a native standard runner. The tests use a mock keychain
 to avoid system prompts or accessing a real login keychain. It does not verify secure
 credential persistence. This does
 not verify Gatekeeper approval on a fresh machine.
