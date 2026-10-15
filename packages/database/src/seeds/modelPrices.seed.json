@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-15T03:31:40.733Z",
+  "generatedAt": "2026-10-15T04:27:27.021Z",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -324,15 +324,10 @@
       "modelId": "gemini-2.5-pro",
       "unit": "per_token",
       "pricing": {
-        "200000": {
+        "2097152": {
           "input": 0.00000125,
           "output": 0.00001,
           "cache_read": 1.25e-7
-        },
-        "2097152": {
-          "input": 0.0000025,
-          "output": 0.000015,
-          "cache_read": 2.5e-7
         }
       }
     },
@@ -382,15 +377,10 @@
       "modelId": "gemini-3.1-pro-preview",
       "unit": "per_token",
       "pricing": {
-        "200000": {
+        "2097152": {
           "input": 0.000002,
           "output": 0.000018,
           "cache_read": 2.0000000000000002e-7
-        },
-        "2097152": {
-          "input": 0.000004,
-          "output": 0.000018,
-          "cache_read": 4.0000000000000003e-7
         }
       }
     },

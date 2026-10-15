@@ -27,10 +27,10 @@ const findModel = async (id: ChatModels): Promise<ModelInfo> => {
 // https://cloud.google.com/vertex-ai/generative-ai/pricing.
 const PUBLISHED_CACHE_READ: Partial<Record<ChatModels, Record<number, number>>> = {
   [ChatModels.GEMINI_3_5_FLASH]: { 1048576: 0.15 },
-  [ChatModels.GEMINI_3_1_PRO_PREVIEW]: { 200000: 0.2, 2097152: 0.4 },
+  [ChatModels.GEMINI_3_1_PRO_PREVIEW]: { 2097152: 0.2 },
   [ChatModels.GEMINI_3_1_FLASH_LITE]: { 1048576: 0.025 },
   [ChatModels.GEMINI_3_FLASH_PREVIEW]: { 2097152: 0.05 },
-  [ChatModels.GEMINI_2_5_PRO]: { 200000: 0.125, 2097152: 0.25 },
+  [ChatModels.GEMINI_2_5_PRO]: { 2097152: 0.125 },
   [ChatModels.GEMINI_2_5_FLASH]: { 1048576: 0.03 },
   [ChatModels.GEMINI_2_5_FLASH_LITE]: { 1048576: 0.01 },
   [ChatModels.GROK_4_5]: { 200000: 0.3, 500000: 0.6 },
@@ -89,19 +89,4 @@ describe('Gemini and xAI cache-read rates', () => {
 
     expect(cost).toBeCloseTo((50_000 * input + 100_000 * cacheRead + 1_000 * output) / 1_000_000, 10);
   });
-
-  it.each([
-    [ChatModels.GEMINI_2_5_PRO, 2.5, 0.25, 15],
-    [ChatModels.GEMINI_3_1_PRO_PREVIEW, 4, 0.4, 18],
-  ])(
-    'bills a cached %s request over 200K at the published long-context rates',
-    async (id, input, cacheRead, output) => {
-      const model = await findModel(id);
-
-      // 250K-token prompt, 200K of it served from cache, 1K out: Google prices every token at the >200K rate.
-      const cost = getTurnsCost(model, [{ inputTokens: 50_000, cacheReadInputTokens: 200_000, outputTokens: 1_000 }]);
-
-      expect(cost).toBeCloseTo((50_000 * input + 200_000 * cacheRead + 1_000 * output) / 1_000_000, 10);
-    }
-  );
 });

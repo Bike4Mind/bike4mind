@@ -192,11 +192,11 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          // Tiered on prompt size, and every rate moves with the tier (a single tier would bill a
-          // >200K cached prompt at the <=200K cache rate). <=200K: $2 in, $0.20 cache read; >200K:
-          // $4 in, $18 out, $0.40 cache read, per 1M. @see https://ai.google.dev/gemini-api/docs/pricing
-          200000: { input: 2 / 1000000, output: 18.0 / 1000000, cache_read: 0.2 / 1000000 },
-          2097152: { input: 4 / 1000000, output: 18 / 1000000, cache_read: 0.4 / 1000000 },
+          // <=200K rates: $2 in, $0.20 cache read per 1M (>200K is $4 in, $0.40 cache read). Held
+          // flat until every billing path picks the tier per request: summed tool-loop or agent-run
+          // input would cross 200K and bill the whole run at the upper rate.
+          // @see https://ai.google.dev/gemini-api/docs/pricing
+          2097152: { input: 2 / 1000000, output: 18.0 / 1000000, cache_read: 0.2 / 1000000 },
         },
         supportsVision: true,
         supportsTools: true,
@@ -361,12 +361,11 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          // Tiered on prompt size, and every rate moves with the tier (a single tier would bill a
-          // >200K cached prompt at the <=200K cache rate). <=200K: $1.25 in, $10 out, $0.125 cache
-          // read; >200K: $2.50 in, $15 out, $0.25 cache read, per 1M.
+          // <=200K rates: $1.25 in, $10 out, $0.125 cache read per 1M (>200K is $2.50 / $15 /
+          // $0.25). Held flat until every billing path picks the tier per request: summed tool-loop
+          // or agent-run input would cross 200K and bill the whole run at the upper rate.
           // @see https://ai.google.dev/gemini-api/docs/pricing
-          200000: { input: 1.25 / 1000000, output: 10.0 / 1000000, cache_read: 0.125 / 1000000 },
-          2097152: { input: 2.5 / 1000000, output: 15 / 1000000, cache_read: 0.25 / 1000000 },
+          2097152: { input: 1.25 / 1000000, output: 10.0 / 1000000, cache_read: 0.125 / 1000000 },
         },
         supportsVision: true,
         supportsTools: true,

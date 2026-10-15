@@ -89,9 +89,9 @@ export async function adapterBuildPricedModelIds(): Promise<ReadonlySet<string>>
  *
  * Lowest tier on purpose: this is a last-resort carry for rates no feed
  * publishes (cache and audio), and the threshold keys of a discovered ladder need
- * not match the literal's. Cache rates do vary by bracket on a few ladders
- * (gemini-2.5-pro, gemini-3.1-pro-preview, grok-4.5), so a first row carried from
- * here takes the lowest bracket's cache_read on every tier. Memoized - the tables
+ * not match the literal's. Cache rates do vary by bracket on some ladders
+ * (grok-4.5), so a first row carried from here takes the lowest bracket's
+ * cache_read on every tier. Memoized - the tables
  * are static, and the planner runs once per convergence pass.
  */
 export async function adapterPriceTiers(): Promise<ReadonlyMap<string, IModelPriceTier>> {
