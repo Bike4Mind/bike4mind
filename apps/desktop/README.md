@@ -52,14 +52,13 @@ gitignored.
 | Command | Produces |
 | --- | --- |
 | `pnpm package` | everything the host platform can build |
-| `pnpm package:mac` | `dmg` and `zip`, both for arm64 and x64 |
+| `pnpm package:mac` | `dmg`, both for arm64 and x64 |
 | `pnpm package:win` | `nsis` installer, x64 |
 | `pnpm package:linux` | `AppImage`, x64 |
 | `pnpm package:dir` | an unpacked `.app`/directory, no installer - the fast loop |
 
-The macOS `zip` is not redundant with the `dmg`. The dmg is the human-facing installer;
-the zip is the format a Squirrel.Mac auto-updater consumes, so it has to exist before
-auto-update can.
+macOS ships DMGs only while updates are installed manually. Linux keeps AppImage as its
+only installer. ZIPs can return if an automatic updater requires them.
 
 ### Automated releases
 
@@ -76,8 +75,12 @@ dispatches on `main`. PR runs are isolated from the main release concurrency gro
 
 The workflow installs from the frozen lockfile, builds shared packages, runs desktop
 typechecks and tests on macOS and Linux, then packages both macOS architectures and
-Linux x64. Publication waits for all three build jobs and validates all five artifacts.
+Linux x64. Publication waits for all three build jobs and validates all three installers.
 Failed uploads leave a draft release, not a partially published download page.
+
+Publication uses the existing release App with repository-scoped contents write access
+to create protected tags. The workflow token and PR build jobs remain read-only. Missing
+App credentials fail publication rather than falling back to the workflow token.
 
 Storage is deliberately short-lived: platform installers, checksums, and release notes
 expire after one day; startup evidence expires after three days. Installers are stored

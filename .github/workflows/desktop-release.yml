@@ -65,6 +65,8 @@ jobs:
           persist-credentials: false
       - name: Test semantic version selection
         run: python3 -m unittest discover -s scripts -p test_desktop_release_version.py -v
+      - name: Test installer and publisher contract
+        run: python3 -m unittest discover -s apps/desktop/scripts -p test_release_workflow.py -v
       - name: Choose installer version
         id: version
         env:
@@ -126,7 +128,7 @@ jobs:
         run: |
           pnpm build
           if [ "$PLATFORM" = mac ]; then
-            pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never "-c.extraMetadata.version=$DESKTOP_VERSION"
+            pnpm exec electron-builder --mac dmg "--$ARCH" --publish never "-c.extraMetadata.version=$DESKTOP_VERSION"
           else
             pnpm exec electron-builder --linux --publish never "-c.extraMetadata.version=$DESKTOP_VERSION"
           fi
@@ -145,7 +147,7 @@ jobs:
             if [ -z "${!key}" ]; then echo "Missing signing credential: $key"; exit 1; fi
           done
           pnpm build
-          pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.forceCodeSigning=true -c.mac.notarize=true "-c.extraMetadata.version=$DESKTOP_VERSION"
+          pnpm exec electron-builder --mac dmg "--$ARCH" --publish never -c.forceCodeSigning=true -c.mac.notarize=true "-c.extraMetadata.version=$DESKTOP_VERSION"
           app_dir=release/mac
           if [ "$ARCH" = arm64 ]; then app_dir=release/mac-arm64; fi
           codesign --verify --deep --strict "$app_dir/Bike4Mind.app"
@@ -186,7 +188,6 @@ jobs:
           retention-days: 1
           path: |
             apps/desktop/release/*.dmg
-            apps/desktop/release/*.zip
             apps/desktop/release/*.AppImage
 
   validate:
@@ -216,7 +217,6 @@ jobs:
           version = versions[0]
           expected = {
               f'Bike4Mind-{version}-arm64.dmg', f'Bike4Mind-{version}-x64.dmg',
-              f'Bike4Mind-{version}-arm64.zip', f'Bike4Mind-{version}-x64.zip',
               f'Bike4Mind-{version}-x64.AppImage',
           }
           if set(files) != expected:
@@ -227,7 +227,7 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\n')
           PY
-          sha256sum -- *.dmg *.zip *.AppImage > SHA256SUMS.txt
+          sha256sum -- *.dmg *.AppImage > SHA256SUMS.txt
       - uses: actions/upload-artifact@v6
         with:
           name: installer-checksums
@@ -240,8 +240,6 @@ jobs:
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -259,14 +257,23 @@ jobs:
         with:
           name: release-notes
           path: notes
+      - name: Generate release App token
+        id: release-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
       - name: Publish desktop release
         env:
           DESKTOP_VERSION: ${{ needs.validate.outputs.version }}
           RELEASE_TARGET: ${{ github.sha }}
           SIGNED: ${{ vars.DESKTOP_MAC_SIGNING == 'true' }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          if [ -z "$GH_TOKEN" ]; then echo 'Release App token is required.'; exit 1; fi
           printf '\nmacOS signing and notarization enabled: %s\n' "$SIGNED" >> notes/desktop-release-notes.md
           (cd installers && sha256sum --check SHA256SUMS.txt)
           bash apps/desktop/scripts/publish-release.sh installers notes/desktop-release-notes.md
