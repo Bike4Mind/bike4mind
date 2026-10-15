@@ -105,6 +105,15 @@ export interface DeductDecisionCreditsParams extends DeductCreditsCommonParams {
   apiKeyId?: string;
 }
 
+/** Quest-less text completion on a platform key outside chat (e.g. lattice chat, AI file edit). */
+export interface DeductCompletionApiUsageCreditsParams extends DeductCreditsCommonParams {
+  type: 'completion_api_usage';
+  inputTokens: number;
+  outputTokens: number;
+  /** Present for API key auth, undefined for JWT */
+  apiKeyId?: string;
+}
+
 /**
  * Union type of all deduction parameter types
  */
@@ -115,7 +124,8 @@ export type DeductCreditsParams =
   | DeductTextGenerationCreditsParams
   | DeductSoundEffectsCreditsParams
   | DeductMusicGenerationCreditsParams
-  | DeductDecisionCreditsParams;
+  | DeductDecisionCreditsParams
+  | DeductCompletionApiUsageCreditsParams;
 
 /**
  * Database adapters required for credit deduction.
@@ -229,11 +239,11 @@ export async function deductCreditsWithOrgSupport(
   } else if (type === 'music_generation_usage') {
     // Quest-less: music generation has no questId.
     transactionParams = { ...baseParams, type: 'music_generation_usage' };
-  } else if (type === 'decision_usage') {
-    // Quest-less: decisions have no questId.
+  } else if (type === 'decision_usage' || type === 'completion_api_usage') {
+    // Quest-less: decisions and completions have no questId.
     transactionParams = {
       ...baseParams,
-      type: 'decision_usage',
+      type,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
       apiKeyId: params.apiKeyId,

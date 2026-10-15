@@ -169,7 +169,7 @@ export interface CompletionParams {
  * Estimate input tokens from messages. Conservative pre-flight estimate at
  * 2.5 chars/token (code, JSON, and non-English tokenize less efficiently).
  */
-function estimateInputTokens(messages: IMessage[]): number {
+export function estimateInputTokens(messages: IMessage[]): number {
   const totalChars = messages.reduce((sum, msg) => {
     const contentLength = typeof msg.content === 'string' ? msg.content.length : JSON.stringify(msg.content).length;
     return sum + contentLength;

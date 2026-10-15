@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const {
@@ -8,6 +9,7 @@ const {
   mockAgentRun,
   mockReplSessionCtor,
   mockRecordReplSandboxUnavailable,
+  meter,
 } = vi.hoisted(() => ({
   mockResolveAccessibleLakes: vi.fn(),
   mockBuildDataLakeTools: vi.fn(),
@@ -17,7 +19,15 @@ const {
   // whole security posture of this endpoint, so it has to be observable.
   mockReplSessionCtor: vi.fn(),
   mockRecordReplSandboxUnavailable: vi.fn(),
+  meter: {
+    denied: new Set<string>(),
+    refund: vi.fn(),
+    reserve: vi.fn(),
+    settle: vi.fn(),
+    replCostUsd: 0,
+  },
 }));
+meter.reserve.mockImplementation(async () => ({ reservedCredits: 10, refund: meter.refund }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -38,7 +48,9 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@bike4mind/llm-adapters', () => ({
-  getAvailableModels: vi.fn(async () => [{ id: 'global.anthropic.claude-sonnet-4-6' }]),
+  getAvailableModels: vi.fn(async () => [
+    { id: 'global.anthropic.claude-sonnet-4-6', pricing: { 200_000: { input: 3e-6, output: 15e-6 } } },
+  ]),
   getLlmByModel: vi.fn(() => ({})),
 }));
 vi.mock('@bike4mind/agents', () => ({
@@ -50,12 +62,26 @@ vi.mock('@bike4mind/agents', () => ({
       mockReplSessionCtor(opts);
     }
     setTools = vi.fn();
-    getUsage = () => ({ executions: 0, subLlmCalls: 0, totalCostUsd: 0 });
+    getUsage = () => ({ executions: 0, subLlmCalls: 0, totalCostUsd: meter.replCostUsd });
     dispose = vi.fn();
   },
   BudgetExceededError: class extends Error {},
   makeCodeExecuteTool: vi.fn(() => ({ name: 'code_execute' })),
   recordReplSandboxUnavailable: mockRecordReplSandboxUnavailable,
+}));
+
+vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
+// Balance mechanics are covered in meterPlatformCompletion.test.ts; this pins the route's call order.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({
+    assert: async (id: string) => {
+      if (meter.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
+    },
+  }),
+  reserveCompletionCredits: (...args: unknown[]) => meter.reserve(...args),
+  completionUsd: (_model: unknown, u: { inputTokens?: number; outputTokens?: number }) =>
+    (u.inputTokens ?? 0) * 0.001 + (u.outputTokens ?? 0) * 0.002,
+  settleCompletion: (_reservation: unknown, _req: unknown, charge: unknown) => meter.settle(charge),
 }));
 
 import handler from '../rlm-answer';
@@ -230,5 +256,85 @@ describe('POST /api/data-lakes/rlm-answer - REPL sandbox posture', () => {
     await call({ authorization: 'Bearer caller.jwt.token' });
 
     expect(mockRecordReplSandboxUnavailable).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/data-lakes/rlm-answer - metering', () => {
+  const MODEL = 'global.anthropic.claude-sonnet-4-6';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    meter.denied.clear();
+    meter.replCostUsd = 0.25;
+    mockResolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }]);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ anthropic: 'sk-test' });
+    mockBuildDataLakeTools.mockReturnValue({});
+    mockAgentRun.mockResolvedValue({
+      finalAnswer: 'ok',
+      steps: [],
+      completionInfo: {
+        iterations: 2,
+        toolCalls: 1,
+        reachedMaxIterations: false,
+        totalInputTokens: 1000,
+        totalOutputTokens: 300,
+      },
+    });
+  });
+
+  it('refuses a zero-credit caller with 422 and never runs the agent', async () => {
+    meter.reserve.mockRejectedValueOnce(insufficientCreditsError('You do not have enough credits.'));
+
+    await expect(call({ authorization: 'Bearer t' })).rejects.toMatchObject({ statusCode: 422 });
+    expect(mockAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('403s a model the user is not admitted to, before reserving or running the agent', async () => {
+    meter.denied.add(MODEL);
+
+    await expect(call({ authorization: 'Bearer t' })).rejects.toMatchObject({ statusCode: 403 });
+    expect(meter.reserve).not.toHaveBeenCalled();
+    expect(mockAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('reserves the root ceiling plus the whole sub-LLM budget', async () => {
+    await call({ authorization: 'Bearer t' });
+
+    // The default budget is the $5 hard cap; the root ceiling sits on top of it.
+    expect(meter.reserve.mock.calls[0][1]).toBeGreaterThan(5);
+  });
+
+  it('settles root usage plus sub-LLM spend', async () => {
+    const res = await call({ authorization: 'Bearer t' });
+
+    expect(res.statusCode).toBe(200);
+    expect(meter.reserve).toHaveBeenCalledBefore(mockAgentRun);
+    expect(meter.settle).toHaveBeenCalledWith({
+      sessionId: expect.stringMatching(/^rlm-answer-/),
+      model: MODEL,
+      usd: 1000 * 0.001 + 300 * 0.002 + 0.25,
+      inputTokens: 1000,
+      outputTokens: 300,
+    });
+  });
+
+  it('settles only the sub-LLM spend when the agent throws', async () => {
+    mockAgentRun.mockRejectedValueOnce(new Error('provider down'));
+
+    const res = await call({ authorization: 'Bearer t' });
+
+    expect(res.statusCode).toBe(500);
+    expect(meter.settle).toHaveBeenCalledWith(expect.objectContaining({ usd: 0.25, inputTokens: 0, outputTokens: 0 }));
+  });
+
+  it('refunds in full when the sandbox cannot be constructed', async () => {
+    mockReplSessionCtor.mockImplementationOnce(() => {
+      throw new Error('No native build was found for isolated-vm');
+    });
+
+    await call({ authorization: 'Bearer t' });
+
+    expect(meter.refund).toHaveBeenCalledTimes(1);
+    expect(meter.settle).not.toHaveBeenCalled();
   });
 });

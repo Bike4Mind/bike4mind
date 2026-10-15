@@ -1,5 +1,6 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
+import type { CreditHoldRecord } from './CreditHolderTypes';
 
 /**
  * Lifecycle of a submitted Anthropic Message Batch, tracked locally so the
@@ -13,6 +14,8 @@ export type TransformBatchStatus = 'in_progress' | 'completed';
 export interface ITransformBatchCustomIdMapping {
   customId: string;
   clientRef: string;
+  /** The request's model, so the poll can price its usage. Absent on rows from before metering. */
+  model?: string;
 }
 
 /**
@@ -60,8 +63,20 @@ export interface ITransformBatch extends IMongoDocument {
    * 16MB doc cap; revisit (e.g. offload to S3) if batch sizes grow.
    */
   results?: ITransformBatchResultItem[];
+  /** Credits reserved at submit, settled once on the first poll that sees the batch end. */
+  creditHold?: CreditHoldRecord | null;
+  /** The API key that submitted the batch, for the settlement ledger row. */
+  apiKeyId?: string;
 }
 
 export interface ITransformBatchRepository extends IBaseRepository<ITransformBatch> {
   findByAnthropicBatchId: (anthropicBatchId: ITransformBatch['anthropicBatchId']) => Promise<ITransformBatch | null>;
+  /**
+   * Atomically mark an in-progress batch completed and clear its credit hold. Returns the row as it
+   * was before the update to exactly one caller (the one that settles the hold); null to the rest.
+   */
+  claimCompletion: (
+    id: string,
+    update: Pick<ITransformBatch, 'succeededCount' | 'erroredCount' | 'results'>
+  ) => Promise<ITransformBatch | null>;
 }

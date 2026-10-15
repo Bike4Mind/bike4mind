@@ -11,6 +11,8 @@ import {
   recordReplSandboxUnavailable,
 } from '@bike4mind/agents';
 import { getSettingsByNames } from '@bike4mind/utils';
+import { getTextModelCost, type IMessage, type ModelInfo } from '@bike4mind/common';
+import { estimateInputTokens } from '@bike4mind/services/cliCompletions';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_QUERY_SCOPES } from '@server/dataLakes/dataLakeScopes';
@@ -19,6 +21,12 @@ import { buildDataLakeTools } from '@server/tavern/rlm/tools';
 import { REPL_TOOL_SYSTEM_PROMPT } from '@server/tavern/rlm/dataLakeReplPrompts';
 import { resolvePrincipalAuthHeaders } from '@server/tavern/rlm/principalAuthHeaders';
 import { resolveAccessibleLakes } from '@server/dataLakes';
+import {
+  completionUsd,
+  createModelAdmission,
+  reserveCompletionCredits,
+  settleCompletion,
+} from '@server/billing/meterPlatformCompletion';
 import { HARD_TIMEOUT_MS, PER_CALL_REPL_TIMEOUT_MS, SUB_LLM_HTTP_TIMEOUT_MS } from '@server/tavern/rlm/timeouts';
 
 /**
@@ -88,6 +96,21 @@ const DEFAULT_MODEL = 'global.anthropic.claude-sonnet-4-6';
 // 25 matches the per-session execution budget; v1 ran with 12 and clipped
 // T3 trajectories mid-orchestration. See doc 13-before-vs-middle-vs-after.md.
 const DEFAULT_MAX_ITERATIONS = 25;
+const ROOT_MAX_TOKENS = 4096;
+const ROOT_HISTORY_ITERATIONS = 4;
+// codeExecuteTool truncates stdout to ~7K chars, ~3K tokens at the 2.5 chars/token estimate.
+const OBSERVATION_TOKEN_CAP = 3000;
+
+/**
+ * Worst-case root-agent spend: every iteration emits ROOT_MAX_TOKENS and re-reads the base prompt
+ * plus the kept history at its cap. Must stay >= real spend: settlement clamps to the hold, so any
+ * overrun past it is free.
+ */
+function rootCeilingUsd(modelInfo: ModelInfo, baseMessages: IMessage[], maxIterations: number): number {
+  const perIterationInput =
+    estimateInputTokens(baseMessages) + ROOT_HISTORY_ITERATIONS * (ROOT_MAX_TOKENS + OBSERVATION_TOKEN_CAP);
+  return getTextModelCost(modelInfo, maxIterations * perIterationInput, maxIterations * ROOT_MAX_TOKENS);
+}
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
   .use(
@@ -175,10 +198,33 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         availableModelIds: models.slice(0, 10).map(m => m.id),
       });
     }
+    await (await createModelAdmission(req.user)).assert(modelInfo.id);
     const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: req.user?.id });
     if (!llm) {
       return res.status(500).json({ error: `Failed to construct backend for model ${modelInfo.id}` });
     }
+
+    // --- Compose system prompt ---
+    const baseAgentPrompt =
+      'You are a research analyst answering questions over the data lake. ' +
+      'Your only tool is `code_execute`, which runs JavaScript in a persistent REPL ' +
+      'with access to data-lake search functions. You MUST use code_execute for every ' +
+      'retrieval step. When you have the information, give a complete, well-organized ' +
+      'answer with citations to article filenames in [brackets].';
+    const systemPrompt = `${baseAgentPrompt}\n\n${REPL_TOOL_SYSTEM_PROMPT}`;
+
+    // --- Reserve credits: root-agent ceiling plus the whole sub-LLM budget ---
+    const maxIterations = parsed.max_iterations ?? DEFAULT_MAX_ITERATIONS;
+    const maxCostUsd = parsed.budget?.max_cost_usd ?? HARD_PER_REQUEST_COST_CAP_USD;
+    const baseMessages: IMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: parsed.query },
+    ];
+    const reservation = await reserveCompletionCredits(
+      req,
+      rootCeilingUsd(modelInfo, baseMessages, maxIterations) + maxCostUsd,
+      'data-lake answers'
+    );
 
     // --- Construct a per-request ReplSession ---
     // `executor: 'isolated'` is load-bearing, not a preference. The code this
@@ -222,7 +268,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         budget: {
           maxExecutions: parsed.budget?.max_executions ?? 25,
           maxSubLlmCalls: parsed.budget?.max_sub_llm_calls ?? 200,
-          maxCostUsd: parsed.budget?.max_cost_usd ?? HARD_PER_REQUEST_COST_CAP_USD,
+          maxCostUsd,
         },
       });
     } catch (e) {
@@ -234,6 +280,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // A 503 reads as an ordinary transient upstream, but a missing native
       // addon is total for the build. Alarmed in infra/alarms.ts.
       await recordReplSandboxUnavailable('rlm-answer', req.logger);
+      await reservation.refund();
       return res.status(503).json({ error: 'Code-execution sandbox unavailable' });
     }
 
@@ -256,15 +303,6 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       toolNames: ['semanticSearch', 'keywordSearch', 'listArticles', 'getArticle', 'subAgentQuery'],
     });
 
-    // --- Compose system prompt ---
-    const baseAgentPrompt =
-      'You are a research analyst answering questions over the data lake. ' +
-      'Your only tool is `code_execute`, which runs JavaScript in a persistent REPL ' +
-      'with access to data-lake search functions. You MUST use code_execute for every ' +
-      'retrieval step. When you have the information, give a complete, well-organized ' +
-      'answer with citations to article filenames in [brackets].';
-    const systemPrompt = `${baseAgentPrompt}\n\n${REPL_TOOL_SYSTEM_PROMPT}`;
-
     // --- Construct + run the agent ---
     const agent = new ReActAgent({
       userId,
@@ -272,10 +310,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       llm,
       model: modelInfo.id,
       tools: [codeExecuteTool],
-      maxIterations: parsed.max_iterations ?? DEFAULT_MAX_ITERATIONS,
+      maxIterations,
       systemPrompt,
       temperature: 0.4,
-      maxTokens: 4096,
+      maxTokens: ROOT_MAX_TOKENS,
     });
 
     let timedOut = false;
@@ -294,9 +332,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
     try {
       try {
         result = await agent.run(parsed.query, {
-          maxIterations: parsed.max_iterations ?? DEFAULT_MAX_ITERATIONS,
+          maxIterations,
           signal: timeoutSignal,
-          maxHistoryIterations: 4,
+          maxHistoryIterations: ROOT_HISTORY_ITERATIONS,
         });
       } catch (e) {
         if (e instanceof BudgetExceededError) {
@@ -318,6 +356,27 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         );
       }
     }
+
+    // Abort and timeout still return a result carrying the partial usage, so they settle what ran.
+    // ponytail: root spend on a thrown run is unbilled (ReActAgent keeps partial usage private);
+    // expose it on the thrown error if that gap matters. Sub-LLM spend is always billed.
+    const rootUsage = result?.completionInfo;
+    await settleCompletion(reservation, req, {
+      sessionId,
+      model: modelInfo.id,
+      usd:
+        (rootUsage
+          ? completionUsd(modelInfo, {
+              inputTokens: rootUsage.totalInputTokens,
+              outputTokens: rootUsage.totalOutputTokens,
+              cacheReadInputTokens: rootUsage.totalCacheReadTokens,
+              cacheCreationInputTokens: rootUsage.totalCacheWriteTokens,
+              turnUsage: rootUsage.turnUsage,
+            })
+          : 0) + replUsage.totalCostUsd,
+      inputTokens: rootUsage?.totalInputTokens ?? 0,
+      outputTokens: rootUsage?.totalOutputTokens ?? 0,
+    });
 
     const totalLatencyMs = Date.now() - t0;
 

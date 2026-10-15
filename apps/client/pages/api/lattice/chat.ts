@@ -14,11 +14,21 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@server/utils/errors';
-import { ChatModels, type IMessage } from '@bike4mind/common';
+import {
+  completionCeilingUsd,
+  completionUsd,
+  createModelAdmission,
+  latchUsage,
+  reserveCompletionCredits,
+  settleCompletion,
+  type CompletionUsage,
+} from '@server/billing/meterPlatformCompletion';
+import { ChatModels, type IMessage, type ModelInfo } from '@bike4mind/common';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { ForbiddenError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import type { ICompletionOptionTools, CompletionInfo } from '@bike4mind/llm-adapters/backend';
 
@@ -322,19 +332,24 @@ const handler = baseApi({ auth: true }).post(
     // Prefer the newest Claude model that supports tool use, in priority order
     const preferredModels = [ChatModels.CLAUDE_4_6_SONNET, ChatModels.CLAUDE_4_5_SONNET, ChatModels.CLAUDE_4_SONNET];
 
-    let modelInfo = null;
-    for (const modelId of preferredModels) {
-      modelInfo = availableModels.find(m => m.id === modelId && m.supportsTools);
-      if (modelInfo) break;
-    }
-
-    // Fallback to any model that supports tools
-    if (!modelInfo) {
-      modelInfo = availableModels.find(m => m.supportsTools);
-    }
-
-    if (!modelInfo) {
+    // Fall back to any tool-capable model, skipping ones the catalog has disabled or gated for this user.
+    const candidates = [
+      ...preferredModels.flatMap(id => availableModels.filter(m => m.id === id && m.supportsTools)),
+      ...availableModels.filter(m => m.supportsTools),
+    ];
+    if (candidates.length === 0) {
       throw new BadRequestError('No LLM models with tool support available.');
+    }
+    const admission = await createModelAdmission(user);
+    let modelInfo: ModelInfo | undefined;
+    for (const candidate of candidates) {
+      if (await admission.admits(candidate.id)) {
+        modelInfo = candidate;
+        break;
+      }
+    }
+    if (!modelInfo) {
+      throw new ForbiddenError(`Model "${candidates[0].id}" is not accessible and no fallback available`);
     }
 
     logger.info(`[Lattice Chat] Using model: ${modelInfo.id}`);
@@ -363,15 +378,22 @@ const handler = baseApi({ auth: true }).post(
       },
     ];
 
-    try {
-      let assistantMessage = '';
-      let lastCompletionInfo: CompletionInfo | undefined;
+    const maxTokens = 4096;
+    const reservation = await reserveCompletionCredits(
+      req,
+      completionCeilingUsd(modelInfo, messages, maxTokens),
+      'Lattice chat'
+    );
 
+    let assistantMessage = '';
+    let lastCompletionInfo: CompletionInfo | undefined;
+    const usage: CompletionUsage = {};
+    try {
       await llm.complete(
         modelInfo.id,
         messages,
         {
-          maxTokens: 4096,
+          maxTokens,
           stream: true,
           tools: LATTICE_TOOLS,
           executeTools: false, // Return tool calls without executing - client will execute
@@ -383,43 +405,52 @@ const handler = baseApi({ auth: true }).post(
             }
           }
           lastCompletionInfo = completionInfo;
+          latchUsage(usage, completionInfo);
         }
       );
+    } catch (error) {
+      logger.error('[Lattice Chat] LLM call failed:', error);
+      await reservation.refund();
+      throw error;
+    }
 
-      const toolCalls: Array<{
-        id: string;
-        name: string;
-        input: Record<string, unknown>;
-      }> = [];
+    await settleCompletion(reservation, req, {
+      model: modelInfo.id,
+      usd: completionUsd(modelInfo, usage),
+      inputTokens: usage.inputTokens ?? 0,
+      outputTokens: usage.outputTokens ?? 0,
+    });
 
-      if (lastCompletionInfo?.toolsUsed) {
-        for (const tool of lastCompletionInfo.toolsUsed) {
-          if (tool.name && tool.arguments) {
-            try {
-              const input = JSON.parse(tool.arguments);
-              toolCalls.push({
-                id: `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                name: tool.name,
-                input,
-              });
-            } catch (parseError) {
-              logger.warn(`[Lattice Chat] Failed to parse tool arguments for ${tool.name}:`, parseError);
-            }
+    const toolCalls: Array<{
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+    }> = [];
+
+    if (lastCompletionInfo?.toolsUsed) {
+      for (const tool of lastCompletionInfo.toolsUsed) {
+        if (tool.name && tool.arguments) {
+          try {
+            const input = JSON.parse(tool.arguments);
+            toolCalls.push({
+              id: `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              name: tool.name,
+              input,
+            });
+          } catch (parseError) {
+            logger.warn(`[Lattice Chat] Failed to parse tool arguments for ${tool.name}:`, parseError);
           }
         }
       }
-
-      return res.json({
-        success: true,
-        assistantMessage,
-        toolCalls,
-        stopReason: toolCalls.length > 0 ? 'tool_use' : 'end_turn',
-        model: modelInfo.id,
-      });
-    } catch (error) {
-      logger.error('[Lattice Chat] LLM call failed:', error);
-      throw error;
     }
+
+    return res.json({
+      success: true,
+      assistantMessage,
+      toolCalls,
+      stopReason: toolCalls.length > 0 ? 'tool_use' : 'end_turn',
+      model: modelInfo.id,
+    });
   })
 );
 

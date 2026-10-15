@@ -1,8 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { transformBatchRepository } from '@bike4mind/database';
-import { NotFoundError } from '@bike4mind/utils';
-import { AnthropicBatchService } from '@bike4mind/llm-adapters';
+import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
+import { getTextModelCost } from '@bike4mind/common';
+import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
+import { settleHeldCredits } from '@server/billing/reserveRequestCredits';
 
 /**
  * GET /api/transforms/batch/:id - poll a submitted batch (id = Anthropic batch id).
@@ -68,13 +70,50 @@ const handler = baseApi().get(async (req, res) => {
     error: r.error,
   }));
 
-  await transformBatchRepository.update({
-    id: batch.id,
-    status: 'completed',
+  // Only the poll that wins the in_progress -> completed transition sees the hold, so a retried or
+  // concurrent poll never settles twice.
+  const claimed = await transformBatchRepository.claimCompletion(batch.id, {
     succeededCount: status.counts.succeeded,
     erroredCount: status.counts.errored + status.counts.canceled + status.counts.expired,
     results,
   });
+  if (claimed?.creditHold) {
+    // Failed items are free. Standard rate, as reserved at submit (no Batches discount in pricing).
+    const modelByRef = new Map(claimed.customIdMap.map(m => [m.clientRef, m.model]));
+    const catalog = await getAvailableModels({ anthropic: apiKey });
+    let usd = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    const models = new Set<string>();
+    for (const r of results) {
+      const modelInfo = catalog.find(m => m.id === modelByRef.get(r.client_ref));
+      if (r.status !== 'done' || !r.tokenUsage || !modelInfo) continue;
+      const u = r.tokenUsage;
+      usd += getTextModelCost(
+        modelInfo,
+        u.actualInputTokens,
+        u.actualOutputTokens,
+        u.cacheReadInputTokens ?? 0,
+        u.cacheCreationInputTokens ?? 0
+      );
+      inputTokens += u.actualInputTokens;
+      outputTokens += u.actualOutputTokens;
+      models.add(modelInfo.id);
+    }
+    await settleHeldCredits(
+      claimed.creditHold,
+      usdToCreditsStochastic(usd),
+      {
+        type: 'completion_api_usage',
+        sessionId: anthropicBatchId,
+        model: [...models].join(',') || 'unknown',
+        apiKeyId: claimed.apiKeyId,
+        inputTokens,
+        outputTokens,
+      },
+      { featureLabel: 'batch transforms', logger: req.logger }
+    );
+  }
 
   return res.json({
     batch_id: anthropicBatchId,

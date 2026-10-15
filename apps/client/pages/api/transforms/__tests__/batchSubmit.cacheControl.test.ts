@@ -33,7 +33,15 @@ vi.mock('@bike4mind/database', () => ({
   transformBatchRepository: { create: vi.fn(async () => ({ id: 'batch-row' })) },
 }));
 
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ assert: async () => {} }),
+  completionCeilingUsd: () => 0,
+  isCreditsEnforced: async () => false,
+  reserveCompletionCredits: async () => ({ hold: null, refund: async () => {} }),
+}));
+
 vi.mock('@bike4mind/llm-adapters', () => ({
+  getAvailableModels: async () => [],
   AnthropicBatchService: {
     fromApiKey: () => ({
       submitBatch: async (requests: any) => {

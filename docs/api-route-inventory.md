@@ -33,7 +33,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-895 routes: 48 contracted, 9 aliases of another route, 197 with no static caller in `apps/client/app`.
+894 routes: 48 contracted, 9 aliases of another route, 196 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -85,7 +85,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | import-history | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | import-history-jobs | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | inbox | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
-| infer | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
 | integrations | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | internal | 2 | 0 | 0 | 0 | 0 | 2 | 2 |
 | invites | 4 | 0 | 4 | 0 | 0 | 0 | 1 |
@@ -878,12 +877,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/inbox/admin-send` | POST | jwt+key | - | no | - | 1: `utils/inboxAPICalls.ts` |
 | `/api/inbox/create` | POST | jwt+key | - | no | - | 1: `utils/inboxAPICalls.ts` |
 | `/api/inbox/read` | POST | jwt+key | - | no | - | 1: `utils/inboxAPICalls.ts` |
-
-### infer
-
-| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/api/infer` | POST | jwt+key | - | no | - | 0 |
 
 ### integrations
 

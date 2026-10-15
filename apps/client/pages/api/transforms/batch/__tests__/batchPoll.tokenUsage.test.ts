@@ -33,19 +33,22 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
 vi.mock('@bike4mind/utils', () => ({
   NotFoundError: class extends Error {},
+  usdToCreditsStochastic: () => 0,
 }));
+vi.mock('@server/billing/reserveRequestCredits', () => ({ settleHeldCredits: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
   transformBatchRepository: {
     findByAnthropicBatchId: vi.fn(async () => mockRefs.batch),
-    update: vi.fn(async (u: any) => {
+    claimCompletion: vi.fn(async (_id: string, u: any) => {
       mockRefs.updated = u;
-      return u;
+      return mockRefs.batch;
     }),
   },
 }));
 
 vi.mock('@bike4mind/llm-adapters', () => ({
+  getAvailableModels: async () => [],
   AnthropicBatchService: {
     fromApiKey: () => ({
       getBatchResults: async () => ({
@@ -97,7 +100,6 @@ describe('GET /api/transforms/batch/:id -- token usage relay', () => {
 
   it('persists what it returns, since later polls are served from the row', async () => {
     const body = await poll();
-    expect(mockRefs.updated.status).toBe('completed');
     expect(mockRefs.updated.results).toEqual(body.results);
   });
 });
