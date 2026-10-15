@@ -9,15 +9,17 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { generateVerificationLink, getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
 import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
 import { z } from 'zod';
+import { stepUpGate } from '@server/auth/stepUp';
 
 const ChangeEmailRequestSchema = z.object({
   // Normalized before the format check so a padded address is not rejected for its whitespace.
   newEmail: z.string().trim().toLowerCase().pipe(z.email()),
 });
 
-// Requires authentication - users change their own email
-const handler = baseApi({ auth: true })
+// Users change their own email from a browser session that recently re-verified.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
+  .use(stepUpGate())
   .use(
     rateLimit({
       limit: 3, // 3 attempts

@@ -22,7 +22,9 @@ const verifySetupResponseSchema = z.object({
   user: selfUserResponseSchema,
 });
 
-const handler = baseApi()
+// Confirms the secret /api/auth/mfa/setup issued. That route requires recent verification for a
+// full session; sign-in enrollment under an mfaPending token is exempt (see setup.ts).
+const handler = baseApi({ auth: 'jwtOnly' })
   // No rate limiting - using server-side lockout for stronger security
   .post(
     asyncHandler(async (req, res) => {

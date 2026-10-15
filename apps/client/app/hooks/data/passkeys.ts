@@ -51,9 +51,9 @@ export function usePasskeys(enabled = true) {
 
 export function useRegisterPasskey() {
   const queryClient = useQueryClient();
-  return useMutation<Passkey, Error, { name?: string; token: string }>({
-    mutationFn: async ({ name, token }) => {
-      const { data: optionsJSON } = await api.post('/api/auth/mfa/passkey/register-options', { token });
+  return useMutation<Passkey, Error, { name?: string }>({
+    mutationFn: async ({ name }) => {
+      const { data: optionsJSON } = await api.post('/api/auth/mfa/passkey/register-options');
       const response = await startRegistration({ optionsJSON });
       const { data } = await api.post<{ passkey: Passkey }>('/api/auth/mfa/passkey/register', { response, name });
       return data.passkey;

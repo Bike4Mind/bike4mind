@@ -19,6 +19,9 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+const mockRequireStepUp = vi.fn();
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp: (...args: unknown[]) => mockRequireStepUp(...args) }));
+
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({
     post: (handler: (...args: unknown[]) => unknown) => handler,
@@ -114,5 +117,34 @@ describe('admin/create-user', () => {
     await runHandler(makeReq({ username: '  Trim Me ', email: 'trim@example.com', name: 'Trim' }), makeRes());
 
     expect(mockCreateUser).toHaveBeenCalledWith(expect.objectContaining({ username: 'Trim Me' }), expect.any(Object));
+  });
+
+  describe('credential and admin-role gate', () => {
+    const base = { username: 'new', email: 'new@example.com', name: 'New User' };
+    const gated: Array<[string, Record<string, unknown>]> = [['the admin role', { ...base, isAdmin: true }]];
+
+    it.each(gated)('requires recent verification for %s and creates nothing without it', async (_label, body) => {
+      mockRequireStepUp.mockRejectedValueOnce(new Error('step_up_required'));
+      await expect(runHandler(makeReq(body), makeRes())).rejects.toThrow('step_up_required');
+      expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+
+    it.each(gated)('refuses %s from an API key before any write', async (_label, body) => {
+      const req = { ...makeReq(body), apiKeyInfo: { scopes: ['admin'] } };
+      await expect(runHandler(req, makeRes())).rejects.toThrow(/signed-in session/);
+      expect(mockRequireStepUp).not.toHaveBeenCalled();
+      expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['passwordless', base],
+      ['password', { ...base, password: 'hunter2secret' }],
+    ])('leaves a %s non-admin account ungated, for a session and an API key', async (_label, body) => {
+      mockCreateUser.mockResolvedValue({ id: 'u3', email: 'new@example.com', username: 'new' });
+      await runHandler(makeReq(body), makeRes());
+      await runHandler({ ...makeReq(body), apiKeyInfo: { scopes: ['admin'] } }, makeRes());
+      expect(mockRequireStepUp).not.toHaveBeenCalled();
+      expect(mockCreateUser).toHaveBeenCalledTimes(2);
+    });
   });
 });
