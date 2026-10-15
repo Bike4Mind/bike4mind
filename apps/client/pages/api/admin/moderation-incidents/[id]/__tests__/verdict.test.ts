@@ -352,13 +352,15 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
-    it('returns 409 when the incident is not in confirmed_csam', async () => {
+    it('returns 409 naming retry_finish when the incident is not in confirmed_csam', async () => {
       mockResolveConfirmedCsam.mockResolvedValue(null);
 
       const res = makeRes();
       await runHandler(makeReq({ verdict: 'requeue' }), res);
 
       expect(res.status).toHaveBeenCalledWith(409);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { error: string };
+      expect(body.error).toContain('retry_finish');
     });
   });
 
@@ -370,9 +372,12 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       mockFinishNcmecReport.mockResolvedValue(undefined);
       mockResolveConfirmedCsam.mockResolvedValue({ ...incident, reviewStatus: 'reported' });
 
+      const req = makeReq({ verdict: 'retry_finish' });
       const res = makeRes();
-      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+      await runHandler(req, res);
 
+      // The acting admin is the audit trail for closing a CSAM report.
+      expect(req.logger.info).toHaveBeenCalledWith(expect.stringContaining('admin=admin-1'));
       expect(mockFinishNcmecReport).toHaveBeenCalledOnce();
       // staleAfterMs=0 bypasses the stale guard -- outcome is known after /finish succeeds
       expect(mockResolveConfirmedCsam).toHaveBeenCalledWith(
@@ -413,9 +418,11 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       });
       mockFinishNcmecReport.mockRejectedValue(new Error('NCMEC /finish error 500: Internal Error'));
 
+      const req = makeReq({ verdict: 'retry_finish' });
       const res = makeRes();
-      await runHandler(makeReq({ verdict: 'retry_finish' }), res);
+      await runHandler(req, res);
 
+      expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('admin=admin-1'));
       expect(mockResolveConfirmedCsam).not.toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(502);
     });
