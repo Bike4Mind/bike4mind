@@ -31,6 +31,13 @@ class DistributionTest(unittest.TestCase):
             manifest = root / 'latest-linux.yml'
             manifest.write_text(yaml.safe_dump({'files': [entry]}))
             verify_linux(root)
+            preview = root / 'pr-linux.yml'
+            manifest.rename(preview)
+            verify_linux(root)
+            preview.unlink()
+            with self.assertRaisesRegex(ValueError, 'Missing builder Linux'):
+                verify_linux(root)
+            preview.write_text(yaml.safe_dump({'files': [entry]}))
             for key in ('size', 'sha512', 'blockMapSize'):
                 with self.subTest(key=key):
                     wrong = {**entry, key: 'incorrect'}

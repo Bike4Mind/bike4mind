@@ -52,13 +52,17 @@ def embedded_blockmap_size(payload):
 
 def verify_linux(folder):
     folder = Path(folder)
-    manifest = yaml.safe_load((folder / 'latest-linux.yml').read_text())
-    entry = next(file for file in manifest['files'] if file['url'].endswith('.AppImage'))
-    payload = (folder / Path(entry['url']).name).read_bytes()
-    expected = {'size': len(payload), 'sha512': base64.b64encode(hashlib.sha512(payload).digest()).decode(),
-                'blockMapSize': embedded_blockmap_size(payload)}
-    if any(entry.get(key) != value for key, value in expected.items()):
-        raise ValueError('Builder Linux metadata differs from embedded AppImage metadata')
+    manifests = sorted(folder.glob('*-linux.yml'))
+    if not manifests:
+        raise ValueError('Missing builder Linux update metadata')
+    for manifest_path in manifests:
+        manifest = yaml.safe_load(manifest_path.read_text())
+        entry = next(file for file in manifest['files'] if file['url'].endswith('.AppImage'))
+        payload = (folder / Path(entry['url']).name).read_bytes()
+        expected = {'size': len(payload), 'sha512': base64.b64encode(hashlib.sha512(payload).digest()).decode(),
+                    'blockMapSize': embedded_blockmap_size(payload)}
+        if any(entry.get(key) != value for key, value in expected.items()):
+            raise ValueError('Builder Linux metadata differs from embedded AppImage metadata')
 
 
 def assemble(folder, version, repository, source):
