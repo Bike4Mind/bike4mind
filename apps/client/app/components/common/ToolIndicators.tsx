@@ -53,6 +53,28 @@ interface ToolIndicatorsProps {
   };
 }
 
+// Show an MCP server only if it's available AND (no enable-list set, or it's listed).
+const isMcpServerShown = (serverName: string, enabled: string[] | null, available: string[]) =>
+  available.includes(serverName) && (enabled === null || enabled.includes(serverName));
+
+const INDICATED_PRIMARY_TOOLS = ['web_search', 'web_fetch', 'image_generation'];
+
+/** Whether ToolIndicators would render anything, for buttons too narrow to show them. */
+export const hasToolIndicators = ({
+  activePrimaryTools,
+  isThinkingActive,
+  otherActiveToolsCount,
+  enabledMcpServers = null,
+  availableMcpServers = ICONED_MCP_SERVERS,
+}: Pick<
+  ToolIndicatorsProps,
+  'activePrimaryTools' | 'isThinkingActive' | 'otherActiveToolsCount' | 'enabledMcpServers' | 'availableMcpServers'
+>) =>
+  activePrimaryTools.some(tool => INDICATED_PRIMARY_TOOLS.includes(tool)) ||
+  isThinkingActive ||
+  otherActiveToolsCount > 0 ||
+  ICONED_MCP_SERVERS.some(server => isMcpServerShown(server, enabledMcpServers, availableMcpServers));
+
 const ToolIndicators = ({
   activePrimaryTools,
   isThinkingActive,
@@ -66,18 +88,8 @@ const ToolIndicators = ({
 }: ToolIndicatorsProps) => {
   const indicators = [];
 
-  // Show an MCP server only if it's available AND (no enable-list set, or it's listed).
-  const shouldShowMcpServer = (serverName: string) => {
-    if (!availableMcpServers.includes(serverName)) {
-      return false;
-    }
-
-    if (enabledMcpServers === null) {
-      return true;
-    }
-
-    return enabledMcpServers.includes(serverName);
-  };
+  const shouldShowMcpServer = (serverName: string) =>
+    isMcpServerShown(serverName, enabledMcpServers, availableMcpServers);
 
   // Add primary tool icons
   if (activePrimaryTools.includes('web_search')) {

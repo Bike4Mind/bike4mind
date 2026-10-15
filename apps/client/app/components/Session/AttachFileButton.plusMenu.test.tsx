@@ -42,6 +42,9 @@ vi.mock('@client/app/contexts/SessionsContext', () => ({
 }));
 vi.mock('@client/app/hooks/useSessionLayout', () => ({ setSessionLayout: vi.fn() }));
 vi.mock('@client/app/hooks/data/agents', () => ({ useGetSessionAgents: () => ({ data: [] }) }));
+vi.mock('@client/app/components/Session/AISettings/useActiveTools', () => ({
+  useActiveTools: () => ({ activeToolsCount: 0, toolMode: 'smart' }),
+}));
 vi.mock('@client/app/contexts/LLMContext', () => ({
   useLLM: Object.assign((select: (s: typeof hoisted.llm) => unknown) => select(hoisted.llm), {
     setState: hoisted.setState,

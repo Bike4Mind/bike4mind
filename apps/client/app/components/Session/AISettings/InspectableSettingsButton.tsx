@@ -8,6 +8,9 @@ interface InspectableSettingsButtonProps {
   modelName?: string;
   buttonSx?: any;
   hideModelName?: boolean;
+  /** Phones: the model is the only control in the row, so the button takes the free width and
+   *  the name ellipsizes instead of the row scrolling sideways. */
+  fluid?: boolean;
 }
 
 const InspectableSettingsButton: FC<InspectableSettingsButtonProps> = ({
@@ -15,6 +18,7 @@ const InspectableSettingsButton: FC<InspectableSettingsButtonProps> = ({
   modelName,
   buttonSx = {},
   hideModelName = false,
+  fluid = false,
 }) => {
   const showModelName = !hideModelName && !!modelName;
 
@@ -35,10 +39,10 @@ const InspectableSettingsButton: FC<InspectableSettingsButtonProps> = ({
           borderRadius: '6px',
           width: 'auto',
           minWidth: '32px',
-          // The composer row scrolls sideways, so the button holds its width rather than letting
-          // flex squeeze the label down to a single character.
-          flexShrink: 0,
-          maxWidth: { xs: '200px', md: 'none' },
+          // Elsewhere the row collapses to icons when it runs out of room (useOverflowCompact), so
+          // the button holds its width rather than letting flex squeeze the label to one character.
+          flexShrink: fluid ? 1 : 0,
+          ...(fluid && { minWidth: 0, maxWidth: '100%' }),
           height: '32px',
           minHeight: 'auto',
           py: 0,
@@ -62,9 +66,6 @@ const InspectableSettingsButton: FC<InspectableSettingsButtonProps> = ({
           <Typography
             level="body-sm"
             sx={{
-              // Keep the model label visible on mobile too. The button's
-              // `maxWidth: 200px` on xs plus the ellipsis rules below truncate it
-              // gracefully instead of dropping it entirely.
               display: 'block',
               fontWeight: '400',
               fontSize: '13px',
@@ -73,8 +74,6 @@ const InspectableSettingsButton: FC<InspectableSettingsButtonProps> = ({
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
               flex: 1,
-              // Wide enough to tell models apart, short enough to leave room for the other controls.
-              maxWidth: { xs: '120px', md: 'none' },
               textAlign: 'center',
               minWidth: 0,
               ml: 1,

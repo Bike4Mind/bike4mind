@@ -38,6 +38,9 @@ vi.mock('@client/app/contexts/SessionsContext', () => ({
 }));
 vi.mock('@client/app/hooks/useSessionLayout', () => ({ setSessionLayout: vi.fn() }));
 vi.mock('@client/app/hooks/data/agents', () => ({ useGetSessionAgents: () => ({ data: [] }) }));
+vi.mock('@client/app/components/Session/AISettings/useActiveTools', () => ({
+  useActiveTools: () => ({ activeToolsCount: 0, toolMode: 'smart' }),
+}));
 vi.mock('@client/app/contexts/LLMContext', () => {
   const state = { tools: ['dice_roll'], agentMode: { enabled: false }, model: 'gpt-4.1-2025-04-14' };
   return { useLLM: Object.assign((select: (s: typeof state) => unknown) => select(state), { setState: vi.fn() }) };

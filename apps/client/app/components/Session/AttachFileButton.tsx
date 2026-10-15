@@ -37,6 +37,7 @@ import useDrivePicker from 'react-google-drive-picker';
 import { toast } from 'sonner';
 import ScienceIcon from '@mui/icons-material/ScienceOutlined';
 import SmartToyIcon from '@mui/icons-material/SmartToyOutlined';
+import HandymanIcon from '@mui/icons-material/HandymanOutlined';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -55,6 +56,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import CountBadge from '@client/app/components/common/CountBadge';
+import { useActiveTools } from '@client/app/components/Session/AISettings/useActiveTools';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePickerStyles';
 import { isImageModel } from '@client/app/utils/commands';
@@ -280,9 +282,11 @@ const AttachFileButton = ({
 
   const isGoogleDriveConnected = !!currentUser?.googleDrive;
 
-  // Get agents count for mobile badge
+  // Phones open Tools and Agents from this menu, so their rows carry the counts the desktop
+  // buttons show.
   const { data: sessionAgents = [] } = useGetSessionAgents(currentSessionId);
   const activeAgentsCount = currentSessionId ? sessionAgents.length : workBenchAgents.length;
+  const { activeToolsCount, toolMode } = useActiveTools(currentSession ?? null);
 
   // Get tool state from LLM context
   const [tools] = useLLM(useShallow(state => [state.tools]));
@@ -290,6 +294,9 @@ const AttachFileButton = ({
   // Advanced AI Settings modal control
   const openAdvancedSettings = useAdvancedAISettings(s => s.openModal);
   const setAgentsDropdownOpen = useAdvancedAISettings(s => s.setAgentsDropdownOpen);
+  const setToolsDropdownOpen = useAdvancedAISettings(s => s.setToolsDropdownOpen);
+
+  const hasPrompt = !!chatInputValue?.trim();
 
   const { isFeatureEnabled } = useFeatureEnabled();
   const isAgentsEnabled = isFeatureEnabled('enableAgents');
@@ -719,10 +726,33 @@ const AttachFileButton = ({
                   </ListItem>
                 )}
 
-                {/* Mobile only - Agents */}
+                {/* Mobile only - Tools and Agents (the desktop row has buttons for both) */}
+                {isMobile && (
+                  <ListItem sx={{ p: 0 }}>
+                    <ListItemButton
+                      data-testid="attach-menu-tools-btn"
+                      onClick={() => {
+                        setIsOpen(false);
+                        setCurrentView('main');
+                        setToolsDropdownOpen(true);
+                      }}
+                      sx={{
+                        color: 'text.primary',
+                        m: 0,
+                      }}
+                    >
+                      <ListItemDecorator>
+                        <HandymanIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
+                      </ListItemDecorator>
+                      {toolMode === 'fast' ? 'Fast Tools' : 'Tools'}
+                      <CountBadge count={activeToolsCount} prefix="" margin={{ ml: 'auto' }} />
+                    </ListItemButton>
+                  </ListItem>
+                )}
                 {isMobile && isAgentsEnabled && (
                   <ListItem sx={{ p: 0 }}>
                     <ListItemButton
+                      data-testid="attach-menu-agents-btn"
                       onClick={() => {
                         setIsOpen(false);
                         setCurrentView('main');
@@ -810,10 +840,13 @@ const AttachFileButton = ({
                   </ListItem>
                 )}
 
-                {/* Mobile only - Optimize Prompt */}
-                {isMobile && chatInputValue && chatInputValue.trim() !== '' && onOptimizePrompt && (
+                {/* Mobile only - Optimize Prompt. Always listed so it can be found; it needs a prompt to
+                    work on, so it waits until there is one. */}
+                {isMobile && onOptimizePrompt && (
                   <ListItem sx={{ p: 0 }}>
                     <ListItemButton
+                      data-testid="attach-menu-optimize-btn"
+                      disabled={!hasPrompt}
                       onClick={() => {
                         setIsOpen(false);
                         setCurrentView('main');
@@ -828,6 +861,11 @@ const AttachFileButton = ({
                         <AutoAwesomeOutlinedIcon sx={{ color: 'text.primary50', fontSize: '18px' }} />
                       </ListItemDecorator>
                       Optimize Prompt
+                      {!hasPrompt && (
+                        <Typography level="body-xs" sx={{ ml: 'auto', color: 'text.tertiary' }}>
+                          Type a prompt first
+                        </Typography>
+                      )}
                     </ListItemButton>
                   </ListItem>
                 )}
