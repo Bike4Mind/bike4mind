@@ -360,6 +360,14 @@ describe('ProfileMenu - focus after navigating', () => {
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
     expect(document.activeElement).toBe(document.body);
   });
+
+  it('opens the Integrations page and closes the menu', () => {
+    router.pathname = '/new';
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-integrations'));
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/integrations' });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
 });
 
 describe('ProfileMenu - roles and keyboard details', () => {

@@ -45,6 +45,7 @@ import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
 import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
 import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
+import PowerOutlinedIcon from '@mui/icons-material/PowerOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
 import ApiIcon from '@mui/icons-material/Api';
@@ -477,6 +478,14 @@ const ProfileMenu = () => {
             label={t('apiKeys.title', 'API Keys')}
             onClick={() => {
               navigateFromMenu('/profile', () => navigate({ to: '/profile', search: { tab: 'api-keys' } }));
+            }}
+          />
+          <MenuRow
+            testId="profile-menu-integrations"
+            icon={<PowerOutlinedIcon sx={{ fontSize: '18px' }} />}
+            label={t('integrations.title', 'Integrations')}
+            onClick={() => {
+              navigateFromMenu('/integrations', () => navigate({ to: '/integrations' }));
             }}
           />
           <MenuRow

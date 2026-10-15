@@ -17,7 +17,6 @@ import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import MovieOutlinedIcon from '@mui/icons-material/MovieOutlined';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
-import PowerOutlinedIcon from '@mui/icons-material/PowerOutlined';
 import { canAccessTavern } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
@@ -422,17 +421,6 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       onClick: () => {
         closeOnMobile();
         navigate({ to: '/gears' });
-      },
-    },
-    {
-      // Permanent, beside Gears: the directory of what the app connects to.
-      key: 'integrations',
-      label: t('sidenav.integrations', 'Integrations'),
-      icon: iconSlot(<PowerOutlinedIcon sx={{ fontSize: '18px' }} />),
-      isActive: location.pathname === '/integrations',
-      onClick: () => {
-        closeOnMobile();
-        navigate({ to: '/integrations' });
       },
     },
   ];

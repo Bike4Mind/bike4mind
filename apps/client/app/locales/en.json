@@ -49,7 +49,6 @@
     "pin": "Pin sidebar",
     "unpin": "Unpin sidebar",
     "help": "Help Center",
-    "integrations": "Integrations",
     "sessions": {
       "sort": {
         "label": "Sort By",
@@ -409,6 +408,7 @@
     "failed_to_load_data": "Failed to load data. Please try again later."
   },
   "integrations": {
+    "title": "Integrations",
     "atlassian": {
       "reconnect_required": "Your Atlassian connection has expired. Please reconnect your account."
     }
