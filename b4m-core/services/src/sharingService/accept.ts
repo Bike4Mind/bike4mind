@@ -349,11 +349,14 @@ const permissionsInviterCanStillGrant = (
   permissions: Permission[],
   inviter: Inviter
 ): Permission[] => {
-  // An empty invite grants nothing either way; without this it would read as a lost share.
-  if (!invite.inviterId || invite.inviterId === doc.userId || permissions.length === 0) return permissions;
+  if (!invite.inviterId || invite.inviterId === doc.userId) return permissions;
 
-  const granted = reshareableBy(doc, inviter, permissions);
-  if (granted.length === 0) throw new ForbiddenError('The person who shared this can no longer share it');
+  const held = grantablePermissions(doc as ShareableAccessShape, inviter?.id, inviter?.groups ?? []);
+  const granted = held.has(Permission.share) ? permissions.filter(permission => held.has(permission)) : [];
+  // An empty invite from an inviter who still holds share is a no-op grant, as when owner-minted.
+  if (!held.has(Permission.share) || (granted.length === 0 && permissions.length > 0)) {
+    throw new ForbiddenError('The person who shared this can no longer share it');
+  }
   return granted;
 };
 

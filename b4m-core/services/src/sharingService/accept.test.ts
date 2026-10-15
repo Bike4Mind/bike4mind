@@ -976,11 +976,18 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
   );
 
   it('accepts an empty non-owner invite as a no-op grant, like an owner-minted one', async () => {
-    const adapters = makeAdapters(InviteType.FabFile, [], makeDoc(null), sharerId);
+    const adapters = makeAdapters(InviteType.FabFile, [], makeDoc(shareLink), sharerId);
 
     await acceptInvite(userId, { id: inviteId }, adapters as never);
 
-    expect(adapters.db.fabFiles.update.mock.calls[0][0].users).toStrictEqual([acceptedRow([])]);
+    expect(adapters.db.fabFiles.update.mock.calls[0][0].users).toContainEqual(acceptedRow([]));
+  });
+
+  it('still refuses an empty invite whose minter has lost share', async () => {
+    const adapters = makeAdapters(InviteType.FabFile, [], makeDoc([Permission.read]), sharerId);
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as never)).rejects.toThrow(ForbiddenError);
+    expect(adapters.db.fabFiles.update).not.toHaveBeenCalled();
   });
 
   it.each([InviteType.FabFile, InviteType.Project])('caps a %s link to what the minter currently holds', async type => {
