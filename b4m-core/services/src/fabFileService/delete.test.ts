@@ -138,6 +138,30 @@ describe('deleteFabFile', () => {
       expect(generatedCopies.storage.delete).toHaveBeenCalledWith('abc.mp3');
     });
 
+    // Ownership is resolved by findByIdAndUserId, whose whole document is what feeds the stored-object
+    // delete - so these pin the field the legal-hold rule reads, not just the row.
+    describe('moderation hold', () => {
+      it('frees the bytes of a file blocked only for an unscannable format', async () => {
+        const blocked = { ...mockFabFile, moderationStatus: 'blocked', blockReason: 'unsupported_format' };
+        mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(blocked);
+        mockAdapter.db.fabFiles.update.mockResolvedValue(blocked);
+
+        await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+        expect(mockAdapter.storage.delete).toHaveBeenCalledWith('uploads/test-file.txt');
+      });
+
+      it('keeps the bytes of a content block as legal-hold evidence', async () => {
+        const blocked = { ...mockFabFile, moderationStatus: 'blocked' };
+        mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(blocked);
+        mockAdapter.db.fabFiles.update.mockResolvedValue(blocked);
+
+        await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+        expect(mockAdapter.storage.delete).not.toHaveBeenCalled();
+      });
+    });
+
     it('should skip S3 deletion when file has no filePath', async () => {
       const fileWithoutPath = { ...mockFabFile, filePath: undefined, fileSize: 0 };
       mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(fileWithoutPath);

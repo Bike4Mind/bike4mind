@@ -125,6 +125,31 @@ describe('deleteStoredObjects', () => {
     expect(storage.generated.storage.delete).not.toHaveBeenCalled();
   });
 
+  it('still deletes a file blocked only for an unscannable format (never an incident)', async () => {
+    const storage = buckets();
+    logger.warn.mockClear();
+
+    await deleteStoredObjects(
+      [
+        {
+          id: 'f1',
+          filePath: 'uploads/a.heic',
+          moderationStatus: 'blocked',
+          blockReason: 'unsupported_format',
+          versions: [version('uploads/a-v1.heic')],
+          sourceMetadata: { generatedCopyKey: 'a.heic' },
+        },
+      ],
+      storage,
+      logger
+    );
+
+    expect(storage.files.delete).toHaveBeenCalledWith('uploads/a.heic');
+    expect(storage.files.delete).toHaveBeenCalledWith('uploads/a-v1.heic');
+    expect(storage.generated.storage.delete).toHaveBeenCalledWith('a.heic');
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('legal hold'), expect.anything());
+  });
+
   it('skips a file with no stored object', async () => {
     const storage = buckets();
 
