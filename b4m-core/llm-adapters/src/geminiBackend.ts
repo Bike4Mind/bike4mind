@@ -165,7 +165,11 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          1048576: { input: 1.5 / 1000000, output: 9.0 / 1000000 }, // $1.50/1M input, $9.00/1M output
+          // $0.15/1M cache read. Google dropped the model from the live Gemini API page when it
+          // deprecated it (2026-10-08); the rate is on the archived page and on Vertex AI's.
+          // @see https://web.archive.org/web/20261001232750/https://ai.google.dev/gemini-api/docs/pricing
+          // @see https://cloud.google.com/vertex-ai/generative-ai/pricing
+          1048576: { input: 1.5 / 1000000, output: 9.0 / 1000000, cache_read: 0.15 / 1000000 }, // $1.50/1M input, $9.00/1M output
         },
         supportsVision: true,
         supportsTools: true,

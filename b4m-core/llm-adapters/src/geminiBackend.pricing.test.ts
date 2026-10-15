@@ -21,8 +21,12 @@ const findModel = async (id: ChatModels): Promise<ModelInfo> => {
   return model;
 };
 
-// Per 1M tokens: https://ai.google.dev/gemini-api/docs/pricing and https://docs.x.ai/docs/models
+// Per 1M tokens: https://ai.google.dev/gemini-api/docs/pricing and https://docs.x.ai/docs/models.
+// gemini-3.5-flash left the live Gemini page on deprecation; its rate is on the archived copy
+// (https://web.archive.org/web/20261001232750/https://ai.google.dev/gemini-api/docs/pricing) and on
+// https://cloud.google.com/vertex-ai/generative-ai/pricing.
 const PUBLISHED_CACHE_READ: Partial<Record<ChatModels, Record<number, number>>> = {
+  [ChatModels.GEMINI_3_5_FLASH]: { 1048576: 0.15 },
   [ChatModels.GEMINI_3_1_PRO_PREVIEW]: { 200000: 0.2, 2097152: 0.4 },
   [ChatModels.GEMINI_3_1_FLASH_LITE]: { 1048576: 0.025 },
   [ChatModels.GEMINI_3_FLASH_PREVIEW]: { 2097152: 0.05 },
@@ -63,6 +67,15 @@ describe('Gemini and xAI cache-read rates', () => {
     const cost = getTurnsCost(model, [{ inputTokens: 20_000, cacheReadInputTokens: 80_000, outputTokens: 2_000 }]);
 
     expect(cost).toBeCloseTo(20_000 * tier.input + (80_000 * 0.05) / 1_000_000 + 2_000 * tier.output, 10);
+  });
+
+  it('bills the cached part of a gemini-3.5-flash request at $0.15/1M, not the $1.50 input rate', async () => {
+    const model = await findModel(ChatModels.GEMINI_3_5_FLASH);
+
+    // 100K-token prompt, 80K of it served from cache, 2K out.
+    const cost = getTurnsCost(model, [{ inputTokens: 20_000, cacheReadInputTokens: 80_000, outputTokens: 2_000 }]);
+
+    expect(cost).toBeCloseTo((20_000 * 1.5 + 80_000 * 0.15 + 2_000 * 9) / 1_000_000, 10);
   });
 
   it.each([

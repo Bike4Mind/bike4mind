@@ -20,7 +20,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { Stream } from 'openai/streaming';
-import type { CompletionInfo, ModelInfo } from '@bike4mind/common';
+import { getTurnsCost, type CompletionInfo, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from './backend';
 import { AnthropicBackend } from './anthropicBackend';
 import { OpenAIBackend } from './openaiBackend';
@@ -499,7 +499,7 @@ const geminiUsage = (u: CachedTurnUsage) => ({
 const geminiTurnUsageSpec: TurnUsageSpec = {
   name: 'GeminiBackend',
   cachedModel: 'gemini-2.5-flash',
-  uncachedModel: 'gemini-3.5-flash',
+  uncachedModel: 'gemini-3-pro-preview',
   build: () => {
     const backend = new GeminiBackend('test-key');
     let calls = 0;
@@ -794,6 +794,29 @@ describe.each([geminiTurnUsageSpec, xaiTurnUsageSpec])('$name per-request usage 
     // The terminal emit carries the totals itself, as on every other terminal path.
     expect(finalCbInfo(calls)!.turnUsage).toEqual(expected);
   });
+});
+
+describe('GeminiBackend cache forwarding on gemini-3.5-flash', () => {
+  it.each([true, false])(
+    'forwards cached tokens, which settle at $0.15/1M rather than the $1.50 input rate (stream: %s)',
+    async stream => {
+      const { backend, setMockSequence } = geminiTurnUsageSpec.build(stream);
+      setMockSequence([
+        geminiTurnUsageSpec.textTurn(stream, 'Done.', { input: 100_000, output: 2_000, cached: 80_000 }),
+      ]);
+      const { calls, cb } = captureCb();
+
+      await backend.complete('gemini-3.5-flash', [{ role: 'user', content: 'Hi.' }], { stream }, cb);
+
+      const final = finalCbInfo(calls)!;
+      expect(final.turnUsage).toEqual([{ inputTokens: 20_000, cacheReadInputTokens: 80_000, outputTokens: 2_000 }]);
+      const model = (await backend.getModelInfo()).find(m => m.id === 'gemini-3.5-flash')!;
+      expect(getTurnsCost(model, final.turnUsage!)).toBeCloseTo(
+        (20_000 * 1.5 + 80_000 * 0.15 + 2_000 * 9) / 1_000_000,
+        10
+      );
+    }
+  );
 });
 
 describe('XAIBackend per-request usage on its other terminal stream emits', () => {

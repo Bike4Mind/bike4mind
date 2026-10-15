@@ -102,7 +102,7 @@ describe('toPublicModel', () => {
   });
 
   it.each([
-    ['a Gemini model with no published cache rate', ModelBackend.Gemini, 'gemini-3.5-flash', undefined],
+    ['a Gemini model with no published cache rate', ModelBackend.Gemini, 'gemini-3-pro-preview', undefined],
     ['an xAI model with no published cache rate', ModelBackend.XAI, 'grok-3', undefined],
     ['a non-Claude Bedrock model', ModelBackend.Bedrock, 'moonshotai.kimi-k2-thinking', 0.5 / 1_000_000],
   ])(
