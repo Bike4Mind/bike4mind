@@ -27,15 +27,50 @@ export const toVerdictPatch = (result: Awaited<ReturnType<typeof moderateUploade
   ...(result.blockReason ? { blockReason: result.blockReason } : {}),
 });
 
+/** S3 event ETags are bare, HeadObject's are quoted; compare them in one form. */
+export const normalizeETag = (eTag: string | null | undefined): string | undefined =>
+  eTag?.replace(/^"|"$/g, '') || undefined;
+
+/**
+ * Records that the object version `eTag` has landed. If the row's verdict (or in-flight scan) covers
+ * a different version, the object was overwritten after it was judged - e.g. by re-PUTting a still
+ * valid presigned URL - so the verdict is reset to 'pending' for a rescan, and an in-flight scan's
+ * claim is dropped so its now-stale verdict cannot land. Run by both landing hooks (objectCreated.ts
+ * and the self-host pages/api/internal/s3/object-created.ts) before they claim the scan. A rescan
+ * always reads the current bytes, which are this version or newer, so out-of-order or redelivered
+ * events only ever cost an extra scan.
+ */
+export const recordLandedObject = (fabFileId: FabFileKey, eTag: string) => {
+  const judged = { $in: ['$moderationStatus', ['clean', 'blocked', 'scanning']] };
+  return FabFile.updateOne({ _id: fabFileId, moderationETag: { $ne: eTag } }, [
+    {
+      $set: {
+        moderationETag: eTag,
+        moderationStatus: { $cond: [judged, 'pending', '$moderationStatus'] },
+        blockReason: { $cond: [judged, '$$REMOVE', '$blockReason'] },
+        moderationClaimedAt: { $cond: [judged, '$$REMOVE', '$moderationClaimedAt'] },
+      },
+    },
+  ]);
+};
+
 /**
  * Atomically claims the right to scan: only ONE concurrent caller can move 'pending'/unset to
  * 'scanning'. Returns the claimed document, or null when another caller already owns (or finished)
  * the scan. `claimedAt` is the claim's identity - writeModerationVerdict and the rescue sweep match on it.
+ * `eTag`, when given, must have been read before the bytes are, so it never names a newer version
+ * than the one scanned (see recordLandedObject).
  */
-export const claimModerationScan = (fabFileId: FabFileKey, claimedAt: Date) =>
+export const claimModerationScan = (fabFileId: FabFileKey, claimedAt: Date, eTag?: string) =>
   FabFile.findOneAndUpdate(
     { _id: fabFileId, moderationStatus: { $in: ['pending', null] } },
-    { $set: { moderationStatus: 'scanning', moderationClaimedAt: claimedAt } },
+    {
+      $set: {
+        moderationStatus: 'scanning',
+        moderationClaimedAt: claimedAt,
+        ...(eTag ? { moderationETag: eTag } : {}),
+      },
+    },
     { new: true }
   );
 

@@ -4,6 +4,8 @@ import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
 import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
 import {
   claimModerationScan,
+  normalizeETag,
+  recordLandedObject,
   scanUploadedObject,
   toVerdictPatch,
   writeModerationVerdict,
@@ -80,6 +82,11 @@ export const func = withContext(async (event, context, logger) => {
       if (!deferStatusFlip) await markComplete();
       metadata.status = 'complete';
     }
+
+    // An overwrite of an already-judged object (a re-PUT of a still valid presigned URL) sends its
+    // verdict back to 'pending', so the claim below rescans the new bytes.
+    const eTag = normalizeETag(object.eTag);
+    if (eTag) await recordLandedObject(metadata._id, eTag);
 
     // Atomically claim the right to scan this file BEFORE the transaction
     // below touches it. `metadata` above was read outside a transaction with retry/backoff

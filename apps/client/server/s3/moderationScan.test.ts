@@ -28,6 +28,7 @@ vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUplo
 
 import {
   claimModerationScan,
+  normalizeETag,
   releaseModerationClaim,
   scanUploadedObject,
   toVerdictPatch,
@@ -43,6 +44,23 @@ describe('moderationScan', () => {
     h.updateOne.mockResolvedValue({ matchedCount: 1 });
     h.getSettingsValue.mockReturnValue(undefined);
     h.moderateUploadedFile.mockResolvedValue({ moderationStatus: 'clean' });
+  });
+
+  it('compares HeadObject (quoted) and S3 event (bare) ETags in one form, multipart suffix kept', () => {
+    expect(normalizeETag('"abc-3"')).toBe('abc-3');
+    expect(normalizeETag('abc-3')).toBe('abc-3');
+    expect(normalizeETag('')).toBeUndefined();
+    expect(normalizeETag(undefined)).toBeUndefined();
+  });
+
+  it('records the version a claim covers only when one is given', async () => {
+    await claimModerationScan('ff1', claimedAt, 'etag-a');
+
+    expect(h.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: 'ff1', moderationStatus: { $in: ['pending', null] } },
+      { $set: { moderationStatus: 'scanning', moderationClaimedAt: claimedAt, moderationETag: 'etag-a' } },
+      { new: true }
+    );
   });
 
   it('claims only a pending or unset file, stamping the claim identity', async () => {

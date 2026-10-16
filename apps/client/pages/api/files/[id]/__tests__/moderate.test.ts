@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   release: vi.fn(),
   scan: vi.fn(),
   writeVerdict: vi.fn(),
+  getMetadata: vi.fn(),
   sendToClient: vi.fn(),
   sleep: vi.fn(),
   baseApiOptions: undefined as unknown,
@@ -23,8 +24,10 @@ vi.mock('node:timers/promises', () => ({ setTimeout: h.sleep }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 vi.mock('@bike4mind/database', () => ({ FabFile: { findById: h.findById, updateOne: h.updateOne } }));
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getMetadata: h.getMetadata }) }));
 vi.mock('@server/s3/moderationScan', () => ({
   claimModerationScan: h.claim,
+  normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,
   releaseModerationClaim: h.release,
   scanUploadedObject: h.scan,
   writeModerationVerdict: h.writeVerdict,
@@ -73,6 +76,7 @@ describe('POST /api/files/[id]/moderate', () => {
     h.claim.mockResolvedValue({ id: 'ff1' });
     h.scan.mockResolvedValue({ moderationStatus: 'clean' });
     h.writeVerdict.mockResolvedValue(true);
+    h.getMetadata.mockResolvedValue({ etag: '"etag-a"' });
     h.release.mockResolvedValue(undefined);
     h.updateOne.mockResolvedValue(undefined);
     h.sendToClient.mockResolvedValue(undefined);
@@ -120,6 +124,23 @@ describe('POST /api/files/[id]/moderate', () => {
     h.findById.mockResolvedValue(marked);
     await handler(makeReq(), makeRes());
     expect(h.scan).toHaveBeenCalledWith(expect.objectContaining({ fabFile: marked }));
+  });
+
+  it('claims under the ETag it read before scanning, so the S3 event does not rescan that version', async () => {
+    await handler(makeReq(), makeRes());
+
+    expect(h.getMetadata).toHaveBeenCalledWith('masks/m.png');
+    expect(h.claim).toHaveBeenCalledWith('oid1', expect.any(Date), 'etag-a');
+    expect(h.getMetadata.mock.invocationCallOrder[0]).toBeLessThan(h.scan.mock.invocationCallOrder[0]);
+  });
+
+  it('still scans when the ETag cannot be read, leaving the version unknown', async () => {
+    h.getMetadata.mockRejectedValue(new Error('head failed'));
+    const res = makeRes();
+    await handler(makeReq(), res);
+
+    expect(h.claim).toHaveBeenCalledWith('oid1', expect.any(Date), undefined);
+    expect(res.body).toEqual({ moderationStatus: 'clean' });
   });
 
   it('reports a blocked verdict with its reason', async () => {

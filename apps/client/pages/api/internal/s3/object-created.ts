@@ -6,6 +6,7 @@ import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
 import { sendToQueue } from '@server/utils/sqs';
 import { getFilesStorage } from '@server/utils/storage';
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
+import { normalizeETag, recordLandedObject } from '@server/s3/moderationScan';
 import { judgeLandedUpload, rejectLandedUpload } from '@server/s3/uploadSizeGate';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
@@ -36,7 +37,7 @@ import crypto from 'crypto';
 
 interface MinioS3Record {
   eventTime?: string;
-  s3?: { bucket?: { name?: string }; object?: { key?: string; size?: number } };
+  s3?: { bucket?: { name?: string }; object?: { key?: string; size?: number; eTag?: string } };
 }
 
 /**
@@ -167,6 +168,11 @@ const handler = baseApi({ auth: false }).post(
 
       metadata.status = 'complete';
       await metadata.save();
+
+      // Same overwrite check as the hosted event (objectCreated.ts): a re-PUT of a judged object
+      // sends its verdict back to 'pending' before the scan below claims it.
+      const eTag = normalizeETag(record.s3?.object?.eTag ?? (await getFilesStorage().getMetadata(objectKey)).etag);
+      if (eTag) await recordLandedObject(metadata._id, eTag);
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
 
       // Charged from the stored object's size, never the row's client-claimed fileSize. The

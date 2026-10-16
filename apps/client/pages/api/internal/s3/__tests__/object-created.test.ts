@@ -19,11 +19,13 @@ const {
   userDoc,
   judgeMock,
   rejectMock,
+  recordLandedMock,
 } = vi.hoisted(() => {
   const deps = { claim: vi.fn(), persist: vi.fn(), release: vi.fn() };
   return {
     judgeMock: vi.fn(),
     rejectMock: vi.fn(),
+    recordLandedMock: vi.fn(),
     chargeMock: vi.fn(),
     getMetadataMock: vi.fn(),
     userFindByIdMock: vi.fn(),
@@ -51,6 +53,10 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({ chargeUploadedObject: chargeMock }));
 vi.mock('@server/s3/uploadSizeGate', () => ({ judgeLandedUpload: judgeMock, rejectLandedUpload: rejectMock }));
+vi.mock('@server/s3/moderationScan', () => ({
+  normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,
+  recordLandedObject: recordLandedMock,
+}));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getMetadata: getMetadataMock }) }));
 vi.mock('@server/s3/utils', () => ({
   decodeS3Key: (k: string) => decodeURIComponent(k.replace(/\+/g, ' ')),
@@ -87,14 +93,24 @@ const makeRes = () => {
   return res;
 };
 
-const makeReq = (authorization: string | undefined, key: string, extra: { size?: number; eventTime?: string } = {}) =>
+const makeReq = (
+  authorization: string | undefined,
+  key: string,
+  extra: { size?: number; eventTime?: string; eTag?: string } = {}
+) =>
   ({
     headers: authorization === undefined ? {} : { authorization },
     body: {
       Records: [
         {
           ...(extra.eventTime ? { eventTime: extra.eventTime } : {}),
-          s3: { object: { key, ...(extra.size !== undefined ? { size: extra.size } : {}) } },
+          s3: {
+            object: {
+              key,
+              ...(extra.size !== undefined ? { size: extra.size } : {}),
+              ...(extra.eTag ? { eTag: extra.eTag } : {}),
+            },
+          },
         },
       ],
     },
@@ -298,6 +314,21 @@ describe('POST /api/internal/s3/object-created', () => {
     expect(req.logger.error).toHaveBeenCalledWith(expect.stringContaining('storage client misconfigured'));
   });
 
+  it('records the landed ETag before the scan, so an overwrite of a judged file is rescanned', async () => {
+    await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5, eTag: 'etag-b' }), makeRes());
+    await vi.waitFor(() => expect(moderateFilesMock).toHaveBeenCalled());
+
+    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'etag-b');
+    expect(recordLandedMock.mock.invocationCallOrder[0]).toBeLessThan(moderateFilesMock.mock.invocationCallOrder[0]);
+  });
+
+  it('reads the ETag from storage when the notification omits it', async () => {
+    getMetadataMock.mockResolvedValue({ size: 5, etag: '"etag-c"' });
+    await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5 }), makeRes());
+
+    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'etag-c');
+  });
+
   it('does not scan or charge when the file has no metadata row', async () => {
     findOneMock.mockResolvedValue(null);
     await handler(makeReq('secret-token', 'uploads/orphan.mp4'), makeRes());
@@ -310,7 +341,10 @@ describe('POST /api/internal/s3/object-created', () => {
     const EVENT_TIME = '2026-10-13T12:00:00.000Z';
 
     it("charges the owner the payload's object size, stamped with the event time", async () => {
-      await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 1234, eventTime: EVENT_TIME }), makeRes());
+      await handler(
+        makeReq('secret-token', 'uploads/a.pdf', { size: 1234, eventTime: EVENT_TIME, eTag: 'etag-a' }),
+        makeRes()
+      );
 
       expect(userFindByIdMock).toHaveBeenCalledWith('u1');
       expect(chargeMock).toHaveBeenCalledWith('ff1', userDoc, 1234, new Date(EVENT_TIME), 'pending', {});

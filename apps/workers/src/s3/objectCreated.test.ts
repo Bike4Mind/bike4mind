@@ -71,9 +71,9 @@ vi.mock('sst', () => ({
 import { func } from './objectCreated';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() };
-const run = (key = 'uploads/report.pdf', eventTime?: string) =>
+const run = (key = 'uploads/report.pdf', eventTime?: string, eTag?: string) =>
   (func as unknown as (e: unknown, c: unknown, l: unknown) => Promise<void>)(
-    { Records: [{ eventTime, s3: { object: { key, size: 10 } } }] },
+    { Records: [{ eventTime, s3: { object: { key, size: 10, eTag } } }] },
     {},
     logger
   );
@@ -116,6 +116,21 @@ describe('objectCreated - measured-size gate', () => {
     expect(h.moderateUploadedFile).not.toHaveBeenCalled();
     expect(h.findOneAndUpdate).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('objectCreated - overwrite of a judged object', () => {
+  it('sends a verdict for another version back to pending before claiming, so the new bytes are scanned', async () => {
+    h.findOne.mockResolvedValue(metadata({ status: 'complete', moderationStatus: 'clean', moderationETag: 'etag-a' }));
+
+    await run('uploads/report.pdf', undefined, 'etag-b');
+
+    expect(h.updateOne).toHaveBeenCalledWith({ _id: 'ff1', moderationETag: { $ne: 'etag-b' } }, expect.any(Array));
+    const recordCall = h.updateOne.mock.calls.findIndex(([filter]) => 'moderationETag' in filter);
+    expect(h.updateOne.mock.invocationCallOrder[recordCall]).toBeLessThan(
+      h.findOneAndUpdate.mock.invocationCallOrder[0]
+    );
+    expect(h.moderateUploadedFile).toHaveBeenCalledTimes(1);
   });
 });
 

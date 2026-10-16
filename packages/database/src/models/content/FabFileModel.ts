@@ -3900,6 +3900,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // bumps it on any write, so an unrelated edit would reset the staleness clock. Only meaningful
     // while moderationStatus === 'scanning'.
     moderationClaimedAt: { type: Date, required: false },
+    // ETag of the object version the moderation verdict covers - see IFabFile.moderationETag.
+    moderationETag: { type: String, required: false },
     // Failed-attempt bookkeeping for the rescue sweep's fairness ordering and backoff - see
     // IFabFile.moderationAttempts / .moderationLastAttemptAt. Left unset (not defaulted to 0) so
     // "never failed" sorts ahead of any attempted row without a backfill.
