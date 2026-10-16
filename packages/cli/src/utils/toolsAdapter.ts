@@ -123,12 +123,13 @@ class CliLogger extends Logger {
 }
 
 /**
- * Shared context for agent observation tracking
- * This allows tool wrappers to add observations to the current agent
+ * Per-agent state the tool wrappers share with their entry point.
  */
 interface AgentContext {
   currentAgent: any | null; // ReActAgent instance
-  observationQueue: Array<{ toolName: string; result: unknown }>; // Queue observations to add after actions
+  /** Shared with ReActAgent's private queue (bootstrap/wireAgentEvents.ts). Nothing in the CLI
+   *  writes to it: the agent only drains entries keyed by tool-use id, which the wrapper never had. */
+  observationQueue: Array<{ toolName: string; result: unknown }>;
   /** Called (synchronously, must not block) after a file-writing tool succeeds, with the path as the tool received it. */
   onFileChanged?: (filePath: string) => void;
 }
@@ -267,8 +268,8 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
       const sandboxCleanupPaths = isSandboxed ? (sandboxedArgs?._sandboxCleanup as string[] | undefined) : undefined;
 
       /**
-       * Shared execution flow: run tool, capture violations, offer retry on
-       * sandbox failure, and record observation.
+       * Shared execution flow: checkpoint, run the tool, capture violations, offer
+       * retry on sandbox failure or a path denial, then fire the post-tool signals.
        */
       async function executeAndRecord(): Promise<string> {
         await checkpointBeforeWrite(checkpointStore, toolName, args);
@@ -960,8 +961,9 @@ const CHECKPOINT_TOOLS = new Set(['create_file', 'edit_local_file', 'delete_file
 
 /**
  * Snapshot the target of a file write in the shadow git repo so /undo can restore it. Called
- * only once the write is approved, so a denied or plan-blocked write leaves no checkpoint. A
- * checkpoint failure never blocks the write.
+ * once the permission gate approves the write, so a write denied there or blocked by plan mode
+ * leaves no checkpoint (a later fuzzy-edit re-prompt or directory grant can still be denied after
+ * it). A checkpoint failure never blocks the write.
  */
 async function checkpointBeforeWrite(
   checkpointStore: CheckpointStore | null | undefined,
@@ -1025,7 +1027,7 @@ export interface ToolFilter {
 }
 
 /**
- * Generate CLI-friendly tools with permission wrapping, server routing, and observation tracking
+ * Generate CLI-friendly tools with permission wrapping and server routing
  * Disables tools that require web app context
  *
  * @param toolFilter - Optional filter to restrict tool access (for subagents)

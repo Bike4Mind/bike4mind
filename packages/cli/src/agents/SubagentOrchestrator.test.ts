@@ -417,6 +417,8 @@ describe('SubagentOrchestrator hook-permission wiring', () => {
     const deps = vi.mocked(createSkillTool).mock.calls[0][0];
     expect(deps.permission.permissionManager).toBeDefined();
     expect(deps.permission.promptFn).toBeDefined();
+    const skillTool = vi.mocked(createSkillTool).mock.results[0].value;
+    expect(vi.mocked(wrapTools).mock.calls.some(([tools]) => tools.includes(skillTool))).toBe(true);
   });
 
   it('routes injected tools through the permission wrapper under the subagent mode ceiling', async () => {

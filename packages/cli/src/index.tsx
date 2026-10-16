@@ -867,7 +867,7 @@ function CliApp() {
         });
       };
 
-      // Create agent context for observation tracking
+      // Per-agent state shared with the tool wrappers
       const agentContext: AgentContext = {
         currentAgent: null,
         observationQueue: [],

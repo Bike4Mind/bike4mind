@@ -76,6 +76,19 @@ describe('redactSecrets', () => {
     expect(out).toContain('[REDACTED]');
   });
 
+  it('leaves a schema property or type annotation that only names a credential field', () => {
+    const schema = '{"github_token":{"type":"string"},"api_key":["a"]}';
+    expect(redactSecrets(schema)).toBe(schema);
+    const code = 'accessToken: string; getToken: () => Promise<string>; password: unknown';
+    expect(redactSecrets(code)).toBe(code);
+  });
+
+  it('still redacts a value that merely starts with a type keyword', () => {
+    const out = redactSecrets('DB_PASSWORD=stringent-pass-9');
+    expect(out).not.toContain('stringent-pass-9');
+    expect(out).toContain('[REDACTED]');
+  });
+
   it('leaves ordinary tool output untouched', () => {
     const content = 'export function add(a: number, b: number) { return a + b; }\n/Users/dev/project/src/add.ts:1';
     expect(redactSecrets(content)).toBe(content);

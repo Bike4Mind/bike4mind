@@ -93,9 +93,14 @@ const SECRET_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   // fields this agent reasons over (`totalTokens: 1523`, `promptTokens=900`), and
   // redacting those loses real information. No credential shape we redact is a bare
   // integer, so the exemption costs no coverage.
+  //
+  // It also exempts a value that opens a structure (`{`, `[`, `(`) or is a bare type
+  // keyword: a JSON schema property (`"github_token": {"type": ...}`) or a type
+  // annotation (`accessToken: string`) names a credential field without holding one,
+  // and redacting it corrupts schemas and code the model reads.
   {
     pattern:
-      /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?)[A-Za-z0-9_]*)(["']?\s*[=:]\s*["']?)(?!\d+(?![^\s"',}]))([^\s"',}]+)/gi,
+      /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?)[A-Za-z0-9_]*)(["']?\s*[=:]\s*["']?)(?!\d+(?![^\s"',}]))(?![{[(])(?!(?:string|number|boolean|object|unknown|any|null|undefined)(?![A-Za-z0-9_]))([^\s"',}]+)/gi,
     replacement: `$1$2${REDACTED}`,
   },
 ];

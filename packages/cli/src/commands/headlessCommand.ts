@@ -330,7 +330,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       log: headlessSandboxLog,
     });
 
-    // Agent context for observation tracking
+    // Per-agent state shared with the tool wrappers
     const agentContext: AgentContext = {
       currentAgent: null,
       observationQueue: [],

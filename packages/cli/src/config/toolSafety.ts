@@ -42,6 +42,8 @@ export const DEFAULT_TOOL_CATEGORIES: Record<string, ToolCategory> = {
   // Auto-approve: the agent's own session bookkeeping and delegation. These ran unwrapped
   // before every tool went through the permission wrapper; they stay prompt-free there.
   // A delegated subagent runs its own tools through the wrapper under its mode ceiling.
+  // Not all are side-effect free (work_item_* write server state, cancel_background_agent
+  // stops a run), so plan mode lets them through: it only blocks prompt_always tools.
   agent_delegate: 'auto_approve',
   check_agent_status: 'auto_approve',
   list_background_agents: 'auto_approve',

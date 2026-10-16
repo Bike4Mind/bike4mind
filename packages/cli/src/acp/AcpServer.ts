@@ -609,10 +609,23 @@ export class AcpServer {
     const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
     const toolSearchTool =
       deferredToolRegistry.size() > 0
-        ? createToolSearchTool(() => {
-            if (!agentToolsRef.current) throw new Error('tool_search invoked before agent context was wired');
-            return agentToolsRef.current;
-          })
+        ? wrapTools(
+            [
+              createToolSearchTool(() => {
+                if (!agentToolsRef.current) throw new Error('tool_search invoked before agent context was wired');
+                return agentToolsRef.current;
+              }),
+            ],
+            {
+              permissionManager,
+              showPermissionPrompt: this.promptFn,
+              agentContext,
+              configStore: this.configStore,
+              apiClient,
+              sandboxOrchestrator: sandboxOrchestrator ?? undefined,
+              allowedDirectories: additionalDirectories,
+            }
+          )[0]
         : null;
     const allTools = [...loadedB4mTools, ...(toolSearchTool ? [toolSearchTool] : []), ...cliTools];
 
