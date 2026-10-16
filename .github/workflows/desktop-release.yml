@@ -149,7 +149,7 @@ jobs:
           fi
           if [ "$PLATFORM" = mac ]; then
             for key in CSC_LINK CSC_KEY_PASSWORD CSC_KEYCHAIN CSC_NAME; do
-              if [ -n "${!key:-}" ]; then echo "Certificate credentials are not allowed in PR packaging: $key"; exit 1; fi
+              if [ -n "${!key:-}" ]; then echo "Certificate credentials are not allowed in ad-hoc packaging: $key"; exit 1; fi
             done
             CSC_FOR_PULL_REQUEST=true pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.mac.identity=- -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" "-c.extraMetadata.version=$DESKTOP_VERSION"
             app_dir=release/mac

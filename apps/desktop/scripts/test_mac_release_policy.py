@@ -26,6 +26,14 @@ class MacReleasePolicyTest(unittest.TestCase):
             with self.subTest(version=version), self.assertRaises(ValueError):
                 signing_mode(version, '', 'true')
 
+    def test_developer_id_path_is_not_capped_at_beta(self):
+        self.assertEqual(signing_mode('1.0.0', 'true', ''), 'signed')
+        self.assertEqual(signing_mode('1.0.0', 'true', 'true'), 'signed')
+        self.assertEqual(signing_mode('1.2.0-pr.12.3', '', '', True), 'adhoc')
+        for version in ('01.0.0', '1.0', '1.0.0;exit'):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                signing_mode(version, 'true', '')
+
     def test_cli_denies_configuration_drift_before_emitting_mode(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'output'

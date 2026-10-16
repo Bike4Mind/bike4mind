@@ -5,16 +5,20 @@ import re
 
 
 def signing_mode(version, signing, adhoc, preview=False):
-    if not re.fullmatch(r'0\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-pr\.[1-9]\d*\.[1-9]\d*)?', version):
-        raise ValueError('Desktop publication requires a valid 0.x beta version')
+    match = re.fullmatch(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-pr\.[1-9]\d*\.[1-9]\d*)?', version)
+    if not match:
+        raise ValueError('Desktop publication requires a valid version')
     if preview:
         return 'adhoc'
     if signing not in ('', 'false', 'true') or adhoc not in ('', 'false', 'true'):
         raise ValueError('Signing opt-ins must be exactly true, false, or unset')
     if signing == 'true':
         return 'signed'
-    if adhoc == 'true':
+    # Account-free distribution is a beta concession; a 1.x release must be Developer ID signed.
+    if adhoc == 'true' and match[1] == '0':
         return 'adhoc'
+    if adhoc == 'true':
+        raise ValueError('Ad-hoc macOS publication requires a 0.x beta version')
     raise ValueError('Set DESKTOP_MAC_SIGNING=true or explicitly opt into DESKTOP_MAC_ADHOC_BETA=true')
 
 
