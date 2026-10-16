@@ -339,7 +339,7 @@ describe('resolveModelAlias', () => {
 
     it('should mention using inherited model in warning', () => {
       const result = resolveModelAlias('invalid', testAgent, testPath);
-      expect(result.warning).toContain('Will inherit the main session model at runtime');
+      expect(result.warning).toContain('Will inherit the parent or main session model at runtime');
     });
 
     it('should suggest similar aliases when available', () => {

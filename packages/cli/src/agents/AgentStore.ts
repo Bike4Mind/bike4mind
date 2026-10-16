@@ -249,7 +249,7 @@ export function resolveModelAlias(
       resolved: false,
       warning:
         `Model "${modelInput}" in agent "${agentName}" (${filePath}) is retired. ` +
-        `Will inherit the main session model at runtime. Set model: ${successor} to pick its replacement.`,
+        `Will inherit the parent or main session model at runtime. Set model: ${successor} to pick its replacement.`,
     };
   }
 
@@ -268,7 +268,7 @@ export function resolveModelAlias(
     .filter(alias => alias.includes(normalizedInput) || normalizedInput.includes(alias))
     .slice(0, 5);
 
-  let warning = `Unknown model "${modelInput}" in agent "${agentName}" (${filePath}). Will inherit the main session model at runtime.\n`;
+  let warning = `Unknown model "${modelInput}" in agent "${agentName}" (${filePath}). Will inherit the parent or main session model at runtime.\n`;
 
   if (suggestions.length > 0) {
     warning += `Did you mean: ${suggestions.join(', ')}?\n`;
