@@ -1,5 +1,5 @@
 import { resolveWorkspaceDeniedTools } from '@bike4mind/common';
-import { premiumWorkspaceDeniedTools } from '@client/app/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
 
 /** The session's `disabledTools` plus what its current surface denies; mirrors the server's denylist. */
 export function effectiveDisabledTools(

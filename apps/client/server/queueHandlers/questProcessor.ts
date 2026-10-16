@@ -43,7 +43,7 @@ import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from './latticeChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
-import { premiumWorkspaceDeniedTools } from '@client/app/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';

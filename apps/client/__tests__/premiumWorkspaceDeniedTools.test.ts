@@ -11,7 +11,7 @@ import { join } from 'node:path';
  */
 
 const REAL_SCRIPT = join(__dirname, '../scripts/generate-premium-glue.mjs');
-const GENERATED = 'app/premium-generated/premiumWorkspaceDeniedTools.generated.ts';
+const GENERATED = 'server/premium-generated/premiumWorkspaceDeniedTools.generated.ts';
 
 let sandbox: string;
 let script: string;
@@ -100,6 +100,15 @@ describe('premium workspace denied tools', () => {
 
     expect(status).toBe(1);
     expect(stderr).toContain('invalid workspaceDeniedTools workspace id');
+  });
+
+  it('rejects a mixed-case workspace id, since surface ids match exactly', () => {
+    writeOverlay('mixed', { workspaceDeniedTools: { 'Example-Workspace': ['tool_a'] } });
+
+    const { status, stderr } = runCodegen();
+
+    expect(status).toBe(1);
+    expect(stderr).toContain('must be lowercase');
   });
 
   it('rejects an entry that is not an array of tool names', () => {

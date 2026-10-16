@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('@client/app/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
+vi.mock('@server/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
   premiumWorkspaceDeniedTools: { 'example-workspace': ['tool_denied_by_surface'] },
 }));
 import {

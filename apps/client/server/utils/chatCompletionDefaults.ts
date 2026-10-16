@@ -60,7 +60,7 @@ import { getUserEntitlements } from '@server/entitlements';
 import { Config } from '@server/utils/config';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { Resource } from 'sst';
-import { premiumWorkspaceDeniedTools } from '@client/app/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
 import { LLMEvents, TelemetryEvents } from '@server/utils/eventBus';
 

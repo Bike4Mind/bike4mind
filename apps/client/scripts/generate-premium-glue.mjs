@@ -17,7 +17,7 @@
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
- *   app/premium-generated/premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
+ *   server/premium-generated/premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
@@ -604,8 +604,8 @@ function readWorkspaceKeyTable(pkg, field, { allowDisplay = false } = {}) {
 const TOOL_NAME_RE = /^[a-z0-9][a-z0-9_.:-]*$/i;
 
 function generateWorkspaceDeniedTools(packages) {
-  const outPath = join(GENERATED_DIR, 'premiumWorkspaceDeniedTools.generated.ts');
-  const typeImport = `import type { PremiumWorkspaceDeniedTools } from '../premiumContract';`;
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceDeniedTools.generated.ts');
+  const typeImport = `import type { PremiumWorkspaceDeniedTools } from '@client/app/premiumContract';`;
   const field = 'workspaceDeniedTools';
 
   const merged = new Map();
@@ -623,6 +623,12 @@ function generateWorkspaceDeniedTools(packages) {
         throw new Error(
           `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
             `${JSON.stringify(workspaceId)} is not of [A-Za-z0-9_-]`
+        );
+      }
+      if (workspaceId !== workspaceId.toLowerCase()) {
+        throw new Error(
+          `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
+            `${JSON.stringify(workspaceId)} must be lowercase, because surface ids are matched exactly`
         );
       }
       if (!Array.isArray(tools) || !tools.every(tool => typeof tool === 'string' && TOOL_NAME_RE.test(tool))) {
