@@ -173,7 +173,7 @@ const CreditsModal = () => {
                         transactionType={TransactionType.Package}
                         packageId={pkg.id}
                         ariaLabel={purchaseCreditsAriaLabel(pkg.credits, pkg.price)}
-                        onPayment={() => handlePaymentComplete(pkg.credits)}
+                        onPayment={handlePaymentComplete}
                       />
                     </Card>
                   ))}

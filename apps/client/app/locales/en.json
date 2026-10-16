@@ -30,7 +30,8 @@
     "title": "Changelog"
   },
   "feedback": {
-    "send": "Send Feedback"
+    "send": "Send Feedback",
+    "rollupTitle": "Your feedback"
   },
   "terms_policies": "Terms & Policies",
   "cookie_settings": "Cookie settings",
@@ -188,7 +189,8 @@
     "messages": "Messages",
     "invites": "Invites",
     "sendMessage": "Send a Message",
-    "noMessages": "No messages"
+    "noMessages": "No messages",
+    "title_unread": "Inbox, unread items"
   },
   "addSomething": "Add {{ name }}",
   "deleteAllSomething": "Delete All {{ name }}",
@@ -389,7 +391,30 @@
     "payment_issue": "Payment failed - update your payment method to keep this plan."
   },
   "billing": {
-    "title": "Billing"
+    "title": "Billing",
+    "balance": "Balance",
+    "credits_heading": "Top up credits",
+    "credits_sub": "One-time packs, added to your balance. No subscription needed.",
+    "credits_sub_with_plan": "One-time packs, added on top of your monthly allowance.",
+    "free_plan": "Free",
+    "free_plan_detail": "Pay as you go with credit packs",
+    "low_org": "An organization admin can add credits to this account.",
+    "low_with_plan": "Top up to keep working until your allowance renews.",
+    "low_without_plan": "A plan adds credits every month; a pack tops you up now.",
+    "payment_failed": "Payment failed",
+    "plan": "Plan",
+    "plan_fallback": "Subscription",
+    "plan_unavailable": "Unavailable",
+    "plan_unavailable_detail": "We could not load your plan.",
+    "plans_change": "Your plan",
+    "plans_change_sub": "Manage, change or cancel your subscription.",
+    "plans_heading": "Plans",
+    "plans_heading_sub": "Monthly plans with a credit allowance.",
+    "plans_upgrade": "Upgrade",
+    "plans_upgrade_sub": "Get a monthly credit allowance instead of topping up by hand.",
+    "retry": "Retry",
+    "see_plans": "See plans",
+    "top_up": "Top up"
   },
   "credits": {
     "title": "Credits",
@@ -417,7 +442,8 @@
     "usage_pattern": "Based on your usage pattern from the last {{days}} days",
     "credits_used": "Credits Used",
     "credits_purchased": "Credits Purchased",
-    "net_credits": "Net Credits"
+    "net_credits": "Net Credits",
+    "unit": "credits"
   },
   "time": {
     "last_7_days": "Last 7 days",
@@ -455,7 +481,7 @@
     "current_credits": "Current credits amount",
     "best_value": "Best Value",
     "purchase_success": "Purchased {{credits}} credits",
-    "history_title": "Credits Purchase History",
+    "history_title": "Credits purchase history",
     "purchase": "Purchase",
     "no_transactions": "No transactions yet",
     "low_credits": "Your credits are low",
@@ -466,7 +492,15 @@
       "completed": "Completed",
       "pending": "Pending",
       "failed": "Failed"
-    }
+    },
+    "buy_pack": "Buy {{credits}} credits for {{price}}",
+    "choose_pack": "Choose a credit pack",
+    "history_usage_hint": "This lists purchases only.",
+    "organization_credits_active": "Organization Credits Active",
+    "rate_per_thousand": "{{rate}} per 1,000 credits",
+    "see_usage": "See usage",
+    "shared_rate": "Every pack is the same rate: {{rate}} per 1,000 credits.",
+    "switch_to_personal": "Switch to your personal account to purchase credits for personal use."
   },
   "settings": {
     "title": "Settings",
@@ -682,7 +716,9 @@
     "personal": "Personal",
     "business": "Business",
     "team": "Team",
-    "enterprise": "Enterprise"
+    "enterprise": "Enterprise",
+    "audience_label": "Plan type",
+    "includes": "Includes"
   },
   "agents": {
     "title": "Agents",
@@ -713,5 +749,13 @@
     "command_palette_description": "Manage reusable instruction templates",
     "market_title": "Skill Market",
     "market_command_palette_description": "Browse, import and publish community skills"
+  },
+  "apiKeys": {
+    "title": "API Keys"
+  },
+  "connections": {
+    "menuTooltip": "Integrations like Google Drive and Slack, plus API keys for your own code",
+    "sections": "Connections sections",
+    "title": "Connections"
   }
 }

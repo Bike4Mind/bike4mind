@@ -3,7 +3,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { UiNavigationEvents } from '@bike4mind/common';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
+import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import ProfileMenu, { AccountCard, closeSideNavOnOverlay } from './ProfileMenu';
 
 // Just enough of the menu's data hooks to render it; none of these rows are under test here.
@@ -20,6 +22,7 @@ vi.mock('@client/app/components/inbox/Badge', () => ({
   default: ({ children }: { children: React.ReactNode }) => children,
 }));
 const billing = vi.hoisted(() => ({ openView: vi.fn(), creditsEnabled: false }));
+const analytics = vi.hoisted(() => ({ mutate: vi.fn() }));
 vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
   useBillingView: () => ({ view: undefined, openView: billing.openView, closeView: vi.fn() }),
 }));
@@ -29,7 +32,7 @@ vi.mock('@client/app/contexts/InboxContext', () => ({
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (select: (s: unknown) => unknown) => select({ currentUser: { id: 'u1', name: 'Jane' }, isAdmin: false }),
 }));
-vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: vi.fn() }) }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: analytics.mutate }) }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => billing.creditsEnabled }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetFriendRequests: () => ({ data: [] }),
@@ -200,6 +203,7 @@ describe('ProfileMenu - API Docs', () => {
 describe('ProfileMenu - billing rows open URL-addressable views', () => {
   beforeEach(() => {
     billing.openView.mockClear();
+    analytics.mutate.mockClear();
     billing.creditsEnabled = true;
   });
 
@@ -216,16 +220,37 @@ describe('ProfileMenu - billing rows open URL-addressable views', () => {
     fireEvent.click(screen.getByTestId('profile-menu-card'));
   };
 
-  it('opens the credits view through the URL', () => {
+  it('shows one Billing row and no separate Credits or Subscriptions rows', () => {
     openMenu();
-    fireEvent.click(screen.getByTestId('profile-menu-credits'));
-    expect(billing.openView).toHaveBeenCalledWith('credits');
+    expect(screen.getByTestId('profile-menu-billing')).toHaveTextContent('Billing');
+    expect(screen.queryByTestId('profile-menu-credits')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('profile-menu-subscriptions')).not.toBeInTheDocument();
   });
 
-  it('opens the plans view through the URL', () => {
+  it('hides the Billing row when enforceCredits is off', () => {
+    billing.creditsEnabled = false;
     openMenu();
-    fireEvent.click(screen.getByTestId('profile-menu-subscriptions'));
-    expect(billing.openView).toHaveBeenCalledWith('plans');
+    expect(screen.getByTestId('profile-menu-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('profile-menu-billing')).not.toBeInTheDocument();
+  });
+
+  it('keeps Inbox and Your feedback out of the top level, and Invite sits directly under Teams', () => {
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-more'));
+    expect(screen.queryByTestId('profile-more-inbox')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('profile-more-invite')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('profile-menu-feedback-rollup')).not.toBeInTheDocument();
+    const teams = screen.getByTestId('profile-menu-teams');
+    const invite = screen.getByTestId('profile-menu-invite');
+    expect(invite).toHaveTextContent('Invite a friend');
+    expect(teams.nextElementSibling).toBe(invite);
+  });
+
+  it('opens Billing through the URL without asking it to jump to a section', () => {
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-billing'));
+    expect(billing.openView).toHaveBeenCalledWith('credits', { focusSection: false });
+    expect(analytics.mutate).toHaveBeenCalledWith({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });
   });
 });
 
@@ -305,7 +330,7 @@ describe('ProfileMenu - keyboard', () => {
     more.focus();
     fireEvent.keyDown(more, { key: 'ArrowRight' });
     expect(more.getAttribute('aria-expanded')).toBe('true');
-    expect(document.activeElement).toBe(screen.getByTestId('profile-more-inbox'));
+    expect(document.activeElement).toBe(screen.getByTestId('profile-more-about'));
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' });
     expect(screen.queryByTestId('profile-menu-more-flyout')).not.toBeInTheDocument();
     expect(screen.getByTestId('profile-menu-panel')).toBeInTheDocument();
@@ -318,7 +343,7 @@ describe('ProfileMenu - keyboard', () => {
     billing.openView.mockImplementationOnce(() => {
       focusedWhenOpened = document.activeElement;
     });
-    fireEvent.click(screen.getByTestId('profile-menu-subscriptions'));
+    fireEvent.click(screen.getByTestId('profile-menu-billing'));
     expect(focusedWhenOpened).toBe(trigger);
   });
 });
@@ -337,11 +362,11 @@ describe('ProfileMenu - focus after navigating', () => {
     fireEvent.click(screen.getByTestId('profile-menu-card'));
   };
 
-  it('keeps focus on the account card when the target is the page already open (API Keys on /profile)', () => {
-    router.pathname = '/profile';
+  it('keeps focus on the account card when the target is the page already open (Connections on /integrations)', () => {
+    router.pathname = '/integrations';
     openMenu();
-    fireEvent.click(screen.getByTestId('profile-menu-api-keys'));
-    expect(router.navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'api-keys' } });
+    fireEvent.click(screen.getByTestId('profile-menu-connections'));
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/integrations', search: { source: 'profile_menu' } });
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
     expect(document.activeElement).toBe(screen.getByTestId('profile-menu-card'));
   });
@@ -362,11 +387,86 @@ describe('ProfileMenu - focus after navigating', () => {
     expect(document.activeElement).toBe(document.body);
   });
 
-  it('opens the Integrations page, attributed to this menu, and closes the menu', () => {
+  it('opens the Connections page, attributed to this menu, and closes the menu', () => {
     router.pathname = '/new';
     openMenu();
-    fireEvent.click(screen.getByTestId('profile-menu-integrations'));
+    fireEvent.click(screen.getByTestId('profile-menu-connections'));
     expect(router.navigate).toHaveBeenCalledWith({ to: '/integrations', search: { source: 'profile_menu' } });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProfileMenu - Connections', () => {
+  beforeEach(() => {
+    router.pathname = '/new';
+    router.navigate.mockClear();
+  });
+
+  const openMenu = () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+  };
+
+  it('shows one Connections row in place of the separate Integrations and API Keys rows', () => {
+    openMenu();
+    expect(screen.getByTestId('profile-menu-connections')).toHaveTextContent('Connections');
+    expect(screen.queryByTestId('profile-menu-integrations')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('profile-menu-api-keys')).not.toBeInTheDocument();
+  });
+
+  it('explains the Connections row in a tooltip on hover', async () => {
+    openMenu();
+    fireEvent.mouseOver(screen.getByTestId('profile-menu-connections'));
+    expect(
+      await screen.findByText('Integrations like Google Drive and Slack, plus API keys for your own code')
+    ).toBeInTheDocument();
+  });
+
+  it('attaches the tooltip as a description on the menu item rather than a wrapper', async () => {
+    openMenu();
+    const row = screen.getByTestId('profile-menu-connections');
+    expect(row).toHaveAttribute('role', 'menuitem');
+    // The tooltip text must not become the row's accessible name on a role-less wrapper.
+    expect(
+      screen.queryByLabelText('Integrations like Google Drive and Slack, plus API keys for your own code')
+    ).not.toBeInTheDocument();
+
+    fireEvent.mouseOver(row);
+    await screen.findByText('Integrations like Google Drive and Slack, plus API keys for your own code');
+    expect(row).toHaveAttribute('aria-describedby');
+  });
+
+  it('lists API Keys, Your feedback, then API Docs in More and opens the API Keys tab', () => {
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-more'));
+    const keys = screen.getByTestId('profile-more-api-keys');
+    const feedback = screen.getByTestId('profile-more-feedback');
+    expect(keys.nextElementSibling).toBe(feedback);
+    expect(feedback.nextElementSibling).toBe(screen.getByTestId('profile-more-api-docs'));
+
+    fireEvent.click(keys);
+    expect(router.navigate).toHaveBeenCalledWith({
+      to: '/integrations',
+      search: { tab: 'api-keys' },
+    });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+
+  it('opens the personal feedback rollup with the default window from More', () => {
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-more'));
+    const feedback = screen.getByTestId('profile-more-feedback');
+    expect(feedback).toHaveTextContent('Your feedback');
+
+    fireEvent.click(feedback);
+    expect(router.navigate).toHaveBeenCalledWith({
+      to: '/feedback/rollup',
+      search: defaultFeedbackRollupWindow(),
+    });
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
   });
 });
@@ -431,7 +531,7 @@ describe('ProfileMenu - roles and keyboard details', () => {
     more.focus();
     expect(more.getAttribute('aria-expanded')).toBe('true');
     fireEvent.keyDown(more, { key: 'ArrowRight' });
-    expect(document.activeElement).toBe(screen.getByTestId('profile-more-inbox'));
+    expect(document.activeElement).toBe(screen.getByTestId('profile-more-about'));
   });
 
   it('hands focus to the trigger before a non-billing row opens a new tab', () => {
