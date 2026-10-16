@@ -124,8 +124,27 @@ describe('retiring and retired aliases', () => {
   });
 
   it('resolves the dated id of a still-served model until its retirement date', () => {
-    const result = resolveModelAlias('o3-2025-04-16', 'test-agent', '/test/path.md', before);
-    expect(result).toEqual({ model: 'o3-2025-04-16', resolved: true });
+    expect(resolveModelAlias('o3-2025-04-16', 'test-agent', '/test/path.md', before)).toEqual({
+      model: 'o3-2025-04-16',
+      resolved: true,
+    });
+    // o3 retires on 2026-12-11, after the o4-mini cutoff, so it is still served
+    // across that earlier date.
+    expect(resolveModelAlias('o3-2025-04-16', 'test-agent', '/test/path.md', onDate)).toEqual({
+      model: 'o3-2025-04-16',
+      resolved: true,
+    });
+  });
+
+  it('retires each alias on its own date, not the earliest cutoff', () => {
+    const o3Retirement = new Date('2026-12-11T00:00:00Z');
+    for (const input of ['o3', 'o3-2025-04-16']) {
+      const result = resolveModelAlias(input, 'test-agent', '/test/path.md', o3Retirement);
+      expect(result.resolved, `${input} must be retired on 2026-12-11`).toBe(false);
+      expect(result.model).toBe(DEFAULT_AGENT_MODEL);
+      expect(result.warning).toContain('is retired');
+      expect(result.warning).toContain('model: gpt-5.5');
+    }
   });
 
   it('warns for the dated id of a retired model instead of pinning it', () => {
