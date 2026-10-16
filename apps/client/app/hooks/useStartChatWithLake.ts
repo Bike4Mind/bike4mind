@@ -12,12 +12,15 @@ type SessionCreateDeps = {
   setCurrentSession: (session: ISessionDocument) => void;
   setCurrentSessionId: (id: string) => void;
   closeManager: () => void;
-  navigate: ReturnType<typeof useNavigate>;
+};
+
+type StartChatWithLakeOptions = {
+  onCreated?: (session: ISessionDocument) => void | Promise<void>;
 };
 
 async function createAndOpenSession(
   body: Record<string, unknown>,
-  { queryClient, setCurrentSession, setCurrentSessionId, closeManager, navigate }: SessionCreateDeps
+  { queryClient, setCurrentSession, setCurrentSessionId, closeManager }: SessionCreateDeps
 ): Promise<ISessionDocument> {
   const res = await api.post<ISessionDocument>('/api/sessions/create', body);
   const created = res.data;
@@ -26,7 +29,6 @@ async function createAndOpenSession(
   setCurrentSession(created);
   setCurrentSessionId(created.id);
   closeManager();
-  navigate({ to: '/notebooks/$id', params: { id: created.id }, replace: true });
   return created;
 }
 
@@ -37,8 +39,8 @@ async function createAndOpenSession(
  * which starts the GLOBAL all-accessible-lakes grounding mode and binds no specific lake.
  *
  * Adopts the new session as current, seeds the react-query caches (same as the other create
- * seams), closes the lake manager, and navigates to the notebook. Throws on API failure so the
- * caller can surface its own error UX.
+ * seams), closes the lake manager, and navigates to the notebook by default. An embedding caller
+ * can handle completion instead. Throws on API failure so the caller can surface its own error UX.
  *
  * NOTE (design follow-up): the entry point that calls this lives in the lake manager's info panel
  * for now - deliberately minimal. Placement/polish (e.g. a reader-facing lake card action) is left
@@ -51,11 +53,18 @@ export default function useStartChatWithLake() {
   const closeManager = useDataLakeWizardStore(s => s.closeManager);
 
   return useCallback(
-    async (dataLakeId: string): Promise<ISessionDocument> =>
-      createAndOpenSession(
+    async (dataLakeId: string, options?: StartChatWithLakeOptions): Promise<ISessionDocument> => {
+      const created = await createAndOpenSession(
         { name: 'New Notebook', dataLakeId },
-        { queryClient, setCurrentSession, setCurrentSessionId, closeManager, navigate }
-      ),
+        { queryClient, setCurrentSession, setCurrentSessionId, closeManager }
+      );
+      if (options?.onCreated) {
+        await options.onCreated(created);
+      } else {
+        navigate({ to: '/notebooks/$id', params: { id: created.id }, replace: true });
+      }
+      return created;
+    },
     [navigate, queryClient, setCurrentSession, setCurrentSessionId, closeManager]
   );
 }
@@ -92,8 +101,8 @@ export function useStartChatWithLakes() {
       retrievalTags: string[];
       groundingMode: DataLakeGroundingMode;
       preauthorizedLakeIds?: string[];
-    }): Promise<ISessionDocument> =>
-      createAndOpenSession(
+    }): Promise<ISessionDocument> => {
+      const created = await createAndOpenSession(
         {
           name: 'New Notebook',
           retrievalTags: params.retrievalTags,
@@ -102,8 +111,11 @@ export function useStartChatWithLakes() {
           corpusGroundingMode: params.groundingMode,
           ...(params.preauthorizedLakeIds?.length ? { preauthorizedLakeIds: params.preauthorizedLakeIds } : {}),
         },
-        { queryClient, setCurrentSession, setCurrentSessionId, closeManager, navigate }
-      ),
+        { queryClient, setCurrentSession, setCurrentSessionId, closeManager }
+      );
+      navigate({ to: '/notebooks/$id', params: { id: created.id }, replace: true });
+      return created;
+    },
     [navigate, queryClient, setCurrentSession, setCurrentSessionId, closeManager]
   );
 }
