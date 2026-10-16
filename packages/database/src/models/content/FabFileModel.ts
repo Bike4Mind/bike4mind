@@ -3008,6 +3008,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     });
   }
 
+  async countRebuildingFilesByScope(scope: DataLakeMembershipScope): Promise<number> {
+    // Reset, not yet committed, and not past REBUILD_PENDING_STALE_MS: older stamps are reported by
+    // findConvergencePausedFilesByScope and errored ones by countFailedFilesByScope, so the three
+    // counts never overlap.
+    return this.fabFileModel.countDocuments({
+      ...buildDataLakeMembershipFilter(scope),
+      deletedAt: null,
+      archivedAt: null,
+      chunkRebuildRequestedAt: { $gte: new Date(Date.now() - REBUILD_PENDING_STALE_MS) },
+      error: { $in: [null, ''] },
+    });
+  }
+
   /**
    * Per-lake live file counts, keyed by membership tag, split into the whole lake and the slice
    * of it a prefix-keyed tag tree structurally cannot render:

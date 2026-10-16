@@ -116,6 +116,7 @@ export function LakeInfoPanel({
   const { data: rebuildStatus } = useUnderChunkedCount(lake.id, !!lake.canRebuild);
   const underChunkedCount = rebuildStatus?.underChunkedCount ?? 0;
   const failedCount = rebuildStatus?.failedCount ?? 0;
+  const rebuildingCount = rebuildStatus?.rebuildingCount ?? 0;
   // Members embedded in a PREVIOUS embedding space, which retrieval withholds wholesale rather than
   // ranking badly - so this is the one lake defect with no symptom an owner can see in search
   // results, and the reason it gets its own affordance instead of folding into Rebuild passages.
@@ -703,6 +704,25 @@ export function LakeInfoPanel({
                 data-testid={`datalake-manager-rebuild-chip-${lake.id}`}
               >
                 {underChunkedCount} to rebuild
+              </Chip>
+            </Tooltip>
+          )}
+          {/* Reset files have no passages and no error until the rebuild commits or finally fails,
+              so without this chip a lake mid-rebuild reads as having nothing to rebuild. */}
+          {(lake.canRebuild || lake.canManage) && rebuildingCount > 0 && (
+            <Tooltip
+              title="These files' passages are being rebuilt. They are not searchable until the rebuild finishes."
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="neutral"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-rebuilding-chip-${lake.id}`}
+              >
+                {rebuildingCount} rebuilding
               </Chip>
             </Tooltip>
           )}

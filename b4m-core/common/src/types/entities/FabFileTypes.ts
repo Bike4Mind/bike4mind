@@ -2005,6 +2005,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
   /**
+   * Count the lake's files whose passages were reset for a rebuild that has not committed yet and
+   * is still inside REBUILD_PENDING_STALE_MS. They have no passages and no error, so without this
+   * a lake mid-rebuild reports nothing to rebuild and nothing failed.
+   */
+  countRebuildingFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
+  /**
    * Distinct live file counts per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
    * stored stats. Prefer this over counting `<prefix>:` tag matches, which misses files that

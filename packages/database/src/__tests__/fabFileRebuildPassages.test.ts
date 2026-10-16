@@ -544,3 +544,28 @@ describe('FabFileRepository.countFailedFilesByScope', () => {
     expect(await fabFileRepository.countFailedFilesByScope(scope)).toBe(2);
   });
 });
+
+describe('FabFileRepository.countRebuildingFilesByScope', () => {
+  setupMongoTest();
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  it('counts reset, uncommitted rebuilds inside the stale bound, and nothing the other two counts report', async () => {
+    const reset = { chunked: false, chunkCount: 0, vectorizedChunkCount: 0 };
+    const fresh = new Date(Date.now() - 60_000);
+    await FabFile.create([
+      makeFile({ ...reset, chunkRebuildRequestedAt: fresh }), // counts
+      makeFile({ ...reset, chunkRebuildRequestedAt: fresh, isChunking: true }), // being chunked now -> counts
+      makeFile({ ...reset, chunkRebuildRequestedAt: fresh, error: 'Connection lost' }), // failed -> no
+      makeFile({ ...reset, chunkRebuildRequestedAt: new Date(Date.now() - REBUILD_PENDING_STALE_MS - 60_000) }), // stale -> no
+      makeFile({ chunked: true, chunkCount: 5 }), // committed -> no
+      makeFile({ ...reset, chunkRebuildRequestedAt: fresh, deletedAt: new Date() }), // deleted -> no
+      makeFile({ ...reset, chunkRebuildRequestedAt: fresh, tags: [{ name: 'datalake:other', strength: 1 }] }), // non-member -> no
+    ]);
+
+    expect(await fabFileRepository.countRebuildingFilesByScope(scope)).toBe(2);
+    expect(await fabFileRepository.countFailedFilesByScope(scope)).toBe(1);
+    expect(await fabFileRepository.findConvergencePausedFilesByScope(scope)).toHaveLength(1);
+  });
+});

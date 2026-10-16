@@ -1595,6 +1595,8 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
 export type LakeRebuildStatus = {
   underChunkedCount: number;
   failedCount: number;
+  /** Files reset for a rebuild that has not committed yet: no passages, no error. */
+  rebuildingCount: number;
   /**
    * Members retrieval is withholding for being embedded in a previous embedding space, or `null`
    * when the server could not resolve the space to compare against. Null is deliberately NOT 0: it
@@ -1628,8 +1630,10 @@ export const INITIAL_REBUILD_POLL_STATE: RebuildPollState = { sawBacklog: false,
  * stale count contributes nothing: unknown is not a backlog, and polling on it would never end.
  */
 export const rebuildBacklog = (
-  status?: Pick<LakeRebuildStatus, 'underChunkedCount' | 'staleEmbeddingSpaceCount'>
-): number => (status?.underChunkedCount ?? 0) + (status?.staleEmbeddingSpaceCount ?? 0);
+  status?: Pick<LakeRebuildStatus, 'underChunkedCount' | 'staleEmbeddingSpaceCount'> &
+    Partial<Pick<LakeRebuildStatus, 'rebuildingCount'>>
+): number =>
+  (status?.underChunkedCount ?? 0) + (status?.staleEmbeddingSpaceCount ?? 0) + (status?.rebuildingCount ?? 0);
 
 /**
  * Poll cadence for the rebuild badge, as a pure function so it can be tested without mounting the
@@ -1676,6 +1680,7 @@ export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) 
       return {
         underChunkedCount: res.data.underChunkedCount,
         failedCount: res.data.failedCount ?? 0,
+        rebuildingCount: res.data.rebuildingCount ?? 0,
         // `?? null`, not `?? 0`: an older server omits the field entirely, and defaulting that to a
         // zero would advertise "no stale files" on a lake nobody has measured.
         staleEmbeddingSpaceCount: res.data.staleEmbeddingSpaceCount ?? null,

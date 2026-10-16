@@ -63,6 +63,7 @@ type RebuildStatusMock =
   | {
       underChunkedCount: number;
       failedCount: number;
+      rebuildingCount?: number;
       staleEmbeddingSpaceCount: number | null;
       // Optional here on purpose: the cases that omit it are the ones that must stay silent.
       embeddingSpaceResolved?: boolean | null;
@@ -455,6 +456,28 @@ describe('LakeInfoPanel - re-embed for search', () => {
     });
     renderPanel({ ...baseLake, canRebuild: false });
     expect(screen.queryByTestId(REEMBED)).not.toBeInTheDocument();
+  });
+});
+
+// A reset file has no passages and no error until its rebuild commits or finally fails, so the
+// under-chunked and failed chips are both silent for it.
+describe('LakeInfoPanel - files mid-rebuild', () => {
+  const REBUILDING = 'datalake-manager-rebuilding-chip-lake-1';
+
+  it('shows how many files are mid-rebuild when nothing else is outstanding', () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 1, staleEmbeddingSpaceCount: 0 },
+    });
+    renderPanel();
+    expect(screen.getByTestId(REBUILDING)).toHaveTextContent('1 rebuilding');
+  });
+
+  it('stays hidden when the server does not report the count', () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: 0 },
+    });
+    renderPanel();
+    expect(screen.queryByTestId(REBUILDING)).not.toBeInTheDocument();
   });
 });
 

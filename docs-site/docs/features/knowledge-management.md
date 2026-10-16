@@ -111,6 +111,7 @@ Check these in order, all of them visible in the plan the button reads:
   back in a minute is how a real warning stops being read. If a rebuild is somehow never carried out
   (the request was recorded but the work never ran), the file keeps reporting as re-indexing rather
   than vanishing, and **Rebuild passages** picks it up once the request is a couple of hours old.
+  Until then the lake panel shows it in an "N rebuilding" chip beside "to rebuild" and "failed".
 
   **Rebuild passages is refused while the pause is on, and says so.** The rebuild door deletes and
   re-embeds a whole wave, so it is gated the same way convergence is: starting it while background

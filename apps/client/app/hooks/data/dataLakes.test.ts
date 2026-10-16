@@ -1121,6 +1121,11 @@ describe('rebuildBacklog', () => {
     expect(rebuildBacklog({ underChunkedCount: 2, staleEmbeddingSpaceCount: null })).toBe(2);
   });
 
+  it('counts files still rebuilding, so the chip is refetched once their rebuild commits', () => {
+    expect(rebuildBacklog({ underChunkedCount: 0, staleEmbeddingSpaceCount: 0, rebuildingCount: 4 })).toBe(4);
+    expect(rebuildBacklog({ underChunkedCount: 1, staleEmbeddingSpaceCount: null, rebuildingCount: 4 })).toBe(5);
+  });
+
   it('is zero before the status has loaded', () => {
     expect(rebuildBacklog(undefined)).toBe(0);
   });
@@ -1673,6 +1678,20 @@ describe('useUnderChunkedCount: the unresolvable-space discriminator', () => {
     const { result } = mount();
     await waitFor(() => expect(result.current.data).toBeDefined());
     expect(result.current.data?.embeddingSpaceResolved).toBeNull();
+  });
+
+  it('carries the mid-rebuild count, and reads an older server that omits it as 0', async () => {
+    apiGet.mockResolvedValueOnce({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 2, staleEmbeddingSpaceCount: 0 },
+    });
+    const first = mount();
+    await waitFor(() => expect(first.result.current.data).toBeDefined());
+    expect(first.result.current.data?.rebuildingCount).toBe(2);
+
+    apiGet.mockResolvedValueOnce({ data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: 0 } });
+    const second = mount();
+    await waitFor(() => expect(second.result.current.data).toBeDefined());
+    expect(second.result.current.data?.rebuildingCount).toBe(0);
   });
 });
 
