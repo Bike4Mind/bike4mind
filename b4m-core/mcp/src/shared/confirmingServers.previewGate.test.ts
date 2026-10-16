@@ -16,8 +16,8 @@ vi.hoisted(() => {
 });
 
 import { registerGitHubTools } from '../github/registerTools.js';
-import { ALL_TOOL_NAMES as GITHUB_TOOL_NAMES } from '../github/constants.js';
-import { ALL_ATLASSIAN_TOOL_NAMES } from '../atlassian/constants.js';
+import { ALL_TOOL_NAMES as GITHUB_TOOL_NAMES, GITHUB_CONFIRMABLE_TOOLS } from '../github/constants.js';
+import { ALL_ATLASSIAN_TOOL_NAMES, ATLASSIAN_CONFIRMABLE_TOOLS } from '../atlassian/constants.js';
 import { registerJiraIssueTools } from '../atlassian/tools/jira-issues.js';
 import { registerJiraProjectTools } from '../atlassian/tools/jira-projects.js';
 import { registerJiraWorkflowTools } from '../atlassian/tools/jira-workflows.js';
@@ -307,6 +307,7 @@ type ServerUnderTest = {
   label: string;
   tools: Map<string, CapturedTool>;
   declared: readonly string[];
+  confirmable: ReadonlySet<string>;
   writes: string[];
   reads: string[];
 };
@@ -320,6 +321,7 @@ beforeAll(() => {
       label: 'github',
       tools: captureTools(server => registerGitHubTools(server, resolvers)),
       declared: GITHUB_TOOL_NAMES,
+      confirmable: GITHUB_CONFIRMABLE_TOOLS,
       writes: GITHUB_WRITE_TOOLS,
       reads: GITHUB_READ_TOOLS,
     },
@@ -327,6 +329,7 @@ beforeAll(() => {
       label: 'atlassian',
       tools: captureTools(server => atlassianRegistrations.forEach(register => register(server))),
       declared: ALL_ATLASSIAN_TOOL_NAMES,
+      confirmable: ATLASSIAN_CONFIRMABLE_TOOLS,
       writes: ATLASSIAN_WRITE_TOOLS,
       reads: ATLASSIAN_READ_TOOLS,
     }
@@ -346,6 +349,11 @@ describe.each(['github', 'atlassian'])('%s MCP server preview gate', label => {
     expect(registered).toEqual([...declared].sort());
     expect([...writes, ...reads].sort()).toEqual(registered);
     expect(new Set([...writes, ...reads]).size).toBe(writes.length + reads.length);
+  });
+
+  it('classifies exactly the confirmable tools as writes', () => {
+    const { writes, confirmable } = serverUnderTest();
+    expect(new Set(writes)).toEqual(new Set(confirmable));
   });
 
   it('drives every tool (no silent skips)', () => {
