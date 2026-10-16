@@ -43,7 +43,8 @@ export type SubagentToolPermissions = {
  * claims the server via `exclusiveMcpServers` (`claimedServers`). Those tools are agent-only, so the
  * parent never holds them and could never take the step back. Their writes only preview and
  * execute on the user's Confirm click, which is the approval the gate would otherwise ask for.
- * A tool the user denied is still refused.
+ * `exclusiveMcpServers` is also settable on user/org agents, so a custom agent claiming one of
+ * these servers gets the same approval-free reads; writes still preview. A denied tool is still refused.
  */
 export function gateSubagentTools(
   tools: ICompletionOptionTools[],
