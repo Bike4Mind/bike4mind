@@ -275,7 +275,10 @@ const AdminSettingInputField = ({
               ) : null}
 
               <FormHelperText data-testid={`admin-setting-${setting.key}-helper`}>
-                {fieldError ?? floorWarning ?? setting.description}
+                {/* The floor warning outranks a stale save error: `saveValue` sends the confirm flag
+                    whenever `floorWarning` is truthy, so the warning must be the line the admin sees
+                    before that save, not one hidden behind a previous failure's message. */}
+                {rangeError ?? floorWarning ?? saveError ?? setting.description}
               </FormHelperText>
             </FormControl>
           </Grid>

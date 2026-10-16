@@ -369,6 +369,23 @@ describe('AdminSettingInputField clearDeletesRow number setting', () => {
     }
   });
 
+  it('shows the above-measured warning even when an earlier save left an error on the field', () => {
+    // The save sends the confirm flag whenever the warning is truthy, so the warning must win the
+    // helper line over a stale error from a previous attempt - otherwise the flag is sent for a
+    // warning the admin never saw.
+    updateError = new Error('save failed earlier');
+    floorWarning = '75% is above the 58% minimum measured for text-embedding-3-small';
+    try {
+      renderField(floorSetting, null);
+      fireEvent.change(floorInput(), { target: { value: '75' } });
+
+      expect(screen.getByTestId(`admin-setting-${floorSetting.key}-helper`)).toHaveTextContent(floorWarning);
+    } finally {
+      floorWarning = undefined;
+      updateError = undefined;
+    }
+  });
+
   it('gives a number setting without the flag no unset placeholder', () => {
     expect(settingsMap.modelDiscoveryPriceBandPct.clearDeletesRow).toBeUndefined();
     renderField(settingsMap.modelDiscoveryPriceBandPct, 50);
