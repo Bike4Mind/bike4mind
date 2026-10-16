@@ -59,8 +59,10 @@ const FULL_MODEL_ID_PREFIXES = [
  * 2. Set the value to the full model ID from ChatModels enum
  *
  * The CLI request path never runs resolveDeprecatedModelId, so a target must be
- * an active model; an alias for a retired model points at its successor or is
- * dropped. AgentStore.test.ts enforces this.
+ * an active model with no deprecationDate. A target with a scheduled
+ * deprecationDate belongs in SUNSETTING_MODEL_ALIASES; an alias for a retired
+ * model points at its successor or moves to RETIRED_MODEL_ALIASES.
+ * AgentStore.test.ts enforces this.
  */
 export const MODEL_ALIASES: Record<string, string> = {
   // Anthropic/Claude Models
@@ -113,7 +115,7 @@ export const MODEL_ALIASES: Record<string, string> = {
 
   // Google Gemini Models
   gemini: ChatModels.GEMINI_3_5_FLASH,
-  'gemini-pro': ChatModels.GEMINI_3_5_FLASH,
+  'gemini-pro': ChatModels.GEMINI_3_1_PRO_PREVIEW,
   'gemini-flash': ChatModels.GEMINI_3_5_FLASH,
   'gemini-flash-lite': ChatModels.GEMINI_3_1_FLASH_LITE,
 
@@ -150,10 +152,51 @@ export const MODEL_ALIASES: Record<string, string> = {
 };
 
 /**
+ * Aliases whose target is still served but carries a catalog deprecationDate.
+ * Each resolves until `retiresOn`, then reports as retired and names `successor`
+ * instead of pinning a dead id. AgentStore.test.ts keeps every `retiresOn` equal
+ * to the catalog deprecationDate and every `successor` a live MODEL_ALIASES key.
+ */
+export const SUNSETTING_MODEL_ALIASES: Record<string, { model: string; retiresOn: string; successor: string }> = {
+  'gpt-4': { model: ChatModels.GPT4, retiresOn: '2026-10-23', successor: 'gpt-5.5' },
+  'gpt-4-turbo': { model: ChatModels.GPT4_TURBO, retiresOn: '2026-10-23', successor: 'gpt-5.5' },
+  'gpt-4.1-nano': { model: ChatModels.GPT4_1_NANO, retiresOn: '2026-10-23', successor: 'gpt-5-nano' },
+  'o4-mini': { model: ChatModels.O4_MINI, retiresOn: '2026-10-23', successor: 'gpt-5-mini' },
+  o3: { model: ChatModels.O3, retiresOn: '2026-12-11', successor: 'gpt-5.5' },
+};
+
+/**
+ * Aliases for retired models, mapped to the alias to suggest instead. Checked
+ * before the full-id passthrough so `gpt-4.5` or `gemini-1.5-pro` warn rather
+ * than pin an id the provider no longer serves.
+ */
+export const RETIRED_MODEL_ALIASES: Record<string, string> = {
+  'gpt-4.5': 'gpt-5.5',
+  o1: 'gpt-5.5',
+  'o1-preview': 'gpt-5.5',
+  'o1-mini': 'gpt-5-mini',
+  'o3-mini': 'gpt-5-mini',
+  'gemini-2.0-flash': 'gemini-flash',
+  'gemini-1.5-pro': 'gemini-pro',
+  'gemini-1.5-flash': 'gemini-flash',
+  'gemini-1.5-flash-8b': 'gemini-flash-lite',
+};
+
+// Agent frontmatter is user-controlled, so `constructor` or `toString` must not
+// resolve through the prototype.
+function ownEntry<T>(table: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
+/**
  * Get list of all available model aliases for error messages
  */
-export function getAvailableModelAliases(): string[] {
-  return Object.keys(MODEL_ALIASES).sort();
+export function getAvailableModelAliases(now: Date = new Date()): string[] {
+  const today = now.toISOString().slice(0, 10);
+  const sunsetting = Object.entries(SUNSETTING_MODEL_ALIASES)
+    .filter(([, entry]) => today < entry.retiresOn)
+    .map(([alias]) => alias);
+  return [...Object.keys(MODEL_ALIASES), ...sunsetting].sort();
 }
 
 /**
@@ -174,13 +217,36 @@ export interface ModelResolutionResult {
  * @param modelInput - The model alias or full model ID
  * @param agentName - Name of the agent (for warning messages)
  * @param filePath - Path to the agent file (for warning messages)
+ * @param now - Clock for sunsetting aliases (injectable for tests)
  * @returns Resolution result with model ID and optional warning
  */
-export function resolveModelAlias(modelInput: string, agentName: string, filePath: string): ModelResolutionResult {
+export function resolveModelAlias(
+  modelInput: string,
+  agentName: string,
+  filePath: string,
+  now: Date = new Date()
+): ModelResolutionResult {
   const normalizedInput = modelInput.toLowerCase();
 
-  if (MODEL_ALIASES[normalizedInput]) {
-    return { model: MODEL_ALIASES[normalizedInput], resolved: true };
+  const alias = ownEntry(MODEL_ALIASES, normalizedInput);
+  if (alias) {
+    return { model: alias, resolved: true };
+  }
+
+  const sunsetting = ownEntry(SUNSETTING_MODEL_ALIASES, normalizedInput);
+  if (sunsetting && now.toISOString().slice(0, 10) < sunsetting.retiresOn) {
+    return { model: sunsetting.model, resolved: true };
+  }
+
+  const successor = sunsetting?.successor ?? ownEntry(RETIRED_MODEL_ALIASES, normalizedInput);
+  if (successor) {
+    return {
+      model: DEFAULT_AGENT_MODEL,
+      resolved: false,
+      warning:
+        `Model "${modelInput}" in agent "${agentName}" (${filePath}) is retired. ` +
+        `Will inherit the main session model at runtime. Set model: ${successor} to pick its replacement.`,
+    };
   }
 
   // Check if it looks like a full model ID
