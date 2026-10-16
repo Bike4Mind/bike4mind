@@ -622,7 +622,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
     if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
     // Latched only alongside outputTokens so the pair always comes from the same frame.
-    if (info?.outputTokens && info.reasoningTokens !== undefined) finalReasoningTokens = info.reasoningTokens;
+    // Compared against undefined (not truthiness) so a reported outputTokens: 0 - an empty or
+    // fully-filtered reply - still latches its count instead of dropping it.
+    if (info?.outputTokens !== undefined && info.reasoningTokens !== undefined)
+      finalReasoningTokens = info.reasoningTokens;
     if (info?.stopReason) finalStopReason = info.stopReason;
     // Tool-artifact frames carry a tool's own output for a renderer, not the model's, so they are not
     // output the provider bills on this call.

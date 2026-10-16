@@ -25,6 +25,8 @@ let availableModels: Array<Record<string, unknown>> = [];
 let backendStopReason: string | undefined;
 /** Reasoning count the stubbed backend reports on its chunk; undefined = reports none. */
 let backendReasoningTokens: number | undefined;
+/** Output count the stubbed backend reports; 0 exercises the empty/filtered-reply frame. */
+let backendOutputTokens = 50;
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
@@ -35,7 +37,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
       capturedOptions = options;
       await onChunk([''], {
         inputTokens: 100,
-        outputTokens: 50,
+        outputTokens: backendOutputTokens,
         ...(backendStopReason ? { stopReason: backendStopReason } : {}),
         ...(backendReasoningTokens !== undefined ? { reasoningTokens: backendReasoningTokens } : {}),
       });
@@ -118,6 +120,7 @@ describe('executeCompletion - output budget', () => {
     capturedOptions = undefined;
     backendStopReason = undefined;
     backendReasoningTokens = undefined;
+    backendOutputTokens = 50;
     // clearAllMocks keeps implementations, so restore the flat cost stubs that the
     // org-member-cap test below swaps for proportional ones.
     vi.mocked(getTextModelCost).mockReturnValue(0.001);
@@ -377,6 +380,20 @@ describe('executeCompletion - output budget', () => {
     await executeCompletion({ ...baseParams, model: 'adaptive-model', db, onChunk });
 
     expect(onChunk.mock.calls.at(-1)?.[1]).toMatchObject({ reasoningTokens: 0 });
+  });
+
+  it('keeps a reasoning count reported alongside a zero output count', async () => {
+    availableModels = [ADAPTIVE_MODEL];
+    backendOutputTokens = 0;
+    backendReasoningTokens = 0;
+    const { db } = buildDb();
+    const onChunk = vi.fn().mockResolvedValue(undefined);
+
+    await executeCompletion({ ...baseParams, model: 'adaptive-model', db, onChunk });
+
+    // The latch gate compares outputTokens against undefined, not its truthiness, so an
+    // outputTokens: 0 frame (an empty or fully-filtered reply) still reports the count.
+    expect(onChunk.mock.calls.at(-1)?.[1]).toMatchObject({ outputTokens: 0, reasoningTokens: 0 });
   });
 
   it('omits the reasoning count when the backend reports none', async () => {
