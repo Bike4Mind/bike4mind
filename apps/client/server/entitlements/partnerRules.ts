@@ -17,6 +17,7 @@
  */
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { normalizeTag, KNOWN_ENTITLEMENT_KEYS, unknownEntitlementKeys } from '@client/lib/entitlements/registry';
+import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 import { BadRequestError } from '@server/utils/errors';
 
@@ -28,6 +29,10 @@ type ResolvedRule = {
   signupCredits: number;
   /** Org a verified signup on this domain is auto-added to, or null. */
   organizationId: string | null;
+  /** User tags stamped at signup; case preserved (see IPartnerSignupRule.tags). */
+  tags: string[];
+  /** Individual subscription granted at signup, or null. */
+  subscription: { priceId: string; durationMonths: number } | null;
 };
 
 /** How long a loaded rule set is trusted before a refresh (ms). */
@@ -54,6 +59,8 @@ async function loadRules(): Promise<Map<string, ResolvedRule>> {
       entitlements: rule.entitlements.map(normalizeTag).filter(Boolean),
       signupCredits: rule.signupCredits ?? 0,
       organizationId: rule.organizationId ?? null,
+      tags: rule.tags ?? [],
+      subscription: rule.subscription ? { ...rule.subscription } : null,
     });
   }
   cache = { rules: map, loadedAt: Date.now() };
@@ -107,6 +114,18 @@ export function assertKnownEntitlements(entitlements: readonly string[]): void {
   }
 }
 
+/**
+ * Reject a rule subscription whose priceId is not in the plan catalog (Zod cannot see it). Hidden
+ * plans are allowed: an admin may grant one on purpose. Saved rules can outlive a plan, which the
+ * signup grant handles by logging and skipping.
+ */
+export function assertKnownSubscriptionPlan(subscription: { priceId: string } | null | undefined): void {
+  if (!subscription) return;
+  if (!SUBSCRIPTION_PLANS.some(plan => plan.priceId === subscription.priceId)) {
+    throw new BadRequestError(`Unknown subscription plan: ${subscription.priceId}`);
+  }
+}
+
 /** The rule matching an email's verified domain, or null. Extracted like the registry (after last `@`). */
 async function ruleForEmail(
   email: string | null | undefined,
@@ -136,7 +155,14 @@ export async function partnerEntitlementsForEmail(
 }
 
 export type PartnerSignupGrant =
-  | { matched: false; entitlements: Set<EntitlementKey>; signupCredits: 0; organizationId: null }
+  | {
+      matched: false;
+      entitlements: Set<EntitlementKey>;
+      signupCredits: 0;
+      organizationId: null;
+      tags: [];
+      subscription: null;
+    }
   | {
       matched: true;
       ruleId: string;
@@ -144,6 +170,8 @@ export type PartnerSignupGrant =
       entitlements: Set<EntitlementKey>;
       signupCredits: number;
       organizationId: string | null;
+      tags: string[];
+      subscription: { priceId: string; durationMonths: number } | null;
     };
 
 /**
@@ -158,13 +186,24 @@ export async function partnerSignupGrantForEmail(
   emailVerified: boolean | null | undefined
 ): Promise<PartnerSignupGrant> {
   const rule = await ruleForEmail(email, emailVerified);
-  if (!rule) return { matched: false, entitlements: new Set(), signupCredits: 0, organizationId: null };
+  if (!rule) {
+    return {
+      matched: false,
+      entitlements: new Set(),
+      signupCredits: 0,
+      organizationId: null,
+      tags: [],
+      subscription: null,
+    };
+  }
   return {
     matched: true,
     ruleId: rule.id,
     domain: rule.domain,
+    subscription: rule.subscription ? { ...rule.subscription } : null,
     entitlements: new Set(rule.entitlements),
     signupCredits: rule.signupCredits,
     organizationId: rule.organizationId,
+    tags: [...rule.tags],
   };
 }

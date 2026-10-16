@@ -265,6 +265,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     removeGroupsFromAllUsers: vi.fn(),
     clearOrganizationPointer: vi.fn(),
     addGroupToUser: vi.fn(),
+    addTagsToUser: vi.fn(),
     removeGroupFromUser: vi.fn(),
     recordReferrals: vi.fn(),
     removeGroupsFromUser: vi.fn(),
