@@ -50,6 +50,7 @@ const fullUser = {
   },
   slackSettings: { slackUserId: 'U1', slackUserToken: 'SLACK-TOKEN', defaultNotebookId: 'n1' },
   blogIntegration: { apiKey: 'BLOG-KEY', baseUrl: 'https://blog', defaultAuthor: 'Jane' },
+  totpLastStep: 56789,
   resetPasswordToken: 'RESET-TOKEN',
   emailVerificationToken: 'EMAILVERIFY-TOKEN',
   pendingEmailToken: 'PENDING-TOKEN',
@@ -158,6 +159,7 @@ describe('redactUserSecretsForSelf', () => {
     for (const f of [
       'password',
       'oauthCredentials',
+      'totpLastStep',
       'resetPasswordToken',
       'emailVerificationToken',
       'pendingEmailToken',

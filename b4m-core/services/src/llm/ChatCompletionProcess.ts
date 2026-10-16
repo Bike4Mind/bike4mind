@@ -109,6 +109,7 @@ import {
   PipelineTimer,
   resolveDeprecatedModelId,
   isTurnEndingTool,
+  ResponsesStreamTruncatedError,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -574,11 +575,11 @@ export function isStreamIdleTimeoutError(error: Error): boolean {
 /**
  * True when a completion failure is a service fault worth counting on the operator
  * `ProcessingFailed` metric. Approximates the terminal branches of the quest-level error handler
- * (billing, abort, request/stream timeout, tool pairing, overloaded, context overflow), which
- * resolve the quest without rethrowing and so never reached /process's failure path. It is not an
- * exact mirror: the handler matches timeouts case-sensitively and rethrows 4xx HTTPErrors (so
- * /process counts them), whereas CLI and embed treat 4xx as caller input and skip them. The CLI and
- * embed routes call this; /process does not.
+ * (billing, abort, request/stream timeout, truncated Responses stream, tool pairing, overloaded,
+ * context overflow), which resolve the quest without rethrowing and so never reached /process's
+ * failure path. It is not an exact mirror: the handler matches timeouts case-sensitively and
+ * rethrows 4xx HTTPErrors (so /process counts them), whereas CLI and embed treat 4xx as caller input
+ * and skip them. The CLI and embed routes call this; /process does not.
  */
 export function isOperatorFault(error: unknown): boolean {
   if (resolveQuestErrorCode(error)) return false;
@@ -588,6 +589,7 @@ export function isOperatorFault(error: unknown): boolean {
     isAbortError(error) ||
     isRequestTimeoutError(error) ||
     isStreamIdleTimeoutError(error) ||
+    error instanceof ResponsesStreamTruncatedError ||
     isToolPairingError(error) ||
     isOverloadedError(error) ||
     error.message.startsWith('Your request is too large for')
@@ -1757,6 +1759,12 @@ export class ChatCompletionProcess {
     const timer = new PipelineTimer();
     timer.phase('init');
     logger.info('⏱️ === LLM COMPLETION PROCESS START ===');
+
+    // invoke already saved this turn as failed; running it would answer with a model the caller was refused.
+    if (prefetchedQuest?.type === 'error') {
+      logger.info(`Skipping process: quest ${prefetchedQuest.id} was already saved as an error`);
+      return;
+    }
 
     const initContext = await this.initializeProcessContext(body, logger, processStartTime, prefetchedQuest);
     const {
@@ -4919,7 +4927,7 @@ export class ChatCompletionProcess {
             // the last error-severity log on the abort path; the backends and the
             // formatted summary below were already downgraded. Real failures still dump
             // at error with the full stack.
-            if (isAbortError(lastError)) {
+            if (isAbortError(lastError) || lastError instanceof ResponsesStreamTruncatedError) {
               logger.warn(lastError);
             } else {
               logger.error(lastError);
@@ -6399,6 +6407,15 @@ export class ChatCompletionProcess {
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
+        setErrorReply('The request was interrupted. Please try sending your message again.');
+        quest.type = 'error';
+        quest.status = 'done';
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (err instanceof ResponsesStreamTruncatedError) {
+        // WARN, not error: an upstream close mid-stream is recoverable by resending, and error
+        // severity would trip the CloudWatch ERROR alert path.
+        logger.warn(`[Truncated] Quest ${questId}: ${err.message}`);
         setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
         quest.status = 'done';

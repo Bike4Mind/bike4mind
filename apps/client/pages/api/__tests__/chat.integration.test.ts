@@ -1101,6 +1101,25 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     expect(res._getJSONData()).not.toHaveProperty('promptDetails');
   });
 
+  it('surfaces the error quest fields in the wait: true response', async () => {
+    mockInvoke.mockResolvedValue({
+      id: 'quest-err',
+      status: 'done',
+      type: 'error',
+      reply: 'You do not have access to this session',
+      replies: [],
+    });
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({
+      id: 'quest-err',
+      status: 'done',
+      type: 'error',
+      response: 'You do not have access to this session',
+    });
+  });
+
   it('returns the prompt text when includeSystemPrompt is set', async () => {
     const TEXT = { blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false }] };
     mockSystemPromptText.value = TEXT;

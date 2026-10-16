@@ -41,6 +41,7 @@ import {
   attachFullToolResult,
   getFullToolResult,
   MAX_FULL_TOOL_RESULT_CHARS,
+  ResponsesStreamTruncatedError,
 } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
@@ -1025,6 +1026,51 @@ describe('ChatCompletionProcess', () => {
       expect(lastSave).toMatchObject({ status: 'done', type: 'error' });
       expect(lastSave.replies.join('')).toContain('The request was interrupted');
     });
+
+    it('a Responses stream the user stopped mid-answer ends stopped with the partial reply kept', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const abort = Object.assign(new Error('Request aborted'), { name: 'AbortError' });
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['partial answer']);
+          throw abort;
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as unknown as ReturnType<typeof getLlmByModel>);
+      mockDb.quests.findByIdWithStatus
+        .mockResolvedValueOnce({ id: 'quest1', status: 'running' })
+        .mockResolvedValue({ id: 'quest1', status: 'stopped' });
+
+      await service.process({ body, logger: mockLogger });
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'stopped', type: 'message' });
+      expect(lastSave.replies.join('')).toContain('partial answer');
+      expect(lastSave.replies.join('')).not.toContain('interrupted');
+    });
+
+    it('a Responses stream closed early ends done with the interrupted reply, warning not erroring', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new ResponsesStreamTruncatedError('gpt-5')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as unknown as ReturnType<typeof getLlmByModel>);
+      mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'running' });
+
+      await expect(service.process({ body, logger: mockLogger })).resolves.toBeUndefined();
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'done', type: 'error' });
+      expect(lastSave.replies.join('')).toContain('The request was interrupted');
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('[Truncated]'));
+      const errorCalls = mockLogger.error.mock.calls.flat();
+      expect(errorCalls.some(a => a instanceof ResponsesStreamTruncatedError)).toBe(false);
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.any(ResponsesStreamTruncatedError));
+    });
   });
 
   describe('resolveCorpusInlinePlan (defer only the tool-retrievable corpus subset)', () => {
@@ -1846,6 +1892,54 @@ describe('ChatCompletionProcess', () => {
           type: 'message',
         })
       );
+    });
+
+    it('skips a prefetched quest that invoke already saved as an error', async () => {
+      const complete = vi.fn();
+      mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 });
+      const errorQuest = { ...mockQuest, type: 'error', status: 'done', reply: 'denied' };
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      await service.process({ body, logger: mockLogger, prefetchedQuest: errorQuest });
+
+      expect(complete).not.toHaveBeenCalled();
+      expect(mockDb.quests.update).not.toHaveBeenCalled();
+      expect(mockDb.quests.findById).not.toHaveBeenCalled();
+    });
+
+    it('still processes a prefetched quest that is not an error', async () => {
+      const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['Hi!']);
+      });
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      await service.process({ body, logger: mockLogger, prefetchedQuest: mockQuest });
+
+      expect(complete).toHaveBeenCalled();
     });
 
     // The root cause of the slow-first-token anomaly never firing was THIS call site dropping
