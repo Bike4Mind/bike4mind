@@ -11,6 +11,7 @@ import {
   McpOAuthTokenUpdate,
   McpToolSettingsUpdate,
   MCP_CONNECTION_PROTECTED_FIELDS,
+  mcpConnectionOwnerProblem,
   RepositoryPatch,
   RepositoryUpdateOptions,
   MCP_API_KEY_SCHEMES,
@@ -28,6 +29,13 @@ import BaseRepository from '@bike4mind/db-core';
 
 /** How long a refresh lease is held before another caller may take it over (design 4.7). */
 export const MCP_REFRESH_LEASE_TTL_MS = 15_000;
+
+export class McpConnectionOwnerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'McpConnectionOwnerError';
+  }
+}
 
 const McpConnectionToolSchema = new Schema<IMcpConnectionTool>(
   {
@@ -127,6 +135,13 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
   }
 );
 
+// Writes after create cannot break this: the generic writers refuse the owner fields and the token
+// and lease writers filter on ownerType 'user'.
+McpConnectionSchema.pre('validate', function () {
+  const problem = mcpConnectionOwnerProblem(this.toObject());
+  if (problem) throw new McpConnectionOwnerError(problem);
+});
+
 McpConnectionSchema.index({ ownerType: 1, ownerKey: 1, slug: 1 }, { unique: true, name: 'mcpconn_owner_slug' });
 // Hot path of every chat turn and agent run, mirroring McpServer's mcp_user_enabled.
 McpConnectionSchema.index({ userId: 1, enabled: 1 }, { name: 'mcpconn_user_enabled' });
@@ -214,6 +229,8 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   }
 
   async create(data: Omit<IMcpConnectionDocument, 'id' | 'updatedAt' | 'createdAt'>) {
+    const problem = mcpConnectionOwnerProblem(data);
+    if (problem) throw new McpConnectionOwnerError(problem);
     return stripSecrets(await super.create(data));
   }
 
@@ -351,7 +368,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   ): Promise<IMcpConnectionDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.model.findOneAndUpdate(
-      { _id: id, 'auth.kind': 'oauth', 'refreshLease.holder': holder },
+      { _id: id, ownerType: 'user', 'auth.kind': 'oauth', 'refreshLease.holder': holder },
       { $set: oauthTokenSet(tokens), $unset: { refreshLease: 1 } },
       { new: true }
     );
@@ -361,7 +378,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   async setInitialOAuthTokens(id: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.model.findOneAndUpdate(
-      { _id: id, 'auth.kind': 'oauth' },
+      { _id: id, ownerType: 'user', 'auth.kind': 'oauth' },
       { $set: oauthTokenSet(tokens) },
       { new: true }
     );
@@ -386,7 +403,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     const now = new Date();
     const result = await this.model
       .findOneAndUpdate(
-        { _id: id, $or: [{ refreshLease: null }, { 'refreshLease.until': { $lt: now } }] },
+        { _id: id, ownerType: 'user', $or: [{ refreshLease: null }, { 'refreshLease.until': { $lt: now } }] },
         { $set: { refreshLease: { holder, until: new Date(now.getTime() + ttlMs) } } },
         { new: true }
       )

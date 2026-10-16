@@ -54,6 +54,27 @@ const apiKeyConnection = (overrides: Partial<CreateInput> = {}): CreateInput =>
     ...overrides,
   });
 
+/** An org-published definition: owned by the org, created by an admin, carrying no credentials. */
+const orgDefinition = (overrides: Partial<CreateInput> = {}): CreateInput =>
+  baseConnection({
+    ownerType: 'org',
+    ownerKey: 'org-1',
+    organizationId: 'org-1',
+    userId: 'admin-1',
+    auth: {
+      kind: 'oauth',
+      oauth: {
+        resource: 'https://mcp.linear.app/mcp',
+        issuer: 'https://linear.app',
+        authorizationServerUrl: 'https://linear.app',
+        scopes: ['read'],
+        clientMode: 'dcr',
+      },
+    },
+    status: 'pending_auth',
+    ...overrides,
+  });
+
 const tool = (name: string, overrides: Partial<IMcpConnectionTool> = {}): IMcpConnectionTool => ({
   name,
   description: `${name} tool`,
@@ -114,10 +135,12 @@ describe('McpConnectionModel', () => {
     it('allows the same slug for a different owner or owner type', async () => {
       await mcpConnectionRepository.create(baseConnection());
       await mcpConnectionRepository.create(baseConnection({ ownerKey: 'user-2', userId: 'user-2' }));
+      await mcpConnectionRepository.create(orgDefinition({ slug: 'linear' }));
+      // An org whose id happens to equal a user's id still has its own slug namespace.
       await mcpConnectionRepository.create(
-        baseConnection({ ownerType: 'org', ownerKey: 'user-1', organizationId: 'user-1', auth: { kind: 'none' } })
+        orgDefinition({ slug: 'linear', ownerKey: 'user-1', organizationId: 'user-1' })
       );
-      expect(await McpConnection.countDocuments({ slug: 'linear' })).toBe(3);
+      expect(await McpConnection.countDocuments({ slug: 'linear' })).toBe(4);
     });
   });
 
@@ -177,6 +200,38 @@ describe('McpConnectionModel', () => {
     });
   });
 
+  describe('owner consistency', () => {
+    it.each([
+      ['a user connection whose ownerKey is not its userId', baseConnection({ ownerKey: 'user-2' })],
+      ['an org definition without organizationId', orgDefinition({ organizationId: undefined })],
+      ['an org definition whose ownerKey is not its organizationId', orgDefinition({ ownerKey: 'org-2' })],
+      [
+        'an org definition carrying an access token',
+        baseConnection({ ownerType: 'org', ownerKey: 'org-1', organizationId: 'org-1' }),
+      ],
+      [
+        'an org definition carrying an API key',
+        apiKeyConnection({ ownerType: 'org', ownerKey: 'org-1', organizationId: 'org-1' }),
+      ],
+      [
+        'an org definition holding a refresh lease',
+        orgDefinition({ refreshLease: { holder: 'h', until: new Date(Date.now() + 1000) } }),
+      ],
+    ])('refuses %s, in create and in schema validation', async (_label, input) => {
+      await expect(mcpConnectionRepository.create(input)).rejects.toThrow(/ownerKey|org definition/);
+      await expect(new McpConnection(input).validate()).rejects.toThrow(/ownerKey|org definition/);
+    });
+
+    it('never writes tokens or a lease onto an org definition', async () => {
+      const def = await mcpConnectionRepository.create(orgDefinition());
+      expect(await mcpConnectionRepository.setInitialOAuthTokens(def.id, { accessTokenEnc: 'enc:x' })).toBeNull();
+      expect(await mcpConnectionRepository.acquireRefreshLease(def.id, 'h')).toBeNull();
+      const raw = await McpConnection.collection.findOne({ _id: new mongoose.Types.ObjectId(def.id) });
+      expect(raw?.auth?.oauth?.accessTokenEnc).toBeUndefined();
+      expect(raw?.refreshLease).toBeUndefined();
+    });
+  });
+
   describe('generic writers', () => {
     it('writing back a default read cannot drop the stored secrets', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
@@ -225,9 +280,7 @@ describe('McpConnectionModel', () => {
       await mcpConnectionRepository.create(baseConnection({ slug: 'ok' }));
       await mcpConnectionRepository.create(baseConnection({ slug: 'off', enabled: false }));
       await mcpConnectionRepository.create(baseConnection({ slug: 'stale', status: 'needs_reconnect' }));
-      await mcpConnectionRepository.create(
-        baseConnection({ slug: 'orgdef', ownerType: 'org', ownerKey: 'org-1', organizationId: 'org-1' })
-      );
+      await mcpConnectionRepository.create(orgDefinition({ slug: 'orgdef' }));
 
       const hot = await mcpConnectionRepository.listForUser('user-1');
       expect(hot.map(c => c.slug)).toEqual(['ok']);

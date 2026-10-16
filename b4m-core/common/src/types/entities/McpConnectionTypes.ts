@@ -160,17 +160,45 @@ export interface IMcpConnection {
 
 export interface IMcpConnectionDocument extends IMcpConnection, IMongoDocument {}
 
-/**
- * Dotted paths of every secret on a connection. Single source for the schema's `select: false`,
- * the `+path` opt-in on credential reads, and the projection test.
- */
-export const MCP_CONNECTION_SECRET_PATHS = [
+/** Dotted paths of the auth secrets. An org definition may carry none of them (members connect their own). */
+export const MCP_CONNECTION_CREDENTIAL_PATHS = [
   'auth.oauth.manualClientIdEnc',
   'auth.oauth.manualClientSecretEnc',
   'auth.oauth.accessTokenEnc',
   'auth.oauth.refreshTokenEnc',
   'auth.apiKey.valueEnc',
 ] as const;
+
+/**
+ * Dotted paths of every secret on a connection. Single source for the schema's `select: false`,
+ * the `+path` opt-in on credential reads, and the projection test.
+ */
+export const MCP_CONNECTION_SECRET_PATHS = [...MCP_CONNECTION_CREDENTIAL_PATHS] as const;
+
+/**
+ * Why the owner fields are inconsistent, or null. `user`: `ownerKey === userId`. `org`: an
+ * `organizationId` equal to `ownerKey`, and no credential or refresh lease on the definition.
+ */
+export function mcpConnectionOwnerProblem(
+  doc: Pick<IMcpConnection, 'ownerType' | 'ownerKey' | 'userId' | 'organizationId' | 'refreshLease'> & {
+    auth?: unknown;
+  }
+): string | null {
+  if (doc.ownerType === 'user') {
+    return doc.ownerKey === doc.userId ? null : 'A user connection must have ownerKey equal to userId';
+  }
+  if (doc.ownerType !== 'org') return `Unknown ownerType ${String(doc.ownerType)}`;
+  if (!doc.organizationId || doc.ownerKey !== doc.organizationId) {
+    return 'An org definition must have ownerKey equal to organizationId';
+  }
+  if (doc.refreshLease) return 'An org definition cannot hold a refresh lease';
+  const credential = MCP_CONNECTION_CREDENTIAL_PATHS.find(
+    path =>
+      path.split('.').reduce<unknown>((node, key) => (node as Record<string, unknown> | undefined)?.[key], doc) !==
+      undefined
+  );
+  return credential ? `An org definition cannot carry ${credential}` : null;
+}
 
 /** Client-safe view: no ciphertext, no lease. Token presence is reported as booleans only. */
 export interface IMcpConnectionPublic {
