@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -151,5 +151,22 @@ describe('SidebarSectionStore', () => {
     await store.create('Work');
 
     expect(await store.move('toString', null)).toEqual({ sections: [{ id: 'section-1', name: 'Work' }], assignments: {} });
+  });
+
+  it('keeps its prior state when a write fails, and persists the next change', async () => {
+    const file = await sectionsFile();
+    const store = new SidebarSectionStore(file, sequentialIds());
+    const before = await store.create('Work');
+    // A directory where the temporary file goes makes the write fail.
+    await mkdir(`${file}.tmp`);
+
+    await expect(store.create('Home')).rejects.toThrow();
+    expect(await store.read()).toEqual(before);
+
+    await rmdir(`${file}.tmp`);
+    const after = await store.create('Home');
+
+    expect(after.sections.map(section => section.name)).toEqual(['Work', 'Home']);
+    expect(await new SidebarSectionStore(file).read()).toEqual(after);
   });
 });
