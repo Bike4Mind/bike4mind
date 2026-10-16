@@ -72,7 +72,7 @@ describe('RemoteMcpClient - round trips', () => {
     expect(result.detectedTransport).toBe('streamable-http');
     expect(remote.detectedTransport).toBe('streamable-http');
     expect(result.serverInfo?.name).toBe('fixture');
-    expect(result.tools.map(t => t.name).sort()).toEqual(['echo', 'fail']);
+    expect(result.tools.map(t => t.name).sort()).toEqual(['echo', 'fail', 'hang']);
     expect(result.tools.find(t => t.name === 'echo')?.annotations?.readOnlyHint).toBe(true);
 
     const sessionIds = new Set(fixture.requests.map(r => r.sessionId).filter(Boolean));
@@ -115,7 +115,7 @@ describe('RemoteMcpClient - round trips', () => {
 
   it('follows a same-origin redirect', async () => {
     const result = await client('/redirect-same').listTools();
-    expect(result.tools.length).toBe(2);
+    expect(result.tools.length).toBe(3);
   });
 });
 
@@ -199,6 +199,11 @@ describe('RemoteMcpClient - caps and timeouts', () => {
     const started = Date.now();
     await expectCode(client('/legacy-silent', { limits: { connectTimeoutMs: 300 } }).listTools(), 'timeout');
     expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it('deletes an issued session after a tool call times out', async () => {
+    await expectCode(client('/mcp', { limits: { callTimeoutMs: 100 } }).callTool('hang'), 'timeout');
+    expect(fixture.requests.some(r => r.method === 'DELETE' && r.sessionId)).toBe(true);
   });
 });
 

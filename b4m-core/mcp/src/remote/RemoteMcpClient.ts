@@ -311,7 +311,12 @@ export class RemoteMcpClient {
   private instrumentFetch(pinned: FetchLike, op: Operation): FetchLike {
     let consecutiveRedirects = 0;
     return async (input, init) => {
-      const signal = init?.signal ? AbortSignal.any([init.signal, op.controller.signal]) : op.controller.signal;
+      const isSessionDelete = init?.method?.toUpperCase() === 'DELETE';
+      const signal = isSessionDelete
+        ? AbortSignal.timeout(SESSION_DELETE_TIMEOUT_MS)
+        : init?.signal
+          ? AbortSignal.any([init.signal, op.controller.signal])
+          : op.controller.signal;
       const response = await pinned(input, { ...init, signal });
       // The SDK follows same-origin redirects itself, hop by hop, up to 5; this holds a chain to the limit.
       if (REDIRECT_STATUSES.has(response.status) && response.headers.has('location')) {
@@ -366,7 +371,7 @@ export class RemoteMcpClient {
           : new SSEClientTransport(url, { fetch: fetchFn, redirectPolicy: 'same-origin', requestInit });
 
       const close = async (): Promise<void> => {
-        if (transport instanceof StreamableHTTPClientTransport && transport.sessionId && !op.failure) {
+        if (transport instanceof StreamableHTTPClientTransport && transport.sessionId) {
           const deadline = AbortSignal.timeout(SESSION_DELETE_TIMEOUT_MS);
           await Promise.race([
             transport.terminateSession().catch(() => undefined),

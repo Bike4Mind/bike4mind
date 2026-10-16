@@ -56,6 +56,7 @@ function buildMcpServer(variant: 'basic' | 'many'): McpServer {
     content: [{ type: 'text', text: 'nope' }],
     isError: true,
   }));
+  server.registerTool('hang', { description: 'Never completes' }, () => new Promise(() => undefined));
   return server;
 }
 
