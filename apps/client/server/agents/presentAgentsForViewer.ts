@@ -2,9 +2,10 @@ import { IAgent } from '@bike4mind/common';
 import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
 
 /**
- * The shape every agent read route returns to `viewerId`: fresh avatar URLs, and owner-only
+ * The shape the user-agent read routes return to `viewerId`: fresh avatar URLs, and owner-only
  * fields removed for anyone but the owner. Shared by GET /api/agents, GET /api/agents/:id and
- * GET /api/sessions/:id/agents so the redaction cannot drift between them.
+ * GET /api/sessions/:id/agents so the redaction cannot drift between them. The v1 API uses its own
+ * allowlist (`toPublicAgent`).
  *
  * `tavernSessionId` is owner-only: it names the owner's own session, which a shared viewer has no
  * access to. The PUT schema in `pages/api/agents/[id]/index.ts` does not accept it either -- only
