@@ -1145,8 +1145,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   summarizeChargedStorageByUserId(userId: string, options?: { maxTimeMS?: number }): Promise<StorageUsageGroup[]>;
 
   /**
-   * The live row's stored charge fields, read lean: a hydrated document reports a missing `status`
-   * as its `'pending'` default, which would misread a legacy row as never charged. Null when gone.
+   * The live row's stored charge fields (see isStorageCharged in storageCharge.ts). Null when gone.
    */
   findChargeState(
     id: string

@@ -11,11 +11,16 @@ import type { ClientSession, Types } from 'mongoose';
  * content rewrite's commit makes (commitContentRewrite in
  * b4m-core/services/src/fabFileService/rewriteStorage.ts), so a rewrite's event and its commit add up
  * to the new size in either order. Returns null when the claim lost.
+ *
+ * `statusBeforeUpload` is the row's status as the event handler read it, before it marked the row
+ * `complete`: the charge rule reads `status`, so judging the pre-image by the handler's own flip would
+ * count a legacy no-status row as already charged and undercharge it by its old size.
  */
 export const claimStorageCharge = async (
   fabFileId: Types.ObjectId | string,
   uploadedAt: Date,
   size: number,
+  statusBeforeUpload: string | null | undefined,
   session?: ClientSession
 ): Promise<number | null> => {
   const pre = await FabFile.findOneAndUpdate(
@@ -23,16 +28,17 @@ export const claimStorageCharge = async (
     { $set: { storageChargedAt: uploadedAt, fileSize: size } },
     {
       new: false,
-      projection: { fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 },
+      projection: { fileSize: 1, storageChargedAt: 1, createdAt: 1 },
       ...(session ? { session } : {}),
     }
-  ).lean(); // A hydrated pre-image reports a legacy row's absent status as its 'pending' default.
-  return pre ? size - chargedBytes(pre) : null;
+  ).lean();
+  return pre ? size - chargedBytes({ ...pre, status: statusBeforeUpload }) : null;
 };
 
 /**
  * Charges an uploaded object's bytes to `user` once per write, through claimStorageCharge.
- * Mutates `user` only; the caller saves it in the same `session`. Shared by the hosted S3 event
+ * Mutates `user` only; the caller saves it in the same `session`. A won claim also records `size` as
+ * the row's `fileSize`. Shared by the hosted S3 event
  * (objectCreated.ts) and the self-host MinIO webhook (pages/api/internal/s3/object-created.ts).
  */
 export const chargeUploadedObject = async (
@@ -40,9 +46,10 @@ export const chargeUploadedObject = async (
   user: IUserDocument,
   size: number,
   uploadedAt: Date,
+  statusBeforeUpload: string | null | undefined,
   session: ClientSession
 ): Promise<boolean> => {
-  const delta = await claimStorageCharge(fabFileId, uploadedAt, size, session);
+  const delta = await claimStorageCharge(fabFileId, uploadedAt, size, statusBeforeUpload, session);
   if (delta === null) return false;
   await changeStorageSize(user, delta);
   return true;

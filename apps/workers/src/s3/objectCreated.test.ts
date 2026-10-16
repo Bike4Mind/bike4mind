@@ -321,14 +321,19 @@ describe('objectCreated - moderation claim identity', () => {
 describe('objectCreated - storage charge', () => {
   const isStorageClaim = (filter: Record<string, unknown>) => '$or' in filter;
 
-  it('records the measured object size on the row, matching the bytes charged', async () => {
-    // The row starts with the client-declared presign size; the measured size must replace it.
-    const file = metadata({ fileSize: 999 }) as ReturnType<typeof metadata> & { fileSize?: number };
-    h.findOne.mockResolvedValue(file);
+  it('charges a legacy no-status row in full, judging it by its status before the flip to complete', async () => {
+    // The claim's pre-image already carries the 'complete' this handler wrote, which on a pre-cutoff
+    // row would read as legacy-charged and undercharge it by its old size.
+    h.findOne.mockResolvedValue(metadata());
+    h.findOneAndUpdate.mockImplementation(async (filter: Record<string, unknown>) =>
+      isStorageClaim(filter)
+        ? { fileSize: 4, status: 'complete', createdAt: new Date('2026-01-01T00:00:00.000Z') }
+        : { id: 'ff1' }
+    );
 
-    await run();
+    await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
 
-    expect(file.fileSize).toBe(10);
+    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 10);
   });
 
   it('leaves the recorded size alone when the storage-charge claim is refused', async () => {

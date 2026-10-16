@@ -140,9 +140,14 @@ const rewriteDb = { fabFiles: fabFileRepository, users: userRepository };
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 2));
 
-/** One S3 event as objectCreated charges it. Returns what it charged, or null when its claim lost. */
+/**
+ * One S3 event as objectCreated charges it: mark the row complete, then claim judged by the status
+ * from before that flip. Returns what it charged, or null when its claim lost.
+ */
 const s3Event = async (fabFileId: unknown, eventTime: Date, size: number) => {
-  const charged = await claimStorageCharge(fabFileId as string, eventTime, size);
+  const before = await FabFile.collection.findOne({ _id: new mongoose.Types.ObjectId(String(fabFileId)) });
+  await FabFile.collection.updateOne({ _id: before?._id }, { $set: { status: 'complete' } });
+  const charged = await claimStorageCharge(fabFileId as string, eventTime, size, before?.status);
   if (charged) await userRepository.incrementCurrentStorage(USER, charged);
   return charged;
 };
@@ -169,14 +174,20 @@ const firstUpload = async (fileSize: number) => {
   return String(row._id);
 };
 
-/** A file the S3 handler charged before rows were stamped: complete, unstamped, created pre-cutoff. */
-const legacyFile = async (fileSize: number) => {
+/**
+ * An unstamped file created pre-cutoff: `complete` (the S3 handler charged it), or with no status at
+ * all, which the charge rule reads as never charged, so the counter does not hold it.
+ */
+const legacyFile = async (fileSize: number, { noStatus = false } = {}) => {
   const [row] = await FabFile.create([
     { userId: USER, fileName: 'x', mimeType: 'text/plain', fileSize, filePath: 'files/x', type: 'FILE' },
   ]);
   const createdAt = new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000);
-  await FabFile.collection.updateOne({ _id: row._id }, { $set: { status: 'complete', createdAt } });
-  await userRepository.incrementCurrentStorage(USER, fileSize);
+  await FabFile.collection.updateOne(
+    { _id: row._id },
+    noStatus ? { $set: { createdAt }, $unset: { status: 1 } } : { $set: { status: 'complete', createdAt } }
+  );
+  if (!noStatus) await userRepository.incrementCurrentStorage(USER, fileSize);
   return String(row._id);
 };
 
@@ -244,10 +255,12 @@ describe('content rewrite storage charge', () => {
     expect(await storedSize()).toBe(await truth());
   });
 
-  // Every row shape the charge rule distinguishes, in both event orders, for growth, no change and shrink.
+  // Every row shape the charge rule distinguishes, in both event orders, for growth, no change and
+  // shrink, with the bytes the counter already holds for it.
   const shapes = {
-    stamped: () => firstUpload(5000),
-    'legacy complete': () => legacyFile(5000),
+    stamped: { create: () => firstUpload(5000), charged: 5000 },
+    'legacy complete': { create: () => legacyFile(5000), charged: 5000 },
+    'legacy no-status': { create: () => legacyFile(5000, { noStatus: true }), charged: 0 },
   };
   it.each(
     (Object.keys(shapes) as (keyof typeof shapes)[]).flatMap(shape =>
@@ -257,12 +270,12 @@ describe('content rewrite storage charge', () => {
     )
   )('charges a rewrite of a %s file only the delta (%s, to %i bytes)', async (shape, order, newSize) => {
     await seedUser();
-    const id = await shapes[shape]();
+    const id = await shapes[shape].create();
     expect(await storedSize()).toBe(await truth());
 
     if (order === 'event first') {
       await rewrite(id, newSize, async eventTime => {
-        expect(await s3Event(id, eventTime, newSize)).toBe(newSize - 5000);
+        expect(await s3Event(id, eventTime, newSize)).toBe(newSize - shapes[shape].charged);
       });
     } else {
       const eventTime = await rewrite(id, newSize);
@@ -354,7 +367,7 @@ describe('notebook import storage charge', () => {
     await importAndCharge('charged');
     const row = await FabFile.findOne({ userId: USER });
 
-    expect(await claimStorageCharge(row?._id, uploadedAt, FILE_BYTES)).toBeNull();
+    expect(await claimStorageCharge(row?._id, uploadedAt, FILE_BYTES, row?.status)).toBeNull();
   });
 
   it('leaves the S3 event for a rewrite of an imported file nothing to charge', async () => {
@@ -364,7 +377,7 @@ describe('notebook import storage charge', () => {
 
     const eventTime = await rewrite(String(row?._id), 1234);
 
-    expect(await claimStorageCharge(row?._id, eventTime, 1234)).toBeNull();
+    expect(await claimStorageCharge(row?._id, eventTime, 1234, row?.status)).toBeNull();
     expect(await storedSize()).toBe(BASELINE_BYTES + (await fabFileRepository.sumFileSizeByUserId(USER)));
   });
 
@@ -374,8 +387,8 @@ describe('notebook import storage charge', () => {
     ]);
     const uploadedAt = new Date();
 
-    expect(await claimStorageCharge(row._id, uploadedAt, 5)).toBe(5);
-    expect(await claimStorageCharge(row._id, uploadedAt, 5)).toBeNull();
+    expect(await claimStorageCharge(row._id, uploadedAt, 5, 'pending')).toBe(5);
+    expect(await claimStorageCharge(row._id, uploadedAt, 5, 'pending')).toBeNull();
   });
 
   it('charges nothing when the transaction rolls back', async () => {
@@ -434,7 +447,7 @@ describe('delete before the ObjectCreated event', () => {
     expect(await storedSize()).toBe(5);
     expect(await fabFileRepository.sumFileSizeByUserId(USER)).toBe(5);
     // The event arriving after the delete must not charge the tombstone, since nothing refunded it.
-    expect(await claimStorageCharge(pending._id, new Date(), 400)).toBeNull();
+    expect(await claimStorageCharge(pending._id, new Date(), 400, 'pending')).toBeNull();
     expect(await storedSize()).toBe(5);
 
     await deleteAndRefund(stamped._id.toString());
@@ -455,7 +468,7 @@ describe('chargeUploadedObject', () => {
   const deliver = (fabFileId: unknown, size: number, uploadedAt: Date) =>
     withTransaction(async session => {
       const user = await User.findById(USER_ID).session(session);
-      if (user && (await chargeUploadedObject(fabFileId as string, user, size, uploadedAt, session))) {
+      if (user && (await chargeUploadedObject(fabFileId as string, user, size, uploadedAt, 'pending', session))) {
         await user.save({ session, validateBeforeSave: false });
       }
     });

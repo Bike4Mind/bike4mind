@@ -25,7 +25,7 @@ export type RewriteStorageDb = {
 /**
  * Throws the standard 400 "File size exceeds storage limit" when the rewrite would grow the
  * OWNER's usage past their quota. A shrinking or same-size rewrite never throws. Measures against the
- * stored row (findChargeState), not `row`, whose `status` may be a hydration default. `actor` is
+ * stored row (findChargeState), not `row`, which may be a stale copy. `actor` is
  * reused when it is the owner, else the owner is loaded (an update-share editor is not charged).
  */
 export async function assertRewriteFits(
