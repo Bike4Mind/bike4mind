@@ -13,7 +13,7 @@ import {
   MFA_ATTEMPT_RESET_WINDOW_MS,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
-import mongoose, { Document, Model, model, Schema, Query } from 'mongoose';
+import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
 import { NotFoundError } from '@bike4mind/utils';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
@@ -410,50 +410,75 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    */
   async atomicRecordMfaFailedAttempt(userId: string): Promise<IUserDocument | null> {
     const now = new Date();
-    const lockoutUntil = new Date(now.getTime() + MFA_LOCKOUT_DURATION_MS);
+    const result = await this.model.findOneAndUpdate({ _id: userId }, mfaAttemptPipeline(now), { new: true });
+    return result ? result.toJSON() : null;
+  }
 
-    // Stage 1: increment failedAttempts, resetting to 1 if the last failure was over an hour ago.
-    // Stage 2: conditionally set lockedUntil from stage 1's output (same pipeline, atomic).
+  /**
+   * Book an MFA attempt BEFORE the code is compared, refusing while the user is locked out.
+   * Counting only after a failed compare lets a burst of concurrent guesses all pass the lockout
+   * check first; reserving up front caps the codes compared per window at MFA_MAX_FAILED_ATTEMPTS.
+   * A successful verify clears the counter in its own write.
+   */
+  async atomicReserveMfaAttempt(userId: string): Promise<{ reserved: boolean; user: IUserDocument | null }> {
+    const now = new Date();
     const result = await this.model.findOneAndUpdate(
-      { _id: userId },
-      [
-        {
-          $set: {
-            'mfa.failedAttempts': {
-              $cond: {
-                if: {
-                  $and: [
-                    { $gt: [{ $ifNull: ['$mfa.lastFailedAttempt', null] }, null] },
-                    {
-                      $gt: [
-                        { $subtract: [now, { $ifNull: ['$mfa.lastFailedAttempt', now] }] },
-                        MFA_ATTEMPT_RESET_WINDOW_MS,
-                      ],
-                    },
-                  ],
-                },
-                then: 1, // stale window — reset counter, this attempt is attempt #1
-                else: { $add: [{ $ifNull: ['$mfa.failedAttempts', 0] }, 1] },
-              },
-            },
-            'mfa.lastFailedAttempt': now,
-          },
-        },
-        {
-          $set: {
-            'mfa.lockedUntil': {
-              $cond: {
-                if: { $gte: ['$mfa.failedAttempts', MFA_MAX_FAILED_ATTEMPTS] },
-                then: lockoutUntil,
-                else: '$$REMOVE',
-              },
-            },
-          },
-        },
-      ],
+      { _id: userId, $or: [{ 'mfa.lockedUntil': null }, { 'mfa.lockedUntil': { $lte: now } }] },
+      mfaAttemptPipeline(now),
       { new: true }
     );
+    if (result) return { reserved: true, user: result.toJSON() };
+    // Locked (or gone): report the current lockout state without counting another attempt.
+    const current = await this.model.findOne({ _id: userId });
+    return { reserved: false, user: current ? current.toJSON() : null };
+  }
 
+  /**
+   * Record `step` as the last accepted TOTP time step, only if it is newer than the stored one.
+   * Returns false when the step was already used, so a code cannot be replayed within its window.
+   */
+  async atomicClaimTotpStep(userId: string, step: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, $or: [{ totpLastStep: null }, { totpLastStep: { $lt: step } }] },
+      { $set: { totpLastStep: step } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Remove `codeHash` from the stored backup codes, only if it is still present. Returns true
+   * exactly once per code, so a backup code cannot be consumed by two requests at once. A
+   * whole-document write from a pre-read snapshot would instead restore a code another request
+   * had already spent, so consumption must be this targeted `$pull`.
+   */
+  async atomicConsumeBackupCode(userId: string, codeHash: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, 'mfa.backupCodes': codeHash },
+      { $pull: { 'mfa.backupCodes': codeHash } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Enable MFA only if the stored secret is still the one just verified (`totpSecret`) and MFA is
+   * still disabled. Two concurrent enrollments can otherwise interleave so that a code checked
+   * against the first secret enables the second: the authenticator holds one secret and the user
+   * is locked out. Matching on the verified secret makes the write refuse instead.
+   */
+  async atomicEnableMfa(userId: string, totpSecret: string): Promise<IUserDocument | null> {
+    const result = await this.model.findOneAndUpdate(
+      { _id: userId, 'mfa.totpSecret': totpSecret, 'mfa.totpEnabled': false },
+      {
+        $set: {
+          'mfa.totpEnabled': true,
+          'mfa.failedAttempts': 0,
+          'mfa.lastUsedAt': new Date(),
+          updatedAt: new Date(),
+        },
+        $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1 },
+      },
+      { new: true }
+    );
     return result ? result.toJSON() : null;
   }
 
@@ -958,6 +983,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
 
     // MFA (Multi-Factor Authentication) field
     mfa: { type: MFASchema, default: null },
+    // Last accepted TOTP time step (unix seconds / 30), see IUser.totpLastStep.
+    totpLastStep: { type: Number, default: null },
 
     // User preferences
     showCreditsUsed: { type: Boolean, default: true },
@@ -1111,6 +1138,49 @@ export const changeStorageSize = async function (user: IUserDocument, size: numb
     user.currentStorageSize = 0;
   }
 };
+
+/**
+ * Update pipeline counting one MFA attempt at `now`. Stage 1 increments failedAttempts, resetting
+ * to 1 when the last failure is older than the reset window; stage 2 sets lockedUntil from stage
+ * 1's output, so the increment and the lockout land in one atomic write.
+ */
+function mfaAttemptPipeline(now: Date): PipelineStage.Set[] {
+  return [
+    {
+      $set: {
+        'mfa.failedAttempts': {
+          $cond: {
+            if: {
+              $and: [
+                { $gt: [{ $ifNull: ['$mfa.lastFailedAttempt', null] }, null] },
+                {
+                  $gt: [
+                    { $subtract: [now, { $ifNull: ['$mfa.lastFailedAttempt', now] }] },
+                    MFA_ATTEMPT_RESET_WINDOW_MS,
+                  ],
+                },
+              ],
+            },
+            then: 1,
+            else: { $add: [{ $ifNull: ['$mfa.failedAttempts', 0] }, 1] },
+          },
+        },
+        'mfa.lastFailedAttempt': now,
+      },
+    },
+    {
+      $set: {
+        'mfa.lockedUntil': {
+          $cond: {
+            if: { $gte: ['$mfa.failedAttempts', MFA_MAX_FAILED_ATTEMPTS] },
+            then: new Date(now.getTime() + MFA_LOCKOUT_DURATION_MS),
+            else: '$$REMOVE',
+          },
+        },
+      },
+    },
+  ];
+}
 
 /**
  * Structural guard for the select:false MFA secrets (`mfa.totpSecret` / `mfa.backupCodes`).
