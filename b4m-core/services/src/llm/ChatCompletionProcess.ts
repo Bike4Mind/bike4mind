@@ -3909,6 +3909,16 @@ export class ChatCompletionProcess {
           `📊 System prompts dropped to fit the input budget (${shedSourceNames.length}): ${shedSourceNames.join(', ')}`
         );
       }
+      // Forced retrieval published its citation chips before the budget ran. Its lake prompt and its
+      // passages are separate messages of one source, and the source-level map above ORs them, so read
+      // delivery per message: a kept lake prompt must not mask a dropped passages block. The feature
+      // then decides what actually justifies withdrawing, since it alone knows which message is which.
+      const knowledgeRetrievalMessageShed = admittedContextMessages.some(
+        t => t.source === 'knowledgeRetrieval' && t.message.role === 'system' && !deliveredMessages.has(t.message)
+      );
+      if (knowledgeRetrievalMessageShed) {
+        this.features.get('knowledgeRetrieval')?.onContextDropped?.(quest, deliveredMessages);
+      }
 
       const countSystemBlockTokens = (content: string) =>
         calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions);

@@ -25,7 +25,13 @@ import {
   settingsMap,
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
-import type { CitableSource, ISessionDocument, IChatHistoryItemDocument, SettingKey } from '@bike4mind/common';
+import type {
+  CitableSource,
+  ISessionDocument,
+  IChatHistoryItemDocument,
+  IMessage,
+  SettingKey,
+} from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 // Partial mock: ChatCompletionFeatures pulls only `getRelevantMementos` from this module, and the V1
@@ -5119,6 +5125,167 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     expect(retrieval?.outcome).toBe('failed');
     expect(retrieval?.surfaces).toEqual(expect.arrayContaining(['lake-memory', 'forced-retrieval']));
     expect(retrieval?.dataLakeTags).toContain('datalake:y');
+  });
+
+  describe('when the input budget drops the injected block', () => {
+    const webCitable = {
+      id: 'web-1',
+      type: 'website',
+      title: 'Example',
+      url: 'https://example.com',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      status: 'complete',
+    } as unknown as CitableSource;
+
+    const retrievedTurn = async (citationStyle?: 'named' | 'indexed') => {
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        undefined,
+        citationStyle
+      );
+      const quest = makeQuest();
+      quest.promptMeta = { citables: [webCitable] } as IChatHistoryItemDocument['promptMeta'];
+      const messages = await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'what does the library say about X'
+      );
+      return { feature, quest, messages };
+    };
+
+    it('withdraws the chips it published and warns that the passages were not used', async () => {
+      const { feature, quest } = await retrievedTurn();
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1', 'fileA']);
+
+      feature.onContextDropped(quest, new Set());
+
+      // A citable some other surface published is not this feature's to take back.
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1']);
+      expect(quest.promptMeta!.warnings).toEqual([
+        "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+      ]);
+    });
+
+    it('keeps the chips when only the lake prompt was dropped and the passages were delivered', async () => {
+      // Same source, two messages: the passages reached the model, so the citations are theirs to keep
+      // even though the small lake prompt beside them did not fit.
+      const { feature, quest, messages } = await retrievedTurn();
+      const lakePrompt = { role: 'system' as const, content: 'lake operating instructions' };
+
+      feature.onContextDropped(quest, new Set<IMessage>([lakePrompt, ...messages]));
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1', 'fileA']);
+      expect(quest.promptMeta!.warnings).toBeUndefined();
+    });
+
+    it('withdraws the chips when another message was delivered but the passages were not', async () => {
+      // Delivery is per message, not "did anything reach the model": the source can keep one
+      // message while the passages block behind it is the one shed by the budget.
+      const { feature, quest } = await retrievedTurn();
+      const keptMessage = { role: 'system' as const, content: 'lake operating instructions' };
+
+      feature.onContextDropped(quest, new Set<IMessage>([keptMessage]));
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1']);
+      expect(quest.promptMeta!.warnings).toEqual([
+        "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+      ]);
+    });
+
+    it('withdraws only its own chips in indexed style, leaving the other surface unnumbered', async () => {
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        undefined,
+        'indexed'
+      );
+      const quest = makeQuest();
+      quest.promptMeta = {
+        citables: [{ ...webCitable, metadata: { citationIndex: 7 } }],
+      } as IChatHistoryItemDocument['promptMeta'];
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'what does the library say about X'
+      );
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['fileA', 'web-1']);
+
+      feature.onContextDropped(quest, new Set());
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1']);
+      // The surviving citable was never part of this turn's numbering, so it must not answer to a [N].
+      expect(quest.promptMeta!.citables![0].metadata?.citationIndex).toBeUndefined();
+      expect(quest.promptMeta!.warnings).toEqual([
+        "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+      ]);
+    });
+
+    it('does nothing on a turn that published no chips', async () => {
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx({ files: [] }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest();
+      quest.promptMeta = { citables: [webCitable] } as IChatHistoryItemDocument['promptMeta'];
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'what does the library say about X'
+      );
+
+      feature.onContextDropped(quest, new Set());
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1']);
+      expect(quest.promptMeta!.warnings).toBeUndefined();
+    });
+
+    it('leaves an earlier surface citable that shares a key with a retrieved one', async () => {
+      // Named style de-dupes against existing keys, so a retrieved file already published by another
+      // surface is not re-recorded - and must not be withdrawn by a drop.
+      const feature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest();
+      quest.promptMeta = {
+        citables: [{ id: 'fileA', type: 'document', title: 'Earlier view of A' }],
+      } as unknown as IChatHistoryItemDocument['promptMeta'];
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'what does the library say about X'
+      );
+
+      feature.onContextDropped(quest, new Set());
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['fileA']);
+      expect(quest.promptMeta!.warnings).toBeUndefined();
+    });
+
+    it('warns once when told twice, appending to warnings already present', async () => {
+      const { feature, quest } = await retrievedTurn();
+      quest.promptMeta!.warnings = ['earlier note'];
+
+      feature.onContextDropped(quest, new Set());
+      feature.onContextDropped(quest, new Set());
+
+      expect(quest.promptMeta!.warnings).toEqual([
+        'earlier note',
+        "The knowledge base passages found for this message did not fit in the model's context and were not used for this answer.",
+      ]);
+    });
+
+    it('does not withdraw chips published by an earlier turn', async () => {
+      const { feature, quest } = await retrievedTurn();
+      // A second retrieval that finds nothing must clear the keys the first turn recorded.
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        '   '
+      );
+
+      feature.onContextDropped(quest, new Set());
+
+      expect(quest.promptMeta!.citables!.map(c => c.id)).toEqual(['web-1', 'fileA']);
+      expect(quest.promptMeta!.warnings).toBeUndefined();
+    });
   });
 });
 

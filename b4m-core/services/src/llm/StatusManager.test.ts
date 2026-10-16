@@ -41,4 +41,18 @@ describe('StatusManager minimal payload', () => {
     expect(sendToClient.mock.calls[0][2].quest).not.toHaveProperty('videoJobIds');
     expect(sendToClient.mock.calls[0][2].quest).not.toHaveProperty('generationJobs');
   });
+
+  it('carries an empty citables array so withdrawn source chips clear mid-stream', async () => {
+    const { manager, sendToClient } = setup();
+    const quest = makeQuest({ promptMeta: { citables: [] } } as Partial<IChatHistoryItemDocument>);
+    await manager.sendStatusUpdate(quest, 'working');
+    // An omitted promptMeta would leave the client's last non-empty chips in place for the stream.
+    expect(sendToClient.mock.calls[0][2].quest.promptMeta).toEqual({ citables: [] });
+  });
+
+  it('omits promptMeta when the quest carries neither citables nor artifacts', async () => {
+    const { manager, sendToClient } = setup();
+    await manager.sendStatusUpdate(makeQuest({ promptMeta: {} } as Partial<IChatHistoryItemDocument>), 'working');
+    expect(sendToClient.mock.calls[0][2].quest).not.toHaveProperty('promptMeta');
+  });
 });
