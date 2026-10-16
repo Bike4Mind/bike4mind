@@ -24,6 +24,7 @@ export * from './voicePricing';
 export * from './generation';
 export * from './video';
 export * from './music';
+export * from './integrations';
 export * from './decisions';
 export * from './soundGeneration';
 export * from './soundPricing';

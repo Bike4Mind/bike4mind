@@ -3183,6 +3183,8 @@ export const settingsMap = {
     category: 'Calendar',
     group: API_SERVICE_GROUPS.CALENDAR.id,
     order: 1,
+    // The Integrations page derives the Google Calendar card's status from it.
+    userReadable: true,
   }),
   googleCalendarServiceAccountEmail: makeStringSetting({
     key: 'googleCalendarServiceAccountEmail',
@@ -3623,6 +3625,8 @@ export const settingsMap = {
     category: 'Tools',
     group: API_SERVICE_GROUPS.MCP.id,
     order: 1,
+    // The Integrations page derives the agent-tool capabilities' status from it.
+    userReadable: true,
   }),
   githubMcpClientId: makeStringSetting({
     key: 'githubMcpClientId',
@@ -4484,6 +4488,8 @@ export const settingsMap = {
     description: 'Enable AI-powered analysis of ingested emails (summary, entities, sentiment, action items).',
     category: 'AI',
     order: 200,
+    // The Integrations page derives the inbound-email analysis capability's status from it.
+    userReadable: true,
   }),
   EmailAnalysisModel: makeStringSetting({
     key: 'EmailAnalysisModel',
