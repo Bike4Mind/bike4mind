@@ -12,7 +12,7 @@ import {
 import { GenerationCallbackMessageSchema } from '@server/generationCallback/messages';
 import { toQuestPollBody } from '@server/utils/questPollBody';
 import { assertUrlAllowed, SsrfError } from '@server/utils/ssrfProtection';
-import { buildSignedWebhookHeaders, RetryableError, WEBHOOK_HTTP_TIMEOUT_MS } from '@server/webhooks/signedWebhook';
+import { buildSignedWebhookHeaders, RetryableError, WEBHOOK_HTTP_TIMEOUT_MS } from '@workers/webhooks/signedWebhook';
 
 /**
  * The only 4xx worth another attempt. Every other 4xx is permanent, as GENERATION_CALLBACK_DESCRIPTION
@@ -32,7 +32,7 @@ type AttemptResult =
 
 /**
  * Delivers one generation completion callback: a POST of the quest's poll body, signed with the
- * calling API key's secret (server/webhooks/signedWebhook.ts). Armed and enqueued by
+ * calling API key's secret (apps/workers/src/webhooks/signedWebhook.ts). Armed and enqueued by
  * server/generationCallback/dispatchQuestCallback.ts.
  *
  * Everything is re-read per attempt, so a retry signs with the key's current secret and a

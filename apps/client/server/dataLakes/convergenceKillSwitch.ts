@@ -12,7 +12,7 @@ import { Logger } from '@bike4mind/observability';
 /**
  * The platform/lake-scoped convergence pause switch. Exported so a caller that resolves the flag
  * ITSELF rather than asking whether to halt a message - the chunk rescue sweep's per-run pause map
- * (server/dataLakes/convergencePauseScope.ts), which grades every overridden lake at once - reads the
+ * (apps/workers/src/dataLakes/convergencePauseScope.ts), which grades every overridden lake at once - reads the
  * same key this module gates on instead of a second copy of the string.
  */
 export const CONVERGENCE_PAUSE_SETTING_KEY = 'PauseLakeConvergence' as const;

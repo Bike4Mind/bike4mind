@@ -44,7 +44,7 @@ const { mockHandler } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@server/integrations/github/handlers', () => ({
+vi.mock('@workers/integrations/github/handlers', () => ({
   createHandlerRegistry: vi.fn().mockReturnValue({}),
   getHandler: vi.fn().mockReturnValue(mockHandler),
 }));
@@ -52,7 +52,7 @@ vi.mock('@server/integrations/github/handlers', () => ({
 // Import after mocking
 import { dispatch } from './githubWebhook';
 import { mcpServerRepository, cacheRepository } from '@bike4mind/database';
-import { getHandler } from '@server/integrations/github/handlers';
+import { getHandler } from '@workers/integrations/github/handlers';
 
 describe('GitHub Webhook Queue Handler', () => {
   const createSQSEvent = (body: Record<string, unknown>): SQSEvent => ({
