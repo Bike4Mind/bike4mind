@@ -2227,9 +2227,8 @@ export class OpenAIBackend implements ICompletionBackend {
     }
 
     if (!finalResponse) {
-      // The openai SDK swallows an abort during the SSE read and ends the iterator quietly, so a
-      // user Stop lands here with no terminal event. Surface it as an abort so callers treat it
-      // as a stop, not a failure.
+      // The openai SDK swallows an abort mid-SSE and ends the iterator quietly; surface it as an
+      // AbortError so a user Stop ends as a stop, not a failure.
       if (options.abortSignal?.aborted) {
         const abortError = new Error('Request aborted');
         abortError.name = 'AbortError';
