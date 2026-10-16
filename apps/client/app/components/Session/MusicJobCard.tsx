@@ -47,8 +47,10 @@ const creditsLabel = (job: Pick<MusicGeneration, 'credits' | 'state'>): string |
 };
 
 // Only a queued song can be cancelled: once composing, the provider call is under way and billed whatever happens.
-// This relies on the server reporting a composing song as `running`; a cancel that still races the start is refused
-// with 409 not_cancellable (handled in useCancelMusicGeneration).
+// Must stay in sync with the server's rule, `GenerationJobModel.requestCancel` (only `pending` with `submitAttemptedAt`
+// null for a before-submit job, chosen by the handler's submitMode in engine.requestCancel). The server reports a
+// composing song as `running`; a cancel that still races the start is refused with 409 not_cancellable (handled in
+// useCancelMusicGeneration).
 const CANCELLABLE_STATES: readonly GenerationJobState[] = ['pending'];
 
 const MusicJobCard = ({ jobId }: { jobId: string }) => {
