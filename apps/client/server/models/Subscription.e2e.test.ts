@@ -326,3 +326,102 @@ describe('findNonTerminalSubscriptionsByOwner', () => {
     expect(found).toEqual([]);
   });
 });
+
+// The once-per-invoice guarantee for payment-failed emails rests on these conditional updates,
+// which the notice service's unit suite mocks out.
+describe('payment failure notice claims', () => {
+  it('lets exactly one caller claim an invoice, and claims a new invoice again', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_claim' }));
+
+    const first = await Promise.all([
+      subscriptionRepository.claimPaymentFailureNotice('sub_claim', 'in_1'),
+      subscriptionRepository.claimPaymentFailureNotice('sub_claim', 'in_1'),
+    ]);
+    expect(first.filter(Boolean)).toHaveLength(1);
+    expect(await subscriptionRepository.claimPaymentFailureNotice('sub_claim', 'in_1')).toBe(false);
+
+    expect(await subscriptionRepository.claimPaymentFailureNotice('sub_claim', 'in_2')).toBe(true);
+  });
+
+  it('releases a claim so the same invoice can be claimed again', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_release' }));
+    await subscriptionRepository.claimPaymentFailureNotice('sub_release', 'in_1');
+
+    await subscriptionRepository.releasePaymentFailureNotice('sub_release', 'in_1');
+
+    expect(await subscriptionRepository.claimPaymentFailureNotice('sub_release', 'in_1')).toBe(true);
+  });
+
+  it('does not release a newer invoice when releasing an older one', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_newer' }));
+    await subscriptionRepository.claimPaymentFailureNotice('sub_newer', 'in_1');
+    await subscriptionRepository.claimPaymentFailureNotice('sub_newer', 'in_2');
+
+    await subscriptionRepository.releasePaymentFailureNotice('sub_newer', 'in_1');
+
+    expect(await subscriptionRepository.claimPaymentFailureNotice('sub_newer', 'in_2')).toBe(false);
+  });
+
+  it('keeps an older invoice claimed when a newer one fails, so retries of either stay silent', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_two' }));
+    await subscriptionRepository.claimPaymentFailureNotice('sub_two', 'in_1');
+    await subscriptionRepository.claimPaymentFailureNotice('sub_two', 'in_2');
+
+    // A late redelivery or retry for the older invoice arrives after the newer one was claimed.
+    expect(await subscriptionRepository.claimPaymentFailureNotice('sub_two', 'in_1')).toBe(false);
+    expect(await subscriptionRepository.claimPaymentFailureNotice('sub_two', 'in_2')).toBe(false);
+  });
+
+  it('caps the remembered invoices, dropping the oldest', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_cap' }));
+    for (let i = 0; i < 13; i++) {
+      await subscriptionRepository.claimPaymentFailureNotice('sub_cap', `in_${i}`);
+    }
+
+    const stored = await Subscription.findOne({ subscriptionId: 'sub_cap' }).lean<{
+      paymentFailureNotifiedInvoiceIds: string[];
+    }>();
+    expect(stored?.paymentFailureNotifiedInvoiceIds).toHaveLength(12);
+    expect(stored?.paymentFailureNotifiedInvoiceIds[0]).toBe('in_1');
+  });
+
+  it('claims the cancellation notice once, and again after a release', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_cancel' }));
+
+    expect(await subscriptionRepository.claimNonPaymentCancelNotice('sub_cancel')).toBe(true);
+    expect(await subscriptionRepository.claimNonPaymentCancelNotice('sub_cancel')).toBe(false);
+
+    await subscriptionRepository.releaseNonPaymentCancelNotice('sub_cancel');
+    expect(await subscriptionRepository.claimNonPaymentCancelNotice('sub_cancel')).toBe(true);
+  });
+
+  it('claims nothing for a subscription this stage has no row for', async () => {
+    expect(await subscriptionRepository.claimPaymentFailureNotice('sub_missing', 'in_1')).toBe(false);
+    expect(await subscriptionRepository.claimNonPaymentCancelNotice('sub_missing')).toBe(false);
+  });
+});
+
+describe('markPastDue', () => {
+  it('moves an open row to past_due', async () => {
+    await Subscription.create(row({ subscriptionId: 'sub_open' }));
+
+    const updated = await subscriptionRepository.markPastDue('sub_open');
+
+    expect(updated?.status).toBe('past_due');
+  });
+
+  it.each(['canceled', 'incomplete_expired'] as const)(
+    'leaves a %s row alone, so a late payment failure cannot revive it',
+    async status => {
+      await Subscription.create(row({ subscriptionId: `sub_${status}`, status }));
+
+      expect(await subscriptionRepository.markPastDue(`sub_${status}`)).toBeNull();
+      const stored = await Subscription.findOne({ subscriptionId: `sub_${status}` }).lean<{ status: string }>();
+      expect(stored?.status).toBe(status);
+    }
+  );
+
+  it('returns null when this stage has no row', async () => {
+    expect(await subscriptionRepository.markPastDue('sub_missing')).toBeNull();
+  });
+});
