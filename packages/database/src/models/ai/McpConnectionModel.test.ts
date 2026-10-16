@@ -418,6 +418,32 @@ describe('McpConnectionModel', () => {
       expect((await mcpConnectionRepository.setEnabled(created.id, OWNER, false))?.enabled).toBe(false);
     });
 
+    it('stores the authorization-server endpoints and the step-up scope', async () => {
+      const input = baseConnection();
+      Object.assign(input.auth.oauth!, {
+        tokenEndpoint: 'https://linear.app/oauth/token',
+        revocationEndpoint: 'https://linear.app/oauth/revoke',
+        registrationEndpoint: 'https://linear.app/oauth/register',
+        tokenEndpointAuthMethod: 'none',
+        issParameterSupported: true,
+      });
+      const created = await mcpConnectionRepository.create(input);
+      expect((await mcpConnectionRepository.findById(created.id))?.auth.oauth).toMatchObject({
+        tokenEndpoint: 'https://linear.app/oauth/token',
+        revocationEndpoint: 'https://linear.app/oauth/revoke',
+        registrationEndpoint: 'https://linear.app/oauth/register',
+        tokenEndpointAuthMethod: 'none',
+        issParameterSupported: true,
+      });
+
+      const stepUp = await mcpConnectionRepository.setStatus(created.id, 'needs_reconnect', {
+        code: 'insufficient_scope',
+        message: 'needs write',
+        requiredScope: 'read write',
+      });
+      expect(stepUp?.lastError).toMatchObject({ code: 'insufficient_scope', requiredScope: 'read write' });
+    });
+
     it('setStatus records lastError and clears it on connected', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       const failed = await mcpConnectionRepository.setStatus(created.id, 'needs_reconnect', {

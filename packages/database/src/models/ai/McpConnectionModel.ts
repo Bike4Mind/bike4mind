@@ -89,6 +89,11 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
             resourceMetadataUrl: { type: String },
             issuer: { type: String, required: true },
             authorizationServerUrl: { type: String, required: true },
+            tokenEndpoint: { type: String },
+            revocationEndpoint: { type: String },
+            registrationEndpoint: { type: String },
+            tokenEndpointAuthMethod: { type: String },
+            issParameterSupported: { type: Boolean },
             scopes: {
               type: [String],
               default: [],
@@ -128,7 +133,12 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
     status: { type: String, enum: MCP_CONNECTION_STATUSES, required: true },
     lastError: {
       type: new Schema(
-        { code: String, message: { type: String, maxlength: MCP_CONNECTION_LIMITS.lastErrorMessageLength }, at: Date },
+        {
+          code: String,
+          message: { type: String, maxlength: MCP_CONNECTION_LIMITS.lastErrorMessageLength },
+          at: Date,
+          requiredScope: { type: String, maxlength: MCP_CONNECTION_LIMITS.requiredScopeLength },
+        },
         { _id: false }
       ),
       required: false,

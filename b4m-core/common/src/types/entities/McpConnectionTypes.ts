@@ -53,6 +53,14 @@ export interface IMcpConnectionOAuth {
   resourceMetadataUrl?: string;
   issuer: string;
   authorizationServerUrl: string;
+  /** Endpoints from the authorization-server metadata, recorded at discovery so refresh and revoke skip it. */
+  tokenEndpoint?: string;
+  revocationEndpoint?: string;
+  registrationEndpoint?: string;
+  /** RFC 7591 `token_endpoint_auth_method` for this client (`none`, `client_secret_post`, ...). */
+  tokenEndpointAuthMethod?: string;
+  /** RFC 9207: the server sends `iss` on the authorization response, so the callback must check it. */
+  issParameterSupported?: boolean;
   scopes: string[];
   clientMode: McpOAuthClientMode;
   /** Id of the shared `McpOAuthClientRegistration` row when `clientMode` is `dcr`. */
@@ -111,6 +119,8 @@ export interface IMcpConnectionLastError {
   code: string;
   message: string;
   at: Date;
+  /** Scope a 403 `insufficient_scope` asked for; reconnecting requests it (step-up). */
+  requiredScope?: string;
 }
 
 /** Server `instructions` are deliberately not stored in v1 (prompt-injection surface). */
@@ -186,6 +196,7 @@ export const MCP_CONNECTION_LIMITS = {
   serverInfoFieldLength: 200,
   displayNameLength: 100,
   maxScopes: 50,
+  requiredScopeLength: 1000,
 } as const;
 
 /** Dotted paths of the auth secrets. An org definition may carry none of them (members connect their own). */
