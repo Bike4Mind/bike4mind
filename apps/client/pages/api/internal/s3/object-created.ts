@@ -6,6 +6,7 @@ import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
 import { sendToQueue } from '@server/utils/sqs';
 import { getFilesStorage } from '@server/utils/storage';
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
+import { judgeLandedUpload, rejectLandedUpload } from '@server/s3/uploadSizeGate';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
 import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
@@ -141,6 +142,29 @@ const handler = baseApi({ auth: false }).post(
       }
 
       const statusBeforeUpload = metadata.status;
+      const payloadSize = record.s3?.object?.size;
+      const size =
+        typeof payloadSize === 'number' && Number.isFinite(payloadSize) && payloadSize >= 0
+          ? payloadSize
+          : (await getFilesStorage().getMetadata(objectKey)).size;
+
+      // Same measured-size gate as the hosted event (objectCreated.ts), before the row is complete.
+      const rejection =
+        size === undefined
+          ? null
+          : await judgeLandedUpload({
+              measuredSize: size,
+              declaredSize: metadata.fileSize,
+              statusBeforeUpload,
+              owner: await User.findById(metadata.userId),
+              organizationId: metadata.organizationId,
+            });
+      if (rejection) {
+        req.logger.warn(`Rejecting upload ${objectKey} (${size} bytes): ${rejection}`);
+        await rejectLandedUpload(metadata._id, objectKey);
+        continue;
+      }
+
       metadata.status = 'complete';
       await metadata.save();
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
@@ -149,11 +173,6 @@ const handler = baseApi({ auth: false }).post(
       // storageChargedAt claim makes a redelivery free. A failure must not 500: the row is already
       // complete and a redelivery would enqueue chunking twice.
       try {
-        const payloadSize = record.s3?.object?.size;
-        const size =
-          typeof payloadSize === 'number' && Number.isFinite(payloadSize) && payloadSize >= 0
-            ? payloadSize
-            : (await getFilesStorage().getMetadata(objectKey)).size;
         if (size === undefined) {
           req.logger.warn(`No object size for ${objectKey}; storage not charged`);
         } else {

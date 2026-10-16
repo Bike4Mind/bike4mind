@@ -10,6 +10,7 @@ import {
   type ModerationVerdictPatch,
 } from '@server/s3/moderationScan';
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
+import { judgeLandedUpload, rejectLandedUpload } from '@server/s3/uploadSizeGate';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { completedBatchStatus, finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
@@ -52,6 +53,18 @@ export const func = withContext(async (event, context, logger) => {
     // Serving stays gated by moderationStatus, which this does not touch.
     // The storage charge below is judged by the status from before this flip (claimStorageCharge).
     const statusBeforeUpload = metadata.status;
+    const rejection = await judgeLandedUpload({
+      measuredSize: object.size,
+      declaredSize: metadata.fileSize,
+      statusBeforeUpload,
+      owner: await User.findById(metadata.userId),
+      organizationId: metadata.organizationId,
+    });
+    if (rejection) {
+      logger.warn(`Rejecting upload ${objectKey} (${object.size} bytes): ${rejection}`);
+      await rejectLandedUpload(metadata._id, objectKey);
+      continue;
+    }
     // Except where the flip alone changes how the charge rule reads the row (a pre-cutoff unstamped
     // row): there it rides the transaction's save, because a retry after a failed transaction would
     // read a persisted flip as the pre-upload status and undercharge. Such a row keeps its old status

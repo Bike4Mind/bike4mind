@@ -17,9 +17,13 @@ const {
   getMetadataMock,
   userFindByIdMock,
   userDoc,
+  judgeMock,
+  rejectMock,
 } = vi.hoisted(() => {
   const deps = { claim: vi.fn(), persist: vi.fn(), release: vi.fn() };
   return {
+    judgeMock: vi.fn(),
+    rejectMock: vi.fn(),
     chargeMock: vi.fn(),
     getMetadataMock: vi.fn(),
     userFindByIdMock: vi.fn(),
@@ -46,6 +50,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: <T>(fn: (session: unknown) => Promise<T>) => fn({}),
 }));
 vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({ chargeUploadedObject: chargeMock }));
+vi.mock('@server/s3/uploadSizeGate', () => ({ judgeLandedUpload: judgeMock, rejectLandedUpload: rejectMock }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getMetadata: getMetadataMock }) }));
 vi.mock('@server/s3/utils', () => ({
   decodeS3Key: (k: string) => decodeURIComponent(k.replace(/\+/g, ' ')),
@@ -107,6 +112,7 @@ describe('POST /api/internal/s3/object-created', () => {
     userFindByIdMock.mockReturnValue({ session: () => Promise.resolve(userDoc) });
     chargeMock.mockResolvedValue(true);
     getMetadataMock.mockResolvedValue({ size: 42 });
+    judgeMock.mockResolvedValue(null);
   });
   afterEach(() => {
     delete process.env.B4M_SELF_HOST;
@@ -192,6 +198,21 @@ describe('POST /api/internal/s3/object-created', () => {
       fabFileId: 'ff1',
       userId: 'u1',
     });
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('withdraws an upload the size gate rejects, without completing, charging or chunking it', async () => {
+    judgeMock.mockResolvedValue('larger_than_declared');
+    const res = makeRes();
+    await handler(makeReq('secret-token', 'uploads/report.pdf', { size: 999 }), res);
+
+    expect(judgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ measuredSize: 999, statusBeforeUpload: 'pending' })
+    );
+    expect(rejectMock).toHaveBeenCalledWith('ff1', 'uploads/report.pdf');
+    expect(saveMock).not.toHaveBeenCalled();
+    expect(chargeMock).not.toHaveBeenCalled();
+    expect(sendToQueueMock).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
