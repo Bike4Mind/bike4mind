@@ -1501,6 +1501,9 @@ importers:
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../common
+      '@bike4mind/fab-pipeline':
+        specifier: workspace:*
+        version: link:../fab-pipeline
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(zod@4.6.6)
