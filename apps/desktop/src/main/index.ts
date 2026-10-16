@@ -101,7 +101,8 @@ ipcMain.handle(IPC_CHANNELS.shellOpenExternal, (_event, url: unknown) => {
 });
 
 void app.whenReady().then(async () => {
-  // First, so a failure anywhere below is on disk too: a packaged build has no terminal.
+  // First in this handler, so a failure below is on disk too (a packaged build has no terminal);
+  // warnings before app ready are not persisted.
   persistConsoleWarnings(console, app.getPath('logs'));
 
   // macOS reads the dock icon from the app bundle, which only a packaged build has, so a
