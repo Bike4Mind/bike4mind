@@ -9,8 +9,6 @@ export interface BackfillFabFileOwnerOrganizationOptions {
 
 type CandidateLake = { id: string; organizationId: string; createdAt: Date };
 
-type FileCandidates = { sourceLakeId?: string; organizationId?: string; lakes: CandidateLake[] };
-
 /** A file in lakes of more than one org: the tiebreak picked `chosen`. */
 export interface AmbiguousOwner {
   fileId: string;
@@ -60,30 +58,12 @@ export async function backfillFabFileOwnerOrganization(
     { _id: 1, datalakeTag: 1, organizationId: 1, createdAt: 1 }
   ).lean<Array<{ _id: unknown; datalakeTag: string; organizationId: string; createdAt: Date }>>();
 
-  const candidatesByFile = new Map<string, FileCandidates & { _id: mongo.ObjectId }>();
-  for (const lake of lakes) {
-    const candidate: CandidateLake = {
-      id: String(lake._id),
-      organizationId: lake.organizationId,
-      createdAt: lake.createdAt,
-    };
-    // The raw collection: it skips the soft-delete filter, which would hide rows that still need an owner.
-    const files = FabFile.collection.find(
-      { 'tags.name': lake.datalakeTag },
-      { projection: { _id: 1, sourceLakeId: 1, organizationId: 1 } }
-    );
-    for await (const file of files) {
-      const key = String(file._id);
-      const entry = candidatesByFile.get(key) ?? {
-        _id: file._id,
-        sourceLakeId: file.sourceLakeId ?? undefined,
-        organizationId: file.organizationId ?? undefined,
-        lakes: [] as CandidateLake[],
-      };
-      entry.lakes.push(candidate);
-      candidatesByFile.set(key, entry);
-    }
-  }
+  const lakesByTag = new Map<string, CandidateLake>(
+    lakes.map(lake => [
+      lake.datalakeTag,
+      { id: String(lake._id), organizationId: lake.organizationId, createdAt: lake.createdAt },
+    ])
+  );
 
   const report: BackfillFabFileOwnerOrganizationReport = {
     orgLakes: lakes.length,
@@ -95,43 +75,52 @@ export async function backfillFabFileOwnerOrganization(
   };
   const pending: Array<{ _id: mongo.ObjectId; organizationId: string }> = [];
 
-  for (const [fileId, entry] of candidatesByFile) {
-    const resolved = fabFilesService.pickOwnerOrganizationId(entry.lakes, entry.sourceLakeId);
-    if (!resolved) continue;
+  const flush = async () => {
+    const batch = pending.splice(0, pending.length);
+    if (dryRun) {
+      report.updated += batch.length;
+      return;
+    }
+    if (batch.length === 0) return;
+    // Raw collection so updatedAt is not bumped; the $exists guard keeps a concurrent create's stamp.
+    const result = await FabFile.collection.bulkWrite(
+      batch.map(({ _id, organizationId }) => ({
+        updateOne: { filter: { _id, organizationId: { $exists: false } }, update: { $set: { organizationId } } },
+      })),
+      { ordered: false }
+    );
+    report.updated += result.modifiedCount;
+  };
 
-    const orgs = [...new Set(entry.lakes.map(lake => lake.organizationId))];
+  // One streaming pass, so memory stays flat however many files there are: every file in an org lake,
+  // plus every already-stamped file (to report the stale ones). The raw collection skips the
+  // soft-delete filter, which would hide rows that still need an owner.
+  const files = FabFile.collection.find(
+    { $or: [{ 'tags.name': { $in: [...lakesByTag.keys()] } }, { organizationId: { $exists: true } }] },
+    { projection: { _id: 1, tags: 1, sourceLakeId: 1, organizationId: 1 } }
+  );
+  for await (const file of files) {
+    const fileId = String(file._id);
+    const stored: string | undefined = file.organizationId ?? undefined;
+    const tagNames: string[] = (file.tags ?? []).map((tag: { name: string }) => tag.name);
+    const fileLakes = [...new Set(tagNames.flatMap(name => lakesByTag.get(name) ?? []))];
+
+    const resolved = fabFilesService.pickOwnerOrganizationId(fileLakes, file.sourceLakeId ?? undefined);
+    if (!resolved) {
+      if (stored) report.stale.push({ fileId, stored: String(stored) });
+      continue;
+    }
+
+    const orgs = [...new Set(fileLakes.map(lake => lake.organizationId))];
     if (orgs.length > 1) report.ambiguous.push({ fileId, chosen: resolved, candidates: orgs.sort() });
 
-    if (entry.organizationId === resolved) report.alreadyOwned++;
-    else if (entry.organizationId) report.conflicts.push({ fileId, stored: entry.organizationId, resolved });
-    else pending.push({ _id: entry._id, organizationId: resolved });
-  }
+    if (stored === resolved) report.alreadyOwned++;
+    else if (stored) report.conflicts.push({ fileId, stored, resolved });
+    else pending.push({ _id: file._id, organizationId: resolved });
 
-  const stamped = FabFile.collection.find(
-    { organizationId: { $exists: true } },
-    { projection: { _id: 1, organizationId: 1 } }
-  );
-  for await (const file of stamped) {
-    if (!candidatesByFile.has(String(file._id))) {
-      report.stale.push({ fileId: String(file._id), stored: String(file.organizationId) });
-    }
+    if (pending.length >= WRITE_BATCH_SIZE) await flush();
   }
-
-  if (dryRun) {
-    report.updated = pending.length;
-  } else {
-    for (let start = 0; start < pending.length; start += WRITE_BATCH_SIZE) {
-      const batch = pending.slice(start, start + WRITE_BATCH_SIZE);
-      // Raw collection so updatedAt is not bumped; the $exists guard keeps a concurrent create's stamp.
-      const result = await FabFile.collection.bulkWrite(
-        batch.map(({ _id, organizationId }) => ({
-          updateOne: { filter: { _id, organizationId: { $exists: false } }, update: { $set: { organizationId } } },
-        })),
-        { ordered: false }
-      );
-      report.updated += result.modifiedCount;
-    }
-  }
+  await flush();
 
   log(
     `[backfill-fabfile-owner-organization] ${report.orgLakes} org lake(s); ` +
