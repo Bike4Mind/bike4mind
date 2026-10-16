@@ -10,6 +10,7 @@ import {
   buildMetaEvent,
   buildSSEEvent,
   createCompletionContract,
+  describeProviderFailure,
   formatSSEError,
   normalizeCompletionRequest,
   resolveApiCompletionSource,
@@ -18,12 +19,14 @@ import {
   serializeSSEEvent,
   SSE_DONE_SIGNAL,
   SSE_KEEPALIVE,
+  type CompletionErrorCause,
   type CompletionSource,
   type CompletionSseErrorCode,
   type SSEErrorEvent,
   type TurnUsage,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { createProviderCallStats } from '@bike4mind/llm-adapters';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { resolveQuestErrorCode } from '@bike4mind/services/llm';
 import { getHttpStatus, isSafetyRefusalError } from '@bike4mind/utils';
@@ -50,6 +53,7 @@ import { emitProcessingFailed } from '../processingFailedMetric';
 import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
 import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from './completionTiming';
+import { classifyStreamFailure, createStreamStats, streamFailureLogFields, type StreamFailure } from './streamFailure';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -93,11 +97,15 @@ function toJsonError(
   return { status: 500, headers: {}, body: buildErrorBody({ error: 'Internal error', requestId }) };
 }
 
-/** A failure after onReady: a typed in-band frame that never carries the raw upstream body. */
-function toStreamErrorFrame(error: unknown, requestId: string): SSEErrorEvent {
+/**
+ * A failure after onReady: a typed in-band frame that never carries the raw upstream body, its
+ * headers or a stack. `cause` is already reduced to the classification, safe codes and timing.
+ */
+export function toStreamErrorFrame(error: unknown, requestId: string, cause?: CompletionErrorCause): SSEErrorEvent {
   const questCode = resolveQuestErrorCode(error);
   let frameError: unknown = error;
   let code: CompletionSseErrorCode | undefined = questCode;
+  let frameCause: CompletionErrorCause | undefined;
   if (!questCode) {
     const status = error instanceof Error ? getHttpStatus(error) : undefined;
     // A refusal is deterministic: retrying the same prompt gets the same answer, unlike provider_error.
@@ -108,12 +116,16 @@ function toStreamErrorFrame(error: unknown, requestId: string): SSEErrorEvent {
       frameError = new Error('Model provider rejected our credentials');
       code = 'provider_rejected';
     } else {
-      const upstream = status === undefined ? '' : ` (upstream ${status})`;
-      frameError = new Error(`Model provider returned an error${upstream}`);
+      // The top-level status still wins: it is what the 401/403 test above went by.
+      frameCause =
+        status !== undefined && cause?.upstreamStatus !== status
+          ? { ...cause, kind: 'upstream_error', upstreamStatus: status }
+          : cause;
+      frameError = new Error(describeProviderFailure(frameCause));
       code = 'provider_error';
     }
   }
-  return formatSSEError(frameError, requestId, code);
+  return formatSSEError(frameError, requestId, code, frameCause);
 }
 
 /**
@@ -161,6 +173,13 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
     const startTime = Date.now();
     const timing = COMPLETION_TIMING_ENABLED ? createCompletionTiming() : undefined;
+    const streamStats = createStreamStats();
+    const providerCalls = createProviderCallStats();
+    // 'close' also fires after a normal finish; only a close before it is the client leaving.
+    let clientAborted = false;
+    res.on('close', () => {
+      if (!res.writableFinished) clientAborted = true;
+    });
     const headers = flattenHeaders(req.headers);
     const logger = new Logger({ metadata: { service: 'chatCompletion', endpoint: COMPLETIONS_ENDPOINT } });
 
@@ -266,6 +285,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       let hasToolCalls = false;
 
       timing?.phase('completionStarted');
+      streamStats.completionStarted();
       await executeCompletion({
         userId,
         model: body.model,
@@ -291,6 +311,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         requestId,
         source,
         logger,
+        providerCalls,
         onReady,
         onChunk: async (text, info) => {
           if (info?.inputTokens) finalInputTokens = info.inputTokens;
@@ -300,6 +321,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
           if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
           timing?.chunk(classifyChunk(text, info));
+          streamStats.chunk(text, info);
           write(serializeSSEEvent(buildSSEEvent(text, info)));
         },
       });
@@ -331,13 +353,21 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       });
     } catch (error) {
       const jsonError = toJsonError(error, requestId);
+      // Only a failure after the stream opened is a provider stream failure worth timing.
+      const streamFailure: StreamFailure | undefined = res.headersSent
+        ? classifyStreamFailure(error, streamStats, { clientAborted })
+        : undefined;
       const level = jsonError.status < 500 ? 'warn' : 'error';
-      logger[level]('[CLI_LLM] Handler error', { requestId, error: serializeError(error) });
+      logger[level]('[CLI_LLM] Handler error', {
+        requestId,
+        error: serializeError(error),
+        ...(streamFailure ? streamFailureLogFields(streamFailure, body?.model, providerCalls) : {}),
+      });
       track(emitProcessingFailed('cli-sse', error));
 
       try {
         if (res.headersSent) {
-          write(serializeSSEEvent(toStreamErrorFrame(error, requestId)));
+          write(serializeSSEEvent(toStreamErrorFrame(error, requestId, streamFailure?.cause)));
           end();
           if (heartbeat) clearInterval(heartbeat);
         } else {

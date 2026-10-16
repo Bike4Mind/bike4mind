@@ -1,5 +1,4 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
-import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
@@ -10,6 +9,7 @@ import { isTurnBudgetStop, lastBoundaryIndex, type ChatMessage, type ChatUsage }
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
 import { ReasoningRow } from './ReasoningRow';
+import { ReplyErrorCard } from './ReplyErrorCard';
 import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
@@ -113,12 +113,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
                 /{skill.name}
                 {skill.args ? ` ${skill.args}` : ''}
               </Typography>
-              <Chip
-                size="sm"
-                variant="soft"
-                color={skillChipColor(skill.source)}
-                data-testid="chat-message-skill-chip"
-              >
+              <Chip size="sm" variant="soft" color={skillChipColor(skill.source)} data-testid="chat-message-skill-chip">
                 {skillSourceLabel(skill.source)} skill
               </Chip>
             </Stack>
@@ -285,9 +280,11 @@ const AssistantTurn = memo(function AssistantTurn({
       <ArtifactList artifacts={message.artifacts ?? []} />
 
       {message.error && (
-        <Alert size="sm" color="danger" variant="soft" sx={{ mt: 1 }} data-testid="chat-message-error">
-          {message.error}
-        </Alert>
+        <ReplyErrorCard
+          error={message.error}
+          failedAt={message.createdAt}
+          {...(message.errorDetail ? { detail: message.errorDetail } : {})}
+        />
       )}
 
       <StopReasonRow reason={message.stopReason} onContinue={onContinue} />

@@ -274,6 +274,12 @@ codes plus `provider_rejected` (the provider refused our credentials), `content_
 model's safety classifier declined the request) and `provider_error` (any other provider failure). The frame message is sanitized; a raw upstream body never
 reaches the client.
 
+How a `provider_error` failed rides beside it as an optional `cause` (`CompletionErrorCauseSchema`:
+a `kind`, an allowlisted transport code, the upstream status, and timing) rather than as new
+`code` values. Shipped clients read an unknown `code` as a refusal and stop retrying, so widening
+the code vocabulary would have turned every dropped connection into a hard failure for them;
+an extra optional field is ignored instead. The same reasoning applies to the next such detail.
+
 The pairing a caller needs is worth stating in the contract `description`: `/api/chat`,
 `/api/embed/chat` and `/api/ai/v1/completions` all refuse pre-stream with a classified
 `422`, and report only a mid-generation exhaustion in-band.

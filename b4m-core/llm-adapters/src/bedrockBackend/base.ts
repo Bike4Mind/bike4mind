@@ -15,6 +15,7 @@ import {
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
 import { executeToolsBatch, shouldEndTurnAfterTools } from '../executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
+import { recordAwsProviderCall } from '../providerCalls';
 import {
   ChoiceEndReason,
   type CompletionInfo,
@@ -468,7 +469,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         let response;
         try {
           response = await this.invokeModelStream(input, options.abortSignal);
+          recordAwsProviderCall(options.providerCalls, response);
         } catch (err: unknown) {
+          recordAwsProviderCall(options.providerCalls, err);
           this.handleBedrockError(err);
         }
         if (!response.body) throw new Error('No response body');

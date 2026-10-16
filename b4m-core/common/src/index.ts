@@ -118,6 +118,7 @@ export * from './utils/imageSizes';
 export * from './utils/imageCapabilities';
 export * from './utils/activity';
 export * from './utils/sseEvents';
+export * from './utils/providerFailure';
 export * from './utils/streamVisibility';
 export * from './utils/replyChoices';
 export * from './utils/ttfvt';

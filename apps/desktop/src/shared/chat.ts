@@ -557,6 +557,27 @@ export interface ChatAutomaticOrigin {
   summary: string;
 }
 
+/**
+ * What a failed completion request left to trace it by. Codes and timing only: never the
+ * server's or the provider's own text.
+ */
+export interface ChatErrorDetail {
+  requestId?: string;
+  model?: string;
+  /** The server's classifier from the error frame or JSON envelope, e.g. `provider_error`. */
+  code?: string;
+  /** How a provider failure happened, e.g. `connection_lost`; see the frame's `cause.kind`. */
+  kind?: string;
+  /** A transport code such as `UND_ERR_SOCKET`, the provider's or this app's own. */
+  transportCode?: string;
+  /** The model provider's HTTP status, when the server reported one. */
+  upstreamStatus?: number;
+  /** The Bike4Mind server's HTTP status, for a request refused before its stream opened. */
+  httpStatus?: number;
+  /** ms from sending the request to the failure, measured here. */
+  elapsedMs?: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -592,6 +613,8 @@ export interface ChatMessage {
   stopReason?: string;
   /** Set instead of a reply when the turn failed; the message is kept so the thread shows why. */
   error?: string;
+  /** Set with `error` when the failure was a completion request, so it can be found in the server logs. */
+  errorDetail?: ChatErrorDetail;
   /** Files the user attached to this turn. Only ever on a user message. */
   attachments?: ChatAttachment[];
   /**
@@ -1086,7 +1109,7 @@ export type ChatStreamEvent =
       /** `content` has had their markup removed, so these ride with it rather than following it. */
       artifacts?: ChatArtifact[];
     }
-  | { type: 'error'; sessionId: string; messageId: string; message: string }
+  | { type: 'error'; sessionId: string; messageId: string; message: string; detail?: ChatErrorDetail }
   | {
       type: 'background-output';
       sessionId: string;

@@ -750,6 +750,104 @@ describe('POST /api/ai/v1/completions - failures after the stream opened', () =>
     expect(errorFrame(text)).toMatchObject({ code: 'provider_error', message });
     expect(text).not.toContain('secret-model-name');
   });
+
+  /** undici's mid-body socket close, with the upstream host in the message as it really is. */
+  const terminated = () =>
+    new TypeError('terminated', {
+      cause: Object.assign(new Error('other side closed - remote: api.example.test:443'), {
+        name: 'SocketError',
+        code: 'UND_ERR_SOCKET',
+      }),
+    });
+
+  it('names a dropped upstream connection, with the safe code and timing on a provider_error cause', async () => {
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(terminated()));
+
+    const text = await (await post()).text();
+    const frame = errorFrame(text) as { message: string; code?: string; cause?: Record<string, unknown> };
+    expect(frame.code).toBe('provider_error');
+    expect(frame.message).toMatch(/^Lost the connection to the model provider after \d+ms$/);
+    expect(frame.cause).toEqual({
+      kind: 'connection_lost',
+      transportCode: 'UND_ERR_SOCKET',
+      elapsedMs: expect.any(Number),
+      idleMs: expect.any(Number),
+    });
+    expect(text).not.toContain('other side closed');
+    expect(text).not.toContain('api.example.test');
+  });
+
+  it('logs what a fix needs: provider, attempt, stream counters and the full cause chain', async () => {
+    mockExecuteCompletion.mockImplementationOnce(
+      async (params: ExecuteParams & { providerCalls: { provider?: string; requests: number; attempts: number } }) => {
+        params.providerCalls.provider = 'openai';
+        params.providerCalls.requests = 1;
+        params.providerCalls.attempts = 2;
+        await params.onReady?.();
+        await params.onChunk(['', ''], { channel: 'reasoning' });
+        await params.onChunk(['Hello']);
+        throw terminated();
+      }
+    );
+
+    await (await post()).text();
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      '[CLI_LLM] Handler error',
+      expect.objectContaining({
+        provider: 'openai',
+        model: 'test-model',
+        failureKind: 'connection_lost',
+        transportCode: 'UND_ERR_SOCKET',
+        providerRequests: 1,
+        attempt: 2,
+        chunks: 2,
+        chars: 5,
+        visibleTextSent: true,
+        elapsedMs: expect.any(Number),
+        timeToFirstChunkMs: expect.any(Number),
+        idleMs: expect.any(Number),
+        causeChain: [
+          { name: 'TypeError', message: 'terminated' },
+          { name: 'SocketError', code: 'UND_ERR_SOCKET', message: 'other side closed - remote: api.example.test:443' },
+        ],
+      })
+    );
+  });
+
+  it('reports that nothing visible was sent when the stream died silent', async () => {
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(terminated()));
+    await (await post()).text();
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      '[CLI_LLM] Handler error',
+      expect.objectContaining({ chunks: 0, chars: 0, visibleTextSent: false })
+    );
+  });
+
+  it.each([
+    ['ENOTFOUND', 'unreachable', /^Could not reach the model provider$/],
+    ['UND_ERR_BODY_TIMEOUT', 'timeout', /^The model provider timed out after \d+ms$/],
+  ])('classifies %s as %s', async (code, kind, message) => {
+    const error = new TypeError('fetch failed', { cause: Object.assign(new Error(`getaddrinfo ${code}`), { code }) });
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(error));
+
+    const frame = errorFrame(await (await post()).text()) as { message: string; cause?: { kind: string } };
+    expect(frame.message).toMatch(message);
+    expect(frame.cause).toMatchObject({ kind, transportCode: code });
+  });
+
+  it('carries the upstream status on the cause as well as in the message', async () => {
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(Object.assign(new Error(RAW), { status: 503 })));
+    const frame = errorFrame(await (await post()).text()) as { cause?: Record<string, unknown> };
+    expect(frame.cause).toMatchObject({ kind: 'upstream_error', upstreamStatus: 503 });
+  });
+
+  it('hands executeCompletion a provider-call tracker to fill in', async () => {
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(terminated()));
+    await (await post()).text();
+    expect(mockExecuteCompletion).toHaveBeenLastCalledWith(
+      expect.objectContaining({ providerCalls: { requests: 0, attempts: 0 } })
+    );
+  });
 });
 
 const HEARTBEAT_INTERVAL_MS = 10_000;

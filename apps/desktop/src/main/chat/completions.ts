@@ -3,7 +3,7 @@ import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
 import type { ReasoningEffort } from '@bike4mind/common';
-import type { ChatModelOption, ChatRole } from '@shared/chat';
+import type { ChatErrorDetail, ChatModelOption, ChatRole } from '@shared/chat';
 import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
@@ -88,11 +88,96 @@ export interface CompletionRequest {
 }
 
 /**
+ * A failed completion request, carrying what it takes to find it in the server logs. `message` is
+ * unchanged from what this request always reported, since callers match on it (isContextOverflow).
+ */
+export class CompletionFailure extends Error {
+  constructor(
+    message: string,
+    readonly detail: ChatErrorDetail,
+    options?: { cause?: unknown }
+  ) {
+    super(message, options);
+    this.name = 'CompletionFailure';
+  }
+}
+
+/** `code=provider_error kind=connection_lost requestId=... elapsedMs=649000 model=...`, for a log line. */
+export function formatFailureForLog(detail: ChatErrorDetail): string {
+  const fields: [string, string | number | undefined][] = [
+    ['code', detail.code],
+    ['kind', detail.kind],
+    ['transportCode', detail.transportCode],
+    ['upstreamStatus', detail.upstreamStatus],
+    ['httpStatus', detail.httpStatus],
+    ['requestId', detail.requestId],
+    ['elapsedMs', detail.elapsedMs],
+    ['model', detail.model],
+  ];
+  return fields
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(' ');
+}
+
+/** The request id this request is known by so far: the response header, then the stream's meta event. */
+interface RequestTrace {
+  requestId?: string;
+}
+
+const REQUEST_ID_HEADER = 'x-request-id';
+const SAFE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+function requestIdFrom(headers: unknown): string | undefined {
+  const value = (headers as Record<string, unknown> | undefined)?.[REQUEST_ID_HEADER];
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+function transportCodeOf(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && SAFE_CODE.test(code) ? code : undefined;
+}
+
+/**
+ * Fold what this side knows into a failure, keeping whatever the server already said. `original`
+ * is the error before toRequestError reworded it, which is where its status and code still are.
+ */
+function withFailureDetail(
+  error: unknown,
+  trace: RequestTrace,
+  startedAt: number,
+  original: unknown = error
+): CompletionFailure {
+  const elapsedMs = Date.now() - startedAt;
+  if (error instanceof CompletionFailure) {
+    return new CompletionFailure(
+      error.message,
+      { ...error.detail, requestId: error.detail.requestId ?? trace.requestId, elapsedMs },
+      { cause: error.cause }
+    );
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  const transportCode = transportCodeOf(original);
+  const httpStatus = isAxiosError(original) ? original.response?.status : undefined;
+  return new CompletionFailure(
+    message,
+    {
+      ...(trace.requestId ? { requestId: trace.requestId } : {}),
+      ...(httpStatus ? { httpStatus } : {}),
+      ...(transportCode ? { transportCode } : {}),
+      elapsedMs,
+    },
+    { cause: original }
+  );
+}
+
+/**
  * Stream one completion, calling `onEvent` for each decoded SSE event.
  *
  * Resolves when the stream ends cleanly (`[DONE]` or socket end) or when `signal` aborts -
  * an abort is a normal outcome here, since stopping a reply is a user action, not a failure.
- * Rejects on a pre-stream HTTP failure or a mid-stream socket error.
+ * Rejects on a pre-stream HTTP failure or a mid-stream socket error, always with a
+ * {@link CompletionFailure}.
  *
  * Callback-based rather than an async iterable because every consumer forwards straight to an
  * IPC push, which cannot exert backpressure anyway.
@@ -106,6 +191,8 @@ export async function streamCompletion(
 ): Promise<void> {
   if (signal?.aborted) return;
 
+  const startedAt = Date.now();
+  const trace: RequestTrace = {};
   let response: AxiosResponse;
   try {
     response = await axiosInstance.post(
@@ -127,10 +214,16 @@ export async function streamCompletion(
     );
   } catch (err) {
     if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
-    throw toRequestError(err, await readErrorBody(err));
+    trace.requestId = isAxiosError(err) ? requestIdFrom(err.response?.headers) : undefined;
+    throw withFailureDetail(toRequestError(err, await readErrorBody(err)), trace, startedAt, err);
   }
 
-  await readSseStream(response, onEvent, signal, { model: request.model, sessionId: request.sessionId });
+  trace.requestId = requestIdFrom(response.headers);
+  try {
+    await readSseStream(response, onEvent, signal, { model: request.model, sessionId: request.sessionId }, trace);
+  } catch (err) {
+    throw withFailureDetail(err, trace, startedAt);
+  }
 }
 
 /** What the dev log tags this request's frames with. See logUpstream. */
@@ -178,7 +271,8 @@ function readSseStream(
   response: AxiosResponse,
   onEvent: (event: CompletionStreamEvent) => void,
   signal: AbortSignal | undefined,
-  context: StreamContext
+  context: StreamContext,
+  trace: RequestTrace
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const stream = response.data as NodeJS.ReadableStream & { destroy(): void };
@@ -221,8 +315,20 @@ function readSseStream(
         const event = parseStreamEvent(decoded);
         if (!event) return;
         logUpstream(event, context);
+        if (event.type === 'meta' && event.requestId) trace.requestId ??= event.requestId;
         if (event.type === 'error') {
-          fail(new Error(event.message || 'The server reported an error mid-reply.'));
+          const { cause } = event;
+          fail(
+            new CompletionFailure(event.message || 'The server reported an error mid-reply.', {
+              ...((event.requestId ?? trace.requestId) ? { requestId: event.requestId ?? trace.requestId } : {}),
+              ...(event.code ? { code: event.code } : {}),
+              ...(cause?.kind ? { kind: cause.kind } : {}),
+              ...(cause?.transportCode && SAFE_CODE.test(cause.transportCode)
+                ? { transportCode: cause.transportCode }
+                : {}),
+              ...(cause?.upstreamStatus !== undefined ? { upstreamStatus: cause.upstreamStatus } : {}),
+            })
+          );
           return;
         }
         onEvent(event);

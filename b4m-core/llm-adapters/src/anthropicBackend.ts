@@ -35,6 +35,7 @@ import {
 } from './backend';
 import { Logger } from '@bike4mind/observability';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
+import { countProviderAttempts } from './providerCalls';
 import {
   ensureToolPairingIntegrity,
   normalizeToolUseInputs,
@@ -1473,14 +1474,15 @@ export class AnthropicBackend implements ICompletionBackend {
 
               // Wrap with retry for transient network errors (TLS abort, fetch terminated)
               const stream = await withRetry(
-                () =>
+                countProviderAttempts(options.providerCalls, () =>
                   this._api.messages.create(
                     { ...apiParams, stream: true },
                     {
                       signal: combinedSignal,
                       ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),
                     }
-                  ),
+                  )
+                ),
                 {
                   maxRetries: 3,
                   initialDelayMs: 500,
@@ -2429,11 +2431,12 @@ export class AnthropicBackend implements ICompletionBackend {
           release = await acquireSlot({ tenantKey: this._endUserId, signal: options.abortSignal });
           // Wrap with retry for transient network errors (TLS abort, fetch terminated)
           response = await withRetry(
-            () =>
+            countProviderAttempts(options.providerCalls, () =>
               this._api.messages.create(apiParams, {
                 signal: options.abortSignal,
                 ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),
-              }),
+              })
+            ),
             {
               maxRetries: 3,
               initialDelayMs: 500,

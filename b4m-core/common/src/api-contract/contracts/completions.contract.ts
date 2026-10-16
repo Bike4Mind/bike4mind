@@ -47,7 +47,12 @@ export const createCompletionContract = defineEndpoint({
     "`error` event. Branch on that event's `code`, never on `message`, which is prose and may change: " +
     '`insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider ' +
     'refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and ' +
-    '`provider_error` for any other provider failure. Treat `code` as optional.',
+    '`provider_error` for any other provider failure. Treat `code` as optional. A `provider_error` may carry ' +
+    'a `cause` saying how the provider call failed: `kind` (`connection_lost`, `timeout`, `unreachable`, ' +
+    '`upstream_error`), a transport `transportCode` such as `UND_ERR_SOCKET`, the `upstreamStatus` when the ' +
+    'provider answered with one, and `elapsedMs` / `idleMs` (time since the request arrived, and since the ' +
+    'provider last sent anything). Every kind is worth a retry. Treat `cause` as optional and an unknown ' +
+    '`kind` as absent; quote the `requestId` when reporting a failure.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],

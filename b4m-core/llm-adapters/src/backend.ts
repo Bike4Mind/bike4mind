@@ -21,6 +21,7 @@ import type { AnthropicEffort } from './thinkingParams';
 import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 import type { RecordableToolUse } from './recordToolResult';
 import type { DowngradedToolChoice } from './forcedToolChoice';
+import type { ProviderCallStats } from './providerCalls';
 
 /** Maximum number of recursive tool calls to prevent infinite loops */
 export const DEFAULT_MAX_TOOL_CALLS = 10;
@@ -203,6 +204,8 @@ export interface ICompletionOptions {
    * `ReasoningEffort` is forwarded to OpenAI's `reasoning_effort` verbatim.
    */
   anthropicEffort?: AnthropicEffort;
+  /** Filled in as the adapter calls the provider; read back by a caller diagnosing a failure. */
+  providerCalls?: ProviderCallStats;
   _internal?: {
     toolCallCount?: number; // Internal counter for tracking recursive tool calls (do not set manually)
     /** Per-request override for the recursive tool-call ceiling (defaults to DEFAULT_MAX_TOOL_CALLS).

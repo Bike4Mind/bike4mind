@@ -81,7 +81,9 @@ import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTimin
 import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import {
+  CompletionFailure,
   DEFAULT_COMPLETIONS_PATH,
+  formatFailureForLog,
   streamCompletion,
   supportsPromptCache,
   withCacheBreakpoints,
@@ -2286,7 +2288,10 @@ export class ChatService {
       return controller.signal.aborted ? 'aborted' : 'completed';
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.deps.logger.warn(`CHAT: reply failed: ${message}`);
+      const errorDetail = err instanceof CompletionFailure ? { ...err.detail, model: session.model } : undefined;
+      this.deps.logger.warn(
+        `CHAT: reply failed: ${message}${errorDetail ? ` ${formatFailureForLog(errorDetail)}` : ''}`
+      );
 
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
@@ -2296,10 +2301,17 @@ export class ChatService {
         content,
         createdAt: new Date().toISOString(),
         error: message,
+        ...(errorDetail ? { errorDetail } : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
       });
-      this.emit({ type: 'error', sessionId, messageId: replyId, message });
+      this.emit({
+        type: 'error',
+        sessionId,
+        messageId: replyId,
+        message,
+        ...(errorDetail ? { detail: errorDetail } : {}),
+      });
       return 'failed';
     }
   }
@@ -2366,6 +2378,7 @@ export class ChatService {
       content: message.content,
       stopReason: message.stopReason,
       error: message.error,
+      errorDetail: message.errorDetail,
       toolCalls: message.toolCalls,
       rounds: message.rounds,
       thinking: message.thinking,

@@ -94,6 +94,16 @@ export const streamEventSchema = z.discriminatedUnion('type', [
     // The server's classifier (CompletionSseErrorEventSchema in @bike4mind/common); kept open so a new code still parses.
     code: z.string().optional(),
     requestId: z.string().optional(),
+    // How a provider_error failed (CompletionErrorCauseSchema); `kind` is open for the same reason as `code`.
+    cause: z
+      .object({
+        kind: z.string(),
+        transportCode: z.string().optional(),
+        upstreamStatus: z.number().optional(),
+        elapsedMs: z.number().optional(),
+        idleMs: z.number().optional(),
+      })
+      .optional(),
   }),
 ]);
 export type StreamEvent = z.infer<typeof streamEventSchema>;

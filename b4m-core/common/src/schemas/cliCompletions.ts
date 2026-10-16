@@ -220,6 +220,30 @@ export const COMPLETION_SSE_ERROR_CODES = [
 export type CompletionSseErrorCode = (typeof COMPLETION_SSE_ERROR_CODES)[number];
 
 /**
+ * How a `provider_error` failed. A detail of that code rather than codes of their own: shipped
+ * clients read an unknown `code` as a refusal and stop retrying, while every one of these is
+ * worth a retry. Classified in utils/providerFailure.ts.
+ */
+export const COMPLETION_ERROR_CAUSE_KINDS = ['connection_lost', 'timeout', 'unreachable', 'upstream_error'] as const;
+export type CompletionErrorCauseKind = (typeof COMPLETION_ERROR_CAUSE_KINDS)[number];
+
+export const CompletionErrorCauseSchema = z.object({
+  kind: z.enum(COMPLETION_ERROR_CAUSE_KINDS),
+  // Only ever a code from the classifier's own allowlist (e.g. UND_ERR_SOCKET, ECONNRESET).
+  transportCode: z
+    .string()
+    .max(64)
+    .regex(/^[A-Z][A-Z0-9_]*$/)
+    .optional(),
+  upstreamStatus: z.number().int().min(100).max(599).optional(),
+  /** ms from the request reaching the server to the failure. */
+  elapsedMs: z.number().int().nonnegative().optional(),
+  /** ms since the provider last sent anything (since the call started, if it sent nothing). */
+  idleMs: z.number().int().nonnegative().optional(),
+});
+export type CompletionErrorCause = z.infer<typeof CompletionErrorCauseSchema>;
+
+/**
  * The in-band terminal failure frame, sent only once the stream has opened. Failures found before
  * the provider call (auth, scope, validation, rate limit, model, credits) are JSON errors with a
  * real status instead; see completions.contract.ts.
@@ -227,7 +251,8 @@ export type CompletionSseErrorCode = (typeof COMPLETION_SSE_ERROR_CODES)[number]
  * `code` is the machine-readable classifier: a billing code when settlement runs out mid-generation,
  * `provider_rejected` / `provider_error` when the model provider fails, `content_blocked` when the
  * model's safety classifier declined the request. Optional; callers must never match on the prose
- * `message`.
+ * `message`. `cause` is optional too and only rides a `provider_error`; a caller that does not
+ * know its `kind` treats it as absent.
  *
  * The field is `code` rather than the conventions' `errorCode` because this frame shipped that way
  * and is a published wire shape.
@@ -237,6 +262,7 @@ export const CompletionSseErrorEventSchema = z.object({
   message: z.string(),
   requestId: z.string().optional(),
   code: z.enum(COMPLETION_SSE_ERROR_CODES).optional(),
+  cause: CompletionErrorCauseSchema.optional(),
 });
 
 /** One `data:` event in the `text/event-stream` completions response. */

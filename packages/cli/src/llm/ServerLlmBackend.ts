@@ -354,24 +354,29 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   }
 }
 
-/** sseRoute.ts toStreamErrorFrame reports a provider failure's upstream status only in its message. */
+/** A server older than the frame's `cause` reports the upstream status only in its message. */
 const UPSTREAM_STATUS = /\(upstream (\d{3})\)/;
 
 /**
  * Classify a server-sent `error` frame by its `code`: a provider failure is retried by its upstream
  * status (none known: as a server error), rejected provider credentials are an auth failure, and
  * everything else (billing, a content refusal, a frame with no code) is a refusal.
+ *
+ * A dropped or timed-out provider connection stays a server error rather than `network`: it is the
+ * server's link to the provider that failed, not this client's, and `network` drives the
+ * client-side connection-drop handling.
  */
 export function errorFrameToModelCallError(frame: {
   message?: string;
   code?: string;
   requestId?: string;
+  cause?: { upstreamStatus?: number };
 }): ModelCallError {
   const message = frame.message || 'Server error';
   const details = { code: frame.code, requestId: frame.requestId };
   if (frame.code === 'provider_error') {
     const upstream = UPSTREAM_STATUS.exec(message);
-    const status = upstream ? Number(upstream[1]) : undefined;
+    const status = frame.cause?.upstreamStatus ?? (upstream ? Number(upstream[1]) : undefined);
     return new ModelCallError(status === undefined ? 'server' : kindForStatus(status), message, { ...details, status });
   }
   if (frame.code === 'provider_rejected') return new ModelCallError('auth', message, details);

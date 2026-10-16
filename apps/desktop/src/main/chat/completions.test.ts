@@ -1,7 +1,7 @@
 import { PassThrough } from 'node:stream';
 import type { AxiosInstance } from 'axios';
 import { describe, expect, it, vi } from 'vitest';
-import { streamCompletion, supportsPromptCache, withCacheBreakpoints } from './completions';
+import { CompletionFailure, streamCompletion, supportsPromptCache, withCacheBreakpoints } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
 /** One SSE frame. The blank-line terminator is what the parser splits on. */
@@ -240,6 +240,78 @@ describe('streamCompletion', () => {
     const instance = { post } as unknown as AxiosInstance;
 
     await expect(streamCompletion(instance, '/c', REQUEST, () => {})).rejects.toThrow(/session may have expired/);
+  });
+});
+
+describe('streamCompletion failure detail', () => {
+  it("carries the error frame's code, cause and request id, and how long it took", async () => {
+    const stream = new PassThrough();
+    const { instance } = fakeAxios(stream);
+    const done = streamCompletion(instance, '/c', REQUEST, () => {});
+    stream.write(frame({ type: 'meta', requestId: 'req-meta' }));
+    stream.write(
+      frame({
+        type: 'error',
+        message: 'Lost the connection to the model provider after 2s',
+        code: 'provider_error',
+        requestId: 'req-1',
+        cause: { kind: 'connection_lost', transportCode: 'UND_ERR_SOCKET', upstreamStatus: undefined },
+      })
+    );
+
+    const failure = await done.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(CompletionFailure);
+    expect(failure).toMatchObject({
+      message: 'Lost the connection to the model provider after 2s',
+      detail: {
+        requestId: 'req-1',
+        code: 'provider_error',
+        kind: 'connection_lost',
+        transportCode: 'UND_ERR_SOCKET',
+        elapsedMs: expect.any(Number),
+      },
+    });
+  });
+
+  it('drops a transport code that is not a plain code', async () => {
+    const stream = new PassThrough();
+    const { instance } = fakeAxios(stream);
+    const done = streamCompletion(instance, '/c', REQUEST, () => {});
+    stream.write(
+      frame({ type: 'error', message: 'x', code: 'provider_error', cause: { kind: 'timeout', transportCode: 'a b' } })
+    );
+    const failure = (await done.catch((error: unknown) => error)) as CompletionFailure;
+    expect(failure.detail).not.toHaveProperty('transportCode');
+  });
+
+  it("keeps a pre-stream refusal's status and the response's request id", async () => {
+    const post = vi.fn().mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        response: { status: 401, headers: { 'x-request-id': 'req-401' } },
+      })
+    );
+    const failure = await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQUEST, () => {}).catch(
+      (error: unknown) => error
+    );
+    expect(failure).toMatchObject({
+      message: expect.stringMatching(/session may have expired/),
+      detail: { httpStatus: 401, requestId: 'req-401', elapsedMs: expect.any(Number) },
+    });
+  });
+
+  it("names this side's own socket code when the stream to the server drops", async () => {
+    const stream = new PassThrough();
+    const { instance } = fakeAxios(stream);
+    const done = streamCompletion(instance, '/c', REQUEST, () => {});
+    stream.write(frame({ type: 'meta', requestId: 'req-meta' }));
+    await new Promise(resolve => setImmediate(resolve));
+    stream.destroy(Object.assign(new Error('aborted'), { code: 'ECONNRESET' }));
+
+    expect(await done.catch((error: unknown) => error)).toMatchObject({
+      message: 'aborted',
+      detail: { requestId: 'req-meta', transportCode: 'ECONNRESET' },
+    });
   });
 });
 

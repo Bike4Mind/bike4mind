@@ -69,6 +69,16 @@ describe('parseStreamEvent', () => {
     });
   });
 
+  it('keeps the cause on an error event, including a kind this build does not know', () => {
+    const cause = { kind: 'some_future_kind', transportCode: 'UND_ERR_SOCKET', elapsedMs: 5, idleMs: 5 };
+    expect(parseStreamEvent({ type: 'error', message: 'boom', code: 'provider_error', cause })).toEqual({
+      type: 'error',
+      message: 'boom',
+      code: 'provider_error',
+      cause,
+    });
+  });
+
   it('strips unknown keys not part of the event shape', () => {
     const event = parseStreamEvent({ type: 'content', text: 'hi', bogus: 'drop me' });
     expect(event).toEqual({ type: 'content', text: 'hi' });

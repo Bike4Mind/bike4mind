@@ -47,6 +47,7 @@ import {
   resolveOutputMaxTokens,
   type ICompletionOptions,
   type ICompletionOptionTools,
+  type ProviderCallStats,
   isModelProviderConfigured,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
@@ -105,6 +106,11 @@ export interface CompletionParams {
    * connection (e.g. res 'close') so a disconnected caller stops billing the owner.
    */
   abortSignal?: AbortSignal;
+  /**
+   * Filled in as the completion runs (provider family, provider requests, attempts) so a caller
+   * can say where a failure happened. See ProviderCallStats.
+   */
+  providerCalls?: ProviderCallStats;
   /**
    * Database repositories required for completion execution
    * ALL repositories are required for proper credit tracking and settings
@@ -423,6 +429,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   }
 
   llm.currentModel = model;
+  if (params.providerCalls && modelInfo?.backend) params.providerCalls.provider = modelInfo.backend;
 
   // Default-on with env-var kill switch. Set B4M_FEATURE_RESPONSE_FORMAT=false
   // to disable in an emergency without a redeploy.
@@ -476,6 +483,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       ? { _internal: { maxToolCalls: params.maxToolCalls } }
       : {}),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+    ...(params.providerCalls ? { providerCalls: params.providerCalls } : {}),
     ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
     ...(responseFormatEnabled && options?.response_format ? { responseFormat: options.response_format } : {}),
     // Gated on can_think as ChatCompletionProcess gates it: Ollama 400s a non-thinking model

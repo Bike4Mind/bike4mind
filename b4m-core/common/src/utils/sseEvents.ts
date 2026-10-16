@@ -1,7 +1,7 @@
 /**
  * SSE event types and helpers for CLI/API completions (ChatCompletion service and CLI client).
  */
-import type { CompletionSseErrorCode } from '../schemas/cliCompletions';
+import type { CompletionErrorCause, CompletionSseErrorCode } from '../schemas/cliCompletions';
 import type { StreamChannel } from './streamVisibility';
 import type { TurnUsage } from '../models';
 
@@ -68,6 +68,8 @@ export interface SSEErrorEvent {
    * code. Absent for unclassified errors - clients must treat it as optional.
    */
   code?: CompletionSseErrorCode;
+  /** How a `provider_error` failed; see CompletionErrorCauseSchema. Never carries upstream text. */
+  cause?: CompletionErrorCause;
 }
 
 /**
@@ -275,15 +277,22 @@ export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: 
  * @param error - Error object or message
  * @param requestId - Correlation ID to attach, when available
  * @param code - Machine-readable classifier to attach, when the caller resolved one
+ * @param cause - Sanitized failure detail, when the caller classified one
  * @returns SSE error event
  */
-export function formatSSEError(error: unknown, requestId?: string, code?: CompletionSseErrorCode): SSEErrorEvent {
+export function formatSSEError(
+  error: unknown,
+  requestId?: string,
+  code?: CompletionSseErrorCode,
+  cause?: CompletionErrorCause
+): SSEErrorEvent {
   const message = error instanceof Error ? error.message : 'Internal server error';
   return {
     type: 'error',
     message,
     ...(requestId && { requestId }),
     ...(code && { code }),
+    ...(cause && { cause }),
   };
 }
 

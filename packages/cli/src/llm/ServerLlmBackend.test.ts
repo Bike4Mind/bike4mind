@@ -159,6 +159,25 @@ describe('ServerLlmBackend SSE transport (open)', () => {
     });
   });
 
+  it.each([
+    [{ kind: 'upstream_error', upstreamStatus: 529 }, 'Model provider returned an error', 'overloaded', 529],
+    [
+      { kind: 'connection_lost', transportCode: 'UND_ERR_SOCKET', elapsedMs: 649_000, idleMs: 649_000 },
+      'Lost the connection to the model provider after 10m 49s (no data for 10m 49s)',
+      'server',
+      undefined,
+    ],
+    [{ kind: 'some_future_kind' }, 'Model provider returned an error', 'server', undefined],
+  ])('classifies a provider_error frame with cause %j as %s', async (cause, message, kind, status) => {
+    const stream = new PassThrough();
+    const done = collect(backendWith(stream));
+    stream.write(
+      `data: ${JSON.stringify({ type: 'error', message, code: 'provider_error', requestId: 'req-2', cause })}\n\n`
+    );
+    stream.end();
+    await expect(done).rejects.toMatchObject({ name: 'ModelCallError', kind, status, message, requestId: 'req-2' });
+  });
+
   it('classifies a stream that closes without [DONE] as a dropped connection', async () => {
     const stream = new PassThrough();
     const done = collect(backendWith(stream));

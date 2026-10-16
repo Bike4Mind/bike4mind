@@ -47,6 +47,7 @@ import {
   createRecursiveArtifactGuard,
   stripUnstreamedToolResult,
 } from './toolStreamingHelper';
+import { countProviderAttempts } from './providerCalls';
 import { DispatchModel } from './dispatchModel';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
@@ -1223,10 +1224,11 @@ export class OpenAIBackend implements ICompletionBackend {
 
     // Wrap with retry for transient network errors (TLS abort, fetch terminated)
     const response = await withRetry(
-      () =>
+      countProviderAttempts(options.providerCalls, () =>
         this._api.chat.completions.create(parameters as ChatCompletionCreateParams, {
           signal: options.abortSignal,
-        }),
+        })
+      ),
       {
         maxRetries: 3,
         initialDelayMs: 500,
@@ -2158,15 +2160,20 @@ export class OpenAIBackend implements ICompletionBackend {
 
     // withRetry wraps stream establishment only; a mid-stream failure surfaces during
     // iteration below and is not retried (mirrors the chat streaming path).
-    const stream = await withRetry(() => this._api.responses.create(params, { signal: options.abortSignal }), {
-      maxRetries: 3,
-      initialDelayMs: 500,
-      maxDelayMs: 10000,
-      jitterFactor: 0.25,
-      isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
-      logger: this.logger,
-      abortSignal: options.abortSignal,
-    }).then(r => r.result);
+    const stream = await withRetry(
+      countProviderAttempts(options.providerCalls, () =>
+        this._api.responses.create(params, { signal: options.abortSignal })
+      ),
+      {
+        maxRetries: 3,
+        initialDelayMs: 500,
+        maxDelayMs: 10000,
+        jitterFactor: 0.25,
+        isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
+        logger: this.logger,
+        abortSignal: options.abortSignal,
+      }
+    ).then(r => r.result);
 
     // Stream text deltas live; capture the terminal Response for usage + tool handling.
     // Usage is only known at the terminal event, so per-delta emits carry the running

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildMetaEvent, buildPublicSSEEvent, buildSSEEvent, formatSSEError, serializeSSEEvent } from './sseEvents';
+import { CompletionSseErrorEventSchema } from '../schemas/cliCompletions';
 
 describe('buildPublicSSEEvent', () => {
   // `text` is indexed by the provider's content-block/choice index, not by channel.
@@ -261,6 +262,40 @@ describe('formatSSEError', () => {
     const event = formatSSEError(new Error('boom'), 'req-1');
     expect(event).not.toHaveProperty('code');
     expect(JSON.stringify(event)).not.toContain('code');
+  });
+
+  it('attaches a cause beside the code, as a contract-valid frame', () => {
+    const cause = { kind: 'connection_lost' as const, transportCode: 'UND_ERR_SOCKET', elapsedMs: 649_000 };
+    const event = formatSSEError(new Error('Lost the connection'), 'req-3', 'provider_error', cause);
+    expect(event).toEqual({
+      type: 'error',
+      message: 'Lost the connection',
+      requestId: 'req-3',
+      code: 'provider_error',
+      cause,
+    });
+    expect(CompletionSseErrorEventSchema.safeParse(event).success).toBe(true);
+  });
+
+  it('omits the cause field when none is passed', () => {
+    expect(formatSSEError(new Error('boom'), 'req-1', 'provider_error')).not.toHaveProperty('cause');
+  });
+});
+
+describe('CompletionSseErrorEventSchema cause', () => {
+  it('rejects a transport code outside the safe shape, so free text cannot ride it', () => {
+    const frame = {
+      type: 'error',
+      message: 'x',
+      code: 'provider_error',
+      cause: { kind: 'connection_lost', transportCode: 'socket closed by https://host/?key=abc' },
+    };
+    expect(CompletionSseErrorEventSchema.safeParse(frame).success).toBe(false);
+  });
+
+  it('rejects an unknown kind', () => {
+    const frame = { type: 'error', message: 'x', cause: { kind: 'gremlins' } };
+    expect(CompletionSseErrorEventSchema.safeParse(frame).success).toBe(false);
   });
 });
 

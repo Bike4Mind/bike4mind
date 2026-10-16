@@ -26,8 +26,10 @@ describe('ChatService', () => {
   let post: ReturnType<typeof vi.fn>;
   let get: ReturnType<typeof vi.fn>;
   let apiClient: AuthenticatedApiClient | null;
+  let warn: ReturnType<typeof vi.fn<(message: string) => void>>;
 
   beforeEach(async () => {
+    warn = vi.fn<(message: string) => void>();
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-chat-')), 'test-model');
     events = [];
     stream = new PassThrough();
@@ -43,7 +45,7 @@ describe('ChatService', () => {
       store,
       // No granted roots, so no tools are declared - these cases exercise plain replies.
       access: { list: async () => [] } as unknown as AccessStore,
-      logger: { debug: vi.fn(), warn: vi.fn() },
+      logger: { debug: vi.fn(), warn },
       getApiClient: () => apiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => events.push(event),
@@ -210,6 +212,50 @@ describe('ChatService', () => {
     const failure = await waitFor(events, 'error');
     expect(failure).toMatchObject({ message: 'insufficient credits' });
     expect((await service.getSession(id))?.messages[1]).toMatchObject({ error: 'insufficient credits' });
+  });
+
+  it('logs, emits and stores what traces a failed reply to the server logs', async () => {
+    post.mockResolvedValue({ data: stream, status: 200, headers: { 'x-request-id': 'req-header' } });
+    const { id } = await service.createSession();
+    await service.send(id, 'go');
+    await waitFor(events, 'start');
+    const message = 'Lost the connection to the model provider after 10m 49s (no data for 10m 49s)';
+    stream.write(frame({ type: 'meta', requestId: 'req-meta' }));
+    stream.write(
+      frame({
+        type: 'error',
+        message,
+        code: 'provider_error',
+        requestId: 'req-frame',
+        cause: { kind: 'connection_lost', transportCode: 'UND_ERR_SOCKET', elapsedMs: 649_000, idleMs: 649_000 },
+      })
+    );
+
+    const detail = {
+      requestId: 'req-frame',
+      model: 'test-model',
+      code: 'provider_error',
+      kind: 'connection_lost',
+      transportCode: 'UND_ERR_SOCKET',
+      elapsedMs: expect.any(Number),
+    };
+    expect(await waitFor(events, 'error')).toMatchObject({ message, detail });
+    expect((await service.getSession(id))?.messages[1]).toMatchObject({ error: message, errorDetail: detail });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^CHAT: reply failed: Lost the connection .* code=provider_error kind=connection_lost transportCode=UND_ERR_SOCKET requestId=req-frame elapsedMs=\d+ model=test-model$/
+      )
+    );
+  });
+
+  it('falls back to the stream meta request id when the error frame carries none', async () => {
+    const { id } = await service.createSession();
+    await service.send(id, 'go');
+    await waitFor(events, 'start');
+    stream.write(frame({ type: 'meta', requestId: 'req-meta' }));
+    stream.write(frame({ type: 'error', message: 'Model provider returned an error', code: 'provider_error' }));
+
+    expect(await waitFor(events, 'error')).toMatchObject({ detail: { requestId: 'req-meta' } });
   });
 
   it('refuses a send while the same conversation is still replying', async () => {
