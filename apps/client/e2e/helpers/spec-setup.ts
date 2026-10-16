@@ -6,6 +6,8 @@ import { getTestRunId, saveSpecUser, getE2ETestId } from './test-users';
 interface SpecUserConfig {
   key: string;
   authFile: string;
+  /** Pass true for a spec that needs to exercise an admin-only affordance. Defaults to false. */
+  isAdmin?: boolean;
   /** Extra user tags to seed (merged with the predefined tags unless includePredefinedTags is false), e.g. ['tavern'] to grant Tavern access. */
   tags?: string[];
   /** Pass false to seed only `tags`, without the server's predefined Developer/Customer/Opti tags. */
@@ -31,7 +33,7 @@ export function setupSpecUser(config: SpecUserConfig) {
       email: `setup-${config.key}-${ID_SUFFIX}-e2e@test.com`,
       name: `Setup ${config.key} ${ID_SUFFIX}`,
       password: `E2e${config.key}Pass123!`,
-      isAdmin: false,
+      isAdmin: config.isAdmin ?? false,
       ...(config.tags && { tags: config.tags }),
       ...(config.includePredefinedTags !== undefined && { includePredefinedTags: config.includePredefinedTags }),
       ...(config.initialCredits !== undefined && { initialCredits: config.initialCredits }),
