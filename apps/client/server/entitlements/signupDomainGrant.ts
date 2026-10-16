@@ -10,12 +10,14 @@ import type { Logger } from '@bike4mind/observability';
 import { creditService, organizationService } from '@bike4mind/services';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
+import { runPartnerSignupHooks, type PartnerSignupRuleMatch } from '@server/entitlements/partnerSignupHooks';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
 import {
   notifyPartnerSignupBlockedAtCapacity,
   notifySeatCeilingRaised,
   type SeatCeilingRaiseTrigger,
 } from '@server/organizations/notifySeatCeilingRaised';
+import { premiumPartnerSignupHooks } from '@server/premium-generated/premiumPartnerSignupHooks.generated';
 
 export type SignupDomainGrantResult = {
   /** Domain signup credits added by this call; 0 when none applied or the grant failed. */
@@ -39,6 +41,9 @@ const NO_GRANT: SignupDomainGrantResult = { creditsGranted: 0, currentCredits: n
  * the env registry is the fallback for a domain not yet in the collection, and `matched` lets a rule
  * grant access with 0 bonus credits without falling through to the env amount.
  *
+ * A matched DB rule then runs the overlay partner signup hooks (./partnerSignupHooks.ts), but only
+ * when no core step failed: a failed step is retried by a later run, which reaches the hooks then.
+ *
  * Never throws: each step logs and swallows its own failure so the caller's already-successful
  * verification or signup is never failed. Both the credit grant (stable
  * `domain-grant-credits:${userId}` transactionId) and the membership write are idempotent, so a
@@ -54,18 +59,22 @@ export async function applySignupDomainGrant(params: {
 
   let domainGrantKeys: Set<string>;
   let signupCredits: number;
-  // Only a DB rule can confer org membership; the env registry has no org concept.
-  let partnerOrganizationId: string | null;
+  // Only a DB rule can confer org membership or run partner hooks; the env registry has neither.
+  let partnerRule: PartnerSignupRuleMatch | null;
   try {
     const partnerGrant = await partnerSignupGrantForEmail(email, true);
     if (partnerGrant.matched) {
       domainGrantKeys = partnerGrant.entitlements;
       signupCredits = partnerGrant.signupCredits;
-      partnerOrganizationId = partnerGrant.organizationId;
+      partnerRule = {
+        id: partnerGrant.ruleId,
+        domain: partnerGrant.domain,
+        organizationId: partnerGrant.organizationId,
+      };
     } else {
       domainGrantKeys = entitlementsForEmail(email, true);
       signupCredits = signupCreditsForKeys(domainGrantKeys);
-      partnerOrganizationId = null;
+      partnerRule = null;
     }
   } catch (resolveError) {
     logger.error(`Signup domain grant could not be resolved for user ${userId} (${trigger})`, resolveError);
@@ -73,6 +82,7 @@ export async function applySignupDomainGrant(params: {
   }
 
   const result: SignupDomainGrantResult = { ...NO_GRANT };
+  let coreStepFailed = false;
 
   if (signupCredits > 0) {
     try {
@@ -99,11 +109,22 @@ export async function applySignupDomainGrant(params: {
           `idempotent transactionId domain-grant-credits:${userId} makes a retry safe`,
         grantError
       );
+      coreStepFailed = true;
     }
   }
 
-  if (partnerOrganizationId) {
-    result.joinedOrganizationId = await applyPartnerMembership(userId, partnerOrganizationId, trigger, logger);
+  if (partnerRule?.organizationId) {
+    const membership = await applyPartnerMembership(userId, partnerRule.organizationId, trigger, logger);
+    if (membership.ok) {
+      result.joinedOrganizationId = membership.joinedOrganizationId;
+    } else {
+      coreStepFailed = true;
+    }
+  }
+
+  // Before the invalidation push, so the wake-up also covers whatever state a hook wrote.
+  if (partnerRule && !coreStepFailed) {
+    await runPartnerSignupHooks(premiumPartnerSignupHooks, { userId, rule: partnerRule, trigger, logger });
   }
 
   if (domainGrantKeys.size > 0) {
@@ -113,16 +134,19 @@ export async function applySignupDomainGrant(params: {
   return result;
 }
 
+type PartnerMembershipOutcome = { ok: true; joinedOrganizationId: string | null } | { ok: false };
+
 /**
  * Derive-on-write org membership for a partner rule. applyPartnerRuleMembership re-reads the
- * verified user, is idempotent, and never removes anyone. Returns the org id when the user was added.
+ * verified user, is idempotent, and never removes anyone. `joinedOrganizationId` is the org id when
+ * the user was added; at-capacity and org-missing are handled outcomes, only a thrown write is not ok.
  */
 async function applyPartnerMembership(
   userId: string,
   organizationId: string,
   trigger: SeatCeilingRaiseTrigger,
   logger: Logger
-): Promise<string | null> {
+): Promise<PartnerMembershipOutcome> {
   try {
     const membership = await organizationService.applyPartnerRuleMembership(
       { userId, organizationId },
@@ -146,7 +170,7 @@ async function applyPartnerMembership(
           logger
         );
       }
-      return organizationId;
+      return { ok: true, joinedOrganizationId: organizationId };
     }
     if (membership.reason === 'at-capacity') {
       // No auto-raise: a Stripe-billed org (ceiling not raised out of band) or a non-Stripe org
@@ -162,6 +186,7 @@ async function applyPartnerMembership(
         `membership is idempotent so a retry is safe`,
       membershipError
     );
+    return { ok: false };
   }
-  return null;
+  return { ok: true, joinedOrganizationId: null };
 }

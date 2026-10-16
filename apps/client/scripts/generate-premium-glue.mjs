@@ -14,6 +14,7 @@
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
  *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
+ *   server/premium-generated/premiumPartnerSignupHooks.generated.ts - post-signup partner-rule hooks
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
@@ -1043,6 +1044,40 @@ function generateSystemPrompts(packages) {
   );
 }
 
+// Premium packages can run their own grant after a partner signup rule matches
+// (b4mContributions.partnerSignupHooksExport -> a module exporting `partnerSignupHooks:
+// PartnerSignupHook[]`). server/entitlements/signupDomainGrant.ts statically imports this
+// file, so like the LLM tools it must exist in BOTH forms.
+function generatePartnerSignupHooks(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumPartnerSignupHooks.generated.ts');
+  const typeImport = `import type { PartnerSignupHook } from '@server/entitlements/partnerSignupHooks';`;
+
+  const contributors = packages.filter(p => p.contributions.partnerSignupHooksExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumPartnerSignupHooks: PartnerSignupHook[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.partnerSignupHooksExport, p.name, 'partnerSignupHooksExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => `import { partnerSignupHooks as hooks${i} } from '${p.contributions.partnerSignupHooksExport}';`)
+    .join('\n');
+
+  const spreads = contributors.map((_, i) => `  ...hooks${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumPartnerSignupHooks: PartnerSignupHook[] = [\n${spreads}\n];\n`
+  );
+}
+
 // --- Generate premium migrations ---
 
 // Premium overlays contribute DB migrations (b4mContributions.migrationsExport -> a module
@@ -1303,6 +1338,7 @@ generateApiStubs(linkedPackages);
 generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
+generatePartnerSignupHooks(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);

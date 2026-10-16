@@ -41,6 +41,11 @@ vi.mock('@server/organizations/notifySeatCeilingRaised', () => ({
   notifyPartnerSignupBlockedAtCapacity: (...a: unknown[]) => mockNotifyAtCapacity(...a),
 }));
 
+const { premiumPartnerSignupHooks } = vi.hoisted(() => ({
+  premiumPartnerSignupHooks: [] as { name: string; run: (context: unknown) => Promise<void> }[],
+}));
+vi.mock('@server/premium-generated/premiumPartnerSignupHooks.generated', () => ({ premiumPartnerSignupHooks }));
+
 import { applySignupDomainGrant } from './signupDomainGrant';
 
 const makeLogger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() });
@@ -58,10 +63,13 @@ describe('applySignupDomainGrant', () => {
     vi.clearAllMocks();
     mockPartnerGrant.mockResolvedValue({
       matched: true,
+      ruleId: 'rule-1',
+      domain: 'partner.example',
       entitlements: new Set(['optihashi:pro']),
       signupCredits: 1000,
       organizationId: 'org-1',
     });
+    premiumPartnerSignupHooks.length = 0;
     mockAddCredits.mockResolvedValue({ currentCredits: 1100 });
     mockApplyPartnerRuleMembership.mockResolvedValue({ added: true, reason: 'added' });
     mockEntitlementsForEmail.mockReturnValue(new Set());
@@ -103,6 +111,8 @@ describe('applySignupDomainGrant', () => {
   it('honours a matched rule with 0 credits without falling through to the env amount', async () => {
     mockPartnerGrant.mockResolvedValue({
       matched: true,
+      ruleId: 'rule-1',
+      domain: 'partner.example',
       entitlements: new Set(['optihashi:pro']),
       signupCredits: 0,
       organizationId: null,
@@ -173,5 +183,88 @@ describe('applySignupDomainGrant', () => {
     expect(mockAddCredits).not.toHaveBeenCalled();
     expect(mockPushInvalidation).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
+  });
+
+  describe('partner signup hooks', () => {
+    const mockHook = vi.fn();
+    beforeEach(() => {
+      mockHook.mockResolvedValue(undefined);
+      premiumPartnerSignupHooks.push({ name: 'overlay-grant', run: mockHook });
+    });
+
+    it('runs with the matched rule after the core grant, before the entitlement wake-up', async () => {
+      await run();
+
+      expect(mockHook).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          rule: { id: 'rule-1', domain: 'partner.example', organizationId: 'org-1' },
+          trigger: 'oauth-signup',
+        })
+      );
+      expect(mockHook.mock.invocationCallOrder[0]).toBeGreaterThan(mockAddCredits.mock.invocationCallOrder[0]);
+      expect(mockHook.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mockApplyPartnerRuleMembership.mock.invocationCallOrder[0]
+      );
+      expect(mockHook.mock.invocationCallOrder[0]).toBeLessThan(mockPushInvalidation.mock.invocationCallOrder[0]);
+    });
+
+    it('runs for a matched rule even when the org is at capacity', async () => {
+      mockApplyPartnerRuleMembership.mockResolvedValue({ added: false, reason: 'at-capacity', seats: 10 });
+
+      await run();
+
+      expect(mockHook).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not run when only the env registry matched', async () => {
+      mockPartnerGrant.mockResolvedValue({
+        matched: false,
+        entitlements: new Set(),
+        signupCredits: 0,
+        organizationId: null,
+      });
+      mockEntitlementsForEmail.mockReturnValue(new Set(['optihashi:pro']));
+      mockSignupCreditsForKeys.mockReturnValue(250);
+
+      await run();
+
+      expect(mockHook).not.toHaveBeenCalled();
+    });
+
+    it('does not run when the credit grant failed', async () => {
+      mockAddCredits.mockRejectedValue(new Error('ledger down'));
+
+      await run();
+
+      expect(mockHook).not.toHaveBeenCalled();
+    });
+
+    it('does not run when the membership write failed', async () => {
+      mockApplyPartnerRuleMembership.mockRejectedValue(new Error('org store down'));
+
+      await run();
+
+      expect(mockHook).not.toHaveBeenCalled();
+    });
+
+    it('does not run when the rule lookup failed', async () => {
+      mockPartnerGrant.mockRejectedValue(new Error('rules down'));
+
+      await run();
+
+      expect(mockHook).not.toHaveBeenCalled();
+    });
+
+    it('logs a throwing hook and still returns the core grant result', async () => {
+      mockHook.mockRejectedValue(new Error('overlay down'));
+      const logger = makeLogger();
+
+      const result = await run(logger);
+
+      expect(result).toEqual({ creditsGranted: 1000, currentCredits: 1100, joinedOrganizationId: 'org-1' });
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('overlay-grant'), expect.any(Error));
+      expect(mockPushInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
+    });
   });
 });
