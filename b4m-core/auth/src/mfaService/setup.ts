@@ -56,6 +56,9 @@ export async function setupMFA(
       setupAt: new Date(),
       lastUsedAt: undefined,
     },
+    // The step counter is a global clock, not tied to this secret: clear it so a code from the
+    // NEW secret is not refused as a replay of one claimed before re-enrollment.
+    totpLastStep: null,
     updatedAt: new Date(),
   });
 
