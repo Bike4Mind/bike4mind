@@ -525,6 +525,25 @@ describe('AuthService token refresh', () => {
     service.dispose();
   });
 
+  it('ends the session when the timer fires over a vault another instance emptied', async () => {
+    const file = memoryFile();
+    const refreshToken = vi.fn();
+    const { service, vault } = await signedIn(refreshToken, file);
+    // Another instance over the same userData signs out, then a reload drops the copy this one
+    // would otherwise answer from - the state a 401 elsewhere leaves behind before the timer runs.
+    await new TokenVault(cipher, file, silentLogger).clearTokens(HOSTED);
+    expect(await vault.reloadTokens(HOSTED)).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(service.getState()).toMatchObject({
+      status: 'signed-out',
+      error: { message: 'You were signed out in another window. Sign in again.', remedy: 'retry-sign-in' },
+    });
+    expect(refreshToken).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
   it('ignores a clear reported by a client built for an environment the user has left', async () => {
     const { service, cleared } = await signedIn(vi.fn(), memoryFile());
     await service.setEnvironment({ preset: 'custom', customUrl: 'https://other.example.com' });
