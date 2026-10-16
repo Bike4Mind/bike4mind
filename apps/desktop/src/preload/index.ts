@@ -33,7 +33,7 @@ import type { PrBarState, PrOption, PrSummaryEvent } from '@shared/pullRequest';
 import type { TerminalCreateRequest, TerminalDataEvent, TerminalsChangedEvent } from '@shared/terminal';
 import type { UpdateState } from '@shared/update';
 import type { UsageWindowId } from '@shared/usage';
-import type { FleetSettingsInput, FleetState } from '@shared/fleet';
+import type { FleetState } from '@shared/fleet';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
 // passthrough: a passthrough would let renderer code reach every handler main ever
@@ -77,10 +77,8 @@ const api: DesktopApi = {
   },
   fleet: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.fleetGetState),
-    save: (input: FleetSettingsInput) => ipcRenderer.invoke(IPC_CHANNELS.fleetSave, input),
-    forgetKey: () => ipcRenderer.invoke(IPC_CHANNELS.fleetForgetKey),
+    refresh: () => ipcRenderer.invoke(IPC_CHANNELS.fleetRefresh),
     setConsent: (consent: boolean) => ipcRenderer.invoke(IPC_CHANNELS.fleetSetConsent, consent),
-    testConnection: () => ipcRenderer.invoke(IPC_CHANNELS.fleetTestConnection),
     sendNow: () => ipcRenderer.invoke(IPC_CHANNELS.fleetSendNow),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: FleetState) => listener(state);

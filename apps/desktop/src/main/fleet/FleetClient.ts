@@ -1,8 +1,4 @@
-import type { FleetConnectionCheck } from '@shared/fleet';
-import type { ActivityBatch } from './activityContract';
-
-const STATUS_PATH = '/api/integrations/bike4mind/status';
-const INGEST_PATH = '/api/integrations/bike4mind/v1/activity';
+const LOGS_PATH = '/v1/logs';
 const REQUEST_TIMEOUT_MS = 15_000;
 
 export type FetchPort = (url: string, init: RequestInit) => Promise<Response>;
@@ -10,13 +6,13 @@ export type FetchPort = (url: string, init: RequestInit) => Promise<Response>;
 /**
  * How a send ended, as the queue acts on it.
  *
- * - `accepted`: Fleet stored the batch (fresh and duplicate events alike); drop it.
+ * - `accepted`: Fleet took the export; drop the batch. Fleet dedupes on event id, so a resend is harmless.
  * - `rejected`: Fleet will never take this batch (400, 413, 415); drop it rather than retry.
- * - `unauthorized`: the key is bad, revoked, expired or lacks the scope; stop until it changes.
+ * - `unauthorized`: the installer's key is wrong or rotated; stop until the file's key changes.
  * - `retry`: the network or Fleet itself failed; keep the batch, same ids, and try later.
  */
 export type IngestOutcome =
-  | { kind: 'accepted'; accepted: number; duplicates: number }
+  | { kind: 'accepted' }
   | { kind: 'rejected'; status: number }
   | { kind: 'unauthorized'; status: number }
   | { kind: 'retry'; status: number | null };
@@ -37,7 +33,7 @@ export function fleetOrigin(raw: string): string | null {
 }
 
 /**
- * Talks to Fleet from main.
+ * Posts OTLP logs to Fleet from main.
  *
  * Main only, never the renderer: Fleet refuses any request carrying a foreign `Origin` or a
  * cross-site `Sec-Fetch-Site`, which a renderer fetch always sends and a Node fetch never does.
@@ -46,65 +42,23 @@ export function fleetOrigin(raw: string): string | null {
 export class FleetClient {
   constructor(private readonly fetchImpl: FetchPort = (url, init) => fetch(url, init)) {}
 
-  async status(origin: string, key: string, now: number): Promise<FleetConnectionCheck> {
+  async sendLogs(origin: string, key: string, body: unknown): Promise<IngestOutcome> {
     let response: Response;
     try {
-      response = await this.request(`${origin}${STATUS_PATH}`, { method: 'GET', headers: this.headers(key) });
-    } catch {
-      return { ok: false, at: now, error: 'Could not reach Fleet.', refused: false };
-    }
-    if (response.status === 200) {
-      const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-      const capabilities = (body?.capabilities ?? {}) as Record<string, unknown>;
-      if (body?.connected !== true || typeof body.consumer !== 'string' || !Array.isArray(body.scopes)) {
-        return { ok: false, at: now, error: 'Fleet answered in a shape this app does not understand.', refused: false };
-      }
-      return {
-        ok: true,
-        at: now,
-        consumer: body.consumer,
-        scopes: body.scopes.filter((scope): scope is string => typeof scope === 'string'),
-        capabilities: {
-          status: capabilities.status === true,
-          activityIngest: capabilities.activityIngest === true,
-          summary: capabilities.summary === true,
-        },
-      };
-    }
-    return {
-      ok: false,
-      at: now,
-      error: statusError(response.status),
-      refused: response.status === 401 || response.status === 403,
-    };
-  }
-
-  async ingest(origin: string, key: string, batch: ActivityBatch): Promise<IngestOutcome> {
-    let response: Response;
-    try {
-      response = await this.request(`${origin}${INGEST_PATH}`, {
+      response = await this.request(`${origin}${LOGS_PATH}`, {
         method: 'POST',
-        headers: { ...this.headers(key), 'Content-Type': 'application/json' },
-        body: JSON.stringify(batch),
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body),
       });
     } catch {
       return { kind: 'retry', status: null };
     }
-    if (response.status === 200) {
-      const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-      const accepted = typeof body?.accepted === 'number' ? body.accepted : 0;
-      const duplicates = typeof body?.duplicates === 'number' ? body.duplicates : 0;
-      return { kind: 'accepted', accepted, duplicates };
-    }
+    if (response.status >= 200 && response.status < 300) return { kind: 'accepted' };
     if (response.status === 401 || response.status === 403) return { kind: 'unauthorized', status: response.status };
     if (response.status === 400 || response.status === 413 || response.status === 415) {
       return { kind: 'rejected', status: response.status };
     }
     return { kind: 'retry', status: response.status };
-  }
-
-  private headers(key: string): Record<string, string> {
-    return { Authorization: `Bearer ${key}`, Accept: 'application/json' };
   }
 
   private async request(url: string, init: RequestInit): Promise<Response> {
@@ -116,12 +70,4 @@ export class FleetClient {
       clearTimeout(timer);
     }
   }
-}
-
-function statusError(status: number): string {
-  if (status === 401) return 'Fleet did not accept this key. It may be wrong, revoked or expired.';
-  if (status === 403) return 'This key does not carry a Bike4Mind activity scope.';
-  if (status === 404) return 'This Fleet does not have the Bike4Mind integration.';
-  if (status === 503) return 'Fleet could not check the key right now. Try again shortly.';
-  return `Fleet answered ${status}.`;
 }

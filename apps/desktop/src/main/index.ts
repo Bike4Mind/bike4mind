@@ -192,7 +192,7 @@ void app.whenReady().then(async () => {
 
   app.once('will-quit', () => {
     auth.dispose();
-    fleet.service.dispose();
+    fleet.dispose();
     chat.dispose();
     pullRequests.dispose();
     updates.dispose();

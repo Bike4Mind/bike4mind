@@ -1,55 +1,46 @@
 /**
  * The Fleet activity integration, as it crosses the contextBridge.
  *
- * Credential-free like the rest of the bridge: the access key is written into main once, when
- * the user saves it, and never read back. The renderer only learns whether one is configured.
+ * Desktop reads its Fleet connection from the file Fleet's installer writes, and the key in it
+ * stays in main: the renderer learns only whether the file is there and usable, and for whom.
  */
 
-/** Whether the OS keychain can hold the key across restarts. */
-export type FleetKeyStorage = 'available' | 'unavailable';
+/**
+ * What the installer file says.
+ *
+ * - `not-installed`: no file. The Fleet installer has not run here, or ran before Desktop was installed.
+ * - `insecure`: the file is readable by other users, so it is ignored.
+ * - `invalid`: the file is there but not one this app can use.
+ * - `no-email`: usable, but names nobody, so Fleet could not attribute the activity.
+ * - `connected`: usable.
+ */
+export type FleetConnection = 'not-installed' | 'insecure' | 'invalid' | 'no-email' | 'connected';
 
 /**
  * Where sending stands.
  *
- * - `not-configured`: no URL or no key, so nothing can be sent.
- * - `paused`: configured, but activity sharing is off. Nothing is recorded or sent.
- * - `active`: configured and sharing; batches go out as activity accrues.
- * - `reconnect-needed`: Fleet refused the key (401/403). Sending stops until the key changes.
+ * - `not-configured`: no usable installer file, so nothing is recorded or sent.
+ * - `paused`: connected, but activity sharing is off. Nothing is recorded or sent.
+ * - `active`: connected and sharing; batches go out as activity accrues.
+ * - `reconnect-needed`: Fleet refused the key (401/403). Sending stops until the file's key changes.
  */
 export type FleetSendStatus = 'not-configured' | 'paused' | 'active' | 'reconnect-needed';
 
-/** What Fleet said about the key, from the status handshake. */
-export type FleetConnectionCheck =
-  | {
-      ok: true;
-      at: number;
-      consumer: string;
-      scopes: string[];
-      capabilities: { status: boolean; activityIngest: boolean; summary: boolean };
-    }
-  /** `refused`: Fleet answered 401/403, so the key itself is the problem, not the network. */
-  | { ok: false; at: number; error: string; refused: boolean };
-
 export interface FleetState {
-  url: string;
-  /** What `url` falls back to when the user clears it. */
-  defaultUrl: string;
-  keyConfigured: boolean;
-  keyStorage: FleetKeyStorage;
+  connection: FleetConnection;
+  /** Where the installer file is looked for, with the home directory as `~`. */
+  configPath: string;
+  /** The Fleet origin from the file, when it has a usable one. */
+  fleetUrl: string | null;
+  /** Who the file says this machine's activity belongs to. */
+  email: string | null;
   consent: boolean;
   status: FleetSendStatus;
   /** Events waiting to be sent. */
   pending: number;
   lastSentAt: number | null;
-  /** The last batch's outcome, for the settings card. Never carries activity content. */
-  lastResult: { accepted: number; duplicates: number } | null;
+  /** How many events the last batch carried. Never carries activity content. */
+  lastResult: { sent: number } | null;
   /** A short, user-facing reason the last send did not land. */
   lastError: string | null;
-  lastCheck: FleetConnectionCheck | null;
-}
-
-/** Saved from the settings card. An absent `key` keeps the one already stored. */
-export interface FleetSettingsInput {
-  url: string;
-  key?: string;
 }

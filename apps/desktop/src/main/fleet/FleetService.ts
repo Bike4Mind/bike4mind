@@ -1,21 +1,25 @@
-import type { FleetConnectionCheck, FleetSettingsInput, FleetState } from '@shared/fleet';
+import type { FleetState } from '@shared/fleet';
 import type { ActivityEvent } from './activityContract';
 import { MAX_BATCH_EVENTS } from './activityContract';
 import type { ActivityQueue } from './ActivityQueue';
-import { fleetOrigin, type FleetClient } from './FleetClient';
+import type { FleetClient } from './FleetClient';
+import type { FleetConfig, FleetConfigResult } from './FleetConfig';
 import type { FleetSettingsStore } from './FleetSettingsStore';
+import { toOtlpLogs } from './otlp';
 
 /** How long activity gathers before a send, unless a full batch is already waiting. */
 export const FLUSH_DELAY_MS = 60_000;
 const MAX_BACKOFF_MS = 30 * 60_000;
 
-const KEY_RE = /^flmt_[0-9a-f]{12}_[0-9a-f]{48}$/;
-
 export interface FleetServiceDeps {
   settings: FleetSettingsStore;
   queue: ActivityQueue;
   client: FleetClient;
-  defaultUrl: string;
+  /** Reads Fleet's installer file; called at start and on every refresh. */
+  readConfig(): Promise<FleetConfigResult>;
+  /** The installer file's path for display, home as `~`. */
+  configPath: string;
+  appVersion: string;
   logger: { warn(message: string): void };
   onState(state: FleetState): void;
   now?(): number;
@@ -23,105 +27,71 @@ export interface FleetServiceDeps {
   clearTimer?(handle: unknown): void;
 }
 
-export type SaveResult = { ok: true; state: FleetState } | { ok: false; error: string };
-
 /**
- * Owns the Fleet integration in main: settings, the consent gate, and the send loop.
+ * Owns the Fleet integration in main: the installer file, the consent gate, and the send loop.
  *
- * Nothing is recorded, queued or sent while consent is off, and turning it off empties the
- * queue. A 401 or 403 from Fleet stops sending until the key or URL changes, since retrying a
- * refused key only fills Fleet's deny log.
+ * Nothing is recorded, queued or sent while consent is off or the file is unusable, and turning
+ * consent off empties the queue. A 401 or 403 stops sending until the file's key changes, which
+ * is what rerunning the Fleet installer after a key rotation does.
  */
 export class FleetService {
-  private url: string;
+  private config: FleetConfigResult = { kind: 'not-installed' };
   private consent = false;
-  private key: string | null = null;
-  private reconnectNeeded = false;
+  private refusedKey: string | null = null;
   private pending = 0;
   private lastSentAt: number | null = null;
   private lastResult: FleetState['lastResult'] = null;
   private lastError: string | null = null;
-  private lastCheck: FleetConnectionCheck | null = null;
   private timer: unknown = null;
   private flushing: Promise<void> | null = null;
   private failures = 0;
 
-  constructor(private readonly deps: FleetServiceDeps) {
-    this.url = deps.defaultUrl;
-  }
+  constructor(private readonly deps: FleetServiceDeps) {}
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
   }
 
   async initialize(): Promise<void> {
-    const stored = await this.deps.settings.read();
-    this.url = stored.url ?? this.deps.defaultUrl;
-    this.consent = stored.consent;
-    this.key = stored.key;
+    this.consent = (await this.deps.settings.read()).consent;
+    this.config = await this.deps.readConfig();
     this.pending = await this.deps.queue.size();
     this.publish();
     if (this.status() === 'active' && this.pending > 0) this.schedule(0);
   }
 
   getState(): FleetState {
+    const usable = this.usable();
     return {
-      url: this.url,
-      defaultUrl: this.deps.defaultUrl,
-      keyConfigured: this.key !== null,
-      keyStorage: this.deps.settings.keyStorage(),
+      connection: this.config.kind,
+      configPath: this.deps.configPath,
+      fleetUrl: 'config' in this.config ? this.config.config.endpoint : null,
+      email: usable?.email ?? null,
       consent: this.consent,
       status: this.status(),
       pending: this.pending,
       lastSentAt: this.lastSentAt,
       lastResult: this.lastResult,
       lastError: this.lastError,
-      lastCheck: this.lastCheck,
     };
   }
 
   /** Whether chat activity should be turned into events at all. */
   recording(): boolean {
-    return this.consent && this.key !== null;
+    return this.consent && this.usable() !== null;
   }
 
-  async save(input: FleetSettingsInput): Promise<SaveResult> {
-    const raw = typeof input?.url === 'string' ? input.url.trim() : '';
-    const origin = raw === '' ? fleetOrigin(this.deps.defaultUrl) : fleetOrigin(raw);
-    if (!origin) return { ok: false, error: 'Enter an https:// Fleet URL.' };
-
-    let key = this.key;
-    if (typeof input.key === 'string' && input.key.trim() !== '') {
-      key = input.key.trim();
-      if (!KEY_RE.test(key)) return { ok: false, error: 'That does not look like a Fleet machine key (flmt_...).' };
-    }
-
-    const changed = origin !== this.url || key !== this.key;
-    this.url = origin;
-    await this.deps.settings.setUrl(origin === fleetOrigin(this.deps.defaultUrl) ? null : origin);
-    if (key !== this.key) {
-      this.key = key;
-      await this.deps.settings.setKey(key);
-    }
-    if (changed) {
-      this.reconnectNeeded = false;
-      this.lastError = null;
-      this.lastCheck = null;
+  /** Read the installer file again, and resume sending if its key changed since Fleet refused one. */
+  async refresh(): Promise<FleetState> {
+    const before = this.usable()?.key ?? null;
+    this.config = await this.deps.readConfig();
+    const after = this.usable()?.key ?? null;
+    if (after !== before) {
       this.failures = 0;
+      if (this.refusedKey !== null && this.refusedKey !== after) this.lastError = null;
     }
-    if (this.key) await this.check();
     this.publish();
-    if (this.status() === 'active' && this.pending > 0) this.schedule(0);
-    return { ok: true, state: this.getState() };
-  }
-
-  async forgetKey(): Promise<FleetState> {
-    this.key = null;
-    this.reconnectNeeded = false;
-    this.lastCheck = null;
-    await this.deps.settings.setKey(null);
-    this.cancelTimer();
-    this.publish();
+    if (this.status() === 'active' && this.pending > 0 && this.timer === null) this.schedule(0);
     return this.getState();
   }
 
@@ -135,12 +105,6 @@ export class FleetService {
     }
     this.publish();
     if (this.status() === 'active' && this.pending > 0) this.schedule(0);
-    return this.getState();
-  }
-
-  async testConnection(): Promise<FleetState> {
-    await this.check();
-    this.publish();
     return this.getState();
   }
 
@@ -166,17 +130,16 @@ export class FleetService {
     this.cancelTimer();
   }
 
-  private status(): FleetState['status'] {
-    if (!this.key) return 'not-configured';
-    if (this.reconnectNeeded) return 'reconnect-needed';
-    return this.consent ? 'active' : 'paused';
+  /** The config only when Fleet could attribute what is sent: a file with no email would be dropped there. */
+  private usable(): FleetConfig | null {
+    return this.config.kind === 'connected' ? this.config.config : null;
   }
 
-  private async check(): Promise<void> {
-    if (!this.key) return;
-    this.lastCheck = await this.deps.client.status(this.url, this.key, this.now());
-    if (this.lastCheck.ok) this.reconnectNeeded = false;
-    else if (this.lastCheck.refused) this.reconnectNeeded = true;
+  private status(): FleetState['status'] {
+    const config = this.usable();
+    if (!config) return 'not-configured';
+    if (this.refusedKey === config.key) return 'reconnect-needed';
+    return this.consent ? 'active' : 'paused';
   }
 
   private flush(): Promise<void> {
@@ -189,18 +152,25 @@ export class FleetService {
   }
 
   private async drain(): Promise<void> {
-    while (this.status() === 'active' && this.key) {
+    while (this.status() === 'active') {
+      const config = this.usable();
+      if (!config) break;
       const batch = await this.deps.queue.peek();
       this.pending = await this.deps.queue.size();
       if (!batch) break;
       const ids = batch.events.map(event => event.eventId);
-      const outcome = await this.deps.client.ingest(this.url, this.key, batch);
+      const body = toOtlpLogs(batch, {
+        appVersion: this.deps.appVersion,
+        email: config.email,
+        installId: config.installId,
+      });
+      const outcome = await this.deps.client.sendLogs(config.endpoint, config.key, body);
 
       if (outcome.kind === 'accepted') {
         await this.deps.queue.remove(ids);
         this.failures = 0;
         this.lastSentAt = this.now();
-        this.lastResult = { accepted: outcome.accepted, duplicates: outcome.duplicates };
+        this.lastResult = { sent: ids.length };
         this.lastError = null;
       } else if (outcome.kind === 'rejected') {
         // Fleet will never take this batch, so retrying it would wedge everything behind it.
@@ -208,8 +178,8 @@ export class FleetService {
         this.deps.logger.warn(`FLEET: Fleet rejected an activity batch (${outcome.status}); dropped it`);
         this.lastError = `Fleet rejected a batch (${outcome.status}); it was dropped.`;
       } else if (outcome.kind === 'unauthorized') {
-        this.reconnectNeeded = true;
-        this.lastError = 'Fleet refused the key. Paste a new one to resume.';
+        this.refusedKey = config.key;
+        this.lastError = 'Fleet refused the installer key. Run the Fleet installer again to update it.';
         this.deps.logger.warn(`FLEET: Fleet refused the key (${outcome.status}); sending stopped`);
       } else {
         this.failures += 1;
