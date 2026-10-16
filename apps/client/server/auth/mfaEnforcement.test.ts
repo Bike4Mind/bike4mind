@@ -26,6 +26,12 @@ describe('readEnforceMfa', () => {
     await readEnforceMfa();
     expect(mockGetSettingsMap).toHaveBeenCalledWith(expect.anything(), { skipCache: true, names: ['enforceMFA'] });
   });
+
+  it('binds only a boolean true, not the legacy string', async () => {
+    // The stored value may be a boolean or a legacy string; only a real true enables enforcement.
+    mockSettingsValue.mockReturnValue('true');
+    expect(await readEnforceMfa()).toBe(false);
+  });
 });
 
 describe('isMfaEnrollmentOwed', () => {
@@ -38,6 +44,8 @@ describe('isMfaEnrollmentOwed', () => {
   it('is never owed by an admin impersonation session', async () => {
     mockSettingsValue.mockReturnValue(true);
     expect(await isMfaEnrollmentOwed(user(false), { impersonatedBy: 'admin-1' })).toBe(false);
+    // Exempt before the settings read, so an impersonating admin never pays for it.
+    expect(mockGetSettingsMap).not.toHaveBeenCalled();
   });
 
   it('is not owed while enforcement is off', async () => {
