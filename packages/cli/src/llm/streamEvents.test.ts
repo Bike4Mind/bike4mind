@@ -79,6 +79,13 @@ describe('parseStreamEvent', () => {
     });
   });
 
+  it('still delivers an error event whose cause is malformed', () => {
+    expect(parseStreamEvent({ type: 'error', message: 'boom', cause: { upstreamStatus: 'n/a' } })).toEqual({
+      type: 'error',
+      message: 'boom',
+    });
+  });
+
   it('strips unknown keys not part of the event shape', () => {
     const event = parseStreamEvent({ type: 'content', text: 'hi', bogus: 'drop me' });
     expect(event).toEqual({ type: 'content', text: 'hi' });

@@ -11,6 +11,26 @@ describe('toolStarted', () => {
   });
 });
 
+describe('error frames', () => {
+  it('keeps the code, request id and cause', () => {
+    const frame = {
+      type: 'error',
+      message: 'Lost the connection',
+      code: 'provider_error',
+      requestId: 'r1',
+      cause: { kind: 'connection_lost', transportCode: 'UND_ERR_SOCKET', upstreamStatus: 502 },
+    };
+    expect(parseStreamEvent(frame)).toEqual(frame);
+  });
+
+  // Dropping the frame would end the stream with no error at all, which reads as an empty reply.
+  it('still delivers the error when its cause is malformed', () => {
+    expect(
+      parseStreamEvent({ type: 'error', message: 'boom', cause: { kind: 'timeout', upstreamStatus: 'n/a' } })
+    ).toEqual({ type: 'error', message: 'boom' });
+  });
+});
+
 describe('usage parsing', () => {
   it('keeps the cache counts and the credits the server sends', () => {
     const event = parseStreamEvent({

@@ -66,14 +66,16 @@ export const streamEventSchema = z.discriminatedUnion('type', [
     message: z.string().optional(),
     code: z.string().optional(),
     requestId: z.string().optional(),
-    // How a provider_error failed. Open strings, so a code or kind added later still parses.
+    // How a provider_error failed. Open strings, so a code or kind added later still parses; a
+    // malformed cause is dropped rather than taking the whole error frame down with it.
     cause: z
       .object({
         kind: z.string().optional(),
         transportCode: z.string().optional(),
         upstreamStatus: z.number().optional(),
       })
-      .optional(),
+      .optional()
+      .catch(undefined),
   }),
   // Opens the stream and carries the server's request id; nothing downstream needs it yet,
   // but parsing it keeps it out of the "unrecognized event" path.

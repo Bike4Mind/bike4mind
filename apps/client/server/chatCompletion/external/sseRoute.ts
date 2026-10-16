@@ -101,7 +101,7 @@ function toJsonError(
  * A failure after onReady: a typed in-band frame that never carries the raw upstream body, its
  * headers or a stack. `cause` is already reduced to the classification, safe codes and timing.
  */
-export function toStreamErrorFrame(error: unknown, requestId: string, cause?: CompletionErrorCause): SSEErrorEvent {
+function toStreamErrorFrame(error: unknown, requestId: string, cause?: CompletionErrorCause): SSEErrorEvent {
   const questCode = resolveQuestErrorCode(error);
   let frameError: unknown = error;
   let code: CompletionSseErrorCode | undefined = questCode;
