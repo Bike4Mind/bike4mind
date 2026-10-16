@@ -32,7 +32,7 @@ import { recordSessionOperationalUsage } from '@workers/events/recordSessionOper
 
 export const handler = withEventContext(async (event, logger) => {
   const body = SessionEvents.Summarize.schema.parse(event.properties);
-  const { sessionId, userId, callTagging, trigger, requesterId } = body;
+  const { sessionId, userId, callTagging, trigger, requesterId, payerId } = body;
 
   logger.updateMetadata({
     sessionId,
@@ -79,6 +79,12 @@ export const handler = withEventContext(async (event, logger) => {
   }
   const writer = requester ? { id: requester.id, groups: requester.groups } : { id: session.userId, groups: [] };
   const writeOpts = requester ? { includeGlobalWrite: true } : undefined;
+  // Whoever asked pays (a sharee or an admin), not the owner on their behalf.
+  const payer = payerId ? await User.findById(payerId) : (requester ?? user);
+  if (!payer) {
+    logger.warn(`Payer ${payerId} not found, skipping summarization for session ${sessionId}`);
+    return;
+  }
 
   // Before the LLM call, so a requester revoked while the job sat in the queue does not bill the
   // owner for a summary that the write below would refuse anyway.
@@ -168,7 +174,7 @@ export const handler = withEventContext(async (event, logger) => {
   });
 
   await recordSessionOperationalUsage({
-    user,
+    user: payer,
     sessionId,
     modelId,
     modelInfo,
@@ -386,7 +392,7 @@ export const handler = withEventContext(async (event, logger) => {
 
   // If requested, queue the tagging job now that the summary is generated
   if (callTagging) {
-    await SessionEvents.Tag.publish({ sessionId: session.id, requesterId });
+    await SessionEvents.Tag.publish({ sessionId: session.id, requesterId, payerId });
   }
 
   await logEvent({ userId: user.id, type: AiEvents.NOTEBOOK_SUMMARIZATION, metadata: { sessionId } });

@@ -21,10 +21,9 @@ const handler = baseApi().post<Request<{}, unknown, unknown, { id: string }>>(as
   if (!session) throw new NotFoundError('Cannot update session');
 
   // Queueing the summary IS the spend, so a refusal is the answer to this request (#1852).
-  // Billed to the session owner, who the Summarize handler resolves - not necessarily the
-  // requester, who may only hold update permission on a shared session.
+  // Billed to whoever asked (payerId below), never the owner on a sharee's behalf.
   await assertSessionOperationalCredits({
-    userId: session.userId,
+    userId: req.user!.id,
     requesterId: req.user?.id,
     operationCount: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
     operation: 'session summarization',
@@ -38,6 +37,7 @@ const handler = baseApi().post<Request<{}, unknown, unknown, { id: string }>>(as
     callTagging: true,
     trigger: 'manual',
     requesterId,
+    payerId: req.user!.id,
   });
 
   return res.json({ message: 'Summarization job queued', requestId });

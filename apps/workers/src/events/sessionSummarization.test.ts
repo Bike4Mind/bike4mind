@@ -515,7 +515,28 @@ describe('sessionSummarization requester write-time re-check', () => {
       expect.objectContaining({ id: SESSION_ID, summary: 'A summary of the session.', summaryTrigger: 'manual' }),
       { includeGlobalWrite: true }
     );
-    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: SHAREE });
+    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: SHAREE, payerId: undefined });
+  });
+
+  it('bills the sharee who asked, not the owner', async () => {
+    h.sessionUpdateWithUpdateAccess.mockResolvedValue({ id: SESSION_ID });
+
+    await run({ requesterId: SHAREE });
+
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: SHAREE }) })
+    );
+  });
+
+  it('bills the named payer and forwards it to the tag job it queues', async () => {
+    h.sessionUpdateWithUpdateAccess.mockResolvedValue({ id: SESSION_ID });
+
+    await run({ payerId: 'user-admin', callTagging: true });
+
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'user-admin' }) })
+    );
+    expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: undefined, payerId: 'user-admin' });
   });
 
   it('stops before the FabFile, upload and tag job when the requester lost access mid-run', async () => {

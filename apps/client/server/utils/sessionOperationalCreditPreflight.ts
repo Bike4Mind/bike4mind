@@ -20,9 +20,8 @@ const MIN_CREDITS_PER_OPERATION = 1;
 
 export interface SessionOperationalCreditPreflightArgs {
   /**
-   * The credit holder: the SESSION OWNER, not necessarily the requester. The session-event
-   * handlers bill `userId ?? session.userId` (e.g. sessionTagging.ts:89) and the publishers
-   * gated here pass no userId, so a session shared into a project bills its owner.
+   * The credit holder: the user who asked. The routes gated here publish that user as the event's
+   * `payerId`, which the session-event handlers bill (sessionTagging.ts, sessionSummarization.ts).
    */
   userId: string;
   /**
@@ -288,63 +287,38 @@ export async function assertSessionOperationalCredits(args: SessionOperationalCr
 }
 
 /**
- * `checkSessionOperationalCredits` for a fan-out, returning the subset of `sessions` whose owner
- * can pay for the work it would queue.
- *
- * Grouped by session OWNER, not by requester: the session-event handlers bill `session.userId`,
- * and an accessible-not-owned reader (`findAllAccessibleByIds`) lets one request span sessions
- * shared in from several users. One check per distinct owner rather than one per session - the
- * holder document does not change until settlement, so per-session checks would re-read the same
- * verdict N times.
+ * `checkSessionOperationalCredits` for a fan-out, returning the subset of `sessions` the work may be
+ * queued for. The PAYER is whoever asked (the handlers bill the event's `payerId`), so one check
+ * covers every session the request spans, whoever owns it: all of them or none. Owner-less
+ * sessions are always returned, since the handlers do no work (and bill nothing) for them.
  *
  * Returns rather than throws so a caller whose primary action is free (attaching a notebook to a
- * project) can skip the queueing without failing the request; it logs each refusal so a skipped
+ * project) can skip the queueing without failing the request; it logs a refusal so a skipped
  * fan-out is visible to ops rather than silent.
- *
- * Per owner, not per request: one settings read (cheap after the first - AdminSettingsCache holds
- * it in process, though concurrent first-callers on a cold container can each miss) plus, for a
- * REFUSED owner only, one operations-model resolution (see `operationalSpendSettlesFree`). Left
- * uncached beyond that deliberately: the owner count per attach is bounded by the notebooks being
- * attached, the checks run concurrently, and a module-level cache would put a staleness window on
- * a billing-adjacent read to save work that only happens when the request is being refused anyway.
  */
 export async function filterSessionIdsByOperationalCredits(
   sessions: Pick<ISessionDocument, 'id' | 'userId'>[],
-  { operationsPerSession, operation, logger }: { operationsPerSession: number; operation: string; logger?: Logger }
+  {
+    payerId,
+    operationsPerSession,
+    operation,
+    logger,
+  }: { payerId: string; operationsPerSession: number; operation: string; logger?: Logger }
 ): Promise<Set<string>> {
-  const allowedSessionIds = new Set<string>();
-  const sessionIdsByOwner = new Map<string, string[]>();
+  const ownerless = sessions.filter(session => !session.userId).map(session => session.id);
+  const billableCount = sessions.length - ownerless.length;
+  const verdict = await checkSessionOperationalCredits({
+    userId: payerId,
+    operationCount: billableCount * operationsPerSession,
+    operation,
+    logger,
+  });
+  if (verdict.allowed) return new Set(sessions.map(session => session.id));
 
-  for (const session of sessions) {
-    // No owner means nothing to attribute or bill, matching recordSessionOperationalUsage's skip.
-    if (!session.userId) {
-      allowedSessionIds.add(session.id);
-      continue;
-    }
-    const owned = sessionIdsByOwner.get(session.userId);
-    if (owned) owned.push(session.id);
-    else sessionIdsByOwner.set(session.userId, [session.id]);
-  }
-
-  await Promise.all(
-    Array.from(sessionIdsByOwner, async ([ownerId, ownedSessionIds]) => {
-      const verdict = await checkSessionOperationalCredits({
-        userId: ownerId,
-        operationCount: ownedSessionIds.length * operationsPerSession,
-        operation,
-        logger,
-      });
-      if (verdict.allowed) {
-        ownedSessionIds.forEach(sessionId => allowedSessionIds.add(sessionId));
-        return;
-      }
-      logger?.warn(`[sessionOperationalCreditPreflight] skipping ${operation}; owner cannot cover it`, {
-        ownerId,
-        sessionCount: ownedSessionIds.length,
-        reason: verdict.reason,
-      });
-    })
-  );
-
-  return allowedSessionIds;
+  logger?.warn(`[sessionOperationalCreditPreflight] skipping ${operation}; payer cannot cover it`, {
+    payerId,
+    sessionCount: billableCount,
+    reason: verdict.reason,
+  });
+  return new Set(ownerless);
 }
