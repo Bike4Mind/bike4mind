@@ -236,6 +236,9 @@ const baseOptions = {
   user: mockUser as any,
   sessionId: 'session1',
   tokenizer: mockTokenizer as any,
+  // The contributed surface denials. Only the cases that set `mockSession.surface` to a key in here
+  // resolve anything; every other test leaves the session with no surface at all.
+  workspaceDeniedTools: { 'denied-surface': ['notion__search'] },
 };
 
 describe('ChatCompletionProcess', () => {
@@ -6585,11 +6588,15 @@ describe('ChatCompletionProcess', () => {
       skipAutoOffers?: boolean;
       disabledTools?: string[];
       connectedMcpTools?: boolean;
+      /** The session's `surface`; a key in `baseOptions.workspaceDeniedTools` resolves denials. */
+      surface?: string;
       /** Have the buildTools stub apply `sessionDisabledTools`, the way buildSharedTools does. */
       deniedFromBuild?: boolean;
     }) => {
       const previousDisabledTools = mockSession.disabledTools;
+      const previousSurface = mockSession.surface;
       mockSession.disabledTools = opts.disabledTools;
+      mockSession.surface = opts.surface;
       const mcpTools = ['notion__search', 'notion__create_page'].map(name => ({
         name,
         toolFn: vi.fn(),
@@ -6660,6 +6667,7 @@ describe('ChatCompletionProcess', () => {
         buildToolsSpy.mockRestore();
         buildToolPromptSpy.mockRestore();
         mockSession.disabledTools = previousDisabledTools;
+        mockSession.surface = previousSurface;
       }
     };
 
@@ -6686,6 +6694,27 @@ describe('ChatCompletionProcess', () => {
       expect(passedOptions?.sessionDisabledTools).toEqual(['notion__notion_search']);
     });
 
+    // The contributed table is read once, into the same `deniedTools` local the session denylist
+    // feeds, so a turn on a denied surface loses the tool even though nothing is stored on the
+    // session. Dropping the surface argument at that one site re-opens every surface denial.
+    it('threads the surface denials through as sessionDisabledTools', async () => {
+      const { passedOptions } = await runWithOptions({ surface: 'denied-surface' });
+      expect(passedOptions?.sessionDisabledTools).toEqual(['notion__search']);
+    });
+
+    it('unions the surface denials with the session denylist', async () => {
+      const { passedOptions } = await runWithOptions({
+        surface: 'denied-surface',
+        disabledTools: ['notion__create_page'],
+      });
+      expect(passedOptions?.sessionDisabledTools?.sort()).toEqual(['notion__create_page', 'notion__search']);
+    });
+
+    it('leaves a session on an unnamed surface with no denials', async () => {
+      const { passedOptions } = await runWithOptions({ surface: 'other-surface' });
+      expect(passedOptions?.sessionDisabledTools).toBeUndefined();
+    });
+
     it('passes only offered MCP tools into the tool prompt after narrowing', async () => {
       const { toolPromptOptions } = await runWithOptions({ skipAutoOffers: true, connectedMcpTools: true });
       expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
@@ -6709,6 +6738,17 @@ describe('ChatCompletionProcess', () => {
         deniedFromBuild: true,
       });
       expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
+    });
+
+    // Same for the contributed denials: they ride the same options, so the tool must be gone from
+    // the prompt as well as from the build.
+    it('keeps a surface-denied MCP tool out of the tool prompt', async () => {
+      const { toolPromptOptions } = await runWithOptions({
+        connectedMcpTools: true,
+        surface: 'denied-surface',
+        deniedFromBuild: true,
+      });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__create_page']);
     });
   });
 

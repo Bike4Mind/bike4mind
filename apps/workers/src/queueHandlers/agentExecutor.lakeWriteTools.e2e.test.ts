@@ -77,6 +77,13 @@ describe('agentExecutor toolDeps wiring', () => {
     );
   });
 
+  // The MCP tools are merged into the built list AFTER the native name filter, so this denylist is
+  // the only thing that reaches a `server__tool` id - and it is the only place the surface denials
+  // do. `processExecution` has no harness, so the call itself is pinned here.
+  it('builds the parent MCP denylist from the surface-aware session denials', () => {
+    expect(source).toMatch(/sessionDisabledTools: mcpSessionDisabledTools\(\s*sessionDeniedTools\(session\),/);
+  });
+
   it('gates the profile tool resolution on whether the connection has an approver', () => {
     expect(source).toMatch(
       /resolveInvocationEnabledTools\(\{[^}]*hasApprover: hasApprover\(execution\.connectionId\),/
