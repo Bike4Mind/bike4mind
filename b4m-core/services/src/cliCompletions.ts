@@ -794,7 +794,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         // Same refund key the web chat path records: a stream aborted as degenerate is
         // priced normally (the provider tokens were spent) but must not read as a clean,
         // fully-valued success. See usageEventStatusForFinish.
-        status: usageEventStatusForFinish(finalStopReason),
+        status: abortError !== undefined ? 'error' : usageEventStatusForFinish(finalStopReason),
         latencyMs: Date.now() - completionStartTime,
       })
       .catch(err => logger?.warn?.('Failed to record usage event', err));

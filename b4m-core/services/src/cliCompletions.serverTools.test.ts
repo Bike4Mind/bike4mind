@@ -306,7 +306,7 @@ describe('executeCompletion - serverTools opt-in', () => {
     const refunds = users.incrementCredits.mock.calls.filter(([, delta]: [string, number]) => delta > 0);
     expect(refunds).toEqual([]);
     expect(usageEvents.record).toHaveBeenCalledWith(
-      expect.objectContaining({ inputTokens: 200, outputTokens: 25, creditsCharged: 10 })
+      expect.objectContaining({ inputTokens: 200, outputTokens: 25, creditsCharged: 10, status: 'error' })
     );
     expect(userApiKeys.incrementSpend).toHaveBeenCalledWith('key1', 10);
   });

@@ -203,32 +203,28 @@ export class ChatCompletionInvoke {
         );
       }
     }
-    const model = modelInfo.find(m => m.id === resolvedModelId);
-    if (!model) throw new BadRequestError(`Invalid model: "${params.model}" is not available`);
     // A disabled model is still listed (so the picker can show it greyed out) but must never
     // run. Reject it here with a clean message rather than letting the request reach the backend
     // and fail with a raw provider error (e.g. the Anthropic 404 for gated Fable 5). This also
     // covers sessions/agents already pinned to a model that has since been disabled.
-    if (model.disabled) {
-      throw new BadRequestError(
-        `Model "${model.id}" is currently unavailable${model.disabledReason ? `: ${model.disabledReason}` : ''}`
-      );
-    }
+    const availableModel = (id: string, requested: string) => {
+      const found = modelInfo.find(m => m.id === id);
+      if (!found) throw new BadRequestError(`Invalid model: "${requested}" is not available`);
+      if (found.disabled) {
+        throw new BadRequestError(
+          `Model "${found.id}" is currently unavailable${found.disabledReason ? `: ${found.disabledReason}` : ''}`
+        );
+      }
+      return found;
+    };
+    const model = availableModel(resolvedModelId, params.model);
 
     // Research mode runs every enabled configuration's model instead of the primary, so each must
     // pass the same availability gate; the access gate below covers them too.
     const researchModelIds = researchMode?.enabled
       ? [...new Set(researchMode.configurations.filter(c => c.enabled).map(c => c.model))]
       : [];
-    for (const researchModelId of researchModelIds) {
-      const researchModel = modelInfo.find(m => m.id === researchModelId);
-      if (!researchModel) throw new BadRequestError(`Invalid model: "${researchModelId}" is not available`);
-      if (researchModel.disabled) {
-        throw new BadRequestError(
-          `Model "${researchModel.id}" is currently unavailable${researchModel.disabledReason ? `: ${researchModel.disabledReason}` : ''}`
-        );
-      }
-    }
+    for (const researchModelId of researchModelIds) availableModel(researchModelId, researchModelId);
 
     // What promptMeta.model.type is allowed to record, resolved once so the write below needs no
     // cast. A completion legitimately resolves to text, image or video - the media backends run

@@ -1730,7 +1730,7 @@ export interface components {
          * @enum {string}
          */
         reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-        /** @description Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking. */
+        /** @description Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking. */
         thinking?: {
           enabled: boolean;
           budget_tokens?: number;

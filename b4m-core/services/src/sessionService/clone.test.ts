@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { cloneSession } from './clone';
+import { MAX_TOOL_CALLS_CEILING } from '@bike4mind/common';
 
 // ObjectId-shaped: createSession drops knowledgeIds that cannot address a row, and the lake
 // derivation reads them through `_id: { $in: ... }`.
@@ -160,6 +161,22 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(created.temperature).toBe(0.2);
     expect(created.maxToolCalls).toBe(7);
     expect(created.systemPromptText).toBe(ownerId === 'caller-1' ? 'Answer like a pirate.' : undefined);
+  });
+
+  it('clamps a stored maxToolCalls past MAX_TOOL_CALLS_CEILING instead of failing the clone', async () => {
+    const { db } = makeAdapters('caller-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'caller-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      maxToolCalls: 1000,
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].maxToolCalls).toBe(MAX_TOOL_CALLS_CEILING);
   });
 
   // Create-only too, and outside the isOwner gate: see the comment on these fields in clone.ts.

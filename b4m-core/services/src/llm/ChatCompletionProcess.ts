@@ -103,6 +103,7 @@ import {
 } from '@bike4mind/utils/retrievalExclusion';
 import {
   buildThinkingParams,
+  resolveDispatchForRecord,
   resolveOutputMaxTokens,
   reasonsWithinOutputBudget,
   getAvailableModels,
@@ -1072,6 +1073,11 @@ export class ChatCompletionProcess {
     modelInfo: ModelInfo;
     inputTokens: number;
     organization: DeductCreditsParams['organization'];
+    // The running attempt's provider-reported counts, when the adapter reported any before the abort.
+    reported?: Pick<
+      CompletionInfo,
+      'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'
+    >;
   } | null = null;
 
   // Phase 2: Tool state management
@@ -4150,11 +4156,14 @@ export class ChatCompletionProcess {
         // it will not incur. See reservationOutputTokens for the under-reservation
         // tradeoff this accepts; settlement below charges actual usage either way.
         //
-        // Thinking raises the max_tokens the adapter sends past safeMaxTokens (buildThinkingParams),
-        // so the hold and the member cap below are priced on the ceiling actually sent, and a turn
-        // that thinks is held like one that reasons inside its output budget.
+        // The Anthropic adapters raise the max_tokens they send past safeMaxTokens for thinking
+        // (buildThinkingParams), so the hold and the member cap below are priced on the ceiling
+        // actually sent, and a turn that thinks is held like one that reasons inside its output budget.
+        const thinkingAdapterFamily = resolveDispatchForRecord(modelInfo)?.adapterFamily;
         const sentMaxTokens =
-          thinking?.enabled && modelInfo.can_think
+          thinking?.enabled &&
+          modelInfo.can_think &&
+          (thinkingAdapterFamily === 'anthropic-messages' || thinkingAdapterFamily === 'bedrock-anthropic')
             ? buildThinkingParams(modelInfo.id, modelInfo, thinking.budget_tokens ?? 16000, safeMaxTokens).maxTokens
             : safeMaxTokens;
         // Research mode runs every enabled configuration instead of the primary, so it holds each of
@@ -4384,6 +4393,7 @@ export class ChatCompletionProcess {
         turnUsage: undefined,
         stopReason: undefined,
       };
+      if (this.reservationBasis) this.reservationBasis.reported = actualTokenUsage;
 
       if (THROTTLE_INTERVAL) {
         logger.info(`🚫 [STREAMING] Server throttling DISABLED for maximum TTFVT in ${process.env.NODE_ENV} mode`);
@@ -4559,11 +4569,14 @@ export class ChatCompletionProcess {
         // This branch returns before the normal settlement, so each configuration's usage settles
         // the hold here; one that streamed nothing (failed or cancelled up front) costs nothing.
         if (adminSettingsEnforceCredits && this.reservedCreditsOwnerId) {
+          // The results already streamed, so a settlement failure is logged rather than failing the turn.
           await this.settleReservation(
             quest,
             researchModeUsages(researchResults, models, inputTokens),
             processStartTime,
             logger
+          ).catch(settleError =>
+            logger.error(`Failed to settle research mode credits for quest ${questId}`, settleError)
           );
         }
 
@@ -5183,6 +5196,7 @@ export class ChatCompletionProcess {
               // Update to the fallback model
               currentModel = fallbackResult.model;
               currentLlm = fallbackResult.backend;
+              if (this.reservationBasis) this.reservationBasis.modelInfo = currentModel;
               primaryFailureReason ??= sanitizeTelemetryError(lastError);
               fallbackAttempt++;
               triedModelIds.add(currentModel.id);
@@ -6400,7 +6414,7 @@ export class ChatCompletionProcess {
       // nothing left to refund. Any other failure refunds the whole hold.
       if (this.reservedCredits > 0 && this.reservedCreditsOwnerId && isAbortError(err)) {
         await this.settleAbortedReservation(quest, processStartTime, logger).catch(settleError =>
-          logger.error(`🚨 Failed to settle the aborted turn for quest ${questId}; refunding its hold`, settleError)
+          logger.error(`Failed to settle the aborted turn for quest ${questId}; refunding its hold`, settleError)
         );
       }
 
@@ -6616,9 +6630,6 @@ export class ChatCompletionProcess {
   }
 
   /**
-   * Send Research Mode streaming updates for individual configurations
-   */
-  /**
    * Settle the turn's credit reservation against `usages` outside the normal completion path (a
    * Research-mode turn, or one ended by a thrown abort): the balance moves by the reservation's
    * difference from the usage, floored at zero like the main settlement (computeSettlementDelta),
@@ -6648,7 +6659,7 @@ export class ChatCompletionProcess {
     let holder = this.reservedCreditHolder;
     if (delta !== 0) holder = await holderMethods.incrementCredits(ownerId, delta);
     logger.info(
-      `⚖️ Credits settled for quest ${quest.id}: reserved=${this.reservedCredits}, actual=${totalCredits}, delta=${delta}`
+      `Credits settled for quest ${quest.id}: reserved=${this.reservedCredits}, actual=${totalCredits}, delta=${delta}`
     );
     this.reservedCredits = 0;
     this.reservedCreditHolder = null;
@@ -6704,9 +6715,10 @@ export class ChatCompletionProcess {
 
   /**
    * A turn ended by a thrown abort (a Stop, a disconnect) still spent what it streamed: settle the
-   * reservation on the reserved model's input estimate plus the streamed replies, the same for every
-   * adapter, so a throwing adapter is billed like one that resolves on abort. Nothing streamed means
-   * nothing billable, and the caller's rollback refunds the whole hold.
+   * reservation on the answering model, at the larger of the provider-reported counts and the input
+   * estimate plus the streamed replies, the same for every adapter, so a throwing adapter is billed
+   * like one that resolves on abort. Nothing streamed or reported means nothing billable, and the
+   * caller's rollback refunds the whole hold.
    */
   private async settleAbortedReservation(
     quest: { id: string; sessionId: string; replies?: string[] | null; reply?: string | null },
@@ -6719,22 +6731,26 @@ export class ChatCompletionProcess {
       (sum, reply) => sum + (reply?.length ?? 0),
       0
     );
-    if (streamedChars === 0) return;
+    const reported = basis.reported ?? {};
+    const reportedInput =
+      (reported.inputTokens ?? 0) + (reported.cacheReadInputTokens ?? 0) + (reported.cacheCreationInputTokens ?? 0);
+    const outputTokens = Math.max(
+      reported.outputTokens ?? 0,
+      streamedChars > 0 ? estimateStreamedOutputTokens(streamedChars, basis.modelInfo.id) : 0
+    );
+    if (outputTokens === 0) return;
     await this.settleReservation(
       quest,
-      [
-        {
-          modelInfo: basis.modelInfo,
-          inputTokens: basis.inputTokens,
-          outputTokens: estimateStreamedOutputTokens(streamedChars, basis.modelInfo.id),
-        },
-      ],
+      [{ modelInfo: basis.modelInfo, inputTokens: Math.max(basis.inputTokens, reportedInput), outputTokens }],
       processStartTime,
       logger,
       'error'
     );
   }
 
+  /**
+   * Send Research Mode streaming updates for individual configurations
+   */
   private async sendResearchModeStreamUpdate(
     quest: IChatHistoryItemDocument,
     configurationId: string,

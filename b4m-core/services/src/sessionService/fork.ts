@@ -5,6 +5,7 @@ import {
   IUserRepository,
   rebindPromptMetaSession,
   toPersistedSummaryTrigger,
+  MAX_TOOL_CALLS_CEILING,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -81,7 +82,8 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       citationStyle: session.citationStyle,
       systemPromptText: session.systemPromptText,
       temperature: session.temperature,
-      maxToolCalls: session.maxToolCalls,
+      // A stored value can predate MAX_TOOL_CALLS_CEILING, which createSession enforces.
+      maxToolCalls: session.maxToolCalls && Math.min(session.maxToolCalls, MAX_TOOL_CALLS_CEILING),
       corpusGroundingMode: session.corpusGroundingMode,
       retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
       retrievalVectorizedOnly: session.retrievalVectorizedOnly,

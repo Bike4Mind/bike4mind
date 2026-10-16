@@ -3440,7 +3440,7 @@ describe('ChatCompletionProcess', () => {
     // Thinking raises the max_tokens the adapter sends (buildThinkingParams), so the hold is priced
     // on that ceiling rather than on the much smaller one the request named.
     it('holds a thinking turn on the max_tokens the adapter will send', async () => {
-      reservationOrgSetup({ can_think: true });
+      reservationOrgSetup({ can_think: true, backend: ModelBackend.Anthropic });
       fundedOrg();
       mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
       const body = reservationBody();
@@ -3449,6 +3449,19 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedReasoningHold);
+    });
+
+    // Only the Anthropic adapters raise max_tokens for thinking; another thinking model sends safeMaxTokens.
+    it('holds a non-Anthropic thinking turn on the max_tokens it sends', async () => {
+      reservationOrgSetup({ can_think: true });
+      fundedOrg();
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+      const body = reservationBody();
+      body.params = { ...body.params, max_tokens: 1000, thinking: { enabled: true, budget_tokens: 32_000 } } as any;
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.organizations.incrementCredits).not.toHaveBeenNthCalledWith(1, 'org1', -expectedReasoningHold);
     });
 
     describe('Research mode billing', () => {
@@ -3512,11 +3525,51 @@ describe('ChatCompletionProcess', () => {
       fundedOrg();
       mockQuest.sessionId = 'session1';
 
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+
       await service.process({ body: reservationBody(), logger: mockLogger });
 
+      // The hold, then one settlement; the error rollback has nothing left to refund.
+      expect(mockDb.organizations.incrementCredits).toHaveBeenCalledTimes(2);
       const refund = mockDb.organizations.incrementCredits.mock.calls[1]?.[1];
       expect(refund).toBeGreaterThanOrEqual(0);
       expect(refund).toBeLessThan(expectedHold);
+      expect(usageEventsRecord).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+    });
+
+    it('bills the provider-reported output of a thrown abort when it exceeds what streamed', async () => {
+      const { complete } = reservationOrgSetup();
+      complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
+        await cb(['x'], { inputTokens: 10, outputTokens: 1000 });
+        const abort = new Error('The operation was aborted');
+        abort.name = 'AbortError';
+        throw abort;
+      });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      const charged = mockDb.creditTransactions.createTransaction.mock.calls.map(
+        ([, row]: [string, { credits: number }]) => Math.abs(row.credits)
+      );
+      expect(charged).toHaveLength(1);
+      expect(charged[0]).toBeGreaterThanOrEqual(settledCredits(1000));
+    });
+
+    it('refunds the whole hold of a thrown abort that streamed nothing', async () => {
+      const { complete } = reservationOrgSetup();
+      complete.mockImplementation(async () => {
+        const abort = new Error('The operation was aborted');
+        abort.name = 'AbortError';
+        throw abort;
+      });
+      fundedOrg();
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold);
     });
 
     // Idempotency guard for a cross-model failover: the failed primary
