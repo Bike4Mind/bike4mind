@@ -163,6 +163,11 @@ describe('buildSSEEvent', () => {
     expect(e.usage).toMatchObject({ outputTokens: 800, reasoningTokens: 780 });
   });
 
+  it('carries reasoningTokens even when no other token field is present', () => {
+    const e = buildSSEEvent([''], { reasoningTokens: 5 });
+    expect(e.usage).toMatchObject({ reasoningTokens: 5 });
+  });
+
   it('leaves reasoningTokens off the wire when unreported', () => {
     const e = buildSSEEvent([''], { inputTokens: 10, outputTokens: 5 });
     expect(e.usage).not.toHaveProperty('reasoningTokens');

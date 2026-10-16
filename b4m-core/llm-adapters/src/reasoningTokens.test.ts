@@ -17,8 +17,11 @@ describe('reasoningTokensFromUsage', () => {
     ['usage without a breakdown', { input_tokens: 10, output_tokens: 4 }],
     ['a null Anthropic count', { output_tokens_details: { thinking_tokens: null } }],
     ['a null details object', { completion_tokens_details: null }],
+    ['a null output-token details object', { output_tokens_details: null }],
     ['a negative count', { thoughtsTokenCount: -1 }],
     ['a non-numeric count', { thoughtsTokenCount: '12' }],
+    ['NaN', { thoughtsTokenCount: Number.NaN }],
+    ['Infinity', { thoughtsTokenCount: Number.POSITIVE_INFINITY }],
   ])('returns undefined for %s', (_label, usage) => {
     expect(reasoningTokensFromUsage(usage)).toBeUndefined();
   });
