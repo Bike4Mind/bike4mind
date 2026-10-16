@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -236,6 +236,48 @@ describe('--enforce CLI contract', () => {
     });
     expect(run.stdout).toContain('unzipped across');
     expect(run.status).toBe(1);
+  });
+
+  it('counts a symlinked file at its target size and skips symlinked or dangling links', () => {
+    // A symlinked file is counted at its target's size, while a symlinked directory and a dangling
+    // link contribute nothing. Undercounting here would pass a bundle the deploy then rejects.
+    const targetDir = mkdtempSync(join(tmpdir(), 'bundle-size-target-'));
+    const linkedBundle = mkdtempSync(join(tmpdir(), 'bundle-size-links-'));
+    try {
+      writeFileSync(join(targetDir, 'target.bin'), Buffer.alloc(MIB));
+      mkdirSync(join(targetDir, 'nested'));
+      writeFileSync(join(targetDir, 'nested', 'inside.bin'), Buffer.alloc(MIB));
+
+      symlinkSync(join(targetDir, 'target.bin'), join(linkedBundle, 'linked-file.bin'));
+      symlinkSync(join(targetDir, 'nested'), join(linkedBundle, 'linked-dir'), 'dir');
+      symlinkSync(join(linkedBundle, 'missing.bin'), join(linkedBundle, 'dangling.bin'));
+
+      const run = runCli(['--enforce', `--dir=${linkedBundle}`]);
+      expect(run.stdout).toContain('1.0 MB unzipped across 1 files');
+      expect(run.status).toBe(0);
+    } finally {
+      rmSync(targetDir, { recursive: true, force: true });
+      rmSync(linkedBundle, { recursive: true, force: true });
+    }
+  });
+
+  it('does not throw when the module is imported by a process whose argv[1] is not a path', () => {
+    // Node's -e mode leaves argv[1] as the first positional argument, so this reproduces an importer
+    // whose argv[1] is not a real file: the direct-invocation check must read that as "not invoked
+    // directly" rather than throw out of the import.
+    const run = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `await import(${JSON.stringify(SCRIPT)}); console.log('imported ok');`,
+        join(scratchDir, 'not-a-real-path.mjs'),
+      ],
+      { encoding: 'utf8' }
+    );
+    expect(run.stderr).not.toContain('ENOENT');
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain('imported ok');
   });
 
   it('writes the reserve and the judged total to the step summary', () => {

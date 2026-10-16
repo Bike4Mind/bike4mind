@@ -306,7 +306,15 @@ async function writeStepSummary(results) {
 
 // Only run when invoked directly, so the exported helpers stay importable from tests. argv[1] keeps
 // the path as given, while import.meta.url is the resolved one, so a symlinked invocation would not
-// match and main() would be skipped - a silent pass for a gate. Resolve both sides instead.
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+// match and main() would be skipped - a silent pass for a gate. Resolve both sides; an argv[1] that
+// does not resolve is simply not a direct invocation, not a reason to throw out of an import.
+const invokedPath = (() => {
+  try {
+    return realpathSync(process.argv[1]);
+  } catch {
+    return null;
+  }
+})();
+if (invokedPath && import.meta.url === pathToFileURL(invokedPath).href) {
   await main();
 }
