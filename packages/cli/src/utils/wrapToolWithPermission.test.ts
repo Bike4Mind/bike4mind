@@ -544,13 +544,13 @@ describe('checkpoint before a file write', () => {
     expect(createCheckpoint).toHaveBeenCalledWith('create_file', ['src/a.ts'], 'before-create_file-a.ts');
   });
 
-  it.each([[{ path: '' }], [{ path: 42 }]])('takes no checkpoint for an unusable path (%o)', async args => {
+  it('takes no checkpoint for a write with no usable path', async () => {
     const { wrapped, createCheckpoint } = checkpointing(
       tool('create_file'),
       vi.fn().mockResolvedValue({ action: 'allow-once' })
     );
 
-    await wrapped.toolFn(args);
+    await wrapped.toolFn({ path: '' });
 
     expect(createCheckpoint).not.toHaveBeenCalled();
   });

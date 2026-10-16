@@ -350,7 +350,11 @@ describe('resume_agent end-to-end through the real orchestrator', () => {
 
 describe('SubagentOrchestrator hook-permission wiring', () => {
   /** Orchestrator whose Stop-hook permission prompt returns `action`. */
-  function createHookOrchestrator(action: 'deny' | 'allow-once', customCommandStore?: unknown) {
+  function createHookOrchestrator(
+    action: 'deny' | 'allow-once',
+    customCommandStore?: unknown,
+    checkpointStore?: unknown
+  ) {
     const showPermissionPrompt = vi.fn(async () => ({ action }) as { action: 'deny' | 'allow-once' });
     const deps = {
       userId: 'test-user',
@@ -363,8 +367,9 @@ describe('SubagentOrchestrator hook-permission wiring', () => {
       agentStore: { getAgent: () => undefined, getAgentNames: () => [] },
       historyStore: new AgentHistoryStore(),
       customCommandStore,
+      checkpointStore,
     } as unknown as OrchestratorDependencies;
-    return { orchestrator: new SubagentOrchestrator(deps), showPermissionPrompt };
+    return { orchestrator: new SubagentOrchestrator(deps), showPermissionPrompt, checkpointStore };
   }
 
   function agentWithStopHook(): SpawnAgentOptions['agentDefinition'] {
@@ -444,7 +449,8 @@ describe('SubagentOrchestrator hook-permission wiring', () => {
 
   it('routes declared shared-context tools through the permission wrapper', async () => {
     vi.mocked(wrapTools).mockClear();
-    const { orchestrator } = createHookOrchestrator('allow-once');
+    const checkpointStore = { createCheckpoint: vi.fn() };
+    const { orchestrator } = createHookOrchestrator('allow-once', undefined, checkpointStore);
     const sharedContext = { get: () => undefined, getAll: () => ({}), set: () => undefined };
 
     await orchestrator.delegateToAgent({
@@ -462,6 +468,7 @@ describe('SubagentOrchestrator hook-permission wiring', () => {
     expect(call).toBeDefined();
     expect(call![0].map(t => t.toolSchema.name)).toEqual(['shared_context_read', 'shared_context_write']);
     expect(call![1].interactionModeOverride).toBe('plan');
+    expect(call![1].checkpointStore).toBe(checkpointStore);
   });
 
   it('advertises the model-reachable command set (not getAllCommands) in the skills prompt', async () => {
