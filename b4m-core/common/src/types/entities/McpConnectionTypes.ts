@@ -84,6 +84,12 @@ export interface IMcpConnectionOAuth {
   manualClientSecretEnc?: string;
   accessTokenEnc?: string;
   refreshTokenEnc?: string;
+  /**
+   * Non-secret presence markers, written in the same update as the ciphertext (the token fields are
+   * `select: false`, so a default read cannot see whether they are set). The public view reads these.
+   */
+  hasAccessToken?: boolean;
+  hasRefreshToken?: boolean;
   expiresAt?: Date;
   grantedScope?: string;
   tokenIssuer?: string;
@@ -364,8 +370,8 @@ export function toMcpConnectionPublic(
               clientMode: oauth.clientMode,
               expiresAt: oauth.expiresAt,
               grantedScope: oauth.grantedScope,
-              hasAccessToken: Boolean(oauth.accessTokenEnc),
-              hasRefreshToken: Boolean(oauth.refreshTokenEnc),
+              hasAccessToken: oauth.hasAccessToken === true,
+              hasRefreshToken: oauth.hasRefreshToken === true,
             },
           }
         : {}),
@@ -547,6 +553,8 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
    * the caller must not retry the write, because the successor's rotated token is the live one.
    */
   completeRefresh(id: string, holder: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null>;
+  /** Disconnect: drop the tokens, their markers and any lease. Revocation at the server is the caller's. */
+  clearOAuthTokens(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /** First code exchange; there is no lease yet. Null when the connection is gone or not OAuth. */
   setInitialOAuthTokens(id: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null>;
   markUsed(id: string): Promise<void>;

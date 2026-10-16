@@ -201,6 +201,62 @@ describe('McpConnectionModel', () => {
       expect((await mcpConnectionRepository.findByIdWithCredentials(key.id))?.auth.apiKey?.valueEnc).toBe('enc:key');
     });
 
+    it('a default read reports token presence and the key tail in the public view', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      const view = toMcpConnectionPublic((await mcpConnectionRepository.findByIdForOwner(created.id, OWNER))!);
+      expect(view.auth.oauth).toMatchObject({ hasAccessToken: true, hasRefreshToken: true });
+
+      const fresh = await mcpConnectionRepository.create(
+        baseConnection({
+          slug: 'fresh',
+          status: 'pending_auth',
+          auth: {
+            kind: 'oauth',
+            oauth: { ...baseConnection().auth.oauth!, accessTokenEnc: undefined, refreshTokenEnc: undefined },
+          },
+        })
+      );
+      const before = toMcpConnectionPublic((await mcpConnectionRepository.findByIdForOwner(fresh.id, OWNER))!);
+      expect(before.auth.oauth).toMatchObject({ hasAccessToken: false, hasRefreshToken: false });
+
+      await mcpConnectionRepository.setInitialOAuthTokens(fresh.id, { accessTokenEnc: 'enc:a' });
+      const accessOnly = toMcpConnectionPublic((await mcpConnectionRepository.findByIdForOwner(fresh.id, OWNER))!);
+      expect(accessOnly.auth.oauth).toMatchObject({ hasAccessToken: true, hasRefreshToken: false });
+
+      await mcpConnectionRepository.acquireRefreshLease(fresh.id, 'h');
+      await mcpConnectionRepository.completeRefresh(fresh.id, 'h', {
+        accessTokenEnc: 'enc:b',
+        refreshTokenEnc: 'enc:r',
+      });
+      const refreshed = toMcpConnectionPublic(
+        (await mcpConnectionRepository.listAllForUser('user-1')).find(c => c.slug === 'fresh')!
+      );
+      expect(refreshed.auth.oauth).toMatchObject({ hasAccessToken: true, hasRefreshToken: true });
+
+      const key = await mcpConnectionRepository.create(apiKeyConnection());
+      const keyView = toMcpConnectionPublic((await mcpConnectionRepository.findByIdForOwner(key.id, OWNER))!);
+      expect(keyView.auth.apiKey).toEqual({ headerName: 'Authorization', scheme: 'Bearer', last4: 'abcd' });
+    });
+
+    it('clearOAuthTokens drops the tokens, markers and lease for the owner only', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.acquireRefreshLease(created.id, 'h');
+      expect(
+        await mcpConnectionRepository.clearOAuthTokens(created.id, { ownerType: 'user', ownerKey: 'user-2' })
+      ).toBeNull();
+
+      const cleared = await mcpConnectionRepository.clearOAuthTokens(created.id, OWNER);
+      expect(cleared?.refreshLease).toBeUndefined();
+      expect(toMcpConnectionPublic(cleared!).auth.oauth).toMatchObject({
+        hasAccessToken: false,
+        hasRefreshToken: false,
+      });
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      expect(withCreds?.auth.oauth?.accessTokenEnc).toBeUndefined();
+      expect(withCreds?.auth.oauth?.refreshTokenEnc).toBeUndefined();
+      expect(withCreds?.auth.oauth?.manualClientIdEnc).toBe('enc:client-id');
+    });
+
     it('the public projection carries no ciphertext even from a credential read', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);

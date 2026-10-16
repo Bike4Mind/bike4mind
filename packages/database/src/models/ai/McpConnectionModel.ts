@@ -114,6 +114,8 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
             manualClientSecretEnc: { type: String, select: false },
             accessTokenEnc: { type: String, select: false },
             refreshTokenEnc: { type: String, select: false },
+            hasAccessToken: { type: Boolean },
+            hasRefreshToken: { type: Boolean },
             expiresAt: { type: Date },
             grantedScope: { type: String },
             tokenIssuer: { type: String },
@@ -240,8 +242,14 @@ function isOwnerSlugDuplicate(error: unknown): boolean {
 }
 
 function oauthTokenSet(tokens: McpOAuthTokenUpdate): Record<string, unknown> {
-  const set: Record<string, unknown> = { 'auth.oauth.accessTokenEnc': tokens.accessTokenEnc };
-  if (tokens.refreshTokenEnc !== undefined) set['auth.oauth.refreshTokenEnc'] = tokens.refreshTokenEnc;
+  const set: Record<string, unknown> = {
+    'auth.oauth.accessTokenEnc': tokens.accessTokenEnc,
+    'auth.oauth.hasAccessToken': true,
+  };
+  if (tokens.refreshTokenEnc !== undefined) {
+    set['auth.oauth.refreshTokenEnc'] = tokens.refreshTokenEnc;
+    set['auth.oauth.hasRefreshToken'] = true;
+  }
   if (tokens.expiresAt !== undefined) set['auth.oauth.expiresAt'] = tokens.expiresAt;
   if (tokens.grantedScope !== undefined) set['auth.oauth.grantedScope'] = tokens.grantedScope;
   if (tokens.tokenIssuer !== undefined) set['auth.oauth.tokenIssuer'] = tokens.tokenIssuer;
@@ -287,8 +295,22 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   async create(data: Omit<IMcpConnectionDocument, 'id' | 'updatedAt' | 'createdAt'>) {
     const problem = mcpConnectionOwnerProblem(data);
     if (problem) throw new McpConnectionOwnerError(problem);
+    const oauth = data.auth?.oauth;
+    const withMarkers = oauth
+      ? {
+          ...data,
+          auth: {
+            ...data.auth,
+            oauth: {
+              ...oauth,
+              hasAccessToken: Boolean(oauth.accessTokenEnc),
+              hasRefreshToken: Boolean(oauth.refreshTokenEnc),
+            },
+          },
+        }
+      : data;
     try {
-      return stripSecrets(await super.create(data));
+      return stripSecrets(await super.create(withMarkers));
     } catch (error) {
       if (isOwnerSlugDuplicate(error)) throw new McpConnectionSlugConflictError(data.slug);
       throw error;
@@ -506,6 +528,26 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     const result = await this.model.findOneAndUpdate(
       { _id: id, ownerType: 'user', 'auth.kind': 'oauth' },
       { $set: oauthTokenSet(tokens) },
+      { new: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async clearOAuthTokens(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey, 'auth.kind': 'oauth' },
+      {
+        $set: { 'auth.oauth.hasAccessToken': false, 'auth.oauth.hasRefreshToken': false },
+        $unset: {
+          'auth.oauth.accessTokenEnc': 1,
+          'auth.oauth.refreshTokenEnc': 1,
+          'auth.oauth.expiresAt': 1,
+          'auth.oauth.grantedScope': 1,
+          'auth.oauth.tokenIssuer': 1,
+          refreshLease: 1,
+        },
+      },
       { new: true }
     );
     return result?.toJSON() ?? null;

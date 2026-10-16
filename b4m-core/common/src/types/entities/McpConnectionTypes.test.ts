@@ -68,6 +68,8 @@ describe('toMcpConnectionPublic', () => {
         manualClientSecretEnc: 'SECRET-2',
         accessTokenEnc: 'SECRET-3',
         refreshTokenEnc: 'SECRET-4',
+        hasAccessToken: true,
+        hasRefreshToken: true,
       },
       apiKey: { headerName: 'X-Api-Key', scheme: 'raw', valueEnc: 'SECRET-5', last4: 'wxyz' },
     },
@@ -102,6 +104,19 @@ describe('toMcpConnectionPublic', () => {
     expect(toMcpConnectionPublic(doc).status).toBe('connected');
     expect(toMcpConnectionPublic(doc, { allowed: true }).status).toBe('connected');
     expect(toMcpConnectionPublic(doc, { allowed: false }).status).toBe('blocked_by_policy');
+  });
+
+  it('reads presence from the markers, not the ciphertext a default read never has', () => {
+    const { accessTokenEnc: _a, refreshTokenEnc: _r, ...oauth } = doc.auth.oauth!;
+    expect(toMcpConnectionPublic({ ...doc, auth: { kind: 'oauth', oauth } }).auth.oauth).toMatchObject({
+      hasAccessToken: true,
+      hasRefreshToken: true,
+    });
+    const unmarked = { ...doc.auth.oauth!, hasAccessToken: undefined, hasRefreshToken: undefined };
+    expect(toMcpConnectionPublic({ ...doc, auth: { kind: 'oauth', oauth: unmarked } }).auth.oauth).toMatchObject({
+      hasAccessToken: false,
+      hasRefreshToken: false,
+    });
   });
 
   it('omits auth sub-objects the connection does not have', () => {
