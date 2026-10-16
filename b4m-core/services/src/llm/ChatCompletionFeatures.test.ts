@@ -5327,13 +5327,25 @@ describe('KnowledgeRetrievalFeature follow-up questions', () => {
     forcedRetrievalRelativeFloorPct: '90',
   };
 
-  const run = async (opts: { priorUserPrompts?: string[]; message: string; failContextEmbedding?: boolean }) => {
+  const run = async (opts: {
+    priorUserPrompts?: string[];
+    message: string;
+    failContextEmbedding?: boolean;
+    embed?: (text: string) => number[];
+    minSimilarityPct?: string;
+  }) => {
+    const embedText = opts.embed ?? embed;
     const generateEmbedding = vi.fn(async (text: string) => {
       if (opts.failContextEmbedding && text !== opts.message) throw new Error('embedding outage');
-      return embed(text);
+      return embedText(text);
     });
+    const warn = vi.fn();
+    const settings: Record<string, string> = {
+      ...platform,
+      ...(opts.minSimilarityPct !== undefined ? { forcedRetrievalMinSimilarityPct: opts.minSimilarityPct } : {}),
+    };
     const ctx = {
-      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+      logger: { log: vi.fn(), warn, error: vi.fn(), debug: vi.fn() } as unknown as Logger,
       user: { id: 'u1', organizationId: 'org1', tags: [], groups: [] },
       priorUserPrompts: opts.priorUserPrompts,
       db: {
@@ -5350,17 +5362,19 @@ describe('KnowledgeRetrievalFeature follow-up questions', () => {
         },
         fabfilechunks: {
           findByFabFileId: vi.fn(),
-          findVectorsByFabFileIds: vi.fn(() => Promise.resolve(passages.map(p => ({ ...p, vector: embed(p.text) })))),
+          findVectorsByFabFileIds: vi.fn(() =>
+            Promise.resolve(passages.map(p => ({ ...p, vector: embedText(p.text) })))
+          ),
         },
         adminSettings: {
-          getSettingsValue: vi.fn(async (key: string) => platform[key]),
+          getSettingsValue: vi.fn(async (key: string) => settings[key]),
           findBySettingNames: vi.fn(async (names: string[]) =>
             names
-              .filter(name => platform[name] != null)
-              .map(name => ({ settingName: name, settingValue: platform[name] }))
+              .filter(name => settings[name] != null)
+              .map(name => ({ settingName: name, settingValue: settings[name] }))
           ),
           findAll: vi.fn(async () =>
-            Object.entries(platform).map(([settingName, settingValue]) => ({ settingName, settingValue }))
+            Object.entries(settings).map(([settingName, settingValue]) => ({ settingName, settingValue }))
           ),
         },
       },
@@ -5383,6 +5397,7 @@ describe('KnowledgeRetrievalFeature follow-up questions', () => {
     return {
       injected: ['ALDER_PRICING', 'BIRCHWAY_PRICING'].filter(marker => content.includes(marker)),
       embeddedTexts: generateEmbedding.mock.calls.map(([text]) => text),
+      warn,
     };
   };
 
@@ -5420,11 +5435,35 @@ describe('KnowledgeRetrievalFeature follow-up questions', () => {
   });
 
   it('falls back to the message alone when the earlier turns cannot be embedded', async () => {
-    const { injected } = await run({
+    const { injected, embeddedTexts, warn } = await run({
       priorUserPrompts: ['Tell me about Alder.'],
       message: 'What about their pricing?',
       failContextEmbedding: true,
     });
     expect(injected).toEqual(['BIRCHWAY_PRICING']);
+    // The context call is attempted even though it throws; a gate that skipped it silently would still
+    // return the message-alone result above, so assert the attempt and the warning, not only the output.
+    expect(embeddedTexts).toEqual(['What about their pricing?', 'Tell me about Alder.']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('follow-up context embedding failed'), expect.anything());
+  });
+
+  it('keeps a passage the bare question alone cleared when the blend pulls it under the floor', async () => {
+    // Bare message to the Alder passage is 0.60; blended with the earlier turn it drops to 0.561, so a
+    // 58% absolute floor sits between the two readings - the shape of a topic switch after an earlier
+    // turn. The floor is on either reading, so the passage must still be injected rather than the turn
+    // abstaining. BIRCHWAY scores below the floor both ways and stays out.
+    const vectors = (text: string): number[] => {
+      if (text === 'What about their pricing?') return [1, 0, 0];
+      if (text === 'Tell me about Alder.') return [0.2, 0.9798, 0];
+      if (text.includes('ALDER_PRICING')) return [0.6, 0.0318, 0.7994];
+      return [0, 0, 1];
+    };
+    const { injected } = await run({
+      priorUserPrompts: ['Tell me about Alder.'],
+      message: 'What about their pricing?',
+      minSimilarityPct: '58',
+      embed: vectors,
+    });
+    expect(injected).toEqual(['ALDER_PRICING']);
   });
 });
