@@ -34,6 +34,9 @@ const {
 // route only cares about the body its own handler builds, and `.post()` here hands
 // back the raw handler so tests can call it directly. Mirrors
 // pages/api/data-lakes/__tests__/semantic-search.test.ts.
+// The real billing helpers read repositories (and mongoose models via entitlements) the database mock lacks.
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createCompletionMeter: vi.fn() }));
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
