@@ -36,8 +36,15 @@ function overlayNames() {
     if (!entry.isDirectory()) continue;
     const manifest = path.join(PREMIUM_DIR, entry.name, 'package.json');
     if (!existsSync(manifest)) continue;
-    const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
-    // Same filter the glue codegen applies: only a package that contributes is an overlay.
+    let pkg;
+    try {
+      pkg = JSON.parse(readFileSync(manifest, 'utf8'));
+    } catch (err) {
+      // Fatal here (unlike the codegen, which skips): pnpm rejects the unparseable
+      // workspace member anyway, and naming the file beats a bare SyntaxError.
+      throw new Error(`[link-premium-overlays] cannot parse ${manifest}: ${err.message}`);
+    }
+    // Same filter the glue codegen applies: only a named, contributing package is an overlay.
     if (pkg.name && pkg.b4mContributions) names.add(pkg.name);
   }
   return [...names].sort();
