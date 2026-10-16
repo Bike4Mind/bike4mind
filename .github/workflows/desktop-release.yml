@@ -252,13 +252,16 @@ jobs:
           DESKTOP_VERSION: ${{ needs.version.outputs.version }}
           DESKTOP_RELEASE_REPOSITORY: ${{ vars.DESKTOP_RELEASE_REPOSITORY }}
           MAC_RELEASE_MODE: ${{ needs.version.outputs.mac-mode }}
-        run: python3 apps/desktop/scripts/distribution.py installers
+        run: |
+          cp apps/desktop/install.sh installers/install.sh
+          python3 apps/desktop/scripts/distribution.py installers
       - uses: actions/upload-artifact@v6
         with:
           name: installer-checksums
           path: |
             installers/SHA256SUMS.txt
             installers/latest-*.yml
+            installers/install.sh
           if-no-files-found: error
           retention-days: 1
 
@@ -331,7 +334,7 @@ jobs:
         run: |
           printf '\nSource: https://github.com/%s/commit/%s\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> notes/desktop-release-notes.md
           if [ "$MAC_RELEASE_MODE" = adhoc ]; then
-            printf '\nmacOS beta: ad-hoc signed, not Developer ID signed or notarized. Install manually; macOS may require Privacy & Security > Open Anyway. Fresh-download Gatekeeper acceptance is not verified. macOS in-app updates are disabled in this build. Linux updates are unchanged.\n' >> notes/desktop-release-notes.md
+            printf '\nmacOS beta: ad-hoc signed, not Developer ID signed or notarized. The install command above avoids the Gatekeeper prompt; a browser-downloaded dmg needs Privacy & Security > Open Anyway. macOS in-app updates are disabled in this build; rerun the install command to update. Linux updates are unchanged.\n' >> notes/desktop-release-notes.md
           else
             printf '\nmacOS Developer ID signing and notarization enabled.\n' >> notes/desktop-release-notes.md
           fi

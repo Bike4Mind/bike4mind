@@ -76,7 +76,7 @@ def assemble(folder, version, repository, source, mac_mode='signed'):
     zip_name = f'Bike4Mind-{version}-arm64.zip'
     image = f'Bike4Mind-{version}-x64.AppImage'
     # The mac updater downloads the zip; the dmg blockmap is never read and the AppImage embeds its own.
-    required = {dmg, image} if mac_mode == 'adhoc' else {dmg, zip_name, image, zip_name + '.blockmap'}
+    required = {dmg, image, 'install.sh'} | (set() if mac_mode == 'adhoc' else {zip_name, zip_name + '.blockmap'})
     unpublished = {zip_name, zip_name + '.blockmap', dmg + '.blockmap', image + '.blockmap'} - required
     manifests = {'latest-mac.yml', 'latest-linux.yml', 'SHA256SUMS.txt'}
     actual = {p.name for p in folder.iterdir()}

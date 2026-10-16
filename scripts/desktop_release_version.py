@@ -30,7 +30,7 @@ def bump_level(message):
     return 1
 
 
-def release_notes(version, previous, repository):
+def release_notes(version, previous, repository, destination):
     changes = []
     revisions = git('rev-list', '--first-parent', f'{previous}..HEAD') if previous else git('rev-list', '-n', '1', 'HEAD')
     for sha in revisions.splitlines():
@@ -46,7 +46,9 @@ def release_notes(version, previous, repository):
     lines.extend(f'- {subject} ([commit](https://github.com/{repository}/commit/{sha}))'
                  for sha, subject, _ in changes)
     lines.extend(['', '## Installation', '',
-                  'Choose arm64.dmg for Apple Silicon or x64.AppImage for Linux. Intel Mac builds are temporarily paused.',
+                  'Run this in a terminal on macOS (Apple Silicon) or Linux (x64); rerun it to update:', '',
+                  f'    curl -fsSL https://github.com/{destination}/releases/latest/download/install.sh | sh', '',
+                  'Or download arm64.dmg for Apple Silicon or x64.AppImage for Linux. Intel Mac builds are temporarily paused.',
                   'SHA256SUMS.txt contains installer and update metadata checksums.',
                   'In-app updates require an installed build configured with this feed. Older unsigned macOS builds require a manual signed installation.', ''])
     return '\n'.join(lines)
@@ -152,7 +154,8 @@ def main():
         os.environ.get('PR_TITLE', ''), os.environ.get('GITHUB_RUN_NUMBER', ''),
     )
     result = f'version={version}\nrelease={str(publish).lower()}\nprevious={previous}\n'
-    Path('desktop-release-notes.md').write_text(release_notes(version, previous, os.environ['GITHUB_REPOSITORY']))
+    Path('desktop-release-notes.md').write_text(
+        release_notes(version, previous, os.environ['GITHUB_REPOSITORY'], destination))
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         output.write(result)
     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:

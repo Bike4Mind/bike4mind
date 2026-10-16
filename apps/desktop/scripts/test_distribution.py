@@ -68,7 +68,9 @@ class DistributionTest(unittest.TestCase):
             root = Path(directory)
             for suffix in ('arm64.dmg', 'arm64.dmg.blockmap', 'arm64.zip', 'arm64.zip.blockmap', 'x64.AppImage'):
                 (root / f'Bike4Mind-0.2.2-{suffix}').write_bytes(appimage() if suffix == 'x64.AppImage' else suffix.encode())
+            (root / 'install.sh').write_text('#!/bin/sh\n')
             assemble(root, '0.2.2', 'owner/dist', 'owner/source')
+            self.assertIn('  install.sh\n', (root / 'SHA256SUMS.txt').read_text())
             self.assertFalse((root / 'Bike4Mind-0.2.2-arm64.dmg.blockmap').exists())
             original = (root / 'SHA256SUMS.txt').read_text()
             for platform in ('mac', 'linux'):
@@ -91,9 +93,14 @@ class DistributionTest(unittest.TestCase):
             self.assertNotIn('latest-mac.yml', (root / 'SHA256SUMS.txt').read_text())
             self.assertTrue((root / 'Bike4Mind-0.2.2-arm64.dmg').exists())
             self.assertEqual(sorted(p.name for p in root.iterdir()),
-                             ['Bike4Mind-0.2.2-arm64.dmg', 'Bike4Mind-0.2.2-x64.AppImage', 'SHA256SUMS.txt', 'latest-linux.yml'])
+                             ['Bike4Mind-0.2.2-arm64.dmg', 'Bike4Mind-0.2.2-x64.AppImage', 'SHA256SUMS.txt',
+                              'install.sh', 'latest-linux.yml'])
             with self.assertRaises(ValueError):
                 assemble(root, '0.2.2', 'owner/dist', 'owner/source', '')
+            (root / 'install.sh').unlink()
+            with self.assertRaises(ValueError):
+                assemble(root, '0.2.2', 'owner/dist', 'owner/source', 'adhoc')
+            (root / 'install.sh').write_text('#!/bin/sh\n')
             (root / 'Bike4Mind-0.2.2-arm64.zip').write_bytes(b'')
             (root / 'Bike4Mind-0.2.2-arm64.zip.blockmap').write_bytes(b'blockmap')
             with self.assertRaises(ValueError):
