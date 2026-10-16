@@ -1,4 +1,5 @@
-import { DELEGATION_TOOLS } from '@bike4mind/common';
+import { DELEGATION_TOOLS, resolveWorkspaceDeniedTools } from '@bike4mind/common';
+import { premiumWorkspaceDeniedTools } from '@client/app/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { CONTENT_READ_TOOL } from './agentExecutor.firstIterationQuery';
 
 /**
@@ -39,11 +40,20 @@ interface PolicyLogger {
   info: (message: string, meta?: Record<string, unknown>) => void;
 }
 
+/** The session's own `disabledTools` plus what its current surface denies. */
+export function sessionDeniedTools(session: { disabledTools?: string[] | null; surface?: string | null }): string[] {
+  return [
+    ...(session.disabledTools ?? []),
+    ...resolveWorkspaceDeniedTools(session.surface, premiumWorkspaceDeniedTools),
+  ];
+}
+
 export interface SessionToolPolicyInput {
   /** The run's resolved toolbelt before session policy (profile + mission + lattice names). */
   toolNames: readonly string[];
   session: {
     disabledTools?: string[] | null;
+    surface?: string | null;
     disableUserIntegrations?: boolean | null;
   };
   /**
@@ -72,7 +82,7 @@ export interface SessionToolPolicyInput {
 export function applySessionToolPolicy(input: SessionToolPolicyInput): string[] {
   const { toolNames, session, profileDeniedTools = [], hasAttachments, scopeDeniedTools = [], logger } = input;
 
-  const sessionDenied = new Set([...(session.disabledTools ?? []), ...scopeDeniedTools]);
+  const sessionDenied = new Set([...sessionDeniedTools(session), ...scopeDeniedTools]);
   const profileDenied = new Set(profileDeniedTools);
   const result = [...toolNames];
 
@@ -133,9 +143,9 @@ export function runHasAttachments(
  */
 export function delegationOffer(input: {
   profileDeniedTools?: readonly string[];
-  session: { disabledTools?: string[] | null; disableUserIntegrations?: boolean | null };
+  session: { disabledTools?: string[] | null; surface?: string | null; disableUserIntegrations?: boolean | null };
 }): { offerDelegate: boolean; offerDag: boolean } {
-  const denied = new Set([...(input.profileDeniedTools ?? []), ...(input.session.disabledTools ?? [])]);
+  const denied = new Set([...(input.profileDeniedTools ?? []), ...sessionDeniedTools(input.session)]);
   if (input.session.disableUserIntegrations) {
     for (const tool of DELEGATION_TOOLS) denied.add(tool);
   }

@@ -362,6 +362,8 @@ export interface IChatCompletionServiceOptions {
   slackWebhookUrl: string;
   imageProcessorLambdaName?: string; // Lambda function name for image processing
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
+  /** `{ surface id: tool names }` denied to sessions on that surface, unioned with `session.disabledTools`. */
+  workspaceDeniedTools?: Readonly<Record<string, readonly string[]>>;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
   invokeCreateMemento: (
     questId: string,

@@ -73,6 +73,16 @@ export function normalizeSurfaceId(surface: string | null | undefined): SurfaceI
   return surface ? surface : null;
 }
 
+/** Tools a contributed `{ surface id: tool names }` table denies to a session on `surface`. */
+export function resolveWorkspaceDeniedTools(
+  surface: string | null | undefined,
+  table: Readonly<Record<string, readonly string[]>> | null | undefined
+): string[] {
+  const id = normalizeSurfaceId(surface);
+  if (id === null || !table || !Object.prototype.hasOwnProperty.call(table, id)) return [];
+  return [...table[id]];
+}
+
 /** The registered workspace for `surface`, or undefined for a surface this repo does not know. */
 export function getWorkspaceSurface(surface: string | null | undefined): WorkspaceSurface | undefined {
   const id = normalizeSurfaceId(surface);

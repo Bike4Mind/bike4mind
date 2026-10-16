@@ -1,8 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('@client/app/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
+  premiumWorkspaceDeniedTools: { 'example-workspace': ['tool_denied_by_surface'] },
+}));
 import {
   applySessionToolPolicy,
   delegationOffer,
   runHasAttachments,
+  sessionDeniedTools,
   DELEGATION_TOOLS,
   type SessionToolPolicyInput,
 } from './agentExecutor.sessionToolPolicy';
@@ -264,5 +269,44 @@ describe('delegationOffer -- profile and session denials reach the dependency ga
     expect(
       delegationOffer({ profileDeniedTools: ['image_generation'], session: { disabledTools: ['web_search'] } })
     ).toEqual({ offerDelegate: true, offerDag: true });
+  });
+});
+
+describe('workspace denied tools', () => {
+  it('unions the surface denials with the session disabledTools', () => {
+    expect(sessionDeniedTools({ disabledTools: ['web_search'], surface: 'example-workspace' }).sort()).toEqual([
+      'tool_denied_by_surface',
+      'web_search',
+    ]);
+    expect(sessionDeniedTools({ disabledTools: ['web_search'], surface: null })).toEqual(['web_search']);
+  });
+
+  it('removes a surface-denied tool from the toolbelt', () => {
+    const result = applySessionToolPolicy({
+      toolNames: ['tool_denied_by_surface', 'web_search'],
+      session: { surface: 'example-workspace' },
+      hasAttachments: false,
+    });
+
+    expect(result).toEqual(['web_search']);
+  });
+
+  it('keeps the tool for a session on another surface', () => {
+    const result = applySessionToolPolicy({
+      toolNames: ['tool_denied_by_surface', 'web_search'],
+      session: { surface: 'elsewhere' },
+      hasAttachments: false,
+    });
+
+    expect(result).toEqual(['tool_denied_by_surface', 'web_search']);
+  });
+
+  it('withholds delegation when the surface denies a delegation tool', () => {
+    const [delegateTool] = DELEGATION_TOOLS;
+    const spy = vi.fn();
+    expect(spy).not.toHaveBeenCalled();
+    const offer = delegationOffer({ session: { surface: 'example-workspace' } });
+    expect(offer.offerDelegate).toBe(true);
+    expect(delegateTool).toBeTruthy();
   });
 });

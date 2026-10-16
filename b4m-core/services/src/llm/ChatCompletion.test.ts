@@ -8542,6 +8542,16 @@ describe('dropOldestHistoryTurn (overflow-recovery shed)', () => {
 });
 
 describe('resolveDeniedTools', () => {
+  it('unions the surface denials with the session and request denylists', () => {
+    expect(resolveDeniedTools(['tool_a'], ['tool_b'], ['tool_b', 'tool_c'])?.sort()).toEqual([
+      'tool_a',
+      'tool_b',
+      'tool_c',
+    ]);
+    expect(resolveDeniedTools(undefined, undefined, ['tool_c'])).toEqual(['tool_c']);
+    expect(resolveDeniedTools(undefined, undefined, [])).toBeUndefined();
+  });
+
   it('unions the session denylist with the request deniedTools', () => {
     expect(resolveDeniedTools(['web_search'], ['create_data_lake', 'web_search'])?.sort()).toEqual([
       'create_data_lake',

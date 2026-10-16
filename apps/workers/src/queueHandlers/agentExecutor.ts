@@ -153,6 +153,7 @@ import {
   delegationOffer,
   DELEGATION_TOOLS,
   runHasAttachments,
+  sessionDeniedTools,
 } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from '@server/utils/agentFailureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
@@ -1973,7 +1974,7 @@ async function processExecution(
       // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
       // so unioning them cannot widen what this agent is offered.
       sessionDisabledTools: mcpSessionDisabledTools(
-        session.disabledTools,
+        sessionDeniedTools(session),
         orchestrationProfile?.deniedTools,
         execution.profileDeniedTools
       ),
@@ -3669,7 +3670,7 @@ async function processSubagentDispatch(
       config: subagentToolConfig,
       // This site passes no `enabledTools`, so the denylist is the only thing standing between a
       // session-forbidden MCP tool and a dispatched subagent.
-      sessionDisabledTools: [...(session.disabledTools ?? []), ...(child.scopeDeniedTools ?? [])],
+      sessionDisabledTools: [...sessionDeniedTools(session), ...(child.scopeDeniedTools ?? [])],
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP
       // tools are excluded from the return), and that return is passed as the

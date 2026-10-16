@@ -47,6 +47,7 @@ import {
   pairDataLakeTools,
   isClaudeModelId,
   questGenerationJobs,
+  resolveWorkspaceDeniedTools,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -725,12 +726,18 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
  * The turn's denylist: the session's curated `disabledTools` plus the request's server-set
  * `deniedTools` (e.g. write tools an API key lacks the scope for - see dataLakeScopes.ts). A union,
  * so neither source can re-enable what the other denies. Undefined when both are empty, matching
- * how `sessionDisabledTools` was passed before.
+ * how `sessionDisabledTools` was passed before. `surfaceDeniedTools` is what the session's current surface
+ * denies (see `resolveWorkspaceDeniedTools`).
  */
-export function resolveDeniedTools(sessionDisabledTools: unknown, requestDeniedTools?: string[]): string[] | undefined {
+export function resolveDeniedTools(
+  sessionDisabledTools: unknown,
+  requestDeniedTools?: string[],
+  surfaceDeniedTools?: readonly string[]
+): string[] | undefined {
   const merged = new Set([
     ...(Array.isArray(sessionDisabledTools) ? sessionDisabledTools : []),
     ...(requestDeniedTools ?? []),
+    ...(surfaceDeniedTools ?? []),
   ]);
   return merged.size > 0 ? [...merged] : undefined;
 }
@@ -997,6 +1004,7 @@ export class ChatCompletionProcess {
   private imageProcessorLambdaName?: string;
   private wsHttpsUrl: string;
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
+  private workspaceDeniedTools: IChatCompletionServiceOptions['workspaceDeniedTools'];
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   private statusManager: StatusManager | null = null;
@@ -1048,6 +1056,7 @@ export class ChatCompletionProcess {
     this.contextSummarizeSession = options.contextSummarizeSession;
     this.wsHttpsUrl = options.wsHttpsUrl;
     this.abilityGetter = options.abilityGetter;
+    this.workspaceDeniedTools = options.workspaceDeniedTools;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
     this.getMcpClient = options.getMcpClient;
@@ -2037,7 +2046,11 @@ export class ChatCompletionProcess {
       const replyChoicesOffered = !(skipAutoOffers || isResearchMode || parsedBody.skipReplyChoices);
       // Read at every denylist site below instead of `session.disabledTools`: the final pass after
       // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
-      const deniedTools = resolveDeniedTools(session.disabledTools, parsedBody.deniedTools);
+      const deniedTools = resolveDeniedTools(
+        session.disabledTools,
+        parsedBody.deniedTools,
+        resolveWorkspaceDeniedTools(session.surface, this.workspaceDeniedTools)
+      );
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
       // fetch below instead of serializing in front of it - folded into that Promise.all.
       //
