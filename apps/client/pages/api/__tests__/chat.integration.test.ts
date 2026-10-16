@@ -1065,7 +1065,7 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     expect(res._getJSONData()).not.toHaveProperty('promptDetails');
   });
 
-  it('returns the error quest as-is on wait: true when invoke saved the turn as failed', async () => {
+  it('surfaces the error quest fields in the wait: true response', async () => {
     mockInvoke.mockResolvedValue({
       id: 'quest-err',
       status: 'done',

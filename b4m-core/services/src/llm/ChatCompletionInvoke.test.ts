@@ -356,7 +356,7 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
       authOrigin: 'session',
     });
 
-    expect(pinnedModels()).toEqual([expect.objectContaining({ lastUsedModel: SUCCESSOR_ID })]);
+    expect(pinnedModels()).toEqual([{ id: 'session-1', lastUsedModel: SUCCESSOR_ID }]);
   });
 
   it('skips the pin write when the session is already on the resolved model', async () => {
