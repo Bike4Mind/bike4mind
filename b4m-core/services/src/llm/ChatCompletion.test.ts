@@ -2019,6 +2019,20 @@ describe('ChatCompletionProcess', () => {
         expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('CRITICAL'), expect.anything());
         expect(incrementCredits).toHaveBeenCalledTimes(1);
       });
+
+      it('restores the holder snapshot when the refund fails', async () => {
+        const fields = service as unknown as ReservationFields & {
+          reservedCreditHolder: { currentCredits: number } | null;
+        };
+        fields.reservedCredits = 50;
+        fields.reservedCreditsOwnerId = 'owner-id';
+        fields.reservedCreditHolder = { currentCredits: 10 };
+        mockDb.users = { ...mockDb.users, incrementCredits: vi.fn().mockRejectedValue(new Error('db down')) };
+
+        await service.releaseReservedCredits('q1', mockLogger);
+
+        expect(fields.reservedCreditHolder?.currentCredits).toBe(10);
+      });
     });
 
     describe('Research Mode cancellation', () => {

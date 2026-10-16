@@ -1743,6 +1743,8 @@ export class ChatCompletionProcess {
       await rollbackMethod.incrementCredits(ownerId, amount);
       logger.info(`Rolled back ${amount} reserved credits for quest ${questId}`);
     } catch (rollbackError) {
+      // The refund never landed, so a later settlement must not charge against it.
+      if (this.reservedCreditHolder) this.reservedCreditHolder.currentCredits -= amount;
       logger.error(
         `CRITICAL: Failed to rollback ${amount} reserved credits for quest ${questId} (ownerType=${this.reservedCreditsOwnerType}). Manual reconciliation required.`,
         rollbackError
