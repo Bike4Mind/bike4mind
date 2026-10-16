@@ -18,7 +18,8 @@ export interface SidebarSections {
   pinned: ChatSessionSummary[];
   /**
    * Every section the user made, in their order, including the empty ones - an empty section
-   * still has to be on screen to be renamed, deleted, or found again.
+   * still has to be on screen to be renamed, deleted, or found again. A section whose sessions
+   * all belong to the other mode is left out, so it does not show as empty here.
    */
   custom: CustomGroup[];
   /** Code sessions, one group per project directory. */
@@ -55,7 +56,20 @@ export function groupSessions(
   const pinned = visible.filter(session => session.pinned);
   const rest = visible.filter(session => !session.pinned);
 
-  const custom = userSections.sections.map(section => ({ section, sessions: [] as ChatSessionSummary[] }));
+  const modesBySection = new Map<string, Set<ChatSessionMode>>();
+  for (const session of sessions) {
+    const sectionId = userSections.assignments[session.id];
+    if (sectionId === undefined) continue;
+    const modes = modesBySection.get(sectionId) ?? new Set<ChatSessionMode>();
+    modes.add(session.mode);
+    modesBySection.set(sectionId, modes);
+  }
+  const custom = userSections.sections
+    .filter(section => {
+      const modes = modesBySection.get(section.id);
+      return !modes || modes.has(mode);
+    })
+    .map(section => ({ section, sessions: [] as ChatSessionSummary[] }));
   const bySection = new Map(custom.map(group => [group.section.id, group]));
   const byDirectory = new Map<string, ProjectGroup>();
   const loose: ChatSessionSummary[] = [];

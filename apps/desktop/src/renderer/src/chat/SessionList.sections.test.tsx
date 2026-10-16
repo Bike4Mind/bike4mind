@@ -618,3 +618,15 @@ describe('searching with sections', () => {
     expect(all('sidebar-section-name').map(node => node.textContent)).toEqual(['Work', 'Home']);
   });
 });
+
+describe('sections in the other mode', () => {
+  it('does not count a code-only section as content in chat mode', async () => {
+    await mount([summary('c1', 'Code work', { mode: 'code' })], {
+      sections: [{ id: 'code-only', name: 'Code only' }],
+      assignments: { c1: 'code-only' },
+    });
+
+    expect(query('chat-sessions-empty')).not.toBeNull();
+    expect(all('sidebar-section')).toHaveLength(0);
+  });
+});

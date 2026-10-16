@@ -188,4 +188,37 @@ describe('user sections', () => {
 
     expect(orderedSessions(sections).map(entry => entry.id)).toEqual(['pin', 'filed', 'loose']);
   });
+
+  describe('a section that holds sessions of only one mode', () => {
+    const state = {
+      sections: [
+        { id: 'code-only', name: 'Code only' },
+        { id: 'empty', name: 'Empty' },
+        { id: 'both', name: 'Both' },
+      ],
+      assignments: { c1: 'code-only', c2: 'both', h1: 'both' },
+    };
+    const sessions = [
+      session({ id: 'c1', mode: 'code', project: project('/r/one', 'one') }),
+      session({ id: 'c2', mode: 'code', project: project('/r/one', 'one') }),
+      session({ id: 'h1' }),
+    ];
+    const names = (mode: 'chat' | 'code') =>
+      groupSessions(sessions, mode, state).custom.map(group => group.section.name);
+
+    it('is hidden in the mode it has no sessions in, and shown in the other', () => {
+      expect(names('chat')).not.toContain('Code only');
+      expect(names('code')).toContain('Code only');
+    });
+
+    it('stays in both modes while it has no sessions at all', () => {
+      expect(names('chat')).toContain('Empty');
+      expect(names('code')).toContain('Empty');
+    });
+
+    it('shows in both modes when it holds a session of each', () => {
+      expect(names('chat')).toContain('Both');
+      expect(names('code')).toContain('Both');
+    });
+  });
 });
