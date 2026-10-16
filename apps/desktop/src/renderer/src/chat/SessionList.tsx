@@ -817,7 +817,13 @@ export function SessionList({
   // Anywhere in the list outside a section takes a session out of its section; a row in no
   // section has nowhere new to go there, so it is not offered as a target at all.
   const dragOverList = (event: DragEvent<HTMLElement>) => {
-    if (!draggingSectionId || !event.dataTransfer.types.includes(SESSION_DRAG_TYPE)) return;
+    if (!event.dataTransfer.types.includes(SESSION_DRAG_TYPE)) return;
+    if (!draggingSectionId) {
+      // Not prevented, so the list is no target; a section lit up on the way here still goes dark.
+      event.dataTransfer.dropEffect = 'none';
+      if (dropTarget !== null) setDropTarget(null);
+      return;
+    }
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
     if (dropTarget?.kind !== 'default') setDropTarget({ kind: 'default' });

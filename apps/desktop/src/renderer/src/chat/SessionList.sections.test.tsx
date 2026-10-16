@@ -514,6 +514,23 @@ describe('dragging a session', () => {
     expect(bridge.moveSession).not.toHaveBeenCalled();
   });
 
+  it('clears a section highlight when a row in no section moves on to the list', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
+    const transfer = fakeDataTransfer();
+    const row = rowNamed('Beta');
+    fireDrag(row, 'dragstart', transfer);
+    await nextFrame();
+
+    fireDrag(sectionNamed('Work'), 'dragover', transfer);
+    await settle();
+    expect(sectionNamed('Work').dataset.dropTarget).toBe('true');
+
+    expect(fireDrag(rowNamed('Beta'), 'dragover', transfer)).toBe(false);
+    await settle();
+    expect(sectionNamed('Work').dataset.dropTarget).toBeUndefined();
+    fireDrag(row, 'dragend', transfer);
+  });
+
   it('does nothing when a row is dropped back on its own section', async () => {
     await mount([summary('a', 'Alpha')], workAndHome);
 
