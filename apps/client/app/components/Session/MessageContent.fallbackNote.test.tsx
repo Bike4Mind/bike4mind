@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -200,15 +200,24 @@ describe('MessageContent - reply model chip', () => {
     expect(await screen.findByRole('tooltip')).toHaveTextContent('Replaces gemini-2.5-pro');
   });
 
-  it('shows no replacement tooltip on an error reply, even one that followed a redirect', async () => {
-    renderWithModel({ name: 'gemini-3.5-flash' }, 'gemini-2.5-pro', 'error');
+  it('shows no replacement tooltip on an error reply, even one that followed a redirect', () => {
+    // Fake timers so the assertion does not race Joy's enterDelay: advancing past it proves the
+    // tooltip stays unmounted, where a wall-clock wait could fire before the popper even mounts.
+    vi.useFakeTimers();
+    try {
+      renderWithModel({ name: 'gemini-3.5-flash' }, 'gemini-2.5-pro', 'error');
 
-    const chip = screen.getByTestId('message-model-chip');
-    expect(chip).toHaveTextContent('gemini-3.5-flash');
-    fireEvent.mouseOver(chip);
+      const chip = screen.getByTestId('message-model-chip');
+      expect(chip).toHaveTextContent('gemini-3.5-flash');
+      fireEvent.mouseOver(chip);
 
-    await new Promise(resolve => setTimeout(resolve, 150));
-    expect(screen.queryByRole('tooltip')).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(screen.queryByRole('tooltip')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows no replacement tooltip when nothing was replaced', () => {
