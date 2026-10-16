@@ -1761,7 +1761,7 @@ describe('ChatCompletionProcess', () => {
     });
 
     describe('caller abortSignal (wait=true deadline)', () => {
-      function arrangeTurn() {
+      function arrangeTurn({ hangUntilAbort = false }: { hangUntilAbort?: boolean } = {}) {
         let signalSeen: AbortSignal | undefined;
         let markBackendCalled: () => void = () => {};
         const backendCalled = new Promise<void>(resolve => {
@@ -1774,7 +1774,9 @@ describe('ChatCompletionProcess', () => {
             const fail = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
             if (opts.abortSignal?.aborted) return fail();
             opts.abortSignal?.addEventListener('abort', fail, { once: true });
-            setTimeout(resolve, 3000);
+            // hangUntilAbort leaves the turn open until the caller aborts, so a test can advance
+            // virtual time past the streaming heartbeat without the turn completing first.
+            if (!hangUntilAbort) setTimeout(resolve, 3000);
           });
         });
         mockedGetLlmByModel.mockReturnValue({
@@ -1829,6 +1831,54 @@ describe('ChatCompletionProcess', () => {
         await run;
 
         expect(mockDb.quests.update.mock.calls.length).toBe(updatesAtAbort);
+      });
+
+      it('waits for an in-flight quest save before returning on the caller abort', async () => {
+        vi.useFakeTimers();
+        try {
+          const { body, backendCalled } = arrangeTurn({ hangUntilAbort: true });
+          // Hold the write the heartbeat starts, so the save mutex stays locked across the abort.
+          let holdWrites = false;
+          let writeStarted = false;
+          let releaseWrite: (value: unknown) => void = () => {};
+          mockDb.quests.update.mockImplementation(() => {
+            if (!holdWrites) return Promise.resolve(undefined);
+            writeStarted = true;
+            return new Promise(resolve => {
+              releaseWrite = resolve;
+            });
+          });
+          const external = new AbortController();
+          let resolved = false;
+          const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+          run.then(
+            () => {
+              resolved = true;
+            },
+            () => {
+              resolved = true;
+            }
+          );
+
+          await backendCalled;
+          holdWrites = true;
+          // One heartbeat: its save clears the not-yet-aborted fence and enters the save mutex.
+          await vi.advanceTimersByTimeAsync(10_000);
+          expect(writeStarted).toBe(true);
+
+          external.abort();
+          holdWrites = false; // only the write already in flight stays held
+          await vi.advanceTimersByTimeAsync(0);
+          for (let i = 0; i < 20; i++) await Promise.resolve();
+          // The write is still pending, so the drain must keep process() from resolving yet.
+          expect(resolved).toBe(false);
+
+          releaseWrite(mockQuest);
+          await run;
+          expect(resolved).toBe(true);
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it('aborts the backend signal at once when the caller signal is already aborted', async () => {
