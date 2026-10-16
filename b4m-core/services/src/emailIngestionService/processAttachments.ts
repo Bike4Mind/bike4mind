@@ -13,26 +13,12 @@ import { createFabFile } from '../fabFileService/create';
 import { ParsedEmailObject, ProcessedAttachment, IStorageAdapter } from './types';
 
 /**
- * Normalize a MIME type to a supported type, falling back to text/plain for unknown types.
+ * Maps the one alias spelling email clients use to its supported type. Every other claim is
+ * passed through as-is so `createFabFile` decides: an unknown or binary claim is never relabeled
+ * text/plain, which is how an extensionless executable was being stored and chunked as prose.
  */
-function normalizeMimeType(mimeType: string): SupportedFabFileMimeTypes {
-  const supportedTypes = Object.values(SupportedFabFileMimeTypes);
-  if (supportedTypes.includes(mimeType as SupportedFabFileMimeTypes)) {
-    return mimeType as SupportedFabFileMimeTypes;
-  }
-
-  // Map common variations
-  const mimeTypeMap: Record<string, SupportedFabFileMimeTypes> = {
-    'text/x-markdown': SupportedFabFileMimeTypes.TXT_MARKDOWN,
-    'application/octet-stream': SupportedFabFileMimeTypes.TXT_PLAIN,
-  };
-
-  if (mimeTypeMap[mimeType]) {
-    return mimeTypeMap[mimeType];
-  }
-
-  Logger.warn(`Unknown MIME type: ${mimeType}, using text/plain as fallback`);
-  return SupportedFabFileMimeTypes.TXT_PLAIN;
+function normalizeMimeType(mimeType: string): string {
+  return mimeType === 'text/x-markdown' ? SupportedFabFileMimeTypes.TXT_MARKDOWN : mimeType;
 }
 
 /**
