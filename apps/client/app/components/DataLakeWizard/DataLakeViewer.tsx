@@ -33,6 +33,7 @@ import {
   humanizeTagSegment,
   satisfiesTagPrefix,
   submittedTagPrefix,
+  type DataLakeOrigin,
 } from '@bike4mind/common';
 import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
 import { labelLakeRoot } from '@client/app/components/datalake/treeChrome';
@@ -58,6 +59,7 @@ interface DataLakeViewerProps {
   dataLakeId: string;
   dataLakeName: string;
   tagPrefix: string;
+  origin?: DataLakeOrigin;
   /**
    * Whether the caller may manage this lake (admin or creator). Gates the per-file
    * management actions (Re-process, Remove) - the lake list surfaces other users'
@@ -72,6 +74,7 @@ export default function DataLakeViewer({
   dataLakeId,
   dataLakeName,
   tagPrefix,
+  origin,
   canManage,
   onClose,
   onAskAbout,
@@ -144,6 +147,7 @@ export default function DataLakeViewer({
           articles={articles}
           tagPrefix={tagPrefix}
           lakeName={dataLakeName}
+          origin={origin}
           breadcrumb={breadcrumb}
           onNavigate={handleNavigate}
           selectedFileIds={selectedFileIds}
@@ -171,6 +175,7 @@ interface TreeSidebarProps {
   articles: DataLakeMemberFile[];
   tagPrefix: string;
   lakeName: string;
+  origin?: DataLakeOrigin;
   breadcrumb: string[];
   onNavigate: (breadcrumb: string[]) => void;
   selectedFileIds: ReadonlySet<string>;
@@ -184,6 +189,7 @@ function TreeSidebar({
   articles,
   tagPrefix,
   lakeName,
+  origin,
   breadcrumb,
   onNavigate,
   selectedFileIds,
@@ -195,7 +201,7 @@ function TreeSidebar({
   // Shares the server's predicate so this bucket holds exactly the files the write doors and the
   // backfill consider uncategorized; a local copy already drifted on the bare-prefix case.
   const prefixNorm = submittedTagPrefix(tagPrefix) || ':';
-  const label = labelLakeRoot(prefixNorm, lakeName, humanizeTagSegment);
+  const label = labelLakeRoot({ name: lakeName, fileTagPrefix: prefixNorm, origin }, humanizeTagSegment);
   const uncategorizedFiles = useMemo(
     () =>
       [...articles]

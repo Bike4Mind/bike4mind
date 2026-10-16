@@ -119,7 +119,7 @@ describe('DataLakeViewer tree counts', () => {
 
     render(
       <TestWrapper>
-        <DataLakeViewer dataLakeId="lk1" dataLakeName="acme/docs" tagPrefix="gh-abc123:" />
+        <DataLakeViewer dataLakeId="lk1" dataLakeName="acme/docs" tagPrefix="gh-abc123:" origin="connector-fed" />
       </TestWrapper>
     );
 
@@ -127,6 +127,21 @@ describe('DataLakeViewer tree counts', () => {
     await userEvent.click(screen.getByTestId('datalake-node-gh-abc123'));
     expect(screen.getByTestId('datalake-node-docs')).toHaveTextContent(/^Docs1$/);
     expect(screen.queryByText(/gh abc123/i)).toBeNull();
+  });
+
+  it('keeps the humanized root of a curated multi-segment prefix', () => {
+    const files = [
+      fabFile({ id: 'f1', fileName: 'a.md', tags: [{ name: 'acme:legal:nda' }] } as Partial<IFabFileDocument>),
+    ];
+    useDataLakeFiles.mockReturnValue({ data: { data: files }, isLoading: false, isError: false });
+
+    render(
+      <TestWrapper>
+        <DataLakeViewer dataLakeId="lk1" dataLakeName="Legal Contracts" tagPrefix="acme:legal:" />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-node-acme')).toHaveTextContent(/^Acme1$/);
   });
 });
 
