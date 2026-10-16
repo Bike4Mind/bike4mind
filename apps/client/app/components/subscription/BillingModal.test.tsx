@@ -4,6 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import { SubscriptionSource } from '@client/lib/subscriptions/types';
 import type { BillingView } from '@client/app/utils/billingDeepLink';
 
 const state = vi.hoisted(() => ({
@@ -85,6 +86,25 @@ describe('BillingModal', () => {
     renderModal();
     expect(sectionOrder()).toEqual(['billing-section-plans', 'billing-section-credits']);
     expect(screen.getByTestId('billing-current-plan')).toHaveTextContent('Payment failed');
+  });
+
+  it('shows the dunned Stripe row, not an active admin grant at the same price, like the plan card does', () => {
+    state.subscriptions = [
+      subRow({ subscriptionId: 'admin_granted_1', source: SubscriptionSource.AdminGrant, status: 'active' }),
+      subRow({ subscriptionId: 'sub_stripe', source: SubscriptionSource.Stripe, status: 'past_due' }),
+    ];
+    renderModal();
+    expect(screen.getByTestId('billing-current-plan')).toHaveTextContent('Payment failed');
+    expect(sectionOrder()).toEqual(['billing-section-plans', 'billing-section-credits']);
+  });
+
+  it('prefers the active row over a trialing one listed before it', () => {
+    state.subscriptions = [
+      subRow({ subscriptionId: 'sub_trial', status: 'trialing', canceledAt: new Date('2026-01-01T00:00:00Z') }),
+      subRow({ subscriptionId: 'sub_active', status: 'active' }),
+    ];
+    renderModal();
+    expect(screen.getByTestId('billing-current-plan')).toHaveTextContent('subscriptions.renews_on');
   });
 
   it.each([

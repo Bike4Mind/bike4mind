@@ -8,7 +8,7 @@ import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings'
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import type { BillingView } from '@client/app/utils/billingDeepLink';
-import { isCancellableSubscriptionStatus, isDelinquentSubscriptionStatus } from '@client/lib/subscriptions/types';
+import { isDelinquentSubscriptionStatus, pickDisplayedSubscription } from '@client/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { CreditsSection } from './CreditsSection';
 import { PlansSection, PlansSectionSkeleton } from './PlansSection';
@@ -100,10 +100,8 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
   const noCredits = credits <= 0;
   const isLowCredits = credits < lowCreditsThreshold;
 
-  const currentSubscription = useMemo(() => {
-    const cancellable = (subscriptions.data ?? []).filter(sub => isCancellableSubscriptionStatus(sub.status));
-    return cancellable.find(sub => !isDelinquentSubscriptionStatus(sub.status)) ?? cancellable[0];
-  }, [subscriptions.data]);
+  // The shared display rule (lib/subscriptions/types), so this header and the plan card agree on the row.
+  const currentSubscription = useMemo(() => pickDisplayedSubscription(subscriptions.data ?? []), [subscriptions.data]);
   const hasPaymentIssue = !!currentSubscription && isDelinquentSubscriptionStatus(currentSubscription.status);
   // A failed payment keeps plans on top: fixing the card is the action that matters.
   const plansFirst = !currentSubscription || hasPaymentIssue;
