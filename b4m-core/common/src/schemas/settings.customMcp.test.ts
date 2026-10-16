@@ -64,6 +64,8 @@ describe('customMcpPolicy', () => {
     expect(entry.schema.safeParse({ mode: 'everything' }).success).toBe(false);
     expect(entry.schema.safeParse({ maxConnectionsPerUser: -1 }).success).toBe(false);
     expect(entry.schema.safeParse({ maxConnectionsPerUser: 1.5 }).success).toBe(false);
+    expect(entry.schema.safeParse({ maxConnectionsPerUser: 21 }).success).toBe(false);
+    expect(entry.schema.safeParse({ maxConnectionsPerUser: 20 }).success).toBe(true);
   });
 
   it('is org-settable and not readable by members', () => {

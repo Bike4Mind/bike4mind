@@ -1118,6 +1118,9 @@ export enum ServerStatusEnum {
   Offline = 'offline',
 }
 
+/** Platform cap on custom MCP connections per user (design #4845). */
+export const CUSTOM_MCP_MAX_CONNECTIONS_PER_USER = 20;
+
 export const CUSTOM_MCP_POLICY_MODES = ['off', 'presets_only', 'allowlist', 'any'] as const;
 export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
 
@@ -1136,7 +1139,13 @@ export const CustomMcpPolicySchema = z.object({
   /** false drops every tool not annotated read-only at offering time. */
   allowWriteTools: z.boolean().default(true),
   requireApprovalForAll: z.boolean().default(false),
-  maxConnectionsPerUser: z.number().int().min(0).max(100).default(20),
+  /** Capped at the platform limit; an org can only lower it. */
+  maxConnectionsPerUser: z
+    .number()
+    .int()
+    .min(0)
+    .max(CUSTOM_MCP_MAX_CONNECTIONS_PER_USER)
+    .default(CUSTOM_MCP_MAX_CONNECTIONS_PER_USER),
 });
 
 export type CustomMcpPolicy = z.infer<typeof CustomMcpPolicySchema>;
