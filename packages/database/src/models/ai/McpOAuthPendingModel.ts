@@ -47,16 +47,18 @@ class McpOAuthPendingRepository
   }
 
   /**
-   * Single use: the `consumedAt: null` filter makes a replayed or concurrent callback lose. The TTL
+   * Single use: the `consumedAt: null` filter makes a replayed or concurrent callback lose. The
+   * `userId` filter means another user's session cannot burn (or complete) the attempt. The TTL
    * monitor only runs about once a minute, so expiry is also checked here rather than trusted to it.
    * Resolves with `codeVerifierEnc`, which the callback needs for the code exchange.
    */
-  async consume(stateHash: string): Promise<IMcpOAuthPendingDocument | null> {
+  async consume(stateHash: string, userId: string): Promise<IMcpOAuthPendingDocument | null> {
     const now = new Date();
     const result = await this.model
       .findOneAndUpdate(
         {
           stateHash,
+          userId,
           consumedAt: null,
           createdAt: { $gt: new Date(now.getTime() - MCP_OAUTH_PENDING_TTL_SECONDS * 1000) },
         },

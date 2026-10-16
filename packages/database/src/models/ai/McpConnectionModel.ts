@@ -7,6 +7,8 @@ import {
   IMongoDocument,
   McpConnectionOwner,
   McpConnectionProtectedFieldError,
+  McpConnectionSlugConflictError,
+  McpRefreshLeaseResult,
   McpConnectionStatus,
   McpDiscoveryUpdate,
   McpOAuthTokenUpdate,
@@ -66,6 +68,8 @@ function toolsWithinBounds(tools: unknown): boolean {
 const serverInfoField = { type: String, maxlength: MCP_CONNECTION_LIMITS.serverInfoFieldLength };
 
 // Secrets are `select: false` (see MCP_CONNECTION_SECRET_PATHS); credential reads opt back in.
+// `aggregate()`, `distinct()` and the raw driver collection bypass `select: false`: never point one
+// at this collection without an explicit projection that drops every secret path.
 const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
   {
     ownerType: { type: String, enum: MCP_CONNECTION_OWNER_TYPES, required: true },
@@ -227,6 +231,14 @@ function assertNoProtectedFields(data: Record<string, unknown>, options?: Record
   }
 }
 
+function isOwnerSlugDuplicate(error: unknown): boolean {
+  const mongoError = error as { code?: number; keyPattern?: Record<string, unknown>; message?: string };
+  return (
+    mongoError?.code === 11000 &&
+    (Boolean(mongoError.keyPattern?.slug) || /mcpconn_owner_slug/.test(mongoError.message ?? ''))
+  );
+}
+
 function oauthTokenSet(tokens: McpOAuthTokenUpdate): Record<string, unknown> {
   const set: Record<string, unknown> = { 'auth.oauth.accessTokenEnc': tokens.accessTokenEnc };
   if (tokens.refreshTokenEnc !== undefined) set['auth.oauth.refreshTokenEnc'] = tokens.refreshTokenEnc;
@@ -275,7 +287,12 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   async create(data: Omit<IMcpConnectionDocument, 'id' | 'updatedAt' | 'createdAt'>) {
     const problem = mcpConnectionOwnerProblem(data);
     if (problem) throw new McpConnectionOwnerError(problem);
-    return stripSecrets(await super.create(data));
+    try {
+      return stripSecrets(await super.create(data));
+    } catch (error) {
+      if (isOwnerSlugDuplicate(error)) throw new McpConnectionSlugConflictError(data.slug);
+      throw error;
+    }
   }
 
   async findByIdForOwner(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null> {
@@ -500,15 +517,16 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
 
   /**
    * Take the refresh lease when it is free or expired. Atomic, so of N concurrent callers exactly
-   * one wins; the losers get null and should re-read the record until the winner has stored the
-   * rotated token. Resolves with credentials, because the winner is about to spend the refresh token.
+   * one wins. Uses the app clock for `now` and `until`: a pipeline update could use `$$NOW`, but
+   * DOCUMENTDB_COMPATIBILITY_NOTES.md does not establish pipeline-update support, so instances are
+   * assumed NTP-synced and the 15 s TTL absorbs ordinary skew.
    */
   async acquireRefreshLease(
     id: string,
     holder: string,
     ttlMs: number = MCP_REFRESH_LEASE_TTL_MS
-  ): Promise<IMcpConnectionDocument | null> {
-    if (!mongoose.isObjectIdOrHexString(id)) return null;
+  ): Promise<McpRefreshLeaseResult> {
+    if (!mongoose.isObjectIdOrHexString(id)) return { outcome: 'not_found' };
     const now = new Date();
     const result = await this.model
       .findOneAndUpdate(
@@ -517,7 +535,11 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
         { new: true }
       )
       .select(WITH_CREDENTIALS);
-    return result?.toJSON() ?? null;
+    if (result) return { outcome: 'acquired', connection: result.toJSON() };
+
+    const current = await this.model.findOne({ _id: id, ownerType: 'user' }, { refreshLease: 1 });
+    if (!current) return { outcome: 'not_found' };
+    return { outcome: 'held', holder: current.refreshLease?.holder, until: current.refreshLease?.until };
   }
 
   /** Releases only the caller's own lease, so a holder that overran its TTL cannot free a successor's. */

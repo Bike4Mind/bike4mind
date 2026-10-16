@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ConflictError } from '../../errors';
 import type { IntegrationId } from '../../integrations/catalog';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
@@ -459,6 +460,24 @@ export class McpConnectionProtectedFieldError extends Error {
   }
 }
 
+/** The slug is already taken for this owner (the `mcpconn_owner_slug` unique index). */
+export class McpConnectionSlugConflictError extends ConflictError {
+  constructor(readonly slug: string) {
+    super(`A connection with the slug "${slug}" already exists`, { slug });
+    this.name = 'McpConnectionSlugConflictError';
+  }
+}
+
+/**
+ * `acquired` carries the connection with credentials (the winner is about to spend the refresh
+ * token). `held`: another caller owns an unexpired lease; poll the record for its rotated token.
+ * `not_found`: deleted, or not a user connection; stop.
+ */
+export type McpRefreshLeaseResult =
+  | { outcome: 'acquired'; connection: IMcpConnectionDocument }
+  | { outcome: 'held'; holder?: string; until?: Date }
+  | { outcome: 'not_found' };
+
 /** One tool's review choices. Omitted fields are left as stored; unknown tool names are ignored. */
 export interface McpToolSettingsUpdate {
   name: string;
@@ -531,7 +550,7 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
   /** First code exchange; there is no lease yet. Null when the connection is gone or not OAuth. */
   setInitialOAuthTokens(id: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null>;
   markUsed(id: string): Promise<void>;
-  acquireRefreshLease(id: string, holder: string, ttlMs?: number): Promise<IMcpConnectionDocument | null>;
+  acquireRefreshLease(id: string, holder: string, ttlMs?: number): Promise<McpRefreshLeaseResult>;
   releaseRefreshLease(id: string, holder: string): Promise<boolean>;
   deleteForOwner(id: string, owner: McpConnectionOwner): Promise<boolean>;
 }
@@ -556,8 +575,11 @@ export interface IMcpOAuthPendingDocument extends IMcpOAuthPending, IMongoDocume
 export const MCP_OAUTH_PENDING_TTL_SECONDS = 600;
 
 export interface IMcpOAuthPendingRepository extends IBaseRepository<IMcpOAuthPendingDocument> {
-  /** Atomically marks the state consumed; resolves null when unknown, expired or already used. */
-  consume(stateHash: string): Promise<IMcpOAuthPendingDocument | null>;
+  /**
+   * Atomically marks the state consumed; resolves null when unknown, expired, already used, or
+   * started by a different user (the callback passes the session's user).
+   */
+  consume(stateHash: string, userId: string): Promise<IMcpOAuthPendingDocument | null>;
 }
 
 /** Dynamic Client Registration result, shared per (authorization server, redirect URI). */

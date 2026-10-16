@@ -53,29 +53,35 @@ describe('McpOAuthPendingModel', () => {
   it('consumes a state exactly once, returning the verifier', async () => {
     await mcpOAuthPendingRepository.create(pending());
 
-    const first = await mcpOAuthPendingRepository.consume('state-hash-1');
+    const first = await mcpOAuthPendingRepository.consume('state-hash-1', 'user-1');
     expect(first?.codeVerifierEnc).toBe('enc:verifier');
     expect(first?.consumedAt).toBeInstanceOf(Date);
 
-    expect(await mcpOAuthPendingRepository.consume('state-hash-1')).toBeNull();
+    expect(await mcpOAuthPendingRepository.consume('state-hash-1', 'user-1')).toBeNull();
+  });
+
+  it("refuses another user's session and leaves the state usable by its owner", async () => {
+    await mcpOAuthPendingRepository.create(pending());
+    expect(await mcpOAuthPendingRepository.consume('state-hash-1', 'user-2')).toBeNull();
+    expect(await mcpOAuthPendingRepository.consume('state-hash-1', 'user-1')).not.toBeNull();
   });
 
   it('lets only one of several concurrent callbacks consume the state', async () => {
     await mcpOAuthPendingRepository.create(pending());
     const results = await Promise.all(
-      Array.from({ length: 5 }, () => mcpOAuthPendingRepository.consume('state-hash-1'))
+      Array.from({ length: 5 }, () => mcpOAuthPendingRepository.consume('state-hash-1', 'user-1'))
     );
     expect(results.filter(r => r !== null)).toHaveLength(1);
   });
 
   it('refuses an unknown or expired state', async () => {
-    expect(await mcpOAuthPendingRepository.consume('nope')).toBeNull();
+    expect(await mcpOAuthPendingRepository.consume('nope', 'user-1')).toBeNull();
 
     const created = await mcpOAuthPendingRepository.create(pending('old'));
     await McpOAuthPending.collection.updateOne(
       { _id: new mongoose.Types.ObjectId(created.id) },
       { $set: { createdAt: new Date(Date.now() - (MCP_OAUTH_PENDING_TTL_SECONDS + 5) * 1000) } }
     );
-    expect(await mcpOAuthPendingRepository.consume('old')).toBeNull();
+    expect(await mcpOAuthPendingRepository.consume('old', 'user-1')).toBeNull();
   });
 });
