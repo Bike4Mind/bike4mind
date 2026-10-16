@@ -1903,6 +1903,47 @@ describe('ChatCompletionProcess', () => {
 
         expect(incrementCredits).not.toHaveBeenCalled();
       });
+
+      it('keeps the refunded balance so a later settlement bills the actual instead of writing it off', async () => {
+        const fields = service as unknown as ReservationFields & {
+          reservedCreditHolder: { currentCredits: number } | null;
+        };
+        fields.reservedCredits = 50;
+        fields.reservedCreditsOwnerId = 'owner-id';
+        // The balance the reservation held it at: 50 had already come out of a 60 balance.
+        fields.reservedCreditHolder = { currentCredits: 10 };
+        const incrementCredits = vi.fn().mockResolvedValue({ id: 'owner-id', currentCredits: 60 });
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        await service.releaseReservedCredits('q1', mockLogger);
+
+        expect(incrementCredits).toHaveBeenCalledWith('owner-id', 50);
+        expect(fields.reservedCreditHolder?.currentCredits).toBe(60);
+        // What the still-running process() computes at settlement. A zeroed holder would floor the
+        // debit at zero and give the turn away; the restored balance charges the real 30.
+        const { delta, writtenOffCredits } = computeSettlementDelta(
+          0,
+          30,
+          fields.reservedCreditHolder?.currentCredits ?? 0
+        );
+        expect(delta).toBe(-30);
+        expect(writtenOffCredits).toBe(0);
+      });
+
+      it('resolves and logs CRITICAL when the refund fails, without refunding twice', async () => {
+        const fields = service as unknown as ReservationFields;
+        fields.reservedCredits = 50;
+        fields.reservedCreditsOwnerId = 'owner-id';
+        const incrementCredits = vi.fn().mockRejectedValue(new Error('db down'));
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        await expect(service.releaseReservedCredits('q1', mockLogger)).resolves.toBeUndefined();
+        // The claim zeroed the counter even though the write failed, so a retry cannot double-refund.
+        await service.releaseReservedCredits('q1', mockLogger);
+
+        expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('CRITICAL'), expect.anything());
+        expect(incrementCredits).toHaveBeenCalledTimes(1);
+      });
     });
 
     describe('Research Mode cancellation', () => {

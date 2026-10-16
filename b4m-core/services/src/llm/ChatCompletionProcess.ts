@@ -1732,7 +1732,11 @@ export class ChatCompletionProcess {
     const ownerId = this.reservedCreditsOwnerId;
     if (amount <= 0 || !ownerId) return;
     this.reservedCredits = 0;
-    this.reservedCreditHolder = null;
+    // Bump the holder in the same synchronous step as the claim, before the refund awaits: a run
+    // that later reaches settlement reads this snapshot, and a stale one (still holding the
+    // reservation-reduced balance) would floor the whole debit at zero. Kept, not nulled, so the
+    // settlement can charge against the restored balance.
+    if (this.reservedCreditHolder) this.reservedCreditHolder.currentCredits += amount;
     try {
       const rollbackMethod =
         this.reservedCreditsOwnerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
