@@ -64,9 +64,20 @@ export async function createModelAdmission(
   });
 }
 
-/** Worst-case cost of one call: the full maxTokens, since settlement clamps to the hold. */
-export function completionCeilingUsd(modelInfo: ModelInfo, messages: IMessage[], maxTokens: number): number {
-  return getTextModelCost(modelInfo, estimateInputTokens(messages), maxTokens);
+/**
+ * Worst-case cost of one call: the full maxTokens, since settlement clamps to the hold. With
+ * `cacheWrites` (the request carries a cache breakpoint) every input token is priced as a cache write.
+ */
+export function completionCeilingUsd(
+  modelInfo: ModelInfo,
+  messages: IMessage[],
+  maxTokens: number,
+  cacheWrites = false
+): number {
+  const inputTokens = estimateInputTokens(messages);
+  return cacheWrites
+    ? getTextModelCost(modelInfo, 0, maxTokens, 0, inputTokens, inputTokens)
+    : getTextModelCost(modelInfo, inputTokens, maxTokens);
 }
 
 export async function isCreditsEnforced(): Promise<boolean> {
@@ -118,6 +129,8 @@ export async function settleCompletion(
     usd: number;
     inputTokens: number;
     outputTokens: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
     sessionId?: string;
   }
 ): Promise<number> {
@@ -145,8 +158,8 @@ export async function settleCompletion(
       model: charge.model,
       inputTokens: charge.inputTokens,
       outputTokens: charge.outputTokens,
-      cachedInputTokens: 0,
-      cacheWriteTokens: 0,
+      cachedInputTokens: charge.cacheReadInputTokens ?? 0,
+      cacheWriteTokens: charge.cacheCreationInputTokens ?? 0,
       settledBasis: 'local',
       costUsd: charge.usd,
       creditsCharged,
@@ -203,6 +216,8 @@ export function createRequestCompletionMeter(
               : ceilingUsd,
           inputTokens: usage.inputTokens ?? 0,
           outputTokens: usage.outputTokens ?? 0,
+          cacheReadInputTokens: usage.cacheReadInputTokens,
+          cacheCreationInputTokens: usage.cacheCreationInputTokens,
           sessionId: opts.sessionId,
         }),
     };

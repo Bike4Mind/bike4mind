@@ -168,6 +168,28 @@ describe('meterPlatformCompletion credits', () => {
       getTextModelCost(model, 100, 4096)
     );
   });
+
+  it('prices every input token at the cache-write rate when the request writes the cache', () => {
+    expect(completionCeilingUsd(model, [{ role: 'user', content: 'x'.repeat(250) }], 4096, true)).toBeCloseTo(
+      (100 * 3 * 1.25) / 1e6 + (4096 * 15) / 1e6
+    );
+  });
+
+  it('records the cache read and write tokens on the usage event', async () => {
+    const reservation = await reserveCompletionCredits(req(), 0.1, 'Lattice chat');
+    await settleCompletion(reservation, req(), {
+      model: 'sonnet',
+      provider: 'anthropic',
+      usd: 0.001,
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadInputTokens: 300,
+      cacheCreationInputTokens: 40,
+    });
+    expect(m.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ cachedInputTokens: 300, cacheWriteTokens: 40 })
+    );
+  });
 });
 
 describe('createModelAdmission', () => {
