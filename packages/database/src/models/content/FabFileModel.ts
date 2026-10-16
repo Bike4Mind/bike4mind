@@ -785,7 +785,7 @@ const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUr
  * dropped upstream of the withhold that exists to name it.
  *
  * Reachable, not theoretical: `findCitableFieldsByIds` backs `createReachableSourcesResolver`
- * (apps/client/server/memory/lakeSourceReachability.ts), which passes a session-derived filter, and
+ * (packages/server-utils/src/memory/lakeSourceReachability.ts), which passes a session-derived filter, and
  * `retrievalVectorizedOnly` is settable per session through the session-create schema. No in-tree
  * path sets it by default, which is the only reason this is latent rather than live - do not read
  * that as a guarantee.
@@ -3905,7 +3905,7 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // "never failed" sorts ahead of any attempted row without a backfill.
     moderationAttempts: { type: Number, required: false },
     moderationLastAttemptAt: { type: Date, required: false },
-    // See IFabFile.storageChargedAt and server/s3/storageCharge.ts.
+    // See IFabFile.storageChargedAt and packages/server-utils/src/s3/storageCharge.ts.
     storageChargedAt: { type: Date, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },

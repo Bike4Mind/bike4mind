@@ -38,12 +38,14 @@ export async function isFeatureEnabled(featureName: SettingKey): Promise<boolean
 export const requireFeatureEnabled =
   (featureName: SettingKey): RequestHandler =>
   async (req, res, next) => {
+    // The Request augmentation that declares requestId lives in apps/client/global.d.ts, outside
+    // this package.
     try {
       if (!(await isFeatureEnabled(featureName))) {
         return res.status(403).json({
           error: 'Feature not available',
           code: 'FEATURE_DISABLED',
-          request_id: req.requestId,
+          request_id: (req as { requestId?: string }).requestId,
         });
       }
 
@@ -53,7 +55,7 @@ export const requireFeatureEnabled =
       // Fail closed - deny access on error to be safe
       return res.status(500).json({
         error: 'Unable to verify feature access',
-        request_id: req.requestId,
+        request_id: (req as { requestId?: string }).requestId,
       });
     }
   };

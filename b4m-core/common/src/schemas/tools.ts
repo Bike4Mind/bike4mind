@@ -5,7 +5,7 @@ import { z } from 'zod';
  *
  * Plain Zod (no `.openapi()`) so any runtime can import them; the OpenAPI layer
  * annotates them via the contract. The tool-name enum MUST stay in sync with
- * SUPPORTED_TOOLS in apps/client/server/cli/toolsHandler.shared.ts.
+ * SUPPORTED_TOOLS in packages/server-utils/src/cli/toolsHandler.shared.ts.
  */
 export const ToolExecutionRequestSchema = z.object({
   toolName: z.enum(['weather_info', 'web_search', 'web_fetch']),

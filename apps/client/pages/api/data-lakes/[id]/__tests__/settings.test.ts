@@ -34,7 +34,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   fallbackLakeSettingsRepository: {},
-  // Reached via @server/dataLakes/lakeConfigAuditDb, which this route spreads into the service's
+  // Reached via @bike4mind/server-utils/dataLakes/lakeConfigAuditDb, which this route spreads into the service's
   // db - the module fails to load without them even though the service itself is mocked here.
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   adminSettingsRepository: {

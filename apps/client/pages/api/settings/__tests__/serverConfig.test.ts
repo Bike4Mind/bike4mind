@@ -26,7 +26,7 @@ vi.mock('@bike4mind/services/llm/toolAvailability', () => ({
 
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: { name: 'getSettingsByNames' } }));
 
-// The resolution rule itself is pinned in server/embeddings/effectiveEmbeddingModel.test.ts; what
+// The resolution rule itself is pinned in packages/server-utils/src/embeddings/effectiveEmbeddingModel.test.ts; what
 // belongs here is only how this route adapts it for the wire.
 const resolveEffectiveEmbeddingModel = vi.fn();
 vi.mock('@bike4mind/server-utils/embeddings/effectiveEmbeddingModel', () => ({

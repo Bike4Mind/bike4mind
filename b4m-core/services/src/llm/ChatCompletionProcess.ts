@@ -1520,7 +1520,7 @@ export class ChatCompletionProcess {
       // unresolvable the semantic arm cannot run at all (the tool falls back to metadata-only keyword
       // search), so nothing is deferrable. Closes the tag-only gap; #1411 hardened the retrieval-side
       // reads this now relies on. `vectorizedChunkCount >= chunkCount` is the usable-data condition.
-      // MUST STAY IN SYNC with `isFabFileCitable` (apps/client/server/memory/lakeSourceReachability.ts),
+      // MUST STAY IN SYNC with `isFabFileCitable` (packages/server-utils/src/memory/lakeSourceReachability.ts),
       // the #1440 lake-memory copy of this same "can the knowledge tool actually reach this doc"
       // predicate (fully vectorized + same embedding model + live/not-excluded). The two live in
       // different packages with no shared symbol; change one, change the other.

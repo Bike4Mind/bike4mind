@@ -2514,22 +2514,70 @@ importers:
 
   packages/server-utils:
     dependencies:
+      '@aws-sdk/client-apigatewaymanagementapi':
+        specifier: ^3.1150.0
+        version: 3.1151.0
+      '@aws-sdk/client-bedrock':
+        specifier: ^3.1150.0
+        version: 3.1151.0
+      '@bike4mind/agents':
+        specifier: workspace:*
+        version: link:../../b4m-core/agents
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../../b4m-core/common
+      '@bike4mind/database':
+        specifier: workspace:*
+        version: link:../database
+      '@bike4mind/fab-pipeline':
+        specifier: workspace:*
+        version: link:../../b4m-core/fab-pipeline
+      '@bike4mind/llm-adapters':
+        specifier: workspace:*
+        version: link:../../b4m-core/llm-adapters
       '@bike4mind/memory':
         specifier: workspace:*
         version: link:../../b4m-core/memory
+      '@bike4mind/observability':
+        specifier: workspace:*
+        version: link:../../b4m-core/observability
       '@bike4mind/resource':
         specifier: workspace:*
         version: link:../../b4m-core/resource
+      '@bike4mind/services':
+        specifier: workspace:*
+        version: link:../../b4m-core/services
+      '@bike4mind/slack':
+        specifier: workspace:*
+        version: link:../../b4m-core/slack
+      '@bike4mind/utils':
+        specifier: workspace:*
+        version: link:../../b4m-core/utils
+      axios:
+        specifier: 1.20.0
+        version: 1.20.0
+      file-type:
+        specifier: ^22.1.0
+        version: 22.1.0
+      mongoose:
+        specifier: ^8.24.1
+        version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+      openai:
+        specifier: ^6.46.0
+        version: 6.47.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.21.3)(zod@4.6.6)
       sst:
         specifier: 4.17.1
         version: 4.17.1
+      zod:
+        specifier: ^4.6.6
+        version: 4.6.6
     devDependencies:
       '@bike4mind/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
+      '@types/express':
+        specifier: ^4.17.17
+        version: 4.17.23
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.3
@@ -18513,7 +18561,7 @@ snapshots:
       obug: 2.1.4
       std-env: 4.2.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@7.3.7(@types/node@24.12.3)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
 
   '@vitest/expect@4.1.11':
     dependencies:
@@ -18578,7 +18626,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vitest: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@7.3.7(@types/node@24.12.3)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
 
   '@vitest/utils@4.1.11':
     dependencies:

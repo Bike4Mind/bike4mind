@@ -27,7 +27,7 @@ describe('closeConnection', () => {
   });
 
   it('treats an already-gone connection as closed', async () => {
-    mockSend.mockRejectedValue(new GoneException('gone'));
+    mockSend.mockRejectedValue(new GoneException({ message: 'gone', $metadata: {} }));
 
     await expect(closeConnection('conn-1', 'https://ws.example.test')).resolves.toBeUndefined();
   });
