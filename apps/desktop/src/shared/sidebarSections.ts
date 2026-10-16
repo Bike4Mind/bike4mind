@@ -22,5 +22,8 @@ export const EMPTY_SIDEBAR_SECTIONS: SidebarSectionsState = { sections: [], assi
 
 /** A typed name the way the store keeps it, so the dialog can refuse what the store would. */
 export function normalizeSectionName(text: string): string {
-  return text.replace(/\s+/g, ' ').trim().slice(0, SIDEBAR_SECTION_NAME_MAX_LENGTH);
+  // By code point, so the cap cannot split an emoji's surrogate pair.
+  return Array.from(text.replace(/\s+/g, ' ').trim())
+    .slice(0, SIDEBAR_SECTION_NAME_MAX_LENGTH)
+    .join('');
 }
