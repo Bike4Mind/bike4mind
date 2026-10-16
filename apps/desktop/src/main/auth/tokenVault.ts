@@ -78,7 +78,7 @@ export class TokenVault {
   }
 
   async setEnvironment(environment: EnvironmentSelection): Promise<void> {
-    const document = await this.load();
+    const document = await this.load({ fromDisk: true });
     document.environment = environment;
     await this.persist(document);
   }
@@ -89,23 +89,17 @@ export class TokenVault {
     if (cached) return cached;
 
     if (this.storageStatus() === 'unavailable') return null;
+    return this.decryptInto(envUrl, await this.load());
+  }
 
-    const blob = (await this.load()).tokens[key];
-    if (!blob) return null;
-
-    try {
-      const parsed: unknown = JSON.parse(this.cipher.decryptString(Buffer.from(blob, 'base64')));
-      if (!isAuthTokens(parsed)) throw new Error('unexpected token shape');
-      this.cache.set(key, parsed);
-      return parsed;
-    } catch (err) {
-      // A blob written under a different OS user, a rotated keychain entry, or a truncated
-      // write. Drop it rather than wedging the app in a state it can never leave.
-      this.logger.warn(`AUTH: discarding unreadable stored credentials for ${key}`);
-      this.logger.debug(`AUTH: vault decrypt failed: ${err instanceof Error ? err.name : 'unknown'}`);
-      await this.clearTokens(envUrl);
-      return null;
-    }
+  /**
+   * {@link getTokens}, but read from the file rather than the cache. Another process sharing this
+   * `userData` (a second app instance, or a dev build next to the packaged one) rotates the same
+   * refresh token, so anything about to present it must see that process's latest write.
+   */
+  async reloadTokens(envUrl: string): Promise<AuthTokens | null> {
+    if (this.storageStatus() === 'unavailable') return this.cache.get(normalizeEnvKey(envUrl)) ?? null;
+    return this.decryptInto(envUrl, await this.load({ fromDisk: true }), { keepCachedOnFailure: true });
   }
 
   async setTokens(envUrl: string, tokens: AuthTokens): Promise<void> {
@@ -114,7 +108,7 @@ export class TokenVault {
 
     if (this.storageStatus() === 'unavailable') return;
 
-    const document = await this.load();
+    const document = await this.load({ fromDisk: true });
     document.tokens[key] = this.cipher.encryptString(JSON.stringify(tokens)).toString('base64');
     await this.persist(document);
   }
@@ -123,7 +117,7 @@ export class TokenVault {
     const key = normalizeEnvKey(envUrl);
     this.cache.delete(key);
 
-    const document = await this.load();
+    const document = await this.load({ fromDisk: true });
     if (!(key in document.tokens)) return;
     delete document.tokens[key];
     await this.persist(document);
@@ -133,16 +127,61 @@ export class TokenVault {
   storeFor(envUrl: string): TokenStore {
     return {
       getAuthTokens: () => this.getTokens(envUrl),
+      reloadAuthTokens: () => this.reloadTokens(envUrl),
       setAuthTokens: tokens => this.setTokens(envUrl, tokens),
       clearAuthTokens: () => this.clearTokens(envUrl),
       isAuthenticated: async () => (await this.getTokens(envUrl)) !== null,
     };
   }
 
-  private async load(): Promise<VaultDocument> {
-    if (this.document) return this.document;
+  /**
+   * Decrypt one environment's blob out of `document` and make it the cached copy. With
+   * `keepCachedOnFailure`, a decrypt failure keeps the copy already in memory instead of clearing.
+   */
+  private async decryptInto(
+    envUrl: string,
+    document: VaultDocument,
+    { keepCachedOnFailure = false }: { keepCachedOnFailure?: boolean } = {}
+  ): Promise<AuthTokens | null> {
+    const key = normalizeEnvKey(envUrl);
+    const blob = document.tokens[key];
+    if (!blob) {
+      this.cache.delete(key);
+      return null;
+    }
 
-    let document = { ...EMPTY_DOCUMENT, tokens: {} };
+    try {
+      const parsed: unknown = JSON.parse(this.cipher.decryptString(Buffer.from(blob, 'base64')));
+      if (!isAuthTokens(parsed)) throw new Error('unexpected token shape');
+      this.cache.set(key, parsed);
+      return parsed;
+    } catch (err) {
+      const cached = this.cache.get(key);
+      if (keepCachedOnFailure && cached) {
+        this.logger.warn(
+          `AUTH: vault decrypt failed on reload for ${key}, keeping the copy in memory (${err instanceof Error ? err.name : 'unknown'})`
+        );
+        return cached;
+      }
+      // A blob written under a different OS user, a rotated keychain entry, or a truncated
+      // write. Drop it rather than wedging the app in a state it can never leave.
+      this.logger.warn(
+        `AUTH: clearing stored credentials for ${key}: vault decrypt failed (${err instanceof Error ? err.name : 'unknown'})`
+      );
+      await this.clearTokens(envUrl);
+      return null;
+    }
+  }
+
+  /**
+   * The vault document. Reads are served from memory; anything that writes, or must see another
+   * process's latest tokens, passes `fromDisk` so it starts from the file as it is now - a
+   * read-modify-write over a stale copy would put back tokens that process already replaced.
+   */
+  private async load({ fromDisk = false }: { fromDisk?: boolean } = {}): Promise<VaultDocument> {
+    if (this.document && !fromDisk) return this.document;
+
+    let document: VaultDocument = { ...EMPTY_DOCUMENT, tokens: {} };
     try {
       const raw = await this.file.read();
       if (raw) {
@@ -154,6 +193,14 @@ export class TokenVault {
         };
       }
     } catch (err) {
+      // A re-read that fails keeps the copy already in hand rather than "starting empty", which
+      // a following write would persist as a wipe of every environment.
+      if (this.document) {
+        this.logger.warn(
+          `AUTH: vault file re-read failed, using the copy in memory: ${err instanceof Error ? err.message : 'unknown'}`
+        );
+        return this.document;
+      }
       this.logger.warn(
         `AUTH: vault file unreadable, starting empty: ${err instanceof Error ? err.message : 'unknown'}`
       );
