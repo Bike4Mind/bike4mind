@@ -235,8 +235,8 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
 
 /**
  * Bottom-of-sidebar profile control: an always-visible card (avatar + name + account type) that
- * expands upward into the account switcher and account menu (Profile, Inbox, Teams, Credits,
- * Subscriptions, Help Center, Theme toggle, a "More" flyout, and Log Out). Replaces the old
+ * expands upward into the account switcher and account menu (Profile, Inbox, Teams, Billing,
+ * Help Center, Theme toggle, a "More" flyout, and Log Out). Replaces the old
  * footer icon row + the top AccountSelector dropdown.
  */
 const ProfileMenu = () => {
@@ -502,24 +502,13 @@ const ProfileMenu = () => {
           />
           {isCreditsEnabled && (
             <MenuRow
-              testId="profile-menu-credits"
-              icon={<CreditIcon sx={{ fontSize: 18, color: 'var(--Icon-color)' }} />}
-              label={t('credits.title', 'Credits')}
+              testId="profile-menu-billing"
+              icon={<MonetizationOnIcon sx={{ fontSize: '18px' }} />}
+              label={t('billing.title', 'Billing')}
               onClick={() => {
                 logEvent.mutate({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });
                 closeToTrigger();
                 openBillingView('credits');
-              }}
-            />
-          )}
-          {isCreditsEnabled && (
-            <MenuRow
-              testId="profile-menu-subscriptions"
-              icon={<MonetizationOnIcon sx={{ fontSize: '18px' }} />}
-              label={t('subscriptions.title', 'Subscriptions')}
-              onClick={() => {
-                closeToTrigger();
-                openBillingView('plans');
               }}
             />
           )}

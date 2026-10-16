@@ -216,16 +216,23 @@ describe('ProfileMenu - billing rows open URL-addressable views', () => {
     fireEvent.click(screen.getByTestId('profile-menu-card'));
   };
 
-  it('opens the credits view through the URL', () => {
+  it('shows one Billing row and no separate Credits or Subscriptions rows', () => {
     openMenu();
-    fireEvent.click(screen.getByTestId('profile-menu-credits'));
-    expect(billing.openView).toHaveBeenCalledWith('credits');
+    expect(screen.getByTestId('profile-menu-billing')).toHaveTextContent('Billing');
+    expect(screen.queryByTestId('profile-menu-credits')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('profile-menu-subscriptions')).not.toBeInTheDocument();
   });
 
-  it('opens the plans view through the URL', () => {
+  it('hides the Billing row when enforceCredits is off', () => {
+    billing.creditsEnabled = false;
     openMenu();
-    fireEvent.click(screen.getByTestId('profile-menu-subscriptions'));
-    expect(billing.openView).toHaveBeenCalledWith('plans');
+    expect(screen.queryByTestId('profile-menu-billing')).not.toBeInTheDocument();
+  });
+
+  it('opens the credits view through the URL', () => {
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-billing'));
+    expect(billing.openView).toHaveBeenCalledWith('credits');
   });
 });
 
@@ -318,7 +325,7 @@ describe('ProfileMenu - keyboard', () => {
     billing.openView.mockImplementationOnce(() => {
       focusedWhenOpened = document.activeElement;
     });
-    fireEvent.click(screen.getByTestId('profile-menu-subscriptions'));
+    fireEvent.click(screen.getByTestId('profile-menu-billing'));
     expect(focusedWhenOpened).toBe(trigger);
   });
 });
