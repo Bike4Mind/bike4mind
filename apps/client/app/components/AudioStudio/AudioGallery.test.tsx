@@ -67,4 +67,25 @@ describe('SoundEffectsGallery', () => {
     });
     expect(screen.getByTestId('audio-card')).toHaveTextContent('sound-effects:a');
   });
+
+  it('explains itself when there is nothing yet', () => {
+    loaded([]);
+    renderGallery(<SoundEffectsGallery />);
+    expect(screen.getByTestId('sound-effects-gallery-empty')).toHaveTextContent(
+      'Sound effects you generate will appear here.'
+    );
+  });
+
+  it('shows a spinner until the first page arrives', () => {
+    h.query = {
+      data: undefined,
+      isPending: true,
+      isFetchNextPageError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+    };
+    renderGallery(<SoundEffectsGallery />);
+    expect(screen.getByTestId('sound-effects-gallery-loading')).toBeInTheDocument();
+  });
 });
