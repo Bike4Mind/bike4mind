@@ -54,7 +54,7 @@ import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
-import { ChatService } from './ChatService';
+import { ChatService, type ChatServiceDeps } from './ChatService';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
@@ -255,7 +255,7 @@ async function pickDirectory(sender: WebContents): Promise<string | null> {
   return picked.canceled || picked.filePaths.length === 0 ? null : picked.filePaths[0];
 }
 
-export function registerChat(auth: AuthService): RegisteredChat {
+export function registerChat(auth: AuthService, hooks: Pick<ChatServiceDeps, 'sessionClosed'> = {}): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
   // Beside approval-mode.json and app-wide like it; see ModelPreference for why.
@@ -423,6 +423,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     getEnvironmentUrl: () => auth.getState().environment.url,
     emit: broadcast,
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
+    sessionClosed: hooks.sessionClosed,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));

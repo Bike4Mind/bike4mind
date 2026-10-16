@@ -68,7 +68,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 
 import { handler, runAbandonedExecutionSweep } from './agentExecutionAbandonedSweep';
-import { ABANDONED_REPLY } from '@server/chatCompletion/questTimeoutRecovery';
+import { ABANDONED_REPLY } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 describe('agentExecutionAbandonedSweep - handler', () => {
   beforeEach(() => {

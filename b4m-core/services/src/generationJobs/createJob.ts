@@ -92,7 +92,7 @@ export async function holdJobCredits(
     requiredCredits: number;
     featureLabel: string;
   },
-  deps: Pick<CreateGenerationJobDeps, 'credits'>
+  deps: Pick<CreateGenerationJobDeps, 'credits' | 'logger'>
 ): Promise<{ ok: true; hold: CreditHold | null } | InsufficientCredits> {
   if (!params.enforceCredits) return { ok: true, hold: null };
   try {
@@ -102,6 +102,7 @@ export async function holdJobCredits(
         organizationId: params.user.organizationId,
         requiredCredits: params.requiredCredits,
         featureLabel: params.featureLabel,
+        logger: deps.logger,
       },
       deps.credits
     );

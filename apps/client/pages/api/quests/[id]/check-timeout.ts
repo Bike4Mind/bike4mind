@@ -1,7 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
-import { resolveQuestTimeoutRecovery, STUCK_QUEST_RECOVERED_LOG } from '@server/chatCompletion/questTimeoutRecovery';
+import {
+  resolveQuestTimeoutRecovery,
+  STUCK_QUEST_RECOVERED_LOG,
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 import type { Request } from 'express';
 

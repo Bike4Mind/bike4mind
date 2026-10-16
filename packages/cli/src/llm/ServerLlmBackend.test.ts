@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { PassThrough, Readable } from 'stream';
 import { AxiosError } from 'axios';
 import { ServerLlmBackend } from './ServerLlmBackend';
@@ -94,8 +94,106 @@ describe('ServerLlmBackend SSE transport (open)', () => {
         model: 'test-model',
       });
       await expect(collect(backend)).rejects.toThrow(wording);
+      await expect(collect(backend)).rejects.toMatchObject({ kind: 'unreachable' });
     }
   );
+
+  it('does not retry an axios request timeout', async () => {
+    const backend = new ServerLlmBackend({
+      apiClient: {
+        baseURL: 'http://localhost:3000',
+        fetch: async () => {
+          throw new AxiosError('timeout of 600000ms exceeded', 'ECONNABORTED');
+        },
+      } as unknown as ApiClient,
+      model: 'test-model',
+    });
+    const error = await collect(backend).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toHaveProperty('kind');
+  });
+
+  describe('complete() when the server stays unreachable', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('retries, then keeps the wording session handoff falls back on', async () => {
+      vi.useFakeTimers();
+      const fetch = vi.fn(async () => {
+        throw new AxiosError('connect ECONNREFUSED 127.0.0.1:3000', 'ECONNREFUSED');
+      });
+      const backend = new ServerLlmBackend({
+        apiClient: { baseURL: 'http://localhost:3000', fetch } as unknown as ApiClient,
+        model: 'test-model',
+      });
+      const outcome = backend.complete('test-model', [], {}, async () => undefined).catch((e: unknown) => e);
+      await vi.runAllTimersAsync();
+      const error = await outcome;
+      expect(fetch).toHaveBeenCalledTimes(4);
+      expect(error).toMatchObject({ message: expect.stringContaining('Cannot connect to Bike4Mind server') });
+      expect(isLlmUnavailableError(error)).toBe(true);
+    });
+  });
+
+  it.each([
+    ['Model provider returned an error (upstream 529)', 'provider_error', 'overloaded', 529],
+    ['Model provider returned an error (upstream 429)', 'provider_error', 'rate_limited', 429],
+    ['Model provider returned an error (upstream 400)', 'provider_error', 'refused', 400],
+    ['Model provider returned an error', 'provider_error', 'server', undefined],
+    ['Model provider rejected our credentials', 'provider_rejected', 'auth', undefined],
+    ['The model declined this request', 'content_blocked', 'refused', undefined],
+    ['Insufficient credits', 'insufficient_credits', 'refused', undefined],
+  ])('classifies an error frame "%s" (%s) as %s', async (message, code, kind, status) => {
+    const stream = new PassThrough();
+    const done = collect(backendWith(stream));
+    stream.write(`data: ${JSON.stringify({ type: 'error', message, code, requestId: 'req-1' })}\n\n`);
+    stream.end();
+    await expect(done).rejects.toMatchObject({
+      name: 'ModelCallError',
+      kind,
+      status,
+      code,
+      requestId: 'req-1',
+      message,
+    });
+  });
+
+  it('classifies a stream that closes without [DONE] as a dropped connection', async () => {
+    const stream = new PassThrough();
+    const done = collect(backendWith(stream));
+    stream.write(`data: ${JSON.stringify({ type: 'content', text: 'Hel' })}\n\n`);
+    stream.end();
+    await expect(done).rejects.toMatchObject({ kind: 'network' });
+  });
+
+  describe('idle watchdog', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('fails a stream that goes silent with stream_idle', async () => {
+      vi.stubEnv('B4M_STREAM_IDLE_TIMEOUT_MS', '30');
+      const stream = new PassThrough();
+      const done = collect(backendWith(stream));
+      stream.write(`data: ${JSON.stringify({ type: 'content', text: 'Hel' })}\n\n`);
+      await expect(done).rejects.toMatchObject({ kind: 'stream_idle' });
+    });
+
+    it('keeps a stream alive on keep-alive comments', async () => {
+      vi.stubEnv('B4M_STREAM_IDLE_TIMEOUT_MS', '60');
+      const stream = new PassThrough();
+      const done = collect(backendWith(stream));
+      for (let beat = 0; beat < 4; beat++) {
+        stream.write(': keep-alive\n\n');
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      stream.write(`data: ${JSON.stringify({ type: 'content', text: 'late' })}\n\n`);
+      stream.write('data: [DONE]\n\n');
+      stream.end();
+      expect(await done).toEqual([{ type: 'content', text: 'late' }]);
+    });
+  });
 
   it('ends quietly when aborted mid-stream', async () => {
     const stream = new PassThrough();
@@ -170,17 +268,39 @@ describe('ServerLlmBackend completions endpoint resolution', () => {
 });
 
 describe('ServerLlmBackend pre-stream HTTP errors', () => {
-  const messageOf = async (status: number, body: string): Promise<string> => {
+  const errorOf = async (status: number, body: string, headers?: Record<string, string>): Promise<unknown> => {
     const backend = new ServerLlmBackend({
-      apiClient: apiClientFor(() => new Response(body, { status })),
+      apiClient: apiClientFor(() => new Response(body, { status, headers })),
       model: 'test-model',
     });
     const events = backend.open({ model: 'test-model', messages: [], options: {} });
-    const error = await events[Symbol.asyncIterator]()
+    return events[Symbol.asyncIterator]()
       .next()
       .catch((e: unknown) => e);
-    return (error as Error).message;
   };
+  const messageOf = async (status: number, body: string): Promise<string> =>
+    ((await errorOf(status, body)) as Error).message;
+
+  it.each([
+    [502, 'server'],
+    [503, 'overloaded'],
+    [401, 'auth'],
+    [422, 'refused'],
+  ])('classifies a %d as %s', async (status, kind) => {
+    expect(await errorOf(status, JSON.stringify({ error: 'x' }))).toMatchObject({ kind, status });
+  });
+
+  it('carries Retry-After and the request id on a 429', async () => {
+    const error = await errorOf(429, JSON.stringify({ error: 'Rate limit exceeded.', request_id: 'r9' }), {
+      'retry-after': '12',
+    });
+    expect(error).toMatchObject({ kind: 'rate_limited', retryAfterMs: 12_000, requestId: 'r9' });
+  });
+
+  it('does not treat a 5xx the server labelled with an errorCode as transient', async () => {
+    const body = JSON.stringify({ error: 'no provider', errorCode: 'provider_not_configured' });
+    expect(await errorOf(503, body)).toMatchObject({ kind: 'refused', code: 'provider_not_configured' });
+  });
 
   it('surfaces the JSON error and errorCode of a 422', async () => {
     const body = JSON.stringify({

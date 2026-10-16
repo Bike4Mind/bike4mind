@@ -208,7 +208,7 @@ export function buildContextBreakdown(
   return {
     questId: options.questId,
     capturedAt: promptMeta?.generatedAt ?? null,
-    model: { id: model?.name ?? null, backend: model?.backend ?? null },
+    model: { id: model?.answeredBy ?? model?.name ?? null, backend: model?.backend ?? null },
     categories,
     layers,
     tools: buildToolUsage(promptMeta ?? {}),

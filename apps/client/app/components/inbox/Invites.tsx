@@ -2,7 +2,7 @@ import { useInbox } from '@client/app/contexts/InboxContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAcceptDocument, useGetUserInvites, useRefuseDocument } from '@client/app/hooks/data/invites';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
-import ConstructionOutlinedIcon from '@mui/icons-material/ConstructionOutlined';
+import HandymanOutlinedIcon from '@mui/icons-material/HandymanOutlined';
 import GroupIcon from '@mui/icons-material/Group';
 import HomeIcon from '@mui/icons-material/Home';
 import NoteAltOutlinedIcon from '@mui/icons-material/NoteAltOutlined';
@@ -37,7 +37,7 @@ const DOCUMENT_ICONS = {
   Group: <GroupIcon />,
   Organization: <HomeIcon />,
   Session: <NoteAltOutlinedIcon />,
-  Tool: <ConstructionOutlinedIcon />,
+  Tool: <HandymanOutlinedIcon />,
   Project: <HubIconIcon sx={{ color: teal[600] }} />,
 };
 

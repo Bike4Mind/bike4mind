@@ -12,6 +12,7 @@ import {
   getStoredJupyterConfig,
   setStoredJupyterConfig,
   clearStoredJupyterConfig,
+  subscribeStoredJupyterConfig,
 } from '../jupyterBrowserClient';
 
 // -- Helpers for mocking WebSocket and fetch --
@@ -382,5 +383,42 @@ describe('localStorage config helpers', () => {
   it('returns null for object missing serverUrl', () => {
     localStorage.setItem('b4m-jupyter-config', JSON.stringify({ token: 'abc' }));
     expect(getStoredJupyterConfig()).toBeNull();
+  });
+
+  describe('subscribeStoredJupyterConfig', () => {
+    it('tells a subscriber about a save and a clear made in this tab, which fire no storage event', () => {
+      const onChange = vi.fn();
+      const unsubscribe = subscribeStoredJupyterConfig(onChange);
+
+      setStoredJupyterConfig({ serverUrl: 'http://localhost:8888', token: '' });
+      expect(onChange).toHaveBeenCalledTimes(1);
+      clearStoredJupyterConfig();
+      expect(onChange).toHaveBeenCalledTimes(2);
+
+      unsubscribe();
+    });
+
+    it("tells a subscriber about another tab's change to this key, or to the whole store, and ignores other keys", () => {
+      const onChange = vi.fn();
+      const unsubscribe = subscribeStoredJupyterConfig(onChange);
+
+      window.dispatchEvent(new StorageEvent('storage', { key: 'some-other-key' }));
+      expect(onChange).not.toHaveBeenCalled();
+      window.dispatchEvent(new StorageEvent('storage', { key: 'b4m-jupyter-config' }));
+      window.dispatchEvent(new StorageEvent('storage', { key: null }));
+      expect(onChange).toHaveBeenCalledTimes(2);
+
+      unsubscribe();
+    });
+
+    it('stops telling a subscriber once it unsubscribes', () => {
+      const onChange = vi.fn();
+      subscribeStoredJupyterConfig(onChange)();
+
+      setStoredJupyterConfig({ serverUrl: 'http://localhost:8888', token: '' });
+      window.dispatchEvent(new StorageEvent('storage', { key: 'b4m-jupyter-config' }));
+
+      expect(onChange).not.toHaveBeenCalled();
+    });
   });
 });

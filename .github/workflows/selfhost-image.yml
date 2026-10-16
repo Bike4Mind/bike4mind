@@ -19,6 +19,9 @@ on:
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'
+      # The deps stage copies and runs this script for the overlay install, so a rename or
+      # deletion breaks every image build (the COPY has no source) without running this gate.
+      - 'scripts/link-premium-overlays.mjs'
       # .dockerignore now decides whether docs-site/docs reaches the builder, and the
       # client prebuild fails without it - an edit there can break the image on its own.
       - '.dockerignore'
@@ -41,6 +44,9 @@ on:
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'
+      # The deps stage copies and runs this script for the overlay install, so a rename or
+      # deletion breaks every image build (the COPY has no source) without running this gate.
+      - 'scripts/link-premium-overlays.mjs'
       # .dockerignore now decides whether docs-site/docs reaches the builder, and the
       # client prebuild fails without it - an edit there can break the image on its own.
       - '.dockerignore'

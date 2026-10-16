@@ -43,7 +43,11 @@ export function buildMusicToolSchema(usableModels: readonly [MusicModelId, ...Mu
       .string()
       .min(1)
       .max(4000)
-      .describe('Genre, mood, instruments, tempo and structure of the song. Describe a style, never a real artist.'),
+      .describe(
+        'Genre, mood, instruments, tempo, era and structure of the song. Never name a real artist or band, even as a ' +
+          'reference. Good: "upbeat indie pop, jangly guitars, handclaps, 120 bpm, 2010s". ' +
+          'Bad: "upbeat indie pop in the style of <artist name>".'
+      ),
     ...(lyricsLimits.length > 0
       ? {
           lyrics: z

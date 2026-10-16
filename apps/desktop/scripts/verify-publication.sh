@@ -8,7 +8,7 @@ if [ "$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$so
 fi
 target=$(gh api "repos/$repo/commits/HEAD" --jq .sha)
 work=$(mktemp -d)
-export GH_REPO="$repo" RELEASE_TARGET="$target"
+export GH_REPO="$repo" RELEASE_TARGET="$target" GITHUB_REPOSITORY="$source_repo" RELEASE_LATEST=false
 export DESKTOP_VERSION="0.0.0-verify.$(date +%s).$$" RELEASE_TAG_PREFIX=desktop-test-v
 tag="$RELEASE_TAG_PREFIX$DESKTOP_VERSION"
 cleanup() {

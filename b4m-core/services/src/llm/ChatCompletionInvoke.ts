@@ -20,7 +20,7 @@ import {
   isZodError,
   getSettingsByNames,
 } from '@bike4mind/utils';
-import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { getAvailableModels, resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
@@ -188,7 +188,22 @@ export class ChatCompletionInvoke {
     if (!modelInfo) {
       throw new InternalServerError('No available models found');
     }
-    const model = modelInfo.find(m => m.id === params.model);
+    // Resolve before the availability checks: a pinned model that is now hidden or disabled is
+    // absent from (or inert in) the catalog, so ChatCompletionProcess never gets to redirect it.
+    // The warning-free variant, because Process still resolves params.model and owns the
+    // [model-sunset] log and metric; calling the logging one here would count each redirect twice.
+    const resolvedModelId = resolveSuccessorChain(params.model);
+    // API-key callers keep the provider convention: a retired id that is hidden or disabled is
+    // rejected (naming its successor), not rerouted. Access below is still checked on the id that runs.
+    if (authOrigin === 'apiKey' && resolvedModelId !== params.model) {
+      const requested = modelInfo.find(m => m.id === params.model);
+      if (!requested || requested.disabled) {
+        throw new BadRequestError(
+          `Invalid model: "${params.model}" is not available; it is replaced by "${resolvedModelId}"`
+        );
+      }
+    }
+    const model = modelInfo.find(m => m.id === resolvedModelId);
     if (!model) throw new BadRequestError(`Invalid model: "${params.model}" is not available`);
     // A disabled model is still listed (so the picker can show it greyed out) but must never
     // run. Reject it here with a clean message rather than letting the request reach the backend
@@ -223,7 +238,11 @@ export class ChatCompletionInvoke {
     // Initialize promptMeta for this completion attempt.
     const promptMeta: Partial<PromptMeta> = {
       model: {
-        name: model.id,
+        // A redirect resolved above keeps the requested id in `name` and the successor in
+        // `answeredBy`, matching what ChatCompletionProcess records for a redirect it resolves
+        // itself; the remaining fields describe the model that runs.
+        name: params.model,
+        ...(model.id !== params.model ? { answeredBy: model.id } : {}),
         type: modelType,
         backend: model?.backend,
         contextWindow: model?.contextWindow,
@@ -414,7 +433,7 @@ export class ChatCompletionInvoke {
       if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
         throw new InternalServerError('Default embedding model not found or not supported');
       }
-      const originalModel = params?.model;
+      const originalModel = model.id;
 
       // Check if primary model is accessible
       const modelToUse = originalModel;

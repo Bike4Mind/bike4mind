@@ -12,6 +12,8 @@ const RESIZE_STEP = 16;
 /**
  * The strip on a column's edge that sets its width: the sidebar's right edge, the browser
  * pane's left one. `edge` is which side of the column it sits on, and so which way a drag grows it.
+ * A `top` edge is the same strip laid on its side, for a panel docked at the bottom (the
+ * terminal): there `width` and every width callback mean the panel's height.
  *
  * The drag runs on window listeners, with the handle's own pointer capture only on top. Capture
  * cannot be relied on alone: the pointer leaves this 5px strip on the first frame of any drag
@@ -44,7 +46,7 @@ export function ResizeHandle({
   onDraggingChange,
   sx,
 }: {
-  edge: 'left' | 'right';
+  edge: 'left' | 'right' | 'top';
   label: string;
   testId: string;
   width: number;
@@ -56,10 +58,11 @@ export function ResizeHandle({
   onWidth: (width: number) => void;
   onCommit: (width: number) => void;
   onDraggingChange: (dragging: boolean) => void;
-  sx: { left: number } | { right: number };
+  sx: { left: number } | { right: number } | { top: number };
 }) {
   const drag = useRef<{ x: number; from: number; to: number; moved: boolean } | null>(null);
   const grow = edge === 'right' ? 1 : -1;
+  const vertical = edge === 'top';
 
   useEffect(() => {
     if (!dragging) return;
@@ -68,7 +71,7 @@ export function ResizeHandle({
       const current = drag.current;
       if (!current) return;
       current.moved = true;
-      current.to = clamp(current.from + grow * (event.clientX - current.x));
+      current.to = clamp(current.from + grow * ((vertical ? event.clientY : event.clientX) - current.x));
       onWidth(current.to);
     };
     const onEnd = () => {
@@ -84,7 +87,7 @@ export function ResizeHandle({
     // Both are set on the document because that is how far the drag reaches.
     const { userSelect, cursor } = document.body.style;
     document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'col-resize';
+    document.body.style.cursor = vertical ? 'row-resize' : 'col-resize';
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onEnd);
@@ -96,7 +99,7 @@ export function ResizeHandle({
       window.removeEventListener('pointerup', onEnd);
       window.removeEventListener('pointercancel', onEnd);
     };
-  }, [dragging, grow, clamp, onWidth, onCommit, onDraggingChange]);
+  }, [dragging, grow, vertical, clamp, onWidth, onCommit, onDraggingChange]);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -108,12 +111,13 @@ export function ResizeHandle({
     } catch {
       // No such pointer (synthesised input): the window listeners carry the drag on their own.
     }
-    drag.current = { x: event.clientX, from: width, to: width, moved: false };
+    drag.current = { x: vertical ? event.clientY : event.clientX, from: width, to: width, moved: false };
     onDraggingChange(true);
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const arrow = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
+    const [back, forward] = vertical ? ['ArrowUp', 'ArrowDown'] : ['ArrowLeft', 'ArrowRight'];
+    const arrow = event.key === back ? -1 : event.key === forward ? 1 : 0;
     if (arrow === 0) return;
     event.preventDefault();
     const next = clamp(width + arrow * grow * RESIZE_STEP);
@@ -130,7 +134,7 @@ export function ResizeHandle({
   return (
     <Box
       role="separator"
-      aria-orientation="vertical"
+      aria-orientation={vertical ? 'horizontal' : 'vertical'}
       aria-label={label}
       aria-valuenow={width}
       aria-valuemin={min}
@@ -141,12 +145,10 @@ export function ResizeHandle({
       onDoubleClick={reset}
       sx={{
         position: 'absolute',
-        top: 0,
-        bottom: 0,
+        ...(vertical ? { left: 0, right: 0, height: 5 } : { top: 0, bottom: 0, width: 5 }),
         ...sx,
-        width: 5,
         zIndex: 2,
-        cursor: 'col-resize',
+        cursor: vertical ? 'row-resize' : 'col-resize',
         // The pointer stream is the whole mechanism; without this a trackpad drag scrolls the
         // content under it instead.
         touchAction: 'none',

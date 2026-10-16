@@ -64,11 +64,7 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
 vi.mock('./AISettings/useHydrateModelFromSession', () => ({ useHydrateModelFromSession: () => {} }));
 vi.mock('./AISettings/useAdvancedAISettingsStore', () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same shape of test double as useLLM
-  useAdvancedAISettings: (selector: any) =>
-    selector({ showAdvancedSettings: false, setShowAdvancedSettings: vi.fn(), setPromptBuilderOpen: vi.fn() }),
-}));
-vi.mock('./PromptBuilder/usePromptBuilderFirstRun', () => ({
-  usePromptBuilderFirstRun: () => ({ showHint: false, markSeen: vi.fn() }),
+  useAdvancedAISettings: (selector: any) => selector({ showAdvancedSettings: false, setShowAdvancedSettings: vi.fn() }),
 }));
 vi.mock('./AISettings/InspectableSettingsButton', () => ({ default: () => null }));
 vi.mock('./AISettings/AdvancedAIModal', () => ({
@@ -78,9 +74,6 @@ vi.mock('./AISettings/AdvancedAIModal', () => ({
   },
 }));
 vi.mock('./AISettings/AgentsButton', () => ({ default: () => null }));
-vi.mock('./AISettings/BriefcaseButton', () => ({ default: () => null }));
-vi.mock('./AISettings/ResearchModeIndicator', () => ({ default: () => null }));
-vi.mock('./ImageTemplates/ImageTemplateControls', () => ({ ImageTemplateControls: () => null }));
 vi.mock('./PromptBuilder/PromptBuilderModal', () => ({ PromptBuilderModal: () => null }));
 vi.mock('./AISettings/ToolsButton', () => ({
   default: (props: Record<string, unknown>) => {
@@ -261,36 +254,16 @@ describe('AdvancedAISettings indicators vs session-denied tools', () => {
   });
 });
 
-describe('AdvancedAISettings toolbar buttons vs session-denied tools', () => {
-  const sessionDenying = (...disabledTools: string[]) => ({ disabledTools }) as unknown as ISessionDocument;
-  const withPromptBuilder = () => {
+describe('AdvancedAISettings row after the plus-menu move', () => {
+  // Prompt Builder, dice and the rest moved into the plus menu (AttachFileButton); their
+  // session-denylist rules are tested there and in ImageOptionsPanel.test.tsx.
+  it('renders neither the Prompt Builder nor the dice, even when both would apply', () => {
     mocks.adminFeatureFlags.value = { EnablePromptBuilder: true };
     mocks.state.model = 'gpt-image-1';
-  };
-
-  it('hides the Prompt Builder button when image_generation is denied', () => {
-    withPromptBuilder();
-    const { queryByTestId } = renderSettings(sessionDenying('image_generation'));
+    mocks.state.tools = ['dice_roll'];
+    const { container, queryByTestId } = renderSettings(null);
     expect(queryByTestId('prompt-builder-open-btn')).toBeNull();
-  });
-
-  // Control: proves the button renders under these mocks, so the test above is not vacuous.
-  it('shows the Prompt Builder button when nothing is denied', () => {
-    withPromptBuilder();
-    const { queryByTestId } = renderSettings(null);
-    expect(queryByTestId('prompt-builder-open-btn')).toBeTruthy();
-  });
-
-  it('hides the dice icon when dice_roll is denied', () => {
-    mocks.state.tools = ['dice_roll'];
-    const { container } = renderSettings(sessionDenying('dice_roll'));
     expect(container.querySelector('[data-testid="CasinoIcon"]')).toBeNull();
-  });
-
-  it('shows the dice icon when nothing is denied', () => {
-    mocks.state.tools = ['dice_roll'];
-    const { container } = renderSettings(null);
-    expect(container.querySelector('[data-testid="CasinoIcon"]')).toBeTruthy();
   });
 });
 

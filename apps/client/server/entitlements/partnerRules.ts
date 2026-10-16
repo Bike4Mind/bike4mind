@@ -20,8 +20,10 @@ import { normalizeTag, KNOWN_ENTITLEMENT_KEYS, unknownEntitlementKeys } from '@c
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 import { BadRequestError } from '@server/utils/errors';
 
-/** Resolved rule shape held in the cache (domain is the Map key). */
+/** Resolved rule shape held in the cache (keyed by its normalized domain). */
 type ResolvedRule = {
+  id: string;
+  domain: string;
   entitlements: EntitlementKey[];
   signupCredits: number;
   /** Org a verified signup on this domain is auto-added to, or null. */
@@ -47,6 +49,8 @@ async function loadRules(): Promise<Map<string, ResolvedRule>> {
     const domain = normalizeTag(rule.domain);
     if (!domain) continue;
     map.set(domain, {
+      id: rule.id,
+      domain,
       entitlements: rule.entitlements.map(normalizeTag).filter(Boolean),
       signupCredits: rule.signupCredits ?? 0,
       organizationId: rule.organizationId ?? null,
@@ -131,6 +135,17 @@ export async function partnerEntitlementsForEmail(
   return new Set(rule?.entitlements ?? []);
 }
 
+export type PartnerSignupGrant =
+  | { matched: false; entitlements: Set<EntitlementKey>; signupCredits: 0; organizationId: null }
+  | {
+      matched: true;
+      ruleId: string;
+      domain: string;
+      entitlements: Set<EntitlementKey>;
+      signupCredits: number;
+      organizationId: string | null;
+    };
+
 /**
  * The one-time signup grant for a verified email, resolved from the DB rule.
  * `matched` distinguishes "a rule set credits to 0" (a valid config - grant
@@ -141,16 +156,13 @@ export async function partnerEntitlementsForEmail(
 export async function partnerSignupGrantForEmail(
   email: string | null | undefined,
   emailVerified: boolean | null | undefined
-): Promise<{
-  matched: boolean;
-  entitlements: Set<EntitlementKey>;
-  signupCredits: number;
-  organizationId: string | null;
-}> {
+): Promise<PartnerSignupGrant> {
   const rule = await ruleForEmail(email, emailVerified);
   if (!rule) return { matched: false, entitlements: new Set(), signupCredits: 0, organizationId: null };
   return {
     matched: true,
+    ruleId: rule.id,
+    domain: rule.domain,
     entitlements: new Set(rule.entitlements),
     signupCredits: rule.signupCredits,
     organizationId: rule.organizationId,

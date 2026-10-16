@@ -7,6 +7,7 @@ import type { ChatModelOption, ChatStreamEvent } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { MediaStore } from './media/MediaStore';
+import { SessionActivity } from './SessionActivity';
 import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
@@ -31,6 +32,7 @@ describe('ChatService agent browser', () => {
   let models: ChatModelOption[];
   let store: SessionStore;
   let approvals: ApprovalGate;
+  let activity: SessionActivity;
   /** Where the page is right now, which is what the script gate keys on. */
   let pageUrl: string;
   /** Hosts the user imported their own browser cookies for. */
@@ -89,9 +91,11 @@ describe('ChatService agent browser', () => {
       },
     };
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-browser-sessions-')), 'test-model');
+    activity = new SessionActivity(() => undefined);
     service = new ChatService({
       store,
       approvals,
+      activity,
       access: { list: async () => granted } as unknown as AccessStore,
       media: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-browser-media-'))),
       models: { list: async () => ({ models }), cached: () => [] } as unknown as ModelCatalog,
@@ -268,10 +272,17 @@ describe('ChatService agent browser', () => {
     answer: 'once' | 'always' | undefined
   ): Promise<{ asked: boolean; result: string }> {
     const before = streams.length;
-    const doneBefore = events.filter(event => event.type === 'done').length;
+    const ended = vi.spyOn(activity, 'replyEnded');
+    const endedBefore = ended.mock.calls.length;
     const askedBefore = events.filter(e => e.type === 'tool-start' && e.call.status === 'awaiting-approval').length;
-    await service.send(sessionId, 'read the page');
-    await vi.waitUntil(() => streams.length === before + 1, { timeout: 3000, interval: 5 });
+    expect(await service.send(sessionId, 'read the page')).toMatchObject({ ok: true });
+    // Says which way it went wrong when it does: no request at all, or an extra one that skipped
+    // past the count this waits for.
+    await vi
+      .waitUntil(() => streams.length === before + 1, { timeout: 3000, interval: 5 })
+      .catch(cause => {
+        throw new Error(`Expected request ${before + 1} after the send, have ${streams.length}`, { cause });
+      });
     streams[before].write(
       frame({ type: 'tool_use', tools: [{ id: `snap_${before}`, name: 'browser_snapshot', arguments: '{}' }] })
     );
@@ -291,10 +302,9 @@ describe('ChatService agent browser', () => {
     await vi.waitUntil(() => streams.length === before + 2, { timeout: 3000, interval: 5 });
     streams[before + 1].write(frame({ type: 'content', text: 'ok' }));
     streams[before + 1].write(frame('[DONE]'));
-    await vi.waitUntil(() => events.filter(event => event.type === 'done').length > doneBefore, {
-      timeout: 3000,
-      interval: 5,
-    });
+    // The turn's end, not its `done` event: `done` goes out before the session stops being busy,
+    // and the next round's send in that gap is refused as still replying.
+    await vi.waitUntil(() => ended.mock.calls.length > endedBefore, { timeout: 3000, interval: 5 });
     const end = events.filter(e => e.type === 'tool-end').at(-1);
     return { asked, result: end && 'call' in end ? (end.call.preview ?? end.call.error ?? '') : '' };
   }
@@ -346,9 +356,7 @@ describe('ChatService agent browser', () => {
     streams[1].write(
       frame({
         type: 'tool_use',
-        tools: [
-          { id: 'nav', name: 'browser_navigate', arguments: JSON.stringify({ url: 'https://example.com/' }) },
-        ],
+        tools: [{ id: 'nav', name: 'browser_navigate', arguments: JSON.stringify({ url: 'https://example.com/' }) }],
       })
     );
     streams[1].write(frame('[DONE]'));
