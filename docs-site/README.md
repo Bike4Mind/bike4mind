@@ -41,4 +41,4 @@ This site is public. No customer or partner names, no internal issue references,
 
 ## Deployment
 
-Deploys are handled by `.github/workflows/deploy-docs.yml`: pushes to `main` touching `docs-site/` deploy staging (docs.staging.bike4mind.com); production (docs.bike4mind.com) is a manual workflow dispatch behind the Production environment. A sensitive-term scan gates every deploy.
+Deploys run from the internal deployer, not from this repo: maintainers dispatch staging (docs.staging.bike4mind.com) or production (docs.bike4mind.com) for a commit that is already on `main`. A sensitive-term scan of the built site gates every deploy.
