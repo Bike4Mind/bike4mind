@@ -1396,6 +1396,9 @@ importers:
       tiktoken:
         specifier: ^1.0.22
         version: 1.0.22
+      undici:
+        specifier: ^7.29.0
+        version: 7.29.1
       unpdf:
         specifier: ^1.6.2
         version: 1.6.2(@napi-rs/canvas@0.1.100)
@@ -1516,6 +1519,9 @@ importers:
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../common
+      '@bike4mind/fab-pipeline':
+        specifier: workspace:*
+        version: link:../fab-pipeline
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(zod@4.6.6)
