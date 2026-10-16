@@ -7,9 +7,9 @@
  * and provider turns), capped at the hold; a call that never connected costs nothing. A realtime
  * hold stays open for its whole call, so it is only stale past the realtime hold's own window; it
  * keeps at least what its responses billed and pays the open-time floor up to the sweep (capped at
- * the hold's window), since its activity markers come only from the client. Settles through settleVoiceHold, the same claim-then-refund rule as the end
- * endpoint, so a concurrent end and a second sweep run are both no-ops. Every settlement writes
- * one voice_hold_settled line.
+ * the hold's window), since its activity markers come only from the client. Settles through
+ * settleVoiceHold, the same claim-then-refund rule as the end endpoint, so a concurrent end and a
+ * second sweep run are both no-ops. Every settlement writes one voice_hold_settled line.
  *
  * Schedule: rate(5 minutes).
  */

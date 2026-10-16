@@ -101,6 +101,18 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // Usage the balance could not cover: debits are floored at zero, so this is logged, not charged.
   let shortfall = 0;
 
+  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const enforceCredits = getSettingsValue('enforceCredits', settings);
+  // Returns the shortfall. Floored only under enforcement: with credits off a balance tracks usage
+  // and may go negative, as before.
+  const debit = async (payerId: string, credits: number): Promise<number> => {
+    if (!enforceCredits) {
+      await userRepository.incrementCredits(payerId, -credits);
+      return 0;
+    }
+    return credits - (await userRepository.decrementCreditsFloored(payerId, credits));
+  };
+
   // Both transactions below carry the request logger, so withTransaction reports a retry and its exhaustion.
   const transactionOptions = { ...VOICE_TRANSACTION_OPTIONS, logger };
 
@@ -131,7 +143,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
             ? actualCredits
             : Math.max(0, before + actualCredits - reserved) - Math.max(0, before - reserved);
         if (fromBalance > 0) {
-          shortfall = fromBalance - (await userRepository.decrementCreditsFloored(user.id, fromBalance));
+          shortfall = await debit(user.id, fromBalance);
         }
         return before;
       }, transactionOptions);
@@ -201,7 +213,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         if (delta > 0) {
           await userRepository.incrementCredits(payerId, delta);
         } else if (delta < 0) {
-          shortfall = -delta - (await userRepository.decrementCreditsFloored(payerId, -delta));
+          shortfall = await debit(payerId, -delta);
         }
         if (credits > 0) {
           await recordVoiceUsage({
@@ -274,9 +286,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const credits = actualCredits;
 
   // Check if credits are now exhausted and enforcement is enabled
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
-  const enforceCredits = getSettingsValue('enforceCredits', settings);
-
   if (enforceCredits) {
     const updatedUser = await userRepository.findById(userId);
     if (updatedUser && (updatedUser.currentCredits ?? 0) <= 0 && holdLeft <= 0) {

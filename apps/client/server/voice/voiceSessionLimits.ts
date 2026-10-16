@@ -9,6 +9,10 @@ export const MAX_SESSION_SECONDS = 5 * 60;
 // onto the same hold can never stretch one reserve past this window.
 export const VOICE_SESSION_TOKEN_TTL_SECONDS = MAX_SESSION_SECONDS + 120;
 
+export function voiceSessionTokenExpiresAtMs(holdStartedAt: Date): number {
+  return holdStartedAt.getTime() + VOICE_SESSION_TOKEN_TTL_SECONDS * 1000;
+}
+
 // Realtime (OpenAI) voice: the hold covers this long a call at worst-case audio rates. Reserved in
 // POST /api/ai/voice-sessions; the same rate floors what a call settles for in
 // server/websocket/voiceSessionEnded.ts, so client-reported usage can never settle below it.

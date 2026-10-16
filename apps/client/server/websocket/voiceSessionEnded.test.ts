@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   // Runs just before a claim, to stand in for another settler that got there first.
   beforeClaim: null as null | (() => void),
   failIncrement: false,
+  enforceCredits: true,
   failTransaction: false,
   failActivity: false,
 }));
@@ -40,7 +41,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   usdToCreditsStochastic: (usd: number) => usd,
   getSettingsMap: async () => ({}),
-  getSettingsValue: () => true,
+  getSettingsValue: () => state.enforceCredits,
 }));
 vi.mock('@bike4mind/services', () => ({
   sessionService: { getSession: async () => ({ ...state.session }) },
@@ -157,6 +158,7 @@ describe('voiceSessionEnded realtime billing', () => {
     state.beforeClaim = null;
     state.failIncrement = false;
     state.failTransaction = false;
+    state.enforceCredits = true;
     state.failActivity = false;
     sendToClient.mockClear();
     logger.error.mockClear();
@@ -434,6 +436,17 @@ describe('voiceSessionEnded realtime billing', () => {
     await send(30);
 
     expect(state.balance).toBe(0);
+  });
+
+  it('lets usage take the balance negative, without a shortfall, when credits are not enforced', async () => {
+    state.enforceCredits = false;
+    state.balance = 10;
+    logger.warn.mockClear();
+
+    await send(HOLD + 50, 'resp-1');
+
+    expect(state.balance).toBe(-40);
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('could not cover'), expect.anything());
   });
 
   it('ignores frames from a user who did not pay the open hold', async () => {

@@ -37,7 +37,7 @@ import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoic
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
 import {
   MAX_SESSION_SECONDS,
-  VOICE_SESSION_TOKEN_TTL_SECONDS,
+  voiceSessionTokenExpiresAtMs,
   shouldReuseVoiceHold,
 } from '@server/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
@@ -180,7 +180,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
     },
     // Expires with the hold's window, not a fresh window per token: ElevenLabs replays it on every
     // turn, and a reconnect onto the same hold must not extend the call the reserve covers.
-    Math.max(1, Math.ceil((holdStartedAt.getTime() + VOICE_SESSION_TOKEN_TTL_SECONDS * 1000 - Date.now()) / 1000))
+    Math.ceil((voiceSessionTokenExpiresAtMs(holdStartedAt) - Date.now()) / 1000)
   );
 
   const transport = createElevenLabsConversationalTransport({
