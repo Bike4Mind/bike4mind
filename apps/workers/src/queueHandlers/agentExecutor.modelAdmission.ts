@@ -1,5 +1,5 @@
 import type { ModelAdmission } from '@bike4mind/services/llm/modelAdmission';
-import type { ServerAgentDefinition } from '@bike4mind/services/llm';
+import type { ServerAgentDefinition } from '@bike4mind/agents';
 
 /**
  * Keep only the models of a user/org agent definition the caller may run (preferred model first,

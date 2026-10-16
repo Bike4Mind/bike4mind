@@ -102,7 +102,7 @@ export interface IntentClassifierAdapters {
   /** Admin orchestration sub-config. Defaults applied if omitted. */
   config?: IntentClassifierConfig;
   /** Per-process cache. Defaults to the shared lambda-warm singleton. */
-  cache?: IntentClassifierCache<IntentDecision>;
+  cache?: IntentClassifierCache<Omit<IntentDecision, 'usage'>>;
   /**
    * Test seam - override the cascade resolution. Production code resolves
    * `[config.primaryModel, ...config.fallbackModels]`.
@@ -134,7 +134,7 @@ export async function classifyIntent(
 ): Promise<IntentDecision> {
   const startedAt = Date.now();
   const config = adapters.config ?? IntentClassifierConfigSchema.parse({});
-  const cache = adapters.cache ?? getSharedIntentCache<IntentDecision>();
+  const cache = adapters.cache ?? getSharedIntentCache<Omit<IntentDecision, 'usage'>>();
   const cacheKey = {
     userId: input.userId,
     message: input.message,
