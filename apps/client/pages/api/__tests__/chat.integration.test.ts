@@ -42,6 +42,7 @@ const {
   mockSettleIfUnfinished,
   mockQuestFindById,
   mockReleaseReservedCredits,
+  mockSendStatusUpdate,
   waitTurnLimits,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
@@ -71,6 +72,7 @@ const {
   // in-memory quest (the row the handler already holds).
   mockQuestFindById: vi.fn(),
   mockReleaseReservedCredits: vi.fn(),
+  mockSendStatusUpdate: vi.fn(),
   // The real 45s/7s by default; the over-budget tests shrink them so the deadline fires at once.
   waitTurnLimits: { budgetMs: 45_000, windDownMs: 7_000 },
 }));
@@ -163,6 +165,7 @@ vi.mock('@bike4mind/services/llm', async orig => {
     }
     process = (...a: unknown[]) => mockProcess(...a);
     releaseReservedCredits = (...a: unknown[]) => mockReleaseReservedCredits(...a);
+    sendStatusUpdate = (...a: unknown[]) => mockSendStatusUpdate(...a);
   }
   return {
     ...actual,
@@ -1290,6 +1293,7 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       // The invoke-created row the deadline path reads in production, before anything streamed.
       mockQuestFindById.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
       mockReleaseReservedCredits.mockResolvedValue(undefined);
+      mockSendStatusUpdate.mockReset().mockResolvedValue(undefined);
       // A turn still mid-flight when the deadline fires: nothing streamed yet.
       mockInvoke.mockResolvedValue({ id: 'quest-2', status: 'running', reply: '', replies: [] });
     });
@@ -1323,6 +1327,11 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
       await handler(req, res);
       expectTimeoutResponse(res);
+      expect(mockSendStatusUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'done' }),
+        null,
+        expect.anything()
+      );
       expect(mockReleaseReservedCredits).not.toHaveBeenCalled();
       expect(mockSettleIfUnfinished).toHaveBeenCalledWith(
         'quest-2',
@@ -1365,11 +1374,47 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       await handler(req, res);
       expectTimeoutResponse(res);
       expect(mockReleaseReservedCredits).toHaveBeenCalledWith('quest-2', expect.anything());
+      expect(mockSendStatusUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'done' }),
+        null,
+        expect.anything()
+      );
       // TIMED_OUT_RUN on an empty quest: terminal error, so questTimeoutSweep has nothing to recover.
       expect(mockSettleIfUnfinished).toHaveBeenCalledWith(
         'quest-2',
         expect.objectContaining({ status: 'done', type: 'error', reply: expect.stringMatching(/timed out/i) })
       );
+    });
+
+    it('does not push a terminal state when the settle lost the race to another writer', async () => {
+      mockSettleIfUnfinished.mockResolvedValue(false);
+      mockProcess.mockImplementation(() => new Promise<never>(() => {}));
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expectTimeoutResponse(res);
+      expect(mockSendStatusUpdate).not.toHaveBeenCalled();
+    });
+
+    it('answers 200 with the full reply when the turn finished before the deadline abort landed', async () => {
+      mockProcess.mockImplementation(
+        ({ prefetchedQuest, abortSignal }: ProcessArgs) =>
+          new Promise<void>(resolve => {
+            prefetchedQuest.status = 'done';
+            prefetchedQuest.reply = 'Full answer';
+            prefetchedQuest.replies = ['Full answer'];
+            abortSignal.addEventListener('abort', () => resolve());
+          })
+      );
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({ response: 'Full answer' });
+      expect(mockSettleIfUnfinished).toHaveBeenCalledWith(
+        'quest-2',
+        expect.objectContaining({ status: 'done', reply: 'Full answer' })
+      );
+      expect(mockSettleIfUnfinished.mock.calls[0][1]).not.toHaveProperty('finishReason');
+      expect(mockReleaseReservedCredits).not.toHaveBeenCalled();
     });
 
     it('leaves a turn that finishes inside the budget untouched', async () => {

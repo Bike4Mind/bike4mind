@@ -54,7 +54,11 @@ import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
-import { TIMED_OUT_RUN, terminalRecoveryFor } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
+import {
+  TIMED_OUT_RUN,
+  applyRecoveryInMemory,
+  terminalRecoveryFor,
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 // How many distinct unrecognized tool ids are named in the warn log and echoed on the response.
 // Both are bounded by the same number so the response is no less bounded than the log; the cap is
@@ -262,7 +266,23 @@ const handler = nextRouteForContract(chatContract, {
       { budgetMs: WAIT_TURN_BUDGET_MS - (Date.now() - requestStartedAt), windDownMs: WAIT_TURN_WIND_DOWN_MS }
     );
 
-    if (turn.outcome !== 'completed') {
+    // successStatus() yields 'stopped' once the turn is aborted, so an in-memory 'done' means the
+    // full answer was produced before the abort landed (the fenced final save may have dropped it).
+    const finishedBeforeAbort =
+      turn.outcome === 'aborted' && turn.error === undefined && quest.status === 'done' && quest.type !== 'error';
+    if (finishedBeforeAbort) {
+      const settled = await questRepository.settleIfUnfinished(quest.id, {
+        status: quest.status,
+        reply: quest.reply,
+        replies: quest.replies,
+        fallbackInfo: quest.fallbackInfo,
+      });
+      req.logger.warn(`POST /api/chat wait=true turn for quest ${quest.id} finished before the deadline abort landed`, {
+        settled,
+      });
+    }
+
+    if (turn.outcome !== 'completed' && !finishedBeforeAbort) {
       // After the abort, process() no longer writes the quest (its saves are fenced), so the
       // terminal state is settled here from what streamed. An aborted turn already refunded or
       // reconciled its own reservation; a stuck one never reached that code, so it is refunded here.
@@ -277,15 +297,23 @@ const handler = nextRouteForContract(chatContract, {
       // would drop the tail that streamed since (or replace a short answer with the timeout error).
       // Keep the in-memory text and take only the fields the patch cannot write from the row.
       const persistedQuest = await questRepository.findById(quest.id).catch(() => null);
-      const settled = await questRepository.settleIfUnfinished(
-        quest.id,
-        terminalRecoveryFor({ ...(persistedQuest ?? quest), reply: quest.reply, replies: quest.replies }, TIMED_OUT_RUN)
+      const recovery = terminalRecoveryFor(
+        { ...(persistedQuest ?? quest), reply: quest.reply, replies: quest.replies },
+        TIMED_OUT_RUN
       );
+      const settled = await questRepository.settleIfUnfinished(quest.id, recovery);
       req.logger.warn(`POST /api/chat wait=true turn for quest ${quest.id} ran past its deadline`, {
         outcome: turn.outcome,
         settled,
         ...(turn.outcome === 'aborted' && turn.error !== undefined && { error: turn.error }),
       });
+      if (settled) {
+        // process()'s own final push on a caller abort sent the still-running quest.
+        applyRecoveryInMemory(quest, recovery);
+        await processService
+          .sendStatusUpdate(quest, null, { skipPayloadOptimization: true })
+          .catch(err => req.logger.warn(`Failed to push settled timeout state for quest ${quest.id}`, { err }));
+      }
       const timeoutError = new GatewayTimeoutError(
         'This turn ran past the wait=true deadline and was ended. Send long turns without wait and poll the quest.',
         { errorCode: REQUEST_TIMEOUT_ERROR_CODE, quest_id: quest.id, sessionId }
