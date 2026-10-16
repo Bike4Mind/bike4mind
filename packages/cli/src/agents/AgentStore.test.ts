@@ -3,8 +3,44 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import {
+  AnthropicBackend,
+  AWSBackend,
+  BFLBackend,
+  DEPRECATED_MODEL_MAP,
+  DeepSeekBackend,
+  GeminiBackend,
+  KimiBackend,
+  OpenAIBackend,
+  UndifferentiatedBedrockBackend,
+  XAIBackend,
+} from '@bike4mind/llm-adapters';
 import { MODEL_ALIASES, resolveModelAlias, getAvailableModelAliases } from './AgentStore';
 import { DEFAULT_AGENT_MODEL } from './types';
+
+describe('MODEL_ALIASES invariants', () => {
+  it('every CLI alias resolves to an active model', async () => {
+    const backends = [
+      new OpenAIBackend('test-key-not-used'),
+      new AnthropicBackend('test-key-not-used'),
+      new UndifferentiatedBedrockBackend(),
+      new GeminiBackend('test-key-not-used'),
+      new XAIBackend('test-key-not-used'),
+      new KimiBackend('test-key-not-used'),
+      new DeepSeekBackend('test-key-not-used'),
+      new AWSBackend(),
+      new BFLBackend('test-key-not-used'),
+    ];
+    const models = (await Promise.all(backends.map(b => b.getModelInfo()))).flat();
+    const inactive = new Set(models.filter(m => m.deprecationDate || m.disabled).map(m => String(m.id)));
+
+    const bad = Object.entries(MODEL_ALIASES)
+      .filter(([, target]) => inactive.has(target) || target in DEPRECATED_MODEL_MAP)
+      .map(([alias, target]) => `${alias} -> ${target}`);
+
+    expect(bad, `aliases pointing at deprecated, disabled or redirected models: ${bad.join(', ')}`).toEqual([]);
+  });
+});
 
 describe('MODEL_ALIASES', () => {
   describe('Anthropic/Claude aliases', () => {
@@ -30,10 +66,8 @@ describe('MODEL_ALIASES', () => {
 
   describe('OpenAI aliases', () => {
     it('should map GPT-4 family aliases', () => {
-      expect(MODEL_ALIASES['gpt-4']).toBe('gpt-4');
       expect(MODEL_ALIASES['gpt-4o']).toBe('gpt-4o');
       expect(MODEL_ALIASES['gpt-4o-mini']).toBe('gpt-4o-mini');
-      expect(MODEL_ALIASES['gpt-4-turbo']).toBe('gpt-4-turbo');
     });
 
     it('should map GPT-5 family aliases', () => {
@@ -41,32 +75,32 @@ describe('MODEL_ALIASES', () => {
       expect(MODEL_ALIASES['gpt-5-mini']).toBe('gpt-5-mini');
     });
 
-    it('should map reasoning model (o-series) aliases', () => {
-      expect(MODEL_ALIASES['o1']).toBe('o1-2024-12-17');
-      expect(MODEL_ALIASES['o3']).toBe('o3-2025-04-16');
-      expect(MODEL_ALIASES['o3-mini']).toBe('o3-mini-2025-01-31');
+    it('should not alias retired reasoning models (o-series)', () => {
+      expect(MODEL_ALIASES['o1']).toBeUndefined();
+      expect(MODEL_ALIASES['o3']).toBeUndefined();
+      expect(MODEL_ALIASES['o3-mini']).toBeUndefined();
     });
   });
 
   describe('Google Gemini aliases', () => {
     it('should map short Gemini aliases', () => {
-      expect(MODEL_ALIASES['gemini']).toBe('gemini-2.5-pro');
-      expect(MODEL_ALIASES['gemini-pro']).toBe('gemini-2.5-pro');
+      expect(MODEL_ALIASES['gemini']).toBe('gemini-3.5-flash');
+      expect(MODEL_ALIASES['gemini-pro']).toBe('gemini-3.5-flash');
       expect(MODEL_ALIASES['gemini-flash']).toBe('gemini-3.5-flash');
     });
 
     it('should map version-specific Gemini aliases', () => {
-      expect(MODEL_ALIASES['gemini-3']).toBe('gemini-3-pro-preview');
-      expect(MODEL_ALIASES['gemini-2.5-pro']).toBe('gemini-2.5-pro');
-      expect(MODEL_ALIASES['gemini-1.5-pro']).toBe('gemini-1.5-pro');
+      expect(MODEL_ALIASES['gemini-3']).toBe('gemini-3.1-pro-preview');
+      expect(MODEL_ALIASES['gemini-2.5-pro']).toBe('gemini-3.5-flash');
+      expect(MODEL_ALIASES['gemini-1.5-pro']).toBeUndefined();
     });
   });
 
   describe('xAI Grok aliases', () => {
     it('should map Grok aliases', () => {
-      expect(MODEL_ALIASES['grok']).toBe('grok-3');
-      expect(MODEL_ALIASES['grok-3']).toBe('grok-3');
-      expect(MODEL_ALIASES['grok-2']).toBe('grok-2-1212');
+      expect(MODEL_ALIASES['grok']).toBe('grok-4.5');
+      expect(MODEL_ALIASES['grok-3']).toBe('grok-4.5');
+      expect(MODEL_ALIASES['grok-2']).toBe('grok-4.5');
     });
   });
 
@@ -113,11 +147,11 @@ describe('resolveModelAlias', () => {
 
     it('should resolve OpenAI aliases', () => {
       expect(resolveModelAlias('gpt-4o', testAgent, testPath).model).toBe('gpt-4o');
-      expect(resolveModelAlias('o3', testAgent, testPath).model).toBe('o3-2025-04-16');
+      expect(resolveModelAlias('o3-2025-04-16', testAgent, testPath).model).toBe('o3-2025-04-16');
     });
 
     it('should resolve Gemini aliases', () => {
-      expect(resolveModelAlias('gemini', testAgent, testPath).model).toBe('gemini-2.5-pro');
+      expect(resolveModelAlias('gemini', testAgent, testPath).model).toBe('gemini-3.5-flash');
       expect(resolveModelAlias('gemini-flash', testAgent, testPath).model).toBe('gemini-3.5-flash');
     });
   });
@@ -149,7 +183,7 @@ describe('resolveModelAlias', () => {
     });
 
     it('should pass through full Gemini model IDs', () => {
-      expect(resolveModelAlias('gemini-2.5-pro', testAgent, testPath).model).toBe('gemini-2.5-pro');
+      expect(resolveModelAlias('gemini-3.1-pro-preview', testAgent, testPath).model).toBe('gemini-3.1-pro-preview');
       expect(resolveModelAlias('gemini-1.5-flash-8b', testAgent, testPath).model).toBe('gemini-1.5-flash-8b');
     });
   });

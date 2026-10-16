@@ -57,6 +57,10 @@ const FULL_MODEL_ID_PREFIXES = [
  * To add a new model alias:
  * 1. Add the alias as a key (lowercase)
  * 2. Set the value to the full model ID from ChatModels enum
+ *
+ * The CLI request path never runs resolveDeprecatedModelId, so a target must be
+ * an active model; an alias for a retired model points at its successor or is
+ * dropped. AgentStore.test.ts enforces this.
  */
 export const MODEL_ALIASES: Record<string, string> = {
   // Anthropic/Claude Models
@@ -79,7 +83,7 @@ export const MODEL_ALIASES: Record<string, string> = {
   'claude-4.5-sonnet': ChatModels.CLAUDE_4_5_SONNET,
   'claude-4.5-haiku': ChatModels.CLAUDE_4_5_HAIKU,
   'claude-4-opus': ChatModels.CLAUDE_4_OPUS,
-  'claude-4-sonnet': ChatModels.CLAUDE_4_SONNET,
+  'claude-4-sonnet': ChatModels.CLAUDE_4_6_SONNET,
   'claude-4.1-opus': ChatModels.CLAUDE_4_1_OPUS,
   'claude-3.7-sonnet': ChatModels.CLAUDE_4_6_SONNET,
   'claude-3.5-sonnet': ChatModels.CLAUDE_4_5_SONNET,
@@ -88,14 +92,10 @@ export const MODEL_ALIASES: Record<string, string> = {
 
   // OpenAI Models
   // GPT-4 family
-  'gpt-4': ChatModels.GPT4,
   'gpt-4o': ChatModels.GPT4o,
   'gpt-4o-mini': ChatModels.GPT4o_MINI,
-  'gpt-4-turbo': ChatModels.GPT4_TURBO,
   'gpt-4.1': ChatModels.GPT4_1,
   'gpt-4.1-mini': ChatModels.GPT4_1_MINI,
-  'gpt-4.1-nano': ChatModels.GPT4_1_NANO,
-  'gpt-4.5': ChatModels.GPT4_5_PREVIEW,
 
   // GPT-5 family
   'gpt-5': ChatModels.GPT5,
@@ -111,46 +111,30 @@ export const MODEL_ALIASES: Record<string, string> = {
   'gpt-5.6-luna': ChatModels.GPT5_6_LUNA,
   'gpt-5.6-terra': ChatModels.GPT5_6_TERRA,
 
-  // OpenAI reasoning models (o-series)
-  o1: ChatModels.O1,
-  'o1-preview': ChatModels.O1_PREVIEW,
-  'o1-mini': ChatModels.O1_MINI,
-  o3: ChatModels.O3,
-  'o3-mini': ChatModels.O3_MINI,
-  'o4-mini': ChatModels.O4_MINI,
-
   // Google Gemini Models
-  gemini: ChatModels.GEMINI_2_5_PRO,
-  'gemini-pro': ChatModels.GEMINI_2_5_PRO,
+  gemini: ChatModels.GEMINI_3_5_FLASH,
+  'gemini-pro': ChatModels.GEMINI_3_5_FLASH,
   'gemini-flash': ChatModels.GEMINI_3_5_FLASH,
-  'gemini-flash-lite': ChatModels.GEMINI_2_5_FLASH_LITE,
+  'gemini-flash-lite': ChatModels.GEMINI_3_1_FLASH_LITE,
 
   // Gemini 3 (preview)
-  'gemini-3': ChatModels.GEMINI_3_PRO_PREVIEW,
-  'gemini-3-pro': ChatModels.GEMINI_3_PRO_PREVIEW,
+  'gemini-3': ChatModels.GEMINI_3_1_PRO_PREVIEW,
+  'gemini-3-pro': ChatModels.GEMINI_3_1_PRO_PREVIEW,
   'gemini-3-flash': ChatModels.GEMINI_3_FLASH_PREVIEW,
 
   // Gemini 2.5
-  'gemini-2.5': ChatModels.GEMINI_2_5_PRO,
-  'gemini-2.5-pro': ChatModels.GEMINI_2_5_PRO,
-  'gemini-2.5-flash': ChatModels.GEMINI_2_5_FLASH,
-
-  // Gemini 2.0
-  'gemini-2.0-flash': ChatModels.GEMINI_2_0_FLASH_EXP,
-
-  // Gemini 1.5 (legacy)
-  'gemini-1.5-pro': ChatModels.GEMINI_1_5_PRO,
-  'gemini-1.5-flash': ChatModels.GEMINI_1_5_FLASH,
-  'gemini-1.5-flash-8b': ChatModels.GEMINI_1_5_FLASH_8B,
+  'gemini-2.5': ChatModels.GEMINI_3_5_FLASH,
+  'gemini-2.5-pro': ChatModels.GEMINI_3_5_FLASH,
+  'gemini-2.5-flash': ChatModels.GEMINI_3_1_FLASH_LITE,
 
   // xAI Grok Models
-  grok: ChatModels.GROK_3,
-  'grok-3': ChatModels.GROK_3,
-  'grok-3-fast': ChatModels.GROK_3_FAST,
+  grok: ChatModels.GROK_4_5,
+  'grok-3': ChatModels.GROK_4_5,
+  'grok-3-fast': ChatModels.GROK_4_5,
   'grok-3-mini': ChatModels.GROK_3_MINI,
-  'grok-3-mini-fast': ChatModels.GROK_3_MINI_FAST,
-  'grok-2': ChatModels.GROK_2,
-  'grok-2-vision': ChatModels.GROK_2_VISION,
+  'grok-3-mini-fast': ChatModels.GROK_3_MINI,
+  'grok-2': ChatModels.GROK_4_5,
+  'grok-2-vision': ChatModels.GROK_4_5,
 
   // DeepSeek Models
   // Bare `deepseek` points at the hosted first-party model; `deepseek-r1` keeps
