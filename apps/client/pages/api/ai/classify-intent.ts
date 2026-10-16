@@ -82,6 +82,20 @@ const handler = baseApi()
       hasFileAttachments: parsed.data.hasFileAttachments,
       hasAgentMention: parsed.data.hasAgentMention,
     };
+    // Cache-only probe: an empty cascade can make no provider call, so a hit is served without
+    // any billing work and a miss throws ("cascade is empty") into the metered path below.
+    const cachedDecision = await classifyIntent(input, {
+      apiKeyTable,
+      availableModels,
+      logger: req.logger,
+      config: classifierConfig,
+      resolveCascade: () => [],
+    }).catch(() => null);
+    if (cachedDecision?.cacheHit) {
+      const { usage: _usage, ...decision } = cachedDecision;
+      return res.status(200).json({ decision, shadowMode: classifierConfig.shadowMode });
+    }
+
     // Hold the worst case: every cascade model runs, each with its best-effort retry.
     const messages = buildIntentClassifierMessages(input);
     const modelCeilingUsd = (modelId: string) => {
@@ -124,13 +138,17 @@ const handler = baseApi()
         ? sum + completionUsd(modelInfo, call)
         : sum + modelCeilingUsd(call.modelId) / INTENT_CLASSIFIER_CALLS_PER_MODEL;
     }, 0);
-    await settleCompletion(reservation, req, {
-      model: decision.classifierModel,
-      provider: availableModels.find(m => m.id === decision.classifierModel)?.backend ?? 'unknown',
-      usd,
-      inputTokens: usage.reduce((sum, call) => sum + (call.inputTokens ?? 0), 0),
-      outputTokens: usage.reduce((sum, call) => sum + (call.outputTokens ?? 0), 0),
-    });
+    if (usd <= 0) {
+      await reservation.refund();
+    } else {
+      await settleCompletion(reservation, req, {
+        model: decision.classifierModel,
+        provider: availableModels.find(m => m.id === decision.classifierModel)?.backend ?? 'unknown',
+        usd,
+        inputTokens: usage.reduce((sum, call) => sum + (call.inputTokens ?? 0), 0),
+        outputTokens: usage.reduce((sum, call) => sum + (call.outputTokens ?? 0), 0),
+      });
+    }
 
     return res.status(200).json({
       decision,

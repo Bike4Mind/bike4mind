@@ -15,6 +15,7 @@ const m = vi.hoisted(() => ({
   settleHold: vi.fn(),
   settle: vi.fn(),
   complete: vi.fn(),
+  cached: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -86,7 +87,9 @@ const MODEL = { id: 'ops-model', backend: 'openai', pricing: { 200_000: { input:
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: async () => [MODEL] }));
 // The classifier is the provider seam here: m.complete stands in for the whole cascade.
 vi.mock('@bike4mind/services/llm/intentClassifier', () => ({
-  classifyIntent: m.complete,
+  // An empty cascade is the route's cache-only probe; m.cached answers it, as the real cache would.
+  classifyIntent: (input: unknown, adapters: { resolveCascade?: () => string[] }) =>
+    adapters.resolveCascade?.().length === 0 ? m.cached(input) : m.complete(input, adapters),
   buildIntentClassifierMessages: () => [{ role: 'user', content: 'classify' }],
   INTENT_CLASSIFIER_MAX_TOKENS: 300,
   INTENT_CLASSIFIER_CALLS_PER_MODEL: 2,
@@ -110,6 +113,7 @@ beforeEach(() => {
   m.enforce = true;
   m.hold.mockResolvedValue({ ownerId: 'u1', ownerType: 'user', reservedCredits: 50 });
   m.settleHold.mockImplementation(async (_hold, credits: number) => credits);
+  m.cached.mockRejectedValue(new Error('intentClassifier: cascade is empty'));
   m.complete.mockResolvedValue({
     useAgent: true,
     confidence: 0.9,
@@ -176,6 +180,48 @@ describe('POST /api/ai/classify-intent metering', () => {
     expect(res._getStatusCode()).toBe(500);
     expect(m.release).toHaveBeenCalledOnce();
     expect(m.settleHold).not.toHaveBeenCalled();
+  });
+
+  it('serves a cache hit without a hold, a settle or a usage event', async () => {
+    m.cached.mockResolvedValue({
+      useAgent: true,
+      confidence: 0.9,
+      reason: 'needs live data',
+      signals: [],
+      classifierModel: 'ops-model',
+      latencyMs: 1,
+      cacheHit: true,
+      earlyExited: false,
+      usage: [],
+    });
+
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().decision).toMatchObject({ cacheHit: true, useAgent: true });
+    expect(res._getJSONData().decision).not.toHaveProperty('usage');
+    expect(m.complete).not.toHaveBeenCalled();
+    expect(m.hold).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+  });
+
+  it('refunds instead of settling a zero-cost classification', async () => {
+    m.complete.mockResolvedValue({
+      useAgent: false,
+      confidence: 0.5,
+      reason: 'r',
+      signals: [],
+      classifierModel: 'ops-model',
+      latencyMs: 5,
+      cacheHit: false,
+      earlyExited: false,
+      usage: [],
+    });
+
+    await call();
+
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(m.release).toHaveBeenCalledOnce();
   });
 
   it('runs without any hold when credits are not enforced', async () => {
