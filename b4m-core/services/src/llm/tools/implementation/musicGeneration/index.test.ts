@@ -51,6 +51,7 @@ describe('music_generation tool', () => {
       'upbeat pop in the style of Some Singer',
       'sounds like The Example Group',
       'inspired by Name Surname, slow tempo',
+      'a slow ballad inspired by the Example Group',
       'In the style of Some Singer, a slow ballad',
       'A ballad. Sounds like \u00c9mile Example',
       'A ROCK SONG IN THE STYLE OF SOME SINGER',
@@ -95,6 +96,8 @@ describe('music_generation tool', () => {
       'a ballad like Spanish guitar',
       'in the vein of Celtic folk, fiddle and whistle',
       'Like a lullaby, inspired by Delta blues',
+      'a track in the style of Motown.',
+      "warm strings, inspired by Nashville's session players",
     ];
     for (const prompt of prompts) {
       expect(JSON.parse(await tool.toolFn({ model: 'test-music', prompt })).jobId).toBe('job1');

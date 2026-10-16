@@ -68,6 +68,13 @@ const STYLE_WORDS = new Set([
   'western',
 ]);
 
+// A run can end a sentence or carry a possessive ("in the style of Motown.", "Nashville's"), so strip both before lookup.
+const toStyleWordKey = (word: string): string =>
+  word
+    .toLowerCase()
+    .replace(/[.'-]+$/, '')
+    .replace(/'s$/, '');
+
 export const ARTIST_REFERENCE_REFUSAL =
   'Music generation failed (artist_reference): the prompt appears to name a real artist or band. ' +
   'Rewrite it describing genre, mood, instruments, tempo and era instead of names, and call music_generation again.';
@@ -80,7 +87,7 @@ export const namesArtistReference = (prompt: string): boolean =>
       run
         .trim()
         .split(/\s+/)
-        .some(word => !STYLE_WORDS.has(word.toLowerCase()))
+        .some(word => !STYLE_WORDS.has(toStyleWordKey(word)))
     );
   });
 
