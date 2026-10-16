@@ -285,7 +285,7 @@ describe('resolveModelAlias', () => {
 
     it('should resolve OpenAI aliases', () => {
       expect(resolveModelAlias('gpt-4o', testAgent, testPath).model).toBe('gpt-4o');
-      expect(resolveModelAlias('gpt-4.1-2025-04-14', testAgent, testPath).model).toBe('gpt-4.1-2025-04-14');
+      expect(resolveModelAlias('gpt-4.1', testAgent, testPath).model).toBe('gpt-4.1-2025-04-14');
     });
 
     it('should resolve Gemini aliases', () => {
