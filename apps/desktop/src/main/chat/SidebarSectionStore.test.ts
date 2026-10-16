@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, rmdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rmdir, writeFile } from 'node:fs/promises';
+import { basename, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -7,6 +8,10 @@ import { SidebarSectionStore } from './SidebarSectionStore';
 
 async function sectionsFile(): Promise<string> {
   return join(await mkdtemp(join(tmpdir(), 'b4m-sidebar-sections-')), 'sidebar-sections.json');
+}
+
+async function asideCopies(file: string): Promise<string[]> {
+  return (await readdir(dirname(file))).filter(name => name.startsWith(`${basename(file)}.corrupt-`));
 }
 
 function sequentialIds() {
@@ -161,7 +166,10 @@ describe('SidebarSectionStore', () => {
     const store = new SidebarSectionStore(await sectionsFile(), sequentialIds());
     await store.create('Work');
 
-    expect(await store.move('toString', null)).toEqual({ sections: [{ id: 'section-1', name: 'Work' }], assignments: {} });
+    expect(await store.move('toString', null)).toEqual({
+      sections: [{ id: 'section-1', name: 'Work' }],
+      assignments: {},
+    });
   });
 
   it('keeps its prior state when a write fails, and persists the next change', async () => {
@@ -179,5 +187,66 @@ describe('SidebarSectionStore', () => {
 
     expect(after.sections.map(section => section.name)).toEqual(['Work', 'Home']);
     expect(await new SidebarSectionStore(file).read()).toEqual(after);
+  });
+  it('moves a corrupt file aside before the first write instead of overwriting it', async () => {
+    const file = await sectionsFile();
+    await writeFile(file, '{not json', 'utf8');
+    const store = new SidebarSectionStore(file, sequentialIds());
+
+    await store.create('Work');
+
+    const kept = await asideCopies(file);
+    expect(kept).toHaveLength(1);
+    expect(await readFile(join(dirname(file), kept[0]), 'utf8')).toBe('{not json');
+    expect(await new SidebarSectionStore(file).read()).toEqual({
+      sections: [{ id: 'section-1', name: 'Work' }],
+      assignments: {},
+    });
+  });
+
+  it('keeps an unreadable file intact through a later change', async () => {
+    const file = await sectionsFile();
+    const original = JSON.stringify({ sections: [{ id: 'a', name: 'Work' }], assignments: { one: 'a' } });
+    await writeFile(file, original, 'utf8');
+    await chmod(file, 0o000);
+    const store = new SidebarSectionStore(file, sequentialIds());
+
+    expect(await store.read()).toEqual({ sections: [], assignments: {} });
+    await store.forgetSession('one');
+    await store.create('Home');
+
+    const kept = await asideCopies(file);
+    expect(kept).toHaveLength(1);
+    const aside = join(dirname(file), kept[0]);
+    await chmod(aside, 0o600);
+    expect(await readFile(aside, 'utf8')).toBe(original);
+  });
+
+  it('does not move a missing file aside', async () => {
+    const file = await sectionsFile();
+
+    await new SidebarSectionStore(file, sequentialIds()).create('Work');
+
+    expect(await asideCopies(file)).toEqual([]);
+  });
+
+  it('keeps the other sections when one entry is malformed', async () => {
+    const file = await sectionsFile();
+    await writeFile(
+      file,
+      JSON.stringify({
+        sections: [{ id: 'a', name: 'Work' }, { id: 'b', name: 5 }, 'junk', { id: 'c', name: 'Home' }],
+        assignments: { one: 'a', two: 7, three: 'c' },
+      }),
+      'utf8'
+    );
+
+    expect(await new SidebarSectionStore(file).read()).toEqual({
+      sections: [
+        { id: 'a', name: 'Work' },
+        { id: 'c', name: 'Home' },
+      ],
+      assignments: { one: 'a', three: 'c' },
+    });
   });
 });

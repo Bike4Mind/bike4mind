@@ -10,38 +10,53 @@ import {
   type SidebarSectionsState,
 } from '@shared/sidebarSections';
 
+// Only the outer shape is all-or-nothing; each entry is validated on its own in sanitize.
 const storedSchema = z.object({
-  sections: z.array(z.object({ id: z.string().min(1), name: z.string() })),
-  assignments: z.record(z.string(), z.string()),
+  sections: z.array(z.unknown()),
+  assignments: z.record(z.string(), z.unknown()),
 });
 
+const sectionSchema = z.object({ id: z.string().min(1), name: z.string() });
+
 /**
- * Drops hand-edit damage (blank names, repeated ids, assignments to a gone section) one entry at a
- * time, so one bad entry does not cost the user every other section.
+ * Drops hand-edit damage (a malformed entry, a blank name, a repeated id, an assignment to a gone
+ * section) one entry at a time, so one bad entry does not cost the user every other section.
  */
 function sanitize(stored: z.infer<typeof storedSchema>): SidebarSectionsState {
   const seen = new Set<string>();
-  const sections = stored.sections.flatMap(section => {
-    const name = normalizeSectionName(section.name);
-    if (!name || seen.has(section.id)) return [];
-    seen.add(section.id);
-    return [{ id: section.id, name }];
+  const sections = stored.sections.flatMap(entry => {
+    const parsed = sectionSchema.safeParse(entry);
+    if (!parsed.success) return [];
+    const name = normalizeSectionName(parsed.data.name);
+    if (!name || seen.has(parsed.data.id)) return [];
+    seen.add(parsed.data.id);
+    return [{ id: parsed.data.id, name }];
   });
-  const assignments = Object.fromEntries(
-    Object.entries(stored.assignments).filter(([, sectionId]) => seen.has(sectionId))
-  );
+  const assignments: Record<string, string> = {};
+  for (const [sessionId, sectionId] of Object.entries(stored.assignments)) {
+    if (typeof sectionId === 'string' && seen.has(sectionId)) assignments[sessionId] = sectionId;
+  }
   return { sections, assignments };
+}
+
+function isMissingFile(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
 /**
  * Sections and assignments in userData, app-wide like approval-mode.json rather than per account,
- * so a second account on this machine sees the first one's section names. An unreadable file
- * reads as empty.
+ * so a second account on this machine sees the first one's section names.
+ *
+ * Only a missing file reads as empty. A file that exists but cannot be read or parsed also reads as
+ * empty, but is moved aside to `<file>.corrupt-<ms>` before the first write, so a transient read
+ * error or a bad hand edit never overwrites the user's sections; if it cannot be moved, the write
+ * fails instead.
  */
 export class SidebarSectionStore {
   private state: SidebarSectionsState | null = null;
   private loading: Promise<SidebarSectionsState> | null = null;
   private queue: Promise<unknown> = Promise.resolve();
+  private keepAside = false;
 
   constructor(
     private readonly filePath: string,
@@ -56,13 +71,22 @@ export class SidebarSectionStore {
   }
 
   private async load(): Promise<SidebarSectionsState> {
+    let text: string;
+    try {
+      text = await readFile(this.filePath, 'utf8');
+    } catch (error) {
+      if (!isMissingFile(error)) this.keepAside = true;
+      this.state ??= EMPTY_SIDEBAR_SECTIONS;
+      return this.state;
+    }
     let raw: unknown;
     try {
-      raw = JSON.parse(await readFile(this.filePath, 'utf8'));
+      raw = JSON.parse(text);
     } catch {
       raw = undefined;
     }
     const parsed = storedSchema.safeParse(raw);
+    if (!parsed.success) this.keepAside = true;
     this.state ??= parsed.success ? sanitize(parsed.data) : EMPTY_SIDEBAR_SECTIONS;
     return this.state;
   }
@@ -137,6 +161,14 @@ export class SidebarSectionStore {
 
   private async persist(state: SidebarSectionsState): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
+    if (this.keepAside) {
+      try {
+        await rename(this.filePath, `${this.filePath}.corrupt-${Date.now()}`);
+      } catch (error) {
+        if (!isMissingFile(error)) throw error;
+      }
+      this.keepAside = false;
+    }
     const temporary = `${this.filePath}.tmp`;
     await writeFile(temporary, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
     await rename(temporary, this.filePath);
