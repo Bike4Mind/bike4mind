@@ -96,6 +96,7 @@ import {
   resolveMajorityEmbeddingModel,
 } from '../dataLakeService/embeddingMismatch';
 import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavailable';
+import { lakeOrderScopes, orderFilesFairlyAcrossLakes } from '../dataLakeService/lakeFairOrder';
 import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
 import { atlasVectorSearch, isAtlasVectorSearchAvailable } from '../dataLakeService/atlasVectorSearch';
 import type { AnnRankableFile } from '../dataLakeService/annVectorSearch';
@@ -1979,7 +1980,7 @@ interface ForcedRetrievalCoverage {
    */
   moreFilesBeyondCap: boolean;
   candidateSelection: ForcedRetrievalCandidateSelection;
-  /** The listing's page size: FORCED_RETRIEVAL_MAX_LISTED_FILES with a relevance pick available, else the cap. */
+  /** The listing's page size: FORCED_RETRIEVAL_MAX_LISTED_FILES with a relevance pick or several lakes, else the cap. */
   listingLimit: number;
   /** Files withheld before the chunk load because they were embedded with a different model. */
   filesExcludedForeignModel: number;
@@ -2397,14 +2398,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     files: T[],
     queryVector: number[],
     embeddingModel: SupportedEmbeddingModel,
-    relevanceSelectionAvailable: boolean
+    relevanceSelectionAvailable: boolean,
+    byNameOrder: (files: T[]) => T[] = byName => byName
   ): Promise<{ files: T[]; selection: ForcedRetrievalCandidateSelection }> {
     if (files.length <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES) return { files, selection: 'all' };
     const ranked = relevanceSelectionAvailable
       ? await this.rankCandidatesByAnn(files, queryVector, embeddingModel)
       : null;
     if (ranked) return { files: ranked.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'relevance' };
-    return { files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'fileName' };
+    return { files: byNameOrder(files).slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'fileName' };
   }
 
   /**
@@ -2957,14 +2959,19 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       //    similarity below, but the ORDER still matters: on a lake larger than the listing limit
       //    it decides which files are considered at all, so it must be stable turn to turn. With a
       //    relevance pick available the listing is wider and an ANN query cuts it to the cap (see
-      //    selectForcedRetrievalCandidates); without one the listing IS the cut.
+      //    selectForcedRetrievalCandidates); without one the cut is by name (fair across lakes, see below).
       //    The widening cannot wait on index queryability: the embedding model whose index would be
       //    asked is voted from this listing (resolveMajorityEmbeddingModel below), so the electorate
       //    is the wider listing whenever the setting is on, even on a turn that falls back by name.
       const relevanceSelectionAvailable = await this.canSelectCandidatesByRelevance();
-      const listingLimit = relevanceSelectionAvailable
-        ? FORCED_RETRIEVAL_MAX_LISTED_FILES
-        : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
+      // A by-name cut over several lakes takes its slots in turn from each lake, so one lake whose
+      // names sort first cannot fill the cap alone. That needs a listing wider than the cap to pick from.
+      const orderScopes = lakeOrderScopes({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
+      const spansSeveralLakes = orderScopes.length > 1;
+      const listingLimit =
+        relevanceSelectionAvailable || spansSeveralLakes
+          ? FORCED_RETRIEVAL_MAX_LISTED_FILES
+          : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
       const listFiles = (restrictToDataLake: boolean) =>
         db.fabfiles.search(
           user.id,
@@ -3117,11 +3124,19 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         : { servable: modelMatchedFiles, superseded: [] };
       // The cap applies HERE, after every partition above, so a withheld, foreign-model or
       // superseded file never takes a candidate slot from one that can actually be served.
+      // Library rows stay behind the lake rows when the lake listing was prioritized above.
+      const fairByName = <F extends { id: string; tags?: { name: string }[] }>(byName: F[]): F[] => {
+        const lakeRows = prioritizeLakeFiles ? byName.filter(f => lakeFileIds.has(f.id)) : byName;
+        const libraryRows = prioritizeLakeFiles ? byName.filter(f => !lakeFileIds.has(f.id)) : [];
+        const { ordered } = orderFilesFairlyAcrossLakes(lakeRows, orderScopes, f => f.tags?.map(t => t.name) ?? []);
+        return [...ordered, ...libraryRows];
+      };
       const { files: scanCandidates, selection: candidateSelection } = await this.selectForcedRetrievalCandidates(
         collapse.servable,
         queryVector,
         embeddingModel,
-        relevanceSelectionAvailable
+        relevanceSelectionAvailable,
+        spansSeveralLakes ? fairByName : undefined
       );
       const supersession = buildSupersessionReport(collapse.superseded);
       // The audit value, resolved once here and used by every write site below. Deliberately NOT
