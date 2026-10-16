@@ -50,6 +50,16 @@ const encodeCanvas = async (canvas: Uint8Array, width: number, height: number): 
  * UnsupportedImageFormatError, which moderation treats as blocked.
  */
 export async function extractAnimationFrames(bytes: Buffer): Promise<Buffer[] | null> {
+  try {
+    return await splitAnimation(bytes);
+  } catch (err) {
+    // A parser bounds error on malformed input is a terminal verdict, not a transient one to retry.
+    if (err instanceof UnsupportedImageFormatError) throw err;
+    throw unsupported(`malformed image: ${(err as Error).message}`);
+  }
+}
+
+async function splitAnimation(bytes: Buffer): Promise<Buffer[] | null> {
   const magic = bytes.subarray(0, 6).toString('latin1');
   if (magic === 'GIF87a' || magic === 'GIF89a') return gifFrames(bytes);
   // The chunk-name probes keep still PNG/WebP files off the parsers entirely.

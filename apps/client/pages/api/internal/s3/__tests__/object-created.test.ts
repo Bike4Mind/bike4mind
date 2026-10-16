@@ -17,14 +17,12 @@ const {
   getMetadataMock,
   userFindByIdMock,
   userDoc,
-  judgeMock,
-  rejectMock,
+  admitMock,
   recordLandedMock,
 } = vi.hoisted(() => {
   const deps = { claim: vi.fn(), persist: vi.fn(), release: vi.fn() };
   return {
-    judgeMock: vi.fn(),
-    rejectMock: vi.fn(),
+    admitMock: vi.fn(),
     recordLandedMock: vi.fn(),
     chargeMock: vi.fn(),
     getMetadataMock: vi.fn(),
@@ -52,7 +50,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: <T>(fn: (session: unknown) => Promise<T>) => fn({}),
 }));
 vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({ chargeUploadedObject: chargeMock }));
-vi.mock('@server/s3/uploadSizeGate', () => ({ judgeLandedUpload: judgeMock, rejectLandedUpload: rejectMock }));
+vi.mock('@server/s3/uploadSizeGate', () => ({ admitLandedUpload: admitMock }));
 vi.mock('@server/s3/moderationScan', () => ({
   normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,
   recordLandedObject: recordLandedMock,
@@ -128,7 +126,7 @@ describe('POST /api/internal/s3/object-created', () => {
     userFindByIdMock.mockReturnValue({ session: () => Promise.resolve(userDoc) });
     chargeMock.mockResolvedValue(true);
     getMetadataMock.mockResolvedValue({ size: 42 });
-    judgeMock.mockResolvedValue(null);
+    admitMock.mockResolvedValue(true);
   });
   afterEach(() => {
     delete process.env.B4M_SELF_HOST;
@@ -218,14 +216,16 @@ describe('POST /api/internal/s3/object-created', () => {
   });
 
   it('withdraws an upload the size gate rejects, without completing, charging or chunking it', async () => {
-    judgeMock.mockResolvedValue('larger_than_declared');
+    admitMock.mockResolvedValue(false);
     const res = makeRes();
     await handler(makeReq('secret-token', 'uploads/report.pdf', { size: 999 }), res);
 
-    expect(judgeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ measuredSize: 999, statusBeforeUpload: 'pending' })
+    expect(admitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending' }),
+      999,
+      'uploads/report.pdf',
+      expect.anything()
     );
-    expect(rejectMock).toHaveBeenCalledWith('ff1', 'uploads/report.pdf');
     expect(saveMock).not.toHaveBeenCalled();
     expect(chargeMock).not.toHaveBeenCalled();
     expect(sendToQueueMock).not.toHaveBeenCalled();
@@ -327,6 +327,17 @@ describe('POST /api/internal/s3/object-created', () => {
     await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5 }), makeRes());
 
     expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'etag-c');
+  });
+
+  // The row is already complete by then, so a 500 would make a redelivery enqueue chunking twice.
+  it('still answers 200 and scans when the ETag read fails', async () => {
+    getMetadataMock.mockRejectedValue(new Error('minio down'));
+    const res = makeRes();
+    await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5 }), res);
+
+    expect(recordLandedMock).not.toHaveBeenCalled();
+    expect(moderateFilesMock).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
   });
 
   it('does not scan or charge when the file has no metadata row', async () => {

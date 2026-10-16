@@ -17,8 +17,7 @@ const h = vi.hoisted(() => ({
   completedBatchStatus: vi.fn(),
   changeStorageSize: vi.fn(),
   withTransaction: vi.fn(),
-  judge: vi.fn(),
-  reject: vi.fn(),
+  admit: vi.fn(),
 }));
 
 // withContext just threads a logger; the handler body is the subject.
@@ -55,7 +54,7 @@ vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationS
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ download: vi.fn(), downloadRange: vi.fn() }) }));
 vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
-vi.mock('@server/s3/uploadSizeGate', () => ({ judgeLandedUpload: h.judge, rejectLandedUpload: h.reject }));
+vi.mock('@server/s3/uploadSizeGate', () => ({ admitLandedUpload: h.admit }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: h.recomputeUploaded,
@@ -98,20 +97,22 @@ beforeEach(() => {
   h.getSettingsValue.mockResolvedValue(false);
   h.claimFileStatus.mockResolvedValue(true);
   h.incrementCounter.mockResolvedValue({ uploadedFiles: 1 });
-  h.judge.mockResolvedValue(null);
+  h.admit.mockResolvedValue(true);
 });
 
 describe('objectCreated - measured-size gate', () => {
   it('withdraws an upload the gate rejects before completing, scanning or charging it', async () => {
     h.findOne.mockResolvedValue(metadata({ fileSize: 4, status: 'pending' }));
-    h.judge.mockResolvedValue('larger_than_declared');
+    h.admit.mockResolvedValue(false);
 
     await run();
 
-    expect(h.judge).toHaveBeenCalledWith(
-      expect.objectContaining({ measuredSize: 10, declaredSize: 4, statusBeforeUpload: 'pending' })
+    expect(h.admit).toHaveBeenCalledWith(
+      expect.objectContaining({ fileSize: 4, status: 'pending' }),
+      10,
+      'uploads/report.pdf',
+      expect.anything()
     );
-    expect(h.reject).toHaveBeenCalledWith('ff1', 'uploads/report.pdf');
     expect(h.updateOne).not.toHaveBeenCalled();
     expect(h.moderateUploadedFile).not.toHaveBeenCalled();
     expect(h.findOneAndUpdate).not.toHaveBeenCalled();

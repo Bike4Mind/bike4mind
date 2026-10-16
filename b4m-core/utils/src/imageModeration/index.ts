@@ -203,12 +203,12 @@ export class RekognitionImageModerationService implements ImageModerationService
     if (!frames) return this.checkStillImage(bytes);
 
     // ponytail: up to MAX_MODERATED_FRAMES Rekognition calls per image; sample frames if cost matters.
+    // Stops scheduling on the first failure: any one already fails the image closed.
     const errors: unknown[] = [];
     let next = 0;
-    const blocked = () => errors.some(e => e instanceof ImageModerationBlockedError);
     await Promise.all(
       Array.from({ length: Math.min(FRAME_CONCURRENCY, frames.length) }, async () => {
-        while (next < frames.length && !blocked()) {
+        while (next < frames.length && errors.length === 0) {
           const frame = frames[next++];
           await this.checkStillImage(frame).catch(err => errors.push(err));
         }

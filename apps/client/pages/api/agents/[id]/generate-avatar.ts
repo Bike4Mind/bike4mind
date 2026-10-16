@@ -377,6 +377,13 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
       if (!uploadedPath) {
         throw new Error('Failed to upload generated image to storage');
       }
+      // The version the up-front 'clean' below covers, so this upload's own S3 event does not send it
+      // back to pending (recordLandedObject). Unknown only costs that one rescan.
+      const { normalizeETag } = await import('@server/s3/moderationScan');
+      const moderationETag = await getFilesStorage()
+        .getMetadata(uploadedPath)
+        .then(head => normalizeETag(head.etag))
+        .catch(() => undefined);
 
       // Generate a signed URL for accessing the uploaded image
       const uploadedUrl = await getFilesStorage().getSignedUrl(uploadedPath, 'get', { expiresIn: 3600 });
@@ -403,6 +410,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
         // transient throttle could strand it un-servable. The atomic scan-claim in
         // objectCreated makes that re-scan a no-op once it observes 'clean'.
         moderationStatus: 'clean' as const,
+        moderationETag,
         // Initialize required shareable fields
         groups: [],
         users: [],

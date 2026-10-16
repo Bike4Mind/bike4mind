@@ -36,7 +36,11 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('axios', () => ({ default: { get: h.axiosGet } }));
 
 vi.mock('@server/utils/storage', () => ({
-  getFilesStorage: () => ({ upload: h.storageUpload, getSignedUrl: h.storageGetSignedUrl }),
+  getFilesStorage: () => ({
+    upload: h.storageUpload,
+    getSignedUrl: h.storageGetSignedUrl,
+    getMetadata: async () => ({ etag: '"etag-1"' }),
+  }),
 }));
 
 // Only the image-generation call and the settings read are stubbed; checkStorageLimit and
@@ -147,6 +151,16 @@ describe('POST /api/agents/[id]/generate-avatar - storage quota', () => {
 
     expect(h.storageUpload).toHaveBeenCalledTimes(1);
     expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+
+  // Marked clean up front, so it records the version that covers: its own S3 event must not rescan it.
+  it("records the uploaded object's ETag with the avatar's up-front verdict", async () => {
+    const { res } = makeRes();
+    await run({ id: 'u1', isAdmin: false, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: 0 }, res);
+
+    expect(h.fabFileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ moderationStatus: 'clean', moderationETag: 'etag-1' })
+    );
   });
 
   it('persists only the new visual leaves, pointing at the stored signed URL', async () => {

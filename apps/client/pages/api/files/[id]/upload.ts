@@ -4,6 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import { getFilesStorage } from '@server/utils/storage';
+import { admitLandedUpload } from '@server/s3/uploadSizeGate';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
@@ -73,6 +74,11 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES, requiredScopes: FILES
       chunks.push(buf);
     }
     const body = Buffer.concat(chunks);
+
+    // The row goes complete below, which the webhook's size gate skips, so the proxy runs it itself.
+    if (!(await admitLandedUpload(fabFile, body.length, filePath, req.logger))) {
+      return res.status(413).json({ error: 'File is larger than declared or exceeds your storage limit' });
+    }
 
     // Write to the FabFile's own storage key (from the DB, never client-supplied) so the caller
     // can't target an arbitrary key and the webhook fires on the expected object.

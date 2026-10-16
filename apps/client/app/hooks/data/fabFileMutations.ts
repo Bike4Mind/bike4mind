@@ -137,7 +137,8 @@ export function useCreateFabFileWithUpload(options?: {
 
   return async (formData: CreateFabFileRequestInputType, file: ActualFileObject | File) => {
     try {
-      const newFabFile = await createFabFileOnServer(formData);
+      // The presigned PUT is signed for exactly the declared size, so declare the bytes uploaded.
+      const newFabFile = await createFabFileOnServer({ ...formData, fileSize: file.size });
       // If the file has a presigned URL, upload it to the bucket
       if (newFabFile.presignedUrl) {
         await uploadFileToUrl(newFabFile.presignedUrl, file, file.type);

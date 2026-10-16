@@ -7,7 +7,7 @@ import { sendToQueue } from '@server/utils/sqs';
 import { getFilesStorage } from '@server/utils/storage';
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
 import { normalizeETag, recordLandedObject } from '@server/s3/moderationScan';
-import { judgeLandedUpload, rejectLandedUpload } from '@server/s3/uploadSizeGate';
+import { admitLandedUpload } from '@server/s3/uploadSizeGate';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
 import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
@@ -150,28 +150,24 @@ const handler = baseApi({ auth: false }).post(
           : (await getFilesStorage().getMetadata(objectKey)).size;
 
       // Same measured-size gate as the hosted event (objectCreated.ts), before the row is complete.
-      const rejection =
-        size === undefined
-          ? null
-          : await judgeLandedUpload({
-              measuredSize: size,
-              declaredSize: metadata.fileSize,
-              statusBeforeUpload,
-              owner: await User.findById(metadata.userId),
-              organizationId: metadata.organizationId,
-            });
-      if (rejection) {
-        req.logger.warn(`Rejecting upload ${objectKey} (${size} bytes): ${rejection}`);
-        await rejectLandedUpload(metadata._id, objectKey);
-        continue;
-      }
+      if (size !== undefined && !(await admitLandedUpload(metadata, size, objectKey, req.logger))) continue;
 
       metadata.status = 'complete';
       await metadata.save();
 
       // Same overwrite check as the hosted event (objectCreated.ts): a re-PUT of a judged object
       // sends its verdict back to 'pending' before the scan below claims it.
-      const eTag = normalizeETag(record.s3?.object?.eTag ?? (await getFilesStorage().getMetadata(objectKey)).etag);
+      // The row is already complete, so a failed HEAD must not 500 the webhook (see the charge below).
+      const eTag = normalizeETag(
+        record.s3?.object?.eTag ??
+          (await getFilesStorage()
+            .getMetadata(objectKey)
+            .then(head => head.etag)
+            .catch((err: unknown) => {
+              req.logger.error(`No eTag for ${objectKey}; overwrite check skipped`, err);
+              return undefined;
+            }))
+      );
       if (eTag) await recordLandedObject(metadata._id, eTag);
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
 

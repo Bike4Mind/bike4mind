@@ -67,6 +67,24 @@ describe('extractAnimationFrames', () => {
     await expect(extractAnimationFrames(fixture('over-cap.gif'))).rejects.toThrow(/61 frames, over the 60 cap/);
   });
 
+  it('refuses a malformed APNG as unsupported rather than as a retryable error', async () => {
+    const chunk = (type: string, data: Buffer) => {
+      const length = Buffer.alloc(4);
+      length.writeUInt32BE(data.length);
+      return Buffer.concat([length, Buffer.from(type, 'latin1'), data, Buffer.alloc(4)]);
+    };
+    const apng = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk('IHDR', Buffer.alloc(2)), // short: no room for the width and height
+      chunk('acTL', Buffer.alloc(8)),
+      chunk('fcTL', Buffer.alloc(26)),
+      chunk('fcTL', Buffer.alloc(26)),
+      chunk('IEND', Buffer.alloc(0)),
+    ]);
+
+    await expect(extractAnimationFrames(apng)).rejects.toThrow(UnsupportedImageFormatError);
+  });
+
   it('leaves still images to the single-image path', async () => {
     const still = await new Jimp({ width: 4, height: 4, color: 0xffffffff }).getBuffer('image/png');
     expect(await extractAnimationFrames(Buffer.from(still))).toBeNull();

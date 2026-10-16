@@ -2,13 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { settingsMap } from '@bike4mind/common';
 import type { Request, Response } from 'express';
 
-const { findByIdMock, uploadMock, getSettingsValueMock, recomputeUploadedMock, scopeGate } = vi.hoisted(() => ({
-  findByIdMock: vi.fn(),
-  uploadMock: vi.fn(),
-  getSettingsValueMock: vi.fn(),
-  recomputeUploadedMock: vi.fn(),
-  scopeGate: { baseApiOptions: undefined as unknown },
-}));
+const { findByIdMock, uploadMock, getSettingsValueMock, recomputeUploadedMock, scopeGate, admitMock } = vi.hoisted(
+  () => ({
+    admitMock: vi.fn(),
+    findByIdMock: vi.fn(),
+    uploadMock: vi.fn(),
+    getSettingsValueMock: vi.fn(),
+    recomputeUploadedMock: vi.fn(),
+    scopeGate: { baseApiOptions: undefined as unknown },
+  })
+);
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
@@ -22,6 +25,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsValue: getSettingsValueMock,
 }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: uploadMock }) }));
+vi.mock('@server/s3/uploadSizeGate', () => ({ admitLandedUpload: admitMock }));
 vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: recomputeUploadedMock,
 }));
@@ -73,6 +77,7 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
     process.env.B4M_SELF_HOST = 'true';
     getSettingsValueMock.mockReturnValue(20); // 20 MB
     uploadMock.mockResolvedValue(undefined);
+    admitMock.mockResolvedValue(true);
     findByIdMock.mockResolvedValue(makePendingFile());
   });
   afterEach(() => {
@@ -144,6 +149,20 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
     expect(key).toBe('uploads/abc.txt');
     expect(options).toMatchObject({ ContentType: 'text/plain', ContentLength: 11 });
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  // The row goes complete here, which the webhook's size gate skips, so the proxy must judge the body.
+  it('runs the landed-size gate on the body and writes nothing when it rejects', async () => {
+    const fabFile = makePendingFile();
+    findByIdMock.mockResolvedValue(fabFile);
+    admitMock.mockResolvedValue(false);
+    const res = makeRes();
+    await handler(makeReq({ body: [Buffer.from('hello '), Buffer.from('world')] }), res);
+
+    expect(admitMock).toHaveBeenCalledWith(fabFile, 11, 'uploads/abc.txt', expect.anything());
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(fabFile.status).toBe('pending');
+    expect(res.status).toHaveBeenCalledWith(413);
   });
 
   it('marks the FabFile complete on a successful write so a lost webhook cannot strand it', async () => {
