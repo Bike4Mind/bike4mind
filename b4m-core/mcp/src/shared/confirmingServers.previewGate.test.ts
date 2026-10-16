@@ -1,6 +1,6 @@
 /**
  * The subagent permission gate trusts every tool of the `github` and `atlassian` MCP servers
- * (isConfirmingMcpTool in b4m-core/services). That holds only while no tool writes without the
+ * (confirmingServerOf in b4m-core/services). That holds only while no tool writes without the
  * host-set `_executeFromButton`, so this drives every registered tool without it and fails on any
  * non-GET request or GraphQL mutation. A new tool must be classified below.
  */

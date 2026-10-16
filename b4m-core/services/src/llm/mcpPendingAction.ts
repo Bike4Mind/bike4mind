@@ -26,7 +26,7 @@ export type McpPendingActionExtraction =
 
 /** Per confirming server, the write tools that gate on a confirm button. The host executors route by
  * the same sets (apps/client/server/utils/pendingActionTarget.ts). The subagent permission gate also
- * trusts these servers' tools (isConfirmingMcpTool), so a server belongs here only if every one of its
+ * trusts these servers' tools (confirmingServerOf), so a server belongs here only if every one of its
  * write tools previews instead of executing (pinned by
  * b4m-core/mcp/src/shared/confirmingServers.previewGate.test.ts). */
 const CONFIRMABLE_TOOLS_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = new Map([
@@ -42,11 +42,6 @@ export function confirmingServerOf(toolName: string): string | undefined {
   if (separatorIndex <= 0) return undefined;
   const server = toolName.slice(0, separatorIndex);
   return CONFIRMABLE_TOOLS_BY_SERVER.has(server) ? server : undefined;
-}
-
-/** True for a namespaced `server__tool` id from a confirming server. */
-export function isConfirmingMcpTool(toolName: string): boolean {
-  return confirmingServerOf(toolName) !== undefined;
 }
 
 const CONFIRM_NEXT_STEP = 'Click the Confirm or Cancel button below to proceed.';
