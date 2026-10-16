@@ -10,10 +10,17 @@ import {
   FabFile,
   OrgGitHubLakeConnection,
   User,
+  buildLacksContentPrefixTagFilter,
   fabFileRepository,
   orgGitHubLakeConnectionRepository,
 } from '@bike4mind/database';
-import { DATALAKE_TAG_STRENGTH, FabFileSourceType, KnowledgeType, UNCATEGORIZED_TAG_SUFFIX } from '@bike4mind/common';
+import {
+  DATALAKE_TAG_STRENGTH,
+  FabFileSourceType,
+  KnowledgeType,
+  satisfiesTagPrefix,
+  UNCATEGORIZED_TAG_SUFFIX,
+} from '@bike4mind/common';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -169,6 +176,7 @@ describe('githubLakeIngest end to end', () => {
 
     const live = await fabFileRepository.findByGitHubConnectionIdInDataLake(connectionId, datalakeTag);
     expect(live.map(f => f.githubPath).sort()).toEqual(['README.md', 'src/a/b.ts', 'src/index.ts']);
+    for (const names of Object.values(tagNamesByPath(live))) expect(satisfiesTagPrefix(names, prefix)).toBe(true);
     expect(tagNamesByPath(live)).toEqual({
       'README.md': [datalakeTag, `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`].sort(),
       'src/index.ts': [datalakeTag, `${prefix}src`].sort(),
@@ -189,7 +197,7 @@ describe('githubLakeIngest end to end', () => {
   });
 
   it('a re-sync after edit, add and delete leaves the new content and deletes the old copies', async () => {
-    const { datalakeTag, connectionId } = await seed();
+    const { datalakeTag, prefix, connectionId } = await seed();
     setRepo([
       ['README.md', '# Docs\n'],
       ['src/index.ts', 'export const a = 1;\n'],
@@ -210,6 +218,15 @@ describe('githubLakeIngest end to end', () => {
     expect(after.map(f => f.githubPath).sort()).toEqual(['README.md', 'docs/new.md']);
     expect(after.find(f => f.githubPath === 'README.md')?.githubBlobSha).toBe(h.blobSha('# Docs v2\n'));
     for (const f of after) expect(f.githubConnectionId).toBe(connectionId);
+    // The replacement copy is tagged exactly as a first sync would tag it, so a re-sync never
+    // drops a file out of its folder or into the lake's untagged bucket.
+    expect(tagNamesByPath(after)).toEqual({
+      'README.md': [datalakeTag, `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`].sort(),
+      'docs/new.md': [datalakeTag, `${prefix}docs`].sort(),
+    });
+    expect(
+      await FabFile.countDocuments({ _id: { $in: after.map(f => f.id) }, ...buildLacksContentPrefixTagFilter(prefix) })
+    ).toBe(0);
     for (const retired of [oldReadme, oldIndex]) {
       const row = await FabFile.findById(retired.id).setOptions({ includeDeleted: true });
       expect(row?.deletedAt).toBeTruthy();
