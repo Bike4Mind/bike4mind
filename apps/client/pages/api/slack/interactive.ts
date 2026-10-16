@@ -1372,10 +1372,9 @@ async function handleAttachmentDownload(
     };
   }
 
-  // Parse compact reference: "questId:index"
-  const [questId, indexStr] = buttonValue.split(':');
-  const index = parseInt(indexStr, 10);
-  if (!questId || isNaN(index)) {
+  // Parse compact reference: "questId:attachmentId"
+  const [questId, attachmentId] = buttonValue.split(':');
+  if (!questId || !attachmentId) {
     logger.error('[Slack Interactive] Failed to parse attachment button value', { buttonValue });
     return {
       text: '❌ Invalid attachment data',
@@ -1387,9 +1386,11 @@ async function handleAttachmentDownload(
   const quest = await Quest.findById(questId);
   // any: attachmentList is defined in the schema but not yet typed on the interface
   const questAny = quest as any;
-  const attachmentEntry = questAny?.attachmentList?.attachments?.[index];
+  const attachmentEntry = questAny?.attachmentList?.attachments?.find(
+    (candidate: any) => candidate.id === attachmentId
+  );
   if (!quest || !questAny?.attachmentList || !attachmentEntry) {
-    logger.error('[Slack Interactive] Quest or attachment not found', { questId, index });
+    logger.error('[Slack Interactive] Quest or attachment not found', { questId, attachmentId });
     return {
       text: '❌ Attachment data expired. Please list attachments again.',
       response_type: 'ephemeral',
@@ -1397,7 +1398,7 @@ async function handleAttachmentDownload(
   }
 
   const { source } = questAny.attachmentList;
-  const { id: attachmentId, filename, emoji, sizeFormatted } = attachmentEntry;
+  const { filename, emoji, sizeFormatted } = attachmentEntry;
   const sessionId = quest.sessionId;
 
   logger.info('[Slack Interactive] Processing attachment download', {
@@ -1536,16 +1537,15 @@ async function openAttachmentDeleteModal(
   botToken: string,
   responseUrl?: string
 ): Promise<Record<string, unknown>> {
-  const [questId, indexStr] = buttonValue.split(':');
-  const index = parseInt(indexStr, 10);
-  if (!questId || isNaN(index)) {
+  const [questId, attachmentId] = buttonValue.split(':');
+  if (!questId || !attachmentId) {
     return { text: '❌ Invalid attachment data', response_type: 'ephemeral' };
   }
 
   const quest = await Quest.findById(questId);
   // any: attachmentList is defined in the schema but not yet typed on the interface
   const questAny = quest as any;
-  const att = questAny?.attachmentList?.attachments?.[index];
+  const att = questAny?.attachmentList?.attachments?.find((candidate: any) => candidate.id === attachmentId);
   if (!quest || !questAny?.attachmentList || !att) {
     return { text: '❌ Attachment data expired. Please list attachments again.', response_type: 'ephemeral' };
   }
@@ -1675,19 +1675,21 @@ async function handleAttachmentDeleteFromModal(
   // After successful deletion, update the original message with refreshed attachment list
   if (isSuccess && responseUrl) {
     try {
-      const [questId, indexStr] = buttonValue.split(':');
-      const deletedIndex = parseInt(indexStr, 10);
+      const [questId, deletedAttachmentId] = buttonValue.split(':');
       const quest = await Quest.findById(questId);
       // any: attachmentList is defined in the schema but not yet typed on the interface
       const questAny = quest as any;
 
       if (quest && questAny?.attachmentList?.attachments) {
-        // Remove the deleted attachment and save
+        // Remove the deleted attachment by id. The $pull is atomic so it does not overwrite a
+        // concurrent removal of the same list (the web delete button prunes it the same way).
         const remainingAttachments = questAny.attachmentList.attachments.filter(
-          (_: unknown, i: number) => i !== deletedIndex
+          (att: any) => att.id !== deletedAttachmentId
         );
-        questAny.attachmentList.attachments = remainingAttachments;
-        await quest.save();
+        await Quest.updateOne(
+          { _id: questId },
+          { $pull: { 'attachmentList.attachments': { id: deletedAttachmentId } } }
+        );
 
         if (remainingAttachments.length > 0) {
           // Rebuild attachment list blocks
@@ -1753,10 +1755,9 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
     };
   }
 
-  // Parse compact reference: "questId:index"
-  const [questId, indexStr] = buttonValue.split(':');
-  const index = parseInt(indexStr, 10);
-  if (!questId || isNaN(index)) {
+  // Parse compact reference: "questId:attachmentId"
+  const [questId, attachmentId] = buttonValue.split(':');
+  if (!questId || !attachmentId) {
     logger.error('[Slack Interactive] Failed to parse attachment delete button value', { buttonValue });
     return {
       text: '❌ Invalid attachment data',
@@ -1768,9 +1769,11 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
   const quest = await Quest.findById(questId);
   // any: attachmentList is defined in the schema but not yet typed on the interface
   const questAny = quest as any;
-  const attachmentEntry = questAny?.attachmentList?.attachments?.[index];
+  const attachmentEntry = questAny?.attachmentList?.attachments?.find(
+    (candidate: any) => candidate.id === attachmentId
+  );
   if (!quest || !questAny?.attachmentList || !attachmentEntry) {
-    logger.error('[Slack Interactive] Quest or attachment not found', { questId, index });
+    logger.error('[Slack Interactive] Quest or attachment not found', { questId, attachmentId });
     return {
       text: '❌ Attachment data expired. Please list attachments again.',
       response_type: 'ephemeral',
@@ -1778,7 +1781,7 @@ async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefin
   }
 
   const { source } = questAny.attachmentList;
-  const { id: attachmentId, filename, emoji } = attachmentEntry;
+  const { filename, emoji } = attachmentEntry;
 
   logger.info('[Slack Interactive] Processing attachment deletion', {
     source,
