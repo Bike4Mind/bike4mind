@@ -24,7 +24,7 @@ export function useBillingView() {
   const router = useRouter();
   const location = useRouterState({ select: state => state.location });
   const view = parseBillingView((location.search as Record<string, unknown>)[BILLING_SEARCH_PARAM]);
-  const focusSection = !(location.state as Record<string, unknown> | undefined)?.[OVERVIEW_STATE_KEY];
+  const focusSection = !(location.state as unknown as Record<string, unknown> | undefined)?.[OVERVIEW_STATE_KEY];
 
   const hrefFor = useCallback(
     (next: BillingView | undefined) => {
