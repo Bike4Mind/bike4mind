@@ -26,17 +26,18 @@ export interface AudioGenerationResult {
 
 type AudioKind = 'Audio' | 'Sound effect';
 
-const SAVE_SKIPPED_MESSAGES: Record<AudioSaveSkippedReason, (kind: AudioKind) => string> = {
-  storage_limit: kind => `${kind} generated, but your storage is full so it was not saved to Files.`,
-  file_too_large: kind => `${kind} generated, but it was too large to save to Files.`,
-  error: kind => `${kind} generated, but saving to Files failed.`,
-};
-
-// The same reasons as a clause, for a clip that finished after its tab unmounted and so is not kept anywhere.
-const SAVE_SKIPPED_CAUSES: Record<AudioSaveSkippedReason, string> = {
-  storage_limit: 'your storage is full',
-  file_too_large: 'it was too large to save',
-  error: 'saving it failed',
+// One row per reason so the two wordings cannot drift: `message` while the player still holds the clip, `cause`
+// as a clause once the tab unmounted and nothing keeps it.
+const SAVE_SKIPPED: Record<AudioSaveSkippedReason, { message: (kind: AudioKind) => string; cause: string }> = {
+  storage_limit: {
+    message: kind => `${kind} generated, but your storage is full so it was not saved to Files.`,
+    cause: 'your storage is full',
+  },
+  file_too_large: {
+    message: kind => `${kind} generated, but it was too large to save to Files.`,
+    cause: 'it was too large to save',
+  },
+  error: { message: kind => `${kind} generated, but saving to Files failed.`, cause: 'saving it failed' },
 };
 
 interface ParsedError {
@@ -114,10 +115,10 @@ export function useGenerateAudio(mode: AudioGenMode) {
         toast.success(`${kind} generated and saved to your Files.`);
       } else if (playerGone) {
         // Unsaved and its blob already revoked: there is no copy left anywhere, so "generated" alone would mislead.
-        const cause = data.saved === false && data.saveSkippedReason ? SAVE_SKIPPED_CAUSES[data.saveSkippedReason] : '';
+        const cause = data.saved === false && data.saveSkippedReason ? SAVE_SKIPPED[data.saveSkippedReason].cause : '';
         toast.warning(`${kind} finished after you left, but it was not saved to your Files${cause && ` (${cause})`}.`);
       } else if (data.saved === false && data.saveSkippedReason) {
-        toast.info(SAVE_SKIPPED_MESSAGES[data.saveSkippedReason](kind));
+        toast.info(SAVE_SKIPPED[data.saveSkippedReason].message(kind));
       } else {
         toast.success(`${kind} generated.`);
       }

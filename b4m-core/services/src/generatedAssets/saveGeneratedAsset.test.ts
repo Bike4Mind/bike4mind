@@ -71,7 +71,7 @@ describe('saveGeneratedAsset', () => {
     expect(adapters.mimeTypePrecedence).toBe('claim-first');
     expect(adapters.provenance).toEqual({
       sourceType: FabFileSourceType.TOOL_GENERATED,
-      sourceMetadata: { sessionId: 's1', questId: 'q1', generation: music },
+      sourceMetadata: { sessionId: 's1', questId: 'q1', generation: { ...music, promptTruncated: false } },
     });
     expect(findOne).not.toHaveBeenCalled();
   });
@@ -88,11 +88,11 @@ describe('saveGeneratedAsset', () => {
     expect(generation.promptTruncated).toBe(true);
   });
 
-  it('leaves the truncation flag off a prompt it kept whole', async () => {
+  it('marks a prompt it kept whole as not truncated', async () => {
     await saveGeneratedAsset(params(), deps);
 
     const { generation } = createFabFile.mock.calls[0][2].provenance.sourceMetadata;
-    expect(generation.promptTruncated).toBeUndefined();
+    expect(generation.promptTruncated).toBe(false);
   });
 
   it('treats a prompt of exactly the cap as kept whole', async () => {
@@ -100,7 +100,7 @@ describe('saveGeneratedAsset', () => {
 
     const { generation } = createFabFile.mock.calls[0][2].provenance.sourceMetadata;
     expect(generation.prompt).toHaveLength(CAP);
-    expect(generation.promptTruncated).toBeUndefined();
+    expect(generation.promptTruncated).toBe(false);
   });
 
   it('truncates and flags a prompt one character over the cap', async () => {
@@ -114,7 +114,9 @@ describe('saveGeneratedAsset', () => {
   it('omits the notebook link when there is no session', async () => {
     await saveGeneratedAsset(params(), deps);
 
-    expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata).toEqual({ generation: music });
+    expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata).toEqual({
+      generation: { ...music, promptTruncated: false },
+    });
   });
 
   it('records the inline-playback copy key so a delete can remove that copy too', async () => {
@@ -123,7 +125,7 @@ describe('saveGeneratedAsset', () => {
     expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata).toEqual({
       sessionId: 's1',
       generatedCopyKey: 'abc.mp3',
-      generation: music,
+      generation: { ...music, promptTruncated: false },
     });
   });
 

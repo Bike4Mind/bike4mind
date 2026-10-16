@@ -329,11 +329,15 @@ describe('useGenerateAudio unmount', () => {
       expect(mocks.toastSuccess).not.toHaveBeenCalled();
     });
 
-    it('says a clip whose save was skipped is gone, and why it was not saved', async () => {
-      await settleAfterUnmount({ saved: false, saveSkippedReason: 'storage_limit' });
+    it.each([
+      ['storage_limit', 'your storage is full'],
+      ['file_too_large', 'it was too large to save'],
+      ['error', 'saving it failed'],
+    ])('says a clip whose save was skipped (%s) is gone, and why', async (saveSkippedReason, cause) => {
+      await settleAfterUnmount({ saved: false, saveSkippedReason });
 
       expect(mocks.toastWarning).toHaveBeenCalledWith(
-        'Audio finished after you left, but it was not saved to your Files (your storage is full).'
+        `Audio finished after you left, but it was not saved to your Files (${cause}).`
       );
       expect(mocks.toastInfo).not.toHaveBeenCalled();
     });

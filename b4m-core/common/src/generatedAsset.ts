@@ -37,8 +37,8 @@ export const GeneratedAssetMetadataSchema = z.object({
   prompt: z.string(),
   /**
    * Storing caps `prompt` at a prefix of what was generated (sourceMetadata rides every metadata-only
-   * listing). Set when that happened, so a surface that lets the user reuse the text can tell it is
-   * incomplete rather than silently generating from half a script.
+   * listing). Written on every save, true when it was cut. Absent only on files saved before it existed:
+   * read it through isStoredPromptPossiblyTruncated, which covers those.
    */
   promptTruncated: z.boolean().optional(),
   lyrics: z.string().optional(),
@@ -60,8 +60,8 @@ export type GeneratedAssetMetadata = z.infer<typeof GeneratedAssetMetadataSchema
 export const GENERATED_ASSET_MAX_STORED_TEXT_CHARS = 2_000;
 
 /**
- * Whether the stored prompt may be only a prefix of what was generated. Files saved before `promptTruncated`
- * existed were cut at the same cap without the flag, so a cap-length prompt with no flag counts as cut too.
+ * Whether the stored prompt may be only a prefix of what was generated. The flag decides when present; files
+ * saved before it existed were cut at the same cap without it, so there a cap-length prompt counts as cut.
  */
 export function isStoredPromptPossiblyTruncated(
   generation: Pick<GeneratedAssetMetadata, 'prompt' | 'promptTruncated'>

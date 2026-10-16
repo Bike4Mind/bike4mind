@@ -94,6 +94,15 @@ describe('GeneratedAudioCard', () => {
     expect(toastSuccess).toHaveBeenCalledWith('Settings copied. The text was too long to keep, so paste it in again.');
   });
 
+  it('restores a cap-length prompt the save marked as kept whole', () => {
+    const whole = { ...generation, prompt: 'x'.repeat(GENERATED_ASSET_MAX_STORED_TEXT_CHARS), promptTruncated: false };
+    renderWithTheme(<GeneratedAudioCard mode="tts" file={speechFile(whole)} />);
+    fireEvent.click(screen.getByTestId('generated-audio-card-reuse-btn'));
+
+    expect(useAudioStudioDraft.getState().text.tts).toBe(whole.prompt);
+    expect(toastSuccess).toHaveBeenCalledWith('Settings copied into the form above.');
+  });
+
   it('keeps a draft already in the form when the file text was too long to keep', () => {
     useAudioStudioDraft.setState({ text: { tts: 'my own draft', 'sound-effects': '' } });
     renderWithTheme(<GeneratedAudioCard mode="tts" file={speechFile({ ...generation, promptTruncated: true })} />);

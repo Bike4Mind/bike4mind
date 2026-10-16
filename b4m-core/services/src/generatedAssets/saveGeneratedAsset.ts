@@ -159,7 +159,7 @@ function storedGeneration(generation: GeneratedAssetMetadata): GeneratedAssetMet
   return {
     ...generation,
     prompt,
-    ...(prompt.length < generation.prompt.length && { promptTruncated: true }),
+    promptTruncated: prompt.length < generation.prompt.length,
     ...(generation.lyrics !== undefined && {
       lyrics: generation.lyrics.slice(0, GENERATED_ASSET_MAX_STORED_TEXT_CHARS),
     }),
