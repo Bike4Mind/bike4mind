@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { musicGenerationTool, isMusicToolConfig, type MusicToolConfig } from './index';
+import {
+  ARTIST_REFERENCE_REFUSAL,
+  isMusicToolConfig,
+  musicGenerationTool,
+  namesArtistReference,
+  type MusicToolConfig,
+} from './index';
 
 const okJob = { ok: true as const, created: true, job: { id: 'job1' } };
 
@@ -38,6 +44,77 @@ describe('music_generation tool', () => {
       request: { model: 'test-music', prompt: 'a sea shanty' },
     });
     expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'music' }] });
+  });
+
+  it('song prompts written from chat describe style without naming artists', async () => {
+    const named = [
+      'upbeat pop in the style of Some Singer',
+      'sounds like The Example Group',
+      'inspired by Name Surname, slow tempo',
+      'a slow ballad inspired by the Example Group',
+      'In the style of Some Singer, a slow ballad',
+      'A ballad. Sounds like \u00c9mile Example',
+      'A ROCK SONG IN THE STYLE OF SOME SINGER',
+      'in the vein of Some Singer',
+      'in the style of Motown, inspired by Some Singer',
+      'in the style of Detroit Example Singer',
+      'in the style of J. Example Singer',
+    ];
+    for (const prompt of named) {
+      const createJob = vi.fn().mockResolvedValue(okJob);
+      const { tool, statusUpdate } = build(createJob);
+      const result = await tool.toolFn({ model: 'test-music', prompt });
+      expect(result).toMatch(/^Music generation failed \(artist_reference\).*rewrite/i);
+      expect(createJob).not.toHaveBeenCalled();
+      expect(statusUpdate).not.toHaveBeenCalled();
+    }
+
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob);
+    const described = 'upbeat indie pop, jangly guitars, handclaps, 120 bpm, in the style of 2010s radio hits';
+    expect(JSON.parse(await tool.toolFn({ model: 'test-music', prompt: described })).jobId).toBe('job1');
+    expect(createJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an artist-shaped prompt at most once per turn, so a false positive cannot block the song', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob);
+    const prompt = 'a sonnet set to lute music, inspired by Example Soloist';
+    expect(await tool.toolFn({ model: 'test-music', prompt })).toBe(ARTIST_REFERENCE_REFUSAL);
+    expect(JSON.parse(await tool.toolFn({ model: 'test-music', prompt })).jobId).toBe('job1');
+    expect(createJob).toHaveBeenCalledTimes(1);
+
+    // The refusal belongs to the built tool, so the next turn gets its own.
+    const fresh = build(createJob);
+    expect(await fresh.tool.toolFn({ model: 'test-music', prompt })).toBe(ARTIST_REFERENCE_REFUSAL);
+    expect(createJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('only inspects the capitalized run on the same line as the style phrase', () => {
+    expect(namesArtistReference('warm and slow, inspired by\nSome Singer')).toBe(true);
+    expect(namesArtistReference('in the style of jazz\nVerse 1 starts quiet')).toBe(false);
+    expect(namesArtistReference('in the style of Latin\nVerse one')).toBe(false);
+  });
+
+  it('allows genre and regional style words after style phrases', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob);
+    const prompts = [
+      'a track in the style of Motown',
+      'sounds like Latin jazz with congas',
+      'sounds like Spanish guitar',
+      'in the vein of Celtic folk, fiddle and whistle',
+      'Like a lullaby, inspired by Delta blues',
+      'a track in the style of Motown.',
+      'in the style of Motown. Female vocals, warm',
+      'sounds like Celtic-Irish fusion',
+      'in the style of A minor ballad, piano only',
+      "warm strings, inspired by Nashville's session players",
+    ];
+    for (const prompt of prompts) {
+      expect(JSON.parse(await tool.toolFn({ model: 'test-music', prompt })).jobId).toBe('job1');
+    }
+    expect(createJob).toHaveBeenCalledTimes(prompts.length);
   });
 
   it('passes lyrics, instrumental and length through and leaves omitted fields to the job', async () => {
