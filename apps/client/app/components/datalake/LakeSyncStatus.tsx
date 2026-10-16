@@ -25,16 +25,18 @@ export default function LakeSyncStatus({
   const { data: gitHub } = useLakeGitHubConnection(lakeId, gitHubEnabled);
 
   const lines = [
-    drive && describeDriveLastSync(drive),
-    gitHubEnabled && gitHub && describeGitHubLastSync(gitHub),
-  ].filter((line): line is string => !!line);
+    { key: 'drive', label: 'Drive', text: drive ? describeDriveLastSync(drive) : null },
+    { key: 'github', label: 'GitHub', text: gitHubEnabled && gitHub ? describeGitHubLastSync(gitHub) : null },
+  ].filter((line): line is { key: string; label: string; text: string } => !!line.text);
   if (lines.length === 0) return null;
+  // One source per lake is enforced only for new bindings, so a lake bound earlier can carry both.
+  const labelled = lines.length > 1;
 
   return (
-    <Stack data-testid={`datalake-last-synced-${lakeId}`}>
-      {lines.map(line => (
-        <Typography key={line} level="body-xs" sx={{ color: 'text.tertiary' }}>
-          {line}
+    <Stack data-testid={`datalake-last-synced-${lakeId}`} sx={{ alignSelf: 'center' }}>
+      {lines.map(({ key, label, text }) => (
+        <Typography key={key} level="body-xs" sx={{ color: 'text.tertiary' }}>
+          {labelled ? `${label}: ${text}` : text}
         </Typography>
       ))}
     </Stack>
