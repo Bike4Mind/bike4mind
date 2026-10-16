@@ -83,6 +83,7 @@ let bridge = fakeSidebarBridge({ sections: [], assignments: {} });
 let onCreate = vi.fn<() => void>();
 let onDelete = vi.fn<(id: string) => void>();
 let onDismissSectionError = vi.fn<() => void>();
+let onToggleCollapsed = vi.fn<() => void>();
 
 function Harness({ sessions, sectionError }: { sessions: ChatSessionSummary[]; sectionError?: string | null }) {
   const { sections, actions } = useSidebarSections();
@@ -96,7 +97,7 @@ function Harness({ sessions, sectionError }: { sessions: ChatSessionSummary[]; s
       statuses={new Map()}
       prSummaries={new Map()}
       collapsed={false}
-      onToggleCollapsed={() => {}}
+      onToggleCollapsed={onToggleCollapsed}
       onSelect={() => {}}
       onCreate={onCreate}
       onOpenArtifacts={() => {}}
@@ -193,6 +194,7 @@ beforeEach(() => {
   onCreate = vi.fn();
   onDelete = vi.fn();
   onDismissSectionError = vi.fn();
+  onToggleCollapsed = vi.fn();
 });
 
 afterEach(() => {
@@ -256,6 +258,34 @@ describe('the sidebar context menu', () => {
 
     expect(query('section-name-dialog')).toBeNull();
     expect(bridge.createSection).not.toHaveBeenCalled();
+  });
+  it('keeps window shortcuts from firing behind the dialog when a button has focus', async () => {
+    await mount([summary('a', 'Alpha')]);
+
+    rightClick(el('sidebar-session-scroll'));
+    await settle();
+    await click(el('sidebar-context-new-section-btn'));
+    await act(async () => {
+      el('section-name-cancel-btn').dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'b', metaKey: true, bubbles: true, cancelable: true })
+      );
+    });
+
+    expect(onToggleCollapsed).not.toHaveBeenCalled();
+    expect(query('section-name-dialog')).not.toBeNull();
+  });
+
+  it('caps a long name by code point after collapsing whitespace, not while typing', async () => {
+    await mount([summary('a', 'Alpha')]);
+    const emoji = '\u{1F600}'.repeat(40);
+
+    rightClick(el('sidebar-session-scroll'));
+    await settle();
+    await click(el('sidebar-context-new-section-btn'));
+    typeName(`${emoji}${' '.repeat(30)}${'x'.repeat(30)}`);
+    await click(el('section-name-submit-btn'));
+
+    expect(bridge.createSection).toHaveBeenCalledWith(`${emoji} ${'x'.repeat(19)}`, undefined);
   });
 });
 

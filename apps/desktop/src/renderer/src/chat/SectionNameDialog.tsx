@@ -5,7 +5,7 @@ import DialogTitle from '@mui/joy/DialogTitle';
 import Input from '@mui/joy/Input';
 import Modal from '@mui/joy/Modal';
 import ModalDialog from '@mui/joy/ModalDialog';
-import { normalizeSectionName, SIDEBAR_SECTION_NAME_MAX_LENGTH } from '@shared/sidebarSections';
+import { normalizeSectionName } from '@shared/sidebarSections';
 
 /** What the dialog is open for: a new section (optionally taking a session with it), or a rename. */
 export type SectionNameRequest =
@@ -34,7 +34,17 @@ export function SectionNameDialog({
 
   return (
     <Modal open onClose={onClose}>
-      <ModalDialog size="sm" sx={{ width: 320 }} data-testid="section-name-dialog">
+      <ModalDialog
+        size="sm"
+        sx={{ width: 320 }}
+        data-testid="section-name-dialog"
+        // Kept away from SessionList's window-level Cmd shortcuts wherever focus is in the dialog.
+        // The stop also hides Escape from the Modal's own handler, so Escape closes here.
+        onKeyDown={event => {
+          event.stopPropagation();
+          if (event.key === 'Escape') onClose();
+        }}
+      >
         <DialogTitle>{request.kind === 'rename' ? 'Rename section' : 'New section'}</DialogTitle>
         <form
           onSubmit={event => {
@@ -48,15 +58,9 @@ export function SectionNameDialog({
             value={draft}
             placeholder="Section name"
             onChange={event => setDraft(event.target.value)}
-            // Kept away from SessionList's window-level Cmd shortcuts, the way the rename input is.
-            // The stop also hides Escape from the Modal's own handler, so Escape closes here.
-            onKeyDown={event => {
-              event.stopPropagation();
-              if (event.key === 'Escape') onClose();
-            }}
+            // No maxLength: it counts UTF-16 units before whitespace collapses; normalizeSectionName caps.
             slotProps={{
               input: {
-                maxLength: SIDEBAR_SECTION_NAME_MAX_LENGTH,
                 'aria-label': 'Section name',
                 'data-testid': 'section-name-input',
               },
