@@ -24,6 +24,8 @@ import {
   normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
   STORAGE_CHARGED_FILTER,
+  LAKE_INGEST_SOURCE_TYPES,
+  type StorageUsageGroup,
   UNCATEGORIZED_TAG_SUFFIX,
   chargedBytes,
   type CitableFabFileFields,
@@ -1209,6 +1211,54 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { $project: { _id: 0, total: 1 } },
     ]);
     return row?.total ?? 0;
+  }
+
+  /**
+   * sumFileSizeByUserId's rows, grouped for the storage breakdown - the groups sum to exactly what
+   * it returns. Bounded by the `{ userId, deletedAt, archivedAt, _id }` index's equality prefix.
+   * Lake ids are kept only for the lake-ingest sources and mime types only for generated files, so
+   * the group count does not grow with the user's file count.
+   */
+  async summarizeChargedStorageByUserId(
+    userId: string,
+    options: { maxTimeMS?: number } = {}
+  ): Promise<StorageUsageGroup[]> {
+    const aggregate = this.fabFileModel.aggregate<StorageUsageGroup>([
+      { $match: { userId, deletedAt: null, ...STORAGE_CHARGED_FILTER } },
+      {
+        $group: {
+          _id: {
+            sourceType: { $ifNull: ['$sourceType', null] },
+            sourceLakeId: {
+              $cond: [{ $in: ['$sourceType', LAKE_INGEST_SOURCE_TYPES] }, { $ifNull: ['$sourceLakeId', null] }, null],
+            },
+            mimeType: {
+              $cond: [
+                { $eq: ['$sourceType', FabFileSourceType.TOOL_GENERATED] },
+                { $ifNull: ['$mimeType', null] },
+                null,
+              ],
+            },
+            archived: { $ne: [{ $ifNull: ['$archivedAt', null] }, null] },
+          },
+          bytes: { $sum: { $ifNull: ['$fileSize', 0] } },
+          fileCount: { $sum: 1 },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          sourceType: '$_id.sourceType',
+          sourceLakeId: '$_id.sourceLakeId',
+          mimeType: '$_id.mimeType',
+          archived: '$_id.archived',
+          bytes: 1,
+          fileCount: 1,
+        },
+      },
+    ]);
+    if (options.maxTimeMS) aggregate.option({ maxTimeMS: options.maxTimeMS });
+    return aggregate.exec();
   }
 
   async findChargeState(

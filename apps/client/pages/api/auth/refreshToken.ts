@@ -1,4 +1,4 @@
-import { User, userRepository, authSessionRepository } from '@bike4mind/database';
+import { User, userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { UnauthorizedError } from '@server/utils/errors';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
@@ -65,7 +65,11 @@ const handler = baseApi({ auth: false })
     // AuthSession store (rotation + grace window + reuse detection live in the service).
     if (authSessionService.isOpaqueRefreshToken(token)) {
       const rotated = await authSessionService.rotateSession(token, {
-        db: { authSessions: authSessionRepository, users: userRepository },
+        db: {
+          authSessions: authSessionRepository,
+          users: userRepository,
+          realtimeConnections: realtimeConnectionRepository,
+        },
         signAccessToken,
         // Involuntary session outcomes -> the forensic audit log. The service's event types are
         // valid UserAuthAuditEvent names by construction. The promise is RETURNED rather than

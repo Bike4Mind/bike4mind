@@ -23,6 +23,8 @@ export interface JwtPayloadClaims {
   scope?: string;
   /** Resource audience (RFC 9068); present iff kind==='oauth'. */
   aud?: string;
+  /** Standard expiry (seconds since epoch), set by jsonwebtoken's expiresIn. */
+  exp?: number;
 }
 
 /**
@@ -66,6 +68,8 @@ export async function verifyJwtPayload(
       // Surface the session id so per-device logout can revoke exactly THIS session
       // (see logout.ts + users/me/sessions.ts) without re-decoding the token.
       (user as any).sid = jwt_payload.sid;
+      // The realtime connect ticket inherits this token's expiry (see pages/api/websocket/ticket.ts).
+      (user as any).accessTokenExpiresAt = jwt_payload.exp ? new Date(jwt_payload.exp * 1000) : undefined;
       // An OAuth (relying-party) access token is recognized here but NOT rejected: first-party
       // sessions carry no `kind` and must still pass. The marker is surfaced so the route gate
       // (oauthRouteGate) can default-deny it everywhere except OAuth-reachable routes.

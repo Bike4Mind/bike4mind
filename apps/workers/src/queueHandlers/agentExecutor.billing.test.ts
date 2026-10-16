@@ -453,21 +453,42 @@ describe('foldGeneratedMediaUsd', () => {
     expect(pending.costUsd).toBe(0);
   });
 
-  it('does NOT fold image_generation on finish - image reserves at start', () => {
+  // A stubbed positive estimate, so only the phase routing can keep the fold at zero.
+  it.each(['image_generation', 'edit_image'])('folds %s on finish - only a delivered image is billed', toolName => {
     const pending = zeroPending();
-    const data = { model: 'unpriced-so-zero', n: 1, prompt: 'x' };
+    const estimateUsd = vi.fn().mockReturnValue(0.04);
 
     foldGeneratedMediaUsd({
       phase: 'finish',
-      toolName: 'image_generation',
-      data,
+      toolName,
+      data: { model: 'gpt-image-1', n: 1, paths: ['img.png'] },
       models: [],
       pending,
-      estimateUsd: estimateGeneratedMediaUsd,
+      estimateUsd,
     });
 
-    expect(pending.costUsd).toBe(0);
+    expect(pending.costUsd).toBe(0.04);
   });
+
+  it.each(['image_generation', 'edit_image'])(
+    'does NOT fold %s on start - a call that fails after start is never billed',
+    toolName => {
+      const pending = zeroPending();
+      const estimateUsd = vi.fn().mockReturnValue(0.04);
+
+      foldGeneratedMediaUsd({
+        phase: 'start',
+        toolName,
+        data: { model: 'gpt-image-1', n: 1, prompt: 'x' },
+        models: [],
+        pending,
+        estimateUsd,
+      });
+
+      expect(estimateUsd).not.toHaveBeenCalled();
+      expect(pending.costUsd).toBe(0);
+    }
+  );
 
   it('is a no-op for a non-media tool', () => {
     const pending = zeroPending();

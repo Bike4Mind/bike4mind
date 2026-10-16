@@ -24,7 +24,6 @@ import {
   SCHEDULE_MESSAGE_CALLBACK_ID,
   parseScheduleMessageSubmission,
   SlackAuditLogger,
-  getClientIp,
   handleGlobalShortcut,
   handleCreateNotebookSubmission,
   handleQuickAskSubmission,
@@ -57,6 +56,7 @@ import timezone from 'dayjs/plugin/timezone';
 import { McpServer } from '@bike4mind/database/ai';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { ImageModels, IUserDocument, McpServerName } from '@bike4mind/common';
+import { getClientIp } from '@server/utils/ip';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -1300,6 +1300,16 @@ async function handleConfirmAction(
       questId,
     });
     return NOT_REQUESTER_RESPONSE;
+  }
+
+  // A button that does not name the action it displayed cannot prove which action the click approves.
+  if (pendingActionTs === undefined) {
+    logger.warn('[Slack Interactive] Confirm button carries no pending action ts', { questId });
+    return {
+      text: '\u274C This confirmation is out of date. Please make the request again.',
+      replace_original: true,
+      response_type: 'in_channel',
+    };
   }
 
   const result = await executePendingAction(questId, dbUser, logger, pendingActionTs);

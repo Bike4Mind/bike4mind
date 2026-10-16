@@ -12,7 +12,6 @@ process.on('warning', warning => {
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { render, Box, Text, useApp, useInput } from 'ink';
-import { execSync } from 'child_process';
 import { randomBytes } from 'crypto';
 import { existsSync, promises as fs } from 'fs';
 import { homedir } from 'os';
@@ -145,6 +144,8 @@ import { WebSocketConnectionManager } from './ws/WebSocketConnectionManager';
 import { setWebSocketToolExecutor, registerFeatureModuleTools, clearFeatureModuleTools } from './llm/ToolRouter';
 import { ApiClient } from './auth/ApiClient';
 import { warmFileCache } from './utils/fileSearch.js';
+import { runBangCommand, killRunningBangCommands } from './utils/runBangCommand.js';
+import { whenTurnIdle } from './session/whenTurnIdle.js';
 import { isAxiosError } from 'axios';
 import { logger } from './utils/Logger';
 import { startPeonNotifier, emitPeonSessionEnd } from './utils/peonNotifier';
@@ -371,6 +372,7 @@ function CliApp() {
     } catch (err) {
       logger.debug(`[CLEANUP] Shell session reap error: ${err}`);
     }
+    killRunningBangCommands();
 
     // Save session
     const session = useCliStore.getState().session;
@@ -1345,6 +1347,8 @@ function CliApp() {
 
     // Set thinking state to show loading indicator
     useCliStore.getState().setIsThinking(true);
+    // Released in the finally below; this finalizes "the last message" from a snapshot.
+    const releaseSession = useCliStore.getState().holdSession();
 
     // Create abort controller for this operation
     const abortController = new AbortController();
@@ -1446,7 +1450,7 @@ function CliApp() {
           // Mid-loop recovery if a provider context-window error interrupts this
           // turn: compact the in-flight history once and retry, instead of
           // failing the turn and losing the user's work.
-          onContextLimit: createReactiveCompactionHandler(state.agent, session, 1 + previousMessages.length + 1),
+          onContextLimit: createReactiveCompactionHandler(state.agent, session),
         });
       } finally {
         state.backgroundManager?.setCurrentTurn(null);
@@ -1612,6 +1616,7 @@ function CliApp() {
       setState(prev => ({ ...prev, abortController: null }));
       state.agent.off('thought', stepHandler);
       state.agent.off('action', stepHandler);
+      releaseSession();
     }
   };
 
@@ -1672,19 +1677,21 @@ function CliApp() {
    * without adding a user message to the conversation.
    */
   const handleBackgroundCompletion = async () => {
-    const session = useCliStore.getState().session;
-    if (!state.agent || !session) {
-      return;
-    }
-
     // Check authentication before allowing any AI operations
     const authTokens = await state.configStore.getAuthTokens();
     if (!authTokens || new Date(authTokens.expiresAt) <= new Date()) {
       return;
     }
 
+    // Snapshot and hold with no await in between, so nothing appends to the session unseen.
+    const session = useCliStore.getState().session;
+    if (!state.agent || !session) {
+      return;
+    }
+
     // Set thinking state
     useCliStore.getState().setIsThinking(true);
+    const releaseSession = useCliStore.getState().holdSession();
 
     // Create abort controller for this operation
     const abortController = new AbortController();
@@ -1780,57 +1787,84 @@ function CliApp() {
     } finally {
       setState(prev => ({ ...prev, abortController: null }));
       useCliStore.getState().setIsThinking(false);
+      releaseSession();
     }
   };
 
   // Handle bash command execution directly (no backend calls)
   const handleBashCommand = useCallback(
-    (command: string) => {
-      const session = useCliStore.getState().session;
-      if (!session) return;
+    async (command: string) => {
+      if (!useCliStore.getState().session) return;
 
-      let output: string;
-      let isError = false;
-
-      try {
-        output = execSync(command, {
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-          cwd: process.cwd(),
-          maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-        });
-      } catch (error) {
-        const execError = error as { stderr?: string; message?: string };
-        output = execError.stderr || execError.message || 'Command failed';
-        isError = true;
+      // With nothing else running the command owns the spinner and ESC, and prompts submitted
+      // meanwhile queue behind it. Mid-turn both belong to the turn, so leave them alone.
+      const ownsInput = !useCliStore.getState().isThinking;
+      const sessionId = useCliStore.getState().session?.id;
+      const abortController = new AbortController();
+      if (ownsInput) {
+        useCliStore.getState().setIsThinking(true);
+        setState(prev => ({ ...prev, abortController }));
       }
 
-      // Create messages for the bash command
-      const userMessage: Message = {
-        id: uuidv4(),
-        role: 'user',
-        content: `$ ${command}`,
-        timestamp: new Date().toISOString(),
-      };
+      const result = await runBangCommand(command, {
+        cwd: process.cwd(),
+        signal: abortController.signal,
+      });
+      // null: killed because the CLI is exiting, so record nothing.
+      if (!result) return;
+      const { output, isError } = result;
 
-      const assistantMessage: Message = {
-        id: uuidv4(),
-        role: 'assistant',
-        content: isError ? `❌ Error:\n${output}` : output.trim() || '(no output)',
-        timestamp: new Date().toISOString(),
-      };
+      // The command runs while the TUI stays live, so an agent turn may have started meanwhile:
+      // append once it ends, reading the session then, and add both messages together so the
+      // history never holds an unanswered `$ command` turn.
+      whenTurnIdle(() => {
+        const session = useCliStore.getState().session;
+        // /clear, /new or /resume may have switched sessions while it ran; it belongs to the old one.
+        if (!session || session.id !== sessionId) return;
 
-      // Update session with both messages
-      const updatedSession: Session = {
-        ...session,
-        messages: [...session.messages, userMessage, assistantMessage],
-        updatedAt: new Date().toISOString(),
-      };
+        const userMessage: Message = {
+          id: uuidv4(),
+          role: 'user',
+          content: `$ ${command}`,
+          timestamp: new Date().toISOString(),
+        };
 
-      setStoreSession(updatedSession);
+        const assistantMessage: Message = {
+          id: uuidv4(),
+          role: 'assistant',
+          content: isError ? `\u274c Error:\n${output}` : output.trim() || '(no output)',
+          timestamp: new Date().toISOString(),
+        };
 
-      // Auto-save session
-      state.sessionStore.save(updatedSession);
+        // Update session with both messages
+        const updatedSession: Session = {
+          ...session,
+          messages: [...session.messages, userMessage, assistantMessage],
+          updatedAt: new Date().toISOString(),
+        };
+
+        setStoreSession(updatedSession);
+
+        // Auto-save session
+        state.sessionStore.save(updatedSession).catch(error => {
+          logger.debug(`[BASH] Session save error: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      });
+
+      setState(prev => (prev.abortController === abortController ? { ...prev, abortController: null } : prev));
+      // ESC already reset the UI (a new turn may have started since), and a custom command or
+      // compaction started meanwhile owns the spinner until its own finally. Those do not drain
+      // the queue, so prompts queued behind this command then wait for the next agent turn.
+      if (ownsInput && !abortController.signal.aborted && useCliStore.getState().sessionHolds === 0) {
+        useCliStore.getState().setIsThinking(false);
+        // Same drain as the end of an agent turn (turnController.ts).
+        const queued = useCliStore.getState().dequeueAllMessages();
+        if (queued.length > 0) {
+          setImmediate(() => {
+            void handleMessageRef.current?.(queued.join('\n\n'));
+          });
+        }
+      }
     },
     // session is read fresh from the store, so it is intentionally not a dependency.
     [state.sessionStore]
@@ -2004,6 +2038,7 @@ function CliApp() {
 
     console.log('📝 Generating session handoff...');
     useCliStore.getState().setIsThinking(true);
+    const releaseSession = useCliStore.getState().holdSession();
     try {
       const result = await state.agent.run(prompt, { maxIterations: 1, streamText: false });
       const handoff = parseHandoffResponse(result.finalAnswer);
@@ -2035,6 +2070,7 @@ function CliApp() {
       return null;
     } finally {
       useCliStore.getState().setIsThinking(false);
+      releaseSession();
     }
   };
 
@@ -2792,7 +2828,7 @@ function CliApp() {
           return;
         }
         try {
-          const diffOutput = state.checkpointStore.getCheckpointDiff(diffTarget);
+          const diffOutput = await state.checkpointStore.getCheckpointDiff(diffTarget);
           if (!diffOutput.trim()) {
             console.log('No differences found between checkpoint and current state.');
           } else {

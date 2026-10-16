@@ -2060,8 +2060,10 @@ export class ChatCompletionProcess {
       // Generic per-session integration isolation: a curated-surface session (e.g. /opti)
       // can suppress the user's personal integrations so it runs only its server-owned
       // toolset - no user MCP servers, no agent delegation. No product-specific branch in
-      // core; mirrors the generic `enabledTools`/`disabledTools` capability above.
-      if (session.disableUserIntegrations) {
+      // core; mirrors the generic `enabledTools`/`disabledTools` capability above. The request
+      // field is the per-turn twin for callers running a prompt the user did not author.
+      const userIntegrationsDisabled = Boolean(session.disableUserIntegrations || parsedBody.disableUserIntegrations);
+      if (userIntegrationsDisabled) {
         enableAgents = false;
         parsedBody.mcpServers = [];
       }
@@ -2248,7 +2250,10 @@ export class ChatCompletionProcess {
         projectId,
         // Not built at all under a prompt mode, rather than built and filtered later: these
         // features have side effects (memory writes, reply replacement) that outlive the prompt.
-        filterFeaturesByPromptMode(optimizedFeatureList, promptMode),
+        // Skills are the user's own authored instructions, so they go with their integrations.
+        filterFeaturesByPromptMode(optimizedFeatureList, promptMode).filter(
+          feature => !(userIntegrationsDisabled && feature === 'skills')
+        ),
         organization,
         sessionSystemPrompt,
         // A mode overrides the session flag in both directions; see resolveForcedRetrieval.
@@ -2301,6 +2306,12 @@ export class ChatCompletionProcess {
 
       if (!modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
+      }
+      // promptMeta.model.name keeps the requested id - unless a fallback hop later overwrites it -
+      // (analytics and last-used-model read it); the reply label reads answeredBy so a redirected
+      // turn is not credited to the model it replaced.
+      if (modelInfo.id !== model && quest.promptMeta?.model) {
+        quest.promptMeta.model.answeredBy = modelInfo.id;
       }
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Model setup completed in ${
@@ -3048,7 +3059,7 @@ export class ChatCompletionProcess {
         // A curated surface that suppresses user integrations must never delegate to agents. This
         // hard veto makes `session.disableUserIntegrations` honor its "no agent delegation"
         // contract self-sufficiently; the disabledTools denylist below is the second layer.
-        disableUserIntegrations: Boolean(session.disableUserIntegrations),
+        disableUserIntegrations: userIntegrationsDisabled,
         allowedAgents: parsedBody.allowedAgents,
         sessionAgentIds: session.agentIds,
         message,
@@ -4588,6 +4599,7 @@ export class ChatCompletionProcess {
               // Update quest metadata to reflect fallback attempt
               quest.promptMeta!.model!.name = currentModel.id;
               quest.promptMeta!.model!.backend = currentModel.backend;
+              if (quest.promptMeta!.model!.answeredBy) quest.promptMeta!.model!.answeredBy = currentModel.id;
               this.sendStatusUpdate(quest, `Trying alternative model: ${currentModel.id}...`, { statusAt: new Date() });
             }
 
@@ -5036,6 +5048,7 @@ export class ChatCompletionProcess {
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
+                  requireTools: !!options.tools?.length,
                 }
               );
 
@@ -6380,6 +6393,9 @@ export class ChatCompletionProcess {
       quest.status = 'done';
       // A turn can switch models and still fail; no model answered it, so it must not claim one did.
       quest.fallbackInfo = null;
+      // Same rule for the redirect record: the successor ran but produced no reply, so the chip must
+      // not credit it as the answering model.
+      if (quest.promptMeta?.model) quest.promptMeta.model.answeredBy = undefined;
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
       // InsufficientCreditsError (code unset by the dispute-pending fraud gates);
       // mid-turn generation tools throw a getQuestErrorCode-tagged 422.

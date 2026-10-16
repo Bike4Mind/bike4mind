@@ -88,10 +88,11 @@ export async function adapterBuildPricedModelIds(): Promise<ReadonlySet<string>>
  * is 0.03/1M against a real 0.006/1M.
  *
  * Lowest tier on purpose: this is a last-resort carry for rates no feed
- * publishes (cache and audio), and those do not vary by context bracket in any
- * literal we ship, while the threshold keys of a discovered ladder need not
- * match the literal's. Memoized - the tables are static, and the planner runs
- * once per convergence pass.
+ * publishes (cache and audio), and the threshold keys of a discovered ladder need
+ * not match the literal's. Cache rates do vary by bracket on some ladders
+ * (grok-4.5), so a first row carried from here takes the lowest bracket's
+ * cache_read on every tier. Memoized - the tables
+ * are static, and the planner runs once per convergence pass.
  */
 export async function adapterPriceTiers(): Promise<ReadonlyMap<string, IModelPriceTier>> {
   cached ??= collect();

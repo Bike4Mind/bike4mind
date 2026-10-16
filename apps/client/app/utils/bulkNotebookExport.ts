@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { visibleReplyForExport } from '@client/shared/replyUtils';
+import { answeringModelId } from '@client/app/utils/answeringModel';
 import { Document, Paragraph, TextRun, Packer, HeadingLevel, BorderStyle } from 'docx';
 import {
   DocxColors,
@@ -32,7 +33,7 @@ export interface ExportedChatMessage {
   prompt: string;
   replies?: string[];
   promptMeta?: {
-    model?: { name: string };
+    model?: { name: string; answeredBy?: string };
     tokenUsage?: {
       inputTokens?: number;
       outputTokens?: number;
@@ -90,7 +91,7 @@ export async function notebooksToExcel(data: BulkExportData): Promise<Blob> {
           Timestamp: msg.timestamp ? new Date(msg.timestamp).toISOString() : '',
           Role: 'Assistant',
           Content: stripSearchResultCardFences(reply, msg.promptMeta?.citables),
-          Model: msg.promptMeta?.model?.name || '',
+          Model: answeringModelId(msg.promptMeta) || '',
           Tokens: msg.promptMeta?.tokenUsage?.outputTokens || '',
         });
       }

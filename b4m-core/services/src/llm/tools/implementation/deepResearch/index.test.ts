@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 const createFirecrawlApp = vi.fn();
 vi.mock('../webfetch/firecrawlApp', () => ({
@@ -137,6 +138,29 @@ describe('performDeepResearch discovery precedence', () => {
     expect(deepResearchState.activities).toContainEqual(
       expect.objectContaining({ type: 'search', status: 'error', message: expect.stringMatching(/both providers/) })
     );
+  });
+
+  it('raises an error-level log when a search fails, since the caller would otherwise void it', async () => {
+    const failing = (name: 'serpapi' | 'searxng') => ({
+      name,
+      search: vi.fn(async () => {
+        throw new Error(`${name} is down`);
+      }),
+    });
+    createFirecrawlApp.mockReturnValue(null);
+    resolveWebSearchProviders.mockResolvedValue([failing('serpapi'), failing('searxng')]);
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+
+    try {
+      await performDeepResearch(makeContext(), { topic: 'marine biology' }, { maxDepth: 1, duration: 1 });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Deep Research: search failed',
+        expect.objectContaining({ searcher: 'serpapi' })
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('uses the web-search provider for discovery when Firecrawl is absent', async () => {

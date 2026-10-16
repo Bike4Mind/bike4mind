@@ -64,7 +64,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
 import { z } from 'zod';
-import { useConfig } from '@client/app/hooks/data/settings';
+import { useGeneratedMediaUrls } from '@client/app/hooks/data/generatedMedia';
 import {
   parseArtifactsWithFallback,
   shouldWarnElidedArtifact,
@@ -97,6 +97,7 @@ import type { CitableSource, WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
+import { isConfirmableMcpTool } from '@client/app/utils/confirmableMcpTool';
 import {
   extractChessJson,
   validateChessFen,
@@ -538,9 +539,6 @@ const PromptReplies: FC<PromptReplyProps> = ({
   isExpandable,
   onEdit,
 }) => {
-  const { data: config } = useConfig();
-  const cdnUrl = config?.cdnUrl || process.env.NEXT_PUBLIC_CDN_URL || '';
-
   const replies = useMemo(() => extractReplies(messageData), [messageData]);
 
   // extractThinking walks every thinking block across every reply slot (see
@@ -549,26 +547,34 @@ const PromptReplies: FC<PromptReplyProps> = ({
   // whole slot with the answer and raw <think> markers still in it.
   const thought = useMemo(() => extractThinking(messageData), [messageData]);
 
-  const generatedImagesUrl = `${cdnUrl}/generated`;
   // quest.images carries every file a tool generated this turn, but not all of them are
   // images - e.g. excel_generation drops an .xlsx and audio_generation (or a pre-job music turn) an audio track in
   // here. Classify once into the inline grid, inline audio players, and download chips
   // (non-image/-audio files, also surfaced in the Knowledge Base) so each lands in exactly
   // one place instead of rendering as a broken <img>. See classifyGeneratedFiles.
-  const { images, audio, generatedFiles } = useMemo(() => {
-    if (!generatedImagesUrl) return { images: [], audio: [], generatedFiles: [] };
-    const buckets = classifyGeneratedFiles(messageData.images ?? []);
-    return {
-      images: buckets.images.map(image => `${generatedImagesUrl}/${image}`),
-      audio: buckets.audio.map(file => `${generatedImagesUrl}/${file}`),
-      generatedFiles: buckets.others.map(name => ({ name, url: `${generatedImagesUrl}/${name}` })),
-    };
-  }, [messageData.images, generatedImagesUrl]);
-  const videos = useMemo(
-    () =>
-      generatedImagesUrl ? messageData.videos?.map(video => `${generatedImagesUrl}/${video}`).filter(Boolean) : [],
-    [messageData.videos, generatedImagesUrl]
+  const generatedBuckets = useMemo(() => classifyGeneratedFiles(messageData.images ?? []), [messageData.images]);
+  const videoKeys = useMemo(() => (messageData.videos ?? []).filter(Boolean), [messageData.videos]);
+  const allGeneratedKeys = useMemo(
+    () => [...generatedBuckets.images, ...generatedBuckets.audio, ...generatedBuckets.others, ...videoKeys],
+    [generatedBuckets, videoKeys]
   );
+  const { urls: generatedMediaUrls } = useGeneratedMediaUrls(messageData.sessionId, allGeneratedKeys);
+
+  // Entries whose presigned URL has not resolved yet (or that the caller may not read) are omitted
+  // rather than rendered with an empty src.
+  const { images, audio, generatedFiles, videos } = useMemo(() => {
+    const resolve = (keys: string[]) =>
+      keys.flatMap(key => {
+        const url = generatedMediaUrls[key];
+        return url ? [{ key, url }] : [];
+      });
+    return {
+      images: resolve(generatedBuckets.images).map(entry => entry.url),
+      audio: resolve(generatedBuckets.audio).map(entry => entry.url),
+      generatedFiles: resolve(generatedBuckets.others).map(({ key, url }) => ({ name: key, url })),
+      videos: resolve(videoKeys).map(entry => entry.url),
+    };
+  }, [generatedBuckets, videoKeys, generatedMediaUrls]);
 
   // Extract notebook content from tool results
   const notebookContent = useMemo(() => {
@@ -763,9 +769,11 @@ function getPendingActionError(error: unknown, fallbackMessage: string): { messa
   };
 }
 
-export const PendingActionButtons: FC<PendingActionButtonsProps> = props => (
-  <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
-);
+// The confirm route executes only allowlisted write tools, so any other pending action gets no card.
+export const PendingActionButtons: FC<PendingActionButtonsProps> = props =>
+  isConfirmableMcpTool(props.pendingAction.tool) ? (
+    <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
+  ) : null;
 
 const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAction, messageId, sessionId }) => {
   const storageKey = messageId ? `mcp-confirm-${messageId}-${pendingAction.ts}` : null;

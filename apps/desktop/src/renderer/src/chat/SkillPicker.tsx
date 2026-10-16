@@ -10,6 +10,7 @@ import Typography from '@mui/joy/Typography';
 import type { SkillSummary } from '@shared/skills';
 import type { ComposerCommand } from './commands';
 import { contentColumnSx } from './layout';
+import { skillChipColor, skillSourceLabel } from './skillMenu';
 
 /** Past this the menu scrolls rather than pushing the transcript off the top of the window. */
 const MAX_HEIGHT = 280;
@@ -157,10 +158,11 @@ export function SkillPicker({
                   <Chip
                     size="sm"
                     variant="soft"
-                    color={skill.source === 'project' ? 'warning' : 'neutral'}
+                    color={skillChipColor(skill.source)}
                     title={skill.filePath}
+                    data-testid="skill-picker-chip"
                   >
-                    {skill.source}
+                    {skillSourceLabel(skill.source)}
                   </Chip>
                 </Stack>
                 <Typography level="body-xs" textColor="text.tertiary" noWrap>

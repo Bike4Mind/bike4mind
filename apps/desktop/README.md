@@ -9,6 +9,21 @@ hydrates Tanstack Router, not a static bundle. So this app has its own lean rend
 over HTTP. Shared Zod schemas and types come from `@bike4mind/common`; components get
 ported over from `apps/client` only as later tasks need them.
 
+## Download and install
+
+Download installers from [Desktop releases](https://github.com/Bike4Mind/desktop-releases/releases).
+No Node.js, pnpm, or source checkout is required.
+
+1. On macOS, choose `arm64.dmg` for Apple Silicon (Intel builds are paused), open it,
+   and drag Bike4Mind into Applications.
+2. On Linux x64, download the `.AppImage`, mark it executable (`chmod +x <file>.AppImage`),
+   and launch it. Some distributions require FUSE support to run AppImages.
+
+New distribution releases require Developer ID signing and notarization. Legacy unsigned
+builds in the source repository do not gain an updater retroactively: install the first signed
+feed-enabled build manually. `SHA256SUMS.txt` accompanies each release for checksum verification.
+Windows packaging exists locally but is not yet part of the release pipeline.
+
 ## Running it
 
 ```bash
@@ -39,11 +54,217 @@ gitignored.
 | `pnpm package` | everything the host platform can build |
 | `pnpm package:mac` | `dmg` and `zip`, both for arm64 and x64 |
 | `pnpm package:win` | `nsis` installer, x64 |
+| `pnpm package:linux` | `AppImage`, x64 |
 | `pnpm package:dir` | an unpacked `.app`/directory, no installer - the fast loop |
 
 The macOS `zip` is not redundant with the `dmg`. The dmg is the human-facing installer;
 the zip is the format a Squirrel.Mac auto-updater consumes, so it has to exist before
 auto-update can.
+
+### Automated releases
+
+[`Desktop Release`](../../.github/workflows/desktop-release.yml) runs on pushes to
+`main` and pull requests touching `apps/desktop/**` or the desktop release workflow,
+version script, dependency gate, and their tests. It can also be run manually from
+Actions on `main`.
+
+Automatic triggers are temporarily desktop-only. Shared/core/backend sources, root
+dependencies, lockfiles, patches, and shared configuration alone do not start this
+workflow, even when desktop depends on them. Until dependency-aware triggers are
+restored, those changes need a manual run or a later desktop change to package.
+
+When a run starts, before packaging,
+`scripts/desktop_affected.py` compares the desktop workspace dependency closure on both
+sides, including dev/typecheck dependencies and transitively resolved lockfile entries.
+The same check governs semantic bumps and release notes, excluding unrelated workspace
+and web-only changes. Shared workspace/build configuration remains a conservative
+input within an existing run; malformed or missing historical inputs require a build.
+Pull requests compare their base with the head. Pushes and manual runs check every
+commit since the last desktop release, including pending shared dependency changes.
+
+Pull requests targeting `main` run the same builds and artifact validation without
+publishing a release. In the workflow run's Artifacts section, download
+`desktop-mac-arm64` and `desktop-linux-x64` for installers,
+plus `installer-checksums` for `SHA256SUMS.txt`. PR jobs have only
+read access to repository contents; the publication job runs only for pushes or manual
+dispatches on `main`. PR runs are isolated from the main release concurrency group.
+
+The workflow installs from the frozen lockfile, builds shared packages, runs desktop
+typechecks and tests on macOS and Linux, then packages Apple Silicon and Linux x64.
+The two platform jobs run in parallel; Turbo also builds independent shared packages
+in parallel while respecting dependency order. Intel macOS release builds are temporarily
+paused; local x64 packaging remains available. Publication waits for both build jobs and
+validates the arm64 DMG, arm64 ZIP, and Linux AppImage.
+Failed uploads leave a draft release, not a partially published download page.
+
+macOS jobs read the repository or organization Actions variable `OSX_RUNNER_LABEL`,
+defaulting to `macos-26-runner` when unset or empty. The selected runner must be
+Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`.
+Paid runner usage is billed by GitHub.
+
+Publication uses the existing release App only to reserve protected source version tags.
+A separate distribution App token has contents write access only to the installer repository.
+The workflow token and PR build jobs remain read-only. Missing credentials fail publication.
+The distribution repository needs no Actions workflows; disable Actions there. The source
+workflow is the only publisher. Anyone can read public installers and metadata, not drafts.
+
+Storage is deliberately short-lived: platform installers, checksums, and release notes
+expire after one day; startup evidence expires after three days. Installers are stored
+only once per platform; there is no duplicate combined installer upload.
+Superseded PR runs are canceled; main release runs are not interrupted.
+Dependency caching is disabled for this workflow, including setup-node's automatic
+package-manager cache. Runner-local build files disappear with the hosted runner.
+Published GitHub Release assets remain available for downloads and rollback separately
+from Actions artifact retention. Retention bounds lifetime, not total storage: many
+concurrent runs can still exhaust the shared artifact allowance. These settings do not
+delete existing artifacts or caches created by earlier runs or other workflows.
+
+The Linux job also launches the actual AppImage under Xvfb with an isolated temporary
+profile. It checks the rendered sign-in/environment screen, auth initialization, and
+the packaged version through main/preload IPC. `linux-x64-smoke-results` contains a screenshot
+and startup logs. This smoke test uses AppImage extraction and `--no-sandbox` only in
+CI; it does not verify FUSE mounting, desktop integration, sandbox compatibility on a
+real workstation, or authenticated chat. Those still need real-machine acceptance tests.
+
+The macOS job mounts the native-architecture DMG read-only, copies the app to a temporary
+installation directory, and runs the same startup checks with an isolated profile.
+`mac-arm64-smoke-results` contains screenshots and logs.
+Apple Silicon runs on a native standard runner. The tests use a mock keychain
+to avoid system prompts or accessing a real login keychain. It does not verify secure
+credential persistence. This does
+not verify Gatekeeper approval on a fresh machine.
+
+Installer versions follow SemVer, selected automatically by
+`scripts/desktop_release_version.py`. The first release uses the package version
+(`0.1.0`). After that, desktop release tags are the version source of truth; there is
+no version-bump commit or separate package release PR.
+
+Local `pnpm package:*` commands use the highest stable desktop tag reachable from
+the checkout, with `-local.<commit>` appended so an unreleased build does not
+impersonate a published installer. Fetch tags with `git fetch origin --tags` first.
+Missing tags fail with instructions instead of silently producing version 0.1.0.
+Set `DESKTOP_VERSION=0.6.0-test.1` for an explicit local test version. Local builds
+never publish. CI continues to select its own version and call the builder directly.
+Local macOS packaging explicitly uses ad-hoc signing, not Developer ID or
+notarization. Set `DESKTOP_MAC_IDENTITY` to an explicit Developer ID identity when
+needed. A valid ad-hoc signature does not guarantee fresh-download Gatekeeper acceptance.
+
+- `feat: ...` bumps minor; `fix: ...`, dependency updates, builds, refactors, and
+  other relevant changes bump patch.
+- During beta, `type!: ...` or a `BREAKING CHANGE:` footer bumps minor, not major.
+  Moving to 1.x requires a deliberate policy change reviewed before release.
+- The accidental `desktop-v1.0.0` release is excluded from baseline selection in
+  CI and local packaging, but its source tag is retained. The beta line resumes
+  from 0.5.0 with 0.6.0. Other stable major baselines fail closed, not silently ignored.
+  Existing 1.0.0 installations need a manual 0.x installation, not an updater downgrade.
+- `docs`, `test`, `ci`, and `style` alone do not publish a new stable release.
+- The highest bump across unreleased, desktop-relevant first-parent commits wins.
+  Unrelated web-only commits do not affect the desktop version. Squash merges use the
+  PR title as their commit header, so set it to the intended release type.
+- PR installers use prereleases such as `0.2.0-pr.123.42`, with the PR title supplying
+  its intended bump. They never become stable releases or change the next stable version.
+
+Reruns at an already released commit reuse its version and leave published assets
+unchanged. Draft releases reserve their version so a failed upload can be retried.
+An older checkout cannot publish after a newer desktop release. Version selection reads
+both repositories and source tag reservations, preserving the pre-migration SemVer baseline.
+Desktop updates use only the dedicated repository's Latest release. Production release
+automation is unchanged. Keep source desktop release tags intact;
+changing the package version does not override existing release history.
+
+Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
+Without it, users must select their own backend. `DESKTOP_RELEASE_REPOSITORY` supplies the
+dedicated public `owner/repo`; CI derives and bakes `B4M_UPDATE_FEED_URL` as its
+`https://github.com/<owner>/<repo>/releases/latest/download/` URL. Unset or source-repo
+destinations fail closed. PR builds have no signing credentials and are not published.
+
+The validation job generates `latest-mac.yml` and `latest-linux.yml` from the actual
+installer bytes, with SHA-512 and size. ZIP blockmaps are mandatory; AppImage blockmaps
+are embedded by electron-builder, and any external blockmaps are retained. Payload URLs
+are pinned to the version tag, so a later Latest switch cannot break an already offered
+update. All assets are uploaded to a draft and downloaded for byte comparison before
+publication promotes the complete release to Latest. A failed upload never exposes a
+partial manifest. Published assets are not overwritten on retry.
+
+#### Distribution setup checklist
+
+1. Create a public, distribution-only repository with an initial `main` commit. Do not
+   publish source, credentials, debug dumps, or builder configuration as release assets.
+2. Set source Actions variable `DESKTOP_RELEASE_REPOSITORY` to the dedicated `owner/repo`
+   in the same organization as the source. Keep its name stable for installed clients.
+3. Install a dedicated GitHub App on only that repository with Contents read/write.
+   Set source variable `DESKTOP_RELEASE_APP_ID` and secret `DESKTOP_RELEASE_APP_PRIVATE_KEY`.
+   The existing source release App and protected-tag bypass remain unchanged.
+4. Choose a macOS signing path. Set `DESKTOP_MAC_SIGNING=true` with the five Apple
+   secrets below for Developer ID signing and notarization. Alternatively, explicitly
+   set `DESKTOP_MAC_ADHOC_BETA=true` for account-free 0.x beta distribution. Unset,
+   false or malformed opt-ins deny publication; Apple signing takes precedence.
+   The ad-hoc path ships DMG/ZIP manual installers, disables macOS in-app updates
+   and omits `latest-mac.yml`. Linux metadata and updates remain enabled. Ad-hoc
+   signing provides bundle integrity, not publisher identity or notarization.
+   Fresh-download Gatekeeper acceptance remains untested; Open Anyway may be needed.
+5. Merge through review, then inspect the first trusted run's signatures, notarization,
+   packaged startup evidence, and destination release asset set. Confirm anonymous
+   `latest-linux.yml` downloads redirect successfully (also `latest-mac.yml` for
+   the Developer ID path only). CI logs record
+   publication and tag operations; organization audit-log retention is managed separately.
+6. Test two signed versions using a temporary installation and profile. Check, download,
+   and explicitly restart into the newer version. Never use a user's existing profile.
+   Contract tests and local feed checks do not prove Squirrel.Mac signature acceptance.
+
+To disable account-free publication, unset `DESKTOP_MAC_ADHOC_BETA` before another
+run. To switch to Developer ID, configure its credentials and set
+`DESKTOP_MAC_SIGNING=true`; missing credentials fail rather than falling back to
+ad-hoc. Do not overwrite published assets or reuse a reserved version. Recover with
+a new higher 0.x version. Users of ad-hoc builds must install that recovery manually.
+Distribution App setup is still required independently of Apple. These opt-ins do
+not enable Sparkle or prove macOS auto-update compatibility.
+
+#### GitHub App setup (independent of Apple)
+
+1. In the organization settings, open Developer settings > GitHub Apps > New GitHub App.
+   Use a dedicated distribution publisher, disable webhooks, and limit installation to
+   this account. It needs no OAuth callback, user permissions, or event subscriptions.
+2. Under Repository permissions, grant Contents read/write. Metadata read is implicit;
+   leave every other permission unset. No organization permissions are needed.
+3. Install the App with Only select repositories and select only the distribution repo.
+   Do not add the source repo or grant this App a source tag-ruleset bypass.
+4. Set source Actions variable `DESKTOP_RELEASE_APP_ID` to the App's client ID, as required
+   by `actions/create-github-app-token@v3`. Generate a private key and upload its PEM
+   contents directly into source Actions secret `DESKTOP_RELEASE_APP_PRIVATE_KEY`.
+   Never paste the PEM into chat, commit it, or put it in the distribution repository.
+5. After credentials are available, verify the minted token can create and remove a
+   temporary destination draft, but cannot write to the source or another repository.
+   A successful test using a personal gh login does not prove the App's token scope.
+
+This can be configured while Apple access is pending. Leave `DESKTOP_MAC_SIGNING` unset
+until the Apple credentials are ready. PR packaging remains available; main distribution
+stays blocked, and no unsigned installer becomes an automatic update.
+
+Release notes list desktop-relevant first-parent changes and explain the semantic bump.
+The publication script is `apps/desktop/scripts/publish-release.sh`, shared with
+`apps/desktop/scripts/verify-publication.sh`. Run the latter from the repository root
+with an explicitly selected sandbox `owner/repo` argument and a gh login with write
+access there. It creates a temporary release, downloads and compares its probe asset,
+checks that reruns do not overwrite published assets, then deletes the release and tag.
+It refuses the current repository. This tests the API flow, not the workflow token's
+production permissions or the full installer set. No sandbox is configured by default.
+
+Set `DESKTOP_MAC_SIGNING=true` only after configuring all five repository secrets:
+`DESKTOP_CSC_LINK`, `DESKTOP_CSC_KEY_PASSWORD`, `DESKTOP_APPLE_ID`,
+`DESKTOP_APPLE_APP_SPECIFIC_PASSWORD`, and `DESKTOP_APPLE_TEAM_ID`.
+Only trusted main runs receive these credentials. Opting in with incomplete credentials
+fails rather than silently publishing unsigned builds. Signed runs require Developer ID
+code-signature and app/DMG stapling validation. Without opt-in, main distribution is blocked. Signing credentials
+and end-to-end notarization verification are external setup requirements.
+
+To stop offering a broken release, mark it as a prerelease and explicitly mark the last
+good complete distribution release as Latest. Verify both manifest URLs anonymously.
+Do not overwrite existing assets or enable updater downgrades. Ship a higher fixed version.
+To roll back manually, download and reinstall an earlier desktop release. Back up the app's
+user-data directory before downgrading because older builds may not understand newer
+local data. If a release is broken, mark it as a prerelease or return it to draft in
+GitHub Releases, then rerun the workflow on corrected `main` to publish a new version.
 
 ### Baking the backend URL
 
@@ -76,14 +297,16 @@ state for an unbranded fork: Local Dev and a self-hosted URL still work.
 
 ### Signing
 
-Nothing in `electron-builder.yml` names a certificate, and an unsigned build is the
-supported default - it produces a working dmg on a machine with no credentials at all.
-electron-builder logs `skipped macOS application code signing` and ad-hoc signs instead,
-which is the minimum macOS needs to run an arm64 build locally. An unsigned app is still
-quarantined on another machine: Gatekeeper needs a right-click -> Open, or
-`xattr -d com.apple.quarantine`.
+Nothing in `electron-builder.yml` names a certificate. Local package scripts explicitly
+request ad-hoc signing; skipping signing can leave an invalid linker signature after
+Electron is repackaged. Verify bundle integrity with `codesign --verify --deep --strict`.
+Ad-hoc signing is not notarization and does not establish the publisher's identity.
+Fresh-download Gatekeeper approval must be tested separately. Do not bypass an invalid
+signature by removing quarantine attributes.
 
-Signing turns itself on once credentials are in the environment:
+Direct electron-builder invocations (including the trusted CI signing job) can use
+credentials from the environment. Local package scripts additionally require
+`DESKTOP_MAC_IDENTITY` to opt into a Developer ID identity:
 
 | Variable | Effect |
 | --- | --- |
@@ -350,14 +573,17 @@ restores the transparent corners with a circular mask.
 | File | Consumed by |
 | --- | --- |
 | `build/icon.icns` | electron-builder, macOS app bundle |
+| `build/icon-mac.png` | macOS development Dock icon (1024x1024) |
 | `build/icon.ico` | electron-builder, Windows |
 | `build/icon.png` | electron-builder, Linux (512x512) |
 | `src/renderer/favicon.png` | the renderer's `<link rel="icon">` |
 
-The mark is inset rather than bled to the edge: 824/1024 on macOS, which is Apple's icon
-grid, and a looser 0.92 elsewhere, where there is no grid to match. It stops reading as a
-wheel below about 32px - the white filigree inside the disc washes out into a pale blob at
-16px - but the disc silhouette and the brand blue still carry it.
+macOS uses the full-size mark with its own blue gradient extended behind it, making the
+circular edge seamless with the rounded-square tile. The corner radius is 22% of the tile
+width. The tile retains the 824/1024 outer inset for the macOS icon grid; the
+transparent margin is outside the tile, not between a circular silhouette and the grid.
+Windows, Linux, and the favicon keep the circular mark with a 0.92 inset. At small sizes,
+the fine detail softens, but the silhouette and brand blue still carry it.
 
 Where the icon actually shows:
 
@@ -366,7 +592,9 @@ Where the icon actually shows:
   path is correct both in dev and when packaged.
 - **macOS** ignores that option - its windows have no icon - and reads the dock icon from the
   app bundle, which only exists once the app is packaged. `app.dock.setIcon()` covers the gap
-  for `pnpm dev`.
+  for `pnpm dev`, using `build/icon-mac.png` with the same tile as the bundle icon. Restart
+  dev after regenerating icons. An installed app needs to be rebuilt and replaced before
+  its bundle icon changes.
 - The renderer's favicon is cosmetic inside Electron, which does not apply a page favicon to
   the window. It is there for where the renderer is opened as a page: devtools and
   `electron-vite preview`.

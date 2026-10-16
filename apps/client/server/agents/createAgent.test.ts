@@ -2,13 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   findById: vi.fn(),
-  incrementCredits: vi.fn(),
   countByUserId: vi.fn(),
   agentCreate: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findById: h.findById, incrementCredits: h.incrementCredits },
+  userRepository: { findById: h.findById },
   agentRepository: { countByUserId: h.countByUserId, create: h.agentCreate },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
@@ -60,7 +59,6 @@ describe('createAgent', () => {
     const error = await createAgent({ name: 'Agent', useOwnCredits: true, currentCredits: 5 }, 'user-1').catch(e => e);
 
     expect(error).toMatchObject({ name: 'BadRequestError', message: expect.stringContaining('Insufficient credits') });
-    expect(h.incrementCredits).not.toHaveBeenCalled();
     expect(h.agentCreate).not.toHaveBeenCalled();
   });
 

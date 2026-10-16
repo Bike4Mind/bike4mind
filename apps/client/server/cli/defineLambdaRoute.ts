@@ -77,6 +77,15 @@ export function defineLambdaRoute<C extends EndpointContract>(
   handle: (ctx: LambdaRouteContext<C>) => Promise<LambdaRouteResult>,
   options: LambdaRouteOptions = {}
 ): (event: APIGatewayProxyEventV2, opts?: { requestId?: string }) => Promise<APIGatewayProxyResultV2> {
+  // registerContract documents Deprecation/Sunset/Link on a deprecated contract's
+  // responses, and this transport does not send them yet. Refuse rather than let the
+  // spec promise headers a caller never receives.
+  if (contract.deprecated) {
+    throw new Error(
+      `defineLambdaRoute(${contract.operationId}): deprecated contracts are only served by nextRouteForContract, ` +
+        'which sends the Deprecation/Sunset/Link headers. Teach this adapter to send them first.'
+    );
+  }
   const checkMethod = createMethodGuard([contract.method]);
 
   return async (event: APIGatewayProxyEventV2, opts?: { requestId?: string }): Promise<APIGatewayProxyResultV2> => {

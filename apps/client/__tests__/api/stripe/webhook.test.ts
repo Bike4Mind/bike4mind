@@ -34,6 +34,7 @@ const mockConstructEvent = vi.fn();
 const mockDeactivateAll = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   creditLotRepository: {},
   creditTransactionRepository: {
     findByPaymentIntentId: (...args: unknown[]) => mockFindByPaymentIntentId(...args),

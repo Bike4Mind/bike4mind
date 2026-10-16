@@ -6,7 +6,7 @@ import { logger } from '../utils/Logger';
 import { StreamLogger } from '../utils/StreamLogger';
 import { parseStreamEvent, type StreamEvent } from './streamEvents';
 import { runCompletion } from './runCompletion';
-import { createTransientRetryPolicy } from './retryPolicy';
+import { ModelCallError, networkErrorCodeOf } from './modelCallError';
 import { bridgeToAsyncIterable } from './streamBridge';
 import type { CompletionRequest, StreamTransport } from './streamTransport';
 import { v4 as uuidv4 } from 'uuid';
@@ -48,8 +48,8 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
 
   /**
    * Run a completion. Delegates the whole lifecycle to the shared core; this
-   * class only supplies the WebSocket transport via `open()` and the retry policy
-   * (a transient drop / mid-stream disconnect is retried).
+   * class only supplies the WebSocket transport via `open()`, which throws
+   * classified errors for the shared retry decision.
    */
   async complete(
     model: string,
@@ -57,21 +57,15 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>
   ): Promise<void> {
-    return runCompletion(
-      this,
-      { model, messages, options },
-      callback,
-      createTransientRetryPolicy(),
-      options.abortSignal
-    );
+    return runCompletion(this, { model, messages, options }, callback, options.abortSignal);
   }
 
   /**
    * Open a single attempt: register the response handler, POST the request, and
    * yield decoded events until `cli_completion_done` (returns) or a failure
    * (throws). A `cli_completion_error` frame, a mid-stream disconnect, or a failed
-   * POST all throw; the disconnect uses a "connection closed" message so the
-   * retry policy classifies it as transient. Handlers are torn down in `finally`.
+   * POST all throw; a disconnect is a `network` {@link ModelCallError}, so it is
+   * retried. Handlers are torn down in `finally`.
    */
   open(req: CompletionRequest, signal?: AbortSignal): AsyncIterable<StreamEvent> {
     return this.streamCompletion(req, signal);
@@ -87,8 +81,7 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
     if (!this.wsManager.isConnected) {
       // Retryable by design: on a retry that races auto-reconnect this lets the
       // core wait out another backoff window rather than surface a dead-end error.
-      // The wording must stay in sync with retryPolicy's transient patterns.
-      throw new Error('WebSocket is not connected');
+      throw new ModelCallError('network', 'WebSocket is not connected');
     }
 
     const isVerbose = process.env.B4M_VERBOSE === '1';
@@ -136,16 +129,19 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
               ? `${baseMessage} (retry after ${retryAfter}s)`
               : baseMessage;
           streamLogger.onCriticalEvent(eventCount, 'ERROR', errorMsg);
-          sink.fail(new Error(errorMsg));
+          // These frames carry no code, so only a rate limit (it has retryAfter) is known to be transient.
+          sink.fail(
+            typeof retryAfter === 'number' && Number.isFinite(retryAfter)
+              ? new ModelCallError('rate_limited', errorMsg, { retryAfterMs: retryAfter * 1000 })
+              : new ModelCallError('refused', errorMsg)
+          );
         }
       };
 
-      // A mid-stream disconnect is a transient wire failure - phrase it so the
-      // retry policy (isTransientNetworkError) classifies it as retryable, giving
-      // the WebSocket path the retries the SSE path already had.
+      // A mid-stream disconnect is a transient wire failure, retried like an SSE drop.
       const onDisconnect = () => {
         logger.debug('[WebSocketLlmBackend] Connection dropped during completion');
-        sink.fail(new Error('WebSocket connection closed during completion'));
+        sink.fail(new ModelCallError('network', 'WebSocket connection closed during completion'));
       };
       // Abort settles without a failure; the core drops partial content.
       const onAbort = () => {
@@ -181,7 +177,12 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
         )
         .catch(err => {
           if (signal?.aborted) return;
-          sink.fail(new Error(`HTTP request failed: ${err instanceof Error ? err.message : String(err)}`));
+          const message = `HTTP request failed: ${err instanceof Error ? err.message : String(err)}`;
+          sink.fail(
+            networkErrorCodeOf(err) === undefined
+              ? new Error(message)
+              : new ModelCallError('unreachable', message, { cause: err })
+          );
         });
 
       return () => {
@@ -255,8 +256,9 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
         return this.getFallbackModels();
       }
 
+      // Text, tool-capable and not disabled: a disabled model is rejected on every turn.
       const filteredModels = response.models.filter(
-        (model: ModelInfo) => model.type === 'text' && model.supportsTools === true
+        (model: ModelInfo) => model.type === 'text' && model.supportsTools === true && !model.disabled
       );
 
       if (filteredModels.length === 0) {

@@ -49,7 +49,7 @@ import { ListTabHandlerPlugin } from './ListTabHandlerPlugin';
 import { ListMarkdownPlugin } from './ListMarkdownPlugin';
 import { MarkdownShortcutPlugin } from '@lexical/react/LexicalMarkdownShortcutPlugin';
 import type { BeautifulMentionsMenuProps } from 'lexical-beautiful-mentions';
-import React, { forwardRef, useImperativeHandle, useRef, useEffect, useMemo, useCallback } from 'react';
+import React, { forwardRef, useImperativeHandle, useRef, useEffect, useMemo, useCallback, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
 import { Box } from '@mui/joy';
@@ -85,6 +85,8 @@ interface LexicalChatInputProps {
   onSubmit?: () => void;
   onPaste?: (event: ClipboardEvent) => Promise<boolean> | boolean; // Returns true if paste was handled
   placeholder?: string;
+  /** Drawn instead of `placeholder` (which still names it for assistive tech), at full opacity. */
+  placeholderContent?: ReactNode;
   agents: Array<{ id: string; name: string; triggerWords: string[] }>;
 }
 
@@ -481,7 +483,7 @@ function EditorRefPlugin({
 }
 
 export const LexicalChatInput = forwardRef<LexicalChatInputRef, LexicalChatInputProps>(
-  ({ value, onChange, onSubmit, onPaste, placeholder = 'Type your message...', agents }, ref) => {
+  ({ value, onChange, onSubmit, onPaste, placeholder = 'Type your message...', placeholderContent, agents }, ref) => {
     const editorRefStore = useRef<LexicalChatInputRef | null>(null);
     const skipSyncRef = useRef<boolean>(false);
 
@@ -627,12 +629,24 @@ export const LexicalChatInput = forwardRef<LexicalChatInputRef, LexicalChatInput
             contentEditable={
               <ContentEditable
                 data-testid="lexical-chat-input-container"
-                className="lexical-chat-input"
+                className={
+                  placeholderContent
+                    ? 'lexical-chat-input lexical-chat-input--custom-placeholder'
+                    : 'lexical-chat-input'
+                }
                 role="textbox"
                 aria-label="Chat message input"
                 aria-placeholder={placeholder}
                 aria-multiline="true"
-                placeholder={<div className="lexical-placeholder">{placeholder}</div>}
+                placeholder={
+                  <div
+                    className={
+                      placeholderContent ? 'lexical-placeholder lexical-placeholder--custom' : 'lexical-placeholder'
+                    }
+                  >
+                    {placeholderContent ?? placeholder}
+                  </div>
+                }
               />
             }
             placeholder={null}

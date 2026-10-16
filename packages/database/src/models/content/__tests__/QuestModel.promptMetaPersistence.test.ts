@@ -18,6 +18,7 @@ import { Quest, questRepository } from '../QuestModel';
 const FULL_PROMPT_META = {
   model: {
     name: 'claude-opus-5',
+    answeredBy: 'claude-opus-5-5',
     type: 'text',
     backend: 'anthropic',
     contextWindow: 200000,

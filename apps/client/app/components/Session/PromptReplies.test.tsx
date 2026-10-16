@@ -98,6 +98,20 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
     sessionStorage.clear();
   });
 
+  it('renders no card for a pending action the confirm route will not execute', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <PendingActionButtons
+          pendingAction={{ ...pendingAction, tool: 'image_generation' }}
+          messageId="quest-1"
+          sessionId="session-1"
+        />
+      </CssVarsProvider>
+    );
+
+    expect(screen.queryByTestId('mcp-confirm-btn')).toBeNull();
+  });
+
   it('posts confirmed: true with the displayed action ts', async () => {
     postMock.mockResolvedValue({ data: { success: true, message: 'done' } });
     renderCard();

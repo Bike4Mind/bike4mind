@@ -78,7 +78,7 @@ vi.mock('sst', () => ({
 }));
 
 const { runQuestNode } = await import('./runQuestNode');
-const { ABANDONED_REPLY } = await import('@server/chatCompletion/questTimeoutRecovery');
+const { ABANDONED_REPLY } = await import('@bike4mind/server-utils/chatCompletion/questTimeoutRecovery');
 
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
 

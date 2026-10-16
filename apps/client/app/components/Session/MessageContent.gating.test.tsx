@@ -161,7 +161,26 @@ vi.mock('@client/app/components/BugReportModal', () => ({
     ) : null,
 }));
 vi.mock('@client/app/components/ProfileModal/ContentPreviewModal', () => ({ default: () => null }));
-vi.mock('../common/DownloadMenu', () => ({ default: () => null, downloadFile: vi.fn() }));
+vi.mock('../common/DownloadMenu', () => ({
+  default: () => null,
+  downloadFile: vi.fn(),
+  ReplyDownloadMenuItems: () => (
+    <>
+      <li role="menuitem">Markdown</li>
+      <li role="menuitem">DOCX</li>
+    </>
+  ),
+}));
+// Joy keeps a closing Drawer mounted until its exit transition ends, which jsdom never runs: render
+// the sheet's content only while it is open.
+vi.mock('../common/BottomSheet', () => ({
+  default: ({ open, children }: { open: boolean; children: React.ReactNode }) => (open ? <div>{children}</div> : null),
+  BottomSheetHeader: ({ title, onBack, backTestId }: { title: string; onBack: () => void; backTestId?: string }) => (
+    <button data-testid={backTestId} onClick={onBack}>
+      {title}
+    </button>
+  ),
+}));
 
 // --- the flag under test ----------------------------------------------------
 // Default (flag on) is established in beforeEach; tests override per-case.
@@ -402,17 +421,23 @@ describe('MessageContent publish-and-share - visible action-bar button', () => {
       Object.defineProperty(window, 'innerWidth', { value: desktopWidth, configurable: true, writable: true });
     });
 
-    it('renders the icon button and wires it to the share flow', async () => {
-      renderAndClickPublishShare();
-
+    // Phones keep only More options and Copy in the row; sharing is in the actions sheet.
+    it('offers sharing in the actions sheet and wires it to the share flow', async () => {
+      renderMessageContent();
       expect(document.querySelector('.action-buttons-mobile')).not.toBeNull();
+      expect(screen.queryByTestId('message-publish-share-btn')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+      fireEvent.click(screen.getByTestId('message-menu-share'));
+
       await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
     });
 
-    it('hides the icon button when the reply has no shareable content', () => {
+    it('leaves sharing out of the sheet when the reply has no shareable content', () => {
       renderMessageContent(emptyReplyMessageData);
+      fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
 
-      expect(screen.queryByTestId('message-publish-share-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('message-menu-share')).not.toBeInTheDocument();
     });
   });
 });
@@ -545,11 +570,43 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
       Object.defineProperty(window, 'innerWidth', { value: desktopWidth, configurable: true, writable: true });
     });
 
-    it('renders the persistent Report button', () => {
+    // Phones trade the persistent button for a Report entry in the actions sheet; a reported
+    // answer still shows its orange mark in the row.
+    it('offers Report in the actions sheet and opens the report modal from it', () => {
+      renderMessageContent();
+      expect(document.querySelector('.action-buttons-mobile')).not.toBeNull();
+      expect(screen.queryByTestId('message-report-btn')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+      fireEvent.click(screen.getByTestId('message-menu-report'));
+
+      expect(screen.getByTestId('bug-report-modal-mock-submit')).toBeInTheDocument();
+    });
+
+    it('keeps the reported mark in the row once the answer is reported', () => {
+      mocks.sessionFeedback = [{ questId: 'quest-1' }];
       renderMessageContent();
 
-      expect(document.querySelector('.action-buttons-mobile')).not.toBeNull();
       expect(screen.getByTestId('message-report-btn')).toBeInTheDocument();
+    });
+
+    it('closes the sheet once an action is picked', async () => {
+      renderMessageContent();
+      fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+      fireEvent.click(screen.getByTestId('message-menu-report'));
+
+      await waitFor(() => expect(screen.queryByTestId('message-menu-report')).not.toBeInTheDocument());
+    });
+
+    it('opens the download formats inside the sheet, with a way back', () => {
+      renderMessageContent();
+      fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
+      fireEvent.click(screen.getByTestId('message-menu-download'));
+
+      expect(screen.getByText('Markdown')).toBeInTheDocument();
+      expect(screen.getByText('DOCX')).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('message-actions-back-btn'));
+      expect(screen.getByTestId('message-menu-download')).toBeInTheDocument();
     });
   });
 });

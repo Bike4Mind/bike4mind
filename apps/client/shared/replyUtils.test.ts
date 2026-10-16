@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { extractReplies, extractThinking, visibleReplyForExport } from './replyUtils';
-import { ABANDONED_REPLY } from '@server/chatCompletion/questTimeoutRecovery';
+import { ABANDONED_REPLY } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 /**
  * `extractReplies` is what decides whether a quest's text reaches the bubble, so

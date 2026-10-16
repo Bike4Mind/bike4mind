@@ -2,6 +2,7 @@ import { type ChunkStallReason } from '../../constants/chunking';
 import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
+import type { StorageUsageGroup } from '../../storageBreakdown';
 
 // Define a type for the MIME types
 export type MimeType =
@@ -1136,6 +1137,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @returns A promise that resolves to the total size in bytes.
    */
   sumFileSizeByUserId(userId: string): Promise<number>;
+
+  /**
+   * The same charged rows `sumFileSizeByUserId` sums, grouped by provenance (see StorageUsageGroup).
+   * `maxTimeMS` bounds the aggregate for users with very large file counts.
+   */
+  summarizeChargedStorageByUserId(userId: string, options?: { maxTimeMS?: number }): Promise<StorageUsageGroup[]>;
 
   /**
    * The live row's stored charge fields, read lean: a hydrated document reports a missing `status`

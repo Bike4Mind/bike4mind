@@ -37,6 +37,7 @@ import type { FabFileNotice } from '@bike4mind/utils';
 import {
   getLlmByModel,
   getAvailableModels,
+  resolveDeprecatedModelId,
   attachFullToolResult,
   getFullToolResult,
   MAX_FULL_TOOL_RESULT_CHARS,
@@ -585,6 +586,69 @@ describe('ChatCompletionProcess', () => {
     mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
     return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
   };
+
+  describe('a deprecated-model redirect', () => {
+    const successor = {
+      id: ChatModels.GPT4_1,
+      type: 'text',
+      name: 'GPT-4.1',
+      backend: ModelBackend.OpenAI,
+      max_tokens: 100,
+      contextWindow: 1000,
+      can_stream: false,
+      pricing: {},
+      supportsImageVariation: false,
+    };
+
+    it('reply metadata names the model that answered and keeps the requested model', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, successor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+
+      await service.process({ body, logger: mockLogger });
+
+      // Assert on what the turn persisted, not only on the in-memory quest object.
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave.promptMeta.model).toMatchObject({ name: ChatModels.GPT4, answeredBy: ChatModels.GPT4_1 });
+    });
+
+    it('leaves answeredBy unset when no redirect happened', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockQuest.promptMeta.model.answeredBy).toBeUndefined();
+    });
+
+    it('clears answeredBy when the successor fails and nothing answers the turn', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, successor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+      // No fallback (shouldTriggerFallback stays false): the redirect is the only swap, and the
+      // successor then fails, so no model produced a reply.
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('gated model')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4_1,
+      } as any); // any: minimal backend shape, as elsewhere in this file
+
+      // The terminal error rethrows after the error save; swallow it to inspect what was persisted.
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ type: 'error', status: 'done' });
+      expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4);
+      expect(lastSave.promptMeta.model.answeredBy).toBeUndefined();
+    });
+  });
 
   describe('per-turn pre-authorized capture', () => {
     it('captures the session ids onto the turn', async () => {
@@ -3958,6 +4022,9 @@ describe('ChatCompletionProcess', () => {
       expect(updateCall).toBeDefined();
       expect(updateCall[0].promptMeta.tokenUsage.actualInputTokens).toBe(fallbackInputTokens);
       expect(updateCall[0].promptMeta.tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
+      // No redirect here: the turn switched models only by falling back, so answeredBy stays unset
+      // and `name` (now the final hop) is the sole record of who answered.
+      expect(updateCall[0].promptMeta.model.answeredBy).toBeUndefined();
     });
 
     // A safety-classifier refusal throws so the loop falls back, which means the refused call
@@ -4296,6 +4363,128 @@ describe('ChatCompletionProcess', () => {
       // Same-provider degradation on the earlier hops; the cross-provider guarantee only on the last.
       expect(optsSeen.slice(0, 4).every(o => o.preferUntriedBackend === false)).toBe(true);
       expect(optsSeen[4].preferUntriedBackend).toBe(true);
+    });
+
+    it('a redirected turn that falls back over several hops credits the reply to the final hop', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('ServiceUnavailableException: primary outage');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4_1,
+      });
+
+      // Hop 1 fails too; hop 2 answers.
+      let hopN = 0;
+      mockedGetLlmWithFallback.mockImplementation(async () => {
+        hopN++;
+        const id = `hop-model-${hopN}`;
+        const answers = hopN >= 2;
+        return {
+          model: {
+            id,
+            type: 'text',
+            name: `Hop ${hopN}`,
+            backend: ModelBackend.Anthropic,
+            max_tokens: 100,
+            contextWindow: 200_000,
+            pricing: { 200000: { input: 0, output: 0 } },
+            supportsImageVariation: false,
+          },
+          backend: {
+            complete: vi
+              .fn()
+              .mockImplementation(
+                async (_m: unknown, _ms: unknown, _o: unknown, cb: (chunks: string[]) => Promise<void>) => {
+                  if (!answers) throw new Error('ServiceUnavailableException: hop outage');
+                  await cb(['Hi!']);
+                }
+              ),
+            getModelInfo: vi.fn().mockResolvedValue([]),
+            currentModel: id,
+          },
+          attempt: 1,
+        } as any;
+      });
+
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4_1,
+          type: 'text',
+          name: 'GPT-4.1',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 0, output: 0 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(hopN).toBe(2);
+      expect(mockQuest.promptMeta.model).toMatchObject({ name: 'hop-model-2', answeredBy: 'hop-model-2' });
+    });
+
+    // Wiring test: a request that carries tools must ask for a tool-capable fallback, or the hop
+    // can land on a model that rejects function calling.
+    it.each([
+      { label: 'with tools', tools: [{ toolSchema: { name: 'math_evaluate' }, toolFn: vi.fn() }], expected: true },
+      { label: 'without tools', tools: [], expected: false },
+    ])('passes requireTools=$expected to getLlmWithFallback $label', async ({ tools, expected }) => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('authentication failed')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const optsSeen: Array<{ requireTools?: boolean }> = [];
+      mockedGetLlmWithFallback.mockImplementation(async (...callArgs: any[]) => {
+        optsSeen.push(callArgs[5] ?? {});
+        return null;
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 0, output: 0 } },
+          supportsImageVariation: false,
+          supportsTools: true,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+      buildToolsSpy.mockRestore();
+
+      expect(optsSeen.length).toBe(1);
+      expect(optsSeen[0].requireTools).toBe(expected);
     });
 
     // Wiring test: with the E2E gate on and the marker present, the affordance simulates a
@@ -6230,6 +6419,8 @@ describe('ChatCompletionProcess', () => {
       sessionAgentIds?: string[];
       allowedAgents?: string[];
       priorToolNames?: string[];
+      disableUserIntegrations?: boolean;
+      mcpServers?: string[];
     }) => {
       // vi.spyOn on a prototype is idempotent across tests: the same underlying
       // mock survives, so `mock.calls` accumulates. Clear before each invocation
@@ -6272,6 +6463,10 @@ describe('ChatCompletionProcess', () => {
         projectId: undefined,
         organizationId: undefined,
         ...(params.allowedAgents !== undefined ? { allowedAgents: params.allowedAgents } : {}),
+        ...(params.disableUserIntegrations !== undefined
+          ? { disableUserIntegrations: params.disableUserIntegrations }
+          : {}),
+        ...(params.mcpServers !== undefined ? { mcpServers: params.mcpServers } : {}),
       };
       await service.process({ body, logger: mockLogger });
 
@@ -6332,6 +6527,47 @@ describe('ChatCompletionProcess', () => {
       });
       expect(agentStore).toBeUndefined();
     });
+
+    // The request flag hard-vetoes delegation even when every positive signal is present: an
+    // @mention, an attached agent and an explicit allowlist. The unflagged control runs the same turn.
+    it.each([
+      { disableUserIntegrations: undefined, offered: true },
+      { disableUserIntegrations: true, offered: false },
+    ])(
+      'request disableUserIntegrations=$disableUserIntegrations -> delegate_to_agent offered=$offered',
+      async ({ disableUserIntegrations, offered }) => {
+        const agentStore = await runWithBuildToolsSpy({
+          message: '@researcher please look up the latest smartphone specs',
+          sessionAgentIds: ['some-agent-id'],
+          allowedAgents: ['researcher'],
+          disableUserIntegrations,
+        });
+        expect(agentStore !== undefined).toBe(offered);
+      }
+    );
+
+    it.each([
+      { disableUserIntegrations: undefined, expected: ['notion'] },
+      { disableUserIntegrations: true, expected: [] },
+    ])(
+      'request disableUserIntegrations=$disableUserIntegrations -> requested MCP servers $expected',
+      async ({ disableUserIntegrations, expected }) => {
+        const buildMcpToolsSpy = vi
+          .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+          .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {} });
+        buildMcpToolsSpy.mockClear();
+        try {
+          await runWithBuildToolsSpy({
+            message: 'Compare the smartphones',
+            disableUserIntegrations,
+            mcpServers: ['notion'],
+          });
+          expect(buildMcpToolsSpy.mock.calls[0]?.[0]?.requestedMcpServers).toEqual(expected);
+        } finally {
+          buildMcpToolsSpy.mockRestore();
+        }
+      }
+    );
 
     it('treats an empty allowedAgents allowlist as "no delegation" rather than "delegation to nothing"', async () => {
       // Pre-fix, `allowedAgents: []` would still trip the `!= null` predicate and
@@ -6640,14 +6876,28 @@ describe('ChatCompletionProcess', () => {
       message: string;
       catalog?: ISkill[];
       resolved?: ISkill[];
+      /** Drive the real feature-list gate instead of pre-registering SkillsFeature. */
+      useRealFeatureBuild?: boolean;
+      disableUserIntegrations?: boolean;
     }): Promise<string> => {
       mockDb.skills = {
         listAccessibleInvocableForUser: vi.fn().mockResolvedValue(params.catalog ?? []),
         findAccessibleByNamesForUser: vi.fn().mockResolvedValue(params.resolved ?? []),
       };
-      // buildOptimizedFeatures is stubbed in beforeEach, so register the real feature under the
-      // same key the assembly reads. This exercises both phases against the live feature.
-      service.features.set('skills', new SkillsFeature(service));
+      if (params.useRealFeatureBuild) {
+        // The stub in beforeEach swallows the feature list, so the per-request gate on 'skills'
+        // would be invisible. Delegate to the real builder so the gate decides what gets built.
+        vi.spyOn(service as any, 'buildOptimizedFeatures').mockImplementation(function (
+          this: unknown,
+          ...args: unknown[]
+        ) {
+          return (ChatCompletionProcess.prototype as any).buildOptimizedFeatures.apply(service, args);
+        });
+      } else {
+        // buildOptimizedFeatures is stubbed in beforeEach, so register the real feature under the
+        // same key the assembly reads. This exercises both phases against the live feature.
+        service.features.set('skills', new SkillsFeature(service));
+      }
 
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
@@ -6680,6 +6930,9 @@ describe('ChatCompletionProcess', () => {
         tools: [],
         projectId: undefined,
         organizationId: undefined,
+        ...(params.disableUserIntegrations !== undefined
+          ? { disableUserIntegrations: params.disableUserIntegrations }
+          : {}),
       };
       await service.process({ body, logger: mockLogger });
 
@@ -6710,6 +6963,33 @@ describe('ChatCompletionProcess', () => {
       expect(systemText).not.toContain('Available Skills');
       expect(systemText).not.toContain('Skill Invoked');
     });
+
+    // The request flag is the per-turn twin of the session flag: a caller running a prompt the user
+    // did not author must not get the user's own skills expanded into it. Asserted at the enforcement
+    // point (the real feature build), with the unflagged control proving the setup does expand them.
+    it.each([
+      { disableUserIntegrations: undefined, expanded: true },
+      { disableUserIntegrations: true, expanded: false },
+    ])(
+      'skills expansion with request disableUserIntegrations=$disableUserIntegrations -> expanded=$expanded',
+      async ({ disableUserIntegrations, expanded }) => {
+        const systemText = await runAndCaptureSystemText({
+          message: '/greet Bob',
+          catalog: [ownedSkill({ name: 'greet', description: 'Greet someone' })],
+          resolved: [ownedSkill({ name: 'greet', body: 'Say hello to $ARGUMENTS' })],
+          useRealFeatureBuild: true,
+          disableUserIntegrations,
+        });
+
+        expect(systemText.includes('Available Skills')).toBe(expanded);
+        expect(systemText.includes('Skill Invoked: /greet')).toBe(expanded);
+        expect(systemText.includes('Say hello to Bob')).toBe(expanded);
+        if (!expanded) {
+          expect(mockDb.skills.listAccessibleInvocableForUser).not.toHaveBeenCalled();
+          expect(mockDb.skills.findAccessibleByNamesForUser).not.toHaveBeenCalled();
+        }
+      }
+    );
 
     // The `skill` LLM tool used to be offered unconditionally. These pin the conditional gate to
     // the SAME catalog/session state runAndCaptureSystemText already exercises for the

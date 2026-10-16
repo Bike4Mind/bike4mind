@@ -1,6 +1,7 @@
 import { IChatHistoryItem, ISessionDocument, stripSearchResultCardFences } from '@bike4mind/common';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
 import { visibleReplyForExport } from '@client/shared/replyUtils';
+import { answeringModelId } from '@client/app/utils/answeringModel';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { Document, Paragraph, TextRun, Packer, HeadingLevel, BorderStyle } from 'docx';
@@ -65,7 +66,7 @@ export function toExportableSession(session: ISessionDocument, chatHistory: ICha
         // Every downstream export format (CSV, XLSX, DOCX, ...) renders `content` as plain
         // text with no way to show cards, so strip the fence at this single read boundary.
         content: stripSearchResultCardFences(reply, item.promptMeta?.citables),
-        model: item.promptMeta?.model?.name,
+        model: answeringModelId(item.promptMeta),
         tokensUsed: item.promptMeta?.tokenUsage?.outputTokens,
         creditsUsed: item.creditsUsed,
       });

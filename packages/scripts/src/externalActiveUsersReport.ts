@@ -49,10 +49,10 @@ interface QuestActivityRow {
 const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
 
 /**
- * Streams the three activity sources from `windowStart` into two user-day maps: app and CLI
- * activity (DAU) and public API activity (reported separately). Projects only the fields it needs
- * and never unions across collections (DocumentDB has no $unionWith). Every read prefers a
- * secondary: a full-window scan of the largest collections should not load the primary.
+ * Streams the three activity sources from `windowStart` into two user-day maps: app, CLI and
+ * desktop activity (DAU) and public API activity (reported separately). Projects only the fields
+ * it needs and never unions across collections (DocumentDB has no $unionWith). Every read prefers
+ * a secondary: a full-window scan of the largest collections should not load the primary.
  */
 async function collectActivity(windowStart: Date, batchSize: number) {
   const userDays: UserDayMap = new Map();

@@ -239,6 +239,12 @@ describe('settlePublication - CDN purge', () => {
     expect(purgedPublicIds()).toEqual(['live1']);
   });
 
+  it('purges when an existing public page is re-published public, so a new title or body shows at once', async () => {
+    mocks.findOneLean.mockResolvedValue(existingRow({ visibility: 'public' }));
+    await settlePublication(input({ visibility: 'public' }));
+    expect(purgedPublicIds()).toEqual(['live1']);
+  });
+
   it('does not purge when the page was and stays non-public', async () => {
     mocks.findOneLean.mockResolvedValue(existingRow({ visibility: 'organization' }));
     await settlePublication(input({ visibility: 'private' }));

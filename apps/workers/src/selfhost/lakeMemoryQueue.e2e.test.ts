@@ -13,7 +13,7 @@ import {
 } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { createLedgerMemoryStore } from '@server/memory/ledgerMemoryStore';
-import { createKeyProvider } from '@server/memory/factCipher';
+import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 
 const { evaluate, send, receive, remove } = vi.hoisted(() => ({
   evaluate: vi.fn(),

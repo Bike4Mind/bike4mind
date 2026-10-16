@@ -120,6 +120,23 @@ test.describe.serial('Profile - Settings', () => {
   });
 });
 
+test.describe('Profile - Storage breakdown', () => {
+  test('a new account opens the breakdown and sees no stored files', async ({ profilePage }) => {
+    const { page } = profilePage;
+    await profilePage.gotoProfile();
+
+    const breakdownResponse = page.waitForResponse(
+      r => r.url().includes('/api/users/me/storage-breakdown') && r.request().method() === 'GET'
+    );
+    await page.getByTestId('storage-breakdown-toggle-btn').click();
+    const response = await breakdownResponse;
+    expect(response.status()).toBe(200);
+    expect(await response.json()).toMatchObject({ totalBytes: 0, unaccountedBytes: 0, buckets: [] });
+
+    await expect(page.getByTestId('storage-breakdown-empty')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  });
+});
+
 test.describe('Profile - Agent connect', () => {
   test('should copy a key-free agent prompt and MCP snippets from the API Keys tab', async ({
     profilePage,
@@ -152,6 +169,35 @@ test.describe('Profile - Agent connect', () => {
       'href',
       /^cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install\?name=bike4mind&config=/
     );
+  });
+
+  test('should list provider keys after account keys and send spend to the Usage tab', async ({ profilePage }) => {
+    const { page } = profilePage;
+    await profilePage.gotoProfile();
+    await profilePage.clickTab('API-keys');
+
+    const usageLink = page.getByTestId('api-keys-usage-link');
+    const agentConnect = page.getByTestId('agent-connect-section');
+    const firstProvider = page.locator('[data-testid^="api-keys-provider-"]').first();
+    await expect(firstProvider).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(usageLink).toBeVisible();
+
+    const linkHandle = await usageLink.elementHandle();
+    const connectHandle = await agentConnect.elementHandle();
+    const providerHandle = await firstProvider.elementHandle();
+    const precedes = (a: typeof linkHandle, b: typeof linkHandle) =>
+      page.evaluate(([x, y]) => !!(x!.compareDocumentPosition(y!) & Node.DOCUMENT_POSITION_FOLLOWING), [a, b]);
+    expect(await precedes(linkHandle, connectHandle)).toBe(true);
+    expect(await precedes(connectHandle, providerHandle)).toBe(true);
+    await expect(page.getByTestId('usage-dashboard')).toHaveCount(0);
+
+    await page.getByTestId('api-keys-usage-link-btn').click();
+    await expect(page.getByTestId('usage-tab')).toHaveAttribute('aria-selected', 'true', {
+      timeout: TIMEOUTS.ELEMENT_STATE,
+    });
+    await expect(page).toHaveURL(/tab=usage/);
+    await expect(page.getByTestId('usage-spend-breakdown')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(page.getByTestId('usage-dashboard')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   });
 
   test('should serve llms.txt with an Authentication section', async ({ request }) => {
