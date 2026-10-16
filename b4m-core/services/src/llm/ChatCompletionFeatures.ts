@@ -65,6 +65,7 @@ import {
   citationTagDescription,
   compareForcedRetrievalRank,
   cosineFloorPctForSpace,
+  forcedRetrievalFloorAboveMeasured,
   forcedRetrievalRelativeCutoff,
   forcedRetrievalSpreadCutoff,
   LAKE_RECALL_K_DEFAULT,
@@ -1839,14 +1840,6 @@ function forcedRetrievalConfiguredAbsolutePct(raw: unknown, logger: Logger): num
   return undefined;
 }
 
-/** `${space}:${pct}` pairs already warned about, so a misconfigured floor warns once per process. */
-const warnedOverFloor = new Set<string>();
-
-/** Test-only: forget which floors were warned about, so a warn-once test does not depend on test order. */
-export function resetForcedRetrievalFloorWarnings(): void {
-  warnedOverFloor.clear();
-}
-
 /**
  * The absolute floor to grade THIS turn's candidates against, given what the operator configured and
  * which embedding space the scores were actually produced in.
@@ -1883,19 +1876,8 @@ export function resetForcedRetrievalFloorWarnings(): void {
  */
 function resolveForcedRetrievalAbsoluteFloor(configuredPct: number | undefined, space: string, logger: Logger): number {
   const spacePct = cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, space);
-  if (configuredPct !== undefined) {
-    // Honored, but above the measured floor it can reject the space's whole band (75 on
-    // text-embedding-3-small returns nothing on every query), so say so - once, not every turn.
-    const warnKey = `${space}:${configuredPct}`;
-    if (spacePct !== undefined && configuredPct > spacePct && !warnedOverFloor.has(warnKey)) {
-      warnedOverFloor.add(warnKey);
-      logger.warn(
-        `\u{1F512} Forced retrieval: configured absolute floor ${configuredPct}% is above the ${spacePct}% ` +
-          `measured for embedding space "${space}" and may reject every chunk; clear it to use the measured floor`
-      );
-    }
-    return configuredPct / 100;
-  }
+  // Honored even above the measured floor; a turn it empties is reported by the no-match exit.
+  if (configuredPct !== undefined) return configuredPct / 100;
 
   if (spacePct !== undefined) {
     if (spacePct !== FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT) {
@@ -3443,10 +3425,32 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // below the line - and no per-turn test separates them, so the line carries what an
         // operator needs to tell them apart instead: a top score far below the floor across a whole
         // scanned corpus is the misconfiguration, one just below it is a genuine miss.
-        this.logger.log(
+        const noneClearedLine =
           `\u{1F512} Forced retrieval: no chunk cleared the ${(floors.minSimilarity * 100).toFixed(0)}% absolute ` +
-            `floor (top=${topScore.toFixed(3)} over ${scoredCount} chunks in "${embeddingModel}" space)`
-        );
+          `floor (top=${topScore.toFixed(3)} over ${scoredCount} chunks in "${embeddingModel}" space)`;
+        // An operator floor above the measured one can empty every turn, so that case warns on every
+        // turn it happens and tells the reader; a measured floor emptying a turn is an ordinary miss.
+        const measuredPct =
+          configuredAbsolutePct !== undefined && scoredCount > 0
+            ? forcedRetrievalFloorAboveMeasured(configuredAbsolutePct, embeddingModel)
+            : undefined;
+        if (configuredAbsolutePct !== undefined && measuredPct !== undefined) {
+          this.logger.warn(
+            `${noneClearedLine}; the configured floor is above the ${measuredPct}% measured for this space, ` +
+              'clear forcedRetrievalMinSimilarityPct to use the measured floor'
+          );
+          quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
+            sessionId: quest.sessionId,
+            userId: this.chatCompletion.user.id,
+          });
+          quest.promptMeta.retrievalFloorRejection = {
+            floorPct: configuredAbsolutePct,
+            measuredPct,
+            embeddingModel,
+          };
+        } else {
+          this.logger.log(noneClearedLine);
+        }
         // The ZERO ROW. Unlike every other write in this collection it records an ATTEMPT AGAINST A
         // SCOPE, not a read: nothing was returned, so there is no file tag to reverse into a lake
         // and `resolvedLakeIds` is the scope that was searched. Written on THIS exit alone - the

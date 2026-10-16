@@ -159,6 +159,7 @@ const FULL_PROMPT_META = {
     partial: true,
     reasons: ['more than the 100-document candidate cap matched, so some were never considered'],
   },
+  retrievalFloorRejection: { floorPct: 75, measuredPct: 58, embeddingModel: 'text-embedding-3-small' },
   functionCalls: [
     {
       name: 'web_search',

@@ -113,6 +113,24 @@ export const FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE = {
   [OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL]: 58,
 } as const satisfies CosineFloorPctByEmbeddingSpace;
 
+/**
+ * The measured floor that a configured `forcedRetrievalMinSimilarityPct` of `pct` sits above in
+ * `space`, or `undefined` when it does not or nobody has measured `space`. A configured value is
+ * honored in every space, so one above the measured floor can reject the whole band on every turn.
+ * Shared by both settings writers, the admin fields, and forced retrieval's per-turn report.
+ */
+export function forcedRetrievalFloorAboveMeasured(pct: number, space: string): number | undefined {
+  const measured = cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, space);
+  return measured !== undefined && pct > measured ? measured : undefined;
+}
+
+export function forcedRetrievalFloorAboveMeasuredMessage(pct: number, measuredPct: number, space: string): string {
+  return (
+    `${pct}% is above the ${measuredPct}% minimum measured for ${space}, the default embedding model, and can ` +
+    'reject every passage on every turn. Clear the field to use the measured minimum.'
+  );
+}
+
 // The per-space V1 memento floor table this file used to keep alongside the one above was retired
 // when V1 mementos moved to a compile-time embedding pin: the floor is now a single literal,
 // MEMENTO_MIN_SIMILARITY (schemas/embedding.ts), the same way V2's always was. See

@@ -8,7 +8,6 @@ import {
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
   mergeLakeFirstListing,
-  resetForcedRetrievalFloorWarnings,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
@@ -85,11 +84,9 @@ const makeArgs = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-// getSettingsByNames caches process-wide, and so does the over-floor warn-once set; each test's
-// fixture must not see the last one's rows or warnings.
+// getSettingsByNames caches process-wide; each test's fixture must not see the last one's rows.
 beforeEach(() => {
   invalidateSettingsCache();
-  resetForcedRetrievalFloorWarnings();
 });
 describe('ContextSummarizationFeature', () => {
   let contextSummarizeSession: ReturnType<typeof vi.fn>;
@@ -3575,30 +3572,56 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     expect(injected).toEqual([0, 1, 2]);
   });
 
-  it("warns once per process when a configured absolute floor sits above the space's measured floor", async () => {
-    const turn = async () => {
+  const overFloorWarns = (ctx: ReturnType<typeof makeCtx>) =>
+    (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn.mock.calls.filter(c =>
+      String(c[0]).includes('the configured floor is above the 58% measured for this space')
+    ).length;
+
+  it('warns and tells the reader on every turn a configured minimum above the measured one rejects everything', async () => {
+    for (let turn = 0; turn < 2; turn++) {
       const ctx = makeCtx({
-        scores: [0.9, 0.7, 0.6],
+        scores: [0.7, 0.6],
         platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
       });
-      await run(ctx);
-      return (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn.mock.calls.filter(c =>
-        String(c[0]).includes('configured absolute floor 75% is above the 58% measured for embedding space')
-      ).length;
-    };
-    expect(await turn()).toBe(1);
-    expect(await turn()).toBe(0);
+      const { quest, injected } = await run(ctx);
+      expect(injected).toEqual([]);
+      expect(overFloorWarns(ctx)).toBe(1);
+      expect(quest.promptMeta?.retrievalFloorRejection).toEqual({
+        floorPct: 75,
+        measuredPct: 58,
+        embeddingModel: 'text-embedding-3-small',
+      });
+    }
   });
 
-  it('does not warn when a configured absolute floor is at or below the measured floor', async () => {
+  it('stays quiet when a configured minimum above the measured one still lets a passage through', async () => {
     const ctx = makeCtx({
       scores: [0.9, 0.7, 0.6],
+      platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '75' },
+    });
+    const { quest, injected } = await run(ctx);
+    expect(injected).toEqual([0]);
+    expect(overFloorWarns(ctx)).toBe(0);
+    expect(quest.promptMeta?.retrievalFloorRejection).toBeUndefined();
+  });
+
+  it('treats an empty turn under the measured minimum as an ordinary miss: no warn, no reader notice', async () => {
+    const ctx = makeCtx({ scores: [0.5, 0.4], platform: smallSpace });
+    const { quest, injected } = await run(ctx);
+    expect(injected).toEqual([]);
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalled();
+    expect(quest.promptMeta?.retrievalFloorRejection).toBeUndefined();
+  });
+
+  it('does not report a configured minimum at or below the measured one that rejects everything', async () => {
+    const ctx = makeCtx({
+      scores: [0.5, 0.4],
       platform: { ...smallSpace, forcedRetrievalMinSimilarityPct: '58' },
     });
-    await run(ctx);
-    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalledWith(
-      expect.stringContaining('configured absolute floor')
-    );
+    const { quest, injected } = await run(ctx);
+    expect(injected).toEqual([]);
+    expect(overFloorWarns(ctx)).toBe(0);
+    expect(quest.promptMeta?.retrievalFloorRejection).toBeUndefined();
   });
 
   it('reads a whitespace-only relative floor as unset rather than as a floor of 0', async () => {

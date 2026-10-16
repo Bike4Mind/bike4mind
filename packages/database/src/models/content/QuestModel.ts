@@ -195,6 +195,14 @@ const RetrievalCoverageSchema = subSchema({
   reasons: [{ type: String, required: false }],
 });
 
+// Required fields and default: undefined for the reason RetrievalCoverageSchema gives: the client
+// banners a reply on this field's presence.
+const RetrievalFloorRejectionSchema = subSchema({
+  floorPct: { type: Number, required: true },
+  measuredPct: { type: Number, required: true },
+  embeddingModel: { type: String, required: true },
+});
+
 // `content` is deliberately absent - see the exclusion note on the context path below.
 const SystemPromptSourceSchema = subSchema({
   fileId: { type: String, required: false },
@@ -435,6 +443,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     retrieval: { type: RetrievalSummarySchema, required: false, default: undefined },
     // Must stay in sync with the Zod PromptMeta `retrievalCoverage` (parity test enforces it).
     retrievalCoverage: { type: RetrievalCoverageSchema, required: false, default: undefined },
+    // Must stay in sync with the Zod PromptMeta `retrievalFloorRejection` (parity test enforces it).
+    retrievalFloorRejection: { type: RetrievalFloorRejectionSchema, required: false, default: undefined },
     functionCalls: [
       {
         name: { type: String, required: false },
