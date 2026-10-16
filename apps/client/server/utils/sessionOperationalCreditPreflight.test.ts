@@ -169,56 +169,6 @@ describe('checkSessionOperationalCredits', () => {
     expect(mockBillingEnabled).not.toHaveBeenCalled();
   });
 
-  // `pushShareable` shares by bare userId with no org constraint, so a requester holding update
-  // on a shared session can sit outside the holder's org entirely. Second person plus a figure
-  // would address the wrong party and disclose another tenant's balance.
-  it('gives a non-holder requester an impersonal refusal with no balance', async () => {
-    billingOn();
-    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });
-    mockFindOrgById.mockResolvedValue({ id: ORG_ID, currentCredits: 37, userDetails: [] });
-
-    // Underfunded but non-zero, so there is a real balance the message could have leaked.
-    const verdict = await preflight({ requesterId: 'someone-else', operationCount: 40 });
-
-    expect(verdict.allowed).toBe(false);
-    const reason = verdict.allowed === false ? verdict.reason : '';
-    expect(reason).toBe('The owner of this notebook does not have enough credits for session tagging.');
-    expect(reason).not.toContain('37');
-    expect(reason).not.toContain('Your organization');
-  });
-
-  // The cap message tells the reader to contact an administrator they may have no relationship
-  // with, so it is withheld from a non-holder too.
-  it('withholds the per-member cap wording from a non-holder requester', async () => {
-    billingOn();
-    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });
-    mockFindOrgById.mockResolvedValue({
-      id: ORG_ID,
-      currentCredits: 1_000_000,
-      maxCreditsPerMember: 10,
-      userDetails: [{ id: USER_ID, usedCredits: 10, periodStart: new Date() }],
-    });
-
-    const verdict = await preflight({ requesterId: 'someone-else' });
-
-    // The refusal is asserted before its wording: a negative assertion alone would pass just as
-    // happily if the cap stopped refusing at all, which is the regression worth catching here.
-    expect(verdict.allowed).toBe(false);
-    const reason = verdict.allowed === false ? verdict.reason : '';
-    expect(reason).toBe('The owner of this notebook does not have enough credits for session tagging.');
-    expect(reason).not.toContain('administrator');
-  });
-
-  // The common case is requester == owner, where the actionable detail is the whole point.
-  it('keeps the detailed refusal when the requester is the holder', async () => {
-    billingOn();
-    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
-
-    const verdict = await preflight({ requesterId: USER_ID });
-
-    expect(verdict.allowed === false && verdict.reason).toContain('currently have 0 credits');
-  });
-
   // A half-resolved pair would skip the cap and bill the member personally for org usage.
   it('allows when the org read fails, rather than falling back to the member balance', async () => {
     billingOn();

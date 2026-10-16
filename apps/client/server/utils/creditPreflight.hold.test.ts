@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { mocks, balance } = vi.hoisted(() => {
   process.env.B4M_SELF_HOST = 'false';
   return {
-    balance: { current: 0 },
+    balance: { current: 0, failRefund: false },
     mocks: {
       getSettingsMap: vi.fn(),
       createTransaction: vi.fn(),
@@ -19,6 +19,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {
     findById: async (id: string) => ({ id, currentCredits: balance.current }),
     incrementCredits: async (id: string, delta: number) => {
+      if (delta > 0 && balance.failRefund) throw new Error('mongo blip');
       balance.current += delta;
       return { id, currentCredits: balance.current };
     },
@@ -40,6 +41,7 @@ beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.getSettingsMap.mockResolvedValue({});
   mocks.createTransaction.mockResolvedValue(undefined);
+  balance.failRefund = false;
 });
 
 describe('holdPreflightCredits', () => {
@@ -74,6 +76,32 @@ describe('holdPreflightCredits', () => {
 
     await expect(held.settle(50, entry)).resolves.toBe(6);
     expect(balance.current).toBe(0);
+  });
+
+  it('keeps the whole hold, and still writes its ledger row, on a non-finite charge', async () => {
+    balance.current = 10;
+    const held = await hold(6);
+
+    await expect(held.settle(NaN, entry)).resolves.toBe(6);
+
+    expect(balance.current).toBe(4);
+    expect(mocks.createTransaction).toHaveBeenCalledWith(
+      'text_to_speech_usage',
+      expect.objectContaining({ credits: -6 })
+    );
+  });
+
+  it('still writes the ledger row when the over-reserve refund fails', async () => {
+    balance.current = 10;
+    const held = await hold(6);
+    balance.failRefund = true;
+
+    await expect(held.settle(4, entry)).resolves.toBe(4);
+
+    expect(mocks.createTransaction).toHaveBeenCalledWith(
+      'text_to_speech_usage',
+      expect.objectContaining({ credits: -4 })
+    );
   });
 
   it('returns the whole hold when the provider call fails', async () => {

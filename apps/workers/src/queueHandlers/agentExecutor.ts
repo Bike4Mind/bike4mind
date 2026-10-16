@@ -92,6 +92,7 @@ import {
   ServerAgentStore,
   ServerSubagentOrchestrator,
   PARENT_DEADLINE_BUFFER_MS,
+  spentResultOf,
   type ServerSubagentTracker,
   type SubagentHandoffSignal,
   type ChildExecutionStatus,
@@ -1074,7 +1075,9 @@ async function processExecution(
     llm.currentModel = resolvedModelId;
 
     // Pre-flight credit check. With enforcement on, the balance must cover one whole iteration
-    // (nextIterationCredits), the same bar the loop re-checks before every later one.
+    // (nextIterationCredits), the same bar the loop re-checks before every later one. An
+    // aggregation-only wake keeps the plain floor, like the member cap below: its children already
+    // spent from this balance, and refusing it would strand their paid-for results.
     const enforceCredits = (await adminSettingsRepository.getSettingsValue('enforceCredits')) === true;
     // Resumed runs price the next request at the size of the last one they sent.
     let lastInputTokens = isNewExecution
@@ -1083,7 +1086,8 @@ async function processExecution(
     const userCredits = (user as IUserDocument).currentCredits ?? 0;
     const orgCredits = organization?.currentCredits ?? 0;
     const availableCredits = organization ? orgCredits : userCredits;
-    const requiredCredits = enforceCredits && modelInfo ? nextIterationCredits(modelInfo, lastInputTokens) : 0;
+    const gateIterations = enforceCredits && Boolean(modelInfo) && !isAggregationOnlyWake;
+    const requiredCredits = gateIterations && modelInfo ? nextIterationCredits(modelInfo, lastInputTokens) : 0;
     if (availableCredits <= 0 || availableCredits < requiredCredits) {
       logger.warn('[Credits] Insufficient credits to start execution', { availableCredits, requiredCredits });
       await agentExecutionRepository.markFailed(executionId, {
@@ -1534,7 +1538,7 @@ async function processExecution(
         // info, or stack fragments. `timedOut` is a typed signal so downstream
         // consumers don't substring-match `message`.
         await agentExecutionRepository.markFailed(childExecutionId, { message: error, timedOut: isTimeout });
-        // A timed-out subagent spent tokens up to the timeout; they are charged like a completed run's.
+        // A timed-out or failed subagent spent tokens until it ended; they are charged like a completed run's.
         if (partialResult) {
           await chargeSubagentTokens(
             {
@@ -1557,7 +1561,7 @@ async function processExecution(
           childExecutionId,
           error: isTimeout ? 'Subagent timed out' : 'Subagent execution failed',
           isTimeout,
-          partialAnswer: partialResult?.finalAnswer,
+          partialAnswer: isTimeout ? partialResult?.finalAnswer : undefined,
         });
       },
       onLambdaDispatch: async ({ childExecutionId, subagentConfig, depth }) => {
@@ -2679,7 +2683,7 @@ async function processExecution(
 
       // Each iteration settles with an unconditional debit, so stop before one the payer's live
       // balance cannot cover rather than letting the run carry the balance below zero.
-      if (enforceCredits && modelInfo) {
+      if (gateIterations && modelInfo) {
         const holder = organization
           ? await organizationRepository.findById(organization.id)
           : await userRepository.findById((user as IUserDocument).id);
@@ -3798,6 +3802,8 @@ async function processSubagentDispatch(
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     };
+    // Awaited before either terminal write, so a frozen Lambda cannot drop a grandchild's charge.
+    const grandchildCharges: Promise<void>[] = [];
     const foldSubagentMediaUsd = (phase: MediaCostPhase, toolName: string, data: unknown) =>
       foldGeneratedMediaUsd({
         phase,
@@ -3858,22 +3864,25 @@ async function processSubagentDispatch(
       questId: child.linkedQuestId,
       // This subagent's own in-process delegations (no tracker is wired here, so the
       // orchestrator never dispatches them and this is their only charge).
-      onSubagentCredits: (credits, meta) =>
-        void chargeSubagentTokens(
-          {
-            user: user as IUserDocument,
-            organization,
-            sessionId: child.sessionId,
-            questId: child.questId,
-            model: meta?.model ?? child.model,
-            completionInfo: {
-              totalCredits: credits,
-              totalInputTokens: meta?.inputTokens ?? 0,
-              totalOutputTokens: meta?.outputTokens ?? 0,
+      onSubagentCredits: (credits, meta) => {
+        grandchildCharges.push(
+          chargeSubagentTokens(
+            {
+              user: user as IUserDocument,
+              organization,
+              sessionId: child.sessionId,
+              questId: child.questId,
+              model: meta?.model ?? child.model,
+              completionInfo: {
+                totalCredits: credits,
+                totalInputTokens: meta?.inputTokens ?? 0,
+                totalOutputTokens: meta?.outputTokens ?? 0,
+              },
             },
-          },
-          logger
-        ),
+            logger
+          )
+        );
+      },
     };
     const subagentToolConfig = buildSubagentToolConfig({
       model: childModel,
@@ -4140,6 +4149,7 @@ async function processSubagentDispatch(
       // settlement round trips would otherwise relabel a completed run as aborted/timed out.
       const runAborted = abortController.signal.aborted;
       await settleMediaCost();
+      await Promise.all(grandchildCharges);
       const credits = result.completionInfo.totalCredits ?? 0;
       // Every exit with a result (completed, aborted, timed out) spent these tokens.
       await chargeSubagentTokens(
@@ -4253,6 +4263,21 @@ async function processSubagentDispatch(
       // Read before settling, for the same poller race as the success path above.
       const signalAborted = abortController.signal.aborted;
       await settleMediaCost();
+      await Promise.all(grandchildCharges);
+      const spent = spentResultOf(err);
+      if (spent) {
+        await chargeSubagentTokens(
+          {
+            user: user as IUserDocument,
+            organization,
+            sessionId: child.sessionId,
+            questId: child.questId,
+            model: spent.model,
+            completionInfo: spent.completionInfo,
+          },
+          logger
+        );
+      }
       const errorMessage = err instanceof Error ? err.message : String(err);
       // Three failure shapes can reach this catch:
       //   1. Our own abort fired during the run and the orchestrator threw

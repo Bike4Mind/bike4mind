@@ -24,7 +24,6 @@ const handler = baseApi().post<Request<{}, unknown, unknown, { id: string }>>(as
   // Billed to whoever asked (payerId below), never the owner on a sharee's behalf.
   await assertSessionOperationalCredits({
     userId: req.user!.id,
-    requesterId: req.user?.id,
     operationCount: OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
     operation: 'session summarization',
     logger: req.logger,

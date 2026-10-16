@@ -106,18 +106,34 @@ export async function holdPreflightCredits(
   }
 
   return {
+    // Mirrors creditService.settleCreditHold, which cannot write these two ledger types
+    // (deductCreditsWithOrgSupport has no TTS/STT row); subtractCredits does.
     async settle(credits, entry) {
-      const charged = hold ? Math.min(Math.max(credits, 0), hold.reservedCredits) : Math.max(credits, 0);
-      try {
-        let currentCreditHolder: { currentCredits: number } | undefined;
-        if (hold) {
-          const overReserved = hold.reservedCredits - charged;
-          currentCreditHolder = (overReserved > 0
-            ? await userRepository.incrementCredits(userId, overReserved)
-            : null) ?? {
-            currentCredits: hold.balanceAfterHold,
-          };
+      if (!Number.isFinite(credits)) {
+        logger.error(`${featureLabel} settled with a non-finite charge - keeping the full reservation`, {
+          userId,
+          credits: String(credits),
+        });
+      }
+      const requested = Number.isFinite(credits) ? Math.max(credits, 0) : (hold?.reservedCredits ?? 0);
+      const charged = hold ? Math.min(requested, hold.reservedCredits) : requested;
+      let currentCreditHolder: { currentCredits: number } | undefined;
+      if (hold) {
+        currentCreditHolder = { currentCredits: hold.balanceAfterHold };
+        const overReserved = hold.reservedCredits - charged;
+        if (overReserved > 0) {
+          try {
+            currentCreditHolder = (await userRepository.incrementCredits(userId, overReserved)) ?? currentCreditHolder;
+          } catch (err) {
+            logger.error(`${featureLabel} over-reserved credit refund failed - caller over-charged`, {
+              userId,
+              overReserved,
+              err,
+            });
+          }
         }
+      }
+      try {
         if (charged > 0) {
           await creditService.subtractCredits(
             { ...entry, ownerId: userId, ownerType: CreditHolderType.User, credits: charged },

@@ -89,6 +89,8 @@ vi.mock('@bike4mind/services/llm', async () => {
     resolveToolAvailability: vi.fn().mockResolvedValue({}),
     buildSharedTools: (...args: unknown[]) => buildSharedToolsMock(...args),
     ServerSubagentOrchestrator: MockOrchestrator,
+    // The real one reads a private symbol the orchestrator sets; the mock orchestrator throws `spent`.
+    spentResultOf: (err: unknown) => (err as { spent?: unknown } | undefined)?.spent,
   };
 });
 
@@ -191,6 +193,17 @@ describe('processSubagentDispatch admission and billing', () => {
         outputTokens: 5,
         questId: 'quest-1',
       }),
+      expect.anything()
+    );
+  });
+
+  it('charges what a subagent spent before it failed', async () => {
+    delegateToAgentMock.mockRejectedValue(Object.assign(new Error('provider 500'), { spent: childResult }));
+
+    await dispatch();
+
+    expect(deductCreditsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'text_generation_usage', credits: 7, inputTokens: 10, outputTokens: 5 }),
       expect.anything()
     );
   });

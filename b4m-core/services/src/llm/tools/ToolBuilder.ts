@@ -472,6 +472,9 @@ export interface BuildToolPromptArgs {
   extraContextMessages: ExtraContextMessage[];
 }
 
+// The tools whose onToolStart records a gate estimate (gateImageCredits, gateAudioCredits).
+const GATED_TOOL_NAMES = new Set(['image_generation', 'edit_image', 'audio_generation']);
+
 export class ToolBuilder {
   constructor(private readonly deps: ToolBuilderConfig) {}
 
@@ -512,10 +515,31 @@ export class ToolBuilder {
 
   /**
    * Gate estimates of calls that passed onToolStart and have not settled yet, per tool name in
-   * call order, so calls running in parallel in one turn each see the others. A call that fails
-   * keeps its entry: that can only refuse a later call in this turn, never let one overdraw.
+   * call order, so calls running in parallel in one turn each see the others. A call that ends
+   * without settling (a provider error) drops one when it returns (trackGatedCalls).
    */
   private readonly gatedToolCredits = new Map<string, number[]>();
+  private readonly inFlightToolCalls = new Map<string, number>();
+
+  /** Keeps no more gate estimates for a tool than it has calls still running. */
+  private trackGatedCalls(tools: ICompletionOptionTools[] | undefined): ICompletionOptionTools[] | undefined {
+    return tools?.map(tool => {
+      const name = tool.toolSchema.name;
+      if (!GATED_TOOL_NAMES.has(name)) return tool;
+      const toolFn: ICompletionOptionTools['toolFn'] = async (...args) => {
+        this.inFlightToolCalls.set(name, (this.inFlightToolCalls.get(name) ?? 0) + 1);
+        try {
+          return await tool.toolFn(...args);
+        } finally {
+          const inFlight = (this.inFlightToolCalls.get(name) ?? 1) - 1;
+          this.inFlightToolCalls.set(name, inFlight);
+          const gated = this.gatedToolCredits.get(name);
+          if (gated && gated.length > inFlight) gated.splice(0, gated.length - inFlight);
+        }
+      };
+      return { ...tool, toolFn };
+    });
+  }
 
   /** Credits this turn has committed to tool calls: settled charges plus in-flight gate estimates. */
   private committedToolCredits(): number {
@@ -884,7 +908,7 @@ export class ToolBuilder {
     externalTools,
     toolAvailability,
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
-    return buildSharedTools(
+    const tools = buildSharedTools(
       {
         userId: this.deps.user.id,
         user: this.deps.user,
@@ -1098,6 +1122,7 @@ export class ToolBuilder {
         toolAvailability,
       }
     );
+    return this.trackGatedCalls(tools);
   }
 
   /**

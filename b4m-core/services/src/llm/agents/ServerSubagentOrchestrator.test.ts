@@ -7,6 +7,7 @@ import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
 import {
   ServerSubagentOrchestrator,
+  spentResultOf,
   type ServerSubagentTracker,
   type SubagentHandoffSignal,
   type ChildExecutionStatus,
@@ -641,6 +642,37 @@ describe('ServerSubagentOrchestrator', () => {
 
       expect(result.summary).toContain('Partial results');
       expect(result.completionInfo.totalCredits).toBeCloseTo(
+        usdToCredits(getTextModelCost(model, 12_000, 3_000, 0, 0)),
+        10
+      );
+    });
+
+    it('carries the priced tokens a failed run spent on the error, so its payer can be charged', async () => {
+      vi.spyOn(ReActAgent.prototype, 'run').mockRejectedValue(new Error('provider 500'));
+      vi.spyOn(ReActAgent.prototype, 'toCheckpoint').mockReturnValue({
+        totalTokens: 15_000,
+        totalInputTokens: 12_000,
+        totalOutputTokens: 3_000,
+        totalCacheReadTokens: 0,
+        totalCacheWriteTokens: 0,
+        turnUsage: [],
+        totalCredits: 0,
+      } as unknown as ReturnType<ReActAgent['toCheckpoint']>);
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+      });
+
+      const error = await orchestrator
+        .delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: MODEL_ID }), thoroughness: 'medium' })
+        .catch((err: unknown) => err);
+
+      expect((error as Error).message).toBe('provider 500');
+      expect(spentResultOf(error)?.completionInfo.totalCredits).toBeCloseTo(
         usdToCredits(getTextModelCost(model, 12_000, 3_000, 0, 0)),
         10
       );

@@ -357,6 +357,21 @@ describe('processExecution tool deps', () => {
       expect(markFailed).toHaveBeenCalledWith('exec-1', { message: 'Insufficient credits to run agent execution' });
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
     });
+
+    // Its children already spent from this balance; refusing the wake would strand their results.
+    it('admits a DAG aggregation wake whose balance is short of a full iteration', async () => {
+      const wake = {
+        ...execDoc,
+        status: 'awaiting_dag_children',
+        dagSpec: { nodes: [] },
+        waitingOnDagChildren: { toolUseId: 'tool-1' },
+      };
+      const { markFailed } = await admitWith({ credits: 1, doc: wake });
+
+      expect(markFailed).not.toHaveBeenCalledWith('exec-1', {
+        message: 'Insufficient credits to run agent execution',
+      });
+    });
   });
 
   describe('model access and subagent billing', () => {

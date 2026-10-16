@@ -6805,10 +6805,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     }
   }
 
-  /**
-   * Get setting value with default fallback.
-   * Works with both default settings and real admin settings.
-   */
   private async buildOptimizedFeatures(
     adminSettings: Record<string, string>,
     enableQuestMaster: boolean,

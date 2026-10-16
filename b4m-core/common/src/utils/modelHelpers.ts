@@ -206,7 +206,7 @@ export function isModelAccessible(
 /**
  * The catalog models a user may run: not disabled, and accessible under the admin
  * `llmModelConfigurations` row when one exists (a model with no row is unrestricted).
- * The same rule `ChatCompletionInvoke` applies to a chat turn's model.
+ * Mirrors the rule `ChatCompletionInvoke` applies inline to a chat turn's model; keep the two in sync.
  */
 export function filterRunnableModels(
   models: ModelInfo[],

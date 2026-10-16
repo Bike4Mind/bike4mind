@@ -4,10 +4,8 @@
  * covers the arguments, which the helper cannot check for itself and which a reader cannot infer
  * from a green unit suite.
  *
- * The load-bearing one is the holder: `userId` must be the SESSION OWNER and `requesterId` the
- * caller. Both are strings on the same request, so swapping them type-checks, passes every unit
- * test, and silently gates the wrong balance in both directions - a broke requester blocking a
- * funded owner's summary, and a broke owner's work billed against a funded requester.
+ * The load-bearing one is the holder: `userId` must be the CALLER, the payer the queued job bills,
+ * never the session owner on a sharee's behalf.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -83,7 +81,6 @@ describe('session operational credit pre-flight wiring', () => {
       expect(mockAssertCredits).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: REQUESTER_ID,
-          requesterId: REQUESTER_ID,
           operationCount: 1,
           operation: 'session tagging',
         })
@@ -133,7 +130,6 @@ describe('session operational credit pre-flight wiring', () => {
       expect(mockAssertCredits).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: REQUESTER_ID,
-          requesterId: REQUESTER_ID,
           operationCount: 2,
           operation: 'session summarization',
         })

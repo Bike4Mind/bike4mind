@@ -30,16 +30,6 @@ export interface SessionOperationalCreditPreflightArgs {
    * Scales the requirement, so a 500-notebook fan-out is not gated like a single tag.
    */
   operationCount: number;
-  /**
-   * Who is asking, when the caller knows. Decides how much of the refusal is safe to say:
-   * `pushShareable` shares by bare userId with no org constraint, so a requester holding
-   * update on a shared session can be outside the holder's organization entirely. Second
-   * person ("Your organization ... has 37 credits") would then both address the wrong party
-   * and disclose another tenant's balance, so a non-holder gets an impersonal reason with no
-   * figures. Omit it on a path whose reason never reaches a client (the fan-out logs its
-   * refusals for ops, where the figures are the point).
-   */
-  requesterId?: string;
   /** Named in the refusal message, e.g. 'session tagging'. */
   operation: string;
   logger?: Logger;
@@ -135,18 +125,14 @@ function resolveRefusalReason({
   billingOrg,
   userId,
   requiredCredits,
-  requesterIsHolder,
   operation,
 }: {
   billingUser: BillingUser;
   billingOrg: BillingOrg;
   userId: string;
   requiredCredits: number;
-  requesterIsHolder: boolean;
   operation: string;
 }): string | null {
-  const crossHolderReason = `The owner of this notebook does not have enough credits for ${operation}.`;
-
   // Cap before pool: a capped member must be refused even when the org pool is flush. Mirrors
   // the RESERVATION pre-flights, which are the only place the cap is ever enforced -
   // semantic-search.ts:496 and music.ts:129 in this app, ChatCompletionProcess.ts:3661 and
@@ -156,15 +142,11 @@ function resolveRefusalReason({
   // could never trip again). That is the same reason the cap cannot live in
   // recordOperationalUsage, and therefore the reason this pre-flight exists.
   if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, userId, requiredCredits)) {
-    // "Contact your organization administrator" is only actionable for a member of that org.
-    return requesterIsHolder
-      ? `Your organization member credit limit has been reached for ${operation}. Contact your organization administrator.`
-      : crossHolderReason;
+    return `Your organization member credit limit has been reached for ${operation}. Contact your organization administrator.`;
   }
 
   const availableCredits = (billingOrg ?? billingUser).currentCredits ?? 0;
   if (availableCredits >= requiredCredits) return null;
-  if (!requesterIsHolder) return crossHolderReason;
   return billingOrg
     ? `Your organization does not have enough credits for ${operation}. It currently has ${availableCredits} credits and this requires at least ${requiredCredits}.`
     : `You do not have enough credits for ${operation}. You currently have ${availableCredits} credits and this requires at least ${requiredCredits}.`;
@@ -195,7 +177,6 @@ export async function checkSessionOperationalCredits({
   userId,
   operationCount,
   operation,
-  requesterId,
   logger,
 }: SessionOperationalCreditPreflightArgs): Promise<SessionOperationalCreditVerdict> {
   if (operationCount <= 0) return { allowed: true };
@@ -245,17 +226,11 @@ export async function checkSessionOperationalCredits({
 
   const requiredCredits = operationCount * MIN_CREDITS_PER_OPERATION;
 
-  // Everything second-person, and every figure, is scoped to the requester being the holder.
-  // A caller that cannot say who is asking is treated as the holder, which is the pre-existing
-  // wording; the entry points that can face a cross-tenant share all pass requesterId.
-  const requesterIsHolder = requesterId === undefined || requesterId === userId;
-
   const refusalReason = resolveRefusalReason({
     billingUser,
     billingOrg,
     userId,
     requiredCredits,
-    requesterIsHolder,
     operation,
   });
   if (!refusalReason) return { allowed: true };

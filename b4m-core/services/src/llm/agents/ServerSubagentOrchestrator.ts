@@ -400,6 +400,15 @@ export interface ServerAgentExecutionResult extends AgentResult {
  * server/Lambda environments. No hooks, no background execution,
  * no permission prompts, no filesystem-based agent loading.
  */
+const SPENT_RESULT = Symbol('subagentSpentResult');
+
+/** The usage a delegateToAgent run spent before it threw, so the caller can bill it. */
+export function spentResultOf(error: unknown): ServerAgentExecutionResult | undefined {
+  return error instanceof Error
+    ? (error as Error & { [SPENT_RESULT]?: ServerAgentExecutionResult })[SPENT_RESULT]
+    : undefined;
+}
+
 export class ServerSubagentOrchestrator {
   private deps: ServerOrchestratorDeps;
 
@@ -513,7 +522,7 @@ export class ServerSubagentOrchestrator {
         // Model absent from availableModels: credits stay unset and the delegation's
         // cost is lost from the usage events. Warn so the miss rate is observable (#152).
         this.deps.logger.warn(
-          `🤖⚠️ [SubagentOrchestrator] cannot compute credits: model "${effectiveModel}" not in availableModels`
+          `[SubagentOrchestrator] cannot compute credits: model "${effectiveModel}" not in availableModels`
         );
       }
     }
@@ -762,6 +771,23 @@ export class ServerSubagentOrchestrator {
       // Graceful timeout handling: return partial results instead of losing all work
       const isAbortError = error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'));
 
+      // The tokens spent before the run ended are billed like a completed run's, whether it timed
+      // out or failed.
+      const usage = agent.toCheckpoint();
+      const spent: AgentResult['completionInfo'] = {
+        totalTokens: usage.totalTokens,
+        totalInputTokens: usage.totalInputTokens,
+        totalOutputTokens: usage.totalOutputTokens,
+        totalCacheReadTokens: usage.totalCacheReadTokens,
+        totalCacheWriteTokens: usage.totalCacheWriteTokens,
+        turnUsage: usage.turnUsage,
+        totalCredits: usage.totalCredits > 0 ? usage.totalCredits : undefined,
+        iterations: 0,
+        toolCalls: agent.getToolCallCount(),
+        reachedMaxIterations: false,
+      };
+      this.priceCompletion(spent, effectiveModel);
+
       if (isAbortError) {
         const duration = Date.now() - startTime;
         this.deps.logger.warn(
@@ -776,25 +802,11 @@ export class ServerSubagentOrchestrator {
             .map(s => s.content)
             .join('\n\n') || 'Agent timed out before producing results.';
 
-        // The tokens spent before the timeout are billed like a completed run's.
-        const usage = agent.toCheckpoint();
         const partialResult: AgentResult = {
           finalAnswer: partialAnswer,
           steps: agent.getSteps(),
-          completionInfo: {
-            totalTokens: usage.totalTokens,
-            totalInputTokens: usage.totalInputTokens,
-            totalOutputTokens: usage.totalOutputTokens,
-            totalCacheReadTokens: usage.totalCacheReadTokens,
-            totalCacheWriteTokens: usage.totalCacheWriteTokens,
-            turnUsage: usage.turnUsage,
-            totalCredits: usage.totalCredits > 0 ? usage.totalCredits : undefined,
-            iterations: 0,
-            toolCalls: agent.getToolCallCount(),
-            reachedMaxIterations: false,
-          },
+          completionInfo: spent,
         };
-        this.priceCompletion(partialResult.completionInfo, effectiveModel);
 
         const summary = this.summarizeResult(partialResult, agentDef);
         const partialServerResult: ServerAgentExecutionResult = {
@@ -823,13 +835,24 @@ export class ServerSubagentOrchestrator {
         return partialServerResult;
       }
 
-      // Non-abort error - notify tracker, then rethrow
+      // Non-abort error - notify tracker, then rethrow, carrying what the run spent for its payer.
+      const failedResult: ServerAgentExecutionResult = {
+        finalAnswer: '',
+        steps: agent.getSteps(),
+        completionInfo: spent,
+        agentName: agentDef.name,
+        thoroughness: effectiveThoroughness,
+        summary: '',
+        model: effectiveModel,
+      };
+      if (error instanceof Error) Object.assign(error, { [SPENT_RESULT]: failedResult });
       if (this.deps.tracker && childExecutionId) {
         try {
           await this.deps.tracker.onFailure({
             childExecutionId,
             error: error instanceof Error ? error.message : String(error),
             isTimeout: false,
+            partialResult: failedResult,
           });
         } catch (err) {
           this.deps.logger.warn(

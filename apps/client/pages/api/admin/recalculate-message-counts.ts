@@ -116,7 +116,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
         await assertSessionOperationalCredits({
           userId,
-          requesterId: userId,
           operationCount: ungroomedCounts.reduce((total, count) => total + count, 0),
           operation: 'notebook grooming',
           logger: req.logger,

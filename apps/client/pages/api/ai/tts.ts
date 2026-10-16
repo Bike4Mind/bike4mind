@@ -120,7 +120,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
 
     // Charge for the successful synthesis before delivery: the provider cost is
     // already incurred however the bytes end up being returned.
-    if (userId && hold) {
+    if (hold) {
       const settling = hold;
       hold = undefined;
       await deductTtsCredits({

@@ -67,6 +67,25 @@ describe('ToolBuilder.gateImageCredits', () => {
     expect(mockValidateUserCredits.mock.calls.map(call => call[6])).toEqual([0, 400, 800]);
   });
 
+  it('drops the estimate of a call that fails before settling, so a retry is not refused', async () => {
+    const { builder } = makeBuilder();
+    type Tracked = { toolFn: (val: unknown) => Promise<unknown> };
+    const [tool] = (builder as unknown as { trackGatedCalls(tools: unknown[]): Tracked[] }).trackGatedCalls([
+      {
+        toolSchema: { name: 'image_generation' },
+        toolFn: async () => {
+          await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
+          throw new Error('content policy');
+        },
+      },
+    ]);
+
+    await expect(tool.toolFn({})).rejects.toThrow('content policy');
+    await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
+
+    expect(mockValidateUserCredits.mock.calls.map(call => call[6])).toEqual([0, 0]);
+  });
+
   it('checks affordability without reserving anything', async () => {
     const { builder, toolCreditsMap, record } = makeBuilder();
 
