@@ -14,7 +14,7 @@ import type { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
  * One contract is consumed by three independent derivations:
  *   1. the OpenAPI registrar (openapi/registerContract.ts) -> the spec + docs,
  *   2. the Next.js route adapter (server/middlewares/defineNextRoute.ts),
- *   3. the Lambda route adapter (apps/workers/src/cli/defineLambdaRoute.ts).
+ *   3. the Lambda route adapter (server/cli/defineLambdaRoute.ts).
  * Define once; derive everything. Nothing can drift because there is one source.
  */
 export type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete';
@@ -192,7 +192,7 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * zod-to-openapi's `request.params` accepts.
    *
    * Next-only today: `defineNextRoute.ts`'s adapter is the only one that reads this
-   * field. The Lambda adapter (`apps/workers/src/cli/defineLambdaRoute.ts`) does not validate
+   * field. The Lambda adapter (`server/cli/defineLambdaRoute.ts`) does not validate
    * path params yet - a `{id}`-style contract served over a Function URL gets no
    * param validation there until that adapter is taught to read `pathParams` too.
    */
@@ -221,7 +221,7 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * guarantee - see `registerContract.test.ts`.
    *
    * Next-only today: `defineNextRoute.ts`'s adapter is the only one that reads this
-   * field. The Lambda adapter (`apps/workers/src/cli/defineLambdaRoute.ts`) does not validate
+   * field. The Lambda adapter (`server/cli/defineLambdaRoute.ts`) does not validate
    * query params yet, matching its existing `pathParams` gap.
    */
   queryParams?: z.ZodObject<z.ZodRawShape>;
