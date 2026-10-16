@@ -91,7 +91,7 @@ export async function applySignupDomainGrant(params: {
     }
   } catch (resolveError) {
     logger.error(`Signup domain grant could not be resolved for user ${userId} (${trigger})`, resolveError);
-    return NO_GRANT;
+    return { ...NO_GRANT, tagsApplied: [] };
   }
 
   const result: SignupDomainGrantResult = { ...NO_GRANT, tagsApplied: [] };
