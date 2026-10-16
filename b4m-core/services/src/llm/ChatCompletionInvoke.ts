@@ -238,7 +238,11 @@ export class ChatCompletionInvoke {
     // Initialize promptMeta for this completion attempt.
     const promptMeta: Partial<PromptMeta> = {
       model: {
-        name: model.id,
+        // A redirect resolved above keeps the requested id in `name` and the successor in
+        // `answeredBy`, matching what ChatCompletionProcess records for a redirect it resolves
+        // itself; the remaining fields describe the model that runs.
+        name: params.model,
+        ...(model.id !== params.model ? { answeredBy: model.id } : {}),
         type: modelType,
         backend: model?.backend,
         contextWindow: model?.contextWindow,
