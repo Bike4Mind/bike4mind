@@ -22,6 +22,18 @@ describe('answerCostBreakdown', () => {
     expect(formatCostParts(parts)).toBe('Chat 64 + Image Generation 120');
   });
 
+  it('prices the chat share against the model that answered a redirected turn', () => {
+    const parts = answerCostBreakdown(
+      meta({
+        model: { name: 'requested-model', answeredBy: 'successor-model' },
+        tokenUsage: { creditsUsed: 64 },
+        functionCalls: [{ name: 'image_generation', creditsUsed: 120, parameters: {} }],
+      }),
+      label
+    );
+    expect(parts[0]).toEqual({ label: 'Chat', credits: 64, model: 'successor-model' });
+  });
+
   it('is empty when no tool charged, so a chat-only answer keeps its single total', () => {
     expect(
       answerCostBreakdown(

@@ -184,3 +184,50 @@ describe('PromptMetaInspector timestamps', () => {
     expect(screen.getByText(/Updated: 2026-03-10/)).toBeTruthy();
   });
 });
+
+describe('PromptMetaInspector answered-by reporting', () => {
+  beforeEach(() => {
+    usePromptMetaInspector.getState().setPromptMeta(null);
+  });
+
+  const copiedMarkdown = () => {
+    const writeText = vi.fn();
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('prompt-meta-copy-md-btn'));
+    return writeText.mock.calls[0][0] as string;
+  };
+
+  it('flags the model that answered when a redirect replaced the requested one', () => {
+    show({ model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' } });
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('prompt-meta-answered-by-chip')).toHaveTextContent('Answered by gemini-3.5-flash');
+  });
+
+  it('shows no answered-by chip when nothing but the requested model answered', () => {
+    show({ model: { name: 'gemini-2.5-pro' } });
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+
+    expect(screen.queryByTestId('prompt-meta-answered-by-chip')).toBeNull();
+  });
+
+  it('does not repeat the model name when a fallback hop made answeredBy equal name', () => {
+    show({ model: { name: 'gpt-5', answeredBy: 'gpt-5' } });
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+
+    expect(screen.queryByTestId('prompt-meta-answered-by-chip')).toBeNull();
+  });
+
+  it('adds an Answered by line to the markdown report only when the model differs', () => {
+    show({ model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-3.5-flash' } });
+
+    expect(copiedMarkdown()).toContain('- **Answered by**: gemini-3.5-flash');
+  });
+
+  it('omits the Answered by line when the answering model is the requested one', () => {
+    show({ model: { name: 'gemini-2.5-pro', answeredBy: 'gemini-2.5-pro' } });
+
+    expect(copiedMarkdown()).not.toContain('Answered by');
+  });
+});
