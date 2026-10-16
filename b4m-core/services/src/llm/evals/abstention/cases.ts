@@ -89,6 +89,19 @@ export const ABSTENTION_CASES: AbstentionCase[] = [
     },
   },
   {
+    id: 'attachment-turn/no_match',
+    finding: 'no_match',
+    history: [
+      { role: 'user', content: 'Take a look at this draft.' },
+      { role: 'assistant', content: 'I have it in front of me.' },
+    ],
+    message: 'summarize the attached figure',
+    expectation: {
+      kind: 'mustNotMentionCoverage',
+      why: 'A lake-chosen chat now gets the block on an attachment turn too. The question is about the attachment, so an unprompted line about library coverage is the false positive to catch.',
+    },
+  },
+  {
     id: 'library-question/unavailable',
     finding: 'unavailable',
     message: 'What does our security policy say about password rotation?',
