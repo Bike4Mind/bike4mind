@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { applyAppIdentity, DEV_APP_NAME } from './appIdentity';
@@ -38,5 +39,11 @@ describe('applyAppIdentity', () => {
     expect(manifest).not.toHaveProperty('productName');
     expect(manifest.name).toBe('@bike4mind/desktop');
     expect(DEV_APP_NAME).not.toBe(manifest.name);
+  });
+
+  // A reorder (or an import sorter) would let another module resolve userData first.
+  it('is the first import in the main entry point', () => {
+    const source = readFileSync(join(__dirname, 'index.ts'), 'utf8');
+    expect(source.match(/^import .*$/m)?.[0]).toBe("import './bootstrapIdentity';");
   });
 });
