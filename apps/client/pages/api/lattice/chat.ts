@@ -23,10 +23,10 @@ import {
   settleCompletion,
   type CompletionUsage,
 } from '@server/billing/meterPlatformCompletion';
-import { ChatModels, type IMessage, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, ForbiddenError, type IMessage, type ModelInfo } from '@bike4mind/common';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
-import { ForbiddenError, getSettingsByNames } from '@bike4mind/utils';
+import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import type { ICompletionOptionTools, CompletionInfo } from '@bike4mind/llm-adapters/backend';
@@ -378,6 +378,7 @@ const handler = baseApi({ auth: true }).post(
     ];
 
     const maxTokens = 4096;
+    // Leaves out LATTICE_TOOLS' schemas (~1-2k input tokens); the full maxTokens term dwarfs them.
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
     const reservation = await reserveCompletionCredits(req, ceilingUsd, 'Lattice chat');
 
@@ -412,6 +413,7 @@ const handler = baseApi({ auth: true }).post(
 
     // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
     const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
+    if (!reported) logger.warn(`[Lattice Chat] ${modelInfo.id} reported no usage; charging the reservation ceiling`);
     await settleCompletion(reservation, req, {
       model: modelInfo.id,
       usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,

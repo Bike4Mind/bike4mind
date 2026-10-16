@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { IncomingHttpHeaders } from 'http';
 import {
+  ForbiddenError,
   getTextModelCost,
   getTurnsCost,
   type IMessage,
@@ -12,7 +13,6 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import type { CompletionInfo } from '@bike4mind/llm-adapters/backend';
 import { estimateInputTokens } from '@bike4mind/services/cliCompletions';
 import {
-  ForbiddenError,
   getSettingsMap,
   getSettingsValue,
   isModelAccessible,
@@ -125,7 +125,7 @@ export function settleCompletion(
     sessionId: charge.sessionId ?? randomUUID(),
     model: charge.model,
     apiKeyId: req.apiKeyInfo?.keyId,
-    // Web JWT calls keep the ledger default; resolveRequestUsageSource would label them 'api'.
+    // Web JWT calls keep the ledger's 'web' default; resolveRequestUsageSource would label them 'api'.
     source: req.apiKeyInfo ? resolveRequestUsageSource(req) : undefined,
     inputTokens: charge.inputTokens,
     outputTokens: charge.outputTokens,
