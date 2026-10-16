@@ -45,6 +45,8 @@ export function confirmingServerOf(toolName: string): string | undefined {
 }
 
 const CONFIRM_NEXT_STEP = 'Click the Confirm or Cancel button below to proceed.';
+const NO_CONFIRM_NEXT_STEP =
+  'Not executed: this change needs a Confirm click that this run cannot show. Tell the user what would change; do not ask them to click a button.';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -107,4 +109,18 @@ export function extractMcpPendingAction(emittingTool: string, result: unknown): 
 
   const forModel = 'next_step' in parsed ? { ...parsed, next_step: CONFIRM_NEXT_STEP } : parsed;
   return { kind: 'accepted', action, result: withoutToken(forModel) };
+}
+
+/** For a run that renders no Confirm card (gated subagents): strips a preview's token and rewrites its
+ * `next_step` so the model does not send the user to a button. Any other result passes through. */
+export function withoutConfirmPrompt<T>(result: T): T | string {
+  if (typeof result !== 'string' || !result.includes('_confirmToken')) return result;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result);
+  } catch {
+    return result;
+  }
+  if (!isRecord(parsed) || !('_confirmToken' in parsed)) return result;
+  return withoutToken('next_step' in parsed ? { ...parsed, next_step: NO_CONFIRM_NEXT_STEP } : parsed);
 }

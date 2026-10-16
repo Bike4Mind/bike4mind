@@ -11,7 +11,7 @@ import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
 import { MemberCreditCapError } from '../../creditService';
-import { confirmingServerOf } from '../mcpPendingAction';
+import { confirmingServerOf, withoutConfirmPrompt } from '../mcpPendingAction';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -43,8 +43,7 @@ export type SubagentToolPermissions = {
  * claims the server via `exclusiveMcpServers` (`claimedServers`). Those tools are agent-only, so the
  * parent never holds them and could never take the step back. Their writes only preview and
  * execute on the user's Confirm click, which is the approval the gate would otherwise ask for.
- * `exclusiveMcpServers` is also settable on user/org agents, so a custom agent claiming one of
- * these servers gets the same approval-free reads; writes still preview. A denied tool is still refused.
+ * Custom agents can claim these servers too. A denied tool is still refused.
  */
 export function gateSubagentTools(
   tools: ICompletionOptionTools[],
@@ -61,7 +60,9 @@ export function gateSubagentTools(
       const confirmingServer = confirmingServerOf(toolName);
       const isClaimedConfirmingTool = confirmingServer !== undefined && claimedServers.includes(confirmingServer);
       if (verdict === 'allowed' || (verdict === 'needs_approval' && isClaimedConfirmingTool)) {
-        return tool.toolFn(parameters, apiKey);
+        const result = await tool.toolFn(parameters, apiKey);
+        // A gated child has no Confirm card, so a write preview must not point the model at one.
+        return confirmingServer ? withoutConfirmPrompt(result) : result;
       }
 
       logger.warn(`[SubagentOrchestrator] Refused subagent call to "${toolName}" (${verdict})`);

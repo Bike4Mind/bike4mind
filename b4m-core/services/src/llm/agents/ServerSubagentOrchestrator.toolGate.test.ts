@@ -143,6 +143,20 @@ describe('gateSubagentTools', () => {
     expect(ran).toEqual([]);
   });
 
+  it('rewrites a confirming tool write preview so the model is not sent to a Confirm button', async () => {
+    const preview = JSON.stringify({
+      action: 'preview',
+      next_step: 'Click the Confirm button below.',
+      _confirmToken: 't',
+    });
+    const tool: ICompletionOptionTools = { ...makeTool('github__create_issue'), toolFn: async () => preview };
+    const [gated] = gateSubagentTools([tool], { approvedTools: [], deniedTools: [] }, makeLogger(), ['github']);
+
+    const forModel = JSON.parse(await gated.toolFn({}));
+    expect(forModel).not.toHaveProperty('_confirmToken');
+    expect(forModel.next_step).toMatch(/^Not executed/);
+  });
+
   it('runs a confirming server tool for an agent that claims only that server', async () => {
     expect(await runGated('github__list_issues', [], [], ['github'])).toBe('github__list_issues ok');
   });
