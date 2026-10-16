@@ -72,6 +72,36 @@ export function isTransientTransactionError(error: unknown): boolean {
   return transientCodes.includes(mongoError.code ?? -1);
 }
 
+const CONNECTION_LOST_ERROR_NAMES = ['MongoNetworkError', 'MongoNetworkTimeoutError', 'MongoServerSelectionError'];
+
+/**
+ * True when the operation failed because the client had no usable server, not because the server
+ * rejected it: mongoose's command-buffering timeout, a server-selection timeout, or a network error.
+ * Matched by name because more than one copy of the driver can be installed.
+ */
+export function isConnectionLostError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const { name, message } = error as { name?: unknown; message?: unknown };
+  if (typeof name !== 'string') return false;
+  if (CONNECTION_LOST_ERROR_NAMES.includes(name)) return true;
+  return name === 'MongooseError' && typeof message === 'string' && message.includes('buffering timed out');
+}
+
+/**
+ * Makes the driver re-check its servers now instead of at the next heartbeat: a pending server
+ * selection requests an immediate monitor check, and mongoose releases buffered commands as soon as
+ * a primary is back.
+ */
+const reselectServer = async (logger?: Logger): Promise<void> => {
+  try {
+    await mongoose.connection.getClient().db().command({ ping: 1 });
+  } catch (error) {
+    logger?.warn('Database ping failed while recovering the connection', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
+
 /** `overrides` is merged last, e.g. `{ autoIndex: false }` for a read-only script. */
 export const connectDB = async (url: string, logger?: Logger, overrides?: ConnectOptions) => {
   logger ??= Logger.withMetadata({});
@@ -176,6 +206,8 @@ export const getDB = () => {
  * - Only retries on TransientTransactionError (e.g., WriteConflict)
  * - Uses exponential backoff with 25% jitter to prevent thundering herd
  * - Conservative retry count (2) since MongoDB driver already retries internally
+ * - With `retryOnConnectionLoss`, also retries a lost connection (see `isConnectionLostError`) after
+ *   forcing the driver to re-check its servers
  *
  * @param fn - The transaction callback (must be idempotent)
  * @param options - Transaction options including optional logger and maxRetries
@@ -189,6 +221,8 @@ export const withTransaction = async <T>(
     logger?: Logger;
     /** Maximum retry attempts for transient errors (default: 2) */
     maxRetries?: number;
+    /** Also retry when the connection was lost (default: false) */
+    retryOnConnectionLoss?: boolean;
   }
 ): Promise<T> => {
   const maxRetries = options?.maxRetries ?? 2;
@@ -205,8 +239,8 @@ export const withTransaction = async <T>(
     } catch (error) {
       lastError = error;
 
-      // Only retry transient transaction errors
-      if (!isTransientTransactionError(error)) {
+      const connectionLost = options?.retryOnConnectionLoss === true && isConnectionLostError(error);
+      if (!connectionLost && !isTransientTransactionError(error)) {
         throw error;
       }
 
@@ -218,6 +252,16 @@ export const withTransaction = async <T>(
           errorLabels: (error as { errorLabels?: string[] })?.errorLabels,
         });
         throw error;
+      }
+
+      if (connectionLost) {
+        options?.logger?.warn('Database connection lost, retrying transaction', {
+          attempt: attempt + 1,
+          maxRetries,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await reselectServer(options?.logger);
+        continue;
       }
 
       // Exponential backoff with jitter (25%) to prevent thundering herd

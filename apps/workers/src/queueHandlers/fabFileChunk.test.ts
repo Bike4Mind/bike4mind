@@ -834,6 +834,18 @@ describe('fabFileChunk handler - chunk computation runs outside the transaction 
     ]);
   });
 
+  // A long prepare can outlast the database connection. Recovering it inside the commit's own
+  // transaction retries the writes alone instead of failing the delivery and redoing the prepare.
+  it('asks the commit transaction to recover a lost connection', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.prepareFabFileChunks).toHaveBeenCalledTimes(1);
+    expect(h.withTransaction).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ retryOnConnectionLoss: true })
+    );
+  });
+
   // A prepare-phase throw is no longer wrapped by withTransaction, so it reaches a DIFFERENT catch
   // site than it used to. It must still land on the same failure accounting - otherwise a corrupt
   // PDF would stop being marked failed and would sit at chunkCount:0 with no error, the exact
