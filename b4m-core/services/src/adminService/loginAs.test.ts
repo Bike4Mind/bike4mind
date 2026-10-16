@@ -8,13 +8,15 @@ import type { IUserDocument } from '@bike4mind/common';
 // fails the test rather than passing tautologically.
 const mockVerifyMFA = vi.fn();
 vi.mock('@bike4mind/auth/mfaService', async () => {
-  const { MfaAttemptRejectedError } =
+  const { MfaAttemptRejectedError, isMfaAttemptRejectedError, recordFailedMfaAttempt } =
     await vi.importActual<typeof import('@bike4mind/auth/mfaService')>('@bike4mind/auth/mfaService');
   return {
     verifyMFA: (...a: unknown[]) => mockVerifyMFA(...a),
     isUserLockedOut: (user: { mfa?: { lockedUntil?: Date } } | null) => !!user?.mfa?.lockedUntil,
     getLockoutTimeRemaining: () => 0,
     MfaAttemptRejectedError,
+    isMfaAttemptRejectedError,
+    recordFailedMfaAttempt,
   };
 });
 

@@ -52,11 +52,6 @@ export function matchTOTPStep(secret: string, token: string, window = 1, nowMs =
   return match ? Math.floor(time / TOTP_STEP_SECONDS) + match.delta : null;
 }
 
-/** Stateless TOTP check. It does not guard against replay, so login and step-up use claimTOTPCode. */
-export function verifyTOTPToken(secret: string, token: string, window = 1): boolean {
-  return matchTOTPStep(secret, token, window) !== null;
-}
-
 /**
  * Hash a backup code for at-rest storage.
  * Codes are high-entropy random strings (speakeasy base32, ~50 bits), so a

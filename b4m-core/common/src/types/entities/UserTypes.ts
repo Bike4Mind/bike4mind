@@ -80,8 +80,6 @@ export interface IMFAConfig {
   failedAttempts?: number;
   lastFailedAttempt?: Date;
   lockedUntil?: Date;
-  /** Last accepted TOTP time step; a code at or below it is rejected as a replay. */
-  lastTotpStep?: number;
 }
 
 /**
@@ -277,6 +275,11 @@ export interface IUser extends ICreditHolder {
    * Multi-Factor Authentication configuration
    */
   mfa: IMFAConfig | null;
+  /**
+   * Last accepted TOTP time step; a code at or below it is a replay. Kept outside `mfa` because
+   * MFA success writes replace that subdocument whole and would roll a concurrent claim back.
+   */
+  totpLastStep?: number | null;
 
   /**
    * The IDs of the system files that the user has created and enabled on their profile

@@ -69,12 +69,8 @@ const handler = baseApi() // Now requires authentication
           user: redactUserSecretsForSelf(result.user),
         };
       } catch (error: unknown) {
-        // A rejected code was already counted, atomically and before it was compared (see
-        // mfaService.reserveMfaAttempt); any other failure here is counted now.
-        const updatedUser =
-          error instanceof mfaService.MfaAttemptRejectedError
-            ? error.attemptState
-            : await userRepository.atomicRecordMfaFailedAttempt(freshUser.id);
+        // A code checked by mfaService was counted before it was compared; anything else is counted now.
+        const updatedUser = await mfaService.recordFailedMfaAttempt(error, freshUser.id, userRepository);
 
         if (updatedUser && mfaService.isUserLockedOut(updatedUser)) {
           const remainingMinutes = mfaService.getLockoutTimeRemaining(updatedUser);

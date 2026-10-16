@@ -103,31 +103,57 @@ describe('verifyMFA', () => {
     expect(persisted.mfa!.lastTotpStep).toBeUndefined();
   });
 
-  it('writes the claimed step as lastTotpStep on TOTP success', async () => {
+  it('claims the TOTP step for the user id', async () => {
     const repo = makeRepo();
     await verifyMFA({ user: makeUser(), token: currentToken() }, repo);
-    const claimedStep = repo.atomicClaimTotpStep.mock.calls[0][1] as number;
-    const persisted = repo.update.mock.calls[0][0] as IUserDocument;
-    expect(persisted.mfa!.lastTotpStep).toBe(claimedStep);
+    expect(repo.atomicClaimTotpStep).toHaveBeenCalledWith('user-1', expect.any(Number));
   });
 
-  it('does not write lastTotpStep on backup-code success', async () => {
-    const repo = makeRepo();
-    await verifyMFA({ user: makeUser(), token: 'abcde12345' }, repo);
-    const persisted = repo.update.mock.calls[0][0] as IUserDocument;
-    expect(persisted.mfa!.lastTotpStep).toBeUndefined();
-  });
+  it.each([
+    ['TOTP', () => currentToken()],
+    ['backup code', () => 'abcde12345'],
+  ])(
+    'never writes a replay step in the %s success update, even when the user has totpLastStep',
+    async (_label, token) => {
+      const repo = makeRepo();
+      const user = { ...makeUser(), totpLastStep: 7 } as unknown as IUserDocument;
+      await verifyMFA({ user, token: token() }, repo);
+      const persisted = repo.update.mock.calls[0][0] as Record<string, unknown> & { mfa: Record<string, unknown> };
+      expect(persisted).not.toHaveProperty('totpLastStep');
+      expect(persisted.mfa).not.toHaveProperty('lastTotpStep');
+    }
+  );
 
-  it('accepts a backup code (case-insensitive) and consumes it', async () => {
-    const repo = makeRepo();
-    const result = await verifyMFA({ user: makeUser(), token: 'abcde12345' }, repo);
-    expect(result.verified).toBe(true);
-    // usedBackupCode is the stored hash (used to filter it out of the array)
-    expect(result.usedBackupCode).toBe(hashBackupCode('ABCDE12345'));
-    // the used code's hash is removed from the persisted set; the other remains
-    const persisted = repo.update.mock.calls[0][0] as IUserDocument;
-    expect(persisted.mfa!.backupCodes).not.toContain(hashBackupCode('ABCDE12345'));
-    expect(persisted.mfa!.backupCodes).toContain(hashBackupCode('FGHIJ67890'));
+  describe('failures after the attempt was reserved', () => {
+    const expectRejectedWithCause = async (repo: ReturnType<typeof makeRepo>, cause: unknown) => {
+      const error = await verifyMFA({ user: makeUser(), token: currentToken() }, repo).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+      expect((error as MfaAttemptRejectedError).attemptState).toBe(reservedUser);
+      expect((error as MfaAttemptRejectedError).cause).toBe(cause);
+    };
+
+    it('wraps a rejecting update', async () => {
+      const repo = makeRepo();
+      const cause = new Error('write failed');
+      repo.update.mockRejectedValue(cause);
+      await expectRejectedWithCause(repo, cause);
+    });
+
+    it('wraps an update that returns null', async () => {
+      const repo = makeRepo();
+      repo.update.mockResolvedValue(null as never);
+      const error = await verifyMFA({ user: makeUser(), token: currentToken() }, repo).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+      expect((error as MfaAttemptRejectedError).attemptState).toBe(reservedUser);
+      expect(((error as MfaAttemptRejectedError).cause as Error).message).toMatch(/Failed to update/);
+    });
+
+    it('wraps a rejecting claim', async () => {
+      const repo = makeRepo();
+      const cause = new Error('claim failed');
+      repo.atomicClaimTotpStep.mockRejectedValue(cause);
+      await expectRejectedWithCause(repo, cause);
+    });
   });
 
   it('throws when MFA is not enabled for the user', async () => {

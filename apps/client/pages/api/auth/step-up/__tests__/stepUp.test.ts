@@ -123,7 +123,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
-  const { MfaAttemptRejectedError: RejectedError } =
+  const { isMfaAttemptRejectedError, recordFailedMfaAttempt } =
     await vi.importActual<typeof import('@bike4mind/auth/mfaService')>('@bike4mind/auth/mfaService');
   return {
     authSessionService: { endRealtimeConnections: h.endRealtimeConnections },
@@ -139,7 +139,8 @@ vi.mock('@bike4mind/services', async () => {
       getLockoutTimeRemaining: () => 15,
       MAX_FAILED_ATTEMPTS: 3,
       resolvePasskeyRelyingParty: () => ({ rpID: 'app.example.com', rpName: 'Example', origin: 'https://x' }),
-      MfaAttemptRejectedError: RejectedError,
+      isMfaAttemptRejectedError,
+      recordFailedMfaAttempt,
       verifyMFA: h.verifyMFA,
       finishPasskeyAuthentication: h.finishPasskeyAuthentication,
       startPasskeyAuthentication: h.startPasskeyAuthentication,

@@ -57,12 +57,8 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
   try {
     await mfaService.verifyMFA({ user: freshAdmin, token: mfaToken }, db.users);
   } catch (error) {
-    // A rejected code was already counted, atomically and before it was compared (see
-    // mfaService.reserveMfaAttempt); any other failure here is counted now.
-    const updatedAdmin =
-      error instanceof mfaService.MfaAttemptRejectedError
-        ? error.attemptState
-        : await db.users.atomicRecordMfaFailedAttempt(freshAdmin.id);
+    // A code checked by verifyMFA was counted before it was compared; anything else is counted now.
+    const updatedAdmin = await mfaService.recordFailedMfaAttempt(error, freshAdmin.id, db.users);
 
     if (updatedAdmin && mfaService.isUserLockedOut(updatedAdmin)) {
       throw new ForbiddenError('MFA locked — too many failed attempts');

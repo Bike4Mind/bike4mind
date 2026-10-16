@@ -85,12 +85,50 @@ describe('verifyMFASetup', () => {
     expect(repo.update).not.toHaveBeenCalled();
   });
 
-  it('writes the claimed step as lastTotpStep in the enable write', async () => {
+  it('claims the TOTP step for the user id', async () => {
     const repo = makeRepo();
     await verifyMFASetup(makePendingUser(), currentToken(), repo);
-    const claimedStep = repo.atomicClaimTotpStep.mock.calls[0][1] as number;
-    const persisted = repo.update.mock.calls[0][0] as IUserDocument;
-    expect(persisted.mfa!.lastTotpStep).toBe(claimedStep);
+    expect(repo.atomicClaimTotpStep).toHaveBeenCalledWith('user-1', expect.any(Number));
+  });
+
+  it('never writes a replay step in the enable update, even when the user has totpLastStep', async () => {
+    const repo = makeRepo();
+    const user = { ...makePendingUser(), totpLastStep: 7 } as unknown as IUserDocument;
+    await verifyMFASetup(user, currentToken(), repo);
+    const persisted = repo.update.mock.calls[0][0] as Record<string, unknown> & { mfa: Record<string, unknown> };
+    expect(persisted).not.toHaveProperty('totpLastStep');
+    expect(persisted.mfa).not.toHaveProperty('lastTotpStep');
+  });
+
+  describe('failures after the attempt was reserved', () => {
+    it('wraps a rejecting update, keeping the original error as cause', async () => {
+      const repo = makeRepo();
+      const cause = new Error('write failed');
+      repo.update.mockRejectedValue(cause);
+      const error = await verifyMFASetup(makePendingUser(), currentToken(), repo).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+      expect((error as MfaAttemptRejectedError).attemptState).toBe(reservedUser);
+      expect((error as MfaAttemptRejectedError).cause).toBe(cause);
+    });
+
+    it('wraps an update that returns null', async () => {
+      const repo = makeRepo();
+      repo.update.mockResolvedValue(null as never);
+      const error = await verifyMFASetup(makePendingUser(), currentToken(), repo).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+      expect((error as MfaAttemptRejectedError).attemptState).toBe(reservedUser);
+      expect(((error as MfaAttemptRejectedError).cause as Error).message).toMatch(/Failed to enable/);
+    });
+
+    it('wraps a rejecting claim, keeping the original error as cause', async () => {
+      const repo = makeRepo();
+      const cause = new Error('claim failed');
+      repo.atomicClaimTotpStep.mockRejectedValue(cause);
+      const error = await verifyMFASetup(makePendingUser(), currentToken(), repo).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(MfaAttemptRejectedError);
+      expect((error as MfaAttemptRejectedError).attemptState).toBe(reservedUser);
+      expect((error as MfaAttemptRejectedError).cause).toBe(cause);
+    });
   });
 
   // Regression: enrolling MFA must not lose the secret. The endpoint used to clear failed

@@ -33,19 +33,18 @@ const RP = { rpID: 'app.example.com', rpName: 'Example', origin: 'https://app.ex
 const mockFinishAuthentication = vi.fn();
 const mockFinishRegistration = vi.fn();
 const mockStartRegistration = vi.fn();
-const mockVerifyTOTP = vi.fn();
 vi.mock('@bike4mind/services', async () => {
   const { MFA_MAX_FAILED_ATTEMPTS } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
-  const { MfaAttemptRejectedError } =
+  const { isMfaAttemptRejectedError, recordFailedMfaAttempt } =
     await vi.importActual<typeof import('@bike4mind/auth/mfaService')>('@bike4mind/auth/mfaService');
   return {
     mfaService: {
-      MfaAttemptRejectedError,
+      isMfaAttemptRejectedError,
+      recordFailedMfaAttempt,
       resolvePasskeyRelyingParty: () => RP,
       finishPasskeyAuthentication: (...a: any[]) => mockFinishAuthentication(...a),
       finishPasskeyRegistration: (...a: any[]) => mockFinishRegistration(...a),
       startPasskeyRegistration: (...a: any[]) => mockStartRegistration(...a),
-      verifyTOTPToken: (...a: any[]) => mockVerifyTOTP(...a),
       MAX_FAILED_ATTEMPTS: MFA_MAX_FAILED_ATTEMPTS,
       isUserLockedOut: (user: any) => !!user?.mfa?.lockedUntil && new Date(user.mfa.lockedUntil) > new Date(),
       getLockoutTimeRemaining: () => 15,
@@ -223,7 +222,6 @@ describe('/api/auth/mfa/passkey/register-options', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ challenge: 'chal' });
     expect(mockStartRegistration.mock.calls[0][0]).toMatchObject({ user: { id: 'user-1' }, rp: RP });
-    expect(mockVerifyTOTP).not.toHaveBeenCalled();
   });
 
   it('maps a ceremony refusal to its status', async () => {

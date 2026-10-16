@@ -6,7 +6,7 @@ import {
   userEligibleForMFA,
   clearFailedAttempts,
 } from './utils';
-import { claimTOTPCode, MfaAttemptRejectedError, reserveMfaAttempt, type MfaAttemptRepository } from './attempt';
+import { claimTOTPCode, MfaAttemptRejectedError, withReservedMfaAttempt, type MfaAttemptRepository } from './attempt';
 
 export interface SetupMFARequest {
   user: IUserDocument;
@@ -88,33 +88,33 @@ export async function verifyMFASetup(
     throw new Error('MFA is already enabled for this user.');
   }
 
-  const attemptState = await reserveMfaAttempt(user.id, userRepository);
-  const totpStep = await claimTOTPCode(user.id, user.mfa.totpSecret, token, userRepository);
-  if (totpStep === null) {
-    throw new MfaAttemptRejectedError('Invalid TOTP code.', attemptState);
-  }
+  const mfa = user.mfa;
+  return withReservedMfaAttempt(user.id, userRepository, async attemptState => {
+    if ((await claimTOTPCode(user.id, mfa.totpSecret, token, userRepository)) === null) {
+      throw new MfaAttemptRejectedError('Invalid TOTP code.', attemptState);
+    }
 
-  // Enable MFA. `user` came from findByIdWithMfaSecrets and carries the select:false
-  // totpSecret + backupCodes; build the write from it - and clear any failed-attempt/lockout
-  // state in this SAME write - so the secrets survive. Clearing from this function's
-  // (not-+selected) return value would omit and `$set`-replace-wipe the secrets, leaving
-  // totpEnabled:true with no secret and permanently bricking sign-in.
-  const updatedMFA = clearFailedAttempts(user.mfa);
-  updatedMFA.totpEnabled = true;
-  updatedMFA.lastUsedAt = new Date();
-  updatedMFA.lastTotpStep = totpStep;
+    // Enable MFA. `user` came from findByIdWithMfaSecrets and carries the select:false
+    // totpSecret + backupCodes; build the write from it - and clear any failed-attempt/lockout
+    // state in this SAME write - so the secrets survive. Clearing from this function's
+    // (not-+selected) return value would omit and `$set`-replace-wipe the secrets, leaving
+    // totpEnabled:true with no secret and permanently bricking sign-in.
+    const updatedMFA = clearFailedAttempts(mfa);
+    updatedMFA.totpEnabled = true;
+    updatedMFA.lastUsedAt = new Date();
 
-  const updatedUser = await userRepository.update({
-    id: user.id,
-    mfa: updatedMFA,
-    updatedAt: new Date(),
+    const updatedUser = await userRepository.update({
+      id: user.id,
+      mfa: updatedMFA,
+      updatedAt: new Date(),
+    });
+
+    if (!updatedUser) {
+      throw new Error('Failed to enable MFA.');
+    }
+
+    return { success: true, user: updatedUser };
   });
-
-  if (!updatedUser) {
-    throw new Error('Failed to enable MFA.');
-  }
-
-  return { success: true, user: updatedUser };
 }
 
 /**

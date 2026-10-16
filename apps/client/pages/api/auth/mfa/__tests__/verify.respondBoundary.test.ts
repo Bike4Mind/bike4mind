@@ -24,14 +24,15 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/services', async () => {
-  const { MfaAttemptRejectedError } =
+  const { isMfaAttemptRejectedError, recordFailedMfaAttempt } =
     await vi.importActual<typeof import('@bike4mind/auth/mfaService')>('@bike4mind/auth/mfaService');
   return {
     mfaService: {
       verifyMFA: (...a: unknown[]) => mockVerifyMFA(...a),
       isUserLockedOut: (user: { mfa?: { lockedUntil?: Date } }) => !!user?.mfa?.lockedUntil,
       getLockoutTimeRemaining: () => 15,
-      MfaAttemptRejectedError,
+      isMfaAttemptRejectedError,
+      recordFailedMfaAttempt,
       MAX_FAILED_ATTEMPTS: 3,
     },
   };

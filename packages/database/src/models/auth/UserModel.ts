@@ -81,8 +81,6 @@ const MFASchema = new Schema(
     failedAttempts: { type: Number, default: 0 },
     lastFailedAttempt: { type: Date, default: null },
     lockedUntil: { type: Date, default: null },
-    // Last accepted TOTP time step (unix seconds / 30); a code at or below it is a replay.
-    lastTotpStep: { type: Number, default: null },
   },
   { _id: false }
 );
@@ -435,8 +433,8 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    */
   async atomicClaimTotpStep(userId: string, step: number): Promise<boolean> {
     const result = await this.model.updateOne(
-      { _id: userId, $or: [{ 'mfa.lastTotpStep': null }, { 'mfa.lastTotpStep': { $lt: step } }] },
-      { $set: { 'mfa.lastTotpStep': step } }
+      { _id: userId, $or: [{ totpLastStep: null }, { totpLastStep: { $lt: step } }] },
+      { $set: { totpLastStep: step } }
     );
     return result.modifiedCount === 1;
   }
@@ -942,6 +940,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
 
     // MFA (Multi-Factor Authentication) field
     mfa: { type: MFASchema, default: null },
+    // Last accepted TOTP time step (unix seconds / 30), see IUser.totpLastStep.
+    totpLastStep: { type: Number, default: null },
 
     // User preferences
     showCreditsUsed: { type: Boolean, default: true },

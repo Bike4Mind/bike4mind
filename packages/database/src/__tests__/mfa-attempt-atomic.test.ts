@@ -15,6 +15,7 @@ describe('atomic MFA attempt reservation and TOTP step claim', () => {
   let userId: string;
 
   const readMfa = async () => (await userRepository.findByIdWithMfaSecrets(userId))!.mfa!;
+  const readTotpLastStep = async () => (await userRepository.findByIdWithMfaSecrets(userId))!.totpLastStep;
 
   beforeEach(async () => {
     await User.deleteMany({});
@@ -93,10 +94,10 @@ describe('atomic MFA attempt reservation and TOTP step claim', () => {
       expect(await userRepository.atomicClaimTotpStep(userId, 100)).toBe(true);
       expect(await userRepository.atomicClaimTotpStep(userId, 100)).toBe(false);
       expect(await userRepository.atomicClaimTotpStep(userId, 99)).toBe(false);
-      expect((await readMfa()).lastTotpStep).toBe(100);
+      expect(await readTotpLastStep()).toBe(100);
 
       expect(await userRepository.atomicClaimTotpStep(userId, 101)).toBe(true);
-      expect((await readMfa()).lastTotpStep).toBe(101);
+      expect(await readTotpLastStep()).toBe(101);
     });
 
     it('lets exactly one of several concurrent claims of the same step win', async () => {
@@ -105,18 +106,20 @@ describe('atomic MFA attempt reservation and TOTP step claim', () => {
       );
 
       expect(results.filter(Boolean)).toHaveLength(1);
-      expect((await readMfa()).lastTotpStep).toBe(500);
+      expect(await readTotpLastStep()).toBe(500);
     });
   });
 
-  describe('lastTotpStep schema field', () => {
-    it('persists through a whole-mfa update carrying totpSecret (not stripped by the schema)', async () => {
-      const current = (await userRepository.findByIdWithMfaSecrets(userId))!;
-      await userRepository.update({ id: userId, mfa: { ...current.mfa!, lastTotpStep: 4242 } });
+  describe('totpLastStep isolation from the mfa subdocument', () => {
+    it('is not rolled back by a whole-mfa update built from a snapshot taken before the claim', async () => {
+      const snapshot = (await userRepository.findByIdWithMfaSecrets(userId))!;
+      expect(await userRepository.atomicClaimTotpStep(userId, 101)).toBe(true);
 
-      const after = await readMfa();
-      expect(after.lastTotpStep).toBe(4242);
-      expect(after.totpSecret).toBe(TOTP_SECRET);
+      await userRepository.update({ id: userId, mfa: { ...snapshot.mfa!, failedAttempts: 0 } });
+
+      expect(await readTotpLastStep()).toBe(101);
+      expect((await readMfa()).totpSecret).toBe(TOTP_SECRET);
+      expect(await userRepository.atomicClaimTotpStep(userId, 101)).toBe(false);
     });
   });
 });
