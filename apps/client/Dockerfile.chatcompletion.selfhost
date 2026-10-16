@@ -19,7 +19,7 @@ FROM public.ecr.aws/docker/library/node:24-slim@sha256:b31e7a42fdf8b8aa5f5ed477c
 
 # Toolchain for any native addons in the dependency graph (node-gyp et al).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 make g++ ca-certificates git \
+    && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable
@@ -40,10 +40,11 @@ COPY patches ./patches
 #    No --prod. Workers is here because compose.selfhost.yaml's `worker` service reuses this
 #    image and runs apps/workers/src/selfhost/main.ts.
 #    A hydrated premium overlay is absent from the tracked lockfile, so it is linked and the
-#    install runs unfrozen; without one the install stays frozen.
+#    install runs unfrozen (which needs git); without one the install stays frozen.
 COPY scripts/link-premium-overlays.mjs ./scripts/
 RUN if ls packages/premium/*/package.json >/dev/null 2>&1; then \
-      node scripts/link-premium-overlays.mjs && pnpm install --no-frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...; \
+      apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* \
+      && node scripts/link-premium-overlays.mjs && pnpm install --no-frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...; \
     else \
       pnpm install --frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...; \
     fi
