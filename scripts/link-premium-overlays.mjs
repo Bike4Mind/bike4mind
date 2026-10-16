@@ -6,9 +6,9 @@
  * generated glue imports overlays by bare specifier from apps/client. A hydrated but
  * undeclared overlay is therefore left unwired (see generate-premium-glue.mjs).
  *
- * Rewrites apps/client/package.json in place, so run it only in a throwaway tree such as
- * the self-host image build. Committing the result would break every open-core install.
- * No-op when packages/premium/ holds no overlay.
+ * Rewrites apps/client/package.json in place, so it refuses to run unless B4M_SELF_HOST=true
+ * (set by the self-host image build). Committing the result would break every open-core
+ * install. No-op when packages/premium/ holds no overlay.
  */
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -18,6 +18,16 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PREMIUM_DIR = path.join(ROOT, 'packages/premium');
 const CLIENT_MANIFEST = path.join(ROOT, 'apps/client/package.json');
+
+// The rewrite target is a tracked file, and a developer running this locally to reproduce
+// the image would dirty it. Gate on the same flag the Dockerfile base stage sets.
+if (process.env.B4M_SELF_HOST !== 'true') {
+  console.error(
+    '[link-premium-overlays] refusing to run: this rewrites apps/client/package.json in place. ' +
+      'Set B4M_SELF_HOST=true (the self-host image build does) to proceed.'
+  );
+  process.exit(1);
+}
 
 function overlayNames() {
   if (!existsSync(PREMIUM_DIR)) return [];
