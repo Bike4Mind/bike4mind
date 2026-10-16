@@ -1297,25 +1297,29 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       expect(res._getJSONData().error).toEqual(expect.any(String));
     };
 
-    it('aborts a turn that honours the signal, leaves the refund to it, and answers 504 with the quest id', async () => {
-      // Models process()'s own abort path: it rolls back its reservation and settles the quest.
+    it('aborts a turn that honours the signal, settles it as timed out keeping what streamed, and answers 504', async () => {
+      // Models process()'s caller-abort path: it refunds or reconciles its own reservation and
+      // returns without writing the quest, leaving the partial reply in memory for the route.
       mockProcess.mockImplementation(
         ({ prefetchedQuest, abortSignal }: ProcessArgs) =>
           new Promise<void>(resolve => {
-            abortSignal.addEventListener('abort', () => {
-              prefetchedQuest.status = 'done';
-              prefetchedQuest.type = 'error';
-              resolve();
-            });
+            prefetchedQuest.reply = 'Partial answer';
+            prefetchedQuest.replies = ['Partial answer'];
+            abortSignal.addEventListener('abort', () => resolve());
           })
       );
-      mockSettleIfUnfinished.mockResolvedValue(false);
       const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
       await handler(req, res);
       expectTimeoutResponse(res);
       expect(mockReleaseReservedCredits).not.toHaveBeenCalled();
-      // Still attempted: a no-op when process() already settled, the backstop when it did not.
-      expect(mockSettleIfUnfinished).toHaveBeenCalledWith('quest-2', expect.objectContaining({ status: 'done' }));
+      expect(mockSettleIfUnfinished).toHaveBeenCalledWith(
+        'quest-2',
+        expect.objectContaining({
+          status: 'done',
+          finishReason: 'timeout',
+          reply: expect.stringContaining('Partial answer'),
+        })
+      );
     });
 
     it('settles a turn that ignores the abort as timed out and refunds its reservation itself', async () => {

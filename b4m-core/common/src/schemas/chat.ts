@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import {
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+  REQUEST_TIMEOUT_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   type ApiErrorCode,
 } from '../apiErrorCodes';
 import { StorageLimitErrorInfoSchema } from '../errors';
-import { REQUEST_TIMEOUT_ERROR_CODE } from '../apiErrorCodes';
 // Specific file, not the `../types` barrel: this module is imported by the
 // contracts, which the CI openapi job runs against an install-only tree (see the
 // note in tools.contract.ts).

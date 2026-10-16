@@ -1760,6 +1760,151 @@ describe('ChatCompletionProcess', () => {
       expect(mockQuest.status).toBe('stopped');
     });
 
+    describe('caller abortSignal (wait=true deadline)', () => {
+      function arrangeTurn() {
+        let signalSeen: AbortSignal | undefined;
+        let markBackendCalled: () => void = () => {};
+        const backendCalled = new Promise<void>(resolve => {
+          markBackendCalled = resolve;
+        });
+        const complete = vi.fn().mockImplementation(async (_model, _messages, opts) => {
+          signalSeen = opts.abortSignal;
+          markBackendCalled();
+          await new Promise<void>((resolve, reject) => {
+            const fail = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+            if (opts.abortSignal?.aborted) return fail();
+            opts.abortSignal?.addEventListener('abort', fail, { once: true });
+            setTimeout(resolve, 3000);
+          });
+        });
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        } as any); // any: minimal backend shape, as elsewhere in this file
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+        return { complete, body, backendCalled, getSignalSeen: () => signalSeen };
+      }
+
+      it('aborting the caller signal aborts the backend call', async () => {
+        const { body, backendCalled, getSignalSeen } = arrangeTurn();
+        const external = new AbortController();
+
+        const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+        await backendCalled;
+        expect(getSignalSeen()?.aborted).toBe(false);
+        external.abort();
+
+        await expect(run).resolves.not.toThrow();
+        expect(getSignalSeen()?.aborted).toBe(true);
+      });
+
+      it('writes no quest update after the caller aborts', async () => {
+        const { body, backendCalled } = arrangeTurn();
+        const external = new AbortController();
+
+        const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+        await backendCalled;
+        const updatesAtAbort = mockDb.quests.update.mock.calls.length;
+        external.abort();
+        await run;
+
+        expect(mockDb.quests.update.mock.calls.length).toBe(updatesAtAbort);
+      });
+
+      it('aborts the backend signal at once when the caller signal is already aborted', async () => {
+        const { body, getSignalSeen, complete } = arrangeTurn();
+        const external = new AbortController();
+        external.abort();
+
+        await expect(
+          service.process({ body, logger: mockLogger, abortSignal: external.signal })
+        ).resolves.not.toThrow();
+
+        expect(complete).toHaveBeenCalledTimes(1);
+        expect(getSignalSeen()?.aborted).toBe(true);
+      });
+
+      it('does not persist the success-path status when the backend resolves on abort', async () => {
+        const { body, complete } = arrangeTurn();
+        let markStreamed: () => void = () => {};
+        const streamed = new Promise<void>(resolve => {
+          markStreamed = resolve;
+        });
+        complete.mockImplementation(async (_model, _messages, opts, cb) => {
+          await cb(['Partial']);
+          markStreamed();
+          await new Promise<void>(resolve => {
+            if (opts.abortSignal?.aborted) return resolve();
+            opts.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+            setTimeout(resolve, 3000);
+          });
+        });
+        const external = new AbortController();
+
+        const run = service.process({ body, logger: mockLogger, abortSignal: external.signal });
+        await streamed;
+        const updatesAtAbort = mockDb.quests.update.mock.calls.length;
+        external.abort();
+        await run;
+
+        expect(mockDb.quests.update.mock.calls.length).toBe(updatesAtAbort);
+      });
+    });
+
+    describe('releaseReservedCredits', () => {
+      type ReservationFields = { reservedCredits: number; reservedCreditsOwnerId: string };
+
+      it('refunds once under concurrent calls', async () => {
+        const fields = service as unknown as ReservationFields;
+        fields.reservedCredits = 50;
+        fields.reservedCreditsOwnerId = 'owner-id';
+        let release: (value: unknown) => void = () => {};
+        const incrementCredits = vi.fn().mockReturnValue(
+          new Promise(resolve => {
+            release = resolve;
+          })
+        );
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        const first = service.releaseReservedCredits('q1', mockLogger);
+        const second = service.releaseReservedCredits('q1', mockLogger);
+        release({ id: 'owner-id', currentCredits: 50 });
+        await Promise.all([first, second]);
+
+        expect(incrementCredits).toHaveBeenCalledTimes(1);
+        expect(incrementCredits).toHaveBeenCalledWith('owner-id', 50);
+      });
+
+      it('is a no-op with nothing reserved', async () => {
+        const incrementCredits = vi.fn();
+        mockDb.users = { ...mockDb.users, incrementCredits };
+
+        await service.releaseReservedCredits('q1', mockLogger);
+
+        expect(incrementCredits).not.toHaveBeenCalled();
+      });
+    });
+
     describe('Research Mode cancellation', () => {
       const RESEARCH_MODEL = 'gpt-4-research';
 

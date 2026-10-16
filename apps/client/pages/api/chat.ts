@@ -36,8 +36,7 @@ import {
   B4MLLMTools,
   chatContract,
   filterKnownTools,
-  HTTPError,
-  HttpStatus,
+  GatewayTimeoutError,
   REQUEST_TIMEOUT_ERROR_CODE,
   questReplyText,
   toToolPayloads,
@@ -264,17 +263,17 @@ const handler = nextRouteForContract(chatContract, {
     );
 
     if (turn.outcome !== 'completed') {
-      // A stuck turn never reached its own error rollback, so its reservation is refunded here.
-      // It keeps running until the Lambda freezes; settleIfUnfinished is a no-op if it settled.
+      // After the abort, process() no longer writes the quest (its saves are fenced), so the
+      // terminal state is settled here from what streamed. An aborted turn already refunded or
+      // reconciled its own reservation; a stuck one never reached that code, so it is refunded here.
       if (turn.outcome === 'stuck') await processService.releaseReservedCredits(quest.id, req.logger);
-      const settledHere = await questRepository.settleIfUnfinished(quest.id, terminalRecoveryFor(quest, TIMED_OUT_RUN));
+      const settled = await questRepository.settleIfUnfinished(quest.id, terminalRecoveryFor(quest, TIMED_OUT_RUN));
       req.logger.warn(`POST /api/chat wait=true turn for quest ${quest.id} ran past its deadline`, {
         outcome: turn.outcome,
-        settledHere,
+        settled,
         ...(turn.outcome === 'aborted' && turn.error !== undefined && { error: turn.error }),
       });
-      const timeoutError = new HTTPError(
-        HttpStatus.GatewayTimeout,
+      const timeoutError = new GatewayTimeoutError(
         'This turn ran past the wait=true deadline and was ended. Send long turns without wait and poll the quest.',
         { errorCode: REQUEST_TIMEOUT_ERROR_CODE, quest_id: quest.id }
       );

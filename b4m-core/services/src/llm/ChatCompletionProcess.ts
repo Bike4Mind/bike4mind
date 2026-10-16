@@ -1848,6 +1848,9 @@ export class ChatCompletionProcess {
     const saveQuest = async (quest: IChatHistoryItemDocument): Promise<IChatHistoryItemDocument | null> => {
       // Use the mutex to serialize the save operations
       return await questSaveMutex.runExclusive(async () => {
+        // Once the caller aborts (the wait=true deadline), the caller owns the quest's terminal
+        // state; a late heartbeat or final save here would write `running`/`stopped` over it.
+        if (abortSignal?.aborted) return quest;
         // If quest has researchModeResults, ensure they're saved
         if (quest.researchModeResults?.length) {
           logger.info(
@@ -5784,19 +5787,23 @@ export class ChatCompletionProcess {
           // Clamp computed BEFORE the usage event so the event can carry the
           // written-off portion; summing creditsCharged alone would over-count
           // collected revenue whenever the clamp fires.
+          // Claim the reservation before any await: releaseReservedCredits (a caller abandoning a
+          // stuck turn) must not refund what this settlement already accounts for.
+          const reservedAtSettlement = this.reservedCredits;
+          this.reservedCredits = 0;
           const { delta: settlementDelta, writtenOffCredits } = this.reservedCreditsOwnerId
             ? computeSettlementDelta(
-                this.reservedCredits,
+                reservedAtSettlement,
                 totalCreditsUsed,
                 this.reservedCreditHolder?.currentCredits ?? 0
               )
-            : { delta: this.reservedCredits - totalCreditsUsed, writtenOffCredits: 0 };
+            : { delta: reservedAtSettlement - totalCreditsUsed, writtenOffCredits: 0 };
           if (writtenOffCredits > 0) {
             logger.warn('[BILLING_SHORTFALL_CLAMP] Settlement exceeds balance; flooring at zero', {
               questId: quest.id,
               ownerId: this.reservedCreditsOwnerId,
               ownerType: this.reservedCreditsOwnerType,
-              shortfall: totalCreditsUsed - this.reservedCredits,
+              shortfall: totalCreditsUsed - reservedAtSettlement,
               available: Math.max(0, this.reservedCreditHolder?.currentCredits ?? 0),
               writtenOff: writtenOffCredits,
             });
@@ -5856,7 +5863,7 @@ export class ChatCompletionProcess {
                 this.reservedCreditsOwnerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
               reconciledHolder = await reconcileMethod.incrementCredits(this.reservedCreditsOwnerId, delta);
               logger.info(
-                `⚖️ Credits reconciled for quest ${quest.id}: reserved=${this.reservedCredits}, actual=${totalCreditsUsed}, delta=${delta}`
+                `⚖️ Credits reconciled for quest ${quest.id}: reserved=${reservedAtSettlement}, actual=${totalCreditsUsed}, delta=${delta}`
               );
             }
 
@@ -5921,12 +5928,10 @@ export class ChatCompletionProcess {
               }
             );
 
-            // Reset reservation state after successful reconciliation
-            this.reservedCredits = 0;
             this.reservedCreditHolder = null;
           } catch (creditError) {
             logger.error(
-              `🚨 Credits reconciliation failed for quest ${quest.id} (${totalCreditsUsed} credits used, ${this.reservedCredits} reserved). Manual reconciliation needed.`,
+              `🚨 Credits reconciliation failed for quest ${quest.id} (${totalCreditsUsed} credits used, ${reservedAtSettlement} reserved). Manual reconciliation needed.`,
               creditError
             );
             // Do not re-throw: balance already adjusted at reservation time
@@ -6378,6 +6383,12 @@ export class ChatCompletionProcess {
 
       // Rollback reserved credits if we never completed reconciliation
       await this.releaseReservedCredits(questId, logger);
+      if (abortSignal?.aborted) {
+        // The caller ended the turn and settles the quest from what streamed; an error reply
+        // written here would be kept as content (and saveQuest is fenced anyway).
+        logger.warn(`Quest ${questId} ended by caller abort`, { error: err });
+        return;
+      }
 
       quest.promptMeta!.performance!.totalResponseTime = totalResponseTime;
       quest.promptMeta!.generatedAt = new Date().toISOString();
