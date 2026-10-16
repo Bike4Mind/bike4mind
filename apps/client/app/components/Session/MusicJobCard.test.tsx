@@ -16,10 +16,15 @@ vi.mock('@client/app/hooks/data/musicGenerations', () => ({
   useCancelMusicGeneration: () => h.cancel,
 }));
 vi.mock('@client/app/components/Media/MediaPlayer', () => ({
-  MediaPlayer: ({ file }: { file: { id: string; mimeType: string; fileUrl?: string; fileUrlExpireAt?: Date } }) => (
+  MediaPlayer: ({
+    file,
+  }: {
+    file: { id: string; fileName: string; mimeType: string; fileUrl?: string; fileUrlExpireAt?: Date };
+  }) => (
     <div
       data-testid="media-player-stub"
       data-file-id={file.id}
+      data-file-name={file.fileName}
       data-mime-type={file.mimeType}
       data-src={file.fileUrl}
       data-expires-at={file.fileUrlExpireAt?.toISOString()}
@@ -150,6 +155,12 @@ describe('MusicJobCard player', () => {
     expect(player).toHaveAttribute('data-src', 'https://files.example/song-1.mp3?sig=a');
     expect(player).toHaveAttribute('data-expires-at', '2026-10-07T00:15:00.000Z');
     expect(screen.getByTestId('music-job-card-player')).toContainElement(player);
+  });
+
+  it('names the downloaded song after its content type', () => {
+    showJob(succeeded(musicOutput({ content_type: 'audio/wav' })));
+    render(card());
+    expect(screen.getByTestId('media-player-stub')).toHaveAttribute('data-file-name', 'song-music-1.wav');
   });
 
   it('plays a song whose signed url has lapsed through the file, which re-signs itself', () => {

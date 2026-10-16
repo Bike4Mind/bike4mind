@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { Box, Button, Card, Chip, LinearProgress, Stack, Typography, type ColorPaletteProp } from '@mui/joy';
-import type { GenerationJobState, MusicGeneration } from '@bike4mind/common';
+import { extensionFromMimeType, type GenerationJobState, type MusicGeneration } from '@bike4mind/common';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generationJobCard';
 import { formatSecondsClock, stripLyricTimestamps } from '@client/app/components/Media/generationFormat';
@@ -31,7 +31,7 @@ type MusicOutput = NonNullable<MusicGeneration['output']>;
 // Saved songs play from their Files copy, so the player re-signs through the file like every other file player.
 const toPlayerFile = (jobId: string, fileId: string, output: MusicOutput): MediaPlayerFile => ({
   id: fileId,
-  fileName: `song-${jobId}.mp3`,
+  fileName: `song-${jobId}.${extensionFromMimeType(output.content_type) ?? 'mp3'}`,
   mimeType: output.content_type,
   fileUrl: output.url ?? undefined,
   fileUrlExpireAt: output.expires_at ? new Date(output.expires_at) : undefined,
@@ -57,7 +57,9 @@ const MusicJobCard = ({ jobId }: { jobId: string }) => {
   const openFiles = useFileBrowser(state => state.setOpen);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const refresh = useCallback(() => void refetch(), [refetch]);
-  const readyUrl = job?.state === 'succeeded' && job.output?.availability === 'ready' ? job.output.url : null;
+  // A song saved to Files plays through MediaPlayer, which re-signs from the file; only the bare-url fallback needs this.
+  const readyUrl =
+    job?.state === 'succeeded' && job.output?.availability === 'ready' && !job.output.file_id ? job.output.url : null;
   const player = useStablePlayerSrc(readyUrl, refresh);
 
   if (isPending) {
