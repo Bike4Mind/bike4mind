@@ -122,7 +122,9 @@ def affected(base, head):
     # Missing historical inputs cannot safely establish that a build is unaffected.
     try:
         base, head = git('rev-parse', '--verify', f'{base}^{{commit}}'), git('rev-parse', '--verify', f'{head}^{{commit}}')
-        paths = git('diff', '--name-only', base, head).splitlines()
+        # Rename detection would collapse a move to a single destination path, hiding the
+        # deleted source; report both sides so a renamed runtime file still counts.
+        paths = git('diff', '--name-only', '--no-renames', base, head).splitlines()
         if not paths:
             return False
         old_roots, old_lock, old_tooling = dependency_inputs(base)

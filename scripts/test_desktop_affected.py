@@ -70,6 +70,17 @@ class DesktopAffectedTest(unittest.TestCase):
         self.commit('docs: document shared package', 'b4m-core/leaf/README.md')
         self.assertFalse(affected(self.base, 'HEAD'))
 
+    def test_desktop_renamed_runtime_file_to_markdown_runs(self):
+        source = Path('apps/desktop/src/main/feature.ts')
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text('\n'.join(f'export const v{index} = {index};' for index in range(40)) + '\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'feat(desktop): add runtime module')
+        base = self.git('rev-parse', 'HEAD')
+        self.git('mv', 'apps/desktop/src/main/feature.ts', 'apps/desktop/src/main/feature.md')
+        self.git('commit', '-qm', 'docs(desktop): turn module into notes')
+        self.assertTrue(affected(base, 'HEAD'))
+
     def test_unrelated_lock_resolution_skips(self):
         self.lock['packages']['web-only@1.0.0'] = {'resolution': {'integrity': 'changed'}}
         self.lock['importers']['apps/client']['dependencies']['web-only']['version'] = '2.0.0'
