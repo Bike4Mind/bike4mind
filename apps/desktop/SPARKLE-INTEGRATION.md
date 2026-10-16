@@ -30,10 +30,12 @@ Holding `showReadyToInstallAndRelaunch` is not an installation authorization gat
    The ready callback follows installer preparation, not just download completion.
 4. [`AppInstaller.m`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Autoupdate/AppInstaller.m)
    registers a termination listener in `retrieveProcessIdentifierAndStartInstallation`.
-   After stage 1, termination calls `finishInstallationAfterHostTermination`, which
-   proceeds to final installation without requiring the ready reply. The helper
-   also sets `_willCompleteInstallation` during `startInstallation`, allowing the
-   updater connection to disappear without necessarily canceling installation.
+   Termination at or after host registration marks the target terminated: if stage 1
+   has already run, `finishInstallationAfterHostTermination` is called immediately;
+   otherwise `startInstallation` calls it on stage-1 completion. Either path proceeds
+   to final installation without requiring the ready reply. The helper also sets
+   `_willCompleteInstallation` during `startInstallation`, allowing the updater
+   connection to disappear without necessarily canceling installation.
 5. [`SPUUpdaterDelegate.h`](https://github.com/sparkle-project/Sparkle/blob/2.10.0/Sparkle/SPUUpdaterDelegate.h)
    offers relaunch postponement, not a documented veto on this helper-side
    termination path.
