@@ -183,9 +183,36 @@ describe('releaseNotes queue handler', () => {
     expect(metricNames()).toEqual(['Failure']);
   });
 
+  it('rewrites once when the headline is generic, feeding the reason back', async () => {
+    setConfig(enabledConfig);
+    h.writeReleaseNotes
+      .mockResolvedValueOnce(draft('Exciting New Features and Important Fixes in Your AI Workspace'))
+      .mockResolvedValueOnce(draft());
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
+    expect(h.writeReleaseNotes.mock.calls[1][3]).toEqual(
+      expect.arrayContaining([expect.stringContaining('Exciting'), expect.stringContaining('most important change')])
+    );
+    expect(h.upsertGenerated).toHaveBeenCalledWith(expect.objectContaining({ headline: 'Faster search' }));
+  });
+
+  it('stores the note with the top item as headline when the rewrite is still generic', async () => {
+    setConfig(enabledConfig);
+    h.writeReleaseNotes.mockResolvedValue(draft('Exciting Updates and Fixes in Your AI Workspace'));
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
+    expect(h.upsertGenerated).toHaveBeenCalledWith(
+      expect.objectContaining({ headline: 'Search is faster', status: 'scheduled' })
+    );
+    expect(metricNames()).not.toContain('Failure');
+  });
+
   it('escapes Slack control characters in generated copy', async () => {
     setConfig(enabledConfig);
-    h.writeReleaseNotes.mockResolvedValue(draft('Hi <!channel> & <https://evil.example|click>'));
+    // In an item, because a "!" in the headline is rejected as generic copy before Slack sees it.
+    const injected = draft();
+    injected.draft.items[0].text = 'Hi <!channel> & <https://evil.example|click>';
+    h.writeReleaseNotes.mockResolvedValue(injected);
     await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
     const { text } = JSON.parse(slackPosts()[0][1].body);
     expect(text).toContain('Hi &lt;!channel&gt; &amp; &lt;https://evil.example|click&gt;');

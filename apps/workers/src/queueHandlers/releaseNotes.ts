@@ -28,6 +28,8 @@ const TOKENS_PER_MILLION = 1_000_000;
 export const GENERATION_BUDGET_MS = 4 * 60 * 1000;
 // Leaves the post inside the Lambda timeout after a full generation budget; a hang would retry and re-announce.
 const SLACK_TIMEOUT_MS = 15_000;
+// The first editorial draft plus one rewrite.
+const MAX_EDITORIAL_ATTEMPTS = 2;
 
 // USD per 1M tokens. Unknown models price high on purpose so the EstimatedCost alarm notices them.
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -118,8 +120,8 @@ async function postToSlack(
 }
 
 /**
- * Generates, finalizes and stores the note. A denylist hit in the headline or summary gets one editorial
- * rewrite; triage is not repeated.
+ * Generates, finalizes and stores the note. A denylist hit or generic copy in the headline or summary gets
+ * one editorial rewrite; triage is not repeated. Only a denylist hit can still fail after the rewrite.
  */
 async function generateAndStore(
   payload: ReleaseNotesJobPayload,
@@ -132,12 +134,14 @@ async function generateAndStore(
   const usage: TokenUsage = { ...triage.usage };
 
   let feedback: string[] = [];
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < MAX_EDITORIAL_ATTEMPTS; attempt++) {
     const generated = await writeReleaseNotes(payload.prs, triage.notes, complete, feedback);
     usage.inputTokens += generated.usage.inputTokens;
     usage.outputTokens += generated.usage.outputTokens;
 
-    const result = finalizeReleaseNote(generated.draft, payload, config, logger);
+    const result = finalizeReleaseNote(generated.draft, payload, config, logger, {
+      lastAttempt: attempt === MAX_EDITORIAL_ATTEMPTS - 1,
+    });
     if (result.kind === 'ok') {
       const { note, preserved } = await releaseNoteRepository.upsertGenerated(result.note);
       return { note: preserved ? note : result.note, preserved, usage, modelId };
