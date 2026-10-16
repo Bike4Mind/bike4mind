@@ -94,14 +94,20 @@ const SECRET_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   // redacting those loses real information. No credential shape we redact is a bare
   // integer, so the exemption costs no coverage.
   //
-  // It also exempts a value that opens a structure (`{`, `[`, `(`) or is a bare type
-  // keyword: a JSON schema property (`"github_token": {"type": ...}`) or a type
-  // annotation (`accessToken: string`) names a credential field without holding one,
-  // and redacting it corrupts schemas and code the model reads.
+  // On a COLON separator it also exempts a value that opens a structure (`{`, `[`, `(`)
+  // or is a bare type keyword: a JSON schema property (`"github_token": {"type": ...}`)
+  // or a type annotation (`accessToken: string`) names a credential field without
+  // holding one, and redacting it corrupts schemas and code the model reads. The
+  // keyword must be a whole token (punctuation, whitespace or end), so `null-abc` and
+  // `any.abc` are values, not type annotations.
+  //
+  // An `=` separator gets no exemption: `KEY=value` is an assignment whose value is
+  // data (env files, KEY=VALUE dumps), never a schema or an annotation, so a
+  // credential-named key there always redacts.
   {
     pattern:
-      /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?)[A-Za-z0-9_]*)(["']?\s*[=:]\s*["']?)(?!\d+(?![^\s"',}]))(?![{[(])(?!(?:string|number|boolean|object|unknown|any|null|undefined)(?![A-Za-z0-9_]))([^\s"',}]+)/gi,
-    replacement: `$1$2${REDACTED}`,
+      /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?)[A-Za-z0-9_]*)(?:(["']?\s*=\s*["']?)(?!\d+(?![^\s"',}]))|(["']?\s*:\s*["']?)(?!\d+(?![^\s"',}]))(?![{[(])(?!(?:string|number|boolean|object|unknown|any|null|undefined)(?=[\s,;)\]}>]|$)))([^\s"',}]+)/gi,
+    replacement: `$1$2$3${REDACTED}`,
   },
 ];
 
