@@ -191,6 +191,83 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
   });
 });
 
+// A session pinned to a retired model must reach its DEPRECATED_MODEL_MAP successor. The catalog
+// hides or disables such a model, so the redirect has to run before the availability checks.
+describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
+  const OWNER_ID = 'owner-1';
+  const HIDDEN_ID = 'claude-3-haiku-20240307';
+  const SUCCESSOR_ID = 'claude-haiku-5-5';
+  const successor = { id: SUCCESSOR_ID, type: 'text', name: 'Claude Haiku 5.5', max_tokens: 100, contextWindow: 1000 };
+  let mockDb: any;
+
+  const makeInvoke = () =>
+    new ChatCompletionInvoke({
+      db: mockDb,
+      logger: { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any,
+      user: { id: OWNER_ID, tags: [] } as any,
+      invokeLambda: vi.fn(),
+    } as any);
+
+  const bodyFor = (model: string) => ({
+    sessionId: 'session-1',
+    historyCount: 1,
+    fabFileIds: [],
+    message: 'hello',
+    messageFileIds: [],
+    params: { model },
+    queryComplexity: 'simple',
+    promptMeta: {},
+  });
+
+  beforeEach(() => {
+    mockedGetAvailableModels.mockReset();
+    mockDb = {
+      sessions: {
+        findById: vi.fn().mockResolvedValue({ id: 'session-1', userId: OWNER_ID, users: [], agentIds: [] }),
+        update: vi.fn(),
+      },
+      organizations: { findById: vi.fn() },
+      quests: {
+        findById: vi.fn(),
+        create: vi.fn().mockResolvedValue({ id: 'quest-1', promptMeta: {} }),
+        update: vi.fn(),
+      },
+      adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+    };
+  });
+
+  it('redirects a hidden deprecated model to its successor', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect((invoke as any).questStartParams).not.toBeNull();
+    expect(mockDb.sessions.update).toHaveBeenCalledWith(expect.objectContaining({ lastUsedModel: SUCCESSOR_ID }));
+  });
+
+  it('redirects a disabled deprecated model to its successor', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: HIDDEN_ID, type: 'text', name: 'Claude 3 Haiku', disabled: true, disabledReason: 'retired' },
+      successor,
+    ] as any);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect((invoke as any).questStartParams).not.toBeNull();
+    expect(mockDb.sessions.update).toHaveBeenCalledWith(expect.objectContaining({ lastUsedModel: SUCCESSOR_ID }));
+  });
+
+  it('still rejects an unmapped model that is not in the catalog', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+
+    await expect(
+      makeInvoke().invoke({ body: bodyFor('no-such-model'), userId: OWNER_ID, authOrigin: 'session' })
+    ).rejects.toThrow(/Invalid model/);
+  });
+});
+
 // promptMeta.model.type is declared as 'text' | 'image' | 'video', while the catalog also serves
 // 'speech-to-text'. This guard is what makes the declared union true rather than aspirational: it
 // rejects the one modality a completion cannot run, before the field is written and before the

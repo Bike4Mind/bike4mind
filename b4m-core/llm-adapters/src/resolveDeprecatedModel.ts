@@ -42,7 +42,8 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'anthropic.claude-3-opus-20240229-v1:0': 'global.anthropic.claude-opus-4-8',
   'us.anthropic.claude-3-5-sonnet-20241022-v2:0': 'global.anthropic.claude-sonnet-4-6',
   'us.anthropic.claude-3-7-sonnet-20250219-v1:0': 'global.anthropic.claude-sonnet-4-6',
-  'anthropic.claude-3-haiku-20240307-v1:0': 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+  // Haiku 5.5, not 4.5: 3 Haiku is $0.25/$1.25 per 1M and 4.5 is $1/$5, a 4x raise.
+  'anthropic.claude-3-haiku-20240307-v1:0': 'global.anthropic.claude-haiku-5-5',
   // Superseded within the Bedrock Claude family by the current Sonnet 4.6 / Opus 4.8;
   // successors are no more expensive.
   'us.anthropic.claude-opus-4-20250514-v1:0': 'global.anthropic.claude-opus-4-8',
@@ -53,7 +54,7 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'claude-3-7-sonnet-20250219': 'claude-sonnet-4-6',
   'claude-sonnet-4-20250514': 'claude-sonnet-4-6',
   'claude-3-opus-20240229': 'claude-opus-4-8',
-  'claude-3-haiku-20240307': 'claude-haiku-4-5-20251001',
+  'claude-3-haiku-20240307': 'claude-haiku-5-5',
   // OpenAI-hosted models retired from the API (https://platform.openai.com/docs/deprecations).
   // These are past their shutdown date and 404 upstream, so a session/agent still pinned to
   // one must be upgraded here to avoid a hard API failure.

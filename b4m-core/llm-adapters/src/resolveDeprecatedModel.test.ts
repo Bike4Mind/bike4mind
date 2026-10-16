@@ -45,7 +45,7 @@ describe('resolveDeprecatedModelId', () => {
       'global.anthropic.claude-sonnet-4-6'
     );
     expect(resolveDeprecatedModelId('anthropic.claude-3-haiku-20240307-v1:0')).toBe(
-      'us.anthropic.claude-haiku-4-5-20251001-v1:0'
+      'global.anthropic.claude-haiku-5-5'
     );
     expect(resolveDeprecatedModelId('anthropic.claude-3-opus-20240229-v1:0')).toBe('global.anthropic.claude-opus-4-8');
   });
@@ -55,7 +55,7 @@ describe('resolveDeprecatedModelId', () => {
     expect(resolveDeprecatedModelId('claude-3-7-sonnet-20250219')).toBe('claude-sonnet-4-6');
     expect(resolveDeprecatedModelId('claude-sonnet-4-20250514')).toBe('claude-sonnet-4-6');
     expect(resolveDeprecatedModelId('claude-3-opus-20240229')).toBe('claude-opus-4-8');
-    expect(resolveDeprecatedModelId('claude-3-haiku-20240307')).toBe('claude-haiku-4-5-20251001');
+    expect(resolveDeprecatedModelId('claude-3-haiku-20240307')).toBe('claude-haiku-5-5');
   });
 
   it('should pass through unknown model IDs unchanged', () => {
@@ -173,6 +173,19 @@ const UNMAPPED_LEGACY: ReadonlySet<string> = new Set<string>([
   'flux-pro',
 ]);
 
+/**
+ * Redirects that raise the bill and were accepted when added (rationale on each
+ * entry in resolveDeprecatedModel.ts): the source is retired or closed upstream
+ * and no cheaper successor keeps its intent. Anything not listed must not cost more.
+ */
+const KNOWN_COST_RAISES: ReadonlySet<string> = new Set<string>([
+  'gpt-5-chat-latest -> gpt-5.5',
+  'gpt-5.1-chat-latest -> gpt-5.5',
+  'gemini-2.5-pro -> gemini-3.5-flash',
+  'gemini-2.5-flash-lite -> gemini-3.1-flash-lite',
+  'kimi-k2.5 -> kimi-k2.6',
+]);
+
 describe('DEPRECATED_MODEL_MAP invariants', () => {
   // Every getModelInfo() here returns a static array, so these keys never reach the network.
   // Ollama and LocalImage are absent because their listings are live server calls.
@@ -190,6 +203,7 @@ describe('DEPRECATED_MODEL_MAP invariants', () => {
     ];
     const models = (await Promise.all(backends.map(b => b.getModelInfo()))).flat();
     return {
+      models,
       ids: new Set(models.map(m => String(m.id))),
       deprecated: new Set(models.filter(m => m.deprecationDate).map(m => String(m.id))),
       disabled: new Set(models.filter(m => m.disabled).map(m => String(m.id))),
@@ -234,6 +248,31 @@ describe('DEPRECATED_MODEL_MAP invariants', () => {
       .map(([from, target]) => `${from} -> ${target}`);
 
     expect(unreachable, `mappings pointing at a disabled model: ${unreachable.join(', ')}`).toEqual([]);
+  });
+
+  it('never redirects a model to a successor that costs more per token', async () => {
+    const { models } = await staticCatalog();
+    const byId = new Map(models.map(m => [String(m.id), m]));
+    // Base-tier rates: the cheapest threshold is what an ordinary prompt pays.
+    const baseRate = (id: string) => {
+      const tiers = byId.get(id)?.pricing;
+      if (!tiers) return undefined;
+      const [, rate] = Object.entries(tiers).sort(([a], [b]) => Number(a) - Number(b))[0] ?? [];
+      return rate;
+    };
+
+    const raises = Object.entries(DEPRECATED_MODEL_MAP)
+      .filter(([from, to]) => {
+        const source = baseRate(from);
+        const target = baseRate(to);
+        // Prices are written as 0.003 / 1000 in one table and 3 / 1e6 in another, so
+        // equal rates differ in the last float bit.
+        return source && target && (target.input > source.input * 1.0001 || target.output > source.output * 1.0001);
+      })
+      .map(([from, to]) => `${from} -> ${to}`)
+      .filter(edge => !KNOWN_COST_RAISES.has(edge));
+
+    expect(raises, `mappings whose target costs more than its source: ${raises.join(', ')}`).toEqual([]);
   });
 
   it('maps only to models that exist in the catalog', async () => {
@@ -282,7 +321,7 @@ describe('Bedrock Claude retirements', () => {
   it.each([
     ['us.anthropic.claude-opus-4-20250514-v1:0', 'global.anthropic.claude-opus-4-8'],
     ['us.anthropic.claude-sonnet-4-20250514-v1:0', 'global.anthropic.claude-sonnet-4-6'],
-    ['anthropic.claude-3-haiku-20240307-v1:0', 'us.anthropic.claude-haiku-4-5-20251001-v1:0'],
+    ['anthropic.claude-3-haiku-20240307-v1:0', 'global.anthropic.claude-haiku-5-5'],
   ])('hides %s by date and resolves a pin to %s, a live successor', async (retired, successor) => {
     const models = await bedrockModels();
 
