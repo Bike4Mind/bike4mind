@@ -20,3 +20,13 @@ export function answeringModelLabel(
   const from = isError ? undefined : promptMeta.redirectedFrom;
   return from ? { label: displayName(name), replaces: displayName(from) } : { label: displayName(name) };
 }
+
+/**
+ * The model id a turn was requested for: the redirect source when a deprecated-model swap happened,
+ * otherwise the model that answered. Undefined when the turn recorded no model.
+ */
+export function requestedModelId(
+  promptMeta: Pick<PromptMeta, 'model' | 'redirectedFrom'> | undefined
+): string | undefined {
+  return promptMeta?.redirectedFrom ?? promptMeta?.model?.name;
+}
