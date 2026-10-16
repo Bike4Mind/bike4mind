@@ -601,7 +601,9 @@ function readWorkspaceKeyTable(pkg, field, { allowDisplay = false } = {}) {
 
 // Tools a workspace denies to every session whose surface matches (b4mContributions.workspaceDeniedTools,
 // `{ "<workspace id>": ["<tool name>"] }`). Pure data, applied at read time and never written onto sessions.
-const TOOL_NAME_RE = /^[a-z0-9][a-z0-9_.:-]*$/i;
+// No `/i`: tool names are matched exactly at read time, so a mixed-case entry would deny nothing - the
+// same reason a mixed-case workspace id is rejected below.
+const TOOL_NAME_RE = /^[a-z0-9][a-z0-9_.:-]*$/;
 
 function generateWorkspaceDeniedTools(packages) {
   const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceDeniedTools.generated.ts');

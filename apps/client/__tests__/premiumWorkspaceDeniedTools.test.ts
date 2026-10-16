@@ -122,6 +122,16 @@ describe('premium workspace denied tools', () => {
     expect(stderr).toContain('must be lowercase');
   });
 
+  // Read-time checks are exact-match, so `Web_Search` would silently deny nothing.
+  it('rejects a mixed-case tool name, since tool names match exactly', () => {
+    writeOverlay('mixedTool', { workspaceDeniedTools: { 'example-workspace': ['Web_Search'] } });
+
+    const { status, stderr } = runCodegen();
+
+    expect(status).toBe(1);
+    expect(stderr).toContain('invalid workspaceDeniedTools tools');
+  });
+
   it('rejects an entry that is not an array of tool names', () => {
     writeOverlay('loose', { workspaceDeniedTools: { space: 'tool_a' } });
     expect(runCodegen().status).toBe(1);
