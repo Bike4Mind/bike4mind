@@ -33,5 +33,10 @@ describe('effectiveDisabledTools wiring', () => {
     expect(source, `${file} no longer calls effectiveDisabledTools, so its surface denials are gone`).toContain(
       'effectiveDisabledTools('
     );
+    // Presence alone would pass with a leftover direct read elsewhere in the same file, which
+    // silently drops the surface denials at that site. Fail the file if any direct read remains.
+    expect(source, `${file} reads the session denylist directly, bypassing the surface denials`).not.toMatch(
+      /[sS]ession\??\.disabledTools\b/
+    );
   });
 });
