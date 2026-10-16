@@ -278,6 +278,9 @@ export default function GitHubRepositoryPickerModal() {
                             <Radio
                               value={String(repo.id)}
                               disabled={!!repo.boundTo}
+                              // Joy's outlined Radio root has no right padding, so the selected outline
+                              // would sit flush against the last label item.
+                              sx={{ pr: 1.5 }}
                               label={
                                 <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
                                   <Typography
