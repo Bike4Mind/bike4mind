@@ -28,7 +28,9 @@ vi.mock('@client/app/components/integrations/IntegrationsGallery', () => ({
   },
 }));
 vi.mock('@client/app/components/ProfileModal/ApiTabContent', () => ({
-  default: () => <div data-testid="api-keys-stub" />,
+  default: ({ replaceHistory }: { replaceHistory?: boolean }) => (
+    <div data-testid="api-keys-stub" data-replace-history={String(replaceHistory)} />
+  ),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -58,7 +60,8 @@ describe('IntegrationsPage tabs', () => {
     router.search = { tab: 'api-keys' };
     renderPage();
     expect(screen.getByTestId('connections-tab-api-keys')).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByTestId('api-keys-stub')).toBeInTheDocument();
+    // Back from the Usage link should return to Connections, not skip past it.
+    expect(screen.getByTestId('api-keys-stub')).toHaveAttribute('data-replace-history', 'false');
     expect(screen.queryByTestId('gallery-stub')).not.toBeInTheDocument();
     expect(gallery.mounts).toEqual([]);
   });

@@ -61,7 +61,7 @@ const IntegrationsPage = () => {
           {galleryMounted && <IntegrationsGallery source={entrySource ?? 'direct'} showHeading={false} />}
         </TabPanel>
         <TabPanel value="api-keys" sx={{ p: 0, pt: '16px' }}>
-          {activeTab === 'api-keys' && <ApiTabContent />}
+          {activeTab === 'api-keys' && <ApiTabContent replaceHistory={false} />}
         </TabPanel>
       </Tabs>
     </PageFrame>
