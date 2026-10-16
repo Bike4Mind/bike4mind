@@ -181,9 +181,6 @@ describe('ToolsButton session-denied tools', () => {
   });
 });
 
-// globals.css sets `min-width: 0` on every element, so a button that flex may shrink gets squeezed
-// below its content: the label slid under the indicators and the row never overflowed, so
-// useOverflowCompact never collapsed it to icons.
 describe('ToolsButton in a crowded composer row', () => {
   it('keeps its width instead of letting flex squeeze it', () => {
     modelRepo = [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: true }];

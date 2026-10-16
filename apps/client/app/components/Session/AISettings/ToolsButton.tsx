@@ -176,9 +176,8 @@ const ToolsButton: FC<ToolsButtonProps> = ({
           display: 'flex',
           position: 'relative',
           borderRadius: '6px',
-          // globals.css sets `min-width: 0` on everything, so without this flex squeezes the button
-          // and its label slides under the indicators instead of the row overflowing and collapsing
-          // to icons (useOverflowCompact). Same as InspectableSettingsButton.
+          // globals.css sets `min-width: 0` everywhere; without this the label squeezes under the indicators
+          // instead of the row overflowing into icons (useOverflowCompact). Same as InspectableSettingsButton.
           flexShrink: 0,
           ...fixedHeight,
           px: 1,
