@@ -16,6 +16,8 @@ const m = vi.hoisted(() => ({
   refund: vi.fn(),
   submitBatch: vi.fn(),
   create: vi.fn(),
+  cancel: vi.fn(),
+  ceiling: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -33,13 +35,18 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: async () => [{ id: 'claude-opus-4-6' }],
   AnthropicBatchService: { fromApiKey: () => ({ submitBatch: m.submitBatch }) },
 }));
+vi.mock('@anthropic-ai/sdk', () => ({
+  default: class {
+    messages = { batches: { cancel: m.cancel } };
+  },
+}));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
   createModelAdmission: async () => ({
     assert: async (id: string) => {
       if (m.denied.has(id)) throw new ForbiddenError(`Model "${id}" is not accessible and no fallback available`);
     },
   }),
-  completionCeilingUsd: () => 2,
+  completionCeilingUsd: (...args: unknown[]) => m.ceiling(...args),
   isCreditsEnforced: async () => m.enforced,
   reserveCompletionCredits: (...args: unknown[]) => m.reserve(...args),
 }));
@@ -69,6 +76,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.denied.clear();
   m.enforced = true;
+  m.ceiling.mockReturnValue(2);
+  m.cancel.mockResolvedValue({});
   m.reserve.mockResolvedValue({ hold: m.hold, refund: m.refund });
   m.submitBatch.mockImplementation(async (requests: { clientRef: string }[]) => ({
     anthropicBatchId: 'msgbatch_1',
@@ -133,12 +142,34 @@ describe('POST /api/transforms/batch metering', () => {
     );
   });
 
-  it('refunds the hold when persisting the batch fails after a successful submit', async () => {
+  it('cancels the batch then refunds the hold when persisting fails after a successful submit', async () => {
     m.create.mockRejectedValueOnce(new Error('db down'));
+    const order: string[] = [];
+    m.cancel.mockImplementation(async () => void order.push('cancel'));
+    m.refund.mockImplementation(async () => void order.push('refund'));
 
     await expect(submit([item('a')])).rejects.toThrow('db down');
     expect(m.submitBatch).toHaveBeenCalledTimes(1);
+    expect(m.cancel).toHaveBeenCalledWith('msgbatch_1');
+    expect(order).toEqual(['cancel', 'refund']);
+  });
+
+  it('still refunds and rethrows the persist error when the cancel fails', async () => {
+    m.create.mockRejectedValueOnce(new Error('db down'));
+    m.cancel.mockRejectedValueOnce(new Error('cancel down'));
+
+    await expect(submit([item('a')])).rejects.toThrow('db down');
     expect(m.refund).toHaveBeenCalledTimes(1);
+  });
+
+  it('prices the ceiling at the cache-write rate only for a request with a cache breakpoint', async () => {
+    const cached = {
+      ...item('b'),
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'p', cache_control: { type: 'ephemeral' } }] }],
+    };
+    await submit([item('a'), cached]);
+
+    expect(m.ceiling.mock.calls.map(c => c[3])).toEqual([false, true]);
   });
 
   it('400s a model it cannot price while credits are enforced, and passes it through when they are not', async () => {

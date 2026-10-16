@@ -10,6 +10,7 @@ import {
   reserveCompletionCredits,
 } from '@server/billing/meterPlatformCompletion';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 import { z } from 'zod';
 
@@ -86,7 +87,8 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
   const ceilingUsd = body.requests.reduce((sum, r) => {
     const modelInfo = modelInfos.get(r.model);
     const messages = [{ role: 'system', content: r.system ?? '' }, ...r.messages] as IMessage[];
-    return modelInfo ? sum + completionCeilingUsd(modelInfo, messages, r.max_tokens) : sum;
+    const cacheWrites = r.messages.some(msg => Array.isArray(msg.content) && msg.content.some(b => b.cache_control));
+    return modelInfo ? sum + completionCeilingUsd(modelInfo, messages, r.max_tokens, cacheWrites) : sum;
   }, 0);
   const service = AnthropicBatchService.fromApiKey(apiKey, req.logger);
 
@@ -120,14 +122,20 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
       succeededCount: 0,
       erroredCount: 0,
       customIdMap,
-      // ponytail: an ended batch that is never polled keeps its hold forever; add a sweeper like
-      // generationJobs/sweep.ts if consumers stop polling to completion.
+      // Settled only by a poll that sees the batch end; nothing sweeps holds, so a batch that is
+      // never polled to completion keeps its hold.
       creditHold: reservation.hold,
       apiKeyId: req.apiKeyInfo?.keyId,
       usageSource: req.apiKeyInfo ? resolveRequestUsageSource(req) : undefined,
     });
   } catch (error) {
     req.logger.error(`[transforms/batch] Failed to persist batch ${anthropicBatchId} after submit`, error);
+    // Unrecorded, the batch would run on the platform key with nothing to settle it.
+    await new Anthropic({ apiKey }).messages.batches
+      .cancel(anthropicBatchId)
+      .catch(cancelError =>
+        req.logger.error(`[transforms/batch] Failed to cancel unrecorded batch ${anthropicBatchId}`, cancelError)
+      );
     await reservation.refund();
     throw error;
   }
