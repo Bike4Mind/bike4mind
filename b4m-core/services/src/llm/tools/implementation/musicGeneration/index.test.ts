@@ -55,6 +55,9 @@ describe('music_generation tool', () => {
       'In the style of Some Singer, a slow ballad',
       'A ballad. Sounds like \u00c9mile Example',
       'A ROCK SONG IN THE STYLE OF SOME SINGER',
+      'in the vein of Some Singer',
+      'in the style of Motown, inspired by Some Singer',
+      'in the style of Detroit Example Singer',
     ];
     for (const prompt of named) {
       const createJob = vi.fn().mockResolvedValue(okJob);
@@ -78,6 +81,11 @@ describe('music_generation tool', () => {
     const prompt = 'a sonnet set to lute music, inspired by Example Soloist';
     expect(await tool.toolFn({ model: 'test-music', prompt })).toBe(ARTIST_REFERENCE_REFUSAL);
     expect(JSON.parse(await tool.toolFn({ model: 'test-music', prompt })).jobId).toBe('job1');
+    expect(createJob).toHaveBeenCalledTimes(1);
+
+    // The refusal belongs to the built tool, so the next turn gets its own.
+    const fresh = build(createJob);
+    expect(await fresh.tool.toolFn({ model: 'test-music', prompt })).toBe(ARTIST_REFERENCE_REFUSAL);
     expect(createJob).toHaveBeenCalledTimes(1);
   });
 
