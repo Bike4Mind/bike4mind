@@ -324,6 +324,11 @@ for the whole window. Removing an alias is a major-version change.
   window was possible. Its create body is strict so a stale field such as `callbackUrl`
   fails with a 422 rather than being dropped. A future in-place change needs a comparable
   reason; "the new shape is nicer" is not one.
+- Second precedent: `files[].url` on `GET /api/v1/quests/{id}` (and the generation-callback
+  body) went from a permanent public URL to a presigned one that expires in about an hour.
+  The shape is unchanged; only the lifetime is. Keeping the permanent URL would have kept
+  generated media readable by anyone holding the link, so no sunset window was offered. It
+  shipped as a breaking (`!`) release so SDK consumers that store the URL get a signal.
 
 ---
 

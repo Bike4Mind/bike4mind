@@ -563,7 +563,7 @@ async function pollQuest(
  * resolves `status: 'done'`, so `type: 'error'` (reason in `reply`) is the failure signal.
  * Generated images are not FabFiles, so there is no file id: the quest id is the handle,
  * and each image is its generated-file name plus the URL the quest poll resolves for it
- * (`fileUrl` is absent when the server has no CDN configured).
+ * (`fileUrl` is a short-lived presigned URL, valid for about an hour).
  */
 export async function generateImage(
   client: B4mApiClient,
