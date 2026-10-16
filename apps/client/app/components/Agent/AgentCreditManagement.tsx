@@ -46,6 +46,9 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
   const [previousIsTransferring, setPreviousIsTransferring] = useState(false);
   const [internalIsTransferring, setInternalIsTransferring] = useState(false);
   const [isUpdatingCreditSource, setIsUpdatingCreditSource] = useState(false);
+  // The credit source is chosen at creation (the agent update API does not accept it), so it is
+  // fixed once the agent exists.
+  const sourceLocked = readOnly || !!agentId;
 
   // Store the initial credits value to prevent it from changing when typing in the input
   const [displayedCredits, setDisplayedCredits] = useState(currentCredits);
@@ -87,25 +90,12 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
       return;
     }
 
-    const newUseOwnCredits = value === CREDIT_SOURCE.AGENT;
-
     setIsUpdatingCreditSource(true);
 
     try {
       // Call the parent callback if provided
       if (onCreditSourceChange) {
         await onCreditSourceChange(value);
-      }
-
-      // Also handle server update if agentId is provided (edit mode)
-      if (agentId) {
-        await api.put(`/api/agents/${agentId}`, {
-          useOwnCredits: newUseOwnCredits,
-        });
-
-        toast.success(`Agent credit source updated to ${newUseOwnCredits ? "agent's own credits" : "user's credits"}`, {
-          duration: 2500,
-        });
       }
     } catch (error: any) {
       console.error('Error updating agent credit source:', error);
@@ -199,7 +189,7 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
         {/* First Option - Use User Account Credits */}
         <FormControl
           size="sm"
-          onClick={readOnly || !useOwnCredits ? undefined : () => handleCreditSourceChange(CREDIT_SOURCE.USER)}
+          onClick={sourceLocked || !useOwnCredits ? undefined : () => handleCreditSourceChange(CREDIT_SOURCE.USER)}
           sx={{
             display: 'flex',
             flexDirection: 'row',
@@ -208,22 +198,22 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
             p: 0,
             mb: 1.5,
             gap: '12px',
-            cursor: readOnly ? 'default' : 'pointer',
+            cursor: sourceLocked ? 'default' : 'pointer',
             transition: 'all 0.2s ease-in-out',
           }}
         >
-          <Radio value={CREDIT_SOURCE.USER} disabled={readOnly || isUpdatingCreditSource} />
+          <Radio value={CREDIT_SOURCE.USER} disabled={sourceLocked || isUpdatingCreditSource} />
           <Box
             sx={{
               display: 'flex',
               flexDirection: { xs: 'column', sm: 'row' },
               gap: { xs: '4px', sm: '12px' },
               flexGrow: 1,
-              pointerEvents: readOnly ? 'none' : 'auto',
+              pointerEvents: sourceLocked ? 'none' : 'auto',
             }}
           >
             <FormLabel
-              sx={{ cursor: readOnly ? 'default' : 'pointer', mb: 0, color: 'text.tertiary', fontSize: '14px' }}
+              sx={{ cursor: sourceLocked ? 'default' : 'pointer', mb: 0, color: 'text.tertiary', fontSize: '14px' }}
             >
               Your account credits balance:
             </FormLabel>
@@ -276,7 +266,7 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
         {/* Second Option - Use Agent's Own Credits */}
         <FormControl
           size="sm"
-          onClick={readOnly || useOwnCredits ? undefined : () => handleCreditSourceChange(CREDIT_SOURCE.AGENT)}
+          onClick={sourceLocked || useOwnCredits ? undefined : () => handleCreditSourceChange(CREDIT_SOURCE.AGENT)}
           sx={{
             display: 'flex',
             flexDirection: 'row',
@@ -284,22 +274,22 @@ const AgentCreditManagement: React.FC<AgentCreditManagementProps> = ({
             border: 'none',
             p: 0,
             gap: '12px',
-            cursor: readOnly ? 'default' : 'pointer',
+            cursor: sourceLocked ? 'default' : 'pointer',
             transition: 'all 0.2s ease-in-out',
           }}
         >
-          <Radio value={CREDIT_SOURCE.AGENT} disabled={readOnly || isUpdatingCreditSource} />
+          <Radio value={CREDIT_SOURCE.AGENT} disabled={sourceLocked || isUpdatingCreditSource} />
           <Box
             sx={{
               display: 'flex',
               flexDirection: { xs: 'column', sm: 'row' },
               gap: { xs: '4px', sm: '12px' },
               flexGrow: 1,
-              pointerEvents: readOnly ? 'none' : 'auto',
+              pointerEvents: sourceLocked ? 'none' : 'auto',
             }}
           >
             <FormLabel
-              sx={{ cursor: readOnly ? 'default' : 'pointer', mb: 0, color: 'text.tertiary', fontSize: '14px' }}
+              sx={{ cursor: sourceLocked ? 'default' : 'pointer', mb: 0, color: 'text.tertiary', fontSize: '14px' }}
             >
               Agent&apos;s own credits balance:
             </FormLabel>
