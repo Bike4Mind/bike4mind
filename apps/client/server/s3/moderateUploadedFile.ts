@@ -4,6 +4,12 @@ import { ImageModerationBlockedError, UnsupportedImageFormatError } from '@bike4
 import type { ImageModerationIncident } from '@bike4mind/common';
 import { SupportedFabFileMimeTypes, UNSUPPORTED_FORMAT_BLOCK_REASON } from '@bike4mind/common';
 import { fileTypeFromBuffer } from 'file-type';
+import {
+  BARE_UPLOAD_MAX_BYTES,
+  BARE_UPLOAD_MIME_TYPE,
+  GENERATE_UPLOAD_BLOCK_REASON,
+  type GenerateUploadConstraint,
+} from '@server/files/generateUploadMarker';
 
 /**
  * Bytes needed for `file-type` to reliably sniff most binary formats from their magic
@@ -71,6 +77,8 @@ export interface ModerateUploadedFileArgs {
     logger: Logger;
   }) => Promise<void>;
   logger: Logger;
+  /** Set for an ai:generate-only upload: it must be a PNG within the size cap to resolve clean. */
+  generateUpload?: GenerateUploadConstraint;
 }
 
 export interface ModerateUploadedFileResult {
@@ -87,7 +95,7 @@ export interface ModerateUploadedFileResult {
    * scanned at all - distinct from a confirmed explicit-content match, for
    * logging/telemetry.
    */
-  blockReason?: typeof UNSUPPORTED_FORMAT_BLOCK_REASON;
+  blockReason?: typeof UNSUPPORTED_FORMAT_BLOCK_REASON | typeof GENERATE_UPLOAD_BLOCK_REASON;
 }
 
 /**
@@ -123,7 +131,22 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
     downloadPartialBytes,
     moderateImageOrThrow,
     logger,
+    generateUpload,
   } = args;
+
+  // Runs before the `enabled` short-circuit: the constraint is not a content judgement, so turning
+  // image moderation off must not let a marked file skip it.
+  if (generateUpload) {
+    const size = await generateUpload.measureSize();
+    const realMime = (await fileTypeFromBuffer(await downloadPartialBytes(SNIFF_BYTES)))?.mime;
+    if (!(size <= BARE_UPLOAD_MAX_BYTES) || realMime !== BARE_UPLOAD_MIME_TYPE) {
+      return {
+        moderationStatus: 'blocked',
+        ...(realMime && realMime !== mimeType ? { correctedMimeType: realMime } : {}),
+        blockReason: GENERATE_UPLOAD_BLOCK_REASON,
+      };
+    }
+  }
 
   if (!enabled) return { moderationStatus: 'clean' };
 
