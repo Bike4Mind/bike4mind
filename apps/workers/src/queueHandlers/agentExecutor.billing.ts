@@ -14,10 +14,27 @@
  * the caller across iterations (mirrors the in-place-mutation contract the call
  * site relies on).
  */
-import { getTurnsCost, type ModelInfo, type TurnUsage } from '@bike4mind/common';
+import { getTurnsCost, reservationOutputTokens, usdToCredits, type ModelInfo, type TurnUsage } from '@bike4mind/common';
 import type { IIterationBilling } from '@bike4mind/database';
 import type { UsageEventStatus } from '@bike4mind/common';
 import { buildEarlyStopStamp } from '@bike4mind/services/llm';
+
+/** Input tokens (cached or not) the last provider request of a run sent; 0 before the first. */
+export function lastRequestInputTokens(turns: readonly TurnUsage[] | undefined): number {
+  const last = turns?.at(-1);
+  return last ? last.inputTokens + (last.cacheReadInputTokens ?? 0) + (last.cacheCreationInputTokens ?? 0) : 0;
+}
+
+/**
+ * Credits the next iteration can cost: a request as large as the last one the run sent, priced
+ * uncached, plus a reservation-sized reply. The executor checks the payer's live balance against
+ * it before every iteration (and at admission), so a run stops before an iteration it cannot pay
+ * for instead of settling the balance below zero.
+ */
+export function nextIterationCredits(modelInfo: ModelInfo, inputTokens: number): number {
+  const outputTokens = reservationOutputTokens(modelInfo.max_tokens);
+  return usdToCredits(getTurnsCost(modelInfo, [{ inputTokens, outputTokens }]));
+}
 
 /** Last-billed cumulative totals; mutated in place as iterations settle. */
 export type BillingCounters = {

@@ -293,6 +293,65 @@ describe('processExecution tool deps', () => {
     });
   });
 
+  // Every iteration settles with an unconditional debit, so admission must require one whole
+  // iteration's worth of credits, not merely a positive balance.
+  describe('credit admission', () => {
+    const pricedModel = {
+      id: 'claude-sonnet-5',
+      type: 'text',
+      name: 'Sonnet',
+      backend: 'anthropic',
+      max_tokens: 64_000,
+      contextWindow: 200_000,
+      pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+    };
+
+    async function admitWith({ credits, doc = execDoc }: { credits: number; doc?: Record<string, unknown> }) {
+      const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+      const { adminSettingsRepository, agentExecutionRepository, User } = await import('@bike4mind/database');
+      vi.mocked(getAvailableModels).mockResolvedValueOnce([pricedModel] as never);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockImplementation(
+        (async (key: string) => key === 'enforceCredits') as never
+      );
+      vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: credits } as never);
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      const { handler } = await import('./agentExecutor');
+      await handler(continuationEvent(), lambdaContext).catch(() => undefined);
+      vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
+      return { markFailed: vi.mocked(agentExecutionRepository.markFailed) };
+    }
+
+    it('refuses a run whose balance cannot cover one iteration, before any tool or model work', async () => {
+      const { markFailed } = await admitWith({ credits: 1 });
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', { message: 'Insufficient credits to run agent execution' });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+
+    it('admits a run whose balance covers one iteration', async () => {
+      const { markFailed } = await admitWith({ credits: 100_000 });
+
+      // The harness stops the run at tool building, which markFailed reports on its own terms.
+      expect(markFailed).not.toHaveBeenCalledWith('exec-1', {
+        message: 'Insufficient credits to run agent execution',
+      });
+      expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
+    });
+
+    // A resumed run prices its next request at the size of the last one it sent, so a long run
+    // stops once its context outgrows the balance rather than once the balance hits zero.
+    it('refuses a resumed run whose last request alone outruns the balance', async () => {
+      const resumed = {
+        ...execDoc,
+        checkpoint: { iteration: 3, steps: [], turnUsage: [{ inputTokens: 150_000, outputTokens: 500 }] },
+      };
+      const { markFailed } = await admitWith({ credits: 1_000, doc: resumed });
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', { message: 'Insufficient credits to run agent execution' });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+  });
+
   it('resolves an unset library flag to included for a session with no explicit lake scope', async () => {
     const deps = await runWithSession(baseSession);
 

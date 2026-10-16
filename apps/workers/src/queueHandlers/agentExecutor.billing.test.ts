@@ -18,6 +18,8 @@ import {
   type BillingCounters,
   type IterationBillingEffects,
   type PendingToolUsage,
+  lastRequestInputTokens,
+  nextIterationCredits,
 } from './agentExecutor.billing';
 import type { ModelInfo } from '@bike4mind/common';
 import { estimateGeneratedMediaUsd } from '@bike4mind/services';
@@ -969,5 +971,32 @@ describe('settleSubagentMediaUsage', () => {
     await expect(settleSubagentMediaUsage(pendingWith(0.04), effects)).rejects.toThrow('db down');
     expect(effects.recordAuditCredits).not.toHaveBeenCalled();
     expect(effects.recordUsageEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('nextIterationCredits', () => {
+  const model = {
+    id: 'm',
+    max_tokens: 64_000,
+    contextWindow: 200_000,
+    pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+  } as unknown as ModelInfo;
+
+  it('prices a full reservation-sized reply even before the first request', () => {
+    expect(nextIterationCredits(model, 0)).toBeGreaterThan(0);
+  });
+
+  it('grows with the size of the last request the run sent', () => {
+    expect(nextIterationCredits(model, 150_000)).toBeGreaterThan(nextIterationCredits(model, 0));
+  });
+
+  it('reads the last request, cached tokens included, and 0 before any', () => {
+    expect(lastRequestInputTokens(undefined)).toBe(0);
+    expect(
+      lastRequestInputTokens([
+        { inputTokens: 10, outputTokens: 1 },
+        { inputTokens: 100, outputTokens: 1, cacheReadInputTokens: 20, cacheCreationInputTokens: 5 },
+      ])
+    ).toBe(125);
   });
 });

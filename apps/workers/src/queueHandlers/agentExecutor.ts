@@ -163,6 +163,8 @@ import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // fold can be unit-tested with injected effect doubles; see `agentExecutor.billing.ts`.
 import {
   billIteration,
+  lastRequestInputTokens,
+  nextIterationCredits,
   reseedCounters,
   addToolUsage,
   takeToolUsage,
@@ -1059,12 +1061,19 @@ async function processExecution(
     if (!llm) throw new Error(`Failed to create LLM backend for model "${execution.model}"`);
     llm.currentModel = resolvedModelId;
 
-    // Pre-flight credit check
+    // Pre-flight credit check. With enforcement on, the balance must cover one whole iteration
+    // (nextIterationCredits), the same bar the loop re-checks before every later one.
+    const enforceCredits = (await adminSettingsRepository.getSettingsValue('enforceCredits')) === true;
+    // Resumed runs price the next request at the size of the last one they sent.
+    let lastInputTokens = isNewExecution
+      ? 0
+      : lastRequestInputTokens((execution.checkpoint as AgentCheckpoint | undefined)?.turnUsage);
     const userCredits = (user as IUserDocument).currentCredits ?? 0;
     const orgCredits = organization?.currentCredits ?? 0;
     const availableCredits = organization ? orgCredits : userCredits;
-    if (availableCredits <= 0) {
-      logger.warn('[Credits] Insufficient credits to start execution', { availableCredits });
+    const requiredCredits = enforceCredits && modelInfo ? nextIterationCredits(modelInfo, lastInputTokens) : 0;
+    if (availableCredits <= 0 || availableCredits < requiredCredits) {
+      logger.warn('[Credits] Insufficient credits to start execution', { availableCredits, requiredCredits });
       await agentExecutionRepository.markFailed(executionId, {
         message: 'Insufficient credits to run agent execution',
       });
@@ -2626,6 +2635,41 @@ async function processExecution(
         return;
       }
 
+      // Each iteration settles with an unconditional debit, so stop before one the payer's live
+      // balance cannot cover rather than letting the run carry the balance below zero.
+      if (enforceCredits && modelInfo) {
+        const holder = organization
+          ? await organizationRepository.findById(organization.id)
+          : await userRepository.findById((user as IUserDocument).id);
+        const balance = holder?.currentCredits ?? 0;
+        const nextCredits = nextIterationCredits(modelInfo, lastInputTokens);
+        if (balance < nextCredits) {
+          logger.warn('[Credits] Balance cannot cover the next iteration; stopping execution', {
+            balance,
+            requiredCredits: nextCredits,
+            iterationIndex,
+          });
+          const checkpoint = agent.toCheckpoint();
+          const partialAnswer = extractFinalAnswer(checkpoint.steps);
+          await agentExecutionRepository.markFailed(executionId, {
+            message: 'Insufficient credits to continue agent execution',
+          });
+          await sendWs('failed', { executionId, reason: 'insufficient_credits', partialResult: checkpoint.steps });
+          await persistRunAsQuest(
+            executionId,
+            partialAnswer
+              ? `Stopped: out of credits. Partial response:\n\n${partialAnswer}`
+              : 'Stopped: out of credits.',
+            logger,
+            generatedImages,
+            undefined,
+            allSideEffects,
+            retrievalSummary
+          );
+          return;
+        }
+      }
+
       // Run one iteration. The `[ATTACHED FILES]` preamble is gated to
       // iteration 0 of a new execution - continuation Lambdas replay the
       // checkpoint, which already embeds the preamble in the first user
@@ -2825,6 +2869,7 @@ async function processExecution(
         ledgerForWrite(optiPlanState)
       );
       await billIterationIfNeeded(iterationIndex, iterationResult.checkpoint, counters);
+      lastInputTokens = lastRequestInputTokens(iterationResult.checkpoint.turnUsage) || lastInputTokens;
 
       // Permission check. The calls listed here were withheld BEFORE execution by
       // `toolGate`, so nothing has run and nothing has been billed for them yet -
