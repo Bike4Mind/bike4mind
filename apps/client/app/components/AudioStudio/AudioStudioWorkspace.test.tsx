@@ -4,16 +4,15 @@ import { estimateTtsCreditCost, TTS_DEFAULT_MODEL } from '@bike4mind/common';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { useAudioProvidersMock, generate, hookState } = vi.hoisted(() => ({
+const { useAudioProvidersMock, useGenerateAudioMock, generate, hookState } = vi.hoisted(() => ({
   useAudioProvidersMock: vi.fn(),
+  useGenerateAudioMock: vi.fn(),
   generate: vi.fn(),
   hookState: { result: null as null | { url: string; saved: boolean }, isGenerating: false },
 }));
 
 vi.mock('@client/app/hooks/data/audioProviders', () => ({ useAudioProviders: useAudioProvidersMock }));
-vi.mock('./useGenerateAudio', () => ({
-  useGenerateAudio: () => ({ generate, isGenerating: hookState.isGenerating, result: hookState.result }),
-}));
+vi.mock('./useGenerateAudio', () => ({ useGenerateAudio: useGenerateAudioMock }));
 vi.mock('@client/app/components/Session/AISettings/AudioGenerationSettings', () => ({
   AudioGenerationSettings: ({ mode }: { mode: string }) => <div data-testid={`settings-${mode}`} />,
 }));
@@ -32,6 +31,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   hookState.result = null;
   hookState.isGenerating = false;
+  // Read through on each call: the tests below set hookState just before rendering.
+  useGenerateAudioMock.mockImplementation(() => ({
+    generate,
+    isGenerating: hookState.isGenerating,
+    result: hookState.result,
+  }));
   useAudioStudioDraft.setState({ text: { tts: '', 'sound-effects': '' } });
   useAudioGenSettings.getState().reset();
   providers(['openai'], ['elevenlabs']);
@@ -103,6 +108,17 @@ describe('AudioStudioWorkspace form', () => {
     hookState.result = { url: 'blob:audio', saved: false };
     renderWithTheme(<SpeechStudioWorkspace testId="speech-studio" />);
     expect(screen.getByTestId('speech-studio-player')).toHaveAttribute('src', 'blob:audio');
+  });
+
+  it('drives the sound-effects form in its own mode', () => {
+    renderWithTheme(<SoundEffectsStudioWorkspace testId="sound-effects-studio" />);
+    fireEvent.change(screen.getByTestId('sound-effects-studio-text-input').querySelector('textarea')!, {
+      target: { value: 'rain on a tin roof' },
+    });
+    fireEvent.click(screen.getByTestId('sound-effects-studio-submit-btn'));
+
+    expect(useGenerateAudioMock).toHaveBeenCalledWith('sound-effects');
+    expect(generate).toHaveBeenCalledWith('rain on a tin roof');
   });
 
   it('leaves a saved result to the gallery', () => {
