@@ -54,7 +54,8 @@ export async function holdCredits(
     organizationId: string | null;
     requiredCredits: number;
     featureLabel: string;
-    logger: Logger;
+    // Only error is used, so a route-level ILogger fits too.
+    logger: Pick<Logger, 'error'>;
     /** Runs after the user/org are loaded and before any balance moves; throw to refuse. */
     assertBillable?: (user: IUserDocument, organization: IOrganizationDocument | null) => void;
   },

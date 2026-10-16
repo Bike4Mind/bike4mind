@@ -15,6 +15,8 @@ const { mocks } = vi.hoisted(() => {
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
+  organizationRepository: {},
+  creditTransactionRepository: {},
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
 }));
 // Keep the real getSettingsValue: the hosted default (enforcement on when the
@@ -58,7 +60,7 @@ describe('assertPreflightCredits', () => {
 
     it('admits any positive balance when no estimate is given', async () => {
       mocks.findById.mockResolvedValue({ currentCredits: 1 });
-      await expect(check()).resolves.toBeUndefined();
+      await expect(check()).resolves.toBe(true);
     });
 
     it('rejects a positive balance that does not cover the estimate, naming both figures', async () => {
@@ -70,7 +72,7 @@ describe('assertPreflightCredits', () => {
 
     it('admits a balance that exactly covers the estimate', async () => {
       mocks.findById.mockResolvedValue({ currentCredits: 10 });
-      await expect(check(10)).resolves.toBeUndefined();
+      await expect(check(10)).resolves.toBe(true);
     });
   });
 
@@ -79,7 +81,7 @@ describe('assertPreflightCredits', () => {
 
     it('admits a zero-balance user', async () => {
       mocks.findById.mockResolvedValue({ currentCredits: 0 });
-      await expect(check(100)).resolves.toBeUndefined();
+      await expect(check(100)).resolves.toBe(false);
     });
 
     it('still rejects a user that does not exist', async () => {

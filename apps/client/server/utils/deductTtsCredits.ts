@@ -1,10 +1,12 @@
 import { CreditHolderType, VoiceGenerationVendor, computeTtsUsd } from '@bike4mind/common';
-import { creditService } from '@bike4mind/services';
 import { usdToCredits } from '@bike4mind/utils';
-import { userRepository, creditTransactionRepository, usageEventRepository } from '@bike4mind/database';
+import { usageEventRepository } from '@bike4mind/database';
 import { type ILogger } from '@bike4mind/observability';
+import type { PreflightCreditHold } from '@server/utils/creditPreflight';
 
 export interface DeductTtsArgs {
+  // Held before synthesis (holdPreflightCredits); settled here on the measured characters.
+  hold: PreflightCreditHold;
   userId: string;
   vendor: VoiceGenerationVendor;
   // Resolved provider model (VoiceSynthesisResult.model) - the per-model billing key.
@@ -15,57 +17,44 @@ export interface DeductTtsArgs {
 }
 
 /**
- * Charge a user for one successful TTS synthesis. Cost is per input character,
- * provider+model aware (voicePricing). Non-fatal: synthesis already succeeded,
- * so a billing failure is logged for ops rather than surfaced to the caller.
- * Mirrors deductTranscriptionCredits in the transcribe route.
+ * Settle one successful TTS synthesis against its hold. Cost is per input
+ * character, provider+model aware (voicePricing). A fallback vendor that costs
+ * more than the held quote is charged the quote: the substitution is ours, not
+ * the caller's. Non-fatal: synthesis already succeeded, so a billing failure is
+ * logged for ops (inside hold.settle) rather than surfaced to the caller.
  */
-export async function deductTtsCredits({ userId, vendor, model, characters, logger }: DeductTtsArgs): Promise<void> {
+export async function deductTtsCredits({
+  hold,
+  userId,
+  vendor,
+  model,
+  characters,
+  logger,
+}: DeductTtsArgs): Promise<void> {
   const costUsd = computeTtsUsd(vendor, model, characters);
-  const credits = usdToCredits(costUsd);
+  const sessionId = `tts-${userId}-${Date.now()}`;
+  const credits = await hold.settle(usdToCredits(costUsd), { type: 'text_to_speech_usage', model, sessionId });
   if (credits <= 0) return;
 
-  const sessionId = `tts-${userId}-${Date.now()}`;
-
-  try {
-    await creditService.subtractCredits(
-      {
-        type: 'text_to_speech_usage',
-        ownerId: userId,
-        ownerType: CreditHolderType.User,
-        credits,
-        model,
-        sessionId,
-      },
-      {
-        db: { creditTransactions: creditTransactionRepository },
-        creditHolderMethods: userRepository,
-      }
-    );
-
-    // Dual-write usage event: analytics only, never billing.
-    usageEventRepository
-      .record({
-        requestId: sessionId,
-        userId,
-        ownerId: userId,
-        ownerType: CreditHolderType.User,
-        sessionId,
-        feature: 'text_to_speech',
-        provider: vendor,
-        model,
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedInputTokens: 0,
-        cacheWriteTokens: 0,
-        units: characters,
-        costUsd,
-        creditsCharged: credits,
-        status: 'ok',
-      })
-      .catch(err => logger.warn('Failed to record TTS usage event', { err }));
-  } catch (err) {
-    // Non-fatal: synthesis succeeded; log the billing miss for ops visibility.
-    logger.error('TTS credit deduction failed - billing may be missed', { userId, credits, err });
-  }
+  // Dual-write usage event: analytics only, never billing.
+  usageEventRepository
+    .record({
+      requestId: sessionId,
+      userId,
+      ownerId: userId,
+      ownerType: CreditHolderType.User,
+      sessionId,
+      feature: 'text_to_speech',
+      provider: vendor,
+      model,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      units: characters,
+      costUsd,
+      creditsCharged: credits,
+      status: 'ok',
+    })
+    .catch(err => logger.warn('Failed to record TTS usage event', { err }));
 }

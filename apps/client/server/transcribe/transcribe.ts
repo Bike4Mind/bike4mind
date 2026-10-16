@@ -11,15 +11,17 @@ import { BadRequestError } from '@server/utils/errors';
 import { MIME_TO_EXTENSION, TRANSCRIBE_UPLOAD_PREFIX } from '@server/utils/transcribeConstants';
 import {
   assertTranscriptionCredits,
+  holdTranscriptionCredits,
   estimateTranscriptionCost,
   MIN_TRANSCRIPTION_USD_PER_MINUTE,
   transcriptionUsdPerMinute,
 } from '@server/utils/transcriptionCost';
-import { speechToTextService, creditService } from '@bike4mind/services';
+import { speechToTextService } from '@bike4mind/services';
 import { Resource } from 'sst';
 import { type ILogger } from '@bike4mind/observability';
 import { CreditHolderType } from '@bike4mind/common';
-import { userRepository, creditTransactionRepository, usageEventRepository } from '@bike4mind/database';
+import { usageEventRepository } from '@bike4mind/database';
+import type { PreflightCreditHold } from '@server/utils/creditPreflight';
 import { v4 as uuidv4 } from 'uuid';
 
 export type TranscribeRejection =
@@ -39,10 +41,10 @@ export const PRESIGNED_POST_EXPIRY_SECONDS = 300; // 5 minutes
 const s3Client = new S3Client();
 const bucketName = Resource.appFilesBucket.name;
 
-// assertTranscriptionCredits throws BadRequestError only for a caller who cannot pay (or does not exist).
-async function assertCanPay(userId: string, estimatedCredits: number): Promise<void> {
+// The transcription credit helpers throw BadRequestError only for a caller who cannot pay (or does not exist).
+async function asInsufficientCredits<T>(check: () => Promise<T>): Promise<T> {
   try {
-    await assertTranscriptionCredits(userId, estimatedCredits);
+    return await check();
   } catch (err) {
     if (err instanceof BadRequestError) throw new TranscribeRequestError('insufficient_credits', err.message);
     throw err;
@@ -64,7 +66,9 @@ export async function createTranscribeUpload({
   // S3-attested size and the resolved backend - this is a fail-fast UX guard
   // on the client-declared size, priced at the cheapest backend so it never
   // refuses what that check admits.
-  await assertCanPay(userId, estimateTranscriptionCost(fileSize, MIN_TRANSCRIPTION_USD_PER_MINUTE).credits);
+  await asInsufficientCredits(() =>
+    assertTranscriptionCredits(userId, estimateTranscriptionCost(fileSize, MIN_TRANSCRIPTION_USD_PER_MINUTE).credits)
+  );
 
   const fileKey = `${TRANSCRIBE_UPLOAD_PREFIX}${userId}/${uuidv4()}.${MIME_TO_EXTENSION[mimeType]}`;
 
@@ -143,7 +147,6 @@ export async function transcribeUpload({
     }
 
     const cost = estimateTranscriptionCost(contentLength, transcriptionUsdPerMinute(speechModelInfo.backend));
-    await assertCanPay(userId, cost.credits);
 
     const apiKey = await getEffectiveApiKeyByBackend(userId || 'system', speechModelInfo.backend);
     if (!apiKey && speechModelInfo.backend !== 'aws') {
@@ -156,6 +159,8 @@ export async function transcribeUpload({
 
     const speechToText = new speechToTextService.speechService(bucketName);
 
+    // Held last, so no rejection above strands it; the actual cost is the same size-based figure.
+    const hold = await asInsufficientCredits(() => holdTranscriptionCredits(userId, cost.credits, logger));
     let results: speechToTextService.TranscriptionResult;
     try {
       if (speechModelInfo.backend === 'openai') {
@@ -166,11 +171,13 @@ export async function transcribeUpload({
         throw new TranscribeRequestError('not_configured', `Unsupported speech backend: ${speechModelInfo.backend}`);
       }
     } catch (err) {
+      await hold.release();
       if (err instanceof TranscribeRequestError || !mapProviderError) throw err;
       throw mapProviderError(err);
     }
 
     await deductTranscriptionCredits({
+      hold,
       userId,
       backend: speechModelInfo.backend,
       contentLength,
@@ -186,62 +193,45 @@ export async function transcribeUpload({
 }
 
 interface DeductArgs {
+  hold: PreflightCreditHold;
   userId: string;
   backend: string;
   contentLength: number;
   logger: ILogger;
 }
 
-async function deductTranscriptionCredits({ userId, backend, contentLength, logger }: DeductArgs): Promise<void> {
-  const { durationMinutes, costUsd, credits } = estimateTranscriptionCost(
-    contentLength,
-    transcriptionUsdPerMinute(backend)
-  );
+// Settles the hold; a billing failure is logged inside hold.settle, never surfaced (transcription succeeded).
+async function deductTranscriptionCredits({ hold, userId, backend, contentLength, logger }: DeductArgs): Promise<void> {
+  const {
+    durationMinutes,
+    costUsd,
+    credits: cost,
+  } = estimateTranscriptionCost(contentLength, transcriptionUsdPerMinute(backend));
+  const sessionId = `transcribe-${userId}-${Date.now()}`;
+  const credits = await hold.settle(cost, { type: 'speech_to_text_usage', model: backend, sessionId });
   if (credits <= 0) return;
 
-  const sessionId = `transcribe-${userId}-${Date.now()}`;
-
-  try {
-    await creditService.subtractCredits(
-      {
-        type: 'speech_to_text_usage',
-        ownerId: userId,
-        ownerType: CreditHolderType.User,
-        credits,
-        model: backend,
-        sessionId,
-      },
-      {
-        db: { creditTransactions: creditTransactionRepository },
-        creditHolderMethods: userRepository,
-      }
-    );
-
-    // Dual-write usage event: analytics only, never billing.
-    usageEventRepository
-      .record({
-        requestId: sessionId,
-        userId,
-        ownerId: userId,
-        ownerType: CreditHolderType.User,
-        sessionId,
-        feature: 'transcription',
-        provider: backend,
-        model: backend,
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedInputTokens: 0,
-        cacheWriteTokens: 0,
-        units: durationMinutes,
-        costUsd,
-        creditsCharged: credits,
-        status: 'ok',
-      })
-      .catch(err => logger.warn('Failed to record usage event', { err }));
-  } catch (err) {
-    // Non-fatal: transcription succeeded; log billing miss for ops visibility.
-    logger.error('Transcription credit deduction failed - billing may be missed', { userId, credits, err });
-  }
+  // Dual-write usage event: analytics only, never billing.
+  usageEventRepository
+    .record({
+      requestId: sessionId,
+      userId,
+      ownerId: userId,
+      ownerType: CreditHolderType.User,
+      sessionId,
+      feature: 'transcription',
+      provider: backend,
+      model: backend,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      units: durationMinutes,
+      costUsd,
+      creditsCharged: credits,
+      status: 'ok',
+    })
+    .catch(err => logger.warn('Failed to record usage event', { err }));
 }
 
 async function deleteSilently(key: string, logger: ILogger): Promise<void> {

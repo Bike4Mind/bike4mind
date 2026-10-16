@@ -5,16 +5,25 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockSend, mockGetOperationsModel, mockOpenAI, mockGetApiKey, mockAssertCredits, mockPresign } = vi.hoisted(
-  () => ({
-    mockSend: vi.fn(),
-    mockGetOperationsModel: vi.fn(),
-    mockOpenAI: vi.fn(),
-    mockGetApiKey: vi.fn(),
-    mockAssertCredits: vi.fn(),
-    mockPresign: vi.fn(),
-  })
-);
+const {
+  mockSend,
+  mockGetOperationsModel,
+  mockOpenAI,
+  mockGetApiKey,
+  mockAssertCredits,
+  mockHoldCredits,
+  mockPresign,
+  hold,
+} = vi.hoisted(() => ({
+  mockSend: vi.fn(),
+  mockGetOperationsModel: vi.fn(),
+  mockOpenAI: vi.fn(),
+  mockGetApiKey: vi.fn(),
+  mockAssertCredits: vi.fn(),
+  mockHoldCredits: vi.fn(),
+  mockPresign: vi.fn(),
+  hold: { settle: vi.fn(), release: vi.fn() },
+}));
 
 vi.mock('@aws-sdk/client-s3', () => ({
   S3Client: class {
@@ -38,9 +47,12 @@ vi.mock('@client/services/operationsModelService', () => ({
 vi.mock('@server/utils/transcriptionCost', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   assertTranscriptionCredits: mockAssertCredits,
+  holdTranscriptionCredits: mockHoldCredits,
 }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
+  organizationRepository: {},
+  adminSettingsRepository: {},
   creditTransactionRepository: {},
   usageEventRepository: { record: vi.fn() },
 }));
@@ -76,6 +88,9 @@ beforeEach(() => {
   mockGetOperationsModel.mockResolvedValue({ speechModelInfo: { backend: 'openai' } });
   mockGetApiKey.mockResolvedValue('sk-test');
   mockAssertCredits.mockResolvedValue(undefined);
+  mockHoldCredits.mockResolvedValue(hold);
+  hold.settle.mockResolvedValue(0);
+  hold.release.mockResolvedValue(undefined);
   mockPresign.mockResolvedValue({ url: 'https://s3.example/upload', fields: {} });
 });
 
@@ -107,7 +122,7 @@ describe('transcribeUpload rejection kinds', () => {
     [
       'a balance that cannot pay',
       'insufficient_credits',
-      () => mockAssertCredits.mockRejectedValue(new BadRequestError('Insufficient credits')),
+      () => mockHoldCredits.mockRejectedValue(new BadRequestError('Insufficient credits')),
     ],
   ])('tags %s as %s', async (_label, kind, arrange) => {
     arrange();
@@ -123,9 +138,33 @@ describe('transcribeUpload rejection kinds', () => {
 
   it('rethrows a credit pre-flight fault that is not a BadRequestError unchanged', async () => {
     const fault = new Error('db down');
-    mockAssertCredits.mockRejectedValue(fault);
+    mockHoldCredits.mockRejectedValue(fault);
 
     await expect(run()).rejects.toBe(fault);
+  });
+});
+
+describe('transcribeUpload credit hold', () => {
+  it('holds the size-based cost before the provider runs, then settles that hold', async () => {
+    mockOpenAI.mockImplementation(async () => {
+      expect(mockHoldCredits).toHaveBeenCalledTimes(1);
+      return { text: 'hello' };
+    });
+
+    await run();
+
+    const [, heldCredits] = mockHoldCredits.mock.calls[0];
+    expect(heldCredits).toBeGreaterThan(0);
+    expect(hold.settle).toHaveBeenCalledWith(heldCredits, expect.objectContaining({ type: 'speech_to_text_usage' }));
+    expect(hold.release).not.toHaveBeenCalled();
+  });
+
+  it('releases the hold when the provider fails, and never settles it', async () => {
+    mockOpenAI.mockRejectedValue(new Error('provider exploded'));
+
+    await expect(run()).rejects.toBe(mapped);
+    expect(hold.release).toHaveBeenCalledTimes(1);
+    expect(hold.settle).not.toHaveBeenCalled();
   });
 });
 

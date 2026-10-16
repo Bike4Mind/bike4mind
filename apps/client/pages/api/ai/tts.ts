@@ -13,7 +13,11 @@ import {
 import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
-import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
+import {
+  holdPreflightCredits,
+  InsufficientCreditsPreflightError,
+  type PreflightCreditHold,
+} from '@server/utils/creditPreflight';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 
@@ -60,14 +64,16 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     );
   }
 
-  // Pre-flight credit gate: reject before incurring provider cost.
+  // Hold the estimate before incurring provider cost, so concurrent calls cannot overdraw the balance.
   const userId = req.user?.id;
+  let hold: PreflightCreditHold | undefined;
   if (userId) {
     try {
-      await assertPreflightCredits({
+      hold = await holdPreflightCredits({
         userId,
         estimatedCredits: estimateTtsCreditCost(vendor, model ?? TTS_DEFAULT_MODEL[vendor], text.length),
         featureLabel: 'text-to-speech',
+        logger: req.logger,
       });
     } catch (error) {
       if (error instanceof InsufficientCreditsPreflightError) {
@@ -114,8 +120,11 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
 
     // Charge for the successful synthesis before delivery: the provider cost is
     // already incurred however the bytes end up being returned.
-    if (userId) {
+    if (userId && hold) {
+      const settling = hold;
+      hold = undefined;
       await deductTtsCredits({
+        hold: settling,
         userId,
         vendor: usedVendor,
         model: result.model,
@@ -158,6 +167,9 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
       logger: req.logger,
     });
   } catch (error) {
+    // Still set only when synthesis failed before settlement: no provider cost was incurred.
+    await hold?.release();
+
     // No provider is usable (the requested one and every alternate lack a key).
     // errorCode lets the client separate this from a configured-but-rejected
     // key, which needs different advice.

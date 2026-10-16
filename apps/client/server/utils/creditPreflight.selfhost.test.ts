@@ -15,6 +15,8 @@ const { mocks } = vi.hoisted(() => {
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
+  organizationRepository: {},
+  creditTransactionRepository: {},
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
@@ -34,7 +36,7 @@ describe('assertPreflightCredits under self-host', () => {
     mocks.findById.mockResolvedValue({ currentCredits: 0 });
     await expect(
       assertPreflightCredits({ userId: 'u1', estimatedCredits: 100, featureLabel: 'text-to-speech' })
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
   });
 
   it('still rejects a zero-balance user when the setting is explicitly on', async () => {

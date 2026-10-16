@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
-    subtractCredits: vi.fn(),
+    settle: vi.fn(),
     recordUsage: vi.fn(),
     computeTtsUsd: vi.fn(),
     usdToCredits: vi.fn(),
@@ -16,12 +16,7 @@ vi.mock('@bike4mind/common', () => ({
 vi.mock('@bike4mind/utils', () => ({
   usdToCredits: (...a: unknown[]) => mocks.usdToCredits(...a),
 }));
-vi.mock('@bike4mind/services', () => ({
-  creditService: { subtractCredits: (...a: unknown[]) => mocks.subtractCredits(...a) },
-}));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: {},
-  creditTransactionRepository: {},
   usageEventRepository: { record: (...a: unknown[]) => mocks.recordUsage(...a) },
 }));
 
@@ -32,11 +27,12 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.recordUsage.mockResolvedValue(undefined);
-  mocks.subtractCredits.mockResolvedValue(undefined);
+  mocks.settle.mockImplementation(async (credits: number) => credits);
 });
 
 describe('deductTtsCredits', () => {
   const args = {
+    hold: { settle: (...a: unknown[]) => mocks.settle(...a), release: vi.fn() } as never,
     userId: 'u1',
     vendor: 'elevenlabs' as const,
     model: 'eleven_multilingual_v2',
@@ -51,14 +47,11 @@ describe('deductTtsCredits', () => {
     await deductTtsCredits(args);
 
     expect(mocks.computeTtsUsd).toHaveBeenCalledWith('elevenlabs', 'eleven_multilingual_v2', 100);
-    expect(mocks.subtractCredits).toHaveBeenCalledTimes(1);
-    expect(mocks.subtractCredits.mock.calls[0][0]).toMatchObject({
-      type: 'text_to_speech_usage',
-      ownerId: 'u1',
-      ownerType: 'User',
-      credits: 5,
-      model: 'eleven_multilingual_v2',
-    });
+    expect(mocks.settle).toHaveBeenCalledTimes(1);
+    expect(mocks.settle).toHaveBeenCalledWith(
+      5,
+      expect.objectContaining({ type: 'text_to_speech_usage', model: 'eleven_multilingual_v2' })
+    );
     expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsage.mock.calls[0][0]).toMatchObject({
       feature: 'text_to_speech',
@@ -70,26 +63,23 @@ describe('deductTtsCredits', () => {
     });
   });
 
-  it('skips billing entirely when the computed credits round to zero', async () => {
+  it('records what the hold actually charged, which a fallback vendor cannot push past the quote', async () => {
+    mocks.computeTtsUsd.mockReturnValue(0.05);
+    mocks.usdToCredits.mockReturnValue(25);
+    mocks.settle.mockResolvedValue(5);
+
+    await deductTtsCredits(args);
+
+    expect(mocks.recordUsage.mock.calls[0][0]).toMatchObject({ creditsCharged: 5 });
+  });
+
+  it('records no usage event when nothing was charged', async () => {
     mocks.computeTtsUsd.mockReturnValue(0);
     mocks.usdToCredits.mockReturnValue(0);
 
     await deductTtsCredits(args);
 
-    expect(mocks.subtractCredits).not.toHaveBeenCalled();
     expect(mocks.recordUsage).not.toHaveBeenCalled();
-  });
-
-  it('is non-fatal: a subtractCredits failure is logged, not thrown', async () => {
-    mocks.computeTtsUsd.mockReturnValue(0.01);
-    mocks.usdToCredits.mockReturnValue(5);
-    mocks.subtractCredits.mockRejectedValue(new Error('ledger down'));
-
-    await expect(deductTtsCredits(args)).resolves.toBeUndefined();
-    expect(logger.error).toHaveBeenCalledWith(
-      'TTS credit deduction failed - billing may be missed',
-      expect.objectContaining({ userId: 'u1', credits: 5 })
-    );
   });
 
   it('swallows a usage-event write failure without failing the deduction', async () => {
@@ -98,6 +88,6 @@ describe('deductTtsCredits', () => {
     mocks.recordUsage.mockRejectedValue(new Error('analytics down'));
 
     await expect(deductTtsCredits(args)).resolves.toBeUndefined();
-    expect(mocks.subtractCredits).toHaveBeenCalledTimes(1);
+    expect(mocks.settle).toHaveBeenCalledTimes(1);
   });
 });

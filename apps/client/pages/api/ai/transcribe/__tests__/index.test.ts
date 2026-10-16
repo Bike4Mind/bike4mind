@@ -39,8 +39,31 @@ vi.mock('@client/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: (...a: unknown[]) => mocks.getOperationsModel(...a) },
   getEffectiveApiKeyByBackend: (...a: unknown[]) => mocks.getEffectiveApiKeyByBackend(...a),
 }));
+// Stands in for the real hold (creditPreflight.hold.test.ts covers it): settle writes the ledger
+// row through subtractCredits and, like the real one, logs rather than throws when that write fails.
+const { fakeHold } = vi.hoisted(() => ({
+  fakeHold: (
+    subtract: (...a: unknown[]) => unknown,
+    args: { userId: string; logger: { error: (...a: unknown[]) => void } }
+  ) => ({
+    settle: async (credits: number, entry: Record<string, unknown>) => {
+      try {
+        await subtract({ ...entry, ownerId: args.userId, credits }, {});
+      } catch (err) {
+        args.logger.error('settlement failed', { err });
+      }
+      return credits;
+    },
+    release: async () => undefined,
+  }),
+}));
+
 vi.mock('@server/utils/creditPreflight', () => ({
   assertPreflightCredits: (...a: unknown[]) => mocks.assertPreflightCredits(...a),
+  holdPreflightCredits: async ({ logger, ...args }: Parameters<typeof fakeHold>[1] & Record<string, unknown>) => {
+    await mocks.assertPreflightCredits(args);
+    return fakeHold(mocks.subtractCredits, { ...args, logger } as Parameters<typeof fakeHold>[1]);
+  },
   InsufficientCreditsPreflightError,
 }));
 vi.mock('@bike4mind/services', () => ({
