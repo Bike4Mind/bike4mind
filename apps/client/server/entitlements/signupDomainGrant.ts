@@ -29,6 +29,8 @@ export type SignupDomainGrantResult = {
   joinedOrganizationId: string | null;
   /** Partner-rule tags merged into the user's tags; empty when none applied or the write failed. */
   tagsApplied: string[];
+  /** Plan credits added by the rule's subscription grant in this call; 0 when none. Not part of creditsGranted. */
+  subscriptionCreditsGranted: number;
   /** Whether this call granted the rule's subscription; false when none applied, already active, or failed. */
   subscriptionGranted: boolean;
 };
@@ -38,6 +40,7 @@ const NO_GRANT: SignupDomainGrantResult = {
   currentCredits: null,
   joinedOrganizationId: null,
   tagsApplied: [],
+  subscriptionCreditsGranted: 0,
   subscriptionGranted: false,
 };
 
@@ -152,7 +155,7 @@ export async function applySignupDomainGrant(params: {
     const granted = await applyPartnerSubscription(userId, partnerRule, partnerSubscription, trigger, logger);
     if (granted) {
       result.subscriptionGranted = true;
-      result.creditsGranted += granted.credits;
+      result.subscriptionCreditsGranted = granted.credits;
       result.currentCredits = granted.currentCredits ?? result.currentCredits;
       await pushSubscriptionsInvalidation(userId, logger);
     }
@@ -188,7 +191,7 @@ type PartnerRuleSubscription = { priceId: string; durationMonths: number };
 
 /**
  * Grants a partner rule's individual subscription through the admin-grant path. Skips when the user
- * already has any active individual subscription (never stacks a plan on a Stripe subscriber), which
+ * already has any non-terminal individual subscription (never stacks a plan on a Stripe subscriber), which
  * also makes a re-run from the signup and email-verify paths a no-op. Returns the credits and
  * post-grant balance when newly granted, null otherwise.
  */

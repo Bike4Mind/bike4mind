@@ -116,6 +116,7 @@ export async function applyEmailVerifiedGrants(params: {
     currentCredits: null,
     joinedOrganizationId: null,
     tagsApplied: [],
+    subscriptionCreditsGranted: 0,
     subscriptionGranted: false,
   };
   try {

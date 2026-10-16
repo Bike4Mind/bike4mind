@@ -321,12 +321,13 @@ describe('applySignupDomainGrant', () => {
       expect(mockPushSubscriptionsInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
     });
 
-    it('folds the subscription credits and post-grant balance into the reported result', async () => {
+    it('reports subscription credits separately from the domain credits', async () => {
       mockPartnerGrant.mockResolvedValue({ ...subscriptionGrant, signupCredits: 1000 });
 
       const result = await run();
 
-      expect(result.creditsGranted).toBe(1000 + 3000);
+      expect(result.creditsGranted).toBe(1000);
+      expect(result.subscriptionCreditsGranted).toBe(3000);
       expect(result.currentCredits).toBe(4100);
     });
 
