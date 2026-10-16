@@ -6,6 +6,7 @@ import {
   EMPTY_SIDEBAR_SECTIONS,
   normalizeSectionName,
   sectionOf,
+  SIDEBAR_SECTIONS_MAX,
   type SidebarSectionsState,
 } from '@shared/sidebarSections';
 
@@ -71,7 +72,7 @@ export class SidebarSectionStore {
   create(name: string, sessionId?: string): Promise<SidebarSectionsState> {
     return this.update(state => {
       const normalized = normalizeSectionName(name);
-      if (!normalized) return state;
+      if (!normalized || state.sections.length >= SIDEBAR_SECTIONS_MAX) return state;
       const id = this.newId();
       return {
         sections: [...state.sections, { id, name: normalized }],

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '@shared/ipc';
+import { SIDEBAR_SESSION_ID_MAX_LENGTH } from '@shared/sidebarSections';
 import { registerSidebarIpc } from './sidebarIpc';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 
@@ -51,5 +52,16 @@ describe('sidebar IPC handlers', () => {
 
     expect(store.create).toHaveBeenCalledWith('Work', undefined);
     expect(store.move).toHaveBeenCalledWith('a', null);
+  });
+
+  it('refuses a session id over the length cap', async () => {
+    const { store, call } = setup();
+    const long = 'x'.repeat(SIDEBAR_SESSION_ID_MAX_LENGTH + 1);
+
+    expect(await call(IPC_CHANNELS.sidebarMoveSession, long, 's1')).toBe(current);
+    await call(IPC_CHANNELS.sidebarCreateSection, 'Work', long);
+
+    expect(store.move).not.toHaveBeenCalled();
+    expect(store.create).toHaveBeenCalledWith('Work', undefined);
   });
 });

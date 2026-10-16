@@ -5,6 +5,9 @@
  */
 
 export const SIDEBAR_SECTION_NAME_MAX_LENGTH = 60;
+/** Bounds on what the renderer can make main write to the file. */
+export const SIDEBAR_SECTIONS_MAX = 200;
+export const SIDEBAR_SESSION_ID_MAX_LENGTH = 128;
 
 export type SidebarSection = {
   id: string;

@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SIDEBAR_SECTIONS_MAX } from '@shared/sidebarSections';
 import { SidebarSectionStore } from './SidebarSectionStore';
 
 async function sectionsFile(): Promise<string> {
@@ -42,6 +43,16 @@ describe('SidebarSectionStore', () => {
     expect((await store.create('   ')).sections).toEqual([]);
     await store.create('Work');
     expect((await store.rename('section-1', '  ')).sections).toEqual([{ id: 'section-1', name: 'Work' }]);
+  });
+
+  it('refuses a section past the cap', async () => {
+    const store = new SidebarSectionStore(await sectionsFile(), sequentialIds());
+    for (let i = 0; i < SIDEBAR_SECTIONS_MAX; i++) await store.create(`Section ${i}`);
+
+    const state = await store.create('One too many', 'session-a');
+
+    expect(state.sections).toHaveLength(SIDEBAR_SECTIONS_MAX);
+    expect(state.assignments).toEqual({});
   });
 
   it('renames a section', async () => {
