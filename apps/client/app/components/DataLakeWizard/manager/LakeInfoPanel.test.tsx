@@ -16,6 +16,10 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 }));
 // The GitHub chip reads the flag cache and its own query; it has its own suite (LakeGitHubStatusChip.test.tsx).
 vi.mock('@client/app/components/datalake/LakeGitHubStatusChip', () => ({ default: () => null }));
+// The sync-time line has its own suite (LakeSyncStatus.test.tsx).
+vi.mock('@client/app/components/datalake/LakeSyncStatus', () => ({
+  default: () => <span data-testid="lake-sync-status-stub" />,
+}));
 vi.mock('@client/app/components/datalake/LakeSkippedFilesChip', () => ({ default: () => null }));
 vi.mock('./FinishSourceConnectBanner', () => ({ default: () => null }));
 
@@ -577,6 +581,14 @@ describe('LakeInfoPanel - origin chip', () => {
   it('keeps the prefix chip on a curated lake whose prefix looks generated', () => {
     renderPanel({ ...baseLake, origin: 'curated', fileTagPrefix: 'gh-1a2b3c4d:' } as ManagerLake);
     expect(screen.getByTestId('datalake-manager-prefix-chip-lake-1')).toHaveTextContent('gh-1a2b3c4d:');
+  });
+
+  it('mounts the sync-time line only for a connector-fed lake', () => {
+    const { unmount } = renderPanel({ ...baseLake, origin: 'connector-fed' } as ManagerLake);
+    expect(screen.getByTestId('lake-sync-status-stub')).toBeInTheDocument();
+    unmount();
+    renderPanel({ ...baseLake, origin: 'curated' } as ManagerLake);
+    expect(screen.queryByTestId('lake-sync-status-stub')).not.toBeInTheDocument();
   });
 
   it('shows no origin chip for a curated lake', () => {
