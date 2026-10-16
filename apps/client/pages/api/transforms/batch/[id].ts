@@ -31,12 +31,12 @@ const handler = baseApi().get(async (req, res) => {
   // without re-streaming the (potentially large) JSONL from Anthropic on every
   // poll. The consumer typically polls completed once, but this also makes the
   // poll idempotent + cheap if it retries.
-  if (batch.status === 'completed') {
+  if (batch.status === 'completed' && batch.results?.length) {
     return res.json({
       batch_id: anthropicBatchId,
       status: 'completed',
       counts: { succeeded: batch.succeededCount, errored: batch.erroredCount },
-      results: batch.results ?? [],
+      results: batch.results,
     });
   }
 
@@ -70,14 +70,28 @@ const handler = baseApi().get(async (req, res) => {
     error: r.error,
   }));
 
-  // Fetched before the claim: once the claim clears the hold, a throw here could never be retried.
+  // Best-effort: results over Mongo's 16MB document cap must not fail the poll; a completed row
+  // without stored results re-streams them from Anthropic on the next poll.
+  const saveResults = () =>
+    transformBatchRepository.saveResults(batch.id, results).catch(error => {
+      req.logger.error(`[transforms/batch] Failed to persist results for batch ${anthropicBatchId}`, error);
+    });
+
+  // Completed but no results stored: the write failed or the claiming poll has not reached it.
+  // Settlement belongs to the claim winner alone, so never settle here.
+  if (batch.status === 'completed') {
+    await saveResults();
+    return res.json({ batch_id: anthropicBatchId, status: 'completed', counts: status.counts, results });
+  }
+
+  // Fetched before the claim: once the claim lands, a throw here could never be retried.
   const catalog = batch.creditHold ? await getAvailableModels({ anthropic: apiKey }) : [];
   // Only the poll that wins the in_progress -> completed transition sees the hold, so a retried or
-  // concurrent poll never settles twice.
+  // concurrent poll never settles twice. The hold stays on the row until markCreditSettled, so a
+  // crash before then leaves a record of the unsettled hold.
   const claimed = await transformBatchRepository.claimCompletion(batch.id, {
     succeededCount: status.counts.succeeded,
     erroredCount: status.counts.errored + status.counts.canceled + status.counts.expired,
-    results,
   });
   if (claimed?.creditHold) {
     // Failed items are free. Standard rate, as reserved at submit (no Batches discount in pricing).
@@ -85,6 +99,8 @@ const handler = baseApi().get(async (req, res) => {
     let usd = 0;
     let inputTokens = 0;
     let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
     const models = new Set<string>();
     for (const r of status.results ?? []) {
       const modelInfo = catalog.find(m => m.id === modelByCustomId.get(r.customId));
@@ -104,6 +120,8 @@ const handler = baseApi().get(async (req, res) => {
       );
       inputTokens += u.inputTokens;
       outputTokens += u.outputTokens;
+      cacheReadTokens += u.cacheReadInputTokens ?? 0;
+      cacheWriteTokens += u.cacheCreationInputTokens ?? 0;
       models.add(modelInfo.id);
     }
     const model = [...models].join(',') || 'unknown';
@@ -121,6 +139,7 @@ const handler = baseApi().get(async (req, res) => {
       },
       { featureLabel: 'batch transforms', logger: req.logger }
     );
+    await transformBatchRepository.markCreditSettled(batch.id);
     await usageEventRepository
       .record({
         requestId: anthropicBatchId,
@@ -132,8 +151,8 @@ const handler = baseApi().get(async (req, res) => {
         model,
         inputTokens,
         outputTokens,
-        cachedInputTokens: 0,
-        cacheWriteTokens: 0,
+        cachedInputTokens: cacheReadTokens,
+        cacheWriteTokens,
         settledBasis: 'local',
         costUsd: usd,
         creditsCharged,
@@ -143,6 +162,7 @@ const handler = baseApi().get(async (req, res) => {
       })
       .catch(err => req.logger.warn('[transforms/batch] usage event failed', err));
   }
+  if (claimed) await saveResults();
 
   return res.json({
     batch_id: anthropicBatchId,

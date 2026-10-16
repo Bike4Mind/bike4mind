@@ -40,9 +40,10 @@ vi.mock('@server/billing/reserveRequestCredits', () => ({ settleHeldCredits: vi.
 vi.mock('@bike4mind/database', () => ({
   transformBatchRepository: {
     findByAnthropicBatchId: vi.fn(async () => mockRefs.batch),
-    claimCompletion: vi.fn(async (_id: string, u: any) => {
-      mockRefs.updated = u;
-      return mockRefs.batch;
+    claimCompletion: vi.fn(async () => mockRefs.batch),
+    markCreditSettled: vi.fn(),
+    saveResults: vi.fn(async (_id: string, results: unknown) => {
+      mockRefs.updated = { results };
     }),
   },
 }));

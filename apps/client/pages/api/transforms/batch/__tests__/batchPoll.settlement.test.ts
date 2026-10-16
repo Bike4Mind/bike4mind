@@ -11,6 +11,9 @@ const m = vi.hoisted(() => ({
   getHandler: null as null | ((req: unknown, res: unknown) => unknown),
   batch: null as Record<string, unknown> | null,
   claim: vi.fn(),
+  markSettled: vi.fn(),
+  saveResults: vi.fn(),
+  getBatchResults: vi.fn(),
   settle: vi.fn(),
   catalog: vi.fn(),
   record: vi.fn(async () => undefined),
@@ -32,7 +35,12 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 vi.mock('@server/billing/reserveRequestCredits', () => ({ settleHeldCredits: m.settle }));
 vi.mock('@bike4mind/database', () => ({
-  transformBatchRepository: { findByAnthropicBatchId: async () => m.batch, claimCompletion: m.claim },
+  transformBatchRepository: {
+    findByAnthropicBatchId: async () => m.batch,
+    claimCompletion: m.claim,
+    markCreditSettled: m.markSettled,
+    saveResults: m.saveResults,
+  },
   usageEventRepository: { record: m.record },
 }));
 const usage = (input: number, output: number) => ({ inputTokens: input, outputTokens: output });
@@ -41,11 +49,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: m.catalog,
   AnthropicBatchService: {
     fromApiKey: () => ({
-      getBatchResults: async () => ({
-        processingStatus: 'ended',
-        counts: { processing: 0, succeeded: 2, errored: 1, canceled: 0, expired: 0 },
-        results: batchResults.items,
-      }),
+      getBatchResults: m.getBatchResults,
     }),
   },
 }));
@@ -68,6 +72,13 @@ beforeEach(() => {
     { customId: 'req_1', clientRef: 'b', status: 'done', reply: 'y', tokenUsage: usage(10, 5) },
     { customId: 'req_2', clientRef: 'c', status: 'failed', error: 'overloaded', tokenUsage: usage(999, 999) },
   ];
+  m.getBatchResults.mockImplementation(async () => ({
+    processingStatus: 'ended',
+    counts: { processing: 0, succeeded: 2, errored: 1, canceled: 0, expired: 0 },
+    results: batchResults.items,
+  }));
+  m.markSettled.mockResolvedValue(undefined);
+  m.saveResults.mockResolvedValue(undefined);
   m.catalog.mockResolvedValue([{ id: 'm1', pricing: { 200_000: { input: 1e-3, output: 2e-3 } } }]);
   m.batch = {
     id: 'row1',
@@ -114,6 +125,13 @@ describe('GET /api/transforms/batch/:id settlement', () => {
   });
 
   it('prices items sharing a client_ref by their own customId model', async () => {
+    m.getBatchResults.mockImplementation(async () => ({
+      processingStatus: 'ended',
+      counts: { processing: 0, succeeded: 2, errored: 1, canceled: 0, expired: 0 },
+      results: batchResults.items,
+    }));
+    m.markSettled.mockResolvedValue(undefined);
+    m.saveResults.mockResolvedValue(undefined);
     m.catalog.mockResolvedValue([
       { id: 'm1', pricing: { 200_000: { input: 1e-3, output: 2e-3 } } },
       { id: 'm2', pricing: { 200_000: { input: 4e-3, output: 8e-3 } } },
@@ -165,13 +183,84 @@ describe('GET /api/transforms/batch/:id settlement', () => {
     expect(body.results).toHaveLength(3);
   });
 
-  it('settles nothing on a poll served from a completed row', async () => {
+  it('serves stored results on a completed row without contacting Anthropic or settling', async () => {
+    m.batch = { ...m.batch, status: 'completed', results: [{ client_ref: 'a', status: 'done', reply: 'x' }] };
+
+    const body = await poll();
+
+    expect(m.getBatchResults).not.toHaveBeenCalled();
+    expect(m.claim).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(body.results).toEqual([{ client_ref: 'a', status: 'done', reply: 'x' }]);
+  });
+
+  it('re-streams results for a completed row that has none stored, without settling', async () => {
     m.batch = { ...m.batch, status: 'completed', results: [] };
+
+    const body = await poll();
+
+    expect(m.getBatchResults).toHaveBeenCalledTimes(1);
+    expect(m.claim).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(m.markSettled).not.toHaveBeenCalled();
+    expect(body.results).toHaveLength(3);
+    expect(m.saveResults).toHaveBeenCalledWith('row1', expect.any(Array));
+  });
+
+  it('claims without results, settles, marks the hold settled, then saves the results', async () => {
+    m.claim.mockResolvedValue(m.batch);
+    const order: string[] = [];
+    m.claim.mockImplementation(async () => (order.push('claim'), m.batch));
+    m.settle.mockImplementation(async () => (order.push('settle'), 0));
+    m.markSettled.mockImplementation(async () => void order.push('markSettled'));
+    m.saveResults.mockImplementation(async () => void order.push('save'));
 
     await poll();
 
-    expect(m.claim).not.toHaveBeenCalled();
-    expect(m.settle).not.toHaveBeenCalled();
+    expect(order).toEqual(['claim', 'settle', 'markSettled', 'save']);
+    expect(m.claim.mock.calls[0][1]).not.toHaveProperty('results');
+    expect(m.markSettled).toHaveBeenCalledWith('row1');
+  });
+
+  it('keeps the hold on the row when settlement throws', async () => {
+    m.claim.mockResolvedValue(m.batch);
+    m.settle.mockRejectedValueOnce(new Error('crash'));
+
+    await expect(poll()).rejects.toThrow('crash');
+    expect(m.markSettled).not.toHaveBeenCalled();
+  });
+
+  it('still settles and returns the results when the results write fails', async () => {
+    m.claim.mockResolvedValue(m.batch);
+    m.saveResults.mockRejectedValueOnce(new Error('document too large'));
+
+    const body = await poll();
+
+    expect(m.settle).toHaveBeenCalledTimes(1);
+    expect(m.markSettled).toHaveBeenCalledTimes(1);
+    expect(body.results).toHaveLength(3);
+  });
+
+  it('records the cache read and write tokens on the usage event', async () => {
+    batchResults.items = [
+      {
+        customId: 'req_0',
+        clientRef: 'a',
+        status: 'done',
+        tokenUsage: { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 300, cacheCreationInputTokens: 40 },
+      },
+      {
+        customId: 'req_1',
+        clientRef: 'b',
+        status: 'done',
+        tokenUsage: { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 200 },
+      },
+    ];
+    m.claim.mockResolvedValue(m.batch);
+
+    await poll();
+
+    expect(m.record).toHaveBeenCalledWith(expect.objectContaining({ cachedInputTokens: 500, cacheWriteTokens: 40 }));
   });
 
   it('leaves the batch unclaimed when the catalog cannot load, so a retried poll can still settle', async () => {

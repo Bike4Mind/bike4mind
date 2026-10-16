@@ -66,6 +66,11 @@ export interface ITransformBatch extends IMongoDocument {
   results?: ITransformBatchResultItem[];
   /** Credits reserved at submit, settled once on the first poll that sees the batch end. */
   creditHold?: CreditHoldRecord | null;
+  /**
+   * Stamped in the write that clears the hold after settlement. A completed row that still has a hold
+   * and no creditSettledAt was claimed but never settled (settlement is not idempotent; never redo one).
+   */
+  creditSettledAt?: Date;
   /** The API key that submitted the batch, for the settlement ledger row. */
   apiKeyId?: string;
   /** Ledger `source` resolved from the submit request; absent for web (JWT) submits. */
@@ -75,11 +80,15 @@ export interface ITransformBatch extends IMongoDocument {
 export interface ITransformBatchRepository extends IBaseRepository<ITransformBatch> {
   findByAnthropicBatchId: (anthropicBatchId: ITransformBatch['anthropicBatchId']) => Promise<ITransformBatch | null>;
   /**
-   * Atomically mark an in-progress batch completed and clear its credit hold. Returns the row as it
-   * was before the update to exactly one caller (the one that settles the hold); null to the rest.
+   * Atomically mark an in-progress batch completed, leaving its credit hold on the row. Returns the
+   * row as it was before the update to exactly one caller (the one that settles the hold); null to the rest.
    */
   claimCompletion: (
     id: string,
-    update: Pick<ITransformBatch, 'succeededCount' | 'erroredCount' | 'results'>
+    update: Pick<ITransformBatch, 'succeededCount' | 'erroredCount'>
   ) => Promise<ITransformBatch | null>;
+  /** Clear the settled hold and stamp creditSettledAt in one write; a no-op once stamped. */
+  markCreditSettled: (id: string) => Promise<void>;
+  /** Cache the per-request results; kept out of the claim so an oversized payload cannot block it. */
+  saveResults: (id: string, results: NonNullable<ITransformBatch['results']>) => Promise<void>;
 }
