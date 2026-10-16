@@ -53,11 +53,27 @@ describe('createPartnerSignupRuleSchema', () => {
     ).toThrow();
   });
 
-  it('rejects developer tags', () => {
-    for (const tag of ['Developer', 'dev', 'developers']) {
+  it('rejects reserved privileged tags case-insensitively', () => {
+    const reserved = [
+      'Developer',
+      'dev',
+      'developers',
+      'DEV',
+      'DEVELOPER',
+      'Tavern',
+      'QA-INGEST',
+      'debugllmendpoint',
+      ' opti ',
+      'debugQuestMaster',
+    ];
+    for (const tag of reserved) {
       expect(() => createPartnerSignupRuleSchema.parse({ ...base, tags: [tag] })).toThrow(/reserved/);
     }
     expect(() => updatePartnerSignupRuleSchema.parse({ tags: ['Dev'] })).toThrow(/reserved/);
+  });
+
+  it('accepts a normal tag', () => {
+    expect(createPartnerSignupRuleSchema.parse({ ...base, tags: ['Partner'] }).tags).toEqual(['Partner']);
   });
 
   it('normalizes domain and entitlement keys to lowercase', () => {

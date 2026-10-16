@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { PENDING_FREE_CREDITS_TAG } from '../constants/user';
-import { hasDeveloperUserTag } from './user';
+import { DEVELOPER_USER_TAGS } from './user';
+import { QA_INGEST_USER_TAG } from './qa';
 
 /**
  * Public mail providers that must never be configured as a partner signup rule
@@ -27,6 +28,20 @@ export const DISALLOWED_SIGNUP_RULE_DOMAINS: readonly string[] = [
   'mail.com',
   'yandex.com',
   'zoho.com',
+];
+
+/**
+ * Tags that gate privileged access elsewhere (developer, tavern, QA ingest, LLM/quest debug,
+ * opti rapid-reply). Lowercase: some gates match case-insensitively, so every casing is blocked.
+ */
+export const RESERVED_PARTNER_RULE_TAGS: readonly string[] = [
+  ...DEVELOPER_USER_TAGS.map(tag => tag.toLowerCase()),
+  'tavern',
+  QA_INGEST_USER_TAG,
+  'debugllmendpoint',
+  'debugquestmaster',
+  'debugprojectnotebookfeature',
+  'opti',
 ];
 
 /** Normalize a domain the same way the entitlement layer does (trim + lowercase). */
@@ -62,7 +77,6 @@ const entitlementKeySchema = z
 // the update path inheriting create's defaults.
 const entitlementsSchema = z.array(entitlementKeySchema).max(20, 'Too many entitlements');
 const signupCreditsSchema = z.number().int('Credits must be a whole number').min(0, 'Credits cannot be negative');
-// Case-preserving: some tag checks are case-sensitive (see DEVELOPER_USER_TAGS in ./user).
 const userTagSchema = z
   .string()
   .trim()
@@ -70,8 +84,10 @@ const userTagSchema = z
   .max(128, 'Tag is too long')
   // System-managed: stamping it at signup would re-mark a verified user as awaiting free credits.
   .refine(tag => tag !== PENDING_FREE_CREDITS_TAG, { message: `"${PENDING_FREE_CREDITS_TAG}" is a reserved tag` })
-  // Developer tags grant elevated access and outlive the rule, so they are never domain-wide grants.
-  .refine(tag => !hasDeveloperUserTag([tag]), { message: 'Developer tags are reserved' });
+  // Privileged tags outlive the rule, so they are never domain-wide grants.
+  .refine(tag => !RESERVED_PARTNER_RULE_TAGS.includes(tag.toLowerCase()), {
+    message: 'Developer, tavern, QA, debug and opti tags are reserved',
+  });
 // Duplicates are dropped rather than rejected; the grant merges with $addToSet regardless.
 const tagsSchema = z
   .array(userTagSchema)
