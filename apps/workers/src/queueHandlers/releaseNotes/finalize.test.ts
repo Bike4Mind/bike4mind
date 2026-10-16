@@ -250,6 +250,23 @@ describe('generic and hype copy', () => {
     expect(last < 0xd800 || last > 0xdbff).toBe(true);
   });
 
+  it('prefers the most important item even when it ends in an exclamation mark the fallback strips', () => {
+    const items = [
+      { ...item('Share skills with your team in the Skill Market!'), importance: 1 },
+      { ...item('Tooltips show on hover.'), importance: 3 },
+    ];
+    const result = run(draft({ headline: 'New features', items }), config, payload(), true);
+
+    expect(result.kind === 'ok' && result.note.headline).toBe('Share skills with your team in the Skill Market');
+  });
+
+  it('leaves no space before the ellipsis when it truncates the fallback headline', () => {
+    const text = 'a'.repeat(115) + ' ' + String.fromCodePoint(0x1f600) + 'z'.repeat(10);
+    const result = run(draft({ headline: 'This release', items: [item(text)] }), config, payload(), true);
+
+    expect(result.kind === 'ok' && result.note.headline).toBe('a'.repeat(115) + '...');
+  });
+
   it('skips an item whose text reads as hype when building the fallback headline', () => {
     const items = [
       { ...item('Voice mode works seamlessly across devices.'), importance: 1 },

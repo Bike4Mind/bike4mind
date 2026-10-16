@@ -44,20 +44,23 @@ export function findGenericCopy(field: 'headline' | 'summary', text: string): st
  */
 function headlineFromItems(items: ReleaseNote['items'], logger: Logger): string {
   const ordered = [...items].sort((a, b) => a.importance - b.importance);
+  // Trailing punctuation is stripped below, so judge each item on the headline it would become.
+  const asHeadline = (text: string) => text.replace(/[.!\s]+$/, '');
   // Prefer an item that already reads as a headline, so the fallback does not reintroduce hype or an "!".
-  const pick = ordered.find(item => findGenericCopy('headline', item.text).length === 0);
+  const pick = ordered.find(item => findGenericCopy('headline', asHeadline(item.text)).length === 0);
   if (!pick) {
     logger.warn('[releaseNotes] no item reads as a specific headline; using the most important one anyway', {
-      reasons: findGenericCopy('headline', ordered[0].text),
+      reasons: findGenericCopy('headline', asHeadline(ordered[0].text)),
     });
   }
-  const text = (pick ?? ordered[0]).text.replace(/[.!\s]+$/, '');
+  const text = asHeadline((pick ?? ordered[0]).text);
   if (text.length <= MAX_HEADLINE_CHARS) return text;
-  // trimEnd, then drop a lone high surrogate so the cut never ends on half of an astral character.
+  // Drop a lone high surrogate first, then trimEnd, so the cut never splits an astral character or
+  // leaves a space in front of the ellipsis.
   const cut = text
     .slice(0, MAX_HEADLINE_CHARS - 3)
-    .trimEnd()
-    .replace(/[\uD800-\uDBFF]$/, '');
+    .replace(/[\uD800-\uDBFF]$/, '')
+    .trimEnd();
   return `${cut}...`;
 }
 
