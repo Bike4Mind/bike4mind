@@ -124,11 +124,24 @@ describe('platform-only custom MCP settings', () => {
 describe('parseCustomMcpPresetClients', () => {
   it('parses a valid map', () => {
     expect(parseCustomMcpPresetClients('{"asana":{"clientId":"id","clientSecret":"s"}}')).toEqual({
-      asana: { clientId: 'id', clientSecret: 's' },
+      ok: true,
+      clients: { asana: { clientId: 'id', clientSecret: 's' } },
     });
   });
 
-  it.each([undefined, '', '   ', 'not json', '{"asana":{}}', '[1]', 42])('reads %j as no clients', raw => {
-    expect(parseCustomMcpPresetClients(raw)).toEqual({});
+  it.each([undefined, null, '', '   '])('reads %j as ok with no clients', raw => {
+    expect(parseCustomMcpPresetClients(raw)).toEqual({ ok: true, clients: {} });
+  });
+
+  it.each([
+    ['not json', /Invalid JSON/],
+    ['{"asana":{}}', /Invalid shape at asana\.clientId/],
+    ['[1]', /Invalid shape/],
+    [42, /Expected a JSON string/],
+  ])('reports %j as an error for the caller to log, with no clients', (raw, error) => {
+    const result = parseCustomMcpPresetClients(raw);
+    expect(result.ok).toBe(false);
+    expect(result.clients).toEqual({});
+    expect(!result.ok && result.error).toMatch(error);
   });
 });

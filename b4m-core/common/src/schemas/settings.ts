@@ -1192,15 +1192,35 @@ export const CustomMcpPresetClientsSchema = z.record(
 
 export type CustomMcpPresetClients = z.infer<typeof CustomMcpPresetClientsSchema>;
 
-/** Parse the stored `customMcpPresetClients` string; blank or malformed reads as no preset clients. */
-export function parseCustomMcpPresetClients(raw: unknown): CustomMcpPresetClients {
-  if (typeof raw !== 'string' || raw.trim() === '') return {};
-  try {
-    const parsed = CustomMcpPresetClientsSchema.safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data : {};
-  } catch {
-    return {};
+export type CustomMcpPresetClientsParse =
+  { ok: true; clients: CustomMcpPresetClients } | { ok: false; clients: CustomMcpPresetClients; error: string };
+
+/**
+ * Parse the stored `customMcpPresetClients` string. Blank is `ok` with no clients. Malformed JSON or
+ * a wrong shape is `ok: false` with an empty map and a reason: common has no logger, so the caller
+ * logs it (otherwise every preset OAuth flow fails with no diagnostic).
+ */
+export function parseCustomMcpPresetClients(raw: unknown): CustomMcpPresetClientsParse {
+  if (raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '')) {
+    return { ok: true, clients: {} };
   }
+  if (typeof raw !== 'string') return { ok: false, clients: {}, error: `Expected a JSON string, got ${typeof raw}` };
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (error) {
+    return { ok: false, clients: {}, error: `Invalid JSON: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const parsed = CustomMcpPresetClientsSchema.safeParse(json);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return {
+      ok: false,
+      clients: {},
+      error: `Invalid shape at ${issue?.path.join('.') || '(root)'}: ${issue?.message}`,
+    };
+  }
+  return { ok: true, clients: parsed.data };
 }
 
 // Logo Settings Schema
