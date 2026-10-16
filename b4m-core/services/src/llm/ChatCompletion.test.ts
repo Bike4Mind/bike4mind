@@ -836,21 +836,21 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
-  describe('a turn redirected off a retired model', () => {
+  describe('a turn redirected off an unavailable model', () => {
     const redirectNotices = (spy: { mock: { calls: unknown[][] } }) =>
-      spy.mock.calls.filter(([, status]) => typeof status === 'string' && status.includes('is retired'));
+      spy.mock.calls.filter(([, status]) => typeof status === 'string' && status.includes('is unavailable'));
 
-    it('tells the user once which model answered in place of the retired one', async () => {
+    it('tells the user once which model answered in place of the unavailable one', async () => {
       mockSession.userId = 'user1';
       mockQuest.promptMeta.redirectedFrom = 'gpt-5-chat-latest';
       const body = wireMinimalTurn();
-      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
 
       await service.process({ body, logger: mockLogger });
 
-      const notices = redirectNotices(sendStatusUpdate as any);
+      const notices = redirectNotices(sendStatusUpdate);
       expect(notices).toHaveLength(1);
-      expect(notices[0][1]).toBe(`gpt-5-chat-latest is retired; answering with ${ChatModels.GPT4}`);
+      expect(notices[0][1]).toBe(`gpt-5-chat-latest is unavailable; answering with ${ChatModels.GPT4}`);
     });
 
     it('says nothing when the successor turns out to be unusable', async () => {
@@ -858,21 +858,21 @@ describe('ChatCompletionProcess', () => {
       mockQuest.promptMeta.redirectedFrom = 'gpt-5-chat-latest';
       const body = wireMinimalTurn();
       mockedGetAvailableModels.mockResolvedValue([]);
-      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
 
       await expect(service.process({ body, logger: mockLogger })).rejects.toThrow('Invalid LLM backend specified');
 
-      expect(redirectNotices(sendStatusUpdate as any)).toHaveLength(0);
+      expect(redirectNotices(sendStatusUpdate)).toHaveLength(0);
     });
 
     it('says nothing when the turn was not redirected', async () => {
       mockSession.userId = 'user1';
       const body = wireMinimalTurn();
-      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
 
       await service.process({ body, logger: mockLogger });
 
-      expect(redirectNotices(sendStatusUpdate as any)).toHaveLength(0);
+      expect(redirectNotices(sendStatusUpdate)).toHaveLength(0);
     });
 
     // Queue and agent runs reach Process without ChatCompletionInvoke, so it records the redirect itself.
@@ -881,8 +881,10 @@ describe('ChatCompletionProcess', () => {
       mockQuest.promptMeta.model = { name: 'gpt-5-chat-latest', backend: ModelBackend.OpenAI };
       const body = wireMinimalTurn();
       body.params = { ...body.params, model: 'gpt-5-chat-latest' };
-      vi.mocked(resolveDeprecatedModelId).mockImplementation(id => (id === 'gpt-5-chat-latest' ? ChatModels.GPT4 : id));
-      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+      vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) =>
+        id === 'gpt-5-chat-latest' ? ChatModels.GPT4 : id
+      );
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
 
       try {
         await service.process({ body, logger: mockLogger });
@@ -892,7 +894,55 @@ describe('ChatCompletionProcess', () => {
 
       expect(mockQuest.promptMeta.redirectedFrom).toBe('gpt-5-chat-latest');
       expect(mockQuest.promptMeta.model.name).toBe(ChatModels.GPT4);
-      expect(redirectNotices(sendStatusUpdate as any)).toHaveLength(1);
+      expect(redirectNotices(sendStatusUpdate)).toHaveLength(1);
+    });
+
+    it('describes the model block from the successor when it records a redirect first seen here', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = {
+        name: 'gpt-5-chat-latest',
+        type: 'image',
+        backend: ModelBackend.Anthropic,
+        contextWindow: 111,
+        supportsTools: true,
+        parameters: { temperature: 0.2 },
+      };
+      const body = wireMinimalTurn();
+      body.params = { ...body.params, model: 'gpt-5-chat-latest' };
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 2000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+          supportsVision: true,
+        },
+      ] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) =>
+        id === 'gpt-5-chat-latest' ? ChatModels.GPT4 : id
+      );
+
+      try {
+        await service.process({ body, logger: mockLogger });
+      } finally {
+        vi.mocked(resolveDeprecatedModelId).mockImplementation((id: string) => id);
+      }
+
+      expect(mockQuest.promptMeta.model).toMatchObject({
+        name: ChatModels.GPT4,
+        type: 'text',
+        backend: ModelBackend.OpenAI,
+        contextWindow: 2000,
+        maxTokens: 100,
+        supportsVision: true,
+        parameters: { temperature: 0.2 },
+      });
+      expect(mockQuest.promptMeta.model.supportsTools).toBeUndefined();
     });
   });
 
@@ -903,7 +953,7 @@ describe('ChatCompletionProcess', () => {
       const complete = vi.fn();
       mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 } as any); // any: minimal backend shape
       mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'stopped' });
-      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+      const sendStatusUpdate = vi.spyOn(service, 'sendStatusUpdate');
 
       await service.process({ body, logger: mockLogger });
 

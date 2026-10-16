@@ -333,7 +333,7 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
   });
 
   it('records the retired id in promptMeta.redirectedFrom and labels the reply with the successor', async () => {
-    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    mockedGetAvailableModels.mockResolvedValue([successor] as never);
 
     const invoke = makeInvoke();
     await invoke.invoke({ body: bodyFor(HIDDEN_ID), userId: OWNER_ID, authOrigin: 'session' });
@@ -349,7 +349,7 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
   });
 
   it('records no redirect for a current model', async () => {
-    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    mockedGetAvailableModels.mockResolvedValue([successor] as never);
 
     const invoke = makeInvoke();
     await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });

@@ -89,6 +89,7 @@ import {
 } from '@bike4mind/utils';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
+import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { buildRecentGeneratedImagesNote } from './recentGeneratedImagesNote';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
@@ -2312,14 +2313,13 @@ export class ChatCompletionProcess {
       if (quest.promptMeta && resolvedModelId !== model) {
         quest.promptMeta.redirectedFrom ??= model;
         if (quest.promptMeta.model) {
-          quest.promptMeta.model.name = modelInfo.id;
-          quest.promptMeta.model.backend = modelInfo.backend;
+          Object.assign(quest.promptMeta.model, buildPromptMetaModel(modelInfo));
         }
       }
       if (quest.promptMeta?.redirectedFrom) {
         this.sendStatusUpdate(
           quest,
-          `${quest.promptMeta.redirectedFrom} is retired; answering with ${resolvedModelId}`,
+          `${quest.promptMeta.redirectedFrom} is unavailable; answering with ${resolvedModelId}`,
           { statusAt: new Date() }
         );
       }

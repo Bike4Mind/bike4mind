@@ -23,6 +23,12 @@ describe('answeringModelLabel', () => {
     });
   });
 
+  it('an error reply names the model alone, without claiming it replaced another', () => {
+    const promptMeta = { model: { name: 'gemini-3.5-flash' }, redirectedFrom: 'gemini-2.5-pro' };
+
+    expect(answeringModelLabel(promptMeta, displayName, true)).toEqual({ label: 'Gemini 3.5 Flash' });
+  });
+
   it('returns null when no model was recorded', () => {
     expect(answeringModelLabel(undefined, displayName)).toBeNull();
     expect(answeringModelLabel({}, displayName)).toBeNull();

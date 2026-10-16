@@ -78,7 +78,7 @@ export async function notebooksToExcel(data: BulkExportData): Promise<Blob> {
           Timestamp: msg.timestamp ? new Date(msg.timestamp).toISOString() : '',
           Role: msg.type === 'system' ? 'System' : 'User',
           Content: msg.prompt,
-          Model: msg.promptMeta?.redirectedFrom || msg.promptMeta?.model?.name || '',
+          Model: msg.promptMeta?.redirectedFrom ?? msg.promptMeta?.model?.name ?? '',
           Tokens: msg.promptMeta?.tokenUsage?.inputTokens || '',
         });
       }

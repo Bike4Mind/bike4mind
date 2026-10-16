@@ -158,12 +158,16 @@ describe('MessageContent - fallback note reload wiring', () => {
 });
 
 describe('MessageContent - reply model chip', () => {
-  const renderWithModel = (model: NonNullable<IChatHistoryItem['promptMeta']>['model'], redirectedFrom?: string) =>
+  const renderWithModel = (
+    model: NonNullable<IChatHistoryItem['promptMeta']>['model'],
+    redirectedFrom?: string,
+    type?: IChatHistoryItem['type']
+  ) =>
     render(
       <TestWrapper>
         <MessageContent
           sessionId="session-1"
-          messageData={{ ...baseMessage, promptMeta: { model, redirectedFrom } } as IChatHistoryItem}
+          messageData={{ ...baseMessage, type, promptMeta: { model, redirectedFrom } } as IChatHistoryItem}
           index={0}
           onDelete={vi.fn()}
           onPinToggle={vi.fn()}
@@ -194,6 +198,17 @@ describe('MessageContent - reply model chip', () => {
     fireEvent.mouseOver(screen.getByTestId('message-model-chip'));
 
     expect(await screen.findByRole('tooltip')).toHaveTextContent('Replaces gemini-2.5-pro');
+  });
+
+  it('shows no replacement tooltip on an error reply, even one that followed a redirect', async () => {
+    renderWithModel({ name: 'gemini-3.5-flash' }, 'gemini-2.5-pro', 'error');
+
+    const chip = screen.getByTestId('message-model-chip');
+    expect(chip).toHaveTextContent('gemini-3.5-flash');
+    fireEvent.mouseOver(chip);
+
+    await new Promise(resolve => setTimeout(resolve, 150));
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
   it('shows no replacement tooltip when nothing was replaced', () => {
