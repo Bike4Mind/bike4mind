@@ -405,9 +405,7 @@ export type JwtRateLimitBucket = 'tools' | 'desktop' | 'ws' | 'completions';
  * past 1000 would lock the same user's CLI out of its own 1000 until the window closed - see the
  * JwtRateLimitBucket note above.
  *
- * Only the ceiling moves. A matched client never changes `source` here: that comes from the route
- * (`resolveApiCompletionSource` on the SSE route, which maps `b4m-desktop/` to `desktop`; `cli` on
- * the WS route).
+ * Source attribution is resolved separately by the shared request classifier.
  */
 const JWT_RATE_LIMIT_BY_CLIENT: ReadonlyArray<{ pattern: RegExp; limit: number; bucket: JwtRateLimitBucket }> = [
   { pattern: /^b4m-desktop\//i, limit: 6000, bucket: 'desktop' },
