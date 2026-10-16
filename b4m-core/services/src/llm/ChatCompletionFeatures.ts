@@ -1763,8 +1763,9 @@ export class SessionPromptFeature implements ChatCompletionFeature {
 // cut is decided by an ANN query over the scope (see selectForcedRetrievalCandidates); otherwise by
 // file name.
 const FORCED_RETRIEVAL_MAX_CANDIDATE_FILES = 100;
-// Metadata rows listed when the candidates can be chosen by relevance: the ANN query ranks this
-// many files down to the cap above. Metadata only (no chunks), so it is cheap next to the scan.
+// Metadata rows listed when the candidates can be chosen by relevance (the ANN query ranks this
+// many files down to the cap above) or the scope spans several lakes (the by-name cut takes from
+// each lake in turn, so it needs more rows than the cap to pick from). Metadata only (no chunks), so it is cheap next to the scan.
 const FORCED_RETRIEVAL_MAX_LISTED_FILES = 1000;
 // Chunk hits requested from the ANN query - several per candidate file, so a few chunk-dense
 // documents cannot fill the pool alone and leave the cap short of distinct files.
@@ -2392,21 +2393,20 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * Cuts the servable files (in stable scan order) down to FORCED_RETRIEVAL_MAX_CANDIDATE_FILES.
    * A relevance pick ranks them with one ANN query (see rankCandidateFilesByRelevance); anything
    * that stops it - index not queryable, no index-ready file, an error, or the deadline - falls
-   * back to the file-name prefix, which reportCoverage then flags as the by-name cut it is.
+   * back to the prefix of the given order, which reportCoverage then flags as the by-name cut it is.
    */
   private async selectForcedRetrievalCandidates<T extends ForcedRetrievalCandidateFile>(
     files: T[],
     queryVector: number[],
     embeddingModel: SupportedEmbeddingModel,
-    relevanceSelectionAvailable: boolean,
-    byNameOrder: (files: T[]) => T[] = byName => byName
+    relevanceSelectionAvailable: boolean
   ): Promise<{ files: T[]; selection: ForcedRetrievalCandidateSelection }> {
     if (files.length <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES) return { files, selection: 'all' };
     const ranked = relevanceSelectionAvailable
       ? await this.rankCandidatesByAnn(files, queryVector, embeddingModel)
       : null;
     if (ranked) return { files: ranked.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'relevance' };
-    return { files: byNameOrder(files).slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'fileName' };
+    return { files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'fileName' };
   }
 
   /**
@@ -2968,7 +2968,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // A by-name cut over several lakes takes its slots in turn from each lake, so one lake whose
       // names sort first cannot fill the cap alone. That needs a listing wider than the cap to pick from.
       const orderScopes = lakeOrderScopes({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
-      const spansSeveralLakes = orderScopes.length > 1;
+      // Counted by lake id, not by scope arm: a registry lake arrives as both its meta-tag and its
+      // prefix, which lakeOrderScopes keeps as two arms.
+      const spansSeveralLakes = new Set(lakes.map(lake => lake.id)).size > 1;
       const listingLimit =
         relevanceSelectionAvailable || spansSeveralLakes
           ? FORCED_RETRIEVAL_MAX_LISTED_FILES
@@ -3125,7 +3127,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         : { servable: modelMatchedFiles, superseded: [] };
       // The cap applies HERE, after every partition above, so a withheld, foreign-model or
       // superseded file never takes a candidate slot from one that can actually be served.
-      // Library rows stay behind the lake rows when the lake listing was prioritized above.
+      // Ordered fairly across lakes BEFORE the cut, not only inside it: the chunk scan below spends
+      // its budget down this order, so a scope under the cap would otherwise still let a chunk-heavy
+      // first lake exhaust the budget. Library rows stay behind the lake rows when the lake listing
+      // was prioritized above. The relevance pick re-ranks, so the order only binds by-name scans.
       const fairByName = <F extends { id: string; tags?: { name: string }[] }>(byName: F[]): F[] => {
         const lakeRows = prioritizeLakeFiles ? byName.filter(f => lakeFileIds.has(f.id)) : byName;
         const libraryRows = prioritizeLakeFiles ? byName.filter(f => !lakeFileIds.has(f.id)) : [];
@@ -3133,11 +3138,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         return [...ordered, ...libraryRows];
       };
       const { files: scanCandidates, selection: candidateSelection } = await this.selectForcedRetrievalCandidates(
-        collapse.servable,
+        spansSeveralLakes ? fairByName(collapse.servable) : collapse.servable,
         queryVector,
         embeddingModel,
-        relevanceSelectionAvailable,
-        spansSeveralLakes ? fairByName : undefined
+        relevanceSelectionAvailable
       );
       const supersession = buildSupersessionReport(collapse.superseded);
       // The audit value, resolved once here and used by every write site below. Deliberately NOT

@@ -1342,6 +1342,65 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       expect([...scanned].filter(id => id.startsWith('b'))).toHaveLength(10);
     });
 
+    it('orders a multi-lake scope under the candidate cap fairly, so a chunk-heavy lake cannot spend the scan budget alone', async () => {
+      // 50 files fit under the cap, but lake a's 40 x 500 chunks dwarf the 4000-chunk budget and all
+      // sort ahead of lake b; scanned in plain name order, lake b would never be read.
+      const twoLakeFiles = [
+        ...Array.from({ length: 40 }, (_, i) => fileInLake('a', i)),
+        ...Array.from({ length: 10 }, (_, i) => fileInLake('b', i)),
+      ];
+      const answer = 'b002';
+      const ctx = makeCtx({
+        files: twoLakeFiles,
+        rows: ids =>
+          ids.flatMap(id =>
+            Array.from({ length: id.startsWith('a') ? 500 : 1 }, (_, c) => ({
+              id: `ch-${id}-${String(c).padStart(3, '0')}`,
+              fabFileId: id,
+              text: `text ${id}`,
+              vector: id === answer ? [1, 0] : [0, 1],
+            }))
+          ),
+        settings: { EnableDataLakeVectorSearch: false },
+      });
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:a', 'datalake:b']
+      );
+      stubLakeAccess(feature, [lake('a'), lake('b')]);
+      const messages = await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'quarterly revenue summary'
+      );
+      const content = messages.map(m => m.content).join('\n');
+      expect(content).toContain(`### b-002.pdf (ID: ${answer})`);
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect([...scanned].filter(id => id.startsWith('b')).length).toBeGreaterThan(0);
+    });
+
+    it('counts a registry lake reached by both its meta-tag and its prefix as one lake, so its listing is not widened', async () => {
+      const ctx = makeCtx({ files: lakeFiles.slice(0, 10), settings: { EnableDataLakeVectorSearch: false } });
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:r']
+      );
+      (feature as unknown as { resolveDataLakeAccess: () => Promise<unknown> }).resolveDataLakeAccess = async () => ({
+        lakeViewComplete: true,
+        excludedByAccessCount: 0,
+        dataLakeTags: ['datalake:r'],
+        dataLakeTagPrefixes: ['r:'],
+        scopedTagPrefixes: [],
+        lakes: [{ ...lake('r'), source: 'static' as const, membership: undefined }],
+      });
+      await feature.getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'quarterly revenue summary'
+      );
+      expect(ctx.db.fabfiles.search.mock.calls[0][3]).toEqual(expect.objectContaining({ limit: 100 }));
+    });
+
     it('keeps library files behind every lake when the by-name cut is fair across lakes and the library is included', async () => {
       // Library files sort ahead of both lakes; the lake-first listing must still win every slot.
       const lakeRows = [
