@@ -24,9 +24,16 @@ export type SignupDomainGrantResult = {
   currentCredits: number | null;
   /** The partner org the user was just added to; null when no membership was added. */
   joinedOrganizationId: string | null;
+  /** Partner-rule tags merged into the user's tags; empty when none applied or the write failed. */
+  tagsApplied: string[];
 };
 
-const NO_GRANT: SignupDomainGrantResult = { creditsGranted: 0, currentCredits: null, joinedOrganizationId: null };
+const NO_GRANT: SignupDomainGrantResult = {
+  creditsGranted: 0,
+  currentCredits: null,
+  joinedOrganizationId: null,
+  tagsApplied: [],
+};
 
 /**
  * Everything a newly proven email's domain confers at signup: the one-time domain signup credits,
@@ -75,7 +82,7 @@ export async function applySignupDomainGrant(params: {
     return NO_GRANT;
   }
 
-  const result: SignupDomainGrantResult = { ...NO_GRANT };
+  const result: SignupDomainGrantResult = { ...NO_GRANT, tagsApplied: [] };
 
   if (signupCredits > 0) {
     try {
@@ -109,10 +116,12 @@ export async function applySignupDomainGrant(params: {
     result.joinedOrganizationId = await applyPartnerMembership(userId, partnerOrganizationId, trigger, logger);
   }
 
-  const tagsApplied = partnerTags.length > 0 && (await applyPartnerTags(userId, partnerTags, trigger, logger));
+  if (partnerTags.length > 0 && (await applyPartnerTags(userId, partnerTags, trigger, logger))) {
+    result.tagsApplied = partnerTags;
+  }
 
   // A tag can itself be an entitlement key (getUserEntitlements reads user.tags), so new tags wake the cache too.
-  if (domainGrantKeys.size > 0 || tagsApplied) {
+  if (domainGrantKeys.size > 0 || result.tagsApplied.length > 0) {
     await pushEntitlementInvalidation(userId, logger);
   }
 
@@ -132,7 +141,8 @@ async function applyPartnerTags(
     return true;
   } catch (tagError) {
     logger.error(
-      `Partner-rule tag stamp failed for user ${userId} (${trigger}); the $addToSet merge makes a retry safe`,
+      `Partner-rule tag stamp failed for user ${userId} (${trigger}); not retried automatically - ` +
+        `re-adding [${tags.join(', ')}] by hand is safe ($addToSet)`,
       tagError
     );
     return false;

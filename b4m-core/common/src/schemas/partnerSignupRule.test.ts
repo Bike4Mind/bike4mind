@@ -30,6 +30,10 @@ describe('createPartnerSignupRuleSchema', () => {
     expect(() => createPartnerSignupRuleSchema.parse({ ...base, tags: tooMany })).toThrow();
   });
 
+  it('rejects the system-managed pending-free-credits tag', () => {
+    expect(() => createPartnerSignupRuleSchema.parse({ ...base, tags: ['pending-free-credits'] })).toThrow(/reserved/);
+  });
+
   it('normalizes domain and entitlement keys to lowercase', () => {
     const parsed = createPartnerSignupRuleSchema.parse({
       ...base,

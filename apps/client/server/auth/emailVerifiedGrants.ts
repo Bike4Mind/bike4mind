@@ -36,6 +36,8 @@ const NOTHING_RELEASED: PendingFreeCreditReleaseResult = { creditsGranted: 0, cu
 export type EmailVerifiedGrantsResult = PendingFreeCreditReleaseResult & {
   /** The partner org the user was just added to; null when no membership was added. */
   joinedOrganizationId: string | null;
+  /** Partner-rule tags merged into the user AFTER `tags` was persisted; callers reflecting tags merge both. */
+  tagsApplied: string[];
 };
 
 /**
@@ -95,7 +97,11 @@ export async function releaseVerifiedPendingFreeCredits(
   return { ...granted, tags: release.patch.tags ?? null };
 }
 
-/** The deferred flat grant, then the verified domain's signup grant (credits, partner org, entitlements). */
+/**
+ * The deferred flat grant, then the verified domain's signup grant (credits, partner org, tags,
+ * entitlements). Order matters: the release $sets the whole tags array from the caller's snapshot,
+ * so the partner-tag $addToSet must run after it or the release would erase those tags.
+ */
 export async function applyEmailVerifiedGrants(params: {
   user: PendingFreeCreditUser;
   verifiedEmail: string;
@@ -105,7 +111,12 @@ export async function applyEmailVerifiedGrants(params: {
 }): Promise<EmailVerifiedGrantsResult> {
   const { user, verifiedEmail, trigger, releaseReason, logger } = params;
   const release = await releaseVerifiedPendingFreeCredits(user, releaseReason, logger);
-  let domainGrant: SignupDomainGrantResult = { creditsGranted: 0, currentCredits: null, joinedOrganizationId: null };
+  let domainGrant: SignupDomainGrantResult = {
+    creditsGranted: 0,
+    currentCredits: null,
+    joinedOrganizationId: null,
+    tagsApplied: [],
+  };
   try {
     domainGrant = await applySignupDomainGrant({ userId: user.id, email: verifiedEmail, trigger, logger });
   } catch (error) {
@@ -117,5 +128,6 @@ export async function applyEmailVerifiedGrants(params: {
     currentCredits: domainGrant.currentCredits ?? release.currentCredits,
     tags: release.tags,
     joinedOrganizationId: domainGrant.joinedOrganizationId,
+    tagsApplied: domainGrant.tagsApplied,
   };
 }

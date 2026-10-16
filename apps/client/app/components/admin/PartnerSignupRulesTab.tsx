@@ -530,6 +530,7 @@ export default function PartnerSignupRulesTab() {
               <Autocomplete
                 multiple
                 freeSolo
+                autoSelect
                 options={[]}
                 value={form.tags}
                 onChange={(_event, value) => setForm(f => ({ ...f, tags: value }))}

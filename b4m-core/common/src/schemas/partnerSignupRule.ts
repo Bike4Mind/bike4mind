@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PENDING_FREE_CREDITS_TAG } from '../constants/user';
 
 /**
  * Public mail providers that must never be configured as a partner signup rule
@@ -61,7 +62,13 @@ const entitlementKeySchema = z
 const entitlementsSchema = z.array(entitlementKeySchema).max(20, 'Too many entitlements');
 const signupCreditsSchema = z.number().int('Credits must be a whole number').min(0, 'Credits cannot be negative');
 // Case-preserving: some tag checks are case-sensitive (see DEVELOPER_USER_TAGS in ./user).
-const userTagSchema = z.string().trim().min(1, 'Tag cannot be empty').max(128, 'Tag is too long');
+const userTagSchema = z
+  .string()
+  .trim()
+  .min(1, 'Tag cannot be empty')
+  .max(128, 'Tag is too long')
+  // System-managed: stamping it at signup would re-mark a verified user as awaiting free credits.
+  .refine(tag => tag !== PENDING_FREE_CREDITS_TAG, { message: `"${PENDING_FREE_CREDITS_TAG}" is a reserved tag` });
 // Duplicates are dropped rather than rejected; the grant merges with $addToSet regardless.
 const tagsSchema = z
   .array(userTagSchema)

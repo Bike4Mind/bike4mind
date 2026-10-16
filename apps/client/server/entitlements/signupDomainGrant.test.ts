@@ -76,7 +76,12 @@ describe('applySignupDomainGrant', () => {
   it('grants the rule credits under the stable id, adds the org membership, and wakes the entitlement cache', async () => {
     const result = await run();
 
-    expect(result).toEqual({ creditsGranted: 1000, currentCredits: 1100, joinedOrganizationId: 'org-1' });
+    expect(result).toEqual({
+      creditsGranted: 1000,
+      currentCredits: 1100,
+      joinedOrganizationId: 'org-1',
+      tagsApplied: ['Partner', 'cohort-a'],
+    });
     expect(mockAddCredits).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: 'user-1', credits: 1000, transactionId: 'domain-grant-credits:user-1' }),
       expect.objectContaining({ db: expect.objectContaining({ creditLots: creditLotRepository }) })
@@ -102,7 +107,7 @@ describe('applySignupDomainGrant', () => {
 
     const result = await run();
 
-    expect(result).toEqual({ creditsGranted: 250, currentCredits: 1100, joinedOrganizationId: null });
+    expect(result).toEqual({ creditsGranted: 250, currentCredits: 1100, joinedOrganizationId: null, tagsApplied: [] });
     expect(mockApplyPartnerRuleMembership).not.toHaveBeenCalled();
     expect(mockAddTagsToUser).not.toHaveBeenCalled();
   });
@@ -155,7 +160,12 @@ describe('applySignupDomainGrant', () => {
 
     const result = await run(logger);
 
-    expect(result).toEqual({ creditsGranted: 1000, currentCredits: 1100, joinedOrganizationId: 'org-1' });
+    expect(result).toEqual({
+      creditsGranted: 1000,
+      currentCredits: 1100,
+      joinedOrganizationId: 'org-1',
+      tagsApplied: [],
+    });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
   });
 
@@ -209,7 +219,12 @@ describe('applySignupDomainGrant', () => {
 
     const result = await run(logger);
 
-    expect(result).toEqual({ creditsGranted: 0, currentCredits: null, joinedOrganizationId: 'org-1' });
+    expect(result).toEqual({
+      creditsGranted: 0,
+      currentCredits: null,
+      joinedOrganizationId: 'org-1',
+      tagsApplied: ['Partner', 'cohort-a'],
+    });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
   });
 
@@ -219,7 +234,12 @@ describe('applySignupDomainGrant', () => {
 
     const result = await run(logger);
 
-    expect(result).toEqual({ creditsGranted: 1000, currentCredits: 1100, joinedOrganizationId: null });
+    expect(result).toEqual({
+      creditsGranted: 1000,
+      currentCredits: 1100,
+      joinedOrganizationId: null,
+      tagsApplied: ['Partner', 'cohort-a'],
+    });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
   });
 
@@ -229,7 +249,7 @@ describe('applySignupDomainGrant', () => {
 
     const result = await run(logger);
 
-    expect(result).toEqual({ creditsGranted: 0, currentCredits: null, joinedOrganizationId: null });
+    expect(result).toEqual({ creditsGranted: 0, currentCredits: null, joinedOrganizationId: null, tagsApplied: [] });
     expect(mockAddCredits).not.toHaveBeenCalled();
     expect(mockAddTagsToUser).not.toHaveBeenCalled();
     expect(mockPushInvalidation).not.toHaveBeenCalled();
