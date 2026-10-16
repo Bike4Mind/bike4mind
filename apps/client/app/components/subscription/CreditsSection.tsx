@@ -179,7 +179,6 @@ export const CreditsSection = ({ transactions, transactionsLoading, onClose }: C
                 : null}
             </Typography>
             <PaymentButton
-              key={selected.id}
               transactionType={TransactionType.Package}
               packageId={selected.id}
               size="lg"
