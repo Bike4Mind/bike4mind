@@ -254,7 +254,10 @@ describe('questExport untracked image keys', () => {
       h.canAccessGeneratedImage.mockResolvedValueOnce(true);
       await runExport(h.COLLABORATOR_ID);
 
-      expect(h.canAccessGeneratedImage).toHaveBeenCalledWith(GENERATED_KEY, h.OWNER_ID);
+      expect(h.canAccessGeneratedImage).toHaveBeenCalledWith(
+        GENERATED_KEY,
+        expect.objectContaining({ id: h.OWNER_ID })
+      );
       expect(h.generatedDownload).toHaveBeenCalledWith(GENERATED_KEY);
       expect(h.filesDownload).not.toHaveBeenCalled();
       const [markdown, imageBuffers] = zipOutput();
@@ -268,7 +271,7 @@ describe('questExport untracked image keys', () => {
     seedReply(`![b](${url})`);
     await runExport(h.COLLABORATOR_ID);
 
-    expect(h.canAccessGeneratedImage).toHaveBeenCalledWith(GENERATED_KEY, h.OWNER_ID);
+    expect(h.canAccessGeneratedImage).toHaveBeenCalledWith(GENERATED_KEY, expect.objectContaining({ id: h.OWNER_ID }));
     expect(h.generatedDownload).not.toHaveBeenCalled();
     expect(zipOutput()[0]).toContain('> \u26a0\ufe0f Image unavailable: gen-1.png. Reason: Image is not available.');
   });
