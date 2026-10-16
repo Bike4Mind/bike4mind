@@ -1,6 +1,7 @@
 import {
   IMcpConnectionDocument,
   IMcpConnectionRepository,
+  IMcpConnectionSummary,
   IMcpConnectionTool,
   IMcpConnectionLastError,
   IMongoDocument,
@@ -10,6 +11,7 @@ import {
   McpDiscoveryUpdate,
   McpOAuthTokenUpdate,
   McpToolSettingsUpdate,
+  MCP_CONNECTION_LIMITS,
   MCP_CONNECTION_PROTECTED_FIELDS,
   mcpConnectionOwnerProblem,
   RepositoryPatch,
@@ -40,9 +42,9 @@ export class McpConnectionOwnerError extends Error {
 
 const McpConnectionToolSchema = new Schema<IMcpConnectionTool>(
   {
-    name: { type: String, required: true },
-    title: { type: String },
-    description: { type: String, default: '' },
+    name: { type: String, required: true, maxlength: MCP_CONNECTION_LIMITS.toolNameLength },
+    title: { type: String, maxlength: MCP_CONNECTION_LIMITS.serverInfoFieldLength },
+    description: { type: String, default: '', maxlength: MCP_CONNECTION_LIMITS.toolDescriptionLength },
     descriptionRawHash: { type: String, required: true },
     inputSchema: { type: Schema.Types.Mixed, default: {} },
     annotations: { type: Schema.Types.Mixed },
@@ -54,6 +56,14 @@ const McpConnectionToolSchema = new Schema<IMcpConnectionTool>(
   { _id: false }
 );
 
+function toolsWithinBounds(tools: unknown): boolean {
+  if (!Array.isArray(tools)) return true;
+  if (tools.length > MCP_CONNECTION_LIMITS.maxTools) return false;
+  return Buffer.byteLength(JSON.stringify(tools)) <= MCP_CONNECTION_LIMITS.maxToolsBytes;
+}
+
+const serverInfoField = { type: String, maxlength: MCP_CONNECTION_LIMITS.serverInfoFieldLength };
+
 // Secrets are `select: false` (see MCP_CONNECTION_SECRET_PATHS); credential reads opt back in.
 const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
   {
@@ -64,7 +74,7 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
     definitionId: { type: String },
     presetId: { type: String },
     slug: { type: String, required: true, match: MCP_CONNECTION_SLUG_PATTERN },
-    displayName: { type: String, required: true },
+    displayName: { type: String, required: true, maxlength: MCP_CONNECTION_LIMITS.displayNameLength },
     urlEnc: { type: String, required: true, select: false },
     displayUrl: { type: String, required: true },
     urlHost: { type: String, required: true },
@@ -79,7 +89,15 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
             resourceMetadataUrl: { type: String },
             issuer: { type: String, required: true },
             authorizationServerUrl: { type: String, required: true },
-            scopes: { type: [String], default: [] },
+            scopes: {
+              type: [String],
+              default: [],
+              validate: {
+                validator: (scopes: unknown) =>
+                  !Array.isArray(scopes) || scopes.length <= MCP_CONNECTION_LIMITS.maxScopes,
+                message: `At most ${MCP_CONNECTION_LIMITS.maxScopes} OAuth scopes`,
+              },
+            },
             clientMode: { type: String, enum: MCP_OAUTH_CLIENT_MODES, required: true },
             clientRegistrationId: { type: String },
             manualClientIdEnc: { type: String, select: false },
@@ -109,14 +127,27 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
     },
     status: { type: String, enum: MCP_CONNECTION_STATUSES, required: true },
     lastError: {
-      type: new Schema({ code: String, message: String, at: Date }, { _id: false }),
+      type: new Schema(
+        { code: String, message: { type: String, maxlength: MCP_CONNECTION_LIMITS.lastErrorMessageLength }, at: Date },
+        { _id: false }
+      ),
       required: false,
     },
     serverInfo: {
-      type: new Schema({ name: String, version: String, protocolVersion: String }, { _id: false }),
+      type: new Schema(
+        { name: serverInfoField, version: serverInfoField, protocolVersion: serverInfoField },
+        { _id: false }
+      ),
       required: false,
     },
-    tools: { type: [McpConnectionToolSchema], default: [] },
+    tools: {
+      type: [McpConnectionToolSchema],
+      default: [],
+      validate: {
+        validator: toolsWithinBounds,
+        message: `At most ${MCP_CONNECTION_LIMITS.maxTools} tools and ${MCP_CONNECTION_LIMITS.maxToolsBytes} bytes`,
+      },
+    },
     toolsFingerprint: { type: String },
     toolsFetchedAt: { type: Date },
     toolsDropped: { type: Number },
@@ -156,6 +187,8 @@ McpConnectionSchema.index({ definitionId: 1 }, { sparse: true, name: 'mcpconn_de
 export interface IMcpConnectionModel extends Model<IMcpConnectionDocument & IMongoDocument> {}
 export const McpConnection: IMcpConnectionModel =
   mongoose.models.McpConnection ?? model<IMcpConnectionDocument>('McpConnection', McpConnectionSchema);
+
+const SUMMARY_PROJECTION = { 'tools.inputSchema': 0 };
 
 const WITH_CREDENTIALS = MCP_CONNECTION_SECRET_PATHS.map(path => `+${path}`).join(' ');
 
@@ -245,24 +278,36 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return result?.toJSON() ?? null;
   }
 
-  async listForUser(userId: string): Promise<IMcpConnectionDocument[]> {
-    return this.find({ userId, enabled: true, ownerType: 'user', status: 'connected' });
+  async listForUser(userId: string, options: { slugs?: string[] } = {}): Promise<IMcpConnectionDocument[]> {
+    return this.find({
+      userId,
+      enabled: true,
+      ownerType: 'user',
+      status: 'connected',
+      ...(options.slugs ? { slug: { $in: options.slugs } } : {}),
+    });
   }
 
-  async listAllForUser(userId: string): Promise<IMcpConnectionDocument[]> {
-    return this.find({ userId, ownerType: 'user' }, { sort: { createdAt: 1 } });
+  async listAllForUser(userId: string): Promise<IMcpConnectionSummary[]> {
+    return this.findSummaries({ userId, ownerType: 'user' });
   }
 
   async countForUser(userId: string): Promise<number> {
     return this.model.countDocuments({ userId, ownerType: 'user' });
   }
 
-  async listForOrg(organizationId: string): Promise<IMcpConnectionDocument[]> {
-    return this.find({ organizationId, ownerType: 'org' }, { sort: { createdAt: 1 } });
+  async listForOrg(organizationId: string): Promise<IMcpConnectionSummary[]> {
+    return this.findSummaries({ organizationId, ownerType: 'org' });
   }
 
-  async findByUrlHost(urlHost: string): Promise<IMcpConnectionDocument[]> {
-    return this.find({ urlHost: urlHost.toLowerCase() });
+  async findByUrlHost(urlHost: string): Promise<IMcpConnectionSummary[]> {
+    return this.findSummaries({ urlHost: urlHost.toLowerCase() });
+  }
+
+  /** Exclusive projection, so mongoose still applies every schema `select: false` on top of it. */
+  private async findSummaries(filter: Record<string, unknown>): Promise<IMcpConnectionSummary[]> {
+    const docs = await this.model.find(filter, SUMMARY_PROJECTION).sort({ createdAt: 1 });
+    return docs.map(doc => doc.toObject() as IMcpConnectionSummary);
   }
 
   async rename(id: string, owner: McpConnectionOwner, displayName: string): Promise<IMcpConnectionDocument | null> {
@@ -323,7 +368,14 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
       toolsDropped: update.dropped ?? 0,
     };
     if (update.detectedTransport !== undefined) set.detectedTransport = update.detectedTransport;
-    if (update.serverInfo !== undefined) set.serverInfo = update.serverInfo;
+    // Untrusted server strings: truncate rather than fail the whole discovery on a long name.
+    if (update.serverInfo !== undefined) {
+      set.serverInfo = Object.fromEntries(
+        Object.entries(update.serverInfo)
+          .filter(([, value]) => typeof value === 'string')
+          .map(([key, value]) => [key, (value as string).slice(0, MCP_CONNECTION_LIMITS.serverInfoFieldLength)])
+      );
+    }
     // `toolsFingerprint: null` also matches a document that never had one.
     const result = await this.model.findOneAndUpdate(
       { _id: id, toolsFingerprint: update.expectedFingerprint },
@@ -356,7 +408,20 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     const update =
       status === 'connected'
         ? { $set: { status }, $unset: { lastError: 1 } }
-        : { $set: { status, ...(lastError ? { lastError: { ...lastError, at: new Date() } } : {}) } };
+        : {
+            $set: {
+              status,
+              ...(lastError
+                ? {
+                    lastError: {
+                      ...lastError,
+                      message: lastError.message.slice(0, MCP_CONNECTION_LIMITS.lastErrorMessageLength),
+                      at: new Date(),
+                    },
+                  }
+                : {}),
+            },
+          };
     const result = await this.model.findByIdAndUpdate(id, update, { new: true });
     return result?.toJSON() ?? null;
   }

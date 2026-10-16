@@ -104,6 +104,9 @@ export interface IMcpConnectionTool {
   firstSeenAt: Date;
 }
 
+/** Without the input schema: what the manage list, org views and sweeps read. */
+export type IMcpConnectionToolSummary = Omit<IMcpConnectionTool, 'inputSchema'>;
+
 export interface IMcpConnectionLastError {
   code: string;
   message: string;
@@ -165,6 +168,25 @@ export interface IMcpConnection {
 }
 
 export interface IMcpConnectionDocument extends IMcpConnection, IMongoDocument {}
+
+/** Slim read (no `tools.inputSchema`) returned by the list and sweep queries. */
+export type IMcpConnectionSummary = Omit<IMcpConnectionDocument, 'tools'> & { tools: IMcpConnectionToolSummary[] };
+
+/**
+ * Storage bounds enforced by the McpConnection schema. Discovery (c3) caps and truncates below
+ * these before writing; the schema is the backstop against a document that grows without limit.
+ */
+export const MCP_CONNECTION_LIMITS = {
+  maxTools: 100,
+  /** Serialized size of the whole `tools` array, in bytes. */
+  maxToolsBytes: 512 * 1024,
+  toolNameLength: 64,
+  toolDescriptionLength: 1024,
+  lastErrorMessageLength: 1000,
+  serverInfoFieldLength: 200,
+  displayNameLength: 100,
+  maxScopes: 50,
+} as const;
 
 /** Dotted paths of the auth secrets. An org definition may carry none of them (members connect their own). */
 export const MCP_CONNECTION_CREDENTIAL_PATHS = [
@@ -253,7 +275,8 @@ export interface IMcpConnectionPublic {
   status: McpConnectionStatus;
   lastError?: IMcpConnectionLastError;
   serverInfo?: IMcpConnectionServerInfo;
-  tools: IMcpConnectionTool[];
+  /** `inputSchema` is present only when the view was built from a full read. */
+  tools: (IMcpConnectionToolSummary & { inputSchema?: Record<string, unknown> })[];
   toolsFingerprint?: string;
   toolsFetchedAt?: Date;
   toolsDropped?: number;
@@ -267,7 +290,7 @@ export interface IMcpConnectionPublic {
  * Build the client-safe view field by field. An allowlist rather than an omit, so a secret field
  * added to the document later stays server-side until someone deliberately exposes it here.
  */
-export function toMcpConnectionPublic(doc: IMcpConnectionDocument): IMcpConnectionPublic {
+export function toMcpConnectionPublic(doc: IMcpConnectionDocument | IMcpConnectionSummary): IMcpConnectionPublic {
   const { oauth, apiKey } = doc.auth ?? { kind: 'none' };
   return {
     id: doc.id,
@@ -408,14 +431,17 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
   findByIdForOwner(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /** Includes the `*Enc` fields. Only for the token manager and the call path, never a response. */
   findByIdWithCredentials(id: string): Promise<IMcpConnectionDocument | null>;
-  /** Hot path: the user's enabled, connected connections offered to a chat turn or agent run. */
-  listForUser(userId: string): Promise<IMcpConnectionDocument[]>;
+  /**
+   * Hot path: the user's enabled, connected connections offered to a chat turn or agent run, with
+   * the tool input schemas tool building needs. `slugs` narrows to the connections a turn selected.
+   */
+  listForUser(userId: string, options?: { slugs?: string[] }): Promise<IMcpConnectionDocument[]>;
   /** Every user-owned connection regardless of state, for the manage list. */
-  listAllForUser(userId: string): Promise<IMcpConnectionDocument[]>;
+  listAllForUser(userId: string): Promise<IMcpConnectionSummary[]>;
   countForUser(userId: string): Promise<number>;
   /** Org-published definitions. */
-  listForOrg(organizationId: string): Promise<IMcpConnectionDocument[]>;
-  findByUrlHost(urlHost: string): Promise<IMcpConnectionDocument[]>;
+  listForOrg(organizationId: string): Promise<IMcpConnectionSummary[]>;
+  findByUrlHost(urlHost: string): Promise<IMcpConnectionSummary[]>;
   rename(id: string, owner: McpConnectionOwner, displayName: string): Promise<IMcpConnectionDocument | null>;
   setEnabled(id: string, owner: McpConnectionOwner, enabled: boolean): Promise<IMcpConnectionDocument | null>;
   /** Applies every entry in one atomic write. */

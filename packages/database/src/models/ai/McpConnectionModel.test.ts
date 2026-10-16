@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import {
+  MCP_CONNECTION_LIMITS,
   MCP_CONNECTION_SECRET_PATHS,
   McpConnectionProtectedFieldError,
   toMcpConnectionPublic,
@@ -442,6 +443,114 @@ describe('McpConnectionModel', () => {
 
       const key = await mcpConnectionRepository.create(apiKeyConnection());
       expect(await mcpConnectionRepository.setInitialOAuthTokens(key.id, { accessTokenEnc: 'enc:x' })).toBeNull();
+    });
+  });
+
+  describe('hot path and bounds', () => {
+    it('listForUser keeps the input schemas and narrows by slug', async () => {
+      const a = await mcpConnectionRepository.create(baseConnection({ slug: 'alpha' }));
+      await mcpConnectionRepository.create(baseConnection({ slug: 'beta' }));
+      await mcpConnectionRepository.updateDiscovery(a.id, {
+        tools: [tool('t', { inputSchema: { type: 'object', properties: { q: { type: 'string' } } } })],
+        fingerprint: 'fp',
+        expectedFingerprint: null,
+      });
+
+      const all = await mcpConnectionRepository.listForUser('user-1');
+      expect(all.map(c => c.slug).sort()).toEqual(['alpha', 'beta']);
+      const narrowed = await mcpConnectionRepository.listForUser('user-1', { slugs: ['alpha'] });
+      expect(narrowed.map(c => c.slug)).toEqual(['alpha']);
+      expect(narrowed[0]?.tools[0]?.inputSchema).toMatchObject({ properties: { q: { type: 'string' } } });
+      expect(await mcpConnectionRepository.listForUser('user-1', { slugs: [] })).toEqual([]);
+    });
+
+    it('the list and sweep reads drop tools.inputSchema and every secret', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('t')],
+        fingerprint: 'fp',
+        expectedFingerprint: null,
+      });
+      await mcpConnectionRepository.create(orgDefinition());
+
+      const slim = [
+        ...(await mcpConnectionRepository.listAllForUser('user-1')),
+        ...(await mcpConnectionRepository.listForOrg('org-1')),
+        ...(await mcpConnectionRepository.findByUrlHost('MCP.linear.app')),
+      ];
+      expect(slim).toHaveLength(4);
+      for (const doc of slim) {
+        expect(secretValues(doc)).toEqual([]);
+        for (const t of doc.tools) expect(t).not.toHaveProperty('inputSchema');
+      }
+      expect(slim[0]?.tools[0]?.name).toBe('t');
+    });
+
+    it('refuses more than the tool cap and an oversized tool list', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      const tooMany = Array.from({ length: MCP_CONNECTION_LIMITS.maxTools + 1 }, (_, i) => tool(`t${i}`));
+      await expect(
+        mcpConnectionRepository.updateDiscovery(created.id, {
+          tools: tooMany,
+          fingerprint: 'fp',
+          expectedFingerprint: null,
+        })
+      ).rejects.toThrow(/tools/);
+
+      const huge = Array.from({ length: 40 }, (_, i) =>
+        tool(`t${i}`, { inputSchema: { blob: 'x'.repeat(16 * 1024) } })
+      );
+      await expect(
+        mcpConnectionRepository.updateDiscovery(created.id, {
+          tools: huge,
+          fingerprint: 'fp',
+          expectedFingerprint: null,
+        })
+      ).rejects.toThrow(/tools/);
+      await expect(mcpConnectionRepository.create(baseConnection({ slug: 'big', tools: tooMany }))).rejects.toThrow(
+        /tools/
+      );
+    });
+
+    it('enforces the string and scope bounds', async () => {
+      await expect(
+        mcpConnectionRepository.create(
+          baseConnection({ displayName: 'x'.repeat(MCP_CONNECTION_LIMITS.displayNameLength + 1) })
+        )
+      ).rejects.toThrow(/displayName/);
+      await expect(
+        mcpConnectionRepository.create(
+          baseConnection({
+            slug: 'longdesc',
+            tools: [tool('t', { description: 'x'.repeat(MCP_CONNECTION_LIMITS.toolDescriptionLength + 1) })],
+          })
+        )
+      ).rejects.toThrow(/description/);
+      const tooManyScopes = baseConnection({ slug: 'scopes' });
+      tooManyScopes.auth.oauth!.scopes = Array.from({ length: MCP_CONNECTION_LIMITS.maxScopes + 1 }, (_, i) => `s${i}`);
+      await expect(mcpConnectionRepository.create(tooManyScopes)).rejects.toThrow(/scopes/);
+
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await expect(
+        mcpConnectionRepository.rename(created.id, OWNER, 'x'.repeat(MCP_CONNECTION_LIMITS.displayNameLength + 1))
+      ).rejects.toThrow(/displayName/);
+    });
+
+    it('truncates untrusted server strings instead of failing the write', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      const discovered = await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [],
+        fingerprint: 'fp',
+        expectedFingerprint: null,
+        serverInfo: { name: 'n'.repeat(500), version: '1' },
+      });
+      expect(discovered?.serverInfo?.name).toHaveLength(MCP_CONNECTION_LIMITS.serverInfoFieldLength);
+
+      const failed = await mcpConnectionRepository.setStatus(created.id, 'error', {
+        code: 'protocol',
+        message: 'm'.repeat(5000),
+      });
+      expect(failed?.lastError?.message).toHaveLength(MCP_CONNECTION_LIMITS.lastErrorMessageLength);
     });
   });
 
