@@ -206,6 +206,11 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
 
   findActiveSubscriptionsByOwner(ownerType: SubscriptionOwnerType, ownerId: string): Promise<ISubscription[]>;
 
+  findActiveSubscriptionsByOwners(
+    ownerType: SubscriptionOwnerType,
+    ownerIds: readonly string[]
+  ): Promise<ISubscription[]>;
+
   /**
    * Every non-terminal subscription an owner has - deliberately a deny-list, because a
    * `past_due` owner still has a row to act on (fix the card, or cancel), and a status

@@ -1,6 +1,6 @@
 import type { MeSubscription, MeTier } from '@bike4mind/common';
 import type { ISubscription } from '@client/lib/subscriptions/types';
-import { getSubscriptionPlanByPriceId } from '@client/lib/userSubscriptions/utils';
+import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
 import { SubscriptionPlanInterval, UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
 
 const TIER_KEYS: Record<UserSubscriptionTier, MeTier> = {
@@ -36,7 +36,7 @@ export function resolveCallerPlan(active: readonly ActiveSubscription[]): {
   }
 
   const priced = active.flatMap(subscription => {
-    const plan = getSubscriptionPlanByPriceId(subscription.priceId);
+    const plan = getEntitlingPlanByPriceId(subscription.priceId);
     return plan ? [{ subscription, plan }] : [];
   });
 
@@ -46,7 +46,7 @@ export function resolveCallerPlan(active: readonly ActiveSubscription[]): {
 
   // Highest ladder rung wins when a caller holds several. An off-ladder plan
   // (`tier` omitted) sorts below every rung but is still paid - see MeTier.
-  // `findActiveUserSubscriptions` returns rows in no guaranteed order, so a tie on
+  // `getActiveSubscriptionsForUser` returns rows in no guaranteed order, so a tie on
   // rung breaks by the later period end - the subscription that outlasts the rest.
   const [best] = [...priced].sort((a, b) => {
     const tierDiff = (b.plan.tier ?? 0) - (a.plan.tier ?? 0);

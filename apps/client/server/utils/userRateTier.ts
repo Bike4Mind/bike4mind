@@ -2,8 +2,8 @@ import { hasDeveloperUserTag, type SettingKey } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
+import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
+import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
 import { UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
 import { isDevelopment } from '@server/utils/config';
 
@@ -13,8 +13,8 @@ import { isDevelopment } from '@server/utils/config';
  * materialized field. Mirrors the derive-on-read model of `entitlements`.
  *
  * `bypass` - admins and developer-tagged users (internal), never rate limited.
- * `pro` / `basic` - highest tier among the user's active subscriptions
- *   (`SUBSCRIPTION_PLANS_MAP[priceId].tier`).
+ * `pro` / `basic` - highest tier among the user's active subscriptions,
+ *   including org seats (`getActiveSubscriptionsForUser`; a Team plan is Pro).
  * `free` - authenticated user with no active paid, ladder-tiered subscription.
  */
 export type UserRateTier = 'bypass' | 'pro' | 'basic' | 'free';
@@ -43,19 +43,14 @@ const TIER_SETTING_KEY = {
 } as const satisfies Record<Exclude<UserRateTier, 'bypass'>, SettingKey>;
 
 /**
- * Resolve the caller's rate-limit tier. Costs one indexed subscription read for
- * non-bypass users - negligible next to the multi-second LLM call these routes
- * make, and `/opti` already pays an equivalent read via `requestHasOptiAccess`.
+ * Resolve the caller's rate-limit tier. Costs two indexed reads for non-bypass
+ * users (three with an org membership) - negligible next to the multi-second LLM
+ * call these routes make.
  */
 export async function resolveUserRateTier(user: RateTierUser): Promise<UserRateTier> {
   if (user.isAdmin || hasDeveloperUserTag(user.tags)) return 'bypass';
 
-  // NOTE: only User-owned subscriptions are considered. A user entitled via an
-  // ORG seat (team plan) currently resolves to `free` and receives the most
-  // restrictive limit - an under-grant (never a security hole), mirroring the
-  // org-seat resolution gap the entitlements layer also defers. Follow-up:
-  // widen this to org-owned/seat subscriptions.
-  const activeSubscriptions = await subscriptionRepository.findActiveUserSubscriptions(user.id);
+  const activeSubscriptions = await getActiveSubscriptionsForUser(user.id);
 
   // Take the HIGHEST ladder tier across active subscriptions. Plans with no
   // `tier` (standalone single-product plans sold off the main ladder) are not
@@ -63,7 +58,7 @@ export async function resolveUserRateTier(user: RateTierUser): Promise<UserRateT
   // unless another active subscription grants one.
   let highestTier: UserSubscriptionTier | undefined;
   for (const subscription of activeSubscriptions) {
-    const planTier = SUBSCRIPTION_PLANS_MAP[subscription.priceId]?.tier;
+    const planTier = getEntitlingPlanByPriceId(subscription.priceId)?.tier;
     if (planTier !== undefined && (highestTier === undefined || planTier > highestTier)) {
       highestTier = planTier;
     }

@@ -4,30 +4,46 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // individual tests flip it. SUBSCRIPTION_PLANS_MAP is mocked with stable test
 // priceIds (the real map's ids come from per-stage env vars). tier values mirror
 // UserSubscriptionTier - Basic = 1, Pro = 2.
-const { isDevelopmentMock, findActiveUserSubscriptionsMock, getSettingsMapMock, getSettingsValueMock } = vi.hoisted(
-  () => ({
-    isDevelopmentMock: vi.fn<() => boolean>(() => false),
-    findActiveUserSubscriptionsMock: vi.fn<(userId: string) => Promise<{ priceId: string }[]>>(),
-    getSettingsMapMock: vi.fn(async () => ({}) as Record<string, string>),
-    getSettingsValueMock: vi.fn<(key: string, settings: Record<string, string>) => number>(),
-  })
-);
+const {
+  isDevelopmentMock,
+  findActiveUserSubscriptionsMock,
+  findActiveSubscriptionsByOwnersMock,
+  findMembershipOrgIdsMock,
+  getSettingsMapMock,
+  getSettingsValueMock,
+} = vi.hoisted(() => ({
+  isDevelopmentMock: vi.fn<() => boolean>(() => false),
+  findActiveUserSubscriptionsMock: vi.fn<(userId: string) => Promise<{ priceId: string }[]>>(),
+  findActiveSubscriptionsByOwnersMock:
+    vi.fn<(ownerType: string, ownerIds: readonly string[]) => Promise<{ priceId: string }[]>>(),
+  findMembershipOrgIdsMock: vi.fn<(userId: string) => Promise<string[]>>(),
+  getSettingsMapMock: vi.fn(async () => ({}) as Record<string, string>),
+  getSettingsValueMock: vi.fn<(key: string, settings: Record<string, string>) => number>(),
+}));
 
 vi.mock('@server/utils/config', () => ({ isDevelopment: () => isDevelopmentMock() }));
 vi.mock('@server/models/Subscription', () => ({
-  subscriptionRepository: { findActiveUserSubscriptions: findActiveUserSubscriptionsMock },
+  subscriptionRepository: {
+    findActiveUserSubscriptions: findActiveUserSubscriptionsMock,
+    findActiveSubscriptionsByOwners: findActiveSubscriptionsByOwnersMock,
+  },
 }));
-vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
+vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: {},
+  organizationRepository: { findMembershipOrgIds: findMembershipOrgIdsMock },
+}));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: (...args: unknown[]) => getSettingsMapMock(...(args as [])),
   getSettingsValue: (key: string, settings: Record<string, string>) => getSettingsValueMock(key, settings),
 }));
 vi.mock('@client/lib/userSubscriptions/constants', () => ({
+  SUBSCRIPTION_PLANS: [],
   SUBSCRIPTION_PLANS_MAP: {
     price_basic: { tier: 1 },
     price_pro: { tier: 2 },
     price_standalone: {}, // standalone single-product plan - no ladder tier
   },
+  TEAM_PLAN: { priceId: 'price_team', tier: 2 },
 }));
 
 import { resolveUserRateTier, resolveUserRateLimitPerMin } from './userRateTier';
@@ -43,11 +59,17 @@ describe('resolveUserRateTier', () => {
     isDevelopmentMock.mockReturnValue(false);
     findActiveUserSubscriptionsMock.mockReset();
     findActiveUserSubscriptionsMock.mockResolvedValue([]);
+    findActiveSubscriptionsByOwnersMock.mockReset();
+    findActiveSubscriptionsByOwnersMock.mockResolvedValue([]);
+    findMembershipOrgIdsMock.mockReset();
+    findMembershipOrgIdsMock.mockResolvedValue([]);
   });
 
-  it('returns "bypass" for admins without reading subscriptions', async () => {
+  it('bypasses for admins without reading org subscriptions', async () => {
     expect(await resolveUserRateTier({ id: 'u1', isAdmin: true })).toBe('bypass');
     expect(findActiveUserSubscriptionsMock).not.toHaveBeenCalled();
+    expect(findMembershipOrgIdsMock).not.toHaveBeenCalled();
+    expect(findActiveSubscriptionsByOwnersMock).not.toHaveBeenCalled();
   });
 
   it('returns "bypass" for developer-tagged users', async () => {
@@ -75,6 +97,35 @@ describe('resolveUserRateTier', () => {
     expect(await resolveUserRateTier({ id: 'u1' })).toBe('pro');
   });
 
+  it('resolves an org seat member to the Pro tier', async () => {
+    findMembershipOrgIdsMock.mockResolvedValue(['org1']);
+    findActiveSubscriptionsByOwnersMock.mockResolvedValue([{ priceId: 'price_team' }]);
+    expect(await resolveUserRateTier({ id: 'u1' })).toBe('pro');
+    expect(findActiveSubscriptionsByOwnersMock).toHaveBeenCalledWith('Organization', ['org1']);
+  });
+
+  it('does not grant org plan tier to a user outside the org', async () => {
+    findMembershipOrgIdsMock.mockResolvedValue([]);
+    expect(await resolveUserRateTier({ id: 'u1' })).toBe('free');
+    expect(findActiveSubscriptionsByOwnersMock).not.toHaveBeenCalled();
+  });
+
+  it('takes the highest tier across user-owned and org-owned subscriptions', async () => {
+    findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_basic' }]);
+    findMembershipOrgIdsMock.mockResolvedValue(['org1']);
+    findActiveSubscriptionsByOwnersMock.mockResolvedValue([{ priceId: 'price_team' }]);
+    expect(await resolveUserRateTier({ id: 'u1' })).toBe('pro');
+  });
+
+  // The repository's active-only predicate is pinned by Subscription.e2e.test.ts; here an org
+  // whose plan has lapsed simply contributes no rows.
+  it('ignores inactive org subscriptions', async () => {
+    findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_basic' }]);
+    findMembershipOrgIdsMock.mockResolvedValue(['org1']);
+    findActiveSubscriptionsByOwnersMock.mockResolvedValue([]);
+    expect(await resolveUserRateTier({ id: 'u1' })).toBe('basic');
+  });
+
   it('treats tier-less standalone plans as "free" (not on the ladder)', async () => {
     findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_standalone' }]);
     expect(await resolveUserRateTier({ id: 'u1' })).toBe('free');
@@ -86,6 +137,10 @@ describe('resolveUserRateLimitPerMin', () => {
     isDevelopmentMock.mockReturnValue(false);
     findActiveUserSubscriptionsMock.mockReset();
     findActiveUserSubscriptionsMock.mockResolvedValue([]);
+    findActiveSubscriptionsByOwnersMock.mockReset();
+    findActiveSubscriptionsByOwnersMock.mockResolvedValue([]);
+    findMembershipOrgIdsMock.mockReset();
+    findMembershipOrgIdsMock.mockResolvedValue([]);
     getSettingsValueMock.mockReset();
     getSettingsValueMock.mockImplementation((key: string) => TIER_LIMITS[key]);
   });
@@ -105,6 +160,11 @@ describe('resolveUserRateLimitPerMin', () => {
   it('returns Infinity for bypass tiers (admins) without reading settings', async () => {
     expect(await resolveUserRateLimitPerMin({ id: 'u1', isAdmin: true })).toBe(Infinity);
     expect(getSettingsValueMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the free floor when org resolution throws', async () => {
+    findMembershipOrgIdsMock.mockRejectedValue(new Error('mongo unavailable'));
+    expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(10);
   });
 
   it('fails closed to the Free-tier floor when subscription resolution throws (no 500)', async () => {

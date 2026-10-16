@@ -4,7 +4,7 @@ import { SubscriptionPlanInterval, UserSubscriptionTier } from '@client/lib/user
 
 const { mockPlanByPriceId } = vi.hoisted(() => ({ mockPlanByPriceId: vi.fn() }));
 
-vi.mock('@client/lib/userSubscriptions/utils', () => ({ getSubscriptionPlanByPriceId: mockPlanByPriceId }));
+vi.mock('@client/lib/userSubscriptions/utils', () => ({ getEntitlingPlanByPriceId: mockPlanByPriceId }));
 
 const { resolveCallerPlan } = await import('./resolveCallerPlan');
 
@@ -29,12 +29,19 @@ const offLadder = {
   description: '',
 };
 
+const team = {
+  priceId: 'price_team',
+  name: 'Team',
+  interval: SubscriptionPlanInterval.Monthly,
+  tier: UserSubscriptionTier.Pro,
+};
+
 const sub = (priceId: string) => ({ priceId, periodEndsAt: PERIOD_END });
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockPlanByPriceId.mockImplementation((priceId: string) =>
-    [professional, offLadder].find(plan => plan.priceId === priceId)
+    [professional, offLadder, team].find(plan => plan.priceId === priceId)
   );
 });
 
@@ -65,6 +72,12 @@ describe('resolveCallerPlan', () => {
     const result = resolveCallerPlan([sub('price_standalone'), sub('price_pro')]);
     expect(result.tier).toBe('basic');
     expect(result.subscription?.price_id).toBe('price_pro');
+  });
+
+  it('ranks an org seat Team plan above an individual Professional plan', () => {
+    const result = resolveCallerPlan([sub('price_pro'), sub('price_team')]);
+    expect(result.tier).toBe('pro');
+    expect(result.subscription?.plan_name).toBe('Team');
   });
 
   it('reports an unnameable plan as other, so a grandfathered subscriber is never called free', () => {

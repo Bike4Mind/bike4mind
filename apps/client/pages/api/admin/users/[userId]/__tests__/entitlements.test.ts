@@ -47,8 +47,8 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mockUserFind(...a) },
 }));
 
-vi.mock('@server/models/Subscription', () => ({
-  subscriptionRepository: { findActiveUserSubscriptions: (...a: unknown[]) => mockSubs(...a) },
+vi.mock('@server/entitlements/activeSubscriptions', () => ({
+  getActiveSubscriptionsForUser: (...a: unknown[]) => mockSubs(...a),
 }));
 
 vi.mock('@server/entitlements/partnerRules', () => ({

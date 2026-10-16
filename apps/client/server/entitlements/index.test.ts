@@ -16,8 +16,12 @@ const makeReq = (user: {
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveUserSubscriptions: vi.fn(),
+    findActiveSubscriptionsByOwners: vi.fn(async () => []),
   },
 }));
+
+const { findMembershipOrgIds } = vi.hoisted(() => ({ findMembershipOrgIds: vi.fn(async (): Promise<string[]> => []) }));
+vi.mock('@bike4mind/database', () => ({ organizationRepository: { findMembershipOrgIds } }));
 
 // Fixture registry: behavior of the real rows is covered by
 // lib/entitlements/registry.test.ts; here we test the resolver's wiring and
@@ -57,6 +61,7 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 }));
 
 const findActive = subscriptionRepository.findActiveUserSubscriptions as ReturnType<typeof vi.fn>;
+const findActiveByOwners = subscriptionRepository.findActiveSubscriptionsByOwners as ReturnType<typeof vi.fn>;
 
 const user = { id: 'u1', tags: ['SomeTag'], isAdmin: false };
 
@@ -64,6 +69,8 @@ describe('getUserEntitlements', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPartnerEntitlements.mockResolvedValue(new Set<string>());
+    findMembershipOrgIds.mockResolvedValue([]);
+    findActiveByOwners.mockResolvedValue([]);
   });
 
   it('grants keys mapped from active subscription prices, unioned with tag-derived keys', async () => {
@@ -71,6 +78,23 @@ describe('getUserEntitlements', () => {
 
     await expect(getUserEntitlements(user)).resolves.toEqual(expect.arrayContaining(['sometag', 'someproduct:pro']));
     expect(findActive).toHaveBeenCalledWith('u1');
+  });
+
+  it('grants Pro entitlements to an org seat member', async () => {
+    findActive.mockResolvedValue([]);
+    findMembershipOrgIds.mockResolvedValue(['org1']);
+    findActiveByOwners.mockResolvedValue([{ priceId: 'price_pro', ownerType: 'Organization', ownerId: 'org1' }]);
+
+    await expect(getUserEntitlements(user)).resolves.toContain('someproduct:pro');
+    expect(findActiveByOwners).toHaveBeenCalledWith('Organization', ['org1']);
+  });
+
+  it('does not grant org plan entitlements to a user outside the org', async () => {
+    findActive.mockResolvedValue([]);
+    findMembershipOrgIds.mockResolvedValue([]);
+
+    await expect(getUserEntitlements(user)).resolves.not.toContain('someproduct:pro');
+    expect(findActiveByOwners).not.toHaveBeenCalled();
   });
 
   it('grants nothing from unmapped prices; tag passthrough (plus baseline) still applies', async () => {
@@ -222,6 +246,16 @@ describe('getRequestEntitlements', () => {
     await getRequestEntitlements(req);
 
     expect(findActive).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses the request membership memo for org seats instead of re-reading membership', async () => {
+    findActive.mockResolvedValue([]);
+    findActiveByOwners.mockResolvedValue([{ priceId: 'price_pro' }]);
+    const req = Object.assign(makeReq(user), { membershipOrgIds: ['org1'] });
+
+    await expect(getRequestEntitlements(req)).resolves.toContain('someproduct:pro');
+    expect(findMembershipOrgIds).not.toHaveBeenCalled();
+    expect(findActiveByOwners).toHaveBeenCalledWith('Organization', ['org1']);
   });
 
   // Fail-closed on an unauthenticated request - returns an empty list (holds nothing)

@@ -9,12 +9,13 @@
  *
  * Status policy (deliberate v1 product decision): only `status === 'active'`
  * grants - `past_due` (no dunning grace) and `trialing` deny. Changing that
- * means replacing `findActiveUserSubscriptions` with a status-allowlist query
- * here, not widening the repository method.
+ * means a status-allowlist query in `getActiveSubscriptionsForUser`, not
+ * widening the repository methods.
  *
- * Owner scope: User-owned subscriptions only. The org-seat fast-follow
- * (ACCESS_MODEL §3.2) adds seat-membership resolution HERE - callers never
- * change. Note the webhook invalidation fan-out for seats is separate work.
+ * Owner scope: the user's own subscriptions plus those of every org they are a
+ * member of (`getActiveSubscriptionsForUser`) - an org seat confers the org
+ * plan's price-derived keys exactly as an owned subscription would. The same
+ * row set feeds the rate tier and `/api/v1/me`.
  */
 import {
   applyImpliedEntitlements,
@@ -23,7 +24,8 @@ import {
   BASE_ENTITLEMENT_KEY,
 } from '@client/lib/entitlements/registry';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
+import { getRequestMembershipOrgIds } from '@server/dataLakes/requestMembership';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
 import type { IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
@@ -39,6 +41,7 @@ import type { Logger } from '@bike4mind/observability';
 export interface EntitlementRequest {
   user?: IUserDocument;
   entitlements?: EntitlementKey[];
+  membershipOrgIds?: string[];
   /** Attached by `baseApi()` early in the middleware chain; optional so a bare test double still fits. */
   logger?: Logger;
 }
@@ -76,8 +79,8 @@ export function toEntitlementUser(user: IUserDocument): EntitlementUser {
 export async function getUserEntitlements(
   user: EntitlementUser,
   /**
-   * The user's active subscriptions, when the caller has already loaded them - it
-   * is the same query this function would run. `/api/v1/me` passes them so `tier`
+   * The user's active subscriptions (from `getActiveSubscriptionsForUser`), when the
+   * caller has already loaded them - it is the same read this function would run. `/api/v1/me` passes them so `tier`
    * and `entitlements` in one response are derived from one read, and therefore
    * are derived from one snapshot read, not two reads that could race apart.
    */
@@ -85,7 +88,7 @@ export async function getUserEntitlements(
 ): Promise<EntitlementKey[]> {
   // Both reads are independent - run them together to avoid serializing two round-trips.
   const [activeSubscriptions, partnerKeys] = await Promise.all([
-    preloadedActiveSubscriptions ?? subscriptionRepository.findActiveUserSubscriptions(user.id),
+    preloadedActiveSubscriptions ?? getActiveSubscriptionsForUser(user.id),
     partnerEntitlementsForEmail(user.email, user.emailVerified),
   ]);
   // DB-backed partner rules (issue #293) union with the pure registry grants
@@ -149,7 +152,11 @@ export async function getRequestEntitlements(req: EntitlementRequest): Promise<E
   // req.user before gating routes call this, so `!` below is safe once past the guard;
   // the guard is defense-in-depth for a future caller that forgets to check.
   if (!req.user) return [];
-  return (req.entitlements ??= await getUserEntitlements(req.user));
+  if (req.entitlements) return req.entitlements;
+  const active = await getActiveSubscriptionsForUser(req.user.id, {
+    membershipOrgIds: await getRequestMembershipOrgIds(req),
+  });
+  return (req.entitlements ??= await getUserEntitlements(req.user, active));
 }
 
 /**
