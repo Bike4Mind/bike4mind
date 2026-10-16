@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { MCP_CONNECTION_SECRET_PATHS, toMcpConnectionPublic, type IMcpConnectionDocument } from '@bike4mind/common';
+import {
+  MCP_CONNECTION_SECRET_PATHS,
+  McpConnectionProtectedFieldError,
+  toMcpConnectionPublic,
+  type IMcpConnectionDocument,
+  type IMcpConnectionTool,
+} from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { McpConnection, mcpConnectionRepository } from './McpConnectionModel';
 
@@ -47,6 +53,20 @@ const apiKeyConnection = (overrides: Partial<CreateInput> = {}): CreateInput =>
     },
     ...overrides,
   });
+
+const tool = (name: string, overrides: Partial<IMcpConnectionTool> = {}): IMcpConnectionTool => ({
+  name,
+  description: `${name} tool`,
+  descriptionRawHash: `h-${name}`,
+  inputSchema: { type: 'object' },
+  enabled: false,
+  approval: 'default',
+  state: 'pending_review',
+  firstSeenAt: new Date(),
+  ...overrides,
+});
+
+const OWNER = { ownerType: 'user' as const, ownerKey: 'user-1' };
 
 function secretValues(doc: unknown): unknown[] {
   return MCP_CONNECTION_SECRET_PATHS.map(path =>
@@ -117,7 +137,14 @@ describe('McpConnectionModel', () => {
         ...(await mcpConnectionRepository.listAllForUser('user-1')),
         ...(await mcpConnectionRepository.findByUrlHost('mcp.linear.app')),
         await mcpConnectionRepository.setStatus(created.id, 'error', { code: 'timeout', message: 'slow' }),
-        await mcpConnectionRepository.updateTools(created.id, [], 'fp'),
+        await mcpConnectionRepository.updateDiscovery(created.id, {
+          tools: [],
+          fingerprint: 'fp',
+          expectedFingerprint: null,
+        }),
+        await mcpConnectionRepository.rename(created.id, OWNER, 'Renamed'),
+        await mcpConnectionRepository.setEnabled(created.id, OWNER, true),
+        await mcpConnectionRepository.setToolSettings(created.id, OWNER, []),
       ];
       for (const doc of reads) {
         expect(doc).not.toBeNull();
@@ -147,6 +174,49 @@ describe('McpConnectionModel', () => {
       expect(JSON.stringify(view)).not.toMatch(/enc:/);
       expect(view.auth.oauth).toMatchObject({ hasAccessToken: true, hasRefreshToken: true });
       expect(view).not.toHaveProperty('refreshLease');
+    });
+  });
+
+  describe('generic writers', () => {
+    it('writing back a default read cannot drop the stored secrets', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      const read = await mcpConnectionRepository.findById(created.id);
+
+      await expect(mcpConnectionRepository.update({ ...read!, displayName: 'Edited' })).rejects.toThrow(
+        McpConnectionProtectedFieldError
+      );
+      await expect(mcpConnectionRepository.updateGuarded({ ...read!, displayName: 'Edited' })).rejects.toThrow(
+        McpConnectionProtectedFieldError
+      );
+
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      expect(withCreds?.auth.oauth).toMatchObject({ accessTokenEnc: 'enc:access', refreshTokenEnc: 'enc:refresh' });
+      expect(withCreds?.displayName).toBe('Linear');
+    });
+
+    it('refuses protected fields as dotted paths, in updateMany and in the unset option', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+
+      await expect(
+        mcpConnectionRepository.update({ id: created.id, 'auth.oauth.accessTokenEnc': 'enc:forged' })
+      ).rejects.toThrow(McpConnectionProtectedFieldError);
+      await expect(mcpConnectionRepository.update({ id: created.id, ownerKey: 'user-2' })).rejects.toThrow(
+        McpConnectionProtectedFieldError
+      );
+      await expect(
+        mcpConnectionRepository.update({ id: created.id, displayName: 'x' }, { unset: ['refreshLease'] })
+      ).rejects.toThrow(McpConnectionProtectedFieldError);
+      await expect(mcpConnectionRepository.updateMany({}, { auth: { kind: 'none' } })).rejects.toThrow(
+        McpConnectionProtectedFieldError
+      );
+    });
+
+    it('still writes unprotected fields', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      const updated = await mcpConnectionRepository.update({ id: created.id, displayName: 'Edited' });
+      expect(updated?.displayName).toBe('Edited');
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      expect(withCreds?.auth.oauth?.accessTokenEnc).toBe('enc:access');
     });
   });
 
@@ -184,28 +254,104 @@ describe('McpConnectionModel', () => {
       expect(await McpConnection.countDocuments({})).toBe(0);
     });
 
-    it('updateTools stores the tools, fingerprint and fetch time', async () => {
+    it('updateDiscovery stores the tools, fingerprint, fetch time and server details', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
-      const updated = await mcpConnectionRepository.updateTools(
-        created.id,
-        [
-          {
-            name: 'create_issue',
-            description: 'Create an issue',
-            descriptionRawHash: 'h1',
-            inputSchema: { type: 'object' },
-            annotations: { readOnlyHint: false },
-            enabled: false,
-            approval: 'default',
-            state: 'pending_review',
-            firstSeenAt: new Date(),
-          },
-        ],
-        'fp-1'
-      );
+      const updated = await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('create_issue', { annotations: { readOnlyHint: false } })],
+        fingerprint: 'fp-1',
+        expectedFingerprint: null,
+        detectedTransport: 'streamable-http',
+        serverInfo: { name: 'linear', version: '1.0.0' },
+        dropped: 2,
+      });
       expect(updated?.toolsFingerprint).toBe('fp-1');
       expect(updated?.toolsFetchedAt).toBeInstanceOf(Date);
+      expect(updated).toMatchObject({ detectedTransport: 'streamable-http', toolsDropped: 2 });
+      expect(updated?.serverInfo).toMatchObject({ name: 'linear', version: '1.0.0' });
       expect(updated?.tools[0]).toMatchObject({ name: 'create_issue', state: 'pending_review', enabled: false });
+    });
+
+    it('a discovery diffed against a stale fingerprint loses and leaves the review choices alone', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('a')],
+        fingerprint: 'fp-1',
+        expectedFingerprint: null,
+      });
+      await mcpConnectionRepository.setToolSettings(created.id, OWNER, [
+        { name: 'a', enabled: true, state: 'active', approval: 'always_allow' },
+      ]);
+
+      // Two concurrent re-discoveries both read fp-1; the second must not overwrite the first.
+      const [first, second] = await Promise.all([
+        mcpConnectionRepository.updateDiscovery(created.id, {
+          tools: [tool('a', { enabled: true, state: 'active', approval: 'always_allow' }), tool('b')],
+          fingerprint: 'fp-2',
+          expectedFingerprint: 'fp-1',
+        }),
+        mcpConnectionRepository.updateDiscovery(created.id, {
+          tools: [tool('a')],
+          fingerprint: 'fp-3',
+          expectedFingerprint: 'fp-1',
+        }),
+      ]);
+      expect([first, second].filter(r => r !== null)).toHaveLength(1);
+
+      // A first discovery replayed after one already landed also loses.
+      expect(
+        await mcpConnectionRepository.updateDiscovery(created.id, {
+          tools: [],
+          fingerprint: 'fp-x',
+          expectedFingerprint: null,
+        })
+      ).toBeNull();
+
+      const stored = await mcpConnectionRepository.findById(created.id);
+      expect(['fp-2', 'fp-3']).toContain(stored?.toolsFingerprint);
+    });
+
+    it('setToolSettings applies several tools in one write and ignores unknown names', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('a'), tool('b'), tool('c')],
+        fingerprint: 'fp-1',
+        expectedFingerprint: null,
+      });
+
+      const updated = await mcpConnectionRepository.setToolSettings(created.id, OWNER, [
+        { name: 'a', enabled: true, state: 'active' },
+        { name: 'b', approval: 'always_ask' },
+        { name: 'a', approval: 'always_allow' },
+        { name: 'missing', enabled: true },
+      ]);
+      expect(updated?.tools.map(t => [t.name, t.enabled, t.approval, t.state])).toEqual([
+        ['a', true, 'always_allow', 'active'],
+        ['b', false, 'always_ask', 'pending_review'],
+        ['c', false, 'default', 'pending_review'],
+      ]);
+
+      await expect(
+        mcpConnectionRepository.setToolSettings(created.id, OWNER, [
+          { name: 'a', approval: 'whenever' as IMcpConnectionTool['approval'] },
+        ])
+      ).rejects.toThrow(/approval/);
+      expect(
+        await mcpConnectionRepository.setToolSettings(created.id, { ownerType: 'user', ownerKey: 'user-2' }, [
+          { name: 'a', enabled: false },
+        ])
+      ).toBeNull();
+    });
+
+    it('rename and setEnabled only reach the owner', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      const stranger = { ownerType: 'user' as const, ownerKey: 'user-2' };
+
+      expect(await mcpConnectionRepository.rename(created.id, stranger, 'Hijacked')).toBeNull();
+      expect(await mcpConnectionRepository.setEnabled(created.id, stranger, false)).toBeNull();
+      expect((await mcpConnectionRepository.rename(created.id, OWNER, 'Linear (work)'))?.displayName).toBe(
+        'Linear (work)'
+      );
+      expect((await mcpConnectionRepository.setEnabled(created.id, OWNER, false))?.enabled).toBe(false);
     });
 
     it('setStatus records lastError and clears it on connected', async () => {

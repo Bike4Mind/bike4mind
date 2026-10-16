@@ -147,6 +147,8 @@ export interface IMcpConnection {
   tools: IMcpConnectionTool[];
   toolsFingerprint?: string;
   toolsFetchedAt?: Date;
+  /** Tools the server listed that discovery refused (invalid name, over a cap). */
+  toolsDropped?: number;
   enabled: boolean;
   lastUsedAt?: Date;
   refreshLease?: IMcpConnectionRefreshLease;
@@ -199,6 +201,7 @@ export interface IMcpConnectionPublic {
   tools: IMcpConnectionTool[];
   toolsFingerprint?: string;
   toolsFetchedAt?: Date;
+  toolsDropped?: number;
   enabled: boolean;
   lastUsedAt?: Date;
   createdAt: Date;
@@ -247,6 +250,7 @@ export function toMcpConnectionPublic(doc: IMcpConnectionDocument): IMcpConnecti
     tools: doc.tools ?? [],
     toolsFingerprint: doc.toolsFingerprint,
     toolsFetchedAt: doc.toolsFetchedAt,
+    toolsDropped: doc.toolsDropped,
     enabled: doc.enabled,
     lastUsedAt: doc.lastUsedAt,
     createdAt: doc.createdAt,
@@ -300,6 +304,46 @@ export interface McpOAuthTokenUpdate {
   tokenIssuer?: string;
 }
 
+/**
+ * Top-level fields the generic `update`/`updateGuarded`/`updateMany` refuse. They `$set` whole
+ * fields, so writing `auth` back from a default read (where every `*Enc` is deselected) would wipe
+ * the stored secrets; the lease and the owner identity have their own guarded writers or none.
+ */
+export const MCP_CONNECTION_PROTECTED_FIELDS = [
+  'auth',
+  'refreshLease',
+  'ownerType',
+  'ownerKey',
+  'userId',
+  'organizationId',
+] as const;
+
+/** A generic repository write named a field only the dedicated McpConnection methods may touch. */
+export class McpConnectionProtectedFieldError extends Error {
+  constructor(readonly field: string) {
+    super(`McpConnection.${field} cannot be written through a generic update; use the dedicated repository method`);
+    this.name = 'McpConnectionProtectedFieldError';
+  }
+}
+
+/** One tool's review choices. Omitted fields are left as stored; unknown tool names are ignored. */
+export interface McpToolSettingsUpdate {
+  name: string;
+  enabled?: boolean;
+  approval?: McpToolApprovalMode;
+  state?: McpToolState;
+}
+
+export interface McpDiscoveryUpdate {
+  tools: IMcpConnectionTool[];
+  fingerprint: string;
+  /** Fingerprint the caller read and diffed against; null for the first discovery. */
+  expectedFingerprint: string | null;
+  detectedTransport?: McpConnectionDetectedTransport;
+  serverInfo?: IMcpConnectionServerInfo;
+  dropped?: number;
+}
+
 export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnectionDocument> {
   findByIdForOwner(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /** Includes the `*Enc` fields. Only for the token manager and the call path, never a response. */
@@ -312,7 +356,20 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
   /** Org-published definitions. */
   listForOrg(organizationId: string): Promise<IMcpConnectionDocument[]>;
   findByUrlHost(urlHost: string): Promise<IMcpConnectionDocument[]>;
-  updateTools(id: string, tools: IMcpConnectionTool[], fingerprint: string): Promise<IMcpConnectionDocument | null>;
+  rename(id: string, owner: McpConnectionOwner, displayName: string): Promise<IMcpConnectionDocument | null>;
+  setEnabled(id: string, owner: McpConnectionOwner, enabled: boolean): Promise<IMcpConnectionDocument | null>;
+  /** Applies every entry in one atomic write. */
+  setToolSettings(
+    id: string,
+    owner: McpConnectionOwner,
+    settings: McpToolSettingsUpdate[]
+  ): Promise<IMcpConnectionDocument | null>;
+  /**
+   * Compare-and-set on `toolsFingerprint === expectedFingerprint`: resolves null when another
+   * discovery already moved the fingerprint, so the caller re-reads and re-diffs instead of
+   * overwriting the review choices that discovery merged.
+   */
+  updateDiscovery(id: string, update: McpDiscoveryUpdate): Promise<IMcpConnectionDocument | null>;
   setStatus(
     id: string,
     status: McpConnectionStatus,

@@ -5,8 +5,14 @@ import {
   IMcpConnectionLastError,
   IMongoDocument,
   McpConnectionOwner,
+  McpConnectionProtectedFieldError,
   McpConnectionStatus,
+  McpDiscoveryUpdate,
   McpOAuthTokenUpdate,
+  McpToolSettingsUpdate,
+  MCP_CONNECTION_PROTECTED_FIELDS,
+  RepositoryPatch,
+  RepositoryUpdateOptions,
   MCP_API_KEY_SCHEMES,
   MCP_CONNECTION_AUTH_KINDS,
   MCP_CONNECTION_OWNER_TYPES,
@@ -103,6 +109,7 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
     tools: { type: [McpConnectionToolSchema], default: [] },
     toolsFingerprint: { type: String },
     toolsFetchedAt: { type: Date },
+    toolsDropped: { type: Number },
     enabled: { type: Boolean, required: true, default: true },
     lastUsedAt: { type: Date },
     refreshLease: {
@@ -148,10 +155,55 @@ function stripSecrets<T extends IMcpConnectionDocument>(doc: T): T {
   return doc;
 }
 
-class McpConnectionRepository
-  extends BaseRepository<IMcpConnectionDocument & IMongoDocument>
-  implements IMcpConnectionRepository
-{
+type ConnectionDoc = IMcpConnectionDocument & IMongoDocument;
+
+const PROTECTED_FIELDS: ReadonlySet<string> = new Set(MCP_CONNECTION_PROTECTED_FIELDS);
+
+/** Throws when `data` (a whole doc, a partial or dotted paths) or the `unset` option names a protected field. */
+function assertNoProtectedFields(data: Record<string, unknown>, options?: Record<string, unknown>): void {
+  const unset = Array.isArray(options?.unset) ? (options.unset as unknown[]) : [];
+  for (const key of [...Object.keys(data), ...unset.filter((k): k is string => typeof k === 'string')]) {
+    const root = key.split('.')[0]!;
+    if (PROTECTED_FIELDS.has(root)) throw new McpConnectionProtectedFieldError(root);
+  }
+}
+
+const TOOL_APPROVAL_MODES: ReadonlySet<string> = new Set(MCP_TOOL_APPROVAL_MODES);
+const TOOL_STATES: ReadonlySet<string> = new Set(MCP_TOOL_STATES);
+
+class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements IMcpConnectionRepository {
+  update(data: Partial<ConnectionDoc>, options?: RepositoryUpdateOptions<ConnectionDoc>): Promise<ConnectionDoc | null>;
+  update(
+    data: RepositoryPatch<ConnectionDoc>,
+    options?: RepositoryUpdateOptions<ConnectionDoc>
+  ): Promise<ConnectionDoc | null>;
+  async update(data: Partial<ConnectionDoc>, options?: RepositoryUpdateOptions<ConnectionDoc>) {
+    assertNoProtectedFields(data, options);
+    return super.update(data, options);
+  }
+
+  updateGuarded(
+    data: Partial<ConnectionDoc>,
+    options?: RepositoryUpdateOptions<ConnectionDoc>
+  ): Promise<ConnectionDoc | null>;
+  updateGuarded(
+    data: RepositoryPatch<ConnectionDoc>,
+    options?: RepositoryUpdateOptions<ConnectionDoc>
+  ): Promise<ConnectionDoc | null>;
+  async updateGuarded(data: Partial<ConnectionDoc>, options?: RepositoryUpdateOptions<ConnectionDoc>) {
+    assertNoProtectedFields(data, options);
+    return super.updateGuarded(data, options);
+  }
+
+  async updateMany(
+    filter: Record<string, unknown>,
+    data: Partial<ConnectionDoc>,
+    options?: RepositoryUpdateOptions<ConnectionDoc>
+  ) {
+    assertNoProtectedFields(data, options);
+    return super.updateMany(filter, data, options);
+  }
+
   async create(data: Omit<IMcpConnectionDocument, 'id' | 'updatedAt' | 'createdAt'>) {
     return stripSecrets(await super.create(data));
   }
@@ -187,15 +239,84 @@ class McpConnectionRepository
     return this.find({ urlHost: urlHost.toLowerCase() });
   }
 
-  async updateTools(
+  async rename(id: string, owner: McpConnectionOwner, displayName: string): Promise<IMcpConnectionDocument | null> {
+    return this.updateForOwner(id, owner, { displayName });
+  }
+
+  async setEnabled(id: string, owner: McpConnectionOwner, enabled: boolean): Promise<IMcpConnectionDocument | null> {
+    return this.updateForOwner(id, owner, { enabled });
+  }
+
+  /**
+   * One `arrayFilters` update (identifier `t<i>` per tool name), so a partial failure cannot leave
+   * half a review applied. Duplicate names collapse to the last entry: two filters resolving to the
+   * same element would make the server reject the whole write as a path conflict.
+   */
+  async setToolSettings(
     id: string,
-    tools: IMcpConnectionTool[],
-    fingerprint: string
+    owner: McpConnectionOwner,
+    settings: McpToolSettingsUpdate[]
   ): Promise<IMcpConnectionDocument | null> {
-    const result = await this.model.findByIdAndUpdate(
-      id,
-      { $set: { tools, toolsFingerprint: fingerprint, toolsFetchedAt: new Date() } },
-      { new: true }
+    const byName = new Map<string, McpToolSettingsUpdate>();
+    for (const entry of settings) {
+      if (entry.approval !== undefined && !TOOL_APPROVAL_MODES.has(entry.approval)) {
+        throw new Error(`Invalid tool approval mode: ${entry.approval}`);
+      }
+      if (entry.state !== undefined && !TOOL_STATES.has(entry.state)) {
+        throw new Error(`Invalid tool state: ${entry.state}`);
+      }
+      byName.set(entry.name, { ...byName.get(entry.name), ...entry });
+    }
+
+    const set: Record<string, unknown> = {};
+    const arrayFilters: Record<string, string>[] = [];
+    for (const entry of byName.values()) {
+      const fields = (['enabled', 'approval', 'state'] as const).filter(field => entry[field] !== undefined);
+      if (fields.length === 0) continue;
+      const ident = `t${arrayFilters.length}`;
+      arrayFilters.push({ [`${ident}.name`]: entry.name });
+      for (const field of fields) set[`tools.$[${ident}].${field}`] = entry[field];
+    }
+    if (arrayFilters.length === 0) return this.findByIdForOwner(id, owner);
+
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey },
+      { $set: set },
+      { new: true, arrayFilters }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async updateDiscovery(id: string, update: McpDiscoveryUpdate): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const set: Record<string, unknown> = {
+      tools: update.tools,
+      toolsFingerprint: update.fingerprint,
+      toolsFetchedAt: new Date(),
+      toolsDropped: update.dropped ?? 0,
+    };
+    if (update.detectedTransport !== undefined) set.detectedTransport = update.detectedTransport;
+    if (update.serverInfo !== undefined) set.serverInfo = update.serverInfo;
+    // `toolsFingerprint: null` also matches a document that never had one.
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, toolsFingerprint: update.expectedFingerprint },
+      { $set: set },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  private async updateForOwner(
+    id: string,
+    owner: McpConnectionOwner,
+    set: Record<string, unknown>
+  ): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey },
+      { $set: set },
+      { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
   }
