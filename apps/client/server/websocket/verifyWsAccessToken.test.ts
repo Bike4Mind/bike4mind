@@ -33,6 +33,7 @@ vi.mock('@server/auth/assertAccountStateUsable', () => ({
 vi.mock('@server/utils/errors', () => ({
   NotFoundError: class NotFoundError extends Error {},
   UnauthorizedError: class UnauthorizedError extends Error {},
+  ForbiddenError: class ForbiddenError extends Error {},
 }));
 
 const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
@@ -43,6 +44,7 @@ vi.mock('@server/auth/mfaEnforcement', () => ({
 
 import { verifyWsAccessToken, verifyWsAccessTokenClaims } from './verifyWsAccessToken';
 import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
+import { ForbiddenError } from '@server/utils/errors';
 
 describe('verifyWsAccessToken', () => {
   beforeEach(() => {
@@ -159,7 +161,11 @@ describe('verifyWsAccessToken: enforceMFA for an existing session', () => {
 
   it('refuses a valid session token once the user owes MFA enrollment', async () => {
     mockIsMfaEnrollmentOwed.mockResolvedValueOnce(true);
-    await expect(verifyWsAccessToken('token')).rejects.toThrow('MFA enrollment required.');
+    // Forbidden, not Unauthorized: the token is valid, so a client must re-enroll rather than
+    // refresh, exactly as REST answers 403 rather than 401 on this gate.
+    const refusal = await verifyWsAccessToken('token').catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(ForbiddenError);
+    expect((refusal as Error).message).toBe('MFA enrollment required.');
   });
 
   it('accepts the same token while no enrollment is owed', async () => {
