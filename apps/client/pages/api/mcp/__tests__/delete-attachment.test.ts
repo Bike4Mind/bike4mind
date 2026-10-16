@@ -32,6 +32,7 @@ vi.mock('@bike4mind/slack', () => {
 
 import { Quest, Session } from '@bike4mind/database';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { parseMcpResult } from '@server/utils/parseMcpResult';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
 import handler from '../delete-attachment';
 
@@ -139,5 +140,68 @@ describe('POST /api/mcp/delete-attachment', () => {
     expect(res._getJSONData()).toMatchObject({ success: false, error: 'Error: permission denied' });
     expect(cleanupConfluencePageContent).not.toHaveBeenCalled();
     expect(Quest.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('refuses an id that is absent from a list the session does have', async () => {
+    vi.mocked(Quest.findOne).mockResolvedValue({
+      _id: 'quest-1',
+      attachmentList: { source: 'jira', attachments: [{ id: 'att-1', filename: 'a.png' }] },
+    } as never);
+
+    const res = await post({ sessionId: SESSION_ID, attachmentId: 'att-2' });
+
+    expect(res.statusCode).toBe(404);
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+    expect(Quest.updateOne).not.toHaveBeenCalled();
+  });
+
+  it("refuses another user's session before reading its attachment list", async () => {
+    vi.mocked(Session.findById).mockResolvedValue({ userId: 'user-2' } as never);
+
+    const res = await post({ sessionId: SESSION_ID, attachmentId: 'att-1' });
+
+    expect(res.statusCode).toBe(403);
+    expect(Quest.findOne).not.toHaveBeenCalled();
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it('fails the request when the parsed tool payload carries an error, without pruning', async () => {
+    vi.mocked(Quest.findOne).mockResolvedValue({
+      _id: 'quest-1',
+      attachmentList: {
+        source: 'confluence',
+        pageId: '555',
+        attachments: [{ id: 'att-1', filename: 'stored.png' }],
+      },
+    } as never);
+    vi.mocked(parseMcpResult).mockReturnValueOnce({ error: 'boom' });
+
+    const res = await post({ sessionId: SESSION_ID, attachmentId: 'att-1' });
+
+    expect(res.statusCode).toBe(500);
+    expect(res._getJSONData()).toMatchObject({ success: false, error: 'boom' });
+    expect(Quest.updateOne).not.toHaveBeenCalled();
+    expect(cleanupConfluencePageContent).not.toHaveBeenCalled();
+  });
+
+  it('still reports success when the Confluence page cannot be cleaned up after the delete', async () => {
+    vi.mocked(Quest.findOne).mockResolvedValue({
+      _id: 'quest-1',
+      attachmentList: {
+        source: 'confluence',
+        pageId: '555',
+        attachments: [{ id: 'att-1', filename: 'stored.png' }],
+      },
+    } as never);
+    vi.mocked(cleanupConfluencePageContent).mockRejectedValueOnce(new Error('409 conflict'));
+
+    const res = await post({ sessionId: SESSION_ID, attachmentId: 'att-1' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ success: true });
+    expect(Quest.updateOne).toHaveBeenCalledWith(
+      { _id: 'quest-1' },
+      { $pull: { 'attachmentList.attachments': { id: 'att-1' } } }
+    );
   });
 });
