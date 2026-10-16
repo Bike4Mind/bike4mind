@@ -80,11 +80,13 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       return structuredClone(job);
     },
 
-    async markSubmitAttempted(id: string, at: Date) {
+    async markSubmitAttempted(id: string, at: Date, { markRunning }: { markRunning: boolean }) {
       const job = jobs.get(id);
-      if (!job) return;
+      if (!job || job.cancelRequested) return null;
       job.submitAttemptedAt = at;
+      if (markRunning) job.state = 'running';
       touch(job);
+      return structuredClone(job);
     },
 
     async commit(id: string, update: GenerationJobCommit, guard: GenerationJobCommitGuard) {
@@ -96,9 +98,12 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       return structuredClone(job);
     },
 
-    async requestCancel(id: string) {
+    async requestCancel(id: string, { beforeSubmitOnly }: { beforeSubmitOnly: boolean }) {
       const job = jobs.get(id);
-      if (!job || (job.state !== 'pending' && job.state !== 'running')) return null;
+      const cancellable = beforeSubmitOnly
+        ? job?.state === 'pending' && !job.submitAttemptedAt
+        : job?.state === 'pending' || job?.state === 'running';
+      if (!job || !cancellable) return null;
       job.cancelRequested = true;
       touch(job);
       return structuredClone(job);

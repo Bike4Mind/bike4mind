@@ -13,7 +13,9 @@ const StudioPage = ({ modality }: { modality: StudioModality }) => {
   return (
     <PageFrame testId={`${testId}-page`}>
       <Stack gap={3}>
-        <Typography level="h2">Studio</Typography>
+        <Typography level="h2" component="h1">
+          Studio
+        </Typography>
         {/* Each tab is its own URL (/studio/<modality>), so a tab can be linked to and survives a reload. */}
         <Tabs
           value={modality}

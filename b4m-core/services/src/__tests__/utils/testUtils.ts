@@ -14,6 +14,7 @@ import {
   ICreditTransactionRepository,
   ICreditTransactionDocument,
   IAuthSessionRepository,
+  IRealtimeConnectionRepository,
   IAuthSessionDocument,
   ISessionAgentConfigRepository,
   ISessionAgentConfigDocument,
@@ -235,8 +236,19 @@ export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepo
     rotateHash: vi.fn(),
     recoverRotateHash: vi.fn(),
     registerReplayUse: vi.fn(),
+    markStepUp: vi.fn(),
+    setStepUpEmailChallenge: vi.fn(),
+    findStepUpEmailChallenge: vi.fn(),
+    recordStepUpEmailChallengeFailure: vi.fn(),
+    recordStepUpPasswordFailure: vi.fn(),
+    consumeStepUpEmailChallenge: vi.fn(),
     revokeBySid: vi.fn(),
     revokeAllByUserId: vi.fn(),
+  });
+
+export const createMockRealtimeConnectionRepository = (): MockedObject<IRealtimeConnectionRepository> =>
+  vi.mocked({
+    endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }),
   });
 
 export const createMockUserRepository = (): MockedObject<IUserRepository> =>
@@ -263,6 +275,9 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     findByStripeCustomerId: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),
+    setCurrentStorageIfUnchanged: vi.fn(),
+    findCurrentStorageSize: vi.fn(),
+    listUserIdsAfter: vi.fn(),
     incrementTokenVersion: vi.fn(),
     findBySlackUserId: vi.fn(),
     findByIdWithNotionToken: vi.fn(),

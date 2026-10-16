@@ -7,11 +7,13 @@ import {
   IMessage,
   ModelBackend,
   PermissionDeniedError,
+  publishesCacheReadRate,
   stripToolArtifactMarkup,
   type CacheUsageStats,
   type ModelInfo,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
+import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
@@ -36,12 +38,29 @@ import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { normalizeOpenAIFinishReason } from './stopReason';
+import { DispatchModel } from './dispatchModel';
+
+/**
+ * Billed output tokens of one xAI usage object. xAI reports reasoning tokens apart from, not inside,
+ * completion_tokens: its chat-completions reference response has 32 prompt + 9 completion + 94
+ * reasoning = 135 total_tokens. Reasoning bills at the output rate, so reading completion_tokens
+ * alone drops it. @see https://docs.x.ai/developers/rest-api-reference/inference/chat-completions
+ */
+const xaiOutputTokens = (
+  usage: { completion_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number } } | undefined | null
+): number => (usage?.completion_tokens || 0) + (usage?.completion_tokens_details?.reasoning_tokens || 0);
 
 export class XAIBackend implements ICompletionBackend {
   private _baseUrl = 'https://api.x.ai/v1';
   private _api: OpenAI;
   private logger: Logger;
   public currentModel: string = '';
+  /** Catalog view of the model being completed; see DispatchModel. */
+  private readonly _dispatch = new DispatchModel();
+
+  setDispatchModel(info: ModelInfo): void {
+    this._dispatch.set(info);
+  }
 
   constructor(apiKey: string, logger?: Logger) {
     if (!apiKey) {
@@ -62,9 +81,12 @@ export class XAIBackend implements ICompletionBackend {
         max_tokens: 128000,
         can_stream: true,
         pricing: {
-          // Tiered on prompt size. <= 200K: $2 / 1M in, $6 / 1M out, $0.30 / 1M cache read.
-          // > 200K: $4 / 1M in, $12 / 1M out, $0.60 / 1M cache read. Cache read is 0.15x input,
+          // Tiered on prompt size. < 200K: $2 / 1M in, $6 / 1M out, $0.30 / 1M cache read.
+          // >= 200K: $4 / 1M in, $12 / 1M out, $0.60 / 1M cache read. Cache read is 0.15x input,
           // not the 0.1x default; the docs page lists all three rates per tier.
+          // Known edge: pricingTierForTokens picks the first key >= the prompt, so a prompt of
+          // exactly 200,000 tokens bills this lower tier while xAI bills it at the higher rate.
+          // Kept at 200000 so model discovery's planLadder matches LiteLLM's 200000 breakpoint.
           // @see https://docs.x.ai/developers/models
           200000: { input: 2 / 1000000, output: 6 / 1000000, cache_read: 0.3 / 1000000 },
           500000: { input: 4 / 1000000, output: 12 / 1000000, cache_read: 0.6 / 1000000 },
@@ -298,6 +320,9 @@ export class XAIBackend implements ICompletionBackend {
     // running total across recursive turns.
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
+    // Cache reads accumulate alongside the CACHE-INCLUSIVE accumInputTokens; usageSoFar splits them.
+    const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set maxToolCalls); else the default.
@@ -369,6 +394,21 @@ export class XAIBackend implements ICompletionBackend {
     // Check thinking support once at the beginning
     const supportsThinking = await this.modelSupportsThinking(model);
 
+    // xAI's prompt_tokens include the cached prefix. Without a published cache rate the cached
+    // tokens stay in inputTokens: getTextModelCost's 0.1x default is Anthropic's discount, not xAI's.
+    // Gated on the catalog-priced record when there is one, the record settlement prices with.
+    const forwardsCacheReads = publishesCacheReadRate(
+      this._dispatch.for(model) ?? (await this.getModelInfo()).find(m => m.id === model)
+    );
+    const turnCacheReads = (usage: unknown): number =>
+      forwardsCacheReads ? cachedTokensFromUsage(usage as Record<string, unknown> | undefined) : 0;
+    // Running totals plus this request, and this request appended to the per-request breakdown.
+    const usageSoFar = (turnPromptTokens: number, turnCacheReadTokens: number, turnOutputTokens: number) => ({
+      ...splitCacheInclusiveInput(accumInputTokens + turnPromptTokens, accumCacheReadTokens + turnCacheReadTokens),
+      outputTokens: accumOutputTokens + turnOutputTokens,
+      turnUsage: appendCacheInclusiveTurn(accumTurnUsage, turnPromptTokens, turnCacheReadTokens, turnOutputTokens),
+    });
+
     // Check if thinking is enabled in options
     const thinkingEnabled = supportsThinking && (options as any).thinking?.enabled === true;
 
@@ -395,6 +435,8 @@ export class XAIBackend implements ICompletionBackend {
 
     if (!(response instanceof Stream)) {
       const streamedText: string[] = [];
+      const responseUsage = () =>
+        usageSoFar(response.usage?.prompt_tokens || 0, turnCacheReads(response.usage), xaiOutputTokens(response.usage));
 
       // Ensure response.choices exists and has elements
       if (!response.choices || response.choices.length === 0) {
@@ -552,8 +594,7 @@ export class XAIBackend implements ICompletionBackend {
               // Text is not emitted before tools in this path, so it rides on the terminal frame.
               await (artifactGuard?.callback ?? callback)([roundText], {
                 toolsUsed,
-                inputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
-                outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                ...responseUsage(),
                 stopReason: 'tool_use',
               });
               if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
@@ -572,7 +613,9 @@ export class XAIBackend implements ICompletionBackend {
                   ...options._internal,
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
-                  accumOutputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                  accumOutputTokens: accumOutputTokens + xaiOutputTokens(response.usage),
+                  accumCacheReadTokens: accumCacheReadTokens + turnCacheReads(response.usage),
+                  accumTurnUsage: responseUsage().turnUsage,
                   artifactGuard,
                 },
               },
@@ -590,8 +633,7 @@ export class XAIBackend implements ICompletionBackend {
             // Terminal leaf - emit accumulated total plus this turn's tokens.
             this.logger.debug(`[Tool Execution] executeTools=false, passing tool calls to callback`);
             await callback([null], {
-              inputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
-              outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+              ...responseUsage(),
               toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
             });
             return; // Exit after passing tools
@@ -616,8 +658,7 @@ export class XAIBackend implements ICompletionBackend {
       // Emit accum + this turn's tokens.
       const finishReason = normalizeOpenAIFinishReason(response.choices[0]?.finish_reason);
       const completionInfo = {
-        inputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
-        outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+        ...responseUsage(),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
@@ -631,6 +672,8 @@ export class XAIBackend implements ICompletionBackend {
     let isInThinkingBlock = false;
     const reasoningEscaper = createThinkMarkerEscaper();
     let cachedTokensFromStream = 0; // Track cached tokens from streaming chunks
+    // Only the billed share: zero unless the model publishes a cache rate (turnCacheReads).
+    const streamCacheReads = () => (forwardsCacheReads ? cachedTokensFromStream : 0);
     // Keep the last non-null finish_reason (mirrors anthropicBackend's stopReason
     // capture) - the terminal chunk of a round carries it, earlier chunks don't.
     let streamFinishReason: string | undefined;
@@ -641,12 +684,9 @@ export class XAIBackend implements ICompletionBackend {
       const streamedText: string[] = [];
       if (chunk.usage) {
         inputTokens = Math.max(inputTokens, chunk.usage?.prompt_tokens || 0);
-        outputTokens += chunk.usage?.completion_tokens || 0;
-        // Capture cached tokens if available in streaming response (xAI-specific field)
-        const chunkUsage = chunk.usage as Record<string, unknown>;
-        if (chunkUsage.cached_prompt_tokens !== undefined) {
-          cachedTokensFromStream = chunkUsage.cached_prompt_tokens as number;
-        }
+        outputTokens = Math.max(outputTokens, xaiOutputTokens(chunk.usage));
+        // xAI reports cache hits under prompt_tokens_details.cached_tokens (OpenAI's shape).
+        cachedTokensFromStream = Math.max(cachedTokensFromStream, cachedTokensFromUsage(chunk.usage));
       }
 
       chunk?.choices.forEach((c: ChatCompletionChunk.Choice) => {
@@ -692,8 +732,7 @@ export class XAIBackend implements ICompletionBackend {
       // (assign-not-add) ends each turn at the cumulative cross-turn total.
       const normalizedFinishReason = normalizeOpenAIFinishReason(streamFinishReason);
       await callback(streamedText, {
-        inputTokens: accumInputTokens + inputTokens,
-        outputTokens: accumOutputTokens + outputTokens,
+        ...usageSoFar(inputTokens, streamCacheReads(), outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
       });
@@ -704,8 +743,7 @@ export class XAIBackend implements ICompletionBackend {
     // partial marker is lost when the tool recursion creates a fresh reasoningEscaper.
     if (isInThinkingBlock) {
       await callback([reasoningEscaper.flush() + '</think>'], {
-        inputTokens: accumInputTokens + inputTokens,
-        outputTokens: accumOutputTokens + outputTokens,
+        ...usageSoFar(inputTokens, streamCacheReads(), outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
       });
       isInThinkingBlock = false;
@@ -720,8 +758,7 @@ export class XAIBackend implements ICompletionBackend {
         usage: {
           prompt_tokens: inputTokens,
           completion_tokens: outputTokens,
-          // Use the cached tokens captured from streaming chunks
-          cached_prompt_tokens: cachedTokensFromStream,
+          prompt_tokens_details: { cached_tokens: cachedTokensFromStream },
         },
       };
       cacheStats = adapter.extractCacheStats(mockResponse, model);
@@ -736,8 +773,7 @@ export class XAIBackend implements ICompletionBackend {
     // last frame. The per-chunk cb above already delivered the JSON content.
     if (bestEffortFormat && func.length === 0) {
       await callback([], {
-        inputTokens: accumInputTokens + inputTokens,
-        outputTokens: accumOutputTokens + outputTokens,
+        ...usageSoFar(inputTokens, streamCacheReads(), outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         responseFormatMode: 'best-effort',
       });
@@ -874,8 +910,7 @@ export class XAIBackend implements ICompletionBackend {
           });
           await (artifactGuard?.callback ?? callback)([], {
             toolsUsed,
-            inputTokens: accumInputTokens + inputTokens,
-            outputTokens: accumOutputTokens + outputTokens,
+            ...usageSoFar(inputTokens, streamCacheReads(), outputTokens),
             stopReason: 'tool_use',
           });
           if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
@@ -896,6 +931,8 @@ export class XAIBackend implements ICompletionBackend {
               toolCallCount: toolCallCount + 1,
               accumInputTokens: accumInputTokens + inputTokens,
               accumOutputTokens: accumOutputTokens + outputTokens,
+              accumCacheReadTokens: accumCacheReadTokens + streamCacheReads(),
+              accumTurnUsage: usageSoFar(inputTokens, streamCacheReads(), outputTokens).turnUsage,
               artifactGuard,
             },
           },
@@ -909,8 +946,7 @@ export class XAIBackend implements ICompletionBackend {
         // Terminal leaf - emit accumulated total plus this turn's tokens.
         this.logger.debug(`[Tool Execution] executeTools=false, passing tool calls to callback`);
         await callback([null], {
-          inputTokens: accumInputTokens + inputTokens,
-          outputTokens: accumOutputTokens + outputTokens,
+          ...usageSoFar(inputTokens, streamCacheReads(), outputTokens),
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         });
       }

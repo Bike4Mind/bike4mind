@@ -21,6 +21,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findByIdWithMfaSecrets: mocks.findByIdWithMfaSecrets },
   authSessionRepository: {},
   passkeyCredentialRepository: { removeAllForUser: vi.fn() },
+  realtimeConnectionRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({
   mfaService: {

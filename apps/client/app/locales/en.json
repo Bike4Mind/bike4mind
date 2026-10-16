@@ -409,6 +409,7 @@
     "failed_to_load_data": "Failed to load data. Please try again later."
   },
   "integrations": {
+    "title": "Integrations",
     "atlassian": {
       "reconnect_required": "Your Atlassian connection has expired. Please reconnect your account."
     }
@@ -595,7 +596,8 @@
   "media_player": {
     "load_failed": "This file could not be played",
     "retry": "Retry",
-    "download_failed": "Failed to download file"
+    "download_failed": "Failed to download file",
+    "open_video": "Open {{name}}"
   },
   "generated_filter": {
     "label": "Generated"

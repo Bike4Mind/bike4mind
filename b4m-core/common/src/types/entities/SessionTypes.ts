@@ -201,8 +201,11 @@ export interface IChatHistoryItem {
   /** Generation jobs (video, music) this quest started, one live card each. Read through questGenerationJobs. */
   generationJobs?: GenerationJobRef[];
 
-  /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentVideoClip). */
+  /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
   agentVideoClipsClaimed?: number;
+
+  /** Agent-mode songs this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentMusicTracksClaimed?: number;
 
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;

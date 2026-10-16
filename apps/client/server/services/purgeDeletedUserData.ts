@@ -1,4 +1,9 @@
-import { User, embedConversationRepository, hideDeletedAuthorAnnotations } from '@bike4mind/database';
+import {
+  User,
+  embedConversationRepository,
+  hideDeletedAuthorAnnotations,
+  integrationRequestRepository,
+} from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
 import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
 import { decryptStoredToken, revokeDriveGrant } from '@server/integrations/google/drive/common';
@@ -44,6 +49,12 @@ export async function purgeDeletedUserData(
     await embedConversationRepository.deleteAllForUser(userId);
   } catch (err) {
     logger.error(`Failed to purge embed conversations for deleted user ${userId}: ${String(err)}`);
+  }
+
+  try {
+    await integrationRequestRepository.deleteAllForUser(userId);
+  } catch (err) {
+    logger.error(`Failed to purge integration requests for deleted user ${userId}: ${String(err)}`);
   }
 
   try {

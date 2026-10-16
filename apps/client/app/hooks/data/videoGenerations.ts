@@ -8,6 +8,7 @@ import { CREDITS_BALANCE_KEY } from './credits';
 import { switcherBillingTarget } from './generationBillingTarget';
 import {
   prependVideoGeneration,
+  reconcileFetchedVideoGeneration,
   seedVideoGeneration,
   upsertVideoGeneration,
   type VideoGenerationList,
@@ -66,11 +67,15 @@ export function useVideoGenerations() {
 
 export function useVideoGeneration(jobId: string) {
   const { readyState } = useWebsocket();
+  const queryClient = useQueryClient();
   const socketOpen = readyState === ReadyState.OPEN;
   return useQuery({
     queryKey: videoGenerationKeys.detail(jobId),
     queryFn: async () =>
-      (await api.get<VideoGeneration>(`/api/v1/video-generations/${encodeURIComponent(jobId)}`)).data,
+      reconcileFetchedVideoGeneration(
+        queryClient,
+        (await api.get<VideoGeneration>(`/api/v1/video-generations/${encodeURIComponent(jobId)}`)).data
+      ),
     enabled: jobId.length > 0,
     // List seeds and websocket patches keep this fresh; a mount right after a seed must not refetch.
     staleTime: 30_000,

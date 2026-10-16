@@ -433,3 +433,138 @@ describe('BaseBedrockBackend per-call cache and turn usage', () => {
     ]);
   });
 });
+
+// Opts into terminal-event tracking the way the Claude adapter does; a chunk marked `done` is the
+// stream's terminal event.
+class TerminatingTestBedrockBackend extends TestBedrockBackend {
+  protected override get signalsStreamTermination(): boolean {
+    return true;
+  }
+
+  override translateStreamChunk(_model: string, json: unknown): { done: boolean; chunk?: ICompletionResponseChunk } {
+    return { done: (json as { done?: boolean }).done === true, chunk: json as ICompletionResponseChunk };
+  }
+}
+
+const markTerminal = (chunks: unknown[]): unknown[] => [
+  ...chunks.slice(0, -1),
+  { ...(chunks.at(-1) as object), done: true },
+];
+
+// Claude's message_start reports the prompt; the output count only comes with the terminal event.
+const promptOnly = (input: number, cacheRead?: number) => ({
+  choices: [
+    { index: 0, status: ChoiceStatus.STREAM, usage: { input_tokens: input, cache_read_input_tokens: cacheRead } },
+  ],
+});
+const PARTIAL = 'p'.repeat(60);
+const partialText = { choices: [{ index: 0, status: ChoiceStatus.STREAM, chunkText: PARTIAL }] };
+
+async function runStopped(streams: unknown[][], tools?: ICompletionOptionTools[]) {
+  const backend = new TerminatingTestBedrockBackend();
+  let call = 0;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+    send: async () => {
+      // A real send rejects once the signal is aborted, which is what ends a Stop that lands before a tool-call recursion.
+      if (call >= streams.length) throw new Error('Request aborted');
+      return { body: asBedrockBody(streams[call++]) };
+    },
+  };
+  const controller = new AbortController();
+  const { calls, cb } = captureCb();
+  const stopped = backend.complete(
+    TEST_MODEL,
+    [{ role: 'user', content: 'Add.' }],
+    {
+      stream: true,
+      abortSignal: controller.signal,
+      ...(tools ? { tools, executeTools: true } : {}),
+    } as Partial<ICompletionOptions>,
+    async (text, info) => {
+      await cb(text, info);
+      // Stop lands once the partial reply has streamed, so the terminal usage event never arrives.
+      if (text.includes(PARTIAL)) controller.abort();
+    }
+  );
+  await stopped.catch(err => {
+    if (!(err instanceof Error && err.message === 'Request aborted')) throw err;
+  });
+  return finalCbInfo(calls);
+}
+
+describe('BaseBedrockBackend output of a stopped call', () => {
+  it('estimates a stopped second call from the chars it streamed', async () => {
+    const last = await runStopped(
+      [
+        markTerminal(turnWithToolCall('add', 'tool_t1', { a: 1, b: 1 }, { input: 100, output: 20 })),
+        [promptOnly(200, 5000), partialText],
+      ],
+      [ADD_TOOL]
+    );
+
+    // 60 chars / 6 chars per token, x1 for an unmeasured model id.
+    expect(last!.outputTokens).toBe(30);
+    expect(last!.inputTokens).toBe(300);
+    expect(last!.turnUsage).toEqual([
+      { inputTokens: 100, outputTokens: 20 },
+      { inputTokens: 200, outputTokens: 10, cacheReadInputTokens: 5000 },
+    ]);
+  });
+
+  it('counts the partial tool arguments of a second call stopped mid tool call', async () => {
+    const partialArgs = '{"a": 1, "b"';
+    const last = await runStopped(
+      [
+        markTerminal(turnWithToolCall('add', 'tool_t1', { a: 1, b: 1 }, { input: 100, output: 20 })),
+        [
+          promptOnly(200, 5000),
+          partialText,
+          { choices: [{ index: 0, status: ChoiceStatus.STREAM, tool: { name: 'add', id: 'tool_t2' } }] },
+          { choices: [{ index: 0, status: ChoiceStatus.STREAM, chunkText: partialArgs.slice(0, 5) }] },
+          { choices: [{ index: 0, status: ChoiceStatus.STREAM, chunkText: partialArgs.slice(5) }] },
+        ],
+      ],
+      [ADD_TOOL]
+    );
+
+    // (60 text + 12 partial argument chars) / 6 chars per token, x1 for an unmeasured model id.
+    const expected = Math.floor((PARTIAL.length + partialArgs.length) / 6);
+    expect(expected).toBe(12);
+    expect(last!.outputTokens).toBe(20 + expected);
+    expect(last!.turnUsage).toEqual([
+      { inputTokens: 100, outputTokens: 20 },
+      { inputTokens: 200, outputTokens: expected, cacheReadInputTokens: 5000 },
+    ]);
+    expect(last!.turnUsage!.reduce((n, t) => n + t.outputTokens, 0)).toBe(last!.outputTokens);
+  });
+
+  it('keeps a provider output count reported before the stop', async () => {
+    const last = await runStopped(
+      [
+        markTerminal(turnWithToolCall('add', 'tool_t1', { a: 1, b: 1 }, { input: 100, output: 20 })),
+        [
+          promptOnly(200, 5000),
+          partialText,
+          // A non-terminal chunk carrying the provider's real output count; the stop lands after it.
+          { choices: [{ index: 0, status: ChoiceStatus.STREAM, usage: { output_tokens: 40 } }] },
+        ],
+      ],
+      [ADD_TOOL]
+    );
+
+    // The provider's own count, not a lower-bound estimate of what streamed.
+    expect(last!.outputTokens).toBe(20 + 40);
+    expect(last!.turnUsage).toEqual([
+      { inputTokens: 100, outputTokens: 20 },
+      { inputTokens: 200, outputTokens: 40, cacheReadInputTokens: 5000 },
+    ]);
+  });
+
+  it('leaves a stopped first call at 0 output for the caller to estimate', async () => {
+    const last = await runStopped([[promptOnly(200), partialText]]);
+
+    expect(last!.outputTokens).toBe(0);
+    expect(last!.turnUsage).toEqual([{ inputTokens: 200, outputTokens: 0 }]);
+  });
+});

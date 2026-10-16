@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock the API client and the share-footer builder so we can drive/inspect the
@@ -25,6 +26,12 @@ import {
 
 const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
 const apiPost = api.post as unknown as ReturnType<typeof vi.fn>;
+
+// Derived slugs end in the first 8 hex chars of sha256(artifactId). 'chronosphere-artifa' below is
+// the LEGACY (id-prefix) shape, kept where a test pins an existing publication's slug.
+const ID_HASH = createHash('sha256').update('artifact_abcdef123456').digest('hex').slice(0, 8);
+const DERIVED = `chronosphere-${ID_HASH}`;
+const DERIVED_V2 = `chronosphere-v2-${ID_HASH}`;
 
 const DRAFT = {
   draftId: 'draft-1',
@@ -84,8 +91,27 @@ describe('publishArtifactBundle', () => {
       title: 'Chronosphere',
       userId: 'u1',
     });
-    // slugify('Chronosphere') + '-' + first 6 chars of the artifact id
-    expect(uploadedSlug()).toBe('chronosphere-artifa');
+    // slugify('Chronosphere') + '-' + first 8 hex chars of sha256(artifact id)
+    expect(uploadedSlug()).toBe(DERIVED);
+  });
+
+  it('derives different slugs for two same-titled artifacts (ids share the artifact_ prefix)', async () => {
+    wirePublishPosts();
+    const publish = (artifactId: string) =>
+      publishArtifactBundle({
+        artifactId,
+        type: 'react',
+        content: 'export default () => null;',
+        title: 'Chronosphere',
+        userId: 'u1',
+      });
+    await publish('artifact_aaaaaa111111');
+    await publish('artifact_bbbbbb222222');
+    const slugs = apiPost.mock.calls
+      .filter(c => c[0] === '/api/publish/artifact/upload-url')
+      .map(c => (c[1] as { slug: string }).slug);
+    // A shared slug would make finalize upsert artifact B onto artifact A's live page.
+    expect(slugs[0]).not.toBe(slugs[1]);
   });
 
   it('uses the slug override verbatim (lands a new version on the existing publication)', async () => {
@@ -122,9 +148,9 @@ describe('publishArtifactBundle', () => {
       // every prior publication (not just the most-recent one).
       forceUniqueSlug: true,
     });
-    expect(uploadedSlug()).not.toBe('chronosphere-artifa');
+    expect(uploadedSlug()).not.toBe(DERIVED);
     // Derived slug + '-' + up to 6 base-36 chars, staying within SlugSchema's 64-char cap.
-    expect(uploadedSlug()).toMatch(/^chronosphere-artifa-[a-z0-9]{1,6}$/);
+    expect(uploadedSlug()).toMatch(new RegExp(`^${DERIVED}-[a-z0-9]{1,6}$`));
     expect(uploadedSlug().length).toBeLessThanOrEqual(64);
   });
 
@@ -151,7 +177,7 @@ describe('publishArtifactBundle', () => {
       title: 'Chronosphere',
       userId: 'u1',
     });
-    expect(uploadedSlug()).toBe('chronosphere-artifa');
+    expect(uploadedSlug()).toBe(DERIVED);
   });
 
   it('defaults to user tier scoped to the user id when no scope is given', async () => {
@@ -201,8 +227,8 @@ describe('publishArtifactBundle', () => {
       .filter(c => c[0] === '/api/publish/artifact/upload-url')
       .map(c => (c[1] as { slug: string }).slug);
     expect(slugs).toHaveLength(2);
-    expect(slugs[0]).toBe('chronosphere-artifa');
-    expect(slugs[1]).toMatch(/^chronosphere-artifa-[a-z0-9]{6}$/);
+    expect(slugs[0]).toBe(DERIVED);
+    expect(slugs[1]).toMatch(new RegExp(`^${DERIVED}-[a-z0-9]{6}$`));
     expect(result).toEqual(RESULT);
   });
 
@@ -302,7 +328,7 @@ describe('artifactBundlePublisher', () => {
     await publish('public', { mode: 'update', existingSlug: 'chronosphere-artifa' });
 
     // Update mode pins the upsert to the existing slug -> finalize appends a version,
-    // even though the drifted title would otherwise derive 'chronosphere-v2-artifa'.
+    // even though the drifted title would otherwise derive DERIVED_V2.
     expect(uploadedSlug()).toBe('chronosphere-artifa');
   });
 
@@ -314,8 +340,8 @@ describe('artifactBundlePublisher', () => {
 
     // Publish-as-new must never reuse the existing slug, or finalize would upsert a version
     // onto it instead of creating a separate page.
-    expect(uploadedSlug()).not.toBe('chronosphere-v2-artifa');
-    expect(uploadedSlug()).toMatch(/^chronosphere-v2-artifa-[a-z0-9]{1,6}$/);
+    expect(uploadedSlug()).not.toBe(DERIVED_V2);
+    expect(uploadedSlug()).toMatch(new RegExp(`^${DERIVED_V2}-[a-z0-9]{1,6}$`));
   });
 
   it('in "new" mode, never lands on the ORIGINAL slug even after prior forks (multi-publish)', async () => {
@@ -324,13 +350,13 @@ describe('artifactBundlePublisher', () => {
 
     // Reproduces the multi-publish sequence: a prior "publish as new" already created
     // 'chronosphere-v2-artifa-abc12', so the dialog now surfaces THAT as the most-recent
-    // existing slug. The derived slug ('chronosphere-v2-artifa') must still be discriminated
+    // existing slug. The derived slug (DERIVED_V2) must still be discriminated
     // otherwise it would collide with the ORIGINAL publication and append a version to it.
     await publish('public', { mode: 'new', existingSlug: 'chronosphere-v2-artifa-abc12' });
 
-    expect(uploadedSlug()).not.toBe('chronosphere-v2-artifa');
+    expect(uploadedSlug()).not.toBe(DERIVED_V2);
     expect(uploadedSlug()).not.toBe('chronosphere-v2-artifa-abc12');
-    expect(uploadedSlug()).toMatch(/^chronosphere-v2-artifa-[a-z0-9]{1,6}$/);
+    expect(uploadedSlug()).toMatch(new RegExp(`^${DERIVED_V2}-[a-z0-9]{1,6}$`));
   });
 
   it('derives a fresh slug when called with no options (plain share)', async () => {
@@ -339,7 +365,7 @@ describe('artifactBundlePublisher', () => {
 
     await publish('public');
 
-    expect(uploadedSlug()).toBe('chronosphere-v2-artifa');
+    expect(uploadedSlug()).toBe(DERIVED_V2);
   });
 
   it('publishes an org-tier page (scopeId = org id) for org visibility when in a Team context', async () => {
@@ -389,8 +415,8 @@ describe('artifactBundlePublisher', () => {
       const second = uploadedSlug();
 
       expect(first).not.toBe(second);
-      expect(first).toMatch(/^chronosphere-v2-artifa-[a-z0-9]{6}$/);
-      expect(second).toMatch(/^chronosphere-v2-artifa-[a-z0-9]{6}$/);
+      expect(first).toMatch(new RegExp(`^${DERIVED_V2}-[a-z0-9]{6}$`));
+      expect(second).toMatch(new RegExp(`^${DERIVED_V2}-[a-z0-9]{6}$`));
     } finally {
       nowSpy.mockRestore();
     }

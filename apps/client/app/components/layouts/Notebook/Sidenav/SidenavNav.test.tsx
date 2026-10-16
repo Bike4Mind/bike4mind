@@ -101,11 +101,9 @@ function renderNav(section?: 'pinned' | 'scroll' | 'all') {
   );
 }
 
-const hearthRow = () => screen.queryByTestId('sidenav-nav-hearth');
-
 beforeEach(() => {
   vi.clearAllMocks();
-  useFeatureEnabledMock.mockImplementation((key: string) => key === 'enableHearth');
+  useFeatureEnabledMock.mockReturnValue(false);
   useGearsNavSignalMock.mockReturnValue({ startHere: false, startHereCredits: 0, claimableCount: 0 });
   useVideoModelsMock.mockReturnValue({ data: [] });
   useMusicModelsMock.mockReturnValue({ data: [] });
@@ -121,22 +119,18 @@ describe('SidenavNav feature rows', () => {
     useFeatureEnabledMock.mockReturnValue(true);
     renderNav();
 
-    for (const key of ['files', 'projects', 'published', 'agents', 'hearth']) {
+    for (const key of ['files', 'projects', 'published', 'agents']) {
       expect(screen.getByTestId(`sidenav-nav-${key}`)).toBeInTheDocument();
     }
   });
 });
 
 describe('SidenavNav Hearth row', () => {
-  it('shows when the experimental flag is on', () => {
+  // Hearth lives in the profile menu's More flyout, not the top of the sidenav.
+  it('is not in the sidenav even with its flag on', () => {
+    useFeatureEnabledMock.mockReturnValue(true);
     renderNav();
-    expect(hearthRow()).toBeInTheDocument();
-  });
-
-  it('hides when the experimental flag is off', () => {
-    useFeatureEnabledMock.mockReturnValue(false);
-    renderNav();
-    expect(hearthRow()).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sidenav-nav-hearth')).not.toBeInTheDocument();
   });
 });
 

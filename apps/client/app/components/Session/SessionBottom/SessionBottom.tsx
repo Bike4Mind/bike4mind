@@ -1,10 +1,9 @@
 import React, { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { registerSendPrompt, type SendPromptOptions } from '@client/app/hooks/useChatActions';
 
-import { Box, Typography, useTheme } from '@mui/joy';
+import { Box } from '@mui/joy';
 import Grid from '@mui/joy/Grid';
 import Stack from '@mui/joy/Stack';
-import Tooltip from '@mui/joy/Tooltip';
 
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
@@ -28,6 +27,8 @@ import { SessionFilePond } from './SessionFilePond';
 import { SessionToolbar } from './SessionToolbar';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { MessageFileThumbnails } from '@client/app/components/Session/MessageFileThumbnails';
+import ContextUsageChip from './ContextUsageChip';
+import { useComposerNotesHeight } from '@client/app/stores/useComposerNotesHeight';
 import { useNotebookFilepond } from '@client/app/components/Session/NotebookFilepondProvider';
 import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
 import { useGetAgents, useGetSessionAgents } from '@client/app/hooks/data/agents';
@@ -50,16 +51,9 @@ import { useChatCompletionContext } from '@client/app/contexts/ChatCompletionCon
 import { useAutoFocus } from '@client/app/hooks/useAutoFocus';
 import { useChatPaste } from '@client/app/hooks/useChatPaste';
 import { useTokenLimits } from '@client/app/hooks/useTokenLimits';
-import {
-  useSessionContextUsage,
-  formatTokenCount,
-  type ContextUsageBand,
-} from '@client/app/hooks/useSessionContextUsage';
-import { ContextUsageWarning } from '../ContextUsageWarning';
+import { useSessionContextUsage } from '@client/app/hooks/useSessionContextUsage';
 import { useAttachmentFitWarning } from '@client/app/hooks/useAttachmentFitWarning';
-import { ContextCompactionNote } from '../ContextCompactionNote';
 import { MemberCreditBudgetNote } from '../MemberCreditBudgetNote';
-import { CreditPayerNote } from '../CreditPayerNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
@@ -69,7 +63,7 @@ import { LexicalChatInput, LexicalChatInputRef } from '../LexicalChatInput';
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
 import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import { dismissCreditNudge, isCreditNudgeDismissed } from '../creditNudgeDismissal';
-import { NoModelsWarning, CreditsWarning, LowCreditsWarning } from '../SessionWarnings';
+import { noModelsPlaceholder, NoModelsPlaceholder, CreditsWarning, LowCreditsWarning } from '../SessionWarnings';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { getComposerCreditUi } from './composerCreditUi';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
@@ -83,6 +77,10 @@ import { useModerationScanFallback } from './useModerationScanFallback';
 import { useRollDice } from './useRollDice';
 import { useModalState } from './useModalState';
 import { useVoiceState } from './useVoiceState';
+import ComposerStatusLine from './ComposerStatusLine';
+import NotebookFilesChip from './NotebookFilesChip';
+import CreditBalanceChip from '@client/app/components/Session/CreditButton';
+import ResearchModeIndicator from '@client/app/components/Session/AISettings/ResearchModeIndicator';
 import { pickerAttachedAgents } from './resolveDispatchAgent';
 import { SlashCommandSuggestions } from '@client/app/components/common/CommandSuggestions';
 import { useContentTransformDetector } from '@client/app/hooks/useContentTransformDetector';
@@ -118,8 +116,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // promote action in that panel exists to rescue.
   const totalFilesCount = workBenchFiles.length + systemFiles.length + messageFiles.length;
   const queryClient = useQueryClient();
-  const theme = useTheme();
-  const mode = theme.palette.mode;
   // Gating (exhausted/low-credit warnings) reads the live balance, not the
   // frozen display value - a genuine mid-turn exhaustion must still surface.
   const effectiveCredits = useEffectiveCredits({ live: true });
@@ -143,8 +139,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const [lowCreditsDismissedFor, setLowCreditsDismissedFor] = useState<string | null>(null);
   const lowCreditsWarningDismissed =
     !!currentUserId && (lowCreditsDismissedFor === currentUserId || isCreditNudgeDismissed(currentUserId));
-  // Band at which the user dismissed the context warning; re-shows on escalation.
-  const [contextWarningDismissedBand, setContextWarningDismissedBand] = useState<ContextUsageBand | null>(null);
 
   // Modal state: triggered modal, admin preview, format dialog, modal list
   const {
@@ -187,11 +181,13 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const { data: modelInfo } = useModelInfo();
   const { accessibleModels, isLoading: isModelsLoading, isModelsError, refetchModels } = useAccessibleModels();
   const hasModels = !!accessibleModels && accessibleModels.length > 0;
+  // No model to send with: the placeholder says so instead of inviting a message.
+  const noModels = !isModelsLoading && !hasModels;
 
   // Keeps enabledMcpServers in sync with the database (init + stale-server cleanup)
   useMcpServerSync();
 
-  const { contextWindowLimit, effectiveMaxOutputTokens, maxInputTokens, isOverContextWindow } = useTokenLimits({
+  const { isOverContextWindow } = useTokenLimits({
     model,
     modelInfo,
     max_tokens,
@@ -208,50 +204,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     // Notebook-context files ride EVERY turn on this session, so they spend the budget too.
     useMemo(() => workBenchFiles.map(f => String(f.id)).filter(Boolean), [workBenchFiles])
   );
-  // Dismissal is per attachment set: changing the files or the model asks a new question, so the
-  // previous dismissal should not silence the new answer.
-  const [attachmentWarningDismissed, setAttachmentWarningDismissed] = useState(false);
-  const attachmentFitKey = attachmentFit ? `${attachmentFit.fileName}:${attachmentFit.deliveredPercent}` : '';
-  useEffect(() => {
-    setAttachmentWarningDismissed(false);
-  }, [attachmentFitKey]);
-  // Show the warning once usage is elevated, until dismissed at that band; a
-  // jump from warning -> danger re-surfaces it.
-  const showContextWarning =
-    !!contextUsage && contextUsage.band !== 'normal' && contextUsage.band !== contextWarningDismissedBand;
-
-  // Compaction note: show when the latest turn folded older history into working
-  // memory, until dismissed. Re-surfaces when a later turn compacts again.
-  const compactedTurns = contextUsage?.compactedTurns ?? 0;
-  const [compactionNoteDismissed, setCompactionNoteDismissed] = useState(false);
-  const showCompactionNote = compactedTurns > 0 && !compactionNoteDismissed;
-  useEffect(() => {
-    setCompactionNoteDismissed(false);
-  }, [compactedTurns]);
-
-  // Reset both dismissals when switching notebooks so a heavy session doesn't
-  // inherit a prior notebook's dismissed state.
-  useEffect(() => {
-    setContextWarningDismissedBand(null);
-    setCompactionNoteDismissed(false);
-  }, [currentSessionId]);
-
-  // Corner readout for the composer. Prefer the real assembled-context size from
-  // the last turn; before any turn completes, fall back to the current-input
-  // guard (which measures the input box against the budget, not the history).
-  const contextMeter = contextUsage
-    ? {
-        show: contextUsage.band !== 'normal',
-        danger: contextUsage.band === 'danger',
-        primary: `${formatTokenCount(contextUsage.actualInputTokens)}/${formatTokenCount(contextUsage.safeMaxInputTokens)}`,
-        secondary: `${Math.round(contextUsage.utilizationPercentage)}% of ${modelName} context`,
-      }
-    : {
-        show: isOverContextWindow,
-        danger: isOverContextWindow,
-        primary: `${chatInputValue.length}/${maxInputTokens}`,
-        secondary: `Context: ${contextWindowLimit} - Output: ${effectiveMaxOutputTokens}`,
-      };
 
   const pond = useNotebookFilepond();
   // Number(...) first so a stored '0' string (truthy) still falls through to the default -
@@ -563,19 +515,91 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
   const { setOpen: setFileBrowserOpen } = useFileBrowser();
 
+  const notesRef = useRef<HTMLDivElement>(null);
+  const setNotesHeight = useComposerNotesHeight(s => s.setHeight);
+  useEffect(() => {
+    const el = notesRef.current;
+    if (!el) return;
+    // Height plus the 8px gap to the status line below, once anything shows.
+    const report = () => setNotesHeight(el.offsetHeight > 0 ? el.offsetHeight + 8 : 0);
+    report();
+    const observer = new ResizeObserver(report);
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      setNotesHeight(0);
+    };
+  }, [setNotesHeight]);
+
+  // The status line and the account notes above the box are its siblings, so they are sized to match.
+  const aboveBoxSx = {
+    width: '100%',
+    maxWidth: promptBarMaxWidth,
+    marginLeft: isCompactLayout ? '0px' : 'auto',
+    marginRight: isCompactLayout ? '0px' : 'auto',
+  };
+
   return (
     <Box
       ref={ref}
       className="session-bottom"
       sx={{
-        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout || isDataLakeSurface ? '0' : '1.25rem',
-        paddingTop: isDockedLayout || isFloatingLayout ? 0 : '20px',
+        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout || isDataLakeSurface ? '0' : '8px',
+        // The status line above the box (its own padding) replaces the top padding.
+        paddingTop: 0,
         position: 'relative',
       }}
       display={'flex'}
+      flexDirection={'column'}
       justifyContent={'center'}
     >
       <HighlanderFocus targetId="chatInput" />
+      {/* Account notes stack above the status line, so the line and the box never move when one
+          appears. Their height is reported for SessionMiddle's scroll-to-bottom button. */}
+      <Box
+        ref={notesRef}
+        sx={[aboveBoxSx, { display: 'flex', flexDirection: 'column', gap: '8px', '&:not(:empty)': { mb: '8px' } }]}
+      >
+        <LowCreditsWarning
+          show={creditUi.lowCreditsNotice}
+          currentCredits={effectiveCredits}
+          onDismiss={() => {
+            dismissCreditNudge(currentUserId);
+            setLowCreditsDismissedFor(currentUserId ?? null);
+          }}
+        />
+        {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
+      </Box>
+      {/* Above the box rather than under it: the file viewer and other embedded chats leave no room
+          below, and on phones the box sits on the keyboard. */}
+      <ComposerStatusLine
+        left={
+          <>
+            <NotebookFilesChip
+              totalFilesCount={totalFilesCount}
+              hasEmbeddingMismatches={hasEmbeddingMismatches}
+              model={model}
+              isMobile={isMobile}
+              open={filesDropdownOpen}
+              setOpen={setFilesDropdownOpen}
+            />
+            <ResearchModeIndicator />
+          </>
+        }
+        right={
+          <>
+            {/* Left of the balance, so its changing width never shifts the balance in the corner. */}
+            <ContextUsageChip
+              usage={contextUsage}
+              modelName={modelName}
+              inputOverLimit={isOverContextWindow}
+              attachment={attachmentFit}
+            />
+            <CreditBalanceChip session={currentSession} />
+          </>
+        }
+        sx={aboveBoxSx}
+      />
       <Stack
         className="session-bottom-container"
         data-testid="session-bottom-container"
@@ -602,8 +626,12 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                 }),
           backgroundColor: theme.palette.background.panel,
           boxShadow: theme.palette.session.boxShadow,
-          paddingX: isPWA ? '24px' : '16px',
-          pb: isPWA ? '20px' : isMobile ? '10px' : '0px',
+          // 12px to every edge of the box. The pieces inside add nothing at the edges (editor wrapper
+          // and Lexical have no top/left padding, the toolbar no bottom one) - keep it that way.
+          // The installed app keeps wider sides and bottom for the device's safe areas.
+          pt: '12px',
+          paddingX: isPWA ? '24px' : '12px',
+          pb: isPWA ? '20px' : '12px',
           // Bottom corners at 8px to sit inside the chat pane's own 8px frame; the top pair
           // is free-standing and keeps its looser .625rem.
           borderRadius:
@@ -623,40 +651,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   width: '100%',
                   paddingX: '0',
                   borderRadius: '6px',
-                  marginTop: '-10px',
                   position: 'relative',
                 }}
               >
-                <NoModelsWarning
-                  show={!isModelsLoading && (!accessibleModels || accessibleModels.length === 0)}
-                  loadError={isModelsError}
-                  onRetry={() => void refetchModels()}
-                />
-                {contextUsage && (
-                  <ContextUsageWarning
-                    show={showContextWarning}
-                    usage={contextUsage}
-                    modelName={modelName}
-                    onDismiss={() => setContextWarningDismissedBand(contextUsage.band)}
-                  />
-                )}
-                {/* Answers a different question than the meter above: not how full the session is, but
-                    whether the file attached to THIS turn survives the budget. Null whenever it fits. */}
-                {attachmentFit && !attachmentWarningDismissed && (
-                  <ContextUsageWarning
-                    show
-                    attachment={attachmentFit}
-                    modelName={modelName}
-                    onDismiss={() => setAttachmentWarningDismissed(true)}
-                  />
-                )}
-                <ContextCompactionNote
-                  show={showCompactionNote}
-                  turns={compactedTurns}
-                  onDismiss={() => setCompactionNoteDismissed(true)}
-                />
-                {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
-                {!creditUi.replaceComposer && <CreditPayerNote session={currentSession} />}
                 {creditUi.replaceComposer ? (
                   <CreditsWarning show />
                 ) : (
@@ -665,7 +662,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                     direction="row"
                     spacing={2}
                     alignItems="center"
-                    sx={{ position: 'relative', paddingTop: '10px' }}
+                    sx={{ position: 'relative' }}
                   >
                     <Box
                       className="session-bottom-editor-wrapper"
@@ -673,7 +670,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         display: 'flex',
                         flexDirection: 'column',
                         width: '100%',
-                        padding: '8px 0px',
+                        // The one gap between the text and the toolbar.
+                        padding: '0 0 20px',
                         flex: 1,
                         overflow: 'visible',
                         position: 'relative',
@@ -685,14 +683,6 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         borderRadius: '8px',
                       }}
                     >
-                      <LowCreditsWarning
-                        show={creditUi.lowCreditsNotice}
-                        currentCredits={effectiveCredits}
-                        onDismiss={() => {
-                          dismissCreditNudge(currentUserId);
-                          setLowCreditsDismissedFor(currentUserId ?? null);
-                        }}
-                      />
                       {/* Slash command suggestions */}
                       {showSlashSuggestions && (
                         <SlashCommandSuggestions
@@ -719,58 +709,77 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         />
                       )}
 
+                      {/* Files attached to this message: compact tiles above its text (MessageFileThumbnails). */}
+                      {pendingMessageFiles.length > 0 && (
+                        <MessageFileThumbnails
+                          files={pendingMessageFiles}
+                          onRemove={fileId => {
+                            setPendingMessageFiles(prev => prev.filter(item => item.fabFile.id !== fileId));
+                            setFiles(prevFiles => prevFiles.filter(f => f.serverId !== fileId));
+
+                            // Strip knowledgeIds BEFORE the hard delete. If the delete succeeded and
+                            // this failed, knowledgeIds would keep a dead id that every later hydration
+                            // tries and fails to resolve. Keyed off the item's own frozen scope rather
+                            // than the current control value, which the user may have changed since.
+                            const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
+                            const stripped =
+                              removed?.scope === 'notebook'
+                                ? removeFromNotebookContext(currentSessionId, fileId).catch(() => {})
+                                : Promise.resolve();
+
+                            void stripped.then(() =>
+                              deleteFileUtility(fileId).catch(err => {
+                                console.error('Failed to delete file:', err);
+                              })
+                            );
+                          }}
+                          onClick={file => {
+                            // First ensure the KnowledgeViewer is open by setting layout to vertical
+                            setSessionLayout({
+                              layout: 'vertical',
+                              selectedArtifactId: undefined,
+                              artifactData: undefined,
+                            });
+
+                            // Find the message file in the sorted knowledge items list
+                            const messageFileIndex = sortedKnowledgeItems.findIndex(item => item.id === file.id);
+
+                            // Set the knowledge viewer to show the message file
+                            // setTimeout ensures the layout change completes before setting the tab index
+                            if (messageFileIndex !== -1) {
+                              setTimeout(() => {
+                                setKnowledgeViewer({ selectedTabIndex: messageFileIndex });
+                              }, 0);
+                            }
+                          }}
+                        />
+                      )}
+                      {/* The editor shows its placeholder only while empty (whitespace counts as text), so with a
+                          draft in the box (a restored one, say) the notice and its Retry move above it. */}
+                      {noModels && chatInputValue !== '' && (
+                        <Box
+                          data-testid="session-no-models-notice"
+                          sx={{ position: 'static', pointerEvents: 'auto', px: 1, pb: 0.5 }}
+                        >
+                          <NoModelsPlaceholder loadError={isModelsError} onRetry={() => void refetchModels()} />
+                        </Box>
+                      )}
                       <LexicalChatInput
                         ref={lexicalInputRef}
                         value={chatInputValue}
                         onChange={handleInputChange}
                         onSubmit={handleEditorSubmit}
                         onPaste={handlePaste}
-                        placeholder={`${t('session.typeYourMessage')}...`}
+                        placeholder={
+                          noModels ? noModelsPlaceholder(isModelsError) : `${t('session.typeYourMessage')}...`
+                        }
+                        placeholderContent={
+                          noModels ? (
+                            <NoModelsPlaceholder loadError={isModelsError} onRetry={() => void refetchModels()} />
+                          ) : undefined
+                        }
                         agents={lexicalAgents}
                       />
-
-                      {contextMeter.show ? (
-                        <Box
-                          sx={{
-                            position: 'absolute',
-                            mr: 20,
-                            // Passive readout: must stay below composer popovers (attach
-                            // menu zIndex 1000 in AttachFileButton.tsx, slash/mention
-                            // suggestions), or it intercepts their clicks.
-                            zIndex: 1,
-                            backgroundColor: 'background.surface',
-                            borderRadius: '6px',
-                            padding: '4px 8px',
-                          }}
-                        >
-                          <Tooltip title="Assembled context size for this notebook (last turn)">
-                            <Typography
-                              sx={theme => ({
-                                color: contextMeter.danger ? 'red' : theme.palette.text.primary,
-                                textAlign: 'right',
-                                leadingTrim: 'both',
-                                textEdge: 'cap',
-                                fontSize: '14px',
-                                fontStyle: 'normal',
-                                fontWeight: '400',
-                                lineHeight: '100%',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: 'flex-end',
-                              })}
-                              variant="plain"
-                              level="body-xs"
-                            >
-                              <Box component="span" sx={{ fontWeight: '500' }}>
-                                {contextMeter.primary}
-                              </Box>
-                              <Box component="span" sx={{ opacity: 0.7, fontSize: '12px', mt: 0.5 }}>
-                                {contextMeter.secondary}
-                              </Box>
-                            </Typography>
-                          </Tooltip>
-                        </Box>
-                      ) : null}
                     </Box>
                   </Stack>
                 )}
@@ -791,55 +800,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           />
         )}
 
-        {/* File Thumbnails */}
-        {pendingMessageFiles.length > 0 && (
-          <MessageFileThumbnails
-            files={pendingMessageFiles}
-            onRemove={fileId => {
-              setPendingMessageFiles(prev => prev.filter(item => item.fabFile.id !== fileId));
-              setFiles(prevFiles => prevFiles.filter(f => f.serverId !== fileId));
-
-              // Strip knowledgeIds BEFORE the hard delete. If the delete succeeded and
-              // this failed, knowledgeIds would keep a dead id that every later hydration
-              // tries and fails to resolve. Keyed off the item's own frozen scope rather
-              // than the current control value, which the user may have changed since.
-              const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
-              const stripped =
-                removed?.scope === 'notebook'
-                  ? removeFromNotebookContext(currentSessionId, fileId).catch(() => {})
-                  : Promise.resolve();
-
-              void stripped.then(() =>
-                deleteFileUtility(fileId).catch(err => {
-                  console.error('Failed to delete file:', err);
-                })
-              );
-            }}
-            onClick={file => {
-              // First ensure the KnowledgeViewer is open by setting layout to vertical
-              setSessionLayout({
-                layout: 'vertical',
-                selectedArtifactId: undefined,
-                artifactData: undefined,
-              });
-
-              // Find the message file in the sorted knowledge items list
-              const messageFileIndex = sortedKnowledgeItems.findIndex(item => item.id === file.id);
-
-              // Set the knowledge viewer to show the message file
-              // setTimeout ensures the layout change completes before setting the tab index
-              if (messageFileIndex !== -1) {
-                setTimeout(() => {
-                  setKnowledgeViewer({ selectedTabIndex: messageFileIndex });
-                }, 0);
-              }
-            }}
-          />
-        )}
-
         <SessionToolbar
           isMobile={isMobile}
-          mode={mode}
           canAttachFiles={canAttachFiles}
           workBenchFiles={workBenchFiles}
           currentSessionId={currentSessionId}
@@ -852,10 +814,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           attachScopeMode={attachScopeMode}
           setAttachScopeMode={setAttachScopeMode}
           totalFilesCount={totalFilesCount}
-          hasEmbeddingMismatches={hasEmbeddingMismatches}
           model={model}
-          filesDropdownOpen={filesDropdownOpen}
-          setFilesDropdownOpen={setFilesDropdownOpen}
           chatInputValue={chatInputValue}
           setChatInputValue={setChatInputValue}
           setRephraseGlow={setRephraseGlow}

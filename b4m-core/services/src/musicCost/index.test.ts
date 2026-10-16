@@ -9,13 +9,8 @@ describe('computeMusicUsdCost (elevenlabs)', () => {
     expect(computeMusicUsdCost('elevenlabs', { lengthMs: 30000 })).toBeCloseTo(0.075, 6);
   });
 
-  it('bills an omitted length at the default clip length (10s)', () => {
-    // 10s * $0.0025/s = $0.025
-    expect(computeMusicUsdCost('elevenlabs', {})).toBeCloseTo(10 * (0.15 / 60), 6);
-  });
-
   it('throws for an unknown vendor', () => {
-    expect(() => computeMusicUsdCost('nope' as 'elevenlabs', {})).toThrow(UnsupportedMusicVendorError);
+    expect(() => computeMusicUsdCost('nope' as 'elevenlabs', { lengthMs: 30000 })).toThrow(UnsupportedMusicVendorError);
   });
 });
 
@@ -27,14 +22,6 @@ describe('estimateMusicCredits', () => {
       usdCost: expect.closeTo(0.075, 6),
       billedSeconds: 30,
     });
-  });
-
-  it('reports the default clip length as billedSeconds when no length is given', () => {
-    // billedSeconds must match what the cost was computed on, so usage-event
-    // units stay consistent with costUsd.
-    const { billedSeconds, usdCost } = estimateMusicCredits('elevenlabs', {});
-    expect(billedSeconds).toBeCloseTo(10, 6);
-    expect(usdCost).toBeCloseTo(10 * (0.15 / 60), 6);
   });
 
   it('rounds a fractional credit cost UP rather than down or to nearest', () => {

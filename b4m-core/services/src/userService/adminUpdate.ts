@@ -16,6 +16,7 @@ import {
   Permission,
   IFriendshipModelAdapter,
   IUserApiKeyRepository,
+  IRealtimeConnectionRepository,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
@@ -23,6 +24,7 @@ import { addCredits } from '../creditService/addCredits';
 import { subtractCredits } from '../creditService/subtractCredits';
 import { MODERATION_POLICY } from './moderationPolicy';
 import { entersBlockedState } from './accountState';
+import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
 
 export const adminUpdateUserSchema = updateUserSchema.extend({
   id: z.string(),
@@ -75,6 +77,8 @@ export interface AdminUpdateUserAdapters {
     friendship: IFriendshipModelAdapter;
     // Required: a ban, dispute or suspension must deactivate the user's API keys.
     userApiKeys: Pick<IUserApiKeyRepository, 'deactivateAllByUserId'>;
+    // Required: a ban, dispute or suspension must also end the user's realtime connections.
+    realtimeConnections: Pick<IRealtimeConnectionRepository, 'endConnections'>;
     /**
      * Optional: when provided, a `currentCredits` change is routed through the
      * audited credit ledger (addCredits/subtractCredits) instead of a raw
@@ -289,6 +293,7 @@ export async function adminUpdateUser(
   // Leaving the state later does not reactivate keys; the user mints new ones.
   if (enteringBlockedState) {
     await db.userApiKeys.deactivateAllByUserId(params.id);
+    await endRealtimeConnections({ userId: params.id }, { db });
   }
 
   const finalUser = await db.users.findById(params.id);

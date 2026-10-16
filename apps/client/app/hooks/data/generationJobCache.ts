@@ -36,6 +36,12 @@ export type GenerationJobCache<TJob, TUpdate> = {
    * response never reverts a newer or terminal job; a job the cache has not seen at all is prepended like a create.
    */
   upsert: (queryClient: QueryClient, job: TJob) => void;
+  /**
+   * The value a detail query's own fetch should store. React Query writes a queryFn result without these ordering
+   * rules, so a refetch read before a websocket frame (or the cancel response) landed would otherwise revert it - e.g.
+   * a `running` snapshot replacing `succeeded`, which no later frame or poll corrects while the socket stays open.
+   */
+  reconcileFetched: (queryClient: QueryClient, job: TJob) => TJob;
   /** Applies a websocket frame. Returns whether the job was cached anywhere. */
   patch: (queryClient: QueryClient, update: TUpdate) => boolean;
 };
@@ -98,6 +104,11 @@ export function createGenerationJobCache<TJob extends CacheableJob, TUpdate exte
     );
   };
 
+  const reconcileFetched = (queryClient: QueryClient, job: TJob): TJob => {
+    const cached = queryClient.getQueryData<TJob>(keys.detail(job.id));
+    return cached && !shouldReplaceGenerationJob(cached, job) ? cached : job;
+  };
+
   const patch = (queryClient: QueryClient, update: TUpdate): boolean => {
     let found = false;
     const patchJob = (cached: TJob): TJob => {
@@ -111,5 +122,5 @@ export function createGenerationJobCache<TJob extends CacheableJob, TUpdate exte
     return found;
   };
 
-  return { seed, prepend, upsert, patch };
+  return { seed, prepend, upsert, reconcileFetched, patch };
 }

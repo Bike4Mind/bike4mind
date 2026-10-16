@@ -267,7 +267,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
 
       expect(mockSubmitNcmecReport).not.toHaveBeenCalled();
       expect(mockClaimForNcmecSubmission).not.toHaveBeenCalled();
-      expect(mockUpdateReviewStatus).toHaveBeenCalledWith('inc-1', 'false_positive');
+      expect(mockUpdateReviewStatus).toHaveBeenCalledWith('inc-1', 'false_positive', undefined, 'admin-1');
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
@@ -457,6 +457,21 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(res.json).toHaveBeenCalledWith({ ok: true, ncmecReportId: '123456' });
     });
 
+    it('logs when the manual report overrode a false_positive verdict', async () => {
+      mockRecordManualReport.mockResolvedValue({
+        reviewStatus: 'reported',
+        ncmecReportId: '123456',
+        previousReviewStatus: 'false_positive',
+      });
+
+      const req = makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' });
+      const res = makeRes();
+      await runHandler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(req.logger.info).toHaveBeenCalledWith(expect.stringContaining('(overriding false_positive)'));
+    });
+
     it('works when NCMEC API credentials are not configured', async () => {
       const { Resource } = await import('sst');
       const r = Resource as unknown as Record<string, { value: string }>;
@@ -509,7 +524,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
     });
 
     it('logs the admin-supplied reportId when the verdict is refused', async () => {
-      for (const incident of [null, { reviewStatus: 'false_positive' }]) {
+      for (const incident of [null, { reviewStatus: 'reported' }]) {
         mockRecordManualReport.mockResolvedValue(null);
         mockFindById.mockResolvedValue(incident);
 
@@ -520,16 +535,17 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       }
     });
 
-    it('returns 409 when the incident is already reported or false_positive', async () => {
-      for (const reviewStatus of ['reported', 'false_positive']) {
-        mockRecordManualReport.mockResolvedValue(null);
-        mockFindById.mockResolvedValue({ reviewStatus });
+    it('returns 409 when the incident is already reported', async () => {
+      mockRecordManualReport.mockResolvedValue(null);
+      mockFindById.mockResolvedValue({ reviewStatus: 'reported', ncmecReportId: 'RPT-API' });
 
-        const res = makeRes();
-        await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' }), res);
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' }), res);
 
-        expect(res.status).toHaveBeenCalledWith(409);
-      }
+      expect(res.status).toHaveBeenCalledWith(409);
+      const body = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0] as { error: string };
+      expect(body.error).toContain('reportId=RPT-API');
+      expect(body.error).toContain('your report id was not stored');
     });
 
     it('returns 400 when ncmecReportId is missing, blank, too long, or has disallowed characters', async () => {

@@ -182,7 +182,8 @@ export interface paths {
     put?: never;
     /**
      * Generate background music
-     * @description Generates an instrumental or vocal background-music track from a text prompt. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @deprecated
+     * @description **Deprecated, sunset 2027-01-15.** Use `/api/v1/music-generations` instead. Generates an instrumental or vocal background-music track from a text prompt. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
      */
     post: operations['generateMusic'];
     delete?: never;
@@ -482,7 +483,7 @@ export interface paths {
     put?: never;
     /**
      * Create a session
-     * @description Creates a session (called a "notebook" in the product UI). Pass the returned `id` as `sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as `ai:chat`. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from `GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on forced retrieval.
+     * @description Creates a session (called a "notebook" in the product UI). Pass the returned `id` as `sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as `ai:chat`. A key holding `ai:generate` without `notebooks:write` may create a bare session only (`name`, `lastUsedModel`, `temperature`, `autoNamePlaceholder`); any other field is a 403. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from `GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on forced retrieval.
      */
     post: operations['createSession'];
     delete?: never;
@@ -614,7 +615,7 @@ export interface paths {
     put?: never;
     /**
      * Start a video generation
-     * @description Queues a video generation and returns `202` with the job. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. On success, `output.availability` says whether the clip can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the requested duration are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the clip before rejecting it and billed it: then the requested duration is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`. Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; omitted, the job bills your home organization (or your personal credits if you have none). Keys are scoped to the billed account, so the same key sent for a different `organization_id` starts a new job.
+     * @description Queues a video generation and returns `202` with the job. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. On success, `output.availability` says whether the clip can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the requested duration are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the clip before rejecting it and billed it: then the requested duration is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`. Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; omitted, the job bills your home organization (or your personal credits if you have none). Keys are scoped to the billed account, so the same key sent for a different `organization_id` starts a new job. An organization-billed API key always bills its own organization (see `organization_id`).
      */
     post: operations['createVideoGeneration'];
     delete?: never;
@@ -674,7 +675,7 @@ export interface paths {
     put?: never;
     /**
      * Cancel a music generation
-     * @description Requests cancellation and returns the job. A job still waiting to start (or to retry) moves to `cancelled` shortly after and its reserved credits are returned. The provider renders a song in one call that cannot be interrupted, so a cancel that arrives while the song is rendering does not stop it: the job finishes and is charged. A finished job is returned unchanged.
+     * @description Requests cancellation and returns the job. A job still `pending` (waiting to start, or to retry) moves to `cancelled` shortly after and its reserved credits are returned. The provider renders a song in one call that cannot be interrupted and is billed once it starts, so a `running` job cannot be cancelled: the request is refused with a 409 (`not_cancellable`), and the job runs to its end, charged if the song is produced. A finished job is returned unchanged.
      */
     post: operations['cancelMusicGeneration'];
     delete?: never;
@@ -698,7 +699,7 @@ export interface paths {
     put?: never;
     /**
      * Start a music generation
-     * @description Queues a song and returns `202` with the job. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. A finished song is saved to your Files with the `generated` tag (if that save fails it is kept outside Files and `output.file_id` is null). On success, `output.availability` says whether it can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the model's price are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the song before rejecting it and billed it: then the price is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/music-models`. Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; omitted, the job bills your home organization (or your personal credits if you have none). Keys are scoped to the billed account, so the same key sent for a different `organization_id` starts a new job.
+     * @description Queues a song and returns `202` with the job. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. A finished song is saved to your Files with the `generated` tag (if that save fails it is kept outside Files and `output.file_id` is null). On success, `output.availability` says whether it can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the model's price are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the song before rejecting it and billed it: then the price is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/music-models`. Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; omitted, the job bills your home organization (or your personal credits if you have none). Keys are scoped to the billed account, so the same key sent for a different `organization_id` starts a new job. An organization-billed API key always bills its own organization (see `organization_id`).
      */
     post: operations['createMusicGeneration'];
     delete?: never;
@@ -2302,6 +2303,21 @@ export interface components {
       /** @enum {string} */
       intent: 'fresh' | 'continuation';
     };
+    generateImageResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
     /**
      * @example {
      *       "prompt": "a watercolor lighthouse at dusk",
@@ -2360,6 +2376,7 @@ export interface components {
       aspect_ratio?: string;
       sessionId?: string;
       questId?: string;
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organizationId?: string | null;
       /** @default [] */
       fabFileIds?: string[];
@@ -2451,6 +2468,21 @@ export interface components {
       sessionId: string;
       images?: string[];
     };
+    editImageResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
     /**
      * @example {
      *       "prompt": "replace the sky with a starry night",
@@ -2513,6 +2545,7 @@ export interface components {
       aspect_ratio?: string;
       sessionId: string;
       questId?: string;
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organizationId?: string | null;
       /** @default [] */
       fabFileIds?: string[];
@@ -3164,6 +3197,7 @@ export interface components {
       videos: string[];
       files: {
         name: string;
+        /** @description Presigned download URL. Short-lived (about an hour): fetch it promptly, do not store it. */
         url: string;
         isImage: boolean;
         isAudio: boolean;
@@ -3584,6 +3618,21 @@ export interface components {
       created_at: string;
       updated_at: string;
     };
+    createVideoGenerationResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
     createVideoGenerationResponse404: {
       error: string;
       request_id?: string;
@@ -3658,7 +3707,7 @@ export interface components {
       /** @description An image file you own, for image_to_video. */
       input_image_file_id?: string;
       audio?: boolean;
-      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. */
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
     };
     /**
@@ -3902,6 +3951,29 @@ export interface components {
       created_at: string;
       updated_at: string;
     };
+    cancelMusicGenerationResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'unsupported_duration'
+        | 'unsupported_lyrics'
+        | 'unsupported_vocals'
+        | 'lyrics_with_instrumental'
+        | 'lyrics_too_long'
+        | 'invalid_request'
+        | 'model_disabled'
+        | 'model_unavailable'
+        | 'insufficient_credits'
+        | 'idempotency_key_reused'
+        | 'invalid_idempotency_key'
+        | 'not_cancellable';
+    };
     /**
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
@@ -3999,6 +4071,21 @@ export interface components {
        */
       owner?: 'user' | 'org';
     };
+    createMusicGenerationResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
     createMusicGenerationResponse422: {
       error: string;
       request_id?: string;
@@ -4019,7 +4106,8 @@ export interface components {
         | 'model_unavailable'
         | 'insufficient_credits'
         | 'idempotency_key_reused'
-        | 'invalid_idempotency_key';
+        | 'invalid_idempotency_key'
+        | 'not_cancellable';
     };
     /**
      * @example {
@@ -4038,7 +4126,7 @@ export interface components {
       instrumental?: boolean;
       /** @description Whole seconds. Defaults to the model's default; see the model's `duration` for how it is honoured. */
       duration_seconds?: number;
-      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. */
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
     };
     /**
@@ -6596,6 +6684,12 @@ export interface operations {
           'X-B4M-Audio-File-Name'?: string;
           /** @description Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes. */
           'X-B4M-Audio-File-Url'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6616,7 +6710,6 @@ export interface operations {
           'audio/opus': string;
           'audio/L16': string;
           'audio/basic': string;
-          'application/octet-stream': string;
         };
       };
       /** @description Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: "base64"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200. */
@@ -6634,6 +6727,12 @@ export interface operations {
           'X-B4M-Audio-File-Name'?: string;
           /** @description Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes. */
           'X-B4M-Audio-File-Url'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6655,6 +6754,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6713,6 +6818,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6731,11 +6842,17 @@ export interface operations {
           'application/json': components['schemas']['generateMusicResponse413'];
         };
       };
-      /** @description Request body failed validation, or the caller cannot afford the track - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
+      /** @description Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the track - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6759,6 +6876,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6782,6 +6905,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1792022400` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Fri, 15 Jan 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/music-generations>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -6848,7 +6977,6 @@ export interface operations {
           'audio/opus': string;
           'audio/L16': string;
           'audio/basic': string;
-          'application/octet-stream': string;
         };
       };
       /** @description Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: "base64"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200. */
@@ -6963,7 +7091,7 @@ export interface operations {
           'application/json': components['schemas']['generateSoundEffectResponse413'];
         };
       };
-      /** @description Request body failed validation, or the caller cannot afford the effect - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
+      /** @description Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the effect - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -7372,7 +7500,7 @@ export interface operations {
           'application/json': components['schemas']['generateImageResponse200'];
         };
       };
-      /** @description `referenceImageFabFileIds` is set for a non-gpt-image model, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. */
+      /** @description `referenceImageFabFileIds` is set for a non-gpt-image model, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -7406,15 +7534,27 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes. */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['generateImageResponse403'];
         };
       };
       /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. */
@@ -7514,7 +7654,7 @@ export interface operations {
           'application/json': components['schemas']['editImageResponse200'];
         };
       };
-      /** @description `fabFileIds` is empty, `referenceImageFabFileIds` is set for a non-gpt-image model, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. */
+      /** @description `fabFileIds` is empty, `referenceImageFabFileIds` is set for a non-gpt-image model, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -7548,15 +7688,27 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes. */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['editImageResponse403'];
         };
       };
       /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. */
@@ -9392,7 +9544,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The key lacks `notebooks:write`, is not bound to a requested data lake, or the caller is not entitled to the requested `surface`. */
+      /** @description The key lacks `notebooks:write` (or holds only `ai:generate` and set a field beyond a bare session), is not bound to a requested data lake, or the caller is not entitled to the requested `surface`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -10762,6 +10914,29 @@ export interface operations {
           'application/json': components['schemas']['createVideoGenerationResponse202'];
         };
       };
+      /** @description An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
       /** @description Missing or invalid credentials. */
       401: {
         headers: {
@@ -10773,7 +10948,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope, or `organization_id` names an organization you do not belong to (or is not a valid id). */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -10793,7 +10968,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['createVideoGenerationResponse403'];
         };
       };
       /** @description `input_image_file_id` does not name an image you own (`errorCode: input_image_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
@@ -11240,6 +11415,29 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
+      /** @description The song is already rendering (`running`); `errorCode` is `not_cancellable`. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['cancelMusicGenerationResponse409'];
+        };
+      };
       /** @description Request failed validation. */
       422: {
         headers: {
@@ -11456,7 +11654,7 @@ export interface operations {
           'application/json': components['schemas']['createMusicGenerationResponse202'];
         };
       };
-      /** @description Your Files storage has no room for the song (`storage_limit_exceeded`, as on the Files upload routes). The body carries `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together; `requested_bytes` here is the most the song can take at the requested length, not its final size. This endpoint checks only the user quota, so `org_storage_limit_exceeded` is never returned here. */
+      /** @description Your Files storage has no room for the song (`storage_limit_exceeded`, as on the Files upload routes). The body carries `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together; `requested_bytes` here is the most the song can take at the requested length, not its final size. This endpoint checks only the user quota, so `org_storage_limit_exceeded` is never returned here. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -11490,7 +11688,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope, or `organization_id` names an organization you do not belong to (or is not a valid id). */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -11510,7 +11708,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['createMusicGenerationResponse403'];
         };
       };
       /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */

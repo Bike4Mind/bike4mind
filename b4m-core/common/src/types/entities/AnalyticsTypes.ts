@@ -45,7 +45,7 @@ export interface FacetResults {
     avgEvents: number;
   };
   /**
-   * Counter-log events grouped by `metadata.source` (web/cli/api/agent/system)
+   * Counter-log events grouped by `metadata.source` (web/cli/desktop/api/agent/system)
    * for the current period. Drives the "Usage by Source" line in the daily/
    * weekly report. Empty when no events carry `metadata.source` yet (pre-
    * instrumentation history).

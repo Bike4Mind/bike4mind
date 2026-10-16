@@ -20,4 +20,5 @@ const musicCache = createGenerationJobCache<MusicGeneration, MusicJobLiveUpdate>
 export const seedMusicGeneration = musicCache.seed;
 export const prependMusicGeneration = musicCache.prepend;
 export const upsertMusicGeneration = musicCache.upsert;
+export const reconcileFetchedMusicGeneration = musicCache.reconcileFetched;
 export const patchMusicGeneration = musicCache.patch;

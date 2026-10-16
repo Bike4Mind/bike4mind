@@ -28,6 +28,23 @@ describe('approval mode copy', () => {
   it('does not promise that approve-for-me checks everything', () => {
     expect(approvalModeOption('auto').description).toMatch(/everything except/i);
     expect(approvalModeOption('auto').description).toMatch(/outside this project/i);
+    expect(approvalModeOption('auto').description).toMatch(/send data out/i);
+  });
+
+  it('says approve-for-me asks before sending data out and after reading untrusted content', () => {
+    const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
+    expect(notes).toMatch(/send data off this computer/i);
+    expect(notes).toMatch(/read web, browser, MCP or skill content/i);
+    expect(notes).toMatch(/browsing a site/i);
+  });
+
+  /**
+   * The copy states the gap rather than implying the list is exhaustive: what a shell command
+   * prints does not count as content the reply read, so a page reached with `curl` does not by
+   * itself turn on the asks above.
+   */
+  it('admits that what a command printed is not counted as reading', () => {
+    expect(APPROVAL_MODE_FOOTNOTES.join(' ')).toMatch(/downloaded and printed is not counted/i);
   });
 
   /** The two axes the popover has to keep visibly apart, plus the two scoping rules. */
@@ -42,7 +59,7 @@ describe('approval mode copy', () => {
 
   /**
    * The other half of the honesty requirement, and the one that is easy to lose: 'auto' reads
-   * as "unsafe things still ask", and builds, installs and network calls run unasked. The copy
+   * as "unsafe things still ask", and builds, installs and downloads run unasked. The copy
    * has to say so, so the saying of it is asserted and not left to the next copy edit.
    */
   it('admits that approve-for-me runs most commands unasked', () => {

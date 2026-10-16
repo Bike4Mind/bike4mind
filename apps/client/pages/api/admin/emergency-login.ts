@@ -10,6 +10,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { z } from 'zod';
 import { Resource } from 'sst';
+import { getClientIp } from '@server/utils/ip';
 
 const EmergencyLoginSchema = z.object({
   username: z.string().min(1).max(200),
@@ -93,7 +94,7 @@ const handler = baseApi({ auth: false })
       // Log emergency access for audit trail - minimal info only
       req.logger.warn('EMERGENCY ADMIN ACCESS: password accepted, second factor pending', {
         userId: user.id,
-        ipAddress: req.ip || req.connection.remoteAddress,
+        ipAddress: getClientIp(req),
         source: 'emergency-login',
       });
 

@@ -5,6 +5,7 @@ import { musicJob } from './__test__/musicGenerationFixtures';
 import {
   patchMusicGeneration,
   prependMusicGeneration,
+  reconcileFetchedMusicGeneration,
   seedMusicGeneration,
   upsertMusicGeneration,
   type MusicGenerationList,
@@ -68,6 +69,32 @@ describe('upsertMusicGeneration', () => {
     queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'cancelled' }));
     upsertMusicGeneration(queryClient, musicJob({ state: 'running', updated_at: LATER }));
     expect(detail()?.state).toBe('cancelled');
+  });
+});
+
+// The card read 'Cancelling' after the song had finished: the websocket frame wrote 'succeeded' (keeping the cached
+// updated_at), then a response read before it - but stamped later - arrived and was written over it.
+describe('a cancel racing the job to completion', () => {
+  const cancelResponse = () => musicJob({ state: 'running', updated_at: LATER });
+
+  it('keeps the finished job when the cancel response lands after the success frame', () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running' }));
+    patchMusicGeneration(queryClient, { id: 'music-1', state: 'succeeded' });
+    upsertMusicGeneration(queryClient, cancelResponse());
+    expect(detail()?.state).toBe('succeeded');
+  });
+
+  it('keeps the finished job when a detail refetch read before the success frame lands after it', () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running' }));
+    patchMusicGeneration(queryClient, { id: 'music-1', state: 'succeeded' });
+    expect(reconcileFetchedMusicGeneration(queryClient, cancelResponse()).state).toBe('succeeded');
+  });
+
+  it('keeps a storing job when the cancel response, read while it ran, lands after the storing frame', () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running' }));
+    patchMusicGeneration(queryClient, { id: 'music-1', state: 'storing' });
+    upsertMusicGeneration(queryClient, cancelResponse());
+    expect(detail()?.state).toBe('storing');
   });
 });
 

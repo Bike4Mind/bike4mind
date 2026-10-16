@@ -336,6 +336,33 @@ describe('POST /api/ai/sound-effects', () => {
     expect(getEffectiveApiKey).not.toHaveBeenCalled();
   });
 
+  it.each(['alaw_8000', ''])('refuses format %j with 422, before reserving or generating', async format => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
+
+    const { res, promise } = run({ text: 'explosion', durationSeconds: 3, format });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData().error).toContain(`'${format}'`);
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('still answers 502 when refunding the failed generation also fails', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
+    generate.mockRejectedValue(new Error('provider down'));
+    userIncrement.mockResolvedValueOnce({ currentCredits: 850 }).mockRejectedValueOnce(new Error('db down'));
+
+    const { res, promise } = run({ text: 'explosion', durationSeconds: 3 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(502);
+    expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 12);
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+  });
+
   it('maps an upstream provider failure to 502 and refunds the reservation', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });

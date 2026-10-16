@@ -1,7 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService, userService } from '@bike4mind/services';
-import { userRepository, authSessionRepository, passkeyCredentialRepository } from '@bike4mind/database';
+import {
+  userRepository,
+  authSessionRepository,
+  passkeyCredentialRepository,
+  realtimeConnectionRepository,
+} from '@bike4mind/database';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { logSecondFactorSignIn, readSignInOrigin } from '@server/auth/signInSecondFactor';
@@ -22,7 +27,9 @@ const verifySetupResponseSchema = z.object({
   user: selfUserResponseSchema,
 });
 
-const handler = baseApi()
+// Confirms the secret /api/auth/mfa/setup issued. That route requires recent verification for a
+// full session; sign-in enrollment under an mfaPending token is exempt (see setup.ts).
+const handler = baseApi({ auth: 'jwtOnly' })
   // No rate limiting - using server-side lockout for stronger security
   .post(
     asyncHandler(async (req, res) => {
@@ -71,7 +78,11 @@ const handler = baseApi()
         // tokenVersion AND clears session rows, so other devices can't silently refresh back in),
         // then mint a fresh session for THIS device with the new version.
         const newTokenVersion = await userService.revokeUserSessions(result.user.id, {
-          db: { users: userRepository, authSessions: authSessionRepository },
+          db: {
+            users: userRepository,
+            authSessions: authSessionRepository,
+            realtimeConnections: realtimeConnectionRepository,
+          },
           logger: req.logger,
         });
         // Enrollment that finishes a sign-in (enforceMFA) is that sign-in's session, so it keeps

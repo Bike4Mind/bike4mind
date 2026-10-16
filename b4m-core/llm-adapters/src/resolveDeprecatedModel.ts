@@ -43,6 +43,11 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'us.anthropic.claude-3-5-sonnet-20241022-v2:0': 'global.anthropic.claude-sonnet-4-6',
   'us.anthropic.claude-3-7-sonnet-20250219-v1:0': 'global.anthropic.claude-sonnet-4-6',
   'anthropic.claude-3-haiku-20240307-v1:0': 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+  // Superseded within the Bedrock Claude family by the current Sonnet 4.6 / Opus 4.8;
+  // successors are no more expensive.
+  'us.anthropic.claude-opus-4-20250514-v1:0': 'global.anthropic.claude-opus-4-8',
+  'us.anthropic.claude-opus-4-1-20250805-v1:0': 'global.anthropic.claude-opus-4-8',
+  'us.anthropic.claude-sonnet-4-20250514-v1:0': 'global.anthropic.claude-sonnet-4-6',
   // Anthropic-hosted models
   'claude-3-5-sonnet-20241022': 'claude-sonnet-4-6',
   'claude-3-7-sonnet-20250219': 'claude-sonnet-4-6',
@@ -56,15 +61,18 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'gpt-5.1-chat-latest': 'gpt-5.5',
   // Gemini 2.5 Flash was retired upstream by Google and 404s ("no longer available to new
   // users"), so a pinned session hard-fails without this. Not gemini-3.5-flash, the capability
-  // successor: at $1.50/$9.00 per 1M against 2.5 Flash's $0.075/$0.60 it would raise a user's
-  // bill 20x on input. Gemini 3.1 Flash Lite is the cheapest current Gemini that keeps the
+  // successor: at $1.50/$9.00 per 1M against 2.5 Flash's $0.30/$2.50 it would raise a user's
+  // bill 5x on input. Gemini 3.1 Flash Lite is the cheapest current Gemini that keeps the
   // original's intent (thinking, vision, tools, 1M context) at $0.25/$1.50.
   'gemini-2.5-flash': 'gemini-3.1-flash-lite',
   // Google closed the 2.5 line to new users (no shutdown date) and points them at 3.1 Flash-Lite
-  // and 3.5 Flash. Flash-Lite costs more ($0.0375/$0.30 -> $0.25/$1.50 per 1M in/out); 2.5 Pro ->
+  // and 3.5 Flash. Flash-Lite costs more ($0.10/$0.40 -> $0.25/$1.50 per 1M in/out); 2.5 Pro ->
   // 3.5 Flash trades Pro quality for GA and a near-equal price ($1.25/$10 -> $1.50/$9).
   'gemini-2.5-pro': 'gemini-3.5-flash',
   'gemini-2.5-flash-lite': 'gemini-3.1-flash-lite',
+  // Shut down by Google on 2026-03-09, so a pinned session hard-fails without this. Google names
+  // 3.1 Pro Preview as the replacement, at the same price.
+  'gemini-3-pro-preview': 'gemini-3.1-pro-preview',
   // xAI models superseded by Grok 4.5. These all still resolve upstream, so nothing here
   // prevents an API failure -- they are mapped because Grok 4.5 is cheaper AND strictly more
   // capable (reasoning, vision, 500K context, cache reads) than every one of them. Grok 3 in

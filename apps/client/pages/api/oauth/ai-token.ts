@@ -20,7 +20,12 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { agentRepository, cacheRepository, organizationRepository } from '@bike4mind/database';
+import {
+  agentRepository,
+  cacheRepository,
+  organizationRepository,
+  realtimeConnectionRepository,
+} from '@bike4mind/database';
 import {
   oauthClientRepository,
   userApiKeyRepository,
@@ -32,6 +37,7 @@ import { ApiKeyScope, ApiKeyStatus, BadRequestError } from '@bike4mind/common';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
+import { getClientIp } from '@server/utils/ip';
 
 /** Minted key lifetime. The app caches the key per-user and re-exchanges only when it expires. */
 const AI_TOKEN_TTL_SECONDS = userApiKeyService.MAX_EXCHANGE_KEY_TTL_MS / 1000;
@@ -55,27 +61,6 @@ const AiTokenRequestSchema = z.object({
 
 // Keep this exchange limited to scopes whose mint and consent requirements it implements.
 const AiTokenScopesSchema = z.array(z.enum([ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ])).min(1);
-
-/**
- * Take the last hop from the X-Forwarded-For chain - the one CloudFront appends
- * and the client can't spoof, unlike earlier entries. `req.ip` on an unauth
- * endpoint behind a proxy is attacker-controllable and would poison audit logs.
- * (Same rationale as cc-bridge/redeem.)
- */
-function trustedClientIp(req: {
-  headers: Record<string, string | string[] | undefined>;
-  socket?: { remoteAddress?: string };
-}): string | undefined {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff.length > 0) {
-    const parts = xff
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
-    if (parts.length > 0) return parts[parts.length - 1];
-  }
-  return req.socket?.remoteAddress;
-}
 
 const handler = baseApi({ auth: false })
   // Coarse per-IP flood backstop for this unauth endpoint. A federated app calls
@@ -202,7 +187,7 @@ const handler = baseApi({ auth: false })
       return res.status(403).json({ error: 'access_denied', error_description: 'Policy acceptance required' });
     }
 
-    const clientIp = trustedClientIp(req);
+    const clientIp = getClientIp(req);
     const userAgent = req.headers['user-agent'];
 
     // 7. Reuse-or-replace: keep at most one active exchange key per (user, client). The raw
@@ -223,7 +208,13 @@ const handler = baseApi({ auth: false })
       await userApiKeyService.revokeUserApiKey(
         b4mUserId,
         { keyId: prior.id, reason: 'Superseded by a new federated AI-token exchange' },
-        { db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository } }
+        {
+          db: {
+            userApiKeys: userApiKeyRepository,
+            organizations: organizationRepository,
+            realtimeConnections: realtimeConnectionRepository,
+          },
+        }
       );
     }
 
