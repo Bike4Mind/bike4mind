@@ -22,6 +22,7 @@ vi.mock('@server/models/Subscription', () => ({
 
 const { findMembershipOrgIds } = vi.hoisted(() => ({ findMembershipOrgIds: vi.fn(async (): Promise<string[]> => []) }));
 vi.mock('@bike4mind/database', () => ({ organizationRepository: { findMembershipOrgIds } }));
+vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: { warn: vi.fn() } } }));
 
 // Fixture registry: behavior of the real rows is covered by
 // lib/entitlements/registry.test.ts; here we test the resolver's wiring and
@@ -80,7 +81,9 @@ describe('getUserEntitlements', () => {
     expect(findActive).toHaveBeenCalledWith('u1');
   });
 
-  it('grants Pro entitlements to an org seat member', async () => {
+  // The fixture price stands in for an org-owned row: this pins that org rows feed the same
+  // price-to-key resolution as owned rows. The real Team price has no key row today.
+  it("confers an org row's price-derived keys on a seat member", async () => {
     findActive.mockResolvedValue([]);
     findMembershipOrgIds.mockResolvedValue(['org1']);
     findActiveByOwners.mockResolvedValue([{ priceId: 'price_pro', ownerType: 'Organization', ownerId: 'org1' }]);
@@ -244,22 +247,28 @@ describe('getRequestEntitlements', () => {
     expect(findMembershipOrgIds).toHaveBeenCalledTimes(1);
   });
 
-  // A membership-read failure must propagate, not silently drop to the caller's own rows:
-  // swallowing it would resolve a seat member as free on every gated route and `/me`.
-  it('propagates a membership-read failure without memoizing a partial list', async () => {
-    findActive.mockResolvedValue([]);
+  // An org-leg failure degrades to the caller's own rows (logged in activeSubscriptions) rather
+  // than failing every gated route for every org member; the user-owned keys still resolve.
+  it('degrades to user-owned keys when the membership read fails', async () => {
+    findActive.mockResolvedValue([{ priceId: 'price_pro' }]);
     findMembershipOrgIds.mockRejectedValue(new Error('mongo unavailable'));
     const req = makeReq(user);
 
-    await expect(getRequestEntitlements(req)).rejects.toThrow('mongo unavailable');
-    expect((req as unknown as { entitlements?: unknown }).entitlements).toBeUndefined();
+    await expect(getRequestEntitlements(req)).resolves.toContain('someproduct:pro');
+    expect(findActiveByOwners).not.toHaveBeenCalled();
   });
 
-  // Same for the org-subscription read: a "best-effort" catch here would silently drop seats.
-  it('propagates an org-subscription read failure without memoizing a partial list', async () => {
+  it('degrades to user-owned keys when the org-subscription read fails', async () => {
     findActive.mockResolvedValue([]);
     findMembershipOrgIds.mockResolvedValue(['org1']);
     findActiveByOwners.mockRejectedValue(new Error('mongo unavailable'));
+    const req = makeReq(user);
+
+    await expect(getRequestEntitlements(req)).resolves.not.toContain('someproduct:pro');
+  });
+
+  it('does not memoize when the user-owned read fails', async () => {
+    findActive.mockRejectedValue(new Error('mongo unavailable'));
     const req = makeReq(user);
 
     await expect(getRequestEntitlements(req)).rejects.toThrow('mongo unavailable');

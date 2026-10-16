@@ -2,7 +2,11 @@ import { hasDeveloperUserTag, type SettingKey } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
+import {
+  getActiveSubscriptionsForUser,
+  getRequestActiveSubscriptions,
+  type ActiveSubscriptionsRequest,
+} from '@server/entitlements/activeSubscriptions';
 import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
 import { UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
 import { isDevelopment } from '@server/utils/config';
@@ -45,12 +49,14 @@ const TIER_SETTING_KEY = {
 /**
  * Resolve the caller's rate-limit tier. Costs two indexed reads for non-bypass
  * users (three with an org membership) - negligible next to the multi-second LLM
- * call these routes make.
+ * call these routes make. Pass the request to resolve through its per-request
+ * memo, so the handler's entitlement gate reuses these reads instead of repeating them.
  */
-export async function resolveUserRateTier(user: RateTierUser): Promise<UserRateTier> {
+export async function resolveUserRateTier(user: RateTierUser, req?: ActiveSubscriptionsRequest): Promise<UserRateTier> {
   if (user.isAdmin || hasDeveloperUserTag(user.tags)) return 'bypass';
 
-  const activeSubscriptions = await getActiveSubscriptionsForUser(user.id);
+  const activeSubscriptions =
+    req?.user?.id === user.id ? await getRequestActiveSubscriptions(req) : await getActiveSubscriptionsForUser(user.id);
 
   // Take the HIGHEST ladder tier across active subscriptions. Plans with no
   // `tier` (standalone single-product plans sold off the main ladder) are not
@@ -81,7 +87,10 @@ export async function resolveUserRateTier(user: RateTierUser): Promise<UserRateT
  * non-optional `req.user` augmentation is client-package-local). A missing user
  * is a can't-happen post-auth; we fail CLOSED to the most-restrictive limit.
  */
-export async function resolveUserRateLimitPerMin(user: RateTierUser | undefined): Promise<number> {
+export async function resolveUserRateLimitPerMin(
+  user: RateTierUser | undefined,
+  req?: ActiveSubscriptionsRequest
+): Promise<number> {
   // Preserve local-dev ergonomics - never rate limit on a dev server.
   if (isDevelopment()) return Infinity;
 
@@ -89,7 +98,7 @@ export async function resolveUserRateLimitPerMin(user: RateTierUser | undefined)
   if (!user) return FALLBACK_RATE_LIMIT_PER_MIN;
 
   try {
-    const tier = await resolveUserRateTier(user);
+    const tier = await resolveUserRateTier(user, req);
     if (tier === 'bypass') return Infinity;
 
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });

@@ -8,8 +8,7 @@
 import { getMeContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
-import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
-import { getRequestMembershipOrgIds } from '@server/dataLakes/requestMembership';
+import { getRequestActiveSubscriptions } from '@server/entitlements/activeSubscriptions';
 import { resolveCallerPlan } from '@server/me/resolveCallerPlan';
 
 const handler = nextRouteForContract(getMeContract, {
@@ -22,9 +21,7 @@ const handler = nextRouteForContract(getMeContract, {
   // `tier` and `entitlements` are derived from one snapshot read of the caller's
   // active subscriptions, org seats included (they resolve the priceId through
   // different tables - see resolveCallerPlan), rather than two reads that could race apart.
-  const active = await getActiveSubscriptionsForUser(user.id, {
-    membershipOrgIds: await getRequestMembershipOrgIds(req),
-  });
+  const active = await getRequestActiveSubscriptions(req);
   const { tier, subscription } = resolveCallerPlan(active);
   const entitlements = await getUserEntitlements(toEntitlementUser(user), active);
 

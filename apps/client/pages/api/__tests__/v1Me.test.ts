@@ -12,15 +12,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, MeResponseSchema } from '@bike4mind/common';
 
-const { mockResolvePlan, mockEntitlements, mockFindActive, mockMembership, mockPlanByPriceId, baseApiOptions } =
-  vi.hoisted(() => ({
-    mockResolvePlan: vi.fn(),
-    mockEntitlements: vi.fn(),
-    mockFindActive: vi.fn(),
-    mockMembership: vi.fn(),
-    mockPlanByPriceId: vi.fn(),
-    baseApiOptions: [] as unknown[],
-  }));
+const { mockResolvePlan, mockEntitlements, mockFindActive, mockPlanByPriceId, baseApiOptions } = vi.hoisted(() => ({
+  mockResolvePlan: vi.fn(),
+  mockEntitlements: vi.fn(),
+  mockFindActive: vi.fn(),
+  mockPlanByPriceId: vi.fn(),
+  baseApiOptions: [] as unknown[],
+}));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
@@ -60,8 +58,7 @@ vi.mock('@server/entitlements', () => ({
   }),
 }));
 vi.mock('@server/me/resolveCallerPlan', () => ({ resolveCallerPlan: mockResolvePlan }));
-vi.mock('@server/entitlements/activeSubscriptions', () => ({ getActiveSubscriptionsForUser: mockFindActive }));
-vi.mock('@server/dataLakes/requestMembership', () => ({ getRequestMembershipOrgIds: mockMembership }));
+vi.mock('@server/entitlements/activeSubscriptions', () => ({ getRequestActiveSubscriptions: mockFindActive }));
 vi.mock('@client/lib/userSubscriptions/utils', () => ({ getEntitlingPlanByPriceId: mockPlanByPriceId }));
 
 const { default: handler } = await import('@pages/api/v1/me');
@@ -94,7 +91,6 @@ const ACTIVE = [{ priceId: 'price_pro', periodEndsAt: new Date('2026-10-18T00:00
 beforeEach(() => {
   vi.clearAllMocks();
   mockFindActive.mockResolvedValue(ACTIVE);
-  mockMembership.mockResolvedValue([]);
   mockResolvePlan.mockReturnValue({
     tier: 'basic',
     subscription: {
@@ -159,7 +155,9 @@ describe('GET /api/v1/me', () => {
 
     await run(req, res);
 
-    expect(mockFindActive).toHaveBeenCalledWith('u1', { membershipOrgIds: [] });
+    expect(mockFindActive).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }) })
+    );
     expect(mockEntitlements).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), ACTIVE);
     expect(res._getJSONData().id).toBe('u1');
   });
@@ -181,15 +179,13 @@ describe('GET /api/v1/me', () => {
     mockPlanByPriceId.mockImplementation((priceId: string) =>
       priceId === 'price_team' ? { priceId, name: 'Team', interval: 'monthly', tier: 2 } : undefined
     );
-    mockMembership.mockResolvedValue(['org1']);
     const seatRows = [{ priceId: 'price_team', periodEndsAt: new Date('2026-11-01T00:00:00.000Z') }];
     mockFindActive.mockResolvedValue(seatRows);
     const { req, res } = get();
 
     await run(req, res);
 
-    expect(mockFindActive).toHaveBeenCalledWith('u1', { membershipOrgIds: ['org1'] });
-    expect(mockMembership).toHaveBeenCalledWith(req);
+    expect(mockFindActive).toHaveBeenCalledWith(req);
     expect(mockEntitlements).toHaveBeenCalledWith(expect.anything(), seatRows);
     const body = res._getJSONData();
     expect(MeResponseSchema.safeParse(body).success).toBe(true);
@@ -204,16 +200,8 @@ describe('GET /api/v1/me', () => {
     });
   });
 
-  // The route adds two reads that were not here before (membership, org subscriptions). A
-  // "best-effort" catch that swallowed either would report a seat member as free with no
-  // error; the real `baseApi` `onError` turns the rejection below into the 500 envelope.
-  it('propagates a failed membership read instead of reporting a tier', async () => {
-    mockMembership.mockRejectedValue(new Error('mongo unavailable'));
-    const { req, res } = get();
-
-    await expect(run(req, res)).rejects.toThrow('mongo unavailable');
-  });
-
+  // An org-leg failure degrades inside the resolver (activeSubscriptions.test.ts); a failed
+  // user-owned read still surfaces as the 500 envelope via the real `baseApi` `onError`.
   it('propagates a failed subscription read instead of reporting a tier', async () => {
     mockFindActive.mockRejectedValue(new Error('mongo unavailable'));
     const { req, res } = get();

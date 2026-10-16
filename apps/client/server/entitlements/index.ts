@@ -28,8 +28,11 @@ import {
   BASE_ENTITLEMENT_KEY,
 } from '@client/lib/entitlements/registry';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
-import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
-import { getRequestMembershipOrgIds, type MembershipRequest } from '@server/dataLakes/requestMembership';
+import {
+  getActiveSubscriptionsForUser,
+  getRequestActiveSubscriptions,
+  type ActiveSubscriptionsRequest,
+} from '@server/entitlements/activeSubscriptions';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
 import type { IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
@@ -42,7 +45,7 @@ import type { Logger } from '@bike4mind/observability';
  * never surfaces because express types are not imported here at all. Any
  * Express.Request (or Next.js request) is structurally assignable to this.
  */
-export interface EntitlementRequest extends MembershipRequest {
+export interface EntitlementRequest extends ActiveSubscriptionsRequest {
   entitlements?: EntitlementKey[];
   /** Attached by `baseApi()` early in the middleware chain; optional so a bare test double still fits. */
   logger?: Logger;
@@ -155,9 +158,7 @@ export async function getRequestEntitlements(req: EntitlementRequest): Promise<E
   // the guard is defense-in-depth for a future caller that forgets to check.
   if (!req.user) return [];
   if (req.entitlements) return req.entitlements;
-  const active = await getActiveSubscriptionsForUser(req.user.id, {
-    membershipOrgIds: await getRequestMembershipOrgIds(req),
-  });
+  const active = await getRequestActiveSubscriptions(req);
   // The early return above covers the settled case; `??=` covers two callers that both passed
   // it before either assigned - the first write wins, so both resolve to the same list.
   return (req.entitlements ??= await getUserEntitlements(req.user, active));

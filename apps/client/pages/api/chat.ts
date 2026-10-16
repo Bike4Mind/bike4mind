@@ -64,7 +64,7 @@ const handler = nextRouteForContract(chatContract, {
   // Per-user request rate limit, tunable per subscription tier. Keyed on userId
   // (IP-independent); admins/developers and the dev server bypass.
   rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
+    limit: req => resolveUserRateLimitPerMin(req.user, req),
     windowMs: 60 * 1000,
   }),
 }).post(async (req, res) => {

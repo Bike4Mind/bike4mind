@@ -173,6 +173,30 @@ describe('resolveUserRateLimitPerMin', () => {
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(10);
   });
 
+  // The org leg degrades to the user's own rows, so a personal subscriber keeps their own tier.
+  it("keeps the user's own tier when org resolution throws", async () => {
+    findActiveUserSubscriptionsMock.mockResolvedValue([{ priceId: 'price_pro' }]);
+    findMembershipOrgIdsMock.mockRejectedValue(new Error('mongo unavailable'));
+    expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(TIER_LIMITS.apiRateLimitProPerMin);
+  });
+
+  it('resolves through the request memo, leaving the reads for the handler to reuse', async () => {
+    findMembershipOrgIdsMock.mockResolvedValue(['org1']);
+    findActiveSubscriptionsByOwnersMock.mockResolvedValue([{ priceId: 'price_team' }]);
+    const user = { id: 'u1' };
+    const req: { user: never; membershipOrgIds?: string[]; activeSubscriptions?: unknown[] } = {
+      user: user as never,
+    };
+
+    expect(await resolveUserRateLimitPerMin(user, req)).toBe(TIER_LIMITS.apiRateLimitProPerMin);
+    expect(req.membershipOrgIds).toEqual(['org1']);
+    expect(req.activeSubscriptions).toEqual([{ priceId: 'price_team' }]);
+
+    await resolveUserRateLimitPerMin(user, req);
+    expect(findActiveUserSubscriptionsMock).toHaveBeenCalledTimes(1);
+    expect(findMembershipOrgIdsMock).toHaveBeenCalledTimes(1);
+  });
+
   it('fails closed to the Free-tier floor when subscription resolution throws (no 500)', async () => {
     findActiveUserSubscriptionsMock.mockRejectedValue(new Error('mongo unavailable'));
     expect(await resolveUserRateLimitPerMin({ id: 'u1' })).toBe(10);
