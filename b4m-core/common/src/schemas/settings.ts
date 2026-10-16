@@ -4029,7 +4029,8 @@ export const settingsMap = {
       `applies). While unset the field is blank; ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} is the ada-002 value. Any value you save, ` +
       `${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} included, is used exactly, in every space, which is yours to get right: 75 ` +
       'against text-embedding-3-small sits above that band entirely and returns nothing on every ' +
-      'query. To go back to the per-model floor, clear the field and save. Where this floor lands ' +
+      'query, so a value above the floor measured for the default model needs confirmation ' +
+      'to save. To go back to the per-model floor, clear the field and save. Where this floor lands ' +
       'inside your band decides a lot - on one measured corpus 74 / 75 / 76 swung recall 91% / 65% / ' +
       '40% - and the same 75 that is a cliff on one lake rejects nothing at all on another. ' +
       'Re-measure after changing the embedding model.',

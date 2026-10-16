@@ -1,6 +1,7 @@
 import React from 'react';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -12,12 +13,65 @@ import {
   PendingActionButtons,
   ReplyCompleteContext,
 } from './PromptReplies';
+import PromptReplies from './PromptReplies';
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
 
 vi.mock('@client/app/contexts/ApiContext', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, api: { post: postMock } };
+});
+
+// ReplyContainer is the only consumer of these, reached from the default export below; the
+// banner's wiring can only be exercised by rendering the whole reply, which needs them stubbed.
+vi.mock('@client/app/contexts/SessionsContext', () => ({
+  useSessions: () => ({ currentSessionId: 'session-1', currentSession: null, setCurrentSession: vi.fn() }),
+  useWorkBenchFiles: () => [],
+  useWorkBenchActions: () => ({ setWorkBenchFiles: vi.fn() }),
+}));
+vi.mock('@client/app/contexts/UserSettingsContext', () => ({
+  useUserSettings: () => ({ settings: {} }),
+}));
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({ isFeatureEnabled: () => false }),
+}));
+vi.mock('@client/app/hooks/useMessageEditMode', () => {
+  const state = { editingMessageId: undefined, editTarget: undefined, clearEdit: vi.fn() };
+  return { useMessageEditMode: (selector: (s: typeof state) => unknown) => selector(state) };
+});
+
+describe('retrieval-floor banner wiring in a rendered reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const rejection = { floorPct: 75, measuredPct: 58, embeddingModel: 'text-embedding-3-small' };
+
+  const renderReply = (promptMeta: Record<string, unknown>) =>
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies
+            messageData={
+              { id: 'quest-1', questMasterReply: 'answer with no citations', status: 'streaming', promptMeta } as never
+            }
+            onSendMessage={async () => {}}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+
+  it('shows the banner when the floor emptied the turn and nothing was cited', () => {
+    renderReply({ retrievalFloorRejection: rejection });
+    expect(screen.getByTestId('retrieval-floor-warning')).toBeInTheDocument();
+  });
+
+  it('hides the banner once the turn cited a source', () => {
+    renderReply({
+      retrievalFloorRejection: rejection,
+      // A knowledge tool can ground the turn after forced retrieval came back empty, so a cited
+      // reply is not one the reader should be told used no library.
+      citables: [{ id: 'https://example.com/doc', type: 'web_url', title: 'Doc' }],
+    });
+    expect(screen.queryByTestId('retrieval-floor-warning')).toBeNull();
+  });
 });
 
 describe('classifyGeneratedFiles', () => {

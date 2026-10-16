@@ -863,6 +863,17 @@ export const RetrievalCoverageSchema = z.object({
   reasons: z.array(z.string()),
 });
 
+/**
+ * Written only when forced retrieval injected nothing because every scored passage fell under an
+ * absolute floor an operator configured above the one measured for the embedding space. Single
+ * producer (ChatCompletionFeatures, the no-match exit); the chat banner reads it.
+ */
+export const RetrievalFloorRejectionSchema = z.object({
+  floorPct: z.number(),
+  measuredPct: z.number(),
+  embeddingModel: z.string(),
+});
+
 // Main PromptMeta Schema
 export const PromptMetaZodSchema = z.object({
   model: PromptMetaModelSchema.optional(),
@@ -875,6 +886,8 @@ export const PromptMetaZodSchema = z.object({
   /** Partial-grounding-coverage detail - see RetrievalCoverageSchema. Top-level for the same
    * one-level-spread-merge reason as `retrieval` above. */
   retrievalCoverage: RetrievalCoverageSchema.optional(),
+  /** See RetrievalFloorRejectionSchema. Top-level for the same reason as `retrieval` above. */
+  retrievalFloorRejection: RetrievalFloorRejectionSchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
   /**
    * Names of the tools actually offered to the model this turn - the output of `buildTools`
