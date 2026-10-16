@@ -573,7 +573,26 @@ export const SSRF_BLOCKED_CODE = 'ERR_SSRF_BLOCKED_ADDRESS';
  * round, but it means "the URL validated and then the connection was blocked" is reachable in normal
  * operation and is NOT evidence that the pin is broken.
  */
-export const ssrfSafeLookup: LookupFunction = (hostname, options, callback) => {
+export const ssrfSafeLookup: LookupFunction = createSsrfSafeLookup();
+
+/**
+ * Builds a connect-time lookup with the `ssrfSafeLookup` policy. `isAllowedPrivate` lets a caller admit
+ * specific private addresses (the self-host CIDR opt-in in `pinnedFetch.ts`); every address it does not
+ * admit is judged exactly as `ssrfSafeLookup` judges it.
+ */
+export function createSsrfSafeLookup(
+  options: { isAllowedPrivate?: (address: string, family: number) => boolean } = {}
+): LookupFunction {
+  const { isAllowedPrivate } = options;
+  return (hostname, lookupOptions, callback) => ssrfSafeLookupImpl(hostname, lookupOptions, callback, isAllowedPrivate);
+}
+
+function ssrfSafeLookupImpl(
+  hostname: string,
+  options: dns.LookupOptions,
+  callback: Parameters<LookupFunction>[2],
+  isAllowedPrivate?: (address: string, family: number) => boolean
+): void {
   // `all: true` regardless of what the caller asked for, because a single-address lookup would only
   // let us judge the address Node preferred and leave the rest of the record unexamined. The
   // caller's shape is restored below.
@@ -599,7 +618,9 @@ export const ssrfSafeLookup: LookupFunction = (hostname, options, callback) => {
       return;
     }
 
-    const privateHit = addresses.find(entry => isPrivateIP(entry.address));
+    const privateHit = addresses.find(
+      entry => isPrivateIP(entry.address) && !isAllowedPrivate?.(entry.address, entry.family)
+    );
     if (privateHit) {
       const blocked: NodeJS.ErrnoException = new Error(
         `Blocked connection to private IP address (${privateHit.address}) for hostname ${hostname}`
@@ -620,7 +641,7 @@ export const ssrfSafeLookup: LookupFunction = (hostname, options, callback) => {
     // back is the order to honour. This hook judges addresses; it does not re-rank them.
     callback(null, addresses[0].address, addresses[0].family);
   });
-};
+}
 
 /**
  * Agents that pin every connection through `ssrfSafeLookup`.

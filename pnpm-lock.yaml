@@ -1378,6 +1378,9 @@ importers:
       tiktoken:
         specifier: ^1.0.22
         version: 1.0.22
+      undici:
+        specifier: ^7.29.0
+        version: 7.29.1
       unpdf:
         specifier: ^1.6.2
         version: 1.6.2(@napi-rs/canvas@0.1.100)
