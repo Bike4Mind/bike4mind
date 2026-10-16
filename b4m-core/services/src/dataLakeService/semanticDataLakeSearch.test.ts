@@ -3229,8 +3229,8 @@ describe('semanticDataLakeSearch multi-lake budget fairness', () => {
       } as never
     );
     expect(result.scan.filesByLake).toEqual({ 'datalake:r': 3, 'datalake:a': 3 });
-    // r2 (prefix-only) sits in the registry bucket, so it takes the registry lake's second turn;
-    // as its own bucket it would trail r3.
+    // r2 (prefix-only) shares the registry bucket, so it waits for round 1. As its own bucket the
+    // registry lake would get a second turn in round 0 (r1 and r2 before a1).
     expect(findVectors.mock.calls[0][0]).toEqual(['r1', 'a1', 'r2', 'a2', 'r3', 'a3']);
   });
 

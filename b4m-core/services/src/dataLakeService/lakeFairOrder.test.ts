@@ -154,6 +154,26 @@ describe('orderFilesFairlyAcrossLakes', () => {
     expect(ids(ordered)).toEqual(['r1', 'd1', 'r2', 'd2', 'r3', 'd3', 'r4', 'd4']);
   });
 
+  it('gives a membership-arm dynamic lake one share next to a paired registry lake', () => {
+    const regScopes = lakeOrderScopes({
+      dataLakeTags: ['datalake:reg', 'datalake:dyn'],
+      dataLakeTagPrefixes: ['reg:'],
+      lakeMemberships: [{ datalakeTag: 'datalake:dyn', fileTagPrefix: 'dyn:' }],
+      lakes: [{ datalakeTag: 'datalake:reg', fileTagPrefix: 'reg:' }],
+    });
+    const files = [
+      file('r1', 'datalake:reg'),
+      file('r2', 'reg:x'),
+      file('r3', 'reg:y'),
+      file('d1', 'dyn:x'),
+      file('d2', 'datalake:dyn'),
+      file('d3', 'dyn:y'),
+    ];
+    const { ordered, filesByLake } = orderFilesFairlyAcrossLakes(files, regScopes, tagsOf);
+    expect(filesByLake).toEqual({ 'datalake:reg': 3, 'datalake:dyn': 3 });
+    expect(ids(ordered)).toEqual(['r1', 'd1', 'r2', 'd2', 'r3', 'd3']);
+  });
+
   it('keeps a file meta-tagged into a dynamic lake in that lake even when it also carries a registry prefix', () => {
     const regScopes = lakeOrderScopes({
       dataLakeTags: ['datalake:reg', 'datalake:dyn'],
