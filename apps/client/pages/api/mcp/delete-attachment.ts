@@ -122,8 +122,16 @@ const handler = baseApi().post(async (req, res) => {
       filename,
     });
 
-    // Drop the entry so the stored list matches what is left on the remote item.
-    await Quest.updateOne({ _id: quest._id }, { $pull: { 'attachmentList.attachments': { id: attachmentId } } });
+    // Drop the entry so the stored list matches what is left on the remote item. The attachment is
+    // already gone, so a failure here is bookkeeping only and must not turn the response into an error.
+    try {
+      await Quest.updateOne({ _id: quest._id }, { $pull: { 'attachmentList.attachments': { id: attachmentId } } });
+    } catch (storeError) {
+      logger.warn('[Web MCP Delete] Deleted remotely but failed to prune the stored attachment list', {
+        error: storeError instanceof Error ? storeError.message : String(storeError),
+        attachmentId,
+      });
+    }
 
     // For Confluence: clean up page content to remove macros referencing the deleted attachment
     if (source === 'confluence' && pageId) {
