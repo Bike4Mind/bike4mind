@@ -22,6 +22,15 @@ describe('presentAgentsForViewer', () => {
     expect(presented[1]).not.toHaveProperty('tavernSessionId');
   });
 
+  it('strips tavernSessionId from an agent with no owner', async () => {
+    const orgAgent = { id: 'agent-org', userId: undefined, tavernSessionId: 'session-org' } as unknown as IAgent;
+
+    const [presented] = await presentAgentsForViewer([orgAgent], 'viewer');
+
+    expect(presented).toMatchObject({ id: 'agent-org' });
+    expect(presented).not.toHaveProperty('tavernSessionId');
+  });
+
   it('redacts the avatar-refreshed agents, not the originals', async () => {
     refreshAgentAvatarUrls.mockImplementation(async (agents: IAgent[]) =>
       agents.map(a => ({ ...a, visual: { portraitUrl: 'fresh' } }))
