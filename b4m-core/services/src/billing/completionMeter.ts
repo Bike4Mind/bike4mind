@@ -1,5 +1,5 @@
 import type { IMessage, ModelInfo } from '@bike4mind/common';
-import type { CompletionInfo, ICompletionBackend } from '@bike4mind/llm-adapters';
+import { resolveOutputMaxTokens, type CompletionInfo, type ICompletionBackend } from '@bike4mind/llm-adapters';
 import { BadRequestError, DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
 
 export type CompletionUsage = Pick<
@@ -86,10 +86,19 @@ export function meterCompletionBackend<T extends Pick<ICompletionBackend, 'compl
     // A bound model set is the admitted set: pricing an unlisted id as modelInfo would undercharge it.
     const callModel = models ? models.find(m => m.id === model) : modelInfo;
     if (!callModel) throw new BadRequestError(`Model "${model}" is not in the metered model set`);
-    const metered = await meter(callModel, messages, options.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS, models);
+    // The hold and the provider cap must be one number: an uncapped call can otherwise run past the
+    // hold, and settlement clamps to it. Sized by the same rule the adapters use (see cliCompletions),
+    // so a model that reasons inside its output budget is not starved by a flat 4096.
+    const maxTokens = resolveOutputMaxTokens({
+      requested: options.maxTokens,
+      fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+      modelInfo: callModel,
+      modelMaxOutputTokens: callModel.max_tokens,
+    });
+    const metered = await meter(callModel, messages, maxTokens, models);
     const usage: CompletionUsage = {};
     return withMeteredCompletion(metered, usage, () =>
-      llm.complete(model, messages, options, async (text, info) => {
+      llm.complete(model, messages, { ...options, maxTokens }, async (text, info) => {
         latchUsage(usage, info);
         await callback(text, info);
       })

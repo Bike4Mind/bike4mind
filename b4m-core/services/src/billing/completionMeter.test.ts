@@ -42,6 +42,22 @@ describe('meterCompletionBackend', () => {
     expect(seen).toEqual(['a', 'b']);
   });
 
+  it('caps the provider at the reserved output budget when the caller names none', async () => {
+    const { llm, meter, metered } = setup(async () => {});
+    await metered.complete('m', [], {}, async () => {});
+    expect(meter).toHaveBeenCalledWith(modelInfo, [], 4096, undefined);
+    expect(llm.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 4096 });
+  });
+
+  it('sizes the hold and the cap for a model that reasons inside its output budget', async () => {
+    const adaptive = { id: 'a', backend: 'anthropic', thinkingStyle: 'adaptive', max_tokens: 128_000 } as ModelInfo;
+    const { llm, meter, metered } = setup(async () => {}, [adaptive]);
+    await metered.complete('a', [], {}, async () => {});
+    const reserved = meter.mock.calls[0][2];
+    expect(reserved).toBe(64_000);
+    expect(llm.complete.mock.calls[0][2]).toMatchObject({ maxTokens: reserved });
+  });
+
   it('never calls the provider when the reservation is refused', async () => {
     const { llm, meter, metered } = setup(async () => {});
     meter.mockRejectedValue(Object.assign(new Error('insufficient'), { statusCode: 422 }));

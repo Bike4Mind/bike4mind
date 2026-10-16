@@ -7,15 +7,15 @@ const m = vi.hoisted(() => ({
   assertOwnerCanAfford: vi.fn(),
 }));
 
-vi.mock('./missions', () => ({
+vi.mock('@server/deepAgent/missions', () => ({
   findAgentsByName: m.findAgentsByName,
   enrollMissionForAgent: m.enrollMissionForAgent,
   formatMissionStatusReport: vi.fn(),
   listMissionsForAgent: vi.fn(),
 }));
-vi.mock('./store', () => ({ MongoDeepAgentStore: class {} }));
-vi.mock('./firstWake', () => ({ runMissionFirstWake: m.runMissionFirstWake }));
-vi.mock('./wakeMetering', () => ({ assertOwnerCanFundWake: m.assertOwnerCanAfford }));
+vi.mock('@server/deepAgent/store', () => ({ MongoDeepAgentStore: class {} }));
+vi.mock('@server/deepAgent/firstWake', () => ({ runMissionFirstWake: m.runMissionFirstWake }));
+vi.mock('@server/deepAgent/wakeMetering', () => ({ assertOwnerCanFundWake: m.assertOwnerCanAfford }));
 
 import { insufficientCreditsError } from '@bike4mind/common';
 import { missionChatTools } from './missionChatTools';

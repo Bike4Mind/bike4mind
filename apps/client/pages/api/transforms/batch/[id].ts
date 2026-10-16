@@ -30,8 +30,9 @@ const handler = baseApi().get(async (req, res) => {
   // Short-circuit: once completed, results are cached on the row - return them
   // without re-streaming the (potentially large) JSONL from Anthropic on every
   // poll. The consumer typically polls completed once, but this also makes the
-  // poll idempotent + cheap if it retries.
-  if (batch.status === 'completed' && batch.results?.length) {
+  // poll idempotent + cheap if it retries. An empty array is a stored zero-result batch; only an
+  // absent field means the results were never written.
+  if (batch.status === 'completed' && Array.isArray(batch.results)) {
     return res.json({
       batch_id: anthropicBatchId,
       status: 'completed',

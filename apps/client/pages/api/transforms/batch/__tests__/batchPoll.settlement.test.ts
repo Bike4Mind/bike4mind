@@ -194,8 +194,18 @@ describe('GET /api/transforms/batch/:id settlement', () => {
     expect(body.results).toEqual([{ client_ref: 'a', status: 'done', reply: 'x' }]);
   });
 
-  it('re-streams results for a completed row that has none stored, without settling', async () => {
+  it('serves a stored zero-result batch without contacting Anthropic', async () => {
     m.batch = { ...m.batch, status: 'completed', results: [] };
+
+    const body = await poll();
+
+    expect(m.getBatchResults).not.toHaveBeenCalled();
+    expect(m.settle).not.toHaveBeenCalled();
+    expect(body.results).toEqual([]);
+  });
+
+  it('re-streams results for a completed row that has none stored, without settling', async () => {
+    m.batch = { ...m.batch, status: 'completed', results: undefined };
 
     const body = await poll();
 
