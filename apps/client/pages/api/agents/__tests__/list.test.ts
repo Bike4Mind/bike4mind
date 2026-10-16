@@ -44,4 +44,18 @@ describe('GET /api/agents', () => {
     expect(data[1]).toMatchObject({ id: 'shared' });
     expect(data[1]).not.toHaveProperty('tavernSessionId');
   });
+
+  // A shared viewer must not be able to sort by the redacted field to learn its order.
+  it('falls back to a safe sort when given an unknown orderBy', async () => {
+    const json = vi.fn();
+    await h.handler!({ user: { id: 'viewer' }, query: { orderBy: 'tavernSessionId' } }, { json });
+
+    expect(h.searchAccessible).toHaveBeenCalledWith(
+      'viewer',
+      '',
+      {},
+      { page: 1, limit: 10 },
+      { by: 'updatedAt', direction: 'desc' }
+    );
+  });
 });
