@@ -37,7 +37,13 @@ export function buildKnowledgeModerationDeps(
         { new: true }
       );
       return claimed
-        ? { _id: claimed._id, id: claimed.id, mimeType: claimed.mimeType, moderationClaimedAt: claimedAt }
+        ? {
+            _id: claimed._id,
+            id: claimed.id,
+            mimeType: claimed.mimeType,
+            sourceMetadata: claimed.sourceMetadata,
+            moderationClaimedAt: claimedAt,
+          }
         : null;
     },
     // Both writers below are guarded on the claim stamp, not on 'scanning' alone: the rescue sweep
@@ -85,6 +91,7 @@ export function buildKnowledgeModerationDeps(
       });
       return res.deletedCount > 0;
     },
+    measureSize: async filePath => (await storage.getMetadata(filePath)).size ?? Number.POSITIVE_INFINITY,
     downloadBytes: filePath => storage.download(filePath),
     downloadPartialBytes: (filePath, length) => storage.downloadRange(filePath, length),
   };

@@ -409,3 +409,25 @@ describe('objectCreated - storage charge', () => {
     expect(h.changeStorageSize).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('objectCreated - ai:generate-only uploads', () => {
+  const generateUploadPassed = () => h.moderateUploadedFile.mock.calls[0][0].generateUpload;
+
+  beforeEach(() => {
+    h.findOneAndUpdate.mockResolvedValue({ id: 'ff1', moderationStatus: 'scanning' });
+  });
+
+  it('scans a marked file under the generate-upload constraint', async () => {
+    h.findOne.mockResolvedValue(
+      metadata({ moderationStatus: 'pending', sourceMetadata: { uploadedVia: 'ai-generate-key-upload' } })
+    );
+    await run('k.png');
+    expect(generateUploadPassed()).toBeDefined();
+  });
+
+  it('scans an unmarked file without it', async () => {
+    h.findOne.mockResolvedValue(metadata({ moderationStatus: 'pending' }));
+    await run('k.png');
+    expect(generateUploadPassed()).toBeUndefined();
+  });
+});
