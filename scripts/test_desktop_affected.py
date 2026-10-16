@@ -53,6 +53,34 @@ class DesktopAffectedTest(unittest.TestCase):
         self.commit('fix: shared', 'b4m-core/leaf/src/index.ts')
         self.assertTrue(affected(self.base, 'HEAD'))
 
+    def test_desktop_docs_only_skips(self):
+        self.commit('docs(desktop): document integration', 'apps/desktop/SPARKLE-INTEGRATION.md')
+        self.assertFalse(affected(self.base, 'HEAD'))
+
+    def test_desktop_runtime_change_runs(self):
+        self.commit('fix(desktop): update runtime', 'apps/desktop/src/main/index.ts')
+        self.assertTrue(affected(self.base, 'HEAD'))
+
+    def test_docs_beside_runtime_change_runs(self):
+        Path('apps/desktop/README.md').write_text('change\n')
+        self.commit('fix(desktop): update runtime and docs', 'apps/desktop/src/main/index.ts')
+        self.assertTrue(affected(self.base, 'HEAD'))
+
+    def test_dependency_docs_only_skips(self):
+        self.commit('docs: document shared package', 'b4m-core/leaf/README.md')
+        self.assertFalse(affected(self.base, 'HEAD'))
+
+    def test_desktop_renamed_runtime_file_to_markdown_runs(self):
+        source = Path('apps/desktop/src/main/feature.ts')
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text('\n'.join(f'export const v{index} = {index};' for index in range(40)) + '\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'feat(desktop): add runtime module')
+        base = self.git('rev-parse', 'HEAD')
+        self.git('mv', 'apps/desktop/src/main/feature.ts', 'apps/desktop/src/main/feature.md')
+        self.git('commit', '-qm', 'docs(desktop): turn module into notes')
+        self.assertTrue(affected(base, 'HEAD'))
+
     def test_unrelated_lock_resolution_skips(self):
         self.lock['packages']['web-only@1.0.0'] = {'resolution': {'integrity': 'changed'}}
         self.lock['importers']['apps/client']['dependencies']['web-only']['version'] = '2.0.0'
