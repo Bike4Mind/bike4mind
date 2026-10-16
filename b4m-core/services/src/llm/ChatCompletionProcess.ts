@@ -1778,7 +1778,9 @@ export class ChatCompletionProcess {
     musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
     /**
      * Caller-side cancellation (e.g. the wait=true request deadline). Aborts the turn the same
-     * way the cancel watcher does, so the error path rolls back reserved credits and settles it.
+     * way the cancel watcher does: process() releases or reconciles its own credit reservation,
+     * but writes no further quest state, so the caller must settle the quest (see the wait path
+     * in apps/client/pages/api/chat.ts).
      */
     abortSignal?: AbortSignal;
   }) {
@@ -6388,6 +6390,10 @@ export class ChatCompletionProcess {
       // Rollback reserved credits if we never completed reconciliation
       await this.releaseReservedCredits(questId, logger);
       if (abortSignal?.aborted) {
+        // Drain any in-flight save before handing the quest's terminal state to the caller: a
+        // heartbeat that cleared the fence just before the abort would otherwise write `running`
+        // back over the caller's settle. Every save after this returns early (still fenced).
+        await questSaveMutex.runExclusive(async () => {});
         // The caller ended the turn and settles the quest from what streamed; an error reply
         // written here would be kept as content (and saveQuest is fenced anyway).
         logger.warn(`Quest ${questId} ended by caller abort`, { error: err });
