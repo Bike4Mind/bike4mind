@@ -1,8 +1,15 @@
 import { QueryClient } from '@tanstack/react-query';
 import type { MusicGeneration } from '@bike4mind/common';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { musicJob } from './__test__/musicGenerationFixtures';
-import { patchMusicGeneration, upsertMusicGeneration } from './musicGenerationCache';
+import {
+  patchMusicGeneration,
+  prependMusicGeneration,
+  reconcileFetchedMusicGeneration,
+  seedMusicGeneration,
+  upsertMusicGeneration,
+  type MusicGenerationList,
+} from './musicGenerationCache';
 import { musicGenerationKeys } from './musicGenerationKeys';
 
 const LATER = '2026-10-07T00:01:00.000Z';
@@ -62,5 +69,84 @@ describe('upsertMusicGeneration', () => {
     queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'cancelled' }));
     upsertMusicGeneration(queryClient, musicJob({ state: 'running', updated_at: LATER }));
     expect(detail()?.state).toBe('cancelled');
+  });
+});
+
+// The card read 'Cancelling' after the song had finished: the websocket frame wrote 'succeeded' (keeping the cached
+// updated_at), then a response read before it - but stamped later - arrived and was written over it.
+describe('a cancel racing the job to completion', () => {
+  const cancelResponse = () => musicJob({ state: 'running', updated_at: LATER });
+
+  it('keeps the finished job when the cancel response lands after the success frame', () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running' }));
+    patchMusicGeneration(queryClient, { id: 'music-1', state: 'succeeded' });
+    upsertMusicGeneration(queryClient, cancelResponse());
+    expect(detail()?.state).toBe('succeeded');
+  });
+
+  it('keeps the finished job when a detail refetch read before the success frame lands after it', () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running' }));
+    patchMusicGeneration(queryClient, { id: 'music-1', state: 'succeeded' });
+    expect(reconcileFetchedMusicGeneration(queryClient, cancelResponse()).state).toBe('succeeded');
+  });
+
+  it('keeps a storing job when the cancel response, read while it ran, lands after the storing frame', () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running' }));
+    patchMusicGeneration(queryClient, { id: 'music-1', state: 'storing' });
+    upsertMusicGeneration(queryClient, cancelResponse());
+    expect(detail()?.state).toBe('storing');
+  });
+});
+
+// A sync submit marks the song `running`, then the engine resets a retryable submit failure to `pending` so it can be
+// retried and cancelled again. The card must take that newer snapshot; the frames `patch` refuses are not the only
+// way it hears about the reset.
+describe('a sync submit the engine resets for a retry', () => {
+  it('takes a strictly newer pending over the cached running', () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running' }));
+    const reset = musicJob({ state: 'pending', updated_at: LATER });
+    expect(reconcileFetchedMusicGeneration(queryClient, reset)).toBe(reset);
+    upsertMusicGeneration(queryClient, reset);
+    expect(detail()?.state).toBe('pending');
+  });
+
+  it('still refuses a pending snapshot that is not newer', () => {
+    queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'running', updated_at: LATER }));
+    expect(reconcileFetchedMusicGeneration(queryClient, musicJob({ state: 'pending' })).state).toBe('running');
+  });
+});
+
+describe('music gallery list', () => {
+  const listOf = (...jobs: MusicGeneration[]): MusicGenerationList => ({
+    pages: [{ data: jobs, next_cursor: null }],
+    pageParams: [undefined],
+  });
+  const listed = () => queryClient.getQueryData<MusicGenerationList>(musicGenerationKeys.list)?.pages[0].data;
+
+  it('patches a listed job that has no detail entry, and reports it as cached', () => {
+    queryClient.setQueryData(musicGenerationKeys.list, listOf(musicJob({ state: 'pending' })));
+    expect(patchMusicGeneration(queryClient, { id: 'music-1', state: 'running' })).toBe(true);
+    expect(listed()?.[0].state).toBe('running');
+  });
+
+  it('prepends a created job once, even when the create is replayed', () => {
+    queryClient.setQueryData(musicGenerationKeys.list, listOf(musicJob({ id: 'old' })));
+    prependMusicGeneration(queryClient, musicJob({ id: 'new' }));
+    prependMusicGeneration(queryClient, musicJob({ id: 'new' }));
+    expect(listed()?.map(job => job.id)).toEqual(['new', 'old']);
+    expect(detail('new')?.id).toBe('new');
+  });
+
+  it('refetches, rather than writes, a list that has not loaded', () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    prependMusicGeneration(queryClient, musicJob({ id: 'new' }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: musicGenerationKeys.list });
+    expect(queryClient.getQueryData(musicGenerationKeys.list)).toBeUndefined();
+  });
+
+  it('seeds a listed job into its detail entry unless the cache holds a newer one', () => {
+    seedMusicGeneration(queryClient, musicJob({ state: 'succeeded', updated_at: LATER }));
+    seedMusicGeneration(queryClient, musicJob({ state: 'running' }));
+    expect(detail()?.state).toBe('succeeded');
   });
 });

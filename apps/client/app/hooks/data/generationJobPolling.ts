@@ -47,19 +47,27 @@ export const movesLiveStateBackwards = (from: GenerationJobState, to: Generation
   return fromRank !== undefined && toRank !== undefined && toRank < fromRank;
 };
 
-// A terminal job is final, and a snapshot read earlier (a list request that was in flight while a detail
-// refetch landed) must not replace a later one.
+// A terminal job is final, a live one never steps back, and a snapshot read earlier (a list request that was in
+// flight while a detail refetch landed) must not replace a later one. The state checks come before the timestamps
+// because a websocket patch keeps the cached updated_at: a snapshot read before the frame, but stamped after it (the
+// cancel response, which bumps updated_at), would otherwise win.
 export const shouldReplaceGenerationJob = <T extends Pick<PollableGenerationJob, 'state' | 'updated_at'>>(
   existing: T | undefined,
   incoming: T
 ): boolean => {
   if (!existing) return true;
   if (isTerminalGenerationState(existing.state) && !isTerminalGenerationState(incoming.state)) return false;
-  const incomingAt = Date.parse(incoming.updated_at);
-  const existingAt = Date.parse(existing.updated_at);
-  // A websocket patch keeps the cached updated_at, so a list row read before the frame ties with it.
-  if (incomingAt === existingAt && movesLiveStateBackwards(existing.state, incoming.state)) return false;
-  return incomingAt >= existingAt;
+  if (movesLiveStateBackwards(existing.state, incoming.state)) {
+    // A sync submit marks the job `running` before the provider answers; a retryable failure then resets it to
+    // `pending` with submitAttemptedAt cleared, so the engine accepts a cancel and retries it
+    // (b4m-core/services/src/generationJobs/engine.ts). Take that newer snapshot so the card stops showing a stale
+    // `running` with Cancel hidden. Frames carry no newer timestamp and are still refused by `patch`.
+    if (existing.state === 'running' && incoming.state === 'pending') {
+      return Date.parse(incoming.updated_at) > Date.parse(existing.updated_at);
+    }
+    return false;
+  }
+  return Date.parse(incoming.updated_at) >= Date.parse(existing.updated_at);
 };
 
 /** The fallback poll for one job; live updates normally arrive over the websocket (GenerationUpdatesListener). */
@@ -84,4 +92,17 @@ export function generationJobPollInterval(
     return msUntil(job.output.expires_at, DETAIL_URL_REFRESH_LEAD_MS, now);
   }
   return false;
+}
+
+/** When a gallery list must refetch to re-sign the earliest-expiring URL on its pages, or false when none expires. */
+export function generationListRefreshInterval(
+  list: { pages: { data: Pick<PollableGenerationJob, 'output'>[] }[] } | undefined,
+  now: number
+): number | false {
+  const expiries = (list?.pages ?? [])
+    .flatMap(page => page.data)
+    .flatMap(job => (job.output?.availability === 'ready' && job.output.expires_at ? [job.output.expires_at] : []));
+  if (expiries.length === 0) return false;
+  const earliest = expiries.reduce((a, b) => (Date.parse(a) <= Date.parse(b) ? a : b));
+  return msUntil(earliest, LIST_URL_REFRESH_LEAD_MS, now);
 }
