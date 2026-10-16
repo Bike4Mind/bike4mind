@@ -287,7 +287,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     REASONING_EFFORT
   );
   const access = new AccessStore(join(userData, 'tool-access.json'));
-  // App-wide like approval-mode.json; see SidebarSectionStore for why it is not scoped.
+  // App-wide like approval-mode.json; see SidebarSectionStore.
   const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
   const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
   // The trust file is its own file beside tool-access.json, and for the same reason: both record

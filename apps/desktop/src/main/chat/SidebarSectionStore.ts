@@ -28,7 +28,11 @@ function sanitize(stored: z.infer<typeof storedSchema>): SidebarSectionsState {
   return { sections, assignments };
 }
 
-/** Sections and assignments in userData, unscoped by account; an unreadable file reads as empty. */
+/**
+ * Sections and assignments in userData, app-wide like approval-mode.json rather than per account,
+ * so a second account on this machine sees the first one's section names. An unreadable file
+ * reads as empty.
+ */
 export class SidebarSectionStore {
   private state: SidebarSectionsState | null = null;
   private loading: Promise<SidebarSectionsState> | null = null;
