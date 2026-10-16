@@ -193,6 +193,16 @@ export class ChatCompletionInvoke {
     // The warning-free variant, because Process still resolves params.model and owns the
     // [model-sunset] log and metric; calling the logging one here would count each redirect twice.
     const resolvedModelId = resolveSuccessorChain(params.model);
+    // API-key callers keep the provider convention: a retired id that is hidden or disabled is
+    // rejected (naming its successor), not rerouted. Access below is still checked on the id that runs.
+    if (authOrigin === 'apiKey' && resolvedModelId !== params.model) {
+      const requested = modelInfo.find(m => m.id === params.model);
+      if (!requested || requested.disabled) {
+        throw new BadRequestError(
+          `Invalid model: "${params.model}" is not available; it is replaced by "${resolvedModelId}"`
+        );
+      }
+    }
     const model = modelInfo.find(m => m.id === resolvedModelId);
     if (!model) throw new BadRequestError(`Invalid model: "${params.model}" is not available`);
     // A disabled model is still listed (so the picker can show it greyed out) but must never
