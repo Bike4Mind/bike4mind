@@ -334,11 +334,14 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
 
 /**
  * 504 for a `wait: true` turn that ran past the request deadline. The turn is already settled
- * (timed out, unused credits refunded) when this is sent; `quest_id` is the quest to poll.
+ * (timed out, unused credits refunded) when this is sent; `quest_id` is the quest to poll and
+ * `sessionId` is the notebook the turn was recorded in, so a caller that sent no `sessionId` can
+ * continue the conversation it just started (same field name as the ACK and the `wait: true` body).
  */
 export const ChatWaitTimeoutErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal(REQUEST_TIMEOUT_ERROR_CODE),
   quest_id: z.string(),
+  sessionId: z.string().optional(),
 });
 
 /**

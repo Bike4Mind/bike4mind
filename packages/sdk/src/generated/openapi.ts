@@ -1280,6 +1280,7 @@ export interface components {
       /** @enum {string} */
       errorCode: 'request_timeout';
       quest_id: string;
+      sessionId?: string;
     };
     /**
      * @example {

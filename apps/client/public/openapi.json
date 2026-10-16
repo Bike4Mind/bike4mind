@@ -723,6 +723,9 @@
           },
           "quest_id": {
             "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
           }
         },
         "required": [

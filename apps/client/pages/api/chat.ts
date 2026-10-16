@@ -283,7 +283,7 @@ const handler = nextRouteForContract(chatContract, {
       });
       const timeoutError = new GatewayTimeoutError(
         'This turn ran past the wait=true deadline and was ended. Send long turns without wait and poll the quest.',
-        { errorCode: REQUEST_TIMEOUT_ERROR_CODE, quest_id: quest.id }
+        { errorCode: REQUEST_TIMEOUT_ERROR_CODE, quest_id: quest.id, sessionId }
       );
       // A deadline we enforce on purpose, not a server fault: errorHandler logs it at warn.
       timeoutError.expected = true;

@@ -1300,7 +1300,12 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
 
     const expectTimeoutResponse = (res: { _getStatusCode(): number; _getJSONData(): Record<string, unknown> }) => {
       expect(res._getStatusCode()).toBe(504);
-      expect(res._getJSONData()).toMatchObject({ errorCode: 'request_timeout', quest_id: 'quest-2' });
+      expect(res._getJSONData()).toMatchObject({
+        errorCode: 'request_timeout',
+        quest_id: 'quest-2',
+        // So a caller that sent no sessionId can continue the notebook it just opened.
+        sessionId: 'sess-1',
+      });
       expect(res._getJSONData().error).toEqual(expect.any(String));
     };
 
