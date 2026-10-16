@@ -10,22 +10,25 @@ const T0 = Date.parse('2026-10-16T12:00:00.000Z');
 function setup(
   enabled = true,
   repository: { owner: string; name: string } | null = { owner: 'acme', name: 'app' },
-  model: string | null = 'claude-opus-5'
+  model: string | null = 'claude-opus-5',
+  lookUpModel: () => Promise<string | null> = async () => model
 ) {
   let now = T0;
   let n = 0;
   const recorded: ActivityEvent[] = [];
+  const modelFor = vi.fn(lookUpModel);
   const recorder = new ActivityRecorder({
     enabled: () => enabled,
     record: events => recorded.push(...events),
     repositoryFor: vi.fn(async () => repository),
-    modelFor: vi.fn(async () => model),
+    modelFor,
     now: () => now,
     newId: () => `event-${String(++n).padStart(4, '0')}`,
   });
   return {
     recorder,
     recorded,
+    modelFor,
     advance: (ms: number) => {
       now += ms;
     },
@@ -176,20 +179,59 @@ describe('ActivityRecorder usage', () => {
     expect(recorded[0]).toMatchObject({ usage: { model: 'claude-opus-5', creditsMilli: 10_000 } });
   });
 
-  it('counts a resumed reply once: the second run adds only what is new', async () => {
+  it('counts a continued reply once: a resumed run reports only what it added', async () => {
     const { recorder, recorded } = setup();
-    recorder.observe(ev({ type: 'start' }));
-    recorder.observe(ev({ type: 'done', content: '', usage: usage({ creditsUsed: 100, inputTokens: 1000 }) }));
-    await vi.waitFor(() => expect(recorded.length).toBeGreaterThan(0));
-    const first = recorded.length;
-
-    recorder.observe(ev({ type: 'start' }));
+    recorder.observe(ev({ type: 'start', baseUsage: usage({ creditsUsed: 100, inputTokens: 1000 }) }));
     recorder.observe(ev({ type: 'done', content: '', usage: usage({ creditsUsed: 160, inputTokens: 1800 }) }));
-    await vi.waitFor(() => expect(recorded.length).toBeGreaterThan(first));
+    await vi.waitFor(() => expect(recorded.length).toBeGreaterThan(0));
 
-    const sessions = recorded.filter(event => event.type === 'session');
-    expect(sessions).toHaveLength(2);
-    expect(sessions[1]).toMatchObject({ usage: { creditsMilli: 60_000, inputTokens: 800 } });
+    expect(recorded[0]).toMatchObject({ type: 'session', usage: { creditsMilli: 60_000, inputTokens: 800 } });
+  });
+
+  it('counts a resumed reply once even after a restart', async () => {
+    const first = setup();
+    first.recorder.observe(ev({ type: 'start' }));
+    first.recorder.observe(ev({ type: 'done', content: '', usage: usage({ creditsUsed: 20, inputTokens: 10_000 }) }));
+    await vi.waitFor(() => expect(first.recorded.length).toBeGreaterThan(0));
+    expect(first.recorded[0]).toMatchObject({ usage: { creditsMilli: 20_000, inputTokens: 10_000 } });
+
+    // A relaunch remembers nothing, so the resumed run's own totals are all the new recorder sees
+    // of the earlier part - the conversation is what says where the run started.
+    const restarted = setup();
+    restarted.recorder.observe(ev({ type: 'start', baseUsage: usage({ creditsUsed: 20, inputTokens: 10_000 }) }));
+    restarted.recorder.observe(
+      ev({ type: 'done', content: '', usage: usage({ creditsUsed: 40, inputTokens: 70_000 }) })
+    );
+    await vi.waitFor(() => expect(restarted.recorded.length).toBeGreaterThan(0));
+    expect(restarted.recorded[0]).toMatchObject({ usage: { creditsMilli: 20_000, inputTokens: 60_000 } });
+  });
+
+  it('sends the session record without usage for a reply that reported none', async () => {
+    const { recorder, recorded } = setup(true, null);
+    recorder.observe(ev({ type: 'start' }));
+    recorder.observe(ev({ type: 'error', message: 'boom' }));
+    await vi.waitFor(() => expect(recorded).toHaveLength(1));
+    expect(recorded[0]).toMatchObject({ type: 'session' });
+    expect(recorded[0]).not.toHaveProperty('usage');
+  });
+
+  it('ignores an end it never saw a start for', async () => {
+    const { recorder, recorded } = setup(true, null);
+    recorder.observe(ev({ type: 'done', content: '', usage: usage() }));
+    recorder.observe(ev({ type: 'error', message: 'boom' }));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(recorded).toEqual([]);
+  });
+
+  it('keeps the session record when the model lookup fails', async () => {
+    const { recorder, recorded } = setup(true, null, 'claude-opus-5', async () => {
+      throw new Error('that conversation is gone');
+    });
+    recorder.observe(ev({ type: 'start' }));
+    recorder.observe(ev({ type: 'done', content: '', usage: usage() }));
+    await vi.waitFor(() => expect(recorded).toHaveLength(1));
+    expect(recorded[0]).toMatchObject({ type: 'session' });
+    expect(recorded[0]).not.toHaveProperty('usage');
   });
 });
 
@@ -200,6 +242,7 @@ describe('ActivityRecorder usage, disabled', () => {
     off.recorder.observe(ev({ type: 'done', content: '', usage: usage() }));
     await new Promise(resolve => setTimeout(resolve, 10));
     expect(off.recorded).toEqual([]);
+    expect(off.modelFor).not.toHaveBeenCalled();
   });
 });
 

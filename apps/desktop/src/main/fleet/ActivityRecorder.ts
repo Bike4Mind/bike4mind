@@ -9,10 +9,7 @@ import {
   type ActivityEvent,
 } from './activityContract';
 import type { RepositoryName } from './repository';
-import { mergeTotals, toReplyUsage, usageTotals, type UsageTotals } from './replyUsage';
-
-/** Replies whose reported usage is remembered, so a resumed reply adds only what is new. */
-const MAX_REPORTED_REPLIES = 200;
+import { toReplyUsage, usageTotals, type UsageTotals } from './replyUsage';
 
 export interface ActivityRecorderDeps {
   /** False while consent is off or no key is set; nothing is derived or looked up then. */
@@ -32,6 +29,8 @@ interface OpenTurn {
   startedAt: number;
   edited: boolean;
   model: Promise<string | null>;
+  /** Where this run began, from the stream's `start`: a resumed run reports only what it added. */
+  base: UsageTotals;
   /** The latest running total the stream reported, kept for a reply that ends in an error. */
   usage: UsageTotals | null;
 }
@@ -45,7 +44,6 @@ interface OpenTurn {
  */
 export class ActivityRecorder {
   private readonly turns = new Map<string, OpenTurn>();
-  private readonly reported = new Map<string, UsageTotals>();
 
   constructor(private readonly deps: ActivityRecorderDeps) {}
 
@@ -72,6 +70,7 @@ export class ActivityRecorder {
         startedAt: this.now(),
         edited: false,
         model: this.deps.modelFor(event.sessionId).catch(() => null),
+        base: usageTotals(event.baseUsage),
         usage: null,
       });
       return;
@@ -115,9 +114,7 @@ export class ActivityRecorder {
   private async closeTurn(turn: OpenTurn, totals: UsageTotals | null): Promise<void> {
     const occurredAt = new Date(turn.startedAt).toISOString();
     const durationMs = clampDuration(this.now() - turn.startedAt);
-    const before = this.reported.get(turn.messageId);
-    const usage = totals ? toReplyUsage(await turn.model, totals, before) : null;
-    if (totals) this.remember(turn.messageId, before ? mergeTotals(before, totals) : totals);
+    const usage = totals ? toReplyUsage(await turn.model, totals, turn.base) : null;
     const events: ActivityEvent[] = [
       {
         eventId: this.id(),
@@ -140,15 +137,6 @@ export class ActivityRecorder {
       });
     }
     if (this.deps.enabled()) this.deps.record(events);
-  }
-
-  private remember(messageId: string, totals: UsageTotals): void {
-    this.reported.delete(messageId);
-    this.reported.set(messageId, totals);
-    for (const oldest of this.reported.keys()) {
-      if (this.reported.size <= MAX_REPORTED_REPLIES) break;
-      this.reported.delete(oldest);
-    }
   }
 
   /** A reply that never reported an end must not hold its entry forever. */
