@@ -4974,13 +4974,85 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
         library
       );
       const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
-      await scopedFeature.getContextMessages(
+      const messages = await scopedFeature.getContextMessages(
         withFiles,
         embeddingFactory as unknown as Parameters<typeof scopedFeature.getContextMessages>[1],
         'compare the attached draft with the lake'
       );
       expect(retrievalOf(withFiles)).toMatchObject({ attempted: true, mode: 'forced' });
       expect(retrievalOf(withFiles)?.forcedSkipReason).toBeUndefined();
+      // The exemption is about grounding the turn, not merely attempting it: the passage the query
+      // matches is injected, so the lake really is searched alongside the attachment.
+      expect(retrievalOf(withFiles)?.outcome).toBe('ok');
+      expect(messages[0]?.content).toContain('### A.pdf (ID: fileA)');
+    });
+
+    it('abstains on a lake-chosen attachment turn that finds no passage', async () => {
+      // Orthogonal to the [1,0] query, so nothing clears the floor and the turn grounds on nothing.
+      const ctx = makeCtx({
+        lakes: [LAKE],
+        rows: ids => ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [0, 1] })),
+      });
+      const scopedFeature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x'],
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      const messages = await scopedFeature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof scopedFeature.getContextMessages>[1],
+        'compare the attached draft with the lake'
+      );
+      // A lake-chosen attachment turn can now draw the abstention block, where before it never did.
+      // That is a user-visible change on a newly reached population, so it is pinned here.
+      expect(retrievalOf(withFiles)?.outcome).toBe('ok');
+      expect(messages[0]?.content).toContain('does not cover this');
+    });
+
+    it('still skips an attachment turn scoped by a tag that names no lake', async () => {
+      // A bare tag count would treat a content tag as a chosen lake and ground the turn across every
+      // reachable lake - the off-topic case the skip exists to prevent.
+      const contentTagFeature = new KnowledgeRetrievalFeature(
+        makeCtx({ lakes: [LAKE] }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['course-bio101'],
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await contentTagFeature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof contentTagFeature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      expect(retrievalOf(withFiles)?.forcedSkipReason).toBe('attached_files');
+    });
+
+    it('still skips an attachment turn with no tags and the library off', async () => {
+      // The "all lakes" shape: an empty scope with the library off names no lake, so there is no
+      // chosen lake to ground against and the attachment stays the source.
+      const emptyScopeFeature = new KnowledgeRetrievalFeature(
+        makeCtx({ lakes: [LAKE] }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        false
+      );
+      const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+      await emptyScopeFeature.getContextMessages(
+        withFiles,
+        embeddingFactory as unknown as Parameters<typeof emptyScopeFeature.getContextMessages>[1],
+        'summarize the attached figure'
+      );
+      expect(retrievalOf(withFiles)?.forcedSkipReason).toBe('attached_files');
     });
 
     it('still skips an attachment turn when the tags were only derived from attaching a lake file', async () => {
