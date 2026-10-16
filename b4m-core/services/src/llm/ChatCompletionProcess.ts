@@ -3071,6 +3071,9 @@ export class ChatCompletionProcess {
         sessionAgentIds: session.agentIds,
         message,
         delegatableAgentNames: fullAgentStore.getAgentNames(),
+        // Names cannot gate this tool (it is pushed as an object), so a denylist entry for it only
+        // takes effect in the final build pass - read it here too, and skip the section entirely.
+        deniedTools,
       });
       // All three delegation surfaces (the tool schema in sharedToolBuilder, the "Agent Delegation"
       // section of the tool prompt, and `promptMeta.offeredTools`) key off the `agentStore` below,
