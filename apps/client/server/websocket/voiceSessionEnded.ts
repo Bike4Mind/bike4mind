@@ -153,39 +153,33 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     // (apps/workers/src/cron/voiceHoldSweep.ts) exactly one settles it, and a failure leaves the
     // hold open for the sweep. Only a realtime hold: an ElevenLabs hold must not settle at the
     // realtime floor from this frame.
-    let charged: number | null;
+    // Logged after the transaction: its callback may run more than once (a transient retry).
+    type CloseSettlement = { credits: number; capped: boolean; floor: number | null };
+    let closed: CloseSettlement | null;
+    const SIXTY_MIN_MS = 60 * 60 * 1000;
+    const elapsedSeconds = Math.floor(elapsedMs / 1000);
     try {
-      charged = await withTransaction(async () => {
+      closed = await withTransaction(async (): Promise<CloseSettlement | null> => {
         const claimed = await sessionRepository.claimVoiceHold(session.id, startedAt, { realtimeOnly: true });
         if (!claimed) return null;
         const billed = claimed.billedCredits ?? 0;
         let credits = reportedCredits;
 
         // 60-min hard cap: a call that ran over pays at most what is left of its hold
-        const SIXTY_MIN_MS = 60 * 60 * 1000;
-        if (elapsedMs > SIXTY_MIN_MS && session.voiceReservedCredits != null) {
-          logger.warn(`Voice session ${sessionId} exceeded 60-min cap - clamping credits`, {
-            actualCredits: credits,
-            voiceReservedCredits: reserved,
-            durationMinutes: Math.round(elapsedMs / 60000),
-          });
+        const capped = elapsedMs > SIXTY_MIN_MS && session.voiceReservedCredits != null;
+        if (capped) {
           credits = Math.min(credits, Math.max(0, reserved - billed));
         }
 
         // Client-reported usage can only raise the settlement: a call never settles below the hold's
         // own rate for the time it has been open by the server's clock, so a zero-usage frame sent
         // mid-call still pays for that call.
-        const elapsedSeconds = Math.floor(elapsedMs / 1000);
         const floor = realtimeCreditsFloor(
           session.voiceReservedCredits ?? usdToCredits(REALTIME_VOICE_RESERVE_USD),
           elapsedSeconds
         );
-        if (billed + credits < floor) {
-          logger.info(`voiceSessionEnded: session ${sessionId} settled at its connected-time floor`, {
-            reportedCredits: billed + credits,
-            floor,
-            elapsedSeconds,
-          });
+        const floored = billed + credits < floor;
+        if (floored) {
           credits = floor - billed;
         }
 
@@ -203,17 +197,30 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
             transactionId: `realtime-voice-close:${sessionId}:${startedAt.toISOString()}`,
           });
         }
-        return credits;
+        return { credits, capped, floor: floored ? floor : null };
       }, VOICE_TRANSACTION_OPTIONS);
     } catch (err) {
       if (!isVoiceLedgerKeyTaken(err)) throw err;
-      charged = null;
+      closed = null;
     }
-    if (charged === null) {
+    if (closed === null) {
       logger.warn(`voiceSessionEnded: session ${sessionId} has no open realtime hold - ignoring`);
       return { statusCode: 200 };
     }
-    actualCredits = charged;
+    if (closed.capped) {
+      logger.warn(`Voice session ${sessionId} exceeded 60-min cap - clamping credits`, {
+        actualCredits: reportedCredits,
+        voiceReservedCredits: reserved,
+        durationMinutes: Math.round(elapsedMs / 60000),
+      });
+    }
+    if (closed.floor !== null) {
+      logger.info(`voiceSessionEnded: session ${sessionId} settled at its connected-time floor`, {
+        floor: closed.floor,
+        elapsedSeconds,
+      });
+    }
+    actualCredits = closed.credits;
   }
 
   // Dual-write usage event: analytics only, never billing.
