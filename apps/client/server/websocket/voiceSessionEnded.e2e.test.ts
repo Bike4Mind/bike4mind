@@ -183,4 +183,38 @@ describe('voiceSessionEnded on a real replica set', () => {
     await send(call, 5);
     expect(await charged(call.userId)).toBe(35);
   });
+
+  // The commit lands but its acknowledgement never reaches the handler; the frame is then retried.
+  const loseNextCommitAck = () => {
+    const realTransaction = mongoose.connection.transaction.bind(mongoose.connection);
+    vi.spyOn(mongoose.connection, 'transaction').mockImplementationOnce(async (fn, options) => {
+      await realTransaction(fn, options);
+      throw new Error('connection reset after commit');
+    });
+  };
+
+  it('a response retried after a committed debit does not debit again', async () => {
+    const call = await seedCall();
+    loseNextCommitAck();
+
+    await expect(send(call, 130, 'resp-1')).rejects.toThrow('connection reset after commit');
+    await send(call, 130, 'resp-1');
+
+    expect(await charged(call.userId)).toBe(130);
+    expect(await ledger(call.sessionId)).toHaveLength(1);
+    expect((await hold(call.sessionId))?.voiceBilledCredits).toBe(130);
+  });
+
+  it('a closing frame retried after a committed settlement does not move the balance again', async () => {
+    const call = await seedCall();
+    await send(call, 30, 'resp-1');
+    loseNextCommitAck();
+
+    await expect(send(call, 5)).rejects.toThrow('connection reset after commit');
+    await send(call, 5);
+
+    expect(await charged(call.userId)).toBe(35);
+    expect(await ledger(call.sessionId)).toHaveLength(2);
+    expect((await hold(call.sessionId))?.voiceSessionStartedAt ?? null).toBeNull();
+  });
 });
