@@ -243,6 +243,7 @@ export class AuthenticatedApiClient {
    * `rejectedAccessToken` is the access token the caller found wanting. When the store (re-read
    * from storage, not a cache) already holds a different, unexpired one, another flow or another
    * process refreshed first, and that token is returned with no exchange at all.
+   * A caller that passes no `rejectedAccessToken` never takes this adopt path: it always exchanges.
    *
    * Rejects with {@link SessionRevokedError} only when the refresh endpoint answered 400/401 -
    * the one case in which the stored tokens are cleared. Any other failure (network, timeout,
