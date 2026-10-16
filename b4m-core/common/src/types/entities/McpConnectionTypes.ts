@@ -408,10 +408,6 @@ export const MCP_CONNECTION_SLUG_PATTERN = /^(?=.{2,20}$)[a-z][a-z0-9]*(?:_[a-z0
  * only from built-ins), plus names that would read as first-party.
  */
 export const RESERVED_MCP_CONNECTION_SLUGS: ReadonlySet<string> = new Set([
-  'github',
-  'atlassian',
-  'notion',
-  'linkedin',
   'mcp',
   'b4m',
   'bike4mind',

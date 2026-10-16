@@ -40,6 +40,9 @@ describe('McpConnectionSlugSchema', () => {
       expect(isValidMcpConnectionSlug(name)).toBe(false);
     }
     expect(McpConnectionSlugSchema.safeParse('github').error?.issues[0]?.message).toBe('This slug is reserved');
+    for (const name of ['github', 'atlassian', 'notion', 'linkedin']) {
+      expect(RESERVED_MCP_CONNECTION_SLUGS.has(name)).toBe(true);
+    }
   });
 });
 
