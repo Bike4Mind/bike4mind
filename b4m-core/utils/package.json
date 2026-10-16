@@ -260,6 +260,7 @@
     "lodash": "^4.18.1",
     "mammoth": "^1.12.3",
     "mime-types": "^3.0.2",
+    "omggif": "^1.0.10",
     "openai": "^6.46.0",
     "tiktoken": "^1.0.22",
     "tldts": "^7.4.13",

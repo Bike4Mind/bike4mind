@@ -5,6 +5,7 @@ import {
 } from '@aws-sdk/client-rekognition';
 import { Logger } from '@bike4mind/observability';
 import { imagePixelCount, MAX_IMAGE_PIXELS } from '../imageResize';
+import { extractAnimationFrames } from './animatedFrames';
 
 /**
  * Rekognition top-level ("L1") categories we block on. Broadening is a policy change.
@@ -41,6 +42,9 @@ const MAX_ATTEMPTS = 3;
  * need full resolution) before the call. Margin kept under 5 MB for request overhead.
  */
 const MAX_INLINE_IMAGE_BYTES = 4.5 * 1024 * 1024;
+
+/** Frames of one animated image moderated at once. */
+const FRAME_CONCURRENCY = 5;
 
 export interface ModerationLabelHit {
   name: string;
@@ -189,7 +193,36 @@ export class RekognitionImageModerationService implements ImageModerationService
     return Buffer.from(await image.getBuffer('image/jpeg'));
   }
 
+  /**
+   * Rekognition reads only the first frame of an animated image, so an animated GIF, APNG or WebP is
+   * moderated frame by frame (see extractAnimationFrames): any flagged frame blocks the image, and
+   * one that cannot be split or is over the frame cap is unsupported, so blocked as well.
+   */
   async checkImage(bytes: Buffer, _mimeType: string): Promise<void> {
+    const frames = await extractAnimationFrames(bytes);
+    if (!frames) return this.checkStillImage(bytes);
+
+    // ponytail: up to MAX_MODERATED_FRAMES Rekognition calls per image; sample frames if cost matters.
+    const errors: unknown[] = [];
+    let next = 0;
+    const blocked = () => errors.some(e => e instanceof ImageModerationBlockedError);
+    await Promise.all(
+      Array.from({ length: Math.min(FRAME_CONCURRENCY, frames.length) }, async () => {
+        while (next < frames.length && !blocked()) {
+          const frame = frames[next++];
+          await this.checkStillImage(frame).catch(err => errors.push(err));
+        }
+      })
+    );
+    // A block outranks an unscannable frame, which outranks a transient failure; all fail closed.
+    const error =
+      errors.find(e => e instanceof ImageModerationBlockedError) ??
+      errors.find(e => e instanceof UnsupportedImageFormatError) ??
+      errors[0];
+    if (error) throw error;
+  }
+
+  private async checkStillImage(bytes: Buffer): Promise<void> {
     let image = await this.fitForInlineDetection(bytes);
     let triedTranscode = false;
     let lastError: unknown;
