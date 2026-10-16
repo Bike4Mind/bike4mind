@@ -215,6 +215,14 @@ describe('folderPathTagsForFile', () => {
     ]);
   });
 
+  it('never mints a folder tag that collides with the fallback stamp', () => {
+    expect(folderPathTagsForFile('uncategorized/x.md', 'gh-x:')).toEqual([]);
+    expect(folderPathTagsForFile('Uncategorized/x.md', 'gh-x:')).toEqual([]);
+    expect(folderPathTagsForFile('uncategorized/sub/x.md', 'gh-x:')).toEqual([
+      { name: 'gh-x:uncategorized:sub', strength: 1.0 },
+    ]);
+  });
+
   it('caps the depth', () => {
     const deep = Array.from({ length: MAX_FOLDER_PATH_TAG_SEGMENTS + 3 }, (_, i) => `d${i}`).join('/');
     const [only] = folderPathTagsForFile(`${deep}/x.md`, 'gh-x:');

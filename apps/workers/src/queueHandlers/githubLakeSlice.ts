@@ -228,6 +228,8 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
 
     // Resolved before the no-op return below so an unchanged copy synced before folder tagging
     // existed still heals; a copy re-ingested this run gets its tags from the ingest loop instead.
+    // Only a copy still wearing the stamp is that legacy shape: one without it had its folder tag
+    // removed or recategorized by a user, and re-adding it every sync would revert that edit.
     const folderPrefix = await resolveFolderTagPrefix(lake, logger);
     let writeAsserted = false;
     const assertWrite = async (): Promise<GitHubLakeSliceOutcome | null> => {
@@ -253,7 +255,8 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
       const heals = existing.flatMap(doc => {
         if (!doc.githubPath || leaving.has(doc.id)) return [];
         const [folderTag] = folderPathTagsForFile(doc.githubPath, folderPrefix);
-        return folderTag && !(doc.tags ?? []).some(tag => tag.name === folderTag.name) ? [{ doc, folderTag }] : [];
+        const names = new Set((doc.tags ?? []).map(tag => tag.name));
+        return folderTag && names.has(stamp) && !names.has(folderTag.name) ? [{ doc, folderTag }] : [];
       });
       for (const [index, { doc, folderTag }] of heals.entries()) {
         if (remainingMs() < GITHUB_LAKE_DEADLINE_BUFFER_MS) {

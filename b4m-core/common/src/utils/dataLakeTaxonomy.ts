@@ -4,6 +4,7 @@ import {
   MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH,
   MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG,
   MAX_TAXONOMY_MATCHING_FOLDER_LENGTH,
+  UNCATEGORIZED_TAG_SUFFIX,
 } from '../constants/dataLakes';
 import type {
   InferTaxonomyResponse,
@@ -162,11 +163,13 @@ export const MAX_FOLDER_PATH_TAG_SEGMENTS = 6;
  * One tag naming a file's whole directory path (`docs/api/x.md` -> `prefix:docs:api`), so the tag
  * tree mirrors the repo layout. Unlike `folderTagForFile`, `docs/api` and `src/api` stay distinct.
  * Returns [] for root-level files or a path whose every directory slugs to empty; depth is capped.
+ * A lone `uncategorized` dir also returns []: that name is the server-owned fallback stamp, which
+ * the stamp reconciler (fallbackLakeTags.ts) retracts by name.
  */
 export function folderPathTagsForFile(relativePath: string, tagPrefix: string): AppliedTag[] {
   const dirs = relativePath.split('/').filter(Boolean).slice(0, -1);
   const slugs = dirs.map(slugifySegment).filter(Boolean).slice(0, MAX_FOLDER_PATH_TAG_SEGMENTS);
-  if (slugs.length === 0) return [];
+  if (slugs.length === 0 || (slugs.length === 1 && slugs[0] === UNCATEGORIZED_TAG_SUFFIX)) return [];
   return [{ name: `${ensureColon(tagPrefix)}${slugs.join(':')}`, strength: 1.0 }];
 }
 
