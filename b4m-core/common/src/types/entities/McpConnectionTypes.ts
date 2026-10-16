@@ -300,7 +300,10 @@ export function mcpConnectionOwnerProblem(
   return credential ? `An org definition cannot carry ${credential}` : null;
 }
 
-/** Client-safe view: no ciphertext (the URL included), no lease. Token presence is reported as booleans only. */
+/**
+ * Client-safe view: no ciphertext (the URL included), no lease. Token presence comes from the
+ * persisted `hasAccessToken`/`hasRefreshToken` markers, since a default read never loads the tokens.
+ */
 export interface IMcpConnectionPublic {
   id: string;
   ownerType: McpConnectionOwnerType;
@@ -437,8 +440,12 @@ export interface McpConnectionOwner {
 
 export interface McpOAuthTokenUpdate {
   accessTokenEnc: string;
-  /** Omit to keep the stored refresh token (a server that does not rotate it). */
+  /**
+   * On a refresh, omit to keep the stored refresh token (a server that does not rotate it). On the
+   * initial exchange an omitted field is cleared, so nothing from a previous grant survives.
+   */
   refreshTokenEnc?: string;
+  /** On a refresh, omitted clears the stored expiry: an old, past expiry would force a refresh at once. */
   expiresAt?: Date;
   grantedScope?: string;
   tokenIssuer?: string;
@@ -447,7 +454,9 @@ export interface McpOAuthTokenUpdate {
 /**
  * Top-level fields the generic `update`/`updateGuarded`/`updateMany` refuse. They `$set` whole
  * fields, so writing `auth` back from a default read (where every `*Enc` is deselected) would wipe
- * the stored secrets; the lease and the owner identity have their own guarded writers or none.
+ * the stored secrets; the lease and the owner identity have their own guarded writers or none. The
+ * URL fields move together (`urlHost` is what the host policy checks, `urlEnc` is what is called),
+ * so a generic write of one of them could split the pair.
  */
 export const MCP_CONNECTION_PROTECTED_FIELDS = [
   'auth',
@@ -456,6 +465,9 @@ export const MCP_CONNECTION_PROTECTED_FIELDS = [
   'ownerKey',
   'userId',
   'organizationId',
+  'urlEnc',
+  'urlHost',
+  'displayUrl',
 ] as const;
 
 /** A generic repository write named a field only the dedicated McpConnection methods may touch. */

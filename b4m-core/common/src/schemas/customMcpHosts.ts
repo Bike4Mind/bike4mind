@@ -114,7 +114,7 @@ export const CLOUD_METADATA_ADDRESSES = [
 /** Why `raw` may not be allowed as a private network, or null when it may. */
 export function customMcpPrivateCidrProblem(raw: string): string | null {
   const cidr = parseCidr(raw);
-  if (!cidr) return 'Must be a CIDR such as 10.0.0.0/8 or fd00::/8';
+  if (!cidr) return 'Must be a CIDR such as 10.0.0.0/8 or fd12:3456::/32';
   const minPrefix = CUSTOM_MCP_MIN_CIDR_PREFIX[cidr.version];
   if (cidr.prefix < minPrefix) return `IPv${cidr.version} ranges must be /${minPrefix} or narrower`;
   const metadata = CLOUD_METADATA_ADDRESSES.find(address => cidrContains(cidr, address));
