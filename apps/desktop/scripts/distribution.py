@@ -65,7 +65,9 @@ def verify_linux(folder):
             raise ValueError('Builder Linux metadata differs from embedded AppImage metadata')
 
 
-def assemble(folder, version, repository, source):
+def assemble(folder, version, repository, source, mac_mode='signed'):
+    if mac_mode not in ('signed', 'adhoc'):
+        raise ValueError('Invalid macOS release mode')
     feed_url(repository, source)
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:-pr\.\d+\.\d+)?', version):
         raise ValueError('Invalid desktop version')
@@ -86,6 +88,9 @@ def assemble(folder, version, repository, source):
     # Pin payloads to this tag so a later Latest switch cannot invalidate an offered update.
     base = f'https://github.com/{repository}/releases/download/desktop-v{version}/'
     for manifest, names in [('latest-mac.yml', [zip_name, dmg]), ('latest-linux.yml', [image])]:
+        if manifest == 'latest-mac.yml' and mac_mode == 'adhoc':
+            (folder / manifest).unlink(missing_ok=True)
+            continue
         files = []
         for name in names:
             payload = (folder / name).read_bytes()
@@ -95,7 +100,7 @@ def assemble(folder, version, repository, source):
                 files[-1]['blockMapSize'] = embedded_blockmap_size(payload)
         document = {'version': version, 'files': files, 'path': files[0]['url'], 'sha512': files[0]['sha512']}
         (folder / manifest).write_text(yaml.safe_dump(document, sort_keys=False))
-    checksummed = sorted(assets + ['latest-mac.yml', 'latest-linux.yml'])
+    checksummed = sorted(assets + ['latest-linux.yml'] + (['latest-mac.yml'] if mac_mode == 'signed' else []))
     (folder / 'SHA256SUMS.txt').write_text(''.join(
         f'{hashlib.sha256((folder / name).read_bytes()).hexdigest()}  {name}\n' for name in checksummed))
 
@@ -112,4 +117,4 @@ if __name__ == '__main__':
             output.write(f'feed={url}\n')
             output.write(f'repository-name={repository.split("/")[1]}\n')
     else:
-        assemble(sys.argv[1], os.environ['DESKTOP_VERSION'], repository, source)
+        assemble(sys.argv[1], os.environ['DESKTOP_VERSION'], repository, source, os.environ['MAC_RELEASE_MODE'])

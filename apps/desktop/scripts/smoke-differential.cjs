@@ -53,6 +53,7 @@ async function main() {
         DESKTOP_VERSION: '0.2.3',
         DESKTOP_RELEASE_REPOSITORY: 'example/dist',
         GITHUB_REPOSITORY: 'example/source',
+        MAC_RELEASE_MODE: 'signed',
       },
     });
     const info = yaml.load(await fs.readFile(path.join(assets, 'latest-linux.yml'), 'utf8')).files[0];

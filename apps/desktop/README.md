@@ -195,15 +195,30 @@ partial manifest. Published assets are not overwritten on retry.
 3. Install a dedicated GitHub App on only that repository with Contents read/write.
    Set source variable `DESKTOP_RELEASE_APP_ID` and secret `DESKTOP_RELEASE_APP_PRIVATE_KEY`.
    The existing source release App and protected-tag bypass remain unchanged.
-4. Configure the five Apple secrets below and set `DESKTOP_MAC_SIGNING=true`. Missing,
-   empty, or false signing configuration blocks main distribution, not unsigned PR testing.
+4. Choose a macOS signing path. Set `DESKTOP_MAC_SIGNING=true` with the five Apple
+   secrets below for Developer ID signing and notarization. Alternatively, explicitly
+   set `DESKTOP_MAC_ADHOC_BETA=true` for account-free 0.x beta distribution. Unset,
+   false or malformed opt-ins deny publication; Apple signing takes precedence.
+   The ad-hoc path ships DMG/ZIP manual installers, disables macOS in-app updates
+   and omits `latest-mac.yml`. Linux metadata and updates remain enabled. Ad-hoc
+   signing provides bundle integrity, not publisher identity or notarization.
+   Fresh-download Gatekeeper acceptance remains untested; Open Anyway may be needed.
 5. Merge through review, then inspect the first trusted run's signatures, notarization,
    packaged startup evidence, and destination release asset set. Confirm anonymous
-   `latest-mac.yml` and `latest-linux.yml` downloads redirect successfully. CI logs record
+   `latest-linux.yml` downloads redirect successfully (also `latest-mac.yml` for
+   the Developer ID path only). CI logs record
    publication and tag operations; organization audit-log retention is managed separately.
 6. Test two signed versions using a temporary installation and profile. Check, download,
    and explicitly restart into the newer version. Never use a user's existing profile.
    Contract tests and local feed checks do not prove Squirrel.Mac signature acceptance.
+
+To disable account-free publication, unset `DESKTOP_MAC_ADHOC_BETA` before another
+run. To switch to Developer ID, configure its credentials and set
+`DESKTOP_MAC_SIGNING=true`; missing credentials fail rather than falling back to
+ad-hoc. Do not overwrite published assets or reuse a reserved version. Recover with
+a new higher 0.x version. Users of ad-hoc builds must install that recovery manually.
+Distribution App setup is still required independently of Apple. These opt-ins do
+not enable Sparkle or prove macOS auto-update compatibility.
 
 #### GitHub App setup (independent of Apple)
 
