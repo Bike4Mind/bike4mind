@@ -337,11 +337,11 @@ describe('ProfileMenu - focus after navigating', () => {
     fireEvent.click(screen.getByTestId('profile-menu-card'));
   };
 
-  it('keeps focus on the account card when the target is the page already open (API Keys on /profile)', () => {
-    router.pathname = '/profile';
+  it('keeps focus on the account card when the target is the page already open (Connections on /integrations)', () => {
+    router.pathname = '/integrations';
     openMenu();
-    fireEvent.click(screen.getByTestId('profile-menu-api-keys'));
-    expect(router.navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'api-keys' } });
+    fireEvent.click(screen.getByTestId('profile-menu-connections'));
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/integrations', search: { source: 'profile_menu' } });
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
     expect(document.activeElement).toBe(screen.getByTestId('profile-menu-card'));
   });
@@ -362,11 +362,56 @@ describe('ProfileMenu - focus after navigating', () => {
     expect(document.activeElement).toBe(document.body);
   });
 
-  it('opens the Integrations page, attributed to this menu, and closes the menu', () => {
+  it('opens the Connections page, attributed to this menu, and closes the menu', () => {
     router.pathname = '/new';
     openMenu();
-    fireEvent.click(screen.getByTestId('profile-menu-integrations'));
+    fireEvent.click(screen.getByTestId('profile-menu-connections'));
     expect(router.navigate).toHaveBeenCalledWith({ to: '/integrations', search: { source: 'profile_menu' } });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProfileMenu - Connections', () => {
+  beforeEach(() => {
+    router.pathname = '/new';
+    router.navigate.mockClear();
+  });
+
+  const openMenu = () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+  };
+
+  it('shows one Connections row in place of the separate Integrations and API Keys rows', () => {
+    openMenu();
+    expect(screen.getByTestId('profile-menu-connections')).toHaveTextContent('Connections');
+    expect(screen.queryByTestId('profile-menu-integrations')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('profile-menu-api-keys')).not.toBeInTheDocument();
+  });
+
+  it('explains the Connections row in a tooltip on hover', async () => {
+    openMenu();
+    fireEvent.mouseOver(screen.getByTestId('profile-menu-connections'));
+    expect(
+      await screen.findByText('Integrations like Google Drive and Slack, plus API keys for your own code')
+    ).toBeInTheDocument();
+  });
+
+  it('lists API Keys directly above API Docs in More and opens the API Keys tab', () => {
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-more'));
+    const keys = screen.getByTestId('profile-more-api-keys');
+    expect(keys.nextElementSibling).toBe(screen.getByTestId('profile-more-api-docs'));
+
+    fireEvent.click(keys);
+    expect(router.navigate).toHaveBeenCalledWith({
+      to: '/integrations',
+      search: { tab: 'api-keys', source: 'profile_menu' },
+    });
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
   });
 });
