@@ -291,6 +291,16 @@ describe('admin/scoped-settings forced-retrieval minimum above the measured one'
     await invoke('put', orgFloor(58));
     expect(writeScopedOverride.mock.calls.map(call => call[2])).toEqual(['75', '58']);
   });
+
+  it('lets an out-of-range value reach the write service instead of refusing it as above the floor', async () => {
+    // 150 fails the setting's own schema (1-100, int). Refusing it as "above the 58% floor" first
+    // would be a second, unrelated 400 after the value is already known to be invalid.
+    const message = "[scopedSettings] value for 'forcedRetrievalMinSimilarityPct' failed validation: 150";
+    writeScopedOverride.mockRejectedValue(new Error(message));
+
+    await expect(invoke('put', orgFloor(150))).rejects.toThrow(message);
+    expect(writeScopedOverride).toHaveBeenCalled();
+  });
 });
 
 describe('admin/scoped-settings inventory', () => {

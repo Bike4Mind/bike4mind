@@ -14,6 +14,7 @@ export async function refuseFloorAboveMeasured(pct: number, logger: Logger): Pro
   const measured = forcedRetrievalFloorAboveMeasured(pct, model);
   if (measured === undefined) return;
   throw new BadRequestError(
-    `${forcedRetrievalFloorAboveMeasuredMessage(pct, measured, model)} Confirm the change to save it anyway.`
+    `${forcedRetrievalFloorAboveMeasuredMessage(pct, measured, model)} ` +
+      'To save it anyway, resend with confirmAboveMeasuredFloor: true.'
   );
 }

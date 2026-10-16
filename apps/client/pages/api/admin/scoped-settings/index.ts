@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import { ApiKeyScope, CreditHolderType, SettingKeySchema, SettingScopeLevel } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, SettingKeySchema, SettingScopeLevel, settingsMap } from '@bike4mind/common';
 import { scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -98,8 +98,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     // schema (pickOverride), so String() is the exact round trip for all three scalar types.
     const settingValue = typeof value === 'string' ? value : String(value);
 
-    if (settingName === 'forcedRetrievalMinSimilarityPct' && confirmAboveMeasuredFloor !== true) {
-      await refuseFloorAboveMeasured(Number(settingValue), req.logger);
+    // Validate against the setting's own schema BEFORE the floor check, so an out-of-range value
+    // (150, 70.5) reports its range error rather than first being refused as above the floor - the
+    // same order `/api/settings/update` uses. `writeScopedOverride` still owns the rejection below;
+    // this only decides whether the floor check runs at all.
+    const parsedSetting = settingsMap[settingName].schema.safeParse(settingValue);
+    if (
+      settingName === 'forcedRetrievalMinSimilarityPct' &&
+      parsedSetting.success &&
+      confirmAboveMeasuredFloor !== true
+    ) {
+      await refuseFloorAboveMeasured(Number(parsedSetting.data), req.logger);
     }
 
     await runWrite(() =>
