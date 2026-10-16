@@ -993,7 +993,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         chunkAdapters
       );
       committedServerTextHash = prepared.serverTextHash;
-      return withTransaction(async () => fabFilesService.commitFabFileChunks(prepared, chunkAdapters));
+      // A connection dropped during a long prepare is recovered here, so it costs one more commit
+      // rather than an SQS redelivery an hour later that repeats the whole prepare.
+      return withTransaction(async () => fabFilesService.commitFabFileChunks(prepared, chunkAdapters), {
+        logger,
+        retryOnConnectionLoss: true,
+      });
     })().catch(async (err: unknown) => {
       // A stale-claim takeover already reassigned this file to a successor mid-run (#1802 Phase
       // 2) - not a failure, so this delivery must NOT count toward batch failure accounting or
