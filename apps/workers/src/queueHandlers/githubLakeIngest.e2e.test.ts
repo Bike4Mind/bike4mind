@@ -250,6 +250,49 @@ describe('githubLakeIngest end to end', () => {
     expect(tagNamesByPath(after)).toEqual({ 'examples/a.md': [datalakeTag, `${prefix}examples`].sort() });
   });
 
+  it('a manual sync heals an unchanged copy stamped before folder tagging, keeping user tags', async () => {
+    const { datalakeTag, prefix, connectionId } = await seed();
+    setRepo([
+      ['docs/x.md', 'legacy\n'],
+      ['README.md', '# Docs\n'],
+    ]);
+    await run({ connectionId });
+    const stamp = `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`;
+    await FabFile.updateOne(
+      { githubConnectionId: connectionId, githubPath: 'docs/x.md' },
+      {
+        $set: {
+          tags: [
+            { name: datalakeTag, strength: DATALAKE_TAG_STRENGTH },
+            { name: stamp, strength: 1 },
+            { name: 'user-tag', strength: 1 },
+          ],
+        },
+      }
+    );
+    const before = await FabFile.find({ githubConnectionId: connectionId }).lean();
+    const batchCount = () => mongoose.models.DataLakeBatch.countDocuments({});
+    const batchesBefore = await batchCount();
+    h.upload.mockClear();
+
+    await run({ connectionId, manual: true });
+
+    const after = await fabFileRepository.findByGitHubConnectionIdInDataLake(connectionId, datalakeTag);
+    expect(tagNamesByPath(after)).toEqual({
+      'docs/x.md': [datalakeTag, `${prefix}docs`, 'user-tag'].sort(),
+      'README.md': [datalakeTag, stamp].sort(),
+    });
+    expect(after.map(f => f.id).sort()).toEqual(before.map(f => String(f._id)).sort());
+    expect(await batchCount()).toBe(batchesBefore);
+    expect(h.upload).not.toHaveBeenCalled();
+
+    const healedAt = (await FabFile.findOne({ githubPath: 'docs/x.md', githubConnectionId: connectionId }).lean())
+      ?.updatedAt;
+    await run({ connectionId, manual: true });
+    const rerun = await FabFile.findOne({ githubPath: 'docs/x.md', githubConnectionId: connectionId }).lean();
+    expect(rerun?.updatedAt).toEqual(healedAt);
+  });
+
   it('a non-manual re-sync with no new commit is a no-op', async () => {
     const { connectionId } = await seed();
     setRepo([['README.md', '# Docs\n']]);

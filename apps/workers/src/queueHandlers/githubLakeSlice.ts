@@ -21,6 +21,7 @@ import {
   type IOrgGitHubLakeConnectionDocument,
   type IUserDocument,
   type LakeSkippedFileReason,
+  UNCATEGORIZED_TAG_SUFFIX,
 } from '@bike4mind/common';
 import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
@@ -225,6 +226,46 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
       membershipChanged = true;
     }
 
+    // Resolved before the no-op return below so an unchanged copy synced before folder tagging
+    // existed still heals; a copy re-ingested this run gets its tags from the ingest loop instead.
+    const folderPrefix = await resolveFolderTagPrefix(lake, logger);
+    let writeAsserted = false;
+    const assertWrite = async (): Promise<GitHubLakeSliceOutcome | null> => {
+      if (writeAsserted) return null;
+      try {
+        await assertConnectorLakeWrite(lake, membershipActor, connection.connectedBy, logger);
+      } catch (refusal) {
+        if (!(refusal instanceof BadRequestError)) throw refusal;
+        return { kind: 'refused', batchId: priorOrAdoptedBatchId, message: refusal.message };
+      }
+      writeAsserted = true;
+      return null;
+    };
+    if (folderPrefix) {
+      const leaving = new Set(
+        [
+          ...toIngest.flatMap(({ prior }) => (prior ? [prior] : [])),
+          ...diff.removed,
+          ...duplicateRetires.map(d => d.duplicate),
+        ].map(doc => doc.id)
+      );
+      const stamp = `${folderPrefix}${UNCATEGORIZED_TAG_SUFFIX}`;
+      const heals = existing.flatMap(doc => {
+        if (!doc.githubPath || leaving.has(doc.id)) return [];
+        const [folderTag] = folderPathTagsForFile(doc.githubPath, folderPrefix);
+        return folderTag && !(doc.tags ?? []).some(tag => tag.name === folderTag.name) ? [{ doc, folderTag }] : [];
+      });
+      for (const [index, { doc, folderTag }] of heals.entries()) {
+        if (remainingMs() < GITHUB_LAKE_DEADLINE_BUFFER_MS) {
+          return { kind: 'deadline', batchId: priorOrAdoptedBatchId, remaining: heals.length - index };
+        }
+        const refused = await assertWrite();
+        if (refused) return refused;
+        await fabFileRepository.pushTagsByFabFileId(doc.id, [folderTag.name], folderTag.strength);
+        await fabFileRepository.pullTagsByFabFileId(doc.id, [stamp]);
+      }
+    }
+
     if (toIngest.length === 0) {
       // No batch this run to record them into (one isn't created for skips alone - see the loop
       // below), so a persistent oversized file doesn't churn a fresh batch on every no-op sync.
@@ -237,12 +278,8 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
       return { kind: 'done', batchId: priorOrAdoptedBatchId, transientSkips: 0 };
     }
 
-    try {
-      await assertConnectorLakeWrite(lake, membershipActor, connection.connectedBy, logger);
-    } catch (refusal) {
-      if (!(refusal instanceof BadRequestError)) throw refusal;
-      return { kind: 'refused', batchId: priorOrAdoptedBatchId, message: refusal.message };
-    }
+    const refused = await assertWrite();
+    if (refused) return refused;
 
     const batch =
       adoptedBatch ??
@@ -281,7 +318,6 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
       db: { dataLakes: dataLakeRepository },
       logger,
     });
-    const folderPrefix = await resolveFolderTagPrefix(lake, logger);
     let acceptedBytes = 0;
     let transientSkips = 0;
     const skip = async (githubPath: string, reason: LakeSkippedFileReason, size?: number) => {
