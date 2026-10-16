@@ -138,6 +138,15 @@ describe('McpConnectionModel', () => {
       );
     });
 
+    it('stores the URL host lowercase and without a trailing dot', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection({ urlHost: ' MCP.Linear.APP. ' }));
+      expect(created.urlHost).toBe('mcp.linear.app');
+    });
+
+    it('refuses a reserved slug at the schema level', async () => {
+      await expect(mcpConnectionRepository.create(baseConnection({ slug: 'github' }))).rejects.toThrow();
+    });
+
     it('refuses a slug outside the grammar at the schema level', async () => {
       await expect(mcpConnectionRepository.create(baseConnection({ slug: 'bad__slug' }))).rejects.toThrow(/slug/);
       await expect(mcpConnectionRepository.create(baseConnection({ slug: 'trailing_' }))).rejects.toThrow(/slug/);
@@ -209,7 +218,7 @@ describe('McpConnectionModel', () => {
       expect(JSON.stringify(view)).not.toMatch(/enc:/);
       expect(view).not.toHaveProperty('urlEnc');
       expect(view.displayUrl).toBe('https://mcp.linear.app/mcp');
-      expect(view.auth.oauth).toMatchObject({ hasAccessToken: true, hasRefreshToken: true });
+      expect(view.auth.oauth).not.toHaveProperty('hasAccessToken');
       expect(view).not.toHaveProperty('refreshLease');
     });
   });
@@ -278,6 +287,38 @@ describe('McpConnectionModel', () => {
       await expect(mcpConnectionRepository.updateMany({}, { auth: { kind: 'none' } })).rejects.toThrow(
         McpConnectionProtectedFieldError
       );
+    });
+
+    it('refuses the URL fields, which only move together', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+
+      for (const patch of [
+        { urlEnc: 'enc:other-url' },
+        { urlHost: 'other.example.com' },
+        { displayUrl: 'https://x' },
+      ]) {
+        await expect(mcpConnectionRepository.update({ id: created.id, ...patch })).rejects.toThrow(
+          McpConnectionProtectedFieldError
+        );
+      }
+      expect((await mcpConnectionRepository.findById(created.id))?.urlHost).toBe('mcp.linear.app');
+    });
+
+    it('runs the schema validators, so a generic write cannot store what create refuses', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+
+      for (const slug of ['bad__x', 'bad_', 'github']) {
+        await expect(mcpConnectionRepository.update({ id: created.id, slug })).rejects.toThrow(
+          mongoose.Error.ValidationError
+        );
+      }
+      await expect(
+        mcpConnectionRepository.update({ id: created.id, status: 'bogus' as IMcpConnectionDocument['status'] })
+      ).rejects.toThrow(mongoose.Error.ValidationError);
+      await expect(mcpConnectionRepository.updateMany({ _id: created.id }, { slug: 'bad__x' })).rejects.toThrow(
+        mongoose.Error.ValidationError
+      );
+      expect((await mcpConnectionRepository.findById(created.id))?.slug).toBe('linear');
     });
 
     it('still writes unprotected fields', async () => {
@@ -490,7 +531,7 @@ describe('McpConnectionModel', () => {
       });
       expect(secretValues(stored)).toEqual([]);
       const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
-      expect(withCreds?.auth.oauth).toMatchObject({ accessTokenEnc: 'enc:access-2', refreshTokenEnc: 'enc:refresh' });
+      expect(withCreds?.auth.oauth?.accessTokenEnc).toBe('enc:access-2');
 
       const key = await mcpConnectionRepository.create(apiKeyConnection());
       expect(await mcpConnectionRepository.setInitialOAuthTokens(key.id, { accessTokenEnc: 'enc:x' })).toBeNull();
@@ -724,6 +765,42 @@ describe('McpConnectionModel', () => {
         accessTokenEnc: 'enc:access-new',
         refreshTokenEnc: 'enc:refresh-new',
       });
+    });
+
+    it('a reconnect clears what the new grant did not return and voids an in-flight refresh', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await McpConnection.updateOne(
+        { _id: created.id },
+        { $set: { 'auth.oauth.expiresAt': new Date(Date.now() - 1000), 'auth.oauth.grantedScope': 'read' } }
+      );
+      await mcpConnectionRepository.acquireRefreshLease(created.id, 'old-grant');
+
+      await mcpConnectionRepository.setInitialOAuthTokens(created.id, { accessTokenEnc: 'enc:access-new' });
+
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      expect(withCreds?.auth.oauth?.accessTokenEnc).toBe('enc:access-new');
+      expect(withCreds?.auth.oauth?.refreshTokenEnc).toBeUndefined();
+      expect(withCreds?.auth.oauth?.expiresAt).toBeUndefined();
+      expect(withCreds?.auth.oauth?.grantedScope).toBeUndefined();
+      expect(withCreds?.refreshLease).toBeUndefined();
+      expect(
+        await mcpConnectionRepository.completeRefresh(created.id, 'old-grant', { accessTokenEnc: 'enc:access-stale' })
+      ).toBeNull();
+    });
+
+    it('a refresh that returns no expiry clears the stored one and keeps an unrotated refresh token', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await McpConnection.updateOne(
+        { _id: created.id },
+        { $set: { 'auth.oauth.expiresAt': new Date(Date.now() - 1000) } }
+      );
+      await mcpConnectionRepository.acquireRefreshLease(created.id, 'a');
+
+      await mcpConnectionRepository.completeRefresh(created.id, 'a', { accessTokenEnc: 'enc:access-2' });
+
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      expect(withCreds?.auth.oauth?.expiresAt).toBeUndefined();
+      expect(withCreds?.auth.oauth?.refreshTokenEnc).toBe('enc:refresh');
     });
 
     it('only the holder can release, and release frees the lease', async () => {

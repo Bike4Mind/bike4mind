@@ -92,9 +92,15 @@ describe('toMcpConnectionPublic', () => {
     expect(MCP_CONNECTION_SECRET_PATHS).toContain('urlEnc');
   });
 
-  it('reports token presence and the key tail only', () => {
+  it('reports no token presence and only the key tail', () => {
     const view = toMcpConnectionPublic(doc);
-    expect(view.auth.oauth).toMatchObject({ hasAccessToken: true, hasRefreshToken: true, clientMode: 'manual' });
+    expect(view.auth.oauth).toEqual({
+      issuer: doc.auth.oauth!.issuer,
+      scopes: doc.auth.oauth!.scopes,
+      clientMode: 'manual',
+      expiresAt: doc.auth.oauth!.expiresAt,
+      grantedScope: doc.auth.oauth!.grantedScope,
+    });
     expect(view.auth.apiKey).toEqual({ headerName: 'X-Api-Key', scheme: 'raw', last4: 'wxyz' });
   });
 

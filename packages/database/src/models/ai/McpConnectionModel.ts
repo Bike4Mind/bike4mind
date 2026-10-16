@@ -29,6 +29,7 @@ import {
   MCP_OAUTH_CLIENT_MODES,
   MCP_TOOL_APPROVAL_MODES,
   MCP_TOOL_STATES,
+  isValidMcpConnectionSlug,
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
@@ -67,6 +68,12 @@ function toolsWithinBounds(tools: unknown): boolean {
 
 const serverInfoField = { type: String, maxlength: MCP_CONNECTION_LIMITS.serverInfoFieldLength };
 
+const MCP_CONNECTION_DETECTED_TRANSPORTS = MCP_CONNECTION_TRANSPORTS.filter(transport => transport !== 'auto');
+
+function normalizeUrlHost(host: string): string {
+  return host.trim().toLowerCase().replace(/\.$/, '');
+}
+
 // Secrets are `select: false` (see MCP_CONNECTION_SECRET_PATHS); credential reads opt back in.
 // `aggregate()`, `distinct()` and the raw driver collection bypass `select: false`: never point one
 // at this collection without an explicit projection that drops every secret path.
@@ -78,13 +85,20 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
     organizationId: { type: String },
     definitionId: { type: String },
     presetId: { type: String },
-    slug: { type: String, required: true, match: MCP_CONNECTION_SLUG_PATTERN },
+    slug: {
+      type: String,
+      required: true,
+      match: MCP_CONNECTION_SLUG_PATTERN,
+      validate: { validator: isValidMcpConnectionSlug, message: 'This slug is reserved' },
+    },
     displayName: { type: String, required: true, maxlength: MCP_CONNECTION_LIMITS.displayNameLength },
     urlEnc: { type: String, required: true, select: false },
     displayUrl: { type: String, required: true },
-    urlHost: { type: String, required: true },
+    // Host-policy patterns are lowercase with no trailing dot, so store the host the same way:
+    // `evil.com.` must not slip past a blocklist entry for `evil.com`.
+    urlHost: { type: String, required: true, set: normalizeUrlHost },
     transport: { type: String, enum: MCP_CONNECTION_TRANSPORTS, default: 'auto' },
-    detectedTransport: { type: String, enum: ['streamable-http', 'sse'] },
+    detectedTransport: { type: String, enum: MCP_CONNECTION_DETECTED_TRANSPORTS },
     auth: {
       kind: { type: String, enum: MCP_CONNECTION_AUTH_KINDS, required: true },
       oauth: {
@@ -231,6 +245,12 @@ function assertNoProtectedFields(data: Record<string, unknown>, options?: Record
   }
 }
 
+// The base repository does not run schema validators on its updates; force them here so a generic
+// write cannot store a slug, status or enum value that `create` would have refused.
+function withValidators(options?: RepositoryUpdateOptions<ConnectionDoc>): RepositoryUpdateOptions<ConnectionDoc> {
+  return { ...options, runValidators: true };
+}
+
 function isOwnerSlugDuplicate(error: unknown): boolean {
   const mongoError = error as { code?: number; keyPattern?: Record<string, unknown>; message?: string };
   return (
@@ -239,13 +259,23 @@ function isOwnerSlugDuplicate(error: unknown): boolean {
   );
 }
 
-function oauthTokenSet(tokens: McpOAuthTokenUpdate): Record<string, unknown> {
-  const set: Record<string, unknown> = { 'auth.oauth.accessTokenEnc': tokens.accessTokenEnc };
-  if (tokens.refreshTokenEnc !== undefined) set['auth.oauth.refreshTokenEnc'] = tokens.refreshTokenEnc;
-  if (tokens.expiresAt !== undefined) set['auth.oauth.expiresAt'] = tokens.expiresAt;
-  if (tokens.grantedScope !== undefined) set['auth.oauth.grantedScope'] = tokens.grantedScope;
-  if (tokens.tokenIssuer !== undefined) set['auth.oauth.tokenIssuer'] = tokens.tokenIssuer;
-  return set;
+const OAUTH_TOKEN_FIELDS = ['refreshTokenEnc', 'expiresAt', 'grantedScope', 'tokenIssuer'] as const;
+
+/**
+ * The `$set`/`$unset` for a token write. `clearOmitted` names the optional fields an omission clears
+ * rather than keeps (see McpOAuthTokenUpdate for which write clears what).
+ */
+function oauthTokenWrite(
+  tokens: McpOAuthTokenUpdate,
+  clearOmitted: readonly (typeof OAUTH_TOKEN_FIELDS)[number][]
+): { $set: Record<string, unknown>; $unset: Record<string, 1> } {
+  const $set: Record<string, unknown> = { 'auth.oauth.accessTokenEnc': tokens.accessTokenEnc };
+  const $unset: Record<string, 1> = {};
+  for (const field of OAUTH_TOKEN_FIELDS) {
+    if (tokens[field] !== undefined) $set[`auth.oauth.${field}`] = tokens[field];
+    else if (clearOmitted.includes(field)) $unset[`auth.oauth.${field}`] = 1;
+  }
+  return { $set, $unset };
 }
 
 const TOOL_APPROVAL_MODES: ReadonlySet<string> = new Set(MCP_TOOL_APPROVAL_MODES);
@@ -259,7 +289,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   ): Promise<ConnectionDoc | null>;
   async update(data: Partial<ConnectionDoc>, options?: RepositoryUpdateOptions<ConnectionDoc>) {
     assertNoProtectedFields(data, options);
-    return super.update(data, options);
+    return super.update(data, withValidators(options));
   }
 
   updateGuarded(
@@ -272,7 +302,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   ): Promise<ConnectionDoc | null>;
   async updateGuarded(data: Partial<ConnectionDoc>, options?: RepositoryUpdateOptions<ConnectionDoc>) {
     assertNoProtectedFields(data, options);
-    return super.updateGuarded(data, options);
+    return super.updateGuarded(data, withValidators(options));
   }
 
   async updateMany(
@@ -281,7 +311,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     options?: RepositoryUpdateOptions<ConnectionDoc>
   ) {
     assertNoProtectedFields(data, options);
-    return super.updateMany(filter, data, options);
+    return super.updateMany(filter, data, withValidators(options));
   }
 
   async create(data: Omit<IMcpConnectionDocument, 'id' | 'updatedAt' | 'createdAt'>) {
@@ -466,6 +496,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     if ((status === 'error' || status === 'needs_reconnect') && !lastError) {
       throw new Error(`setStatus(${status}) requires a lastError`);
     }
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     const update =
       status === 'connected'
         ? { $set: { status }, $unset: { lastError: 1 } }
@@ -493,9 +524,10 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     tokens: McpOAuthTokenUpdate
   ): Promise<IMcpConnectionDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const { $set, $unset } = oauthTokenWrite(tokens, ['expiresAt']);
     const result = await this.model.findOneAndUpdate(
       { _id: id, ownerType: 'user', 'auth.kind': 'oauth', 'refreshLease.holder': holder },
-      { $set: oauthTokenSet(tokens), $unset: { refreshLease: 1 } },
+      { $set, $unset: { ...$unset, refreshLease: 1 } },
       { new: true }
     );
     return result?.toJSON() ?? null;
@@ -503,15 +535,19 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
 
   async setInitialOAuthTokens(id: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
+    // Dropping the lease makes an in-flight refresh of the previous grant fail its holder check
+    // instead of overwriting these tokens.
+    const { $set, $unset } = oauthTokenWrite(tokens, OAUTH_TOKEN_FIELDS);
     const result = await this.model.findOneAndUpdate(
       { _id: id, ownerType: 'user', 'auth.kind': 'oauth' },
-      { $set: oauthTokenSet(tokens) },
+      { $set, $unset: { ...$unset, refreshLease: 1 } },
       { new: true }
     );
     return result?.toJSON() ?? null;
   }
 
   async markUsed(id: string): Promise<void> {
+    if (!mongoose.isObjectIdOrHexString(id)) return;
     await this.model.updateOne({ _id: id }, { $set: { lastUsedAt: new Date() } });
   }
 
@@ -544,6 +580,7 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
 
   /** Releases only the caller's own lease, so a holder that overran its TTL cannot free a successor's. */
   async releaseRefreshLease(id: string, holder: string): Promise<boolean> {
+    if (!mongoose.isObjectIdOrHexString(id)) return false;
     const result = await this.model.updateOne(
       { _id: id, 'refreshLease.holder': holder },
       { $unset: { refreshLease: 1 } }
