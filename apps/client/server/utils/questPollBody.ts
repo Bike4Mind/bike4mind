@@ -16,22 +16,23 @@ import { toGeneratedFiles } from '@server/utils/generatedFiles';
  * `isOwner` gates promptMeta redaction: a share grant authorizes reading the conversation, not
  * re-reading whatever the owner's tools touched (see redactPromptMetaForViewer).
  */
-export function toQuestPollBody(
+export async function toQuestPollBody(
   quest: IChatHistoryItemDocument,
   { isOwner, logger }: { isOwner: boolean; logger?: Pick<ILogger, 'warn'> }
 ) {
   // `quest.images` holds bare generated-file basenames (e.g. `<uuid>.png`, a `.mp3` from
   // music_generation, or a `.xlsx` from excel_generation - not everything here is an image).
-  // Programmatic pollers shouldn't have to know the CDN path convention, so we resolve each into
-  // a typed descriptor with a ready-to-use URL server-side (the single source of truth). `images`
+  // Programmatic pollers shouldn't have to know the storage layout, so we resolve each into a typed
+  // descriptor with a presigned URL server-side (the single source of truth). The caller has already
+  // authorized reading this quest, which is what grants its files. `images`
   // (raw basenames) is kept for parity with the WebSocket payload; `files[].isImage`/`isAudio`/`isVideo`
   // let a caller pick out renderable media.
   const images = quest.images ?? [];
-  // Rendered videos are basenames under the same `generated/` prefix (PromptReplies builds the
-  // same URL), so they resolve through the same helper. Without them a video callback or poll
+  // Rendered videos are basenames in the same generated bucket, so they resolve through the same
+  // helper. Without them a video callback or poll
   // settles `done` with nothing to fetch.
   const videos = quest.videos ?? [];
-  const files = toGeneratedFiles([...images, ...videos]);
+  const files = await toGeneratedFiles([...images, ...videos]);
 
   const promptMeta = redactPromptMetaForViewer(quest.promptMeta, isOwner);
 
