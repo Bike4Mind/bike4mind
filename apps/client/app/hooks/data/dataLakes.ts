@@ -1644,13 +1644,10 @@ export const rebuildBacklog = (
  * hook (the two defects this logic has carried both shipped because nothing executed it).
  *
  * `backlog` is what `rebuildBacklog` sums and `rebuilding` is the in-flight slice of it. The size
- * tiers read the TOTAL backlog, because each tick is a full lake rescan and the whole lake is what
- * that rescan costs - not just its repairable remainder. The in-flight slice only picks fast lane
- * vs slow: a backlog with nothing repairable left (every file reset, or a send the queue rejected)
- * parks at the slow cadence, since a rebuild in flight commits on the chunk worker's own clock.
- * Keeping the tiers off `backlog - rebuilding` is the point: one straggler left under-chunked beside
- * a 1000-file wave must not drop the panel to the fast lane on exactly the large lakes the tiers
- * exist to protect. `failedCount` deliberately is NOT in the sum: a failed file never
+ * tiers read the TOTAL backlog, because each tick is a full lake rescan, so one straggler beside a
+ * 1000-file wave stays on the slow lane. The in-flight slice only parks a backlog with nothing
+ * repairable left at the slow cadence, since a rebuild in flight commits on the chunk worker's own
+ * clock. `failedCount` deliberately is NOT in the sum: a failed file never
  * retries (see countFailedFilesByScope - it is invisible to both the detection query and the rescue
  * sweep), so including it gives a term that can never reach zero and the badge polls forever on any
  * lake holding one. But the backlog alone still stops too early: a wave is RESET minutes before

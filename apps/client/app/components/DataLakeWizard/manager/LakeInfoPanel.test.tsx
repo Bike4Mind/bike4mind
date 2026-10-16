@@ -6,7 +6,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { toast } from 'sonner';
 import { LakeInfoPanel } from './LakeInfoPanel';
-import { DATA_LAKES } from '@bike4mind/common';
+import { DATA_LAKES, REBUILD_PENDING_STALE_MS } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
 
 // LakeInfoPanel's Drive chip reaches this hook directly - stub it so the chip renders nothing
@@ -470,6 +470,18 @@ describe('LakeInfoPanel - files mid-rebuild', () => {
     });
     renderPanel();
     expect(screen.getByTestId(REBUILDING)).toHaveTextContent('1 rebuilding');
+  });
+
+  it('names the stale window the rebuild door re-offers a stranded file after', async () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 1, staleEmbeddingSpaceCount: 0 },
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await user.hover(screen.getByTestId(REBUILDING));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      `within ${REBUILD_PENDING_STALE_MS / 3_600_000} hours`
+    );
   });
 
   it('stays hidden when the server does not report the count', () => {

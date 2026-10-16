@@ -1159,11 +1159,9 @@ describe('nextRebuildPoll', () => {
   });
 
   it('keeps a small repairable remainder beside a large wave at the slow cadence', () => {
-    // The size tiers read the TOTAL backlog, not the repairable remainder: mid-wave, 1000 files are
-    // already reset and one straggler is still under-chunked. Keying the tiers off the remainder
-    // would drop the panel to the 5s lane - 6x the rescans - on exactly the large lakes the tiers
-    // exist to protect.
+    // Keying the size tiers off the remainder would drop these to a faster lane.
     expect(nextRebuildPoll(1001, start, 1000).interval).toBe(30_000);
+    expect(nextRebuildPoll(60, start, 55).interval).toBe(15_000);
   });
 
   it('stops immediately when there was never a backlog to drain', () => {
@@ -1715,12 +1713,8 @@ describe('useUnderChunkedCount: the unresolvable-space discriminator', () => {
   });
 });
 
-/**
- * The badge's refetchInterval reads the server's counts, so a wiring slip here is silent: no test
- * executes the closure and the wrong cadence just polls too fast. The shape that matters is a backlog
- * made only of rebuilds in flight - what one rejected queue send leaves behind - which must stay on
- * the slow lane rather than rescanning the whole lake every 5s for the stale window.
- */
+// Executes the hook's refetchInterval closure: a backlog of only in-flight rebuilds (what one
+// rejected queue send leaves behind) must stay on the slow lane for the whole stale window.
 describe('useUnderChunkedCount poll cadence', () => {
   beforeEach(() => {
     vi.clearAllMocks();

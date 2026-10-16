@@ -58,8 +58,7 @@ import type { ManagerLake } from './shared';
 // Right pane: selected lake's details + management actions
 
 // The rebuild door re-offers a stranded file after this window (findConvergencePausedFilesByScope's
-// stale-pending arm), so the rebuilding chip derives its copy from the constant rather than a
-// literal that would quietly promise the wrong window if the value changed.
+// stale-pending arm).
 const REBUILD_PENDING_HOURS = REBUILD_PENDING_STALE_MS / (60 * 60_000);
 
 export function LakeInfoPanel({
