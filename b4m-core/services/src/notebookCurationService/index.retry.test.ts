@@ -39,7 +39,6 @@ function buildDefaultAdapters() {
       create: vi.fn().mockResolvedValue({ id: 'fab-1', fileName: 'curated.md', fileSize: 1 }),
     },
     fileStorageService: { upload: vi.fn(), generateSignedUrl: vi.fn() },
-    creditTransactionRepository: { createTransaction: vi.fn().mockResolvedValue(undefined) },
     userRepository: {
       findById: vi.fn().mockResolvedValue({ id: 'u1', storageLimit: 100000, currentStorageSize: 0 }),
       incrementCredits: vi.fn().mockResolvedValue({ id: 'u1' }),
@@ -53,11 +52,10 @@ function buildDefaultAdapters() {
 }
 
 describe('curation billing', () => {
-  it('writes no credit transaction itself: the host bills the summary LLM calls', async () => {
+  it('does not bill the user itself: the host bills the summary LLM calls', async () => {
     const adapters = buildDefaultAdapters();
     const service = new NotebookCurationService(adapters as unknown as NotebookCurationAdapters);
     expect(await service.curateNotebook('s1', 'u1', options)).toMatchObject({ success: true, tokensDeducted: 0 });
-    expect(adapters.creditTransactionRepository.createTransaction).not.toHaveBeenCalled();
     expect(adapters.userRepository.incrementCredits).not.toHaveBeenCalled();
   });
 

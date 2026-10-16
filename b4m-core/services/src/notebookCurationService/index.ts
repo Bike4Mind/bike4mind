@@ -9,7 +9,6 @@ import {
   NotebookCurationError,
   ISessionRepository,
   IFabFileRepository,
-  ICreditTransactionRepository,
   IUserRepository,
   IAdminSettingsRepository,
   ISessionDocument,
@@ -40,7 +39,6 @@ export interface NotebookCurationAdapters {
   chatHistoryRepository: ChatHistorySource;
   fabFileRepository: IFabFileRepository;
   fileStorageService: CreateFabFileAdapters['storage'];
-  creditTransactionRepository: ICreditTransactionRepository;
   userRepository: IUserRepository;
   /**
    * Required, not optional: backs the MaxFileSize check createFabFile runs on the write below.

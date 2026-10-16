@@ -46,7 +46,6 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {},
   questRepository: {},
   fabFileRepository: {},
-  creditTransactionRepository: {},
   userRepository: {},
   adminSettingsRepository: {},
   connectDB: vi.fn().mockResolvedValue(undefined),

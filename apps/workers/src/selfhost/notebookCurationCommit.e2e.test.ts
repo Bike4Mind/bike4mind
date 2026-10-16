@@ -11,7 +11,6 @@ import {
   sessionRepository,
   questRepository,
   fabFileRepository,
-  creditTransactionRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
 import { CurationType } from '@bike4mind/common';
@@ -44,7 +43,6 @@ function service(job = 'job') {
     sessionRepository,
     chatHistoryRepository: questRepository,
     fabFileRepository,
-    creditTransactionRepository,
     adminSettingsRepository,
     logger,
     objectKeyPrefix: `curated-notebooks/jobs/${job}`,

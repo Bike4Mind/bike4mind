@@ -30,7 +30,6 @@ function makeAdapters(overrides: Record<string, any> = {}) {
       findById: vi.fn(),
     },
     fileStorageService: {},
-    creditTransactionRepository: {},
     userRepository: {},
     adminSettingsRepository: {
       findAll: vi.fn().mockResolvedValue([]),

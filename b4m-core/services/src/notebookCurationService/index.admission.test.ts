@@ -42,7 +42,6 @@ function buildDefaultAdapters() {
     // Only reached if a gate wrongly lets the write through; kept working (rather than
     // left empty) so that failure mode surfaces as the gate assertions below, not as an
     // unrelated mock gap further down the success path (credit deduction).
-    creditTransactionRepository: { createTransaction: vi.fn().mockResolvedValue(undefined) },
     userRepository: {
       findById: vi.fn().mockResolvedValue({ id: 'u1', storageLimit: 100000, currentStorageSize: 0 }),
       incrementCredits: vi.fn().mockResolvedValue({ id: 'u1' }),
