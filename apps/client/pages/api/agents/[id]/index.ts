@@ -207,8 +207,8 @@ const updateBodySchema = z.object({
     )
     .optional(),
   conversationCooldowns: z.array(z.object({ otherAgentId: z.string(), cooldownUntil: dateParamSchema })).optional(),
-  // `tavernSessionId` is deliberately absent: it must name the owner's own session, so only the
-  // server-side session bridge sets it. See `presentAgentsForViewer`.
+  // `tavernSessionId` is deliberately absent: it must name the owner's own session, so only
+  // `AgentRepository.updateTavernSessionId` sets it. See `presentAgentsForViewer`.
   currentFloorId: z.string().optional(),
   tavernStats: z
     .object({
