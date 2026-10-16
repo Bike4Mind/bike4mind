@@ -629,7 +629,25 @@ describe('ChatCompletionProcess', () => {
       expect(mockQuest.promptMeta.model.name).toBe(ChatModels.GPT4);
     });
 
-    it('keeps the requested model when the successor fails and nothing answers the turn', async () => {
+    it('keeps an existing redirect record rather than overwriting it', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.redirectedFrom = 'earlier-model';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, successor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+
+      await service.process({ body, logger: mockLogger });
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave.promptMeta).toMatchObject({
+        redirectedFrom: 'earlier-model',
+        model: { name: ChatModels.GPT4_1 },
+      });
+    });
+
+    it('keeps the redirect record when the successor fails and nothing answers the turn', async () => {
       mockSession.userId = 'user1';
       mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
       const body = wireMinimalTurn();
@@ -650,6 +668,7 @@ describe('ChatCompletionProcess', () => {
       const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
       expect(lastSave).toMatchObject({ type: 'error', status: 'done' });
       expect(lastSave.promptMeta.redirectedFrom).toBe(ChatModels.GPT4);
+      expect(lastSave.promptMeta.model.name).toBe(ChatModels.GPT4_1);
     });
   });
 
