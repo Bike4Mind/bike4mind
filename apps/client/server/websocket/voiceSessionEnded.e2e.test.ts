@@ -15,7 +15,7 @@ const state = vi.hoisted(() => ({ userId: '' }));
 
 vi.mock('@server/websocket/utils', () => ({
   withWebSocketContext: (handler: (...args: unknown[]) => unknown) => (event: unknown) =>
-    handler(event, {}, { info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+    handler(event, {}, { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
   sendToClient: vi.fn(),
 }));
 vi.mock('@server/websocket/connectionScope', () => ({ connectionHoldsScope: () => true }));
@@ -53,6 +53,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
 });
 
 import { CreditTransaction, Session, User, creditTransactionRepository, userRepository } from '@bike4mind/database';
+import { CreditHolderType } from '@bike4mind/common';
 import { func } from './voiceSessionEnded';
 
 let replSet: MongoMemoryReplSet;
@@ -216,5 +217,31 @@ describe('voiceSessionEnded on a real replica set', () => {
     expect(await charged(call.userId)).toBe(35);
     expect(await ledger(call.sessionId)).toHaveLength(2);
     expect((await hold(call.sessionId))?.voiceSessionStartedAt ?? null).toBeNull();
+  });
+
+  // The duplicate key is the last write in the close transaction, so its abort is what has to undo
+  // the claim and the refund that went before it.
+  it('a duplicate closing ledger key rolls the claim and the balance move back', async () => {
+    const call = await seedCall();
+    const startedAt = (await hold(call.sessionId))?.voiceSessionStartedAt;
+    if (!startedAt) throw new Error('seeded hold has no start');
+    await creditTransactionRepository.createTransaction('realtime_voice_usage', {
+      ownerId: call.userId,
+      ownerType: CreditHolderType.User,
+      credits: -5,
+      description: 'Voice usage',
+      model: 'gpt-realtime',
+      sessionId: call.sessionId,
+      transactionId: `realtime-voice-close:${call.sessionId}:${startedAt.toISOString()}`,
+    });
+
+    const res = await send(call, 5);
+
+    expect(res).toMatchObject({ statusCode: 200 });
+    expect(await charged(call.userId)).toBe(HOLD);
+    const open = await hold(call.sessionId);
+    expect(open?.voiceSessionStartedAt ?? null).not.toBeNull();
+    expect(open?.voiceReservedCredits).toBe(HOLD);
+    expect(await ledger(call.sessionId)).toHaveLength(1);
   });
 });

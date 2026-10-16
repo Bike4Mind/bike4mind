@@ -628,6 +628,20 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.incrementCredits).not.toHaveBeenCalled();
     expect(mocks.openVoiceHold).not.toHaveBeenCalled();
   });
+
+  // The transport session exists by the time the reserve runs, so a reserve failure must still
+  // answer without carrying the signed URL or session token it just minted.
+  it('answers 500 without leaking the transport bootstrap when the reserve fails after it was created', async () => {
+    mocks.incrementCredits.mockRejectedValueOnce(new Error('balance write failed'));
+    const { res, run } = fireSessions();
+    await run();
+
+    expect(res._getStatusCode()).toBe(500);
+    expect(mocks.createTransportSession).toHaveBeenCalled();
+    const body = JSON.stringify(res._getJSONData());
+    expect(body).not.toContain('signed-session-token');
+    expect(body).not.toContain('sig=1');
+  });
 });
 
 describe('POST /api/v1/voice/sessions/{id}/end', () => {
@@ -708,7 +722,7 @@ describe('POST /api/v1/voice/sessions/{id}/end', () => {
     expect(refunded).toBeLessThan(RESERVED_CREDITS * 0.55);
   });
 
-  it('answers 500 and records no settlement when the refund fails, leaving the hold to the sweep', async () => {
+  it('answers 500 and writes no ledger row when the refund fails', async () => {
     mocks.findByIdAndUserId.mockResolvedValue({
       id: SESSION_ID,
       voiceReservedCredits: RESERVED_CREDITS,

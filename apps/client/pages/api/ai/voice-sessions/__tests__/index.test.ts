@@ -174,6 +174,18 @@ describe('POST /api/ai/voice-sessions upstream failures', () => {
     expect(mockIncrementCredits).not.toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
+
+  // OpenAI has already minted the call's key by the time the reserve runs, so a reserve failure
+  // must still answer without echoing it back.
+  it('answers 500 without leaking the ephemeral key when the reserve fails after OpenAI issued it', async () => {
+    mockIncrementCredits.mockRejectedValueOnce(new Error('balance write failed'));
+
+    const { res } = await callRoute();
+
+    expect(res._getStatusCode()).toBe(500);
+    expect(mockPost).toHaveBeenCalled();
+    expect(res._getData()).not.toContain('ek-test');
+  });
 });
 
 describe('POST /api/ai/voice-sessions on an existing notebook', () => {

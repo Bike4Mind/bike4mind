@@ -319,7 +319,7 @@ describe('voiceSessionEnded realtime billing', () => {
     expect(charged()).toBe(HOLD);
   });
 
-  it('keys the closing ledger row on the hold, so a replayed row is not added twice', async () => {
+  it("keys the closing ledger row on the hold's start", async () => {
     const startedAt = state.session.voiceSessionStartedAt as Date;
 
     await send(5);
