@@ -375,7 +375,14 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
     status: McpConnectionStatus,
     lastError?: Omit<IMcpConnectionLastError, 'at'>
   ): Promise<IMcpConnectionDocument | null>;
-  updateOAuthTokens(id: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null>;
+  /**
+   * Store refreshed tokens and drop the lease in one write, only while `holder` still owns it.
+   * Null means the lease was lost (taken over after expiry, or the connection is gone or not OAuth):
+   * the caller must not retry the write, because the successor's rotated token is the live one.
+   */
+  completeRefresh(id: string, holder: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null>;
+  /** First code exchange; there is no lease yet. Null when the connection is gone or not OAuth. */
+  setInitialOAuthTokens(id: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null>;
   markUsed(id: string): Promise<void>;
   acquireRefreshLease(id: string, holder: string, ttlMs?: number): Promise<IMcpConnectionDocument | null>;
   releaseRefreshLease(id: string, holder: string): Promise<boolean>;

@@ -168,6 +168,15 @@ function assertNoProtectedFields(data: Record<string, unknown>, options?: Record
   }
 }
 
+function oauthTokenSet(tokens: McpOAuthTokenUpdate): Record<string, unknown> {
+  const set: Record<string, unknown> = { 'auth.oauth.accessTokenEnc': tokens.accessTokenEnc };
+  if (tokens.refreshTokenEnc !== undefined) set['auth.oauth.refreshTokenEnc'] = tokens.refreshTokenEnc;
+  if (tokens.expiresAt !== undefined) set['auth.oauth.expiresAt'] = tokens.expiresAt;
+  if (tokens.grantedScope !== undefined) set['auth.oauth.grantedScope'] = tokens.grantedScope;
+  if (tokens.tokenIssuer !== undefined) set['auth.oauth.tokenIssuer'] = tokens.tokenIssuer;
+  return set;
+}
+
 const TOOL_APPROVAL_MODES: ReadonlySet<string> = new Set(MCP_TOOL_APPROVAL_MODES);
 const TOOL_STATES: ReadonlySet<string> = new Set(MCP_TOOL_STATES);
 
@@ -335,13 +344,27 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return result?.toJSON() ?? null;
   }
 
-  async updateOAuthTokens(id: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null> {
-    const set: Record<string, unknown> = { 'auth.oauth.accessTokenEnc': tokens.accessTokenEnc };
-    if (tokens.refreshTokenEnc !== undefined) set['auth.oauth.refreshTokenEnc'] = tokens.refreshTokenEnc;
-    if (tokens.expiresAt !== undefined) set['auth.oauth.expiresAt'] = tokens.expiresAt;
-    if (tokens.grantedScope !== undefined) set['auth.oauth.grantedScope'] = tokens.grantedScope;
-    if (tokens.tokenIssuer !== undefined) set['auth.oauth.tokenIssuer'] = tokens.tokenIssuer;
-    const result = await this.model.findByIdAndUpdate(id, { $set: set }, { new: true });
+  async completeRefresh(
+    id: string,
+    holder: string,
+    tokens: McpOAuthTokenUpdate
+  ): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, 'auth.kind': 'oauth', 'refreshLease.holder': holder },
+      { $set: oauthTokenSet(tokens), $unset: { refreshLease: 1 } },
+      { new: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async setInitialOAuthTokens(id: string, tokens: McpOAuthTokenUpdate): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, 'auth.kind': 'oauth' },
+      { $set: oauthTokenSet(tokens) },
+      { new: true }
+    );
     return result?.toJSON() ?? null;
   }
 

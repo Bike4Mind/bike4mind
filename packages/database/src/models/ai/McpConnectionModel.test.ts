@@ -367,11 +367,18 @@ describe('McpConnectionModel', () => {
       expect(healed?.lastError).toBeUndefined();
     });
 
-    it('updateOAuthTokens keeps the stored refresh token when none is given', async () => {
+    it('setInitialOAuthTokens stores tokens without returning them and refuses a non-OAuth connection', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
-      await mcpConnectionRepository.updateOAuthTokens(created.id, { accessTokenEnc: 'enc:access-2' });
+      const stored = await mcpConnectionRepository.setInitialOAuthTokens(created.id, {
+        accessTokenEnc: 'enc:access-2',
+        expiresAt: new Date(Date.now() + 3600_000),
+      });
+      expect(secretValues(stored)).toEqual([]);
       const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
       expect(withCreds?.auth.oauth).toMatchObject({ accessTokenEnc: 'enc:access-2', refreshTokenEnc: 'enc:refresh' });
+
+      const key = await mcpConnectionRepository.create(apiKeyConnection());
+      expect(await mcpConnectionRepository.setInitialOAuthTokens(key.id, { accessTokenEnc: 'enc:x' })).toBeNull();
     });
   });
 
@@ -395,6 +402,44 @@ describe('McpConnectionModel', () => {
 
       const taken = await mcpConnectionRepository.acquireRefreshLease(created.id, 'next');
       expect(taken?.refreshLease?.holder).toBe('next');
+    });
+
+    it('completeRefresh stores the tokens and frees the lease for the holder only', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.acquireRefreshLease(created.id, 'a');
+
+      const done = await mcpConnectionRepository.completeRefresh(created.id, 'a', {
+        accessTokenEnc: 'enc:access-2',
+        refreshTokenEnc: 'enc:refresh-2',
+      });
+      expect(done).not.toBeNull();
+      expect(secretValues(done)).toEqual([]);
+      expect(done?.refreshLease).toBeUndefined();
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      expect(withCreds?.auth.oauth).toMatchObject({ accessTokenEnc: 'enc:access-2', refreshTokenEnc: 'enc:refresh-2' });
+    });
+
+    it('a stale holder cannot write after a successor took the expired lease', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.acquireRefreshLease(created.id, 'slow');
+      await McpConnection.updateOne({ _id: created.id }, { $set: { 'refreshLease.until': new Date(Date.now() - 1) } });
+      expect(await mcpConnectionRepository.acquireRefreshLease(created.id, 'successor')).not.toBeNull();
+      await mcpConnectionRepository.completeRefresh(created.id, 'successor', {
+        accessTokenEnc: 'enc:access-new',
+        refreshTokenEnc: 'enc:refresh-new',
+      });
+
+      expect(
+        await mcpConnectionRepository.completeRefresh(created.id, 'slow', {
+          accessTokenEnc: 'enc:access-stale',
+          refreshTokenEnc: 'enc:refresh-stale',
+        })
+      ).toBeNull();
+      const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id);
+      expect(withCreds?.auth.oauth).toMatchObject({
+        accessTokenEnc: 'enc:access-new',
+        refreshTokenEnc: 'enc:refresh-new',
+      });
     });
 
     it('only the holder can release, and release frees the lease', async () => {
