@@ -89,6 +89,14 @@ describe('saveGeneratedAsset', () => {
     expect(generation.promptTruncated).toBeUndefined();
   });
 
+  it('treats a prompt of exactly the cap as kept whole', async () => {
+    await saveGeneratedAsset(params({ generation: { ...music, prompt: 'x'.repeat(2_000) } }), deps);
+
+    const { generation } = createFabFile.mock.calls[0][2].provenance.sourceMetadata;
+    expect(generation.prompt).toHaveLength(2_000);
+    expect(generation.promptTruncated).toBeUndefined();
+  });
+
   it('omits the notebook link when there is no session', async () => {
     await saveGeneratedAsset(params(), deps);
 
