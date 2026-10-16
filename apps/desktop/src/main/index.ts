@@ -1,3 +1,5 @@
+// First, before any module that could read userData or touch safeStorage; see appIdentity.ts.
+import './bootstrapIdentity';
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { IPC_CHANNELS, type AppInfo } from '@shared/ipc';
