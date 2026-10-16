@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AuthenticatedApiClient, DeviceFlowClient } from '@bike4mind/client-auth';
+import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import {
+  AuthenticatedApiClient,
+  type AuthTokens,
+  type DeviceFlowClient,
+  type RefreshTokenResponse,
+} from '@bike4mind/client-auth';
 import type { AuthState } from '@shared/auth';
 import { AuthService, DESKTOP_OAUTH_CLIENT_ID, readPhotoSource, toDesktopUser } from './AuthService';
 import { fetchProfilePhoto, LOCAL_FILE_PROXY_BASE, type ProfilePhotoCache } from './profilePhoto';
@@ -346,5 +352,185 @@ describe('readPhotoSource', () => {
     expect(readPhotoSource({ photoUrl: null })).toBeUndefined();
     expect(readPhotoSource({ photoUrl: '' })).toBeUndefined();
     expect(readPhotoSource(undefined)).toBeUndefined();
+  });
+});
+
+/**
+ * The real shared client over the vault, so these exercise the refresh rules end to end. The
+ * API accepts whichever access tokens are in `accepted`; everything else is a 401.
+ */
+function buildWithSharedClient(options: { file?: VaultFile; refreshToken: ReturnType<typeof vi.fn> }) {
+  const accepted = new Set<string>();
+  const device = fakeDeviceFlow({ refreshToken: options.refreshToken as DeviceFlowClient['refreshToken'] });
+  const file = options.file ?? memoryFile();
+  const vault = new TokenVault(cipher, file, silentLogger);
+  const states: AuthState[] = [];
+
+  const service = new AuthService({
+    vault,
+    logger: silentLogger,
+    openExternal: async () => {},
+    devFallback: false,
+    userAgent: 'b4m-desktop/test',
+    onStateChanged: state => states.push(state),
+    createDeviceFlowClient: () => device,
+    createApiClient: (baseUrl, tokenStore, onTokensCleared) => {
+      const client = new AuthenticatedApiClient({
+        baseUrl,
+        tokenStore,
+        oauthClient: device,
+        logger: silentLogger,
+        onTokensCleared,
+        reauthMessages: { refreshFailed: 'expired', stillUnauthorized: 'invalid' },
+      });
+      client.getAxiosInstance().defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
+        const sent = String(config.headers.Authorization ?? '').replace('Bearer ', '');
+        if (accepted.has(sent)) {
+          return {
+            data: { user: { id: 'user-1' } },
+            status: 200,
+            statusText: 'OK',
+            headers: {},
+            config,
+          } as AxiosResponse;
+        }
+        throw httpError(401, config);
+      }) as AxiosAdapter;
+      return client;
+    },
+  });
+
+  return { service, vault, file, states, accepted, device };
+}
+
+function httpError(status: number, config = {} as InternalAxiosRequestConfig): AxiosError {
+  return new AxiosError(`HTTP ${status}`, 'ERR_BAD_RESPONSE', config, {}, {
+    status,
+    statusText: String(status),
+    data: {},
+    headers: {},
+    config,
+  } as AxiosResponse);
+}
+
+function storedTokens(index: number, expiresInMs: number): AuthTokens {
+  return {
+    accessToken: `access-${index}`,
+    refreshToken: `refresh-${index}`,
+    expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
+    userId: 'user-1',
+  };
+}
+
+function rotation(index: number): RefreshTokenResponse {
+  return {
+    access_token: `access-${index}`,
+    refresh_token: `refresh-${index}`,
+    token_type: 'Bearer',
+    expires_in: 1800,
+  } as RefreshTokenResponse;
+}
+
+describe('AuthService token refresh', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Signed in on `access-0`, whose proactive refresh falls due after the 5 s minimum delay. */
+  async function signedIn(refreshToken: ReturnType<typeof vi.fn>, file?: VaultFile) {
+    vi.useFakeTimers();
+    process.env[BAKED] = HOSTED;
+    const harness = buildWithSharedClient({ refreshToken, file });
+    harness.accepted.add('access-0');
+    await harness.vault.setTokens(HOSTED, storedTokens(0, 60_000));
+    await harness.service.initialize();
+    expect(harness.service.getState().status).toBe('signed-in');
+    return harness;
+  }
+
+  it('keeps the session and the vault when a proactive refresh fails transiently', async () => {
+    const { service, vault } = await signedIn(vi.fn().mockRejectedValue(httpError(503)));
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(service.getState().status).toBe('signed-in');
+    expect(await vault.getTokens(HOSTED)).toMatchObject({ refreshToken: 'refresh-0' });
+    service.dispose();
+  });
+
+  it('shows signed-out with a reason, and empties the vault, when the server rejects the refresh token', async () => {
+    const { service, vault } = await signedIn(vi.fn().mockRejectedValue(httpError(401)));
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(service.getState()).toMatchObject({
+      status: 'signed-out',
+      user: undefined,
+      error: { message: 'This session has expired. Sign in again.', remedy: 'retry-sign-in' },
+    });
+    expect(await vault.reloadTokens(HOSTED)).toBeNull();
+    expect(silentLogger.warn).toHaveBeenCalledWith(expect.stringContaining('HTTP 401'));
+  });
+
+  it('shows signed-out when the client clears the tokens on a request 401, instead of staying signed-in', async () => {
+    const { service, accepted, vault } = await signedIn(vi.fn().mockRejectedValue(httpError(400)));
+    // The access token lapses server-side and locally before the proactive timer runs.
+    accepted.clear();
+    await vault.setTokens(HOSTED, storedTokens(0, -1_000));
+
+    await expect(service.getApiClient()?.get('/api/anything')).rejects.toThrow('expired');
+
+    expect(service.getState()).toMatchObject({ status: 'signed-out', error: { remedy: 'retry-sign-in' } });
+    expect(service.getApiClient()).toBeNull();
+    service.dispose();
+  });
+
+  it('shares one exchange between the proactive timer and a concurrent 401', async () => {
+    let release: (value: RefreshTokenResponse) => void = () => {};
+    const refreshToken = vi.fn(() => new Promise<RefreshTokenResponse>(resolve => (release = resolve)));
+    const { service, accepted, vault } = await signedIn(refreshToken);
+    const api = service.getApiClient();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    accepted.delete('access-0');
+    accepted.add('access-1');
+    const request = api?.get('/api/anything');
+
+    release(rotation(1));
+
+    await expect(request).resolves.toBeTruthy();
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    expect(await vault.reloadTokens(HOSTED)).toMatchObject({ refreshToken: 'refresh-1' });
+    service.dispose();
+  });
+
+  it('presents the refresh token another instance rotated into the shared vault file', async () => {
+    const file = memoryFile();
+    const refreshToken = vi.fn().mockResolvedValue(rotation(6));
+    const { service, vault } = await signedIn(refreshToken, file);
+    // A second app instance over the same userData rotated the chain on its own, and that
+    // access token has lapsed too, so an exchange is due - with the sibling's refresh token.
+    await new TokenVault(cipher, file, silentLogger).setTokens(HOSTED, storedTokens(5, -1_000));
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(refreshToken).toHaveBeenCalledWith('refresh-5');
+    expect(await vault.reloadTokens(HOSTED)).toMatchObject({ refreshToken: 'refresh-6' });
+    service.dispose();
+  });
+
+  it('adopts a refresh another instance already made instead of rotating again', async () => {
+    const file = memoryFile();
+    const refreshToken = vi.fn();
+    const { service, vault } = await signedIn(refreshToken, file);
+    await new TokenVault(cipher, file, silentLogger).setTokens(HOSTED, storedTokens(5, 30 * 60_000));
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(refreshToken).not.toHaveBeenCalled();
+    expect(await vault.getTokens(HOSTED)).toMatchObject({ refreshToken: 'refresh-5' });
+    expect(service.getState().status).toBe('signed-in');
+    service.dispose();
   });
 });

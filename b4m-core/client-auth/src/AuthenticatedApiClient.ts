@@ -1,6 +1,6 @@
 import axios, { isAxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios';
 import type { RefreshTokenResponse } from './DeviceFlowClient';
-import type { AuthLogger, TokenStore } from './tokens';
+import type { AuthLogger, AuthTokens, TokenStore } from './tokens';
 
 /**
  * Thrown by the response interceptor only when the session is DEFINITIVELY revoked - the
@@ -69,6 +69,21 @@ export interface AuthenticatedApiClientOptions {
    * missing AI-provider key).
    */
   isPassThrough401?: (data: unknown) => boolean;
+  /**
+   * Called after this client has cleared the stored tokens because the session is definitively
+   * gone (the refresh token was rejected). Lets a host that tracks signed-in state show the user
+   * signed out, with the reason, instead of carrying on over an empty store.
+   */
+  onTokensCleared?: (reason: string) => void;
+}
+
+function isExpired(tokens: AuthTokens): boolean {
+  return new Date(tokens.expiresAt).getTime() <= Date.now();
+}
+
+function bearerToken(config: AxiosRequestConfig | undefined): string | undefined {
+  const header: unknown = config?.headers?.Authorization;
+  return typeof header === 'string' && header.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
 }
 
 /**
@@ -82,6 +97,10 @@ export class AuthenticatedApiClient {
   private logger: AuthLogger;
   private apiKey?: string;
   private isPassThrough401?: (data: unknown) => boolean;
+  private onTokensCleared?: (reason: string) => void;
+  private reauthMessages: Required<ReauthMessages>;
+  /** The one refresh exchange in flight, shared by every caller - see {@link refreshSession}. */
+  private inFlightRefresh: Promise<AuthTokens> | null = null;
 
   constructor(options: AuthenticatedApiClientOptions) {
     this.tokenStore = options.tokenStore;
@@ -89,11 +108,12 @@ export class AuthenticatedApiClient {
     this.logger = options.logger;
     this.apiKey = options.apiKey;
     this.isPassThrough401 = options.isPassThrough401;
-    const {
-      refreshFailed,
-      stillUnauthorized,
-      notLoggedIn = 'Authentication failed: not logged in.',
-    } = options.reauthMessages;
+    this.onTokensCleared = options.onTokensCleared;
+    this.reauthMessages = {
+      notLoggedIn: 'Authentication failed: not logged in.',
+      ...options.reauthMessages,
+    };
+    const { refreshFailed, stillUnauthorized, notLoggedIn } = this.reauthMessages;
 
     this.client = axios.create({
       baseURL: options.baseUrl,
@@ -158,86 +178,145 @@ export class AuthenticatedApiClient {
             throw new NotAuthenticatedError(notLoggedIn);
           }
 
-          try {
-            // Skip refresh while the stored access token has not expired yet: a 401 against a
-            // token that is still inside its own lifetime is far more likely a transient server
-            // error than an auth failure, and refreshing would spend a rotation for nothing.
-            //
-            // This reads `expiresAt` directly rather than reconstructing an issue time by
-            // subtracting an assumed lifetime from it. The old form subtracted a hardcoded 7 days,
-            // which stopped being true when access tokens became short-lived - it reported every
-            // token as ~7 days old and the branch never fired.
-            //
-            // NOTE: this means a tokenVersion kill-switch bump is not detected as a revocation
-            // until the token actually expires (checkSessionValid reports it valid until then).
-            // REST calls still 401 in the meantime, so it is a bounded no-teardown delay, not
-            // retained access.
-            if (new Date(tokens.expiresAt).getTime() > Date.now()) {
-              this.logger.debug('AUTH: Access token has not expired, skipping refresh - 401 is likely transient');
-              return Promise.reject(error);
-            }
+          const sentAccessToken = bearerToken(originalRequest);
 
-            // Attempt to refresh the access token
-            this.logger.debug('AUTH: Attempting token refresh');
-            const newTokens = await this.oauthClient.refreshToken(tokens.refreshToken);
-            this.logger.debug('AUTH: Token refresh successful');
-
-            // Calculate new expiry time
-            const expiresAt = new Date(Date.now() + newTokens.expires_in * 1000).toISOString();
-
-            // Store new tokens. `refresh_token` is absent when the server did not rotate the chain
-            // (RFC 6749 s6) - keep the one we presented rather than persisting undefined, which
-            // would erase the credential and force a re-login on the next call.
-            await this.tokenStore.setAuthTokens({
-              accessToken: newTokens.access_token,
-              refreshToken: newTokens.refresh_token ?? tokens.refreshToken,
-              expiresAt,
-              userId: tokens.userId, // Preserve userId
-            });
-
-            // Update the original request with new token
-            originalRequest.headers.Authorization = `Bearer ${newTokens.access_token}`;
-
-            // Retry original request with new token
-            this.logger.debug('AUTH: Retrying request with new token');
+          // The store already moved past the token this request carried (a refresh landed while
+          // it was in flight): retry with the current one rather than spending another rotation.
+          if (sentAccessToken !== tokens.accessToken && !isExpired(tokens) && !this.inFlightRefresh) {
+            this.logger.debug('AUTH: Retrying with the access token stored since this request was sent');
+            originalRequest.headers.Authorization = `Bearer ${tokens.accessToken}`;
             return this.client(originalRequest);
+          }
+
+          // Skip refresh while the stored access token has not expired yet: a 401 against a
+          // token that is still inside its own lifetime is far more likely a transient server
+          // error than an auth failure, and refreshing would spend a rotation for nothing. A
+          // refresh already in flight is joined instead: it is about to replace this token.
+          //
+          // NOTE: this means a tokenVersion kill-switch bump is not detected as a revocation
+          // until the token actually expires (checkSessionValid reports it valid until then).
+          // REST calls still 401 in the meantime, so it is a bounded no-teardown delay, not
+          // retained access.
+          if (!isExpired(tokens) && !this.inFlightRefresh) {
+            this.logger.debug('AUTH: Access token has not expired, skipping refresh - 401 is likely transient');
+            return Promise.reject(error);
+          }
+
+          let refreshed: AuthTokens;
+          try {
+            refreshed = await this.refreshSession(sentAccessToken);
           } catch (refreshError) {
+            if (refreshError instanceof SessionRevokedError || refreshError instanceof NotAuthenticatedError) {
+              throw refreshError;
+            }
+            // A 5xx / network / timeout / 429 is a transient outage: the tokens stay, and a plain
+            // Error (same message, so string-matching callers are unaffected) keeps
+            // revoke-vs-transient consumers retrying instead of tearing down.
             const refreshMsg = refreshError instanceof Error ? refreshError.message : 'Unknown error';
             this.logger.warn(`AUTH: Token refresh failed: ${refreshMsg}`);
-
-            // Only clear tokens if the access token is actually expired
-            const tokens = await this.tokenStore.getAuthTokens();
-            if (tokens && new Date(tokens.expiresAt) <= new Date()) {
-              await this.tokenStore.clearAuthTokens();
-            }
-
-            // A 400/401 from the refresh endpoint means the refresh token was rejected =
-            // genuine revocation (SessionRevokedError). A 5xx / network / timeout is a transient
-            // outage - throw a plain Error (same message, so string-matching callers are
-            // unaffected) so revoke-vs-transient consumers keep retrying instead of tearing down.
-            const refreshStatus = isAxiosError(refreshError) ? refreshError.response?.status : undefined;
-            if (refreshStatus === 400 || refreshStatus === 401) {
-              throw new SessionRevokedError(refreshFailed);
-            }
             throw new Error(refreshFailed);
           }
+
+          originalRequest.headers.Authorization = `Bearer ${refreshed.accessToken}`;
+          this.logger.debug('AUTH: Retrying request with new token');
+          return this.client(originalRequest);
         }
 
-        // If we already retried and still got 401, auth is invalid - a 401 that survives a
-        // successful refresh is a definitive revocation.
+        // A 401 that survives a successful refresh is reported as a revocation, but the tokens
+        // stay: the refresh endpoint just accepted them, so only it can say the session is gone.
         if (error.response?.status === 401 && originalRequest._retry) {
           this.logger.debug('AUTH: Token refresh retry failed');
-          // Only clear tokens if genuinely expired
-          const tokens = await this.tokenStore.getAuthTokens();
-          if (tokens && new Date(tokens.expiresAt) <= new Date()) {
-            await this.tokenStore.clearAuthTokens();
-          }
           throw new SessionRevokedError(stillUnauthorized);
         }
 
         return Promise.reject(error);
       }
     );
+  }
+
+  /**
+   * Exchange the stored refresh token for a new access token, and persist the result.
+   *
+   * Single flight: every caller in this process - a 401 here, a host's proactive timer - shares
+   * one exchange, so a burst of 401s spends one rotation rather than one each.
+   *
+   * `rejectedAccessToken` is the access token the caller found wanting. When the store (re-read
+   * from storage, not a cache) already holds a different, unexpired one, another flow or another
+   * process refreshed first, and that token is returned with no exchange at all.
+   *
+   * Rejects with {@link SessionRevokedError} only when the refresh endpoint answered 400/401 -
+   * the one case in which the stored tokens are cleared. Any other failure (network, timeout,
+   * 5xx, 429) is rethrown as-is and leaves the tokens untouched.
+   */
+  refreshSession(rejectedAccessToken?: string): Promise<AuthTokens> {
+    if (!this.inFlightRefresh) {
+      this.inFlightRefresh = this.exchangeRefreshToken(rejectedAccessToken).finally(() => {
+        this.inFlightRefresh = null;
+      });
+    }
+    return this.inFlightRefresh;
+  }
+
+  private async exchangeRefreshToken(rejectedAccessToken: string | undefined): Promise<AuthTokens> {
+    const presented = await this.readStoredTokens();
+    if (!presented) throw new NotAuthenticatedError(this.reauthMessages.notLoggedIn);
+
+    if (rejectedAccessToken !== undefined && presented.accessToken !== rejectedAccessToken && !isExpired(presented)) {
+      this.logger.debug('AUTH: Stored tokens were already refreshed elsewhere, adopting them');
+      return presented;
+    }
+
+    this.logger.debug('AUTH: Attempting token refresh');
+    let response: RefreshTokenResponse;
+    try {
+      response = await this.oauthClient.refreshToken(presented.refreshToken);
+    } catch (refreshError) {
+      const status = isAxiosError(refreshError) ? refreshError.response?.status : undefined;
+      if (status !== 400 && status !== 401) throw refreshError;
+
+      // Rejected - but if the stored refresh token changed while this exchange was in flight,
+      // the rejection is about a token nobody holds any more. Keep the newer one.
+      const current = await this.readStoredTokens();
+      if (current && current.refreshToken !== presented.refreshToken) {
+        this.logger.warn('AUTH: Refresh rejected for a token already replaced in storage; keeping the newer one');
+        return current;
+      }
+      if (current) await this.clearStoredTokens(`refresh token rejected by the server (HTTP ${status})`);
+      throw new SessionRevokedError(this.reauthMessages.refreshFailed);
+    }
+    this.logger.debug('AUTH: Token refresh successful');
+
+    // Compare-and-set: write only if storage still holds the refresh token this exchange
+    // presented. Anything else there is newer (a sign-in, or another process's rotation), and
+    // overwriting it would put a superseded token back - whose next use reads as theft and
+    // revokes the whole session. Cleared meanwhile means signed out: do not resurrect it.
+    const current = await this.readStoredTokens();
+    if (!current) throw new NotAuthenticatedError(this.reauthMessages.notLoggedIn);
+    if (current.refreshToken !== presented.refreshToken) {
+      this.logger.debug('AUTH: Stored tokens changed during refresh, keeping the stored ones');
+      return current;
+    }
+
+    const next: AuthTokens = {
+      accessToken: response.access_token,
+      // Absent when the server did not rotate the chain (RFC 6749 s6) - keep the one we
+      // presented rather than persisting undefined, which would erase the credential.
+      refreshToken: response.refresh_token ?? presented.refreshToken,
+      expiresAt: new Date(Date.now() + response.expires_in * 1000).toISOString(),
+      userId: presented.userId,
+    };
+    await this.tokenStore.setAuthTokens(next);
+    return next;
+  }
+
+  private readStoredTokens(): Promise<AuthTokens | null> {
+    return this.tokenStore.reloadAuthTokens ? this.tokenStore.reloadAuthTokens() : this.tokenStore.getAuthTokens();
+  }
+
+  private async clearStoredTokens(reason: string): Promise<void> {
+    this.logger.warn(`AUTH: Clearing stored tokens: ${reason}`);
+    await this.tokenStore.clearAuthTokens();
+    this.onTokensCleared?.(reason);
   }
 
   /**

@@ -10,6 +10,7 @@ import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlo
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from './externalLinks';
+import { persistConsoleWarnings } from './logFile';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';
 import { registerUsage } from './usage';
@@ -100,6 +101,9 @@ ipcMain.handle(IPC_CHANNELS.shellOpenExternal, (_event, url: unknown) => {
 });
 
 void app.whenReady().then(async () => {
+  // First, so a failure anywhere below is on disk too: a packaged build has no terminal.
+  persistConsoleWarnings(console, app.getPath('logs'));
+
   // macOS reads the dock icon from the app bundle, which only a packaged build has, so a
   // dev run would otherwise sit in the dock as Electron's own atom.
   if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(macAppIcon);
