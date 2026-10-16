@@ -292,6 +292,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
   {
     model: {
       name: { type: String, required: false },
+      answeredBy: { type: String, required: false },
       type: { type: String, required: false },
       backend: { type: String, required: false },
       contextWindow: { type: Number, required: false },

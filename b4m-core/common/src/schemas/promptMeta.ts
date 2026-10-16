@@ -45,6 +45,8 @@ const PromptMetaModelSchema = z.object({
   // We're flexible about model name since they'll potentially come from Hugging Face
   // or other public sources
   name: z.string(),
+  // The model that produced the reply when a deprecated-model redirect replaced `name`; absent otherwise.
+  answeredBy: z.string().optional(),
   parameters: PromptMetaModelParametersSchema.optional(),
   type: z.enum(PROMPT_META_MODEL_TYPES).optional(),
   backend: z.string().optional(),

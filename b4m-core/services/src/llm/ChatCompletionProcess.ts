@@ -2307,6 +2307,11 @@ export class ChatCompletionProcess {
       if (!modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
       }
+      // promptMeta.model.name keeps the requested id (analytics and last-used-model read it); the
+      // reply label reads answeredBy so a redirected turn is not credited to the model it replaced.
+      if (modelInfo.id !== model && quest.promptMeta?.model) {
+        quest.promptMeta.model.answeredBy = modelInfo.id;
+      }
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Model setup completed in ${
           Date.now() - modelSetupStartTime
@@ -4593,6 +4598,7 @@ export class ChatCompletionProcess {
               // Update quest metadata to reflect fallback attempt
               quest.promptMeta!.model!.name = currentModel.id;
               quest.promptMeta!.model!.backend = currentModel.backend;
+              if (quest.promptMeta!.model!.answeredBy) quest.promptMeta!.model!.answeredBy = currentModel.id;
               this.sendStatusUpdate(quest, `Trying alternative model: ${currentModel.id}...`, { statusAt: new Date() });
             }
 

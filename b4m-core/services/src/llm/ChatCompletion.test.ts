@@ -37,6 +37,7 @@ import type { FabFileNotice } from '@bike4mind/utils';
 import {
   getLlmByModel,
   getAvailableModels,
+  resolveDeprecatedModelId,
   attachFullToolResult,
   getFullToolResult,
   MAX_FULL_TOOL_RESULT_CHARS,
@@ -585,6 +586,43 @@ describe('ChatCompletionProcess', () => {
     mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
     return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
   };
+
+  describe('a deprecated-model redirect', () => {
+    const successor = {
+      id: ChatModels.GPT4_1,
+      type: 'text',
+      name: 'GPT-4.1',
+      backend: ModelBackend.OpenAI,
+      max_tokens: 100,
+      contextWindow: 1000,
+      can_stream: false,
+      pricing: {},
+      supportsImageVariation: false,
+    };
+
+    it('reply metadata names the model that answered and keeps the requested model', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+      const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+      mockedGetAvailableModels.mockResolvedValue([requested, successor] as never);
+      vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockQuest.promptMeta.model).toMatchObject({ name: ChatModels.GPT4, answeredBy: ChatModels.GPT4_1 });
+    });
+
+    it('leaves answeredBy unset when no redirect happened', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4 };
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockQuest.promptMeta.model.answeredBy).toBeUndefined();
+    });
+  });
 
   describe('per-turn pre-authorized capture', () => {
     it('captures the session ids onto the turn', async () => {
