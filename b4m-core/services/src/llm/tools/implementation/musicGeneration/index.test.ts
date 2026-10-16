@@ -40,6 +40,27 @@ describe('music_generation tool', () => {
     expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'music' }] });
   });
 
+  it('song prompts written from chat describe style without naming artists', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool, statusUpdate } = build(createJob);
+    const named = [
+      'upbeat pop in the style of Some Singer',
+      'a ballad like Some Band',
+      'sounds like The Example Group',
+      'inspired by Name Surname, slow tempo',
+    ];
+    for (const prompt of named) {
+      const result = await tool.toolFn({ model: 'test-music', prompt });
+      expect(result).toMatch(/^Music generation failed \(artist_reference\).*rewrite/i);
+    }
+    expect(createJob).not.toHaveBeenCalled();
+    expect(statusUpdate).not.toHaveBeenCalled();
+
+    const described = 'upbeat indie pop, jangly guitars, handclaps, 120 bpm, in the style of 2010s radio hits';
+    expect(JSON.parse(await tool.toolFn({ model: 'test-music', prompt: described })).jobId).toBe('job1');
+    expect(createJob).toHaveBeenCalledTimes(1);
+  });
+
   it('passes lyrics, instrumental and length through and leaves omitted fields to the job', async () => {
     const createJob = vi.fn().mockResolvedValue(okJob);
     const { tool } = build(createJob);

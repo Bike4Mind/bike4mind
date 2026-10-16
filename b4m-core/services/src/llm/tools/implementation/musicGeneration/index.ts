@@ -29,6 +29,16 @@ export const isMusicToolConfig = (value: unknown): value is PopulatedMusicToolCo
   Array.isArray(value.usableModels) &&
   value.usableModels.length > 0;
 
+// Providers refuse prompts that name real artists, so catch the common "style of <Proper Noun>" shapes before a job exists.
+const ARTIST_REFERENCE =
+  /\b(?:in the style of|in the vein of|style of|sounds? like|sounding like|similar to|reminiscent of|inspired by|a la|like)\s+(?:the\s+)?[A-Z]/;
+
+export const ARTIST_REFERENCE_REFUSAL =
+  'Music generation failed (artist_reference): the prompt appears to name a real artist or band. ' +
+  'Rewrite it describing genre, mood, instruments, tempo and era instead of names, and call music_generation again.';
+
+export const namesArtistReference = (prompt: string): boolean => ARTIST_REFERENCE.test(prompt);
+
 // Defaults (length, instrumental) are left to createMusicJob, which resolves them per model.
 const toRequest = (args: MusicToolArgs): MusicGenerationRequest => ({
   model: args.model,
@@ -47,6 +57,7 @@ export const musicGenerationTool: ToolDefinition = {
     return {
       toolFn: async (parameters?: unknown) => {
         const args = schema.parse(parameters);
+        if (namesArtistReference(args.prompt)) return ARTIST_REFERENCE_REFUSAL;
         const request = toRequest(args);
         const result = await config.createJob({
           user: { id: context.userId, organizationId: context.organizationId ?? null },
